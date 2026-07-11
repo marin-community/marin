@@ -10,6 +10,7 @@ import numpy as np
 from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
 from levanter.grug._moe.source_push_semantic_fused_w2_return import (
     SourcePushSemanticFusedW2ReturnConfig,
+    _w2_pipeline_structure,
     source_push_semantic_fused_w2_return,
     source_push_semantic_fused_w2_return_metadata_jax,
     source_push_semantic_fused_w2_return_schedule,
@@ -61,6 +62,20 @@ def test_fused_w2_return_schedule_keeps_odd_hidden_tile_tail():
     assert schedule.w2_jobs == 20
     assert schedule.min_w2_jobs_per_program == 0
     assert schedule.max_w2_jobs_per_program == 1
+
+
+def test_fused_w2_return_target_pipeline_double_buffers_wgmma_operands():
+    pipeline = _w2_pipeline_structure(
+        intermediate_dim=2560,
+        dtype=jnp.bfloat16,
+        config=CONFIG,
+    )
+
+    assert pipeline.intermediate_tiles == 40
+    assert pipeline.tile_pairs == 20
+    assert pipeline.stages == 2
+    assert pipeline.smem_bytes == 112 * 1024
+    assert pipeline.max_pending_wgmma_groups == 4
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):

@@ -31,6 +31,8 @@ WGMMA_TILE_M = 8
 PERSISTENT_W2_PROGRAMS = 128
 PERSISTENT_COMBINE_PROGRAMS = 32
 N_GROUPS_PER_JOB = 2
+W2_PIPELINE_STAGES = 2
+W2_PIPELINE_MAX_PENDING_WGMMA_GROUPS = W2_PIPELINE_STAGES * N_GROUPS_PER_JOB
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +110,32 @@ class SourcePushSemanticFusedW2ReturnSchedule:
     @property
     def total_programs(self) -> int:
         return max(self.producer_programs, self.combine_program_start + self.combine_programs)
+
+
+@dataclass(frozen=True, slots=True)
+class _W2PipelineStructure:
+    intermediate_tiles: int
+    tile_pairs: int
+    stages: int
+    smem_bytes: int
+    max_pending_wgmma_groups: int
+
+
+def _w2_pipeline_structure(
+    *,
+    intermediate_dim: int,
+    dtype: jnp.dtype,
+    config: SourcePushSemanticFusedW2ReturnConfig,
+) -> _W2PipelineStructure:
+    intermediate_tiles = intermediate_dim // config.block_k
+    elements_per_stage = 3 * config.compute_m * config.block_k + N_GROUPS_PER_JOB * config.block_k * config.block_n
+    return _W2PipelineStructure(
+        intermediate_tiles=intermediate_tiles,
+        tile_pairs=(intermediate_tiles + W2_PIPELINE_STAGES - 1) // W2_PIPELINE_STAGES,
+        stages=W2_PIPELINE_STAGES,
+        smem_bytes=W2_PIPELINE_STAGES * elements_per_stage * jnp.dtype(dtype).itemsize,
+        max_pending_wgmma_groups=W2_PIPELINE_MAX_PENDING_WGMMA_GROUPS,
+    )
 
 
 def source_push_semantic_fused_w2_return_schedule(
@@ -469,7 +497,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
     )
     hidden_tiles = schedule.hidden_tiles
     hidden_tile_jobs = (hidden_tiles + N_GROUPS_PER_JOB - 1) // N_GROUPS_PER_JOB
-    intermediate_tiles = intermediate_dim // config.block_k
+    pipeline = _w2_pipeline_structure(intermediate_dim=intermediate_dim, dtype=dtype, config=config)
     token_blocks = schedule.token_blocks
     combine_programs = schedule.combine_programs
     worker_programs = schedule.total_programs
@@ -524,13 +552,20 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
                 def _acc_scope(acc_0_ref, acc_1_ref) -> None:
                     def _smem_scope(
-                        gate_smem,
-                        up_smem,
-                        h_smem,
-                        w_0_smem,
-                        w_1_smem,
-                        activation_barrier,
-                        w_1_barrier,
+                        gate_0_smem,
+                        up_0_smem,
+                        h_0_smem,
+                        w_00_smem,
+                        w_01_smem,
+                        gate_1_smem,
+                        up_1_smem,
+                        h_1_smem,
+                        w_10_smem,
+                        w_11_smem,
+                        activation_0_barrier,
+                        w_01_barrier,
+                        activation_1_barrier,
+                        w_11_barrier,
                     ) -> None:
                         row = mgpu.layout_cast(
                             lax.broadcasted_iota(jnp.int32, (config.compute_m, config.block_k), 0),
@@ -538,8 +573,15 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                         )
                         row_valid = (row < valid_rows).astype(jnp.float32)
 
-                        @pl.loop(0, intermediate_tiles)
-                        def _intermediate_loop(intermediate_tile) -> None:
+                        def _load_stage(
+                            intermediate_tile,
+                            gate_smem,
+                            up_smem,
+                            w_0_smem,
+                            w_1_smem,
+                            activation_barrier,
+                            w_1_barrier,
+                        ) -> None:
                             intermediate_start = intermediate_tile * config.block_k
                             mgpu.copy_gmem_to_smem(
                                 w_ref.at[
@@ -581,12 +623,14 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                     w_1_barrier,
                                 )
 
+                        def _wait_stage(activation_barrier, w_1_barrier) -> None:
                             mgpu.barrier_wait(activation_barrier)
 
                             @pl.when(has_second_hidden_tile)
                             def _wait_for_second_weight_tile() -> None:
                                 mgpu.barrier_wait(w_1_barrier)
 
+                        def _issue_stage(gate_smem, up_smem, h_smem, w_0_smem, w_1_smem) -> None:
                             gate = gate_smem[...].astype(jnp.float32)
                             up = up_smem[...].astype(jnp.float32)
                             h_smem[:, :] = (jax.nn.silu(gate) * up * row_valid).astype(dtype)
@@ -597,33 +641,100 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                             def _accumulate_second_hidden_tile() -> None:
                                 mgpu.wgmma(acc_1_ref, h_smem, w_1_smem)
 
-                            mgpu.wgmma_wait(0)
+                        def _wait_for_reusable_stage() -> None:
+                            @pl.when(has_second_hidden_tile)
+                            def _wait_for_two_groups() -> None:
+                                mgpu.wgmma_wait(2)
+
+                            @pl.when(jnp.logical_not(has_second_hidden_tile))
+                            def _wait_for_one_group() -> None:
+                                mgpu.wgmma_wait(1)
+
+                        _load_stage(
+                            0,
+                            gate_0_smem,
+                            up_0_smem,
+                            w_00_smem,
+                            w_01_smem,
+                            activation_0_barrier,
+                            w_01_barrier,
+                        )
+
+                        @pl.loop(0, pipeline.tile_pairs)
+                        def _intermediate_pair_loop(pair) -> None:
+                            # A reuse wait retires the older stage but leaves the current tile's groups in flight.
+                            even_tile = pair * W2_PIPELINE_STAGES
+                            _wait_stage(activation_0_barrier, w_01_barrier)
+                            _issue_stage(gate_0_smem, up_0_smem, h_0_smem, w_00_smem, w_01_smem)
+
+                            odd_tile = even_tile + 1
+
+                            @pl.when(odd_tile < pipeline.intermediate_tiles)
+                            def _issue_odd_tile() -> None:
+                                _wait_for_reusable_stage()
+                                _load_stage(
+                                    odd_tile,
+                                    gate_1_smem,
+                                    up_1_smem,
+                                    w_10_smem,
+                                    w_11_smem,
+                                    activation_1_barrier,
+                                    w_11_barrier,
+                                )
+                                _wait_stage(activation_1_barrier, w_11_barrier)
+                                _issue_stage(gate_1_smem, up_1_smem, h_1_smem, w_10_smem, w_11_smem)
+
+                                next_even_tile = even_tile + W2_PIPELINE_STAGES
+
+                                @pl.when(next_even_tile < pipeline.intermediate_tiles)
+                                def _prefetch_next_even_tile() -> None:
+                                    _wait_for_reusable_stage()
+                                    _load_stage(
+                                        next_even_tile,
+                                        gate_0_smem,
+                                        up_0_smem,
+                                        w_00_smem,
+                                        w_01_smem,
+                                        activation_0_barrier,
+                                        w_01_barrier,
+                                    )
+
+                        mgpu.wgmma_wait(0)
 
                     pl.run_scoped(
                         _smem_scope,
-                        gate_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                        up_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                        h_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                        w_0_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
-                        w_1_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
-                        activation_barrier=mgpu.Barrier(num_arrivals=3),
-                        w_1_barrier=mgpu.Barrier(num_arrivals=1),
+                        gate_0_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        up_0_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        h_0_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        w_00_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        w_01_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        gate_1_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        up_1_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        h_1_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        w_10_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        w_11_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        activation_0_barrier=mgpu.Barrier(num_arrivals=3),
+                        w_01_barrier=mgpu.Barrier(num_arrivals=1),
+                        activation_1_barrier=mgpu.Barrier(num_arrivals=3),
+                        w_11_barrier=mgpu.Barrier(num_arrivals=1),
                     )
+                    acc_0 = mgpu.wgmma_accumulator_load(acc_0_ref, wait_n=None)
                     destination_ref[
                         destination_ordinal,
                         entry,
                         pl.ds(0, config.compute_m),
                         pl.ds(hidden_start, config.block_n),
-                    ] = acc_0_ref[...].astype(jnp.bfloat16)
+                    ] = acc_0.astype(jnp.bfloat16)
 
                     @pl.when(has_second_hidden_tile)
                     def _store_second_hidden_tile() -> None:
+                        acc_1 = mgpu.wgmma_accumulator_load(acc_1_ref, wait_n=None)
                         destination_ref[
                             destination_ordinal,
                             entry,
                             pl.ds(0, config.compute_m),
                             pl.ds(hidden_start + config.block_n, config.block_n),
-                        ] = acc_1_ref[...].astype(jnp.bfloat16)
+                        ] = acc_1.astype(jnp.bfloat16)
 
                 pl.run_scoped(
                     _acc_scope,
