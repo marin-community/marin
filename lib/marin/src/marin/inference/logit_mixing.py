@@ -376,6 +376,8 @@ def _sample_token(
 
 
 def _text_before_stop(text: str, stop: tuple[str, ...]) -> str | None:
+    """Return text before the earliest stop, or None when no stop matched."""
+
     positions = [position for item in stop if (position := text.find(item)) >= 0]
     return text[: min(positions)] if positions else None
 
