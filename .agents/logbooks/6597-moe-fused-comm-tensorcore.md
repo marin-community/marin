@@ -3820,3 +3820,17 @@ repeat. The next diagnostic uses a scalar reduction over one `d_w2` and one
 `d_route_weight` element per rank as an explicit global completion barrier
 before W13 backward. This tests the stronger requirement that every rank must
 retire the W2-backward transport phase before any rank enters W13 backward.
+
+## 2026-07-11 FUSED-MOE-128 - Global phase barrier fixes target all-stages
+
+Target job `/dlwh/mlp-all-stages-global-barrier-04f5` at `04f5802023`
+completed with one repeat at `129.673339 ms`, `59.649638` useful and
+`74.562047` rounded TFLOP/s/rank, checksum `23401137700864`, and zero
+drop/metadata/queue/layout errors. The per-rank edge had faulted at the same
+target shape.
+
+This proves the transport phases require a global completion edge between W2
+backward and W13 backward. Production backward now reduces one `d_w2` and one
+`d_route_weight` element per rank to a scalar completion token and injects its
+zero-valued dependency into `d_z13`. The next gate is the actual target custom
+VJP with three repeat medians.

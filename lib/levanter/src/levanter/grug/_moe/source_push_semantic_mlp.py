@@ -456,9 +456,14 @@ def _source_push_semantic_fused_mlp_backward(
         mesh=mesh,
         interpret=interpret,
     )
+    w2_backward_done = jnp.sum(fused_w2_backward.d_w2[:, 0, 0, 0].astype(jnp.float32))
+    w2_backward_done += jnp.sum(fused_w2_backward.d_route_weight[:, 0, 0].astype(jnp.float32))
+    w2_backward_done = jax.lax.optimization_barrier(w2_backward_done)
+    w2_backward_zero = w2_backward_done - jax.lax.optimization_barrier(w2_backward_done)
+    d_z13 = fused_w2_backward.d_z13 + w2_backward_zero.astype(fused_w2_backward.d_z13.dtype)
     fused_w13_backward = source_push_semantic_fused_w13_backward(
         residual.x,
-        fused_w2_backward.d_z13.astype(residual.w13.dtype),
+        d_z13.astype(residual.w13.dtype),
         residual.w13,
         residual.plan,
         send_chunks_per_dst=send_chunks_per_dst,
