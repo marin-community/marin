@@ -2219,3 +2219,28 @@ owners + ten gather helpers + twenty WGMMA consumers. Future W13 work must make
 the raw gather itself cheaper or more coalesced; redistributing the same gather
 work among persistent CTAs has now been bracketed and does not improve the
 aggregate objective.
+
+## 2026-07-10 FUSED-MOE-076 - W2 fused-kernel decomposition
+
+Job `/dlwh/bench-semantic-w2-decomposition-4d8f-20260710-2200` measured the
+selected target shape with three repeats per mode:
+
+| Mode | Median ms | Useful TFLOP/s/rank |
+|---|---:|---:|
+| W2 expert-major prepacked | 32.988112 | 26.039485 |
+| Direct return to source | 6.691665 | 128.367665 |
+| Source-owned combine | 2.932673 | n/a |
+| Fused W2 + return + combine | 61.828298 | 13.893209 |
+
+The split-stage median sum is `42.612450 ms`, leaving `19.215848 ms` of fused
+execution tax. This is not launch overhead: the fused persistent consumer loop
+serializes input staging, SwiGLU, each WGMMA K step, remote return, and slot
+release. The isolated W2 mode is also much slower than the historical balanced
+microbenchmark, so both tensor-core scheduling and overlap need work. The
+direct-return synthetic checksum was NaN, so use that row for timing
+decomposition only; integrated correctness remains the acceptance gate.
+
+The next experiment is a manual two-stage SMEM K pipeline in the Lane-lowered
+fused kernel. Peer-id refs prevent using the existing warp-specialized pipeline
+helper, but the current K loop can still prefetch tile `k+1` while WGMMA consumes
+tile `k` before the final wait and remote return.
