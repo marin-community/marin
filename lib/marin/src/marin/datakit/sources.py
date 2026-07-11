@@ -27,6 +27,7 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.dolma3_5_pool import dolma3_5_pool_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
@@ -250,6 +251,22 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
+    # dolma3.5_pool: 3 of the pool's ~15 components registered so far, each
+    # its own HF-directory-scoped download (see dolma3_5_pool.py for why).
+    # Token counts are estimated from the upstream jsonl.zst shards: for
+    # dolma4pdfs (whose records carry a `token_count` field on a subset of
+    # shards) the measured ~4.03 chars/token matches the standard chars/4
+    # heuristic, so chars/4 over a stratified byte-weighted file sample is
+    # used for all three (no `token_count` field elsewhere).
+    dolma3_5_pool = _rows_flat(
+        dolma3_5_pool_normalize_steps,
+        {
+            "dolma4pdfs": 2300.61,
+            "dolma_code": 1093.15,
+            "dolma_code_prose": 61.84,
+        },
+    )
+
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
     # own normalize.
@@ -392,6 +409,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *starcoder2_extras,
         *common_pile,
         *finepdfs,
+        *dolma3_5_pool,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,
         *nemotron_cc_code_v1,
