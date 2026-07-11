@@ -71,6 +71,10 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 )
 DEFAULT_CONTROLLER_TIMEOUT_MS = 30_000
 
+# Credential-store cluster name when nothing else identifies the cluster (no
+# --cluster, config name, local controller, or --controller-url to derive one).
+DEFAULT_CLUSTER_NAME = "default"
+
 
 @dataclass(frozen=True)
 class ControllerEndpoint:
@@ -95,7 +99,7 @@ def resolve_cluster_name(
         return "local"
     if controller_url:
         return cluster_name_from_url(controller_url)
-    return "default"
+    return DEFAULT_CLUSTER_NAME
 
 
 def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:

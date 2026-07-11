@@ -19,7 +19,7 @@ from rigging.config_discovery import list_cluster_configs
 from rigging.credential_store import list_cached_clusters, load_credentials
 from rigging.login_status import LoginMethod, LoginState, LoginStatus, resolve_login_status
 
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, cluster_auth_for
+from iris.cli.connect import DEFAULT_CLUSTER_NAME, IRIS_CLUSTER_CONFIG_DIRS, cluster_auth_for
 from iris.cluster.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def whoami(ctx, all_clusters: bool, output_format: str):
         statuses = _all_statuses()
     else:
         obj = ctx.obj or {}
-        statuses = [_status_for(obj.get("cluster_name") or "default", obj.get("config"))]
+        statuses = [_status_for(obj.get("cluster_name") or DEFAULT_CLUSTER_NAME, obj.get("config"))]
 
     if output_format == "json":
         click.echo(json.dumps([_to_json(s) for s in statuses], indent=2))

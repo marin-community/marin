@@ -17,6 +17,7 @@ from rigging.log_setup import configure_logging
 from rigging.login_status import EMAIL_METADATA_KEY, email_from_id_token
 
 from iris.cli.connect import (
+    DEFAULT_CLUSTER_NAME,
     IRIS_CLUSTER_CONFIG_DIRS,
     client_credentials,
     iap_config,
@@ -142,7 +143,7 @@ def login(ctx, headless):
     """
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
-    cluster_name = ctx.obj.get("cluster_name", "default")
+    cluster_name = ctx.obj.get("cluster_name", DEFAULT_CLUSTER_NAME)
 
     iap = iap_config(config)
     if iap is None:
