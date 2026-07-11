@@ -208,6 +208,9 @@ MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS = "semantic_fused_w2_backward_pallas"
 MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE = "semantic_fused_w2_backward_compare"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS = "semantic_fused_w13_backward_pallas"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE = "semantic_fused_w13_backward_compare"
+MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS = "semantic_fused_w13_backward_staging_only_pallas"
+MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS = "semantic_fused_w13_backward_staging_dx_pallas"
+MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS = "semantic_fused_w13_backward_staging_dw_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS = "semantic_fused_mlp_forward_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE = "semantic_fused_mlp_forward_compare"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS = "semantic_fused_mlp_forward_backward_pallas"
@@ -226,6 +229,12 @@ SEMANTIC_FUSED_MLP_MODES = (
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
 )
+SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES = (
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
+)
+SEMANTIC_FUSED_PALLAS_MODES = SEMANTIC_FUSED_STAGE_MODES + SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE = "w13_source_padded_direct_pack_compare"
 MODE_W2 = "w2"
@@ -565,6 +574,9 @@ MODES = (
     MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
@@ -1820,6 +1832,8 @@ def _mode_flops_per_rank(
         MODE_BACKWARD_W13_DW13_EXPERT_MAJOR_PREPACKED_PALLAS,
         MODE_BACKWARD_W13_DX_PAIR_PALLAS,
         MODE_BACKWARD_W13_DW13_PALLAS,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
     ):
         useful = useful_rows_total * w13_per_row
         rounded = rounded_rows_total * w13_per_row
@@ -3016,7 +3030,7 @@ def _make_mesh(ep_size: int) -> Mesh:
 
 
 def _is_pallas_mode(mode: str) -> bool:
-    return mode in SEMANTIC_FUSED_STAGE_MODES or mode in (
+    return mode in SEMANTIC_FUSED_PALLAS_MODES or mode in (
         MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
@@ -3210,7 +3224,11 @@ def _block_sizes_for_mode(args: argparse.Namespace, mode: str) -> dict[str, Any]
             "intermediate_block": config.intermediate_block,
             "inbox_slots": config.inbox_slots,
         }
-    if mode in (MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE):
+    if mode in (
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+        *SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES,
+    ):
         return {
             "compute_m": 64,
             "send_m": 256,
@@ -3678,6 +3696,7 @@ def _mode_callable(
         _make_mesh(args.ep_size)
         if (
             mode in SEMANTIC_FUSED_STAGE_MODES
+            or mode in SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
             or mode in SEMANTIC_FUSED_MLP_MODES
             or mode
             in (
@@ -4262,6 +4281,51 @@ def _mode_callable(
             "queue_overflow_route_error_count": result.queue_overflow_routes,
             "layout_overflow_row_error_count": result.layout_overflow_rows,
         }
+
+    def semantic_fused_w13_backward_diagnostic(
+        inputs: SemanticFusedW13BackwardBenchInputs,
+        diagnostic: source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic,
+    ):
+        send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
+        result = source_push_semantic_fused_w13_backward._source_push_semantic_fused_w13_backward_diagnostic(
+            inputs.x.astype(jnp.bfloat16),
+            inputs.dz13.astype(jnp.bfloat16),
+            inputs.w_gate_up.astype(jnp.bfloat16),
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=fused_rows_per_expert,
+            diagnostic=diagnostic,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        outputs = {
+            "x_expert": result.x_expert,
+            "queue_overflow_route_error_count": result.queue_overflow_routes,
+            "layout_overflow_row_error_count": result.layout_overflow_rows,
+        }
+        if diagnostic.includes_dx:
+            outputs["dx"] = result.dx
+        if diagnostic.includes_dw:
+            outputs["dw13"] = result.dw13
+        return outputs
+
+    def semantic_fused_w13_backward_staging_only_pallas(inputs: SemanticFusedW13BackwardBenchInputs):
+        return semantic_fused_w13_backward_diagnostic(
+            inputs,
+            source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY,
+        )
+
+    def semantic_fused_w13_backward_staging_dx_pallas(inputs: SemanticFusedW13BackwardBenchInputs):
+        return semantic_fused_w13_backward_diagnostic(
+            inputs,
+            source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX,
+        )
+
+    def semantic_fused_w13_backward_staging_dw_pallas(inputs: SemanticFusedW13BackwardBenchInputs):
+        return semantic_fused_w13_backward_diagnostic(
+            inputs,
+            source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW,
+        )
 
     def semantic_fused_w13_backward_reference(inputs: SemanticFusedW13BackwardBenchInputs):
         return semantic_fused_w13_backward(inputs, interpret=True)
@@ -8506,6 +8570,9 @@ def _mode_callable(
             host_metrics=_semantic_fused_w2_backward_host_metrics,
         ),
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS: semantic_fused_w13_backward_pallas,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS: semantic_fused_w13_backward_staging_only_pallas,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS: semantic_fused_w13_backward_staging_dx_pallas,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS: semantic_fused_w13_backward_staging_dw_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: SplitComparison(
             reference=semantic_fused_w13_backward_reference,
             observed=semantic_fused_w13_backward_observed,
@@ -9412,6 +9479,7 @@ def _run_stage_mode(
             _make_mesh(args.ep_size)
             if (
                 mode in SEMANTIC_FUSED_STAGE_MODES
+                or mode in SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
                 or mode in SEMANTIC_FUSED_MLP_MODES
                 or mode
                 in (
@@ -9698,7 +9766,11 @@ def _run_stage_mode(
         )
         if mode in (MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE):
             inputs = _make_semantic_fused_w2_backward_inputs(args, plan, expert_mesh)
-        if mode in (MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE):
+        if mode in (
+            MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+            MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+            *SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES,
+        ):
             inputs = _make_semantic_fused_w13_backward_inputs(args, plan, expert_mesh)
         if (
             mode
@@ -9791,7 +9863,12 @@ def _run_stage_mode(
         ):
             inputs = _shard_semantic_fused_w2_backward_inputs(inputs, expert_mesh)
         if (
-            mode in (MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS, MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE)
+            mode
+            in (
+                MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
+                MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+                *SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES,
+            )
             and expert_mesh is not None
         ):
             inputs = _shard_semantic_fused_w13_backward_inputs(inputs, expert_mesh)

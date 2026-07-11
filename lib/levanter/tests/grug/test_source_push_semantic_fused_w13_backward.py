@@ -10,11 +10,13 @@ import numpy as np
 from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
 from levanter.grug._moe.source_push_semantic_fused_w13_backward import (
     SourcePushSemanticFusedW13BackwardConfig,
+    _SourcePushSemanticFusedW13BackwardDiagnostic,
+    _source_push_semantic_fused_w13_backward_diagnostic,
+    _source_push_semantic_fused_w13_backward_role_layout,
     source_push_semantic_fused_w13_backward,
     source_push_semantic_fused_w13_backward_metadata_jax,
     source_push_semantic_fused_w13_backward_schedule,
 )
-
 
 CONFIG = SourcePushSemanticFusedW13BackwardConfig()
 
@@ -239,6 +241,53 @@ def test_fused_w13_backward_strided_role_ownership_covers_jobs_once_with_tails()
         assert sorted(owned) == list(range(jobs))
 
 
+def test_fused_w13_backward_diagnostic_role_layouts_remove_inactive_roles():
+    staging_only = _source_push_semantic_fused_w13_backward_role_layout(
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY
+    )
+    staging_dx = _source_push_semantic_fused_w13_backward_role_layout(
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX
+    )
+    staging_dw = _source_push_semantic_fused_w13_backward_role_layout(
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW
+    )
+    full = _source_push_semantic_fused_w13_backward_role_layout(_SourcePushSemanticFusedW13BackwardDiagnostic.FULL)
+
+    assert staging_only.total_programs == 48
+    assert staging_dx == (48, 88, 88)
+    assert staging_dw == (48, 48, 88)
+    assert full == (48, 88, 128)
+
+
+def test_fused_w13_backward_diagnostics_interpret_isolate_role_outputs():
+    x, dz13, w13, plan = _inputs()
+    expected_x_expert = _independent_staging_reference(x, plan, rows_per_expert_capacity=256)
+    expected_dx, expected_dw = _independent_backward_reference(x, dz13, w13, plan)
+
+    for diagnostic in (
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY,
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX,
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW,
+    ):
+        result = _source_push_semantic_fused_w13_backward_diagnostic(
+            x,
+            dz13,
+            w13,
+            plan,
+            send_chunks_per_dst=1,
+            rows_per_expert_capacity=256,
+            diagnostic=diagnostic,
+            interpret=True,
+        )
+        np.testing.assert_array_equal(np.asarray(result.x_expert), expected_x_expert)
+        expected_diagnostic_dx = expected_dx if diagnostic.includes_dx else np.zeros_like(expected_dx)
+        expected_diagnostic_dw = expected_dw if diagnostic.includes_dw else np.zeros_like(expected_dw)
+        np.testing.assert_allclose(np.asarray(result.dx), expected_diagnostic_dx, rtol=2e-4, atol=2e-4)
+        np.testing.assert_allclose(np.asarray(result.dw13), expected_diagnostic_dw, rtol=2e-4, atol=2e-4)
+        assert int(result.queue_overflow_routes) == 0
+        assert int(result.layout_overflow_rows) == 0
+
+
 def test_fused_w13_backward_interpret_matches_independent_route_reference():
     x, dz13, w13, plan = _inputs()
     result = jax.jit(
@@ -377,3 +426,27 @@ def _independent_backward_reference(x, dz13, w13, plan):
                     expected_dx[source, token] += dz_row @ w_host[destination, expert].T
                     expected_dw[destination, expert] += np.outer(x_host[source, token], dz_row)
     return expected_dx, expected_dw
+
+
+def _independent_staging_reference(x, plan, *, rows_per_expert_capacity: int):
+    x_host = np.asarray(x)
+    xcounts = np.asarray(plan.xcounts)
+    pair_bases = np.asarray(plan.pair_expert_base)
+    assignment_ids = np.asarray(plan.assignment_ids)
+    rounded_counts = ((xcounts + CONFIG.compute_m - 1) // CONFIG.compute_m) * CONFIG.compute_m
+    source_bases = np.zeros_like(xcounts)
+    source_bases[1:] = np.cumsum(rounded_counts[:-1], axis=0)
+    expected = np.zeros(
+        (xcounts.shape[1], xcounts.shape[2], rows_per_expert_capacity, x.shape[-1]),
+        dtype=x_host.dtype,
+    )
+    for source in range(xcounts.shape[0]):
+        for destination in range(xcounts.shape[1]):
+            for expert in range(xcounts.shape[2]):
+                for local_row in range(int(xcounts[source, destination, expert])):
+                    pair_row = int(pair_bases[source, destination, expert]) + local_row
+                    assignment = int(assignment_ids[source, destination, pair_row])
+                    token = assignment // plan.topk
+                    expert_row = int(source_bases[source, destination, expert]) + local_row
+                    expected[destination, expert, expert_row] = x_host[source, token]
+    return expected

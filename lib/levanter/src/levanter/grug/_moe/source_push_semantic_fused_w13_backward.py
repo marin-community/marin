@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import NamedTuple
+from enum import StrEnum
+from typing import NamedTuple, cast
 
 import jax
 import jax.numpy as jnp
@@ -28,7 +29,6 @@ from levanter.grug._moe.source_push_semantic_fused_w13 import (
     source_push_semantic_fused_w13_metadata_jax,
 )
 
-
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 WGMMA_PIPELINE_STAGES = 2
@@ -41,6 +41,25 @@ STAGING_PROGRAMS = 48
 DX_PROGRAMS = 40
 DW_PROGRAMS = 40
 assert STAGING_PROGRAMS + DX_PROGRAMS + DW_PROGRAMS == PERSISTENT_BACKWARD_PROGRAMS
+
+
+class _SourcePushSemanticFusedW13BackwardDiagnostic(StrEnum):
+    FULL = "full"
+    STAGING_ONLY = "staging_only"
+    STAGING_DX = "staging_dx"
+    STAGING_DW = "staging_dw"
+
+    @property
+    def includes_dx(self) -> bool:
+        return self in (self.FULL, self.STAGING_DX)
+
+    @property
+    def includes_dw(self) -> bool:
+        return self in (self.FULL, self.STAGING_DW)
+
+    @property
+    def includes_combine(self) -> bool:
+        return self.includes_dx
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +118,29 @@ class SourcePushSemanticFusedW13BackwardResult(NamedTuple):
     dw13: Float[Array, "Dst E H O"]
     queue_overflow_routes: Int[Array, ""]
     layout_overflow_rows: Int[Array, ""]
+
+
+class _SourcePushSemanticFusedW13BackwardDiagnosticResult(NamedTuple):
+    x_expert: Float[Array, "Dst E C H"]
+    dx: Float[Array, "S T H"]
+    dw13: Float[Array, "Dst E H O"]
+    queue_overflow_routes: Int[Array, ""]
+    layout_overflow_rows: Int[Array, ""]
+
+
+class _SourcePushSemanticFusedW13BackwardRoleLayout(NamedTuple):
+    dx_program_start: int
+    dw_program_start: int
+    total_programs: int
+
+
+def _source_push_semantic_fused_w13_backward_role_layout(
+    diagnostic: _SourcePushSemanticFusedW13BackwardDiagnostic,
+) -> _SourcePushSemanticFusedW13BackwardRoleLayout:
+    dx_program_start = STAGING_PROGRAMS
+    dw_program_start = dx_program_start + (DX_PROGRAMS if diagnostic.includes_dx else 0)
+    total_programs = dw_program_start + (DW_PROGRAMS if diagnostic.includes_dw else 0)
+    return _SourcePushSemanticFusedW13BackwardRoleLayout(dx_program_start, dw_program_start, total_programs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,6 +371,31 @@ def source_push_semantic_fused_w13_backward_reference_jax(
     return dx, dw13
 
 
+def _source_push_semantic_fused_w13_staging_reference_jax(
+    x: Float[Array, "S T H"],
+    metadata: SourcePushSemanticFusedW13BackwardMetadata,
+    *,
+    experts_per_rank: int,
+    rows_per_expert_capacity: int,
+) -> Float[Array, "Dst E C H"]:
+    forward = metadata.forward
+    source_count, destination_count, _chunks, _blocks, compute_m = forward.token_ids.shape
+    source = jnp.arange(source_count, dtype=jnp.int32)[:, None, None, None, None]
+    dst_ordinal = jnp.arange(destination_count, dtype=jnp.int32)[None, :, None, None]
+    destination = (jnp.arange(source_count, dtype=jnp.int32)[:, None, None, None] + dst_ordinal) % destination_count
+    row = jnp.arange(compute_m, dtype=jnp.int32)[None, None, None, None, :]
+    row_valid = row < forward.send_valid_rows[..., None]
+    expert = jnp.maximum(forward.send_expert, 0)[..., None]
+    expert_row = forward.send_row_start[..., None] + row
+    gathered_x = x.at[source, forward.token_ids].get()
+    gathered_x = jnp.where(row_valid[..., None], gathered_x, 0.0)
+    x_expert = jnp.zeros(
+        (destination_count, experts_per_rank, rows_per_expert_capacity, x.shape[-1]),
+        dtype=x.dtype,
+    )
+    return x_expert.at[destination[..., None], expert, expert_row].add(gathered_x)
+
+
 def source_push_semantic_fused_w13_backward(
     x: Float[Array, "S T H"],
     dz13: Float[Array, "Dst E C O"],
@@ -376,6 +443,66 @@ def source_push_semantic_fused_w13_backward(
     )
 
 
+def _source_push_semantic_fused_w13_backward_diagnostic(
+    x: Float[Array, "S T H"],
+    dz13: Float[Array, "Dst E C O"],
+    w13: Float[Array, "Dst E H O"],
+    plan: SourcePushSemanticPlan,
+    *,
+    send_chunks_per_dst: int,
+    rows_per_expert_capacity: int,
+    diagnostic: _SourcePushSemanticFusedW13BackwardDiagnostic,
+    config: SourcePushSemanticFusedW13BackwardConfig = SourcePushSemanticFusedW13BackwardConfig(),
+    mesh: Mesh | AbstractMesh | None = None,
+    interpret: bool = False,
+) -> _SourcePushSemanticFusedW13BackwardDiagnosticResult:
+    """Run a benchmark-only compile-time role isolation variant."""
+
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
+        raise ValueError("the full path must use source_push_semantic_fused_w13_backward")
+    _validate_request(x, dz13, w13, plan, rows_per_expert_capacity, config)
+    metadata = source_push_semantic_fused_w13_backward_metadata_jax(
+        x,
+        plan,
+        send_chunks_per_dst=send_chunks_per_dst,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+        config=config,
+    )
+    if interpret:
+        x_expert = _source_push_semantic_fused_w13_staging_reference_jax(
+            x,
+            metadata,
+            experts_per_rank=w13.shape[1],
+            rows_per_expert_capacity=rows_per_expert_capacity,
+        )
+        reference_dx, reference_dw13 = source_push_semantic_fused_w13_backward_reference_jax(x, dz13, w13, metadata)
+        dx = reference_dx if diagnostic.includes_dx else jnp.zeros_like(x, dtype=jnp.float32)
+        dw13 = reference_dw13 if diagnostic.includes_dw else jnp.zeros_like(w13, dtype=jnp.float32)
+    else:
+        if jax.default_backend() != "gpu":
+            raise NotImplementedError("persistent semantic fused W13 backward diagnostics require a GPU backend")
+        if mesh is None:
+            mesh = jax.sharding.get_abstract_mesh()
+            if mesh.empty:
+                raise ValueError("mesh is required for persistent semantic fused W13 backward diagnostics")
+        x_expert, dx, dw13 = _source_push_semantic_fused_w13_backward_sharded(
+            x,
+            dz13,
+            w13,
+            metadata,
+            config=config,
+            mesh=mesh,
+            diagnostic=diagnostic,
+        )
+    return _SourcePushSemanticFusedW13BackwardDiagnosticResult(
+        x_expert=x_expert,
+        dx=dx,
+        dw13=dw13,
+        queue_overflow_routes=metadata.forward.queue_overflow_routes,
+        layout_overflow_rows=metadata.forward.layout_overflow_rows,
+    )
+
+
 def _source_push_semantic_fused_w13_backward_sharded(
     x: Array,
     dz13: Array,
@@ -384,7 +511,8 @@ def _source_push_semantic_fused_w13_backward_sharded(
     *,
     config: SourcePushSemanticFusedW13BackwardConfig,
     mesh: Mesh | AbstractMesh,
-) -> tuple[Array, Array]:
+    diagnostic: _SourcePushSemanticFusedW13BackwardDiagnostic = _SourcePushSemanticFusedW13BackwardDiagnostic.FULL,
+) -> tuple[Array, ...]:
     ep_size = x.shape[0]
     if mesh.shape[SOURCE_PUSH_MESH_AXIS] != ep_size:
         raise ValueError(f"mesh size must match EP size {ep_size}, got {mesh.shape[SOURCE_PUSH_MESH_AXIS]}")
@@ -398,6 +526,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
         send_chunks_per_dst=metadata.forward.send_chunks_per_dst,
         dtype=x.dtype,
         config=config,
+        diagnostic=diagnostic,
     )
 
     def local_fn(
@@ -419,7 +548,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
         dz_local,
         w_local,
     ):
-        _x_expert, _dx_return, dx_local, dw_local = kernel(
+        x_expert_local, _dx_return, dx_local, dw_local = kernel(
             x_local[0],
             token_ids_local[0],
             send_valid_local[0],
@@ -438,14 +567,34 @@ def _source_push_semantic_fused_w13_backward_sharded(
             dz_local[0],
             w_local[0],
         )
-        return dx_local[None, ...], dw_local[None, ...]
+        if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
+            return dx_local[None, ...], dw_local[None, ...]
+        if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
+            return (x_expert_local[None, ...],)
+        if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX:
+            return x_expert_local[None, ...], dx_local[None, ...]
+        return x_expert_local[None, ...], dw_local[None, ...]
 
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     source_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     destination_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     source_token_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
-    return shard_map(
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
+        out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None), P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
+        out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None, None),)
+    elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX:
+        out_specs = (
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+        )
+    else:
+        out_specs = (
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        )
+    outputs = shard_map(
         local_fn,
         mesh=mesh,
         in_specs=(
@@ -467,7 +616,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
         ),
-        out_specs=(P(SOURCE_PUSH_MESH_AXIS, None, None), P(SOURCE_PUSH_MESH_AXIS, None, None, None)),
+        out_specs=out_specs,
         check_vma=False,
     )(
         jax.sharding.reshard(x, source_3d),
@@ -488,6 +637,16 @@ def _source_push_semantic_fused_w13_backward_sharded(
         jax.sharding.reshard(dz13, destination_4d),
         jax.sharding.reshard(w13, destination_4d),
     )
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
+        return outputs
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
+        (x_expert,) = cast(tuple[Array], outputs)
+        return x_expert, jnp.zeros_like(x, dtype=jnp.float32), jnp.zeros_like(w13, dtype=jnp.float32)
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX:
+        x_expert, dx = cast(tuple[Array, Array], outputs)
+        return x_expert, dx, jnp.zeros_like(w13, dtype=jnp.float32)
+    x_expert, dw13 = cast(tuple[Array, Array], outputs)
+    return x_expert, jnp.zeros_like(x, dtype=jnp.float32), dw13
 
 
 def _make_source_push_semantic_fused_w13_backward_kernel(
@@ -501,6 +660,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
     send_chunks_per_dst: int,
     dtype: jnp.dtype,
     config: SourcePushSemanticFusedW13BackwardConfig,
+    diagnostic: _SourcePushSemanticFusedW13BackwardDiagnostic = _SourcePushSemanticFusedW13BackwardDiagnostic.FULL,
 ):
     config.validate()
     _validate_kernel_dimensions(hidden_dim, output_dim, config)
@@ -516,6 +676,10 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
     hidden_tiles = schedule.hidden_tiles
     output_tiles = output_dim // config.block_output
     dw_tiles = experts_per_rank * hidden_tiles * output_tiles
+    role_layout = _source_push_semantic_fused_w13_backward_role_layout(diagnostic)
+    dx_program_start = role_layout.dx_program_start
+    dw_program_start = role_layout.dw_program_start
+    total_programs = role_layout.total_programs
 
     def body(
         x_ref,
@@ -540,11 +704,13 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         dx_ref,
         dw_ref,
     ) -> None:
-        compact_ready_sem = pl.get_global(
-            mgpu.SemaphoreType.REGULAR((experts_per_rank, schedule.compact_m_blocks, hidden_tiles))
-        )
-        dx_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, send_chunks_per_dst)))
-        ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
+        if diagnostic.includes_dw:
+            compact_ready_sem = pl.get_global(
+                mgpu.SemaphoreType.REGULAR((experts_per_rank, schedule.compact_m_blocks, hidden_tiles))
+            )
+        if diagnostic.includes_dx:
+            dx_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, send_chunks_per_dst)))
+            ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
 
@@ -613,76 +779,77 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 _copy_scope,
                                 x_smem=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
                             )
-                            compact_block = row_start // config.compute_m
-                            if static_destination_ordinal == 0:
-                                pl.semaphore_signal(compact_ready_sem.at[expert, compact_block, hidden_tile])
-                            else:
-                                _signal_remote(
-                                    compact_ready_sem,
-                                    destination,
-                                    (expert, compact_block, hidden_tile),
-                                )
+                            if diagnostic.includes_dw:
+                                compact_block = row_start // config.compute_m
+                                if static_destination_ordinal == 0:
+                                    pl.semaphore_signal(compact_ready_sem.at[expert, compact_block, hidden_tile])
+                                else:
+                                    _signal_remote(
+                                        compact_ready_sem,
+                                        destination,
+                                        (expert, compact_block, hidden_tile),
+                                    )
 
             for destination_ordinal in range(ep_size):
                 _stage_peer(destination_ordinal)
 
-            hidden_tile = producer % hidden_tiles
-            consumer_lane = producer // hidden_tiles
-            consumers_for_tile = (schedule.combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
-            hidden_start = hidden_tile * config.block_hidden
+            if diagnostic.includes_combine:
+                hidden_tile = producer % hidden_tiles
+                consumer_lane = producer // hidden_tiles
+                consumers_for_tile = (schedule.combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
+                hidden_start = hidden_tile * config.block_hidden
 
-            @pl.when(consumer_lane < schedule.token_blocks)
-            def _active_consumer() -> None:
-                @pl.loop(0, schedule.token_blocks)
-                def _token_block_loop(iteration) -> None:
-                    token_block = consumer_lane + iteration * consumers_for_tile
+                @pl.when(consumer_lane < schedule.token_blocks)
+                def _active_consumer() -> None:
+                    @pl.loop(0, schedule.token_blocks)
+                    def _token_block_loop(iteration) -> None:
+                        token_block = consumer_lane + iteration * consumers_for_tile
 
-                    @pl.when(token_block < schedule.token_blocks)
-                    def _combine_token_block() -> None:
-                        for destination_ordinal in range(ep_size):
-                            for slot in range(config.inbox_slots):
-                                required_generation = combine_ready_ref[token_block, destination_ordinal, slot]
+                        @pl.when(token_block < schedule.token_blocks)
+                        def _combine_token_block() -> None:
+                            for destination_ordinal in range(ep_size):
+                                for slot in range(config.inbox_slots):
+                                    required_generation = combine_ready_ref[token_block, destination_ordinal, slot]
 
-                                @pl.when(required_generation > 0)
-                                def _wait_for_required_round() -> None:
-                                    pl.semaphore_wait(
-                                        ready_sem.at[destination_ordinal, slot],
-                                        value=required_generation,
-                                        decrement=False,
-                                    )
+                                    @pl.when(required_generation > 0)
+                                    def _wait_for_required_round() -> None:
+                                        pl.semaphore_wait(
+                                            ready_sem.at[destination_ordinal, slot],
+                                            value=required_generation,
+                                            decrement=False,
+                                        )
 
-                        token_start = token_block * config.combine_token_block
+                            token_start = token_block * config.combine_token_block
 
-                        @pl.loop(0, config.combine_token_block)
-                        def _token_loop(token_offset) -> None:
-                            token = token_start + token_offset
+                            @pl.loop(0, config.combine_token_block)
+                            def _token_loop(token_offset) -> None:
+                                token = token_start + token_offset
 
-                            @pl.when(token < tokens_per_source)
-                            def _combine_token() -> None:
-                                acc = jnp.zeros((config.block_hidden,), dtype=jnp.float32)
-                                for route_slot in range(route_valid_ref.shape[-1]):
-                                    destination_ordinal = route_dst_ref[token, route_slot]
-                                    chunk = route_chunk_ref[token, route_slot]
-                                    block = route_block_ref[token, route_slot]
-                                    row = route_row_ref[token, route_slot]
-                                    route_value = dx_return_ref[
-                                        destination_ordinal,
-                                        chunk,
-                                        block * config.compute_m + row,
-                                        pl.ds(hidden_start, config.block_hidden),
-                                    ].astype(jnp.float32)
-                                    valid = route_valid_ref[token, route_slot] != 0
-                                    acc += jnp.where(
-                                        valid,
-                                        route_value,
-                                        jnp.zeros((), dtype=jnp.float32),
-                                    )
+                                @pl.when(token < tokens_per_source)
+                                def _combine_token() -> None:
+                                    acc = jnp.zeros((config.block_hidden,), dtype=jnp.float32)
+                                    for route_slot in range(route_valid_ref.shape[-1]):
+                                        destination_ordinal = route_dst_ref[token, route_slot]
+                                        chunk = route_chunk_ref[token, route_slot]
+                                        block = route_block_ref[token, route_slot]
+                                        row = route_row_ref[token, route_slot]
+                                        route_value = dx_return_ref[
+                                            destination_ordinal,
+                                            chunk,
+                                            block * config.compute_m + row,
+                                            pl.ds(hidden_start, config.block_hidden),
+                                        ].astype(jnp.float32)
+                                        valid = route_valid_ref[token, route_slot] != 0
+                                        acc += jnp.where(
+                                            valid,
+                                            route_value,
+                                            jnp.zeros((), dtype=jnp.float32),
+                                        )
 
-                                dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = acc
+                                    dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = acc
 
-        @pl.when((worker >= schedule.dx_program_start) & (worker < schedule.dw_program_start))
         def _compute_and_publish_dx() -> None:
-            consumer = worker - schedule.dx_program_start
+            consumer = worker - dx_program_start
             dx_jobs_per_source = send_chunks_per_dst * config.compute_blocks_per_send * hidden_tiles
 
             def _compute_source(static_source_ordinal: int) -> None:
@@ -824,9 +991,11 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
             for source_ordinal in range(ep_size):
                 _compute_source(source_ordinal)
 
-        @pl.when(worker >= schedule.dw_program_start)
+        if diagnostic.includes_dx:
+            pl.when((worker >= dx_program_start) & (worker < dw_program_start))(_compute_and_publish_dx)
+
         def _own_dw_tiles() -> None:
-            owner = worker - schedule.dw_program_start
+            owner = worker - dw_program_start
 
             @pl.loop(0, math.ceil(dw_tiles / schedule.dw_programs))
             def _tile_loop(iteration) -> None:
@@ -935,6 +1104,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         acc_ref=mgpu.ACC((config.block_hidden, config.block_output)),
                     )
 
+        if diagnostic.includes_dw:
+            pl.when(worker >= dw_program_start)(_own_dw_tiles)
+
     x_expert_shape = (experts_per_rank, rows_per_expert_capacity, hidden_dim)
     return_shape = (ep_size, send_chunks_per_dst, config.send_m, hidden_dim)
     return mgpu.kernel(
@@ -945,7 +1117,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
             jax.ShapeDtypeStruct((tokens_per_source, hidden_dim), jnp.float32),
             jax.ShapeDtypeStruct((experts_per_rank, hidden_dim, output_dim), jnp.float32),
         ),
-        grid=(schedule.total_programs,),
+        grid=(total_programs,),
         grid_names=("worker_program",),
         compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane),
     )

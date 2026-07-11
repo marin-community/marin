@@ -172,6 +172,14 @@ def test_source_push_semantic_plan_semantic_fused_stage_alias_includes_queue_sha
     assert bench_source_push_semantic_plan._parse_modes("semantic_fused_w2_backward_pallas") == (
         bench_source_push_semantic_plan.MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
     )
+    assert (
+        bench_source_push_semantic_plan._parse_modes(
+            "semantic_fused_w13_backward_staging_only_pallas,"
+            "semantic_fused_w13_backward_staging_dx_pallas,"
+            "semantic_fused_w13_backward_staging_dw_pallas"
+        )
+        == bench_source_push_semantic_plan.SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
+    )
 
 
 def test_source_push_semantic_plan_builds_fused_w2_backward_inputs_directly_sharded():
@@ -2398,7 +2406,10 @@ def test_source_push_semantic_plan_bench_emits_fused_stage_rows(tmp_path):
     bench_source_push_semantic_plan = _bench_module()
     modes = (
         "semantic_fused_w2_return_pallas,semantic_fused_w2_return_compare,"
-        "semantic_fused_w13_backward_pallas,semantic_fused_w13_backward_compare"
+        "semantic_fused_w13_backward_pallas,semantic_fused_w13_backward_compare,"
+        "semantic_fused_w13_backward_staging_only_pallas,"
+        "semantic_fused_w13_backward_staging_dx_pallas,"
+        "semantic_fused_w13_backward_staging_dw_pallas"
     )
 
     bench_source_push_semantic_plan.main(
@@ -2441,7 +2452,10 @@ def test_source_push_semantic_plan_bench_emits_fused_stage_rows(tmp_path):
         assert summary["implementation"] == "pallas_mgpu"
         assert summary["error_rows"] == 0
         assert summary["median_steady_state_time"] > 0
-        assert summary["median_useful_tflops_per_rank"] is not None
+        if summary["mode"] == "semantic_fused_w13_backward_staging_only_pallas":
+            assert summary["median_useful_tflops_per_rank"] is None
+        else:
+            assert summary["median_useful_tflops_per_rank"] is not None
         assert summary["median_queue_overflow_route_error_count"] == 0.0
         assert summary["median_layout_overflow_row_error_count"] == 0.0
 
