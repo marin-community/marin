@@ -3,10 +3,12 @@
 # ruff: noqa: PLC0415
 
 import ctypes
+import os
 import statistics
 import time
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 PAYLOAD_WORDS = 4
 
@@ -17,6 +19,10 @@ class PullOperation(StrEnum):
     PEER_LOAD = "peer_load"
     BLOCKING_WARP = "blocking_warp"
     NBI_WARP_QUIET = "nbi_warp_quiet"
+    BLOCKING_BLOCK = "blocking_block"
+    NBI_BLOCK_QUIET = "nbi_block_quiet"
+    PEER_LOAD_WARP = "peer_load_warp"
+    NBI_BATCHED_QUIET = "nbi_batched_quiet"
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,21 @@ def _copy_uint64_array_to_host(buffer: object, length: int) -> tuple[int, ...]:
     return tuple(int(value) for value in values)
 
 
+def _wait_for_start_gate(nvshmem: object) -> None:
+    ready_dir = os.environ.get("NVTP_READY_DIR")
+    start_file = os.environ.get("NVTP_START_FILE")
+    if not ready_dir and not start_file:
+        return
+    if not ready_dir or not start_file:
+        raise ValueError("NVTP_READY_DIR and NVTP_START_FILE must be set together")
+    rank = int(nvshmem.my_pe())
+    ready_path = Path(ready_dir)
+    ready_path.mkdir(parents=True, exist_ok=True)
+    (ready_path / f"transport-{rank}").touch()
+    while not Path(start_file).exists():
+        time.sleep(0.01)
+
+
 def run_get_probe(
     num_epochs: int,
     num_slots: int,
@@ -73,6 +94,8 @@ def run_get_probe(
         raise ValueError("num_slots must be one of 1, 2, 4, or 8")
     if payload_bytes < PAYLOAD_WORDS * 4 or payload_bytes % 4:
         raise ValueError("payload_bytes must be a multiple of four and at least 16")
+    if operation is PullOperation.NBI_BATCHED_QUIET and payload_bytes % 16:
+        raise ValueError("nbi_batched_quiet requires payload_bytes to be a multiple of 16")
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
     payload_words = payload_bytes // 4
@@ -181,10 +204,83 @@ def run_get_probe(
             nvshmem_cute.get_nbi_warp(destination, source, predecessor)
             quiet()
 
+    elif operation is PullOperation.BLOCKING_BLOCK:
+
+        @cute.jit
+        def transfer(
+            destination: cute.Tensor,
+            source: cute.Tensor,
+            peer_source: cute.Tensor,
+            predecessor: Int32,
+            words: Int32,
+        ):
+            nvshmem_cute.get_block(destination, source, predecessor)
+
+    elif operation is PullOperation.NBI_BLOCK_QUIET:
+
+        @cute.jit
+        def transfer(
+            destination: cute.Tensor,
+            source: cute.Tensor,
+            peer_source: cute.Tensor,
+            predecessor: Int32,
+            words: Int32,
+        ):
+            nvshmem_cute.get_nbi_block(destination, source, predecessor)
+            quiet()
+
+    elif operation is PullOperation.PEER_LOAD_WARP:
+
+        @cute.jit
+        def transfer(
+            destination: cute.Tensor,
+            source: cute.Tensor,
+            peer_source: cute.Tensor,
+            predecessor: Int32,
+            words: Int32,
+        ):
+            thread_index, _, _ = cute.arch.thread_idx()
+            lane = thread_index % 32
+            peer_ptr = cute.make_ptr(cute.Int32, peer_source.iterator.toint(), cute.AddressSpace.gmem, assumed_align=16)
+            destination_ptr = cute.make_ptr(
+                cute.Int32, destination.iterator.toint(), cute.AddressSpace.gmem, assumed_align=16
+            )
+            fence_acq_rel_sys()
+            for offset in range(lane, words, 32):
+                store(
+                    (destination_ptr + offset).llvm_ptr,
+                    load((peer_ptr + offset).llvm_ptr, cute.Int32, cop="cv"),
+                )
+            sync_warp()
+
+    elif operation is PullOperation.NBI_BATCHED_QUIET:
+
+        @cute.jit
+        def transfer(
+            destination: cute.Tensor,
+            source: cute.Tensor,
+            peer_source: cute.Tensor,
+            predecessor: Int32,
+            words: Int32,
+        ):
+            chunk_words = words // 4
+            for chunk in cutlass.range_constexpr(4):
+                destination_chunk = cute.make_tensor(
+                    destination.iterator + chunk * chunk_words, cute.make_layout(chunk_words)
+                )
+                source_chunk = cute.make_tensor(source.iterator + chunk * chunk_words, cute.make_layout(chunk_words))
+                nvshmem_cute.get_nbi(destination_chunk, source_chunk, predecessor)
+            quiet()
+
     else:
         raise ValueError(f"unknown pull operation {operation}")
 
-    warp_cooperative = operation in (PullOperation.BLOCKING_WARP, PullOperation.NBI_WARP_QUIET)
+    warp_cooperative = operation in (
+        PullOperation.BLOCKING_WARP,
+        PullOperation.NBI_WARP_QUIET,
+        PullOperation.PEER_LOAD_WARP,
+    )
+    block_cooperative = operation in (PullOperation.BLOCKING_BLOCK, PullOperation.NBI_BLOCK_QUIET)
 
     @cute.kernel
     def pull_ring_kernel(
@@ -204,7 +300,62 @@ def run_get_probe(
         predecessor = (rank + num_pes - 1) % num_pes
         peer_source = nvshmem_cute_mem.get_peer_tensor(source, predecessor)
 
-        if thread_index == 0:
+        if block_cooperative:
+            for epoch in range(1, epochs + 1):
+                slot = (epoch - 1) % slots
+                source_slot = cute.make_tensor(source.iterator + slot * payload_words, cute.make_layout(payload_words))
+                peer_source_slot = cute.make_tensor(
+                    peer_source.iterator + slot * payload_words, cute.make_layout(payload_words)
+                )
+                destination_slot = cute.make_tensor(
+                    destination.iterator + slot * payload_words, cute.make_layout(payload_words)
+                )
+                source_ptr = cute.make_ptr(
+                    cute.Int32, source_slot.iterator.toint(), cute.AddressSpace.gmem, assumed_align=16
+                )
+                destination_ptr = cute.make_ptr(
+                    cute.Int32, destination_slot.iterator.toint(), cute.AddressSpace.gmem, assumed_align=16
+                )
+                ready_slot = cute.make_tensor(ready.iterator + slot, cute.make_layout(1))
+                consumed_slot = cute.make_tensor(consumed.iterator + slot, cute.make_layout(1))
+                if thread_index == 0:
+                    if epoch > slots:
+                        nvshmem_cute.signal_wait(consumed_slot, nvshmem.ComparisonType.CMP_GE, epoch - slots)
+                    store(source_ptr.llvm_ptr, cutlass.Int32(rank), sem="release", scope="sys")
+                    store((source_ptr + 1).llvm_ptr, cutlass.Int32(epoch), sem="release", scope="sys")
+                    store((source_ptr + 2).llvm_ptr, cutlass.Int32(slot), sem="release", scope="sys")
+                    store((source_ptr + 3).llvm_ptr, cutlass.Int32(rank ^ epoch), sem="release", scope="sys")
+                    fence_acq_rel_sys()
+                    nvshmem_cute.signal_op(ready_slot, epoch, nvshmem.SignalOp.SIGNAL_SET, successor)
+                cute.arch.sync_threads()
+                if thread_index == 32:
+                    nvshmem_cute.signal_wait(ready_slot, nvshmem.ComparisonType.CMP_GE, epoch)
+                cute.arch.sync_threads()
+                transfer(destination_slot, source_slot, peer_source_slot, predecessor, words)
+                cute.arch.sync_threads()
+                if thread_index == 32:
+                    fence_acq_rel_sys()
+                    observed_rank = load(destination_ptr.llvm_ptr, cute.Int32, cop="cv")
+                    observed_epoch = load((destination_ptr + 1).llvm_ptr, cute.Int32, cop="cv")
+                    observed_slot = load((destination_ptr + 2).llvm_ptr, cute.Int32, cop="cv")
+                    observed_checksum = load((destination_ptr + 3).llvm_ptr, cute.Int32, cop="cv")
+                    if (
+                        observed_rank != predecessor
+                        or observed_epoch != epoch
+                        or observed_slot != slot
+                        or observed_checksum != (predecessor ^ epoch)
+                    ):
+                        if validation[0] == 0:
+                            validation[1] = epoch
+                            validation[2] = observed_rank
+                            validation[3] = observed_epoch
+                            validation[4] = observed_slot
+                            validation[5] = observed_checksum
+                        validation[0] = validation[0] + 1
+                    nvshmem_cute.signal_op(consumed_slot, epoch, nvshmem.SignalOp.SIGNAL_SET, predecessor)
+                cute.arch.sync_threads()
+
+        elif thread_index == 0:
             for epoch in range(1, epochs + 1):
                 slot = (epoch - 1) % slots
                 source_slot = cute.make_tensor(
@@ -228,7 +379,9 @@ def run_get_probe(
                 fence_acq_rel_sys()
                 nvshmem_cute.signal_op(ready_slot, epoch, nvshmem.SignalOp.SIGNAL_SET, successor)
 
-        consumer_active = thread_index >= 32 if warp_cooperative else thread_index == 32
+        consumer_active = (
+            False if block_cooperative else (thread_index >= 32 if warp_cooperative else thread_index == 32)
+        )
 
         if consumer_active:
             for epoch in range(1, epochs + 1):
@@ -314,6 +467,7 @@ def run_get_probe(
     cuda_library = compiled.jit_module.cuda_library
     kernel_object = nvshmem.NvshmemKernelObject.from_handle(int(cuda_library[0]))
     nvshmem.library_init(kernel_object)
+    _wait_for_start_gate(nvshmem)
 
     elapsed_times = []
     for _ in range(repetitions):

@@ -106,13 +106,27 @@ def main() -> None:
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--payload-bytes", type=int, nargs="+", default=DEFAULT_PAYLOAD_BYTES)
     parser.add_argument("--epochs", type=int)
+    parser.add_argument(
+        "--push-operations",
+        type=PushOperation,
+        nargs="+",
+        choices=list(PushOperation),
+        default=list(PushOperation),
+    )
+    parser.add_argument(
+        "--pull-operations",
+        type=PullOperation,
+        nargs="+",
+        choices=list(PullOperation),
+        default=list(PullOperation),
+    )
     parser.add_argument("--output")
     args = parser.parse_args()
 
     rows = []
     for payload_bytes in args.payload_bytes:
         num_epochs = args.epochs or _epochs_for_payload(payload_bytes)
-        for operation in PushOperation:
+        for operation in args.push_operations:
             row = _benchmark_push(
                 operation,
                 num_pes=args.num_pes,
@@ -123,7 +137,7 @@ def main() -> None:
             )
             rows.append(row)
             print(json.dumps(asdict(row), sort_keys=True), flush=True)
-        for operation in PullOperation:
+        for operation in args.pull_operations:
             row = _benchmark_pull(
                 operation,
                 num_pes=args.num_pes,

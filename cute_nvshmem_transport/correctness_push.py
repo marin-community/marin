@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from queue import Empty
 
 from cute_nvshmem_transport.push_kernels import PushOperation, run_push_probe
+from cute_nvshmem_transport.signals import final_slot_epochs
 
 
 @dataclass(frozen=True)
@@ -96,9 +97,7 @@ def run_push_correctness(
     if errors:
         raise RuntimeError("\n".join(errors))
 
-    expected_epochs = tuple(
-        num_epochs - ((num_epochs - slot - 1) % num_slots) if num_epochs > slot else 0 for slot in range(num_slots)
-    )
+    expected_epochs = final_slot_epochs(num_epochs, num_slots)
     for result in rank_results:
         if result.ready_epochs != expected_epochs:
             raise AssertionError(
