@@ -32,7 +32,6 @@ from levanter.grug._moe.source_push_semantic_fused_w13 import (
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 WGMMA_PIPELINE_STAGES = 2
-DW_REDUCTION_BLOCKS = 2
 # A separate persistent dW owner grid would wait for stage-ready signals while
 # the 288-CTA route grid could leave the required producers nonresident. Keep
 # the complete producer -> {dX, dW} partial order in one co-resident grid below
@@ -108,7 +107,6 @@ class SourcePushSemanticFusedW13BackwardSchedule:
 
     hidden_tiles: int
     compact_m_blocks: int
-    dw_reduction_pairs: int
     staging_jobs: int
     dx_jobs: int
     token_blocks: int
@@ -179,7 +177,6 @@ def source_push_semantic_fused_w13_backward_schedule(
     return SourcePushSemanticFusedW13BackwardSchedule(
         hidden_tiles=hidden_tiles,
         compact_m_blocks=compact_m_blocks,
-        dw_reduction_pairs=math.ceil(compact_m_blocks / DW_REDUCTION_BLOCKS),
         staging_jobs=block_jobs * hidden_tiles,
         dx_jobs=block_jobs * hidden_tiles,
         token_blocks=token_blocks,
@@ -846,13 +843,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
                     def _acc_scope(acc_ref) -> None:
                         def _smem_scope(x_smem, dz_smem, barrier) -> None:
-                            def _copy_compact_half(compact_block, half) -> None:
+                            def _copy_compact_block(compact_block, stage) -> None:
                                 valid_rows = compact_valid_rows_ref[expert, compact_block]
 
                                 @pl.when(valid_rows > 0)
-                                def _copy_live_half() -> None:
+                                def _copy_live_block() -> None:
                                     row_start = compact_block * config.compute_m
-                                    half_start = half * config.compute_m
                                     pl.semaphore_wait(
                                         compact_ready_sem.at[expert, compact_block, hidden_tile],
                                         value=1,
@@ -864,8 +860,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                             pl.ds(row_start, config.compute_m),
                                             pl.ds(hidden_start, config.block_hidden),
                                         ],
-                                        x_smem.at[pl.ds(half_start, config.compute_m)],
-                                        barrier.at[half],
+                                        x_smem.at[stage],
+                                        barrier.at[stage],
                                     )
                                     mgpu.copy_gmem_to_smem(
                                         dz_ref.at[
@@ -873,16 +869,16 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                             pl.ds(row_start, config.compute_m),
                                             pl.ds(output_start, config.block_output),
                                         ],
-                                        dz_smem.at[pl.ds(half_start, config.compute_m)],
-                                        barrier.at[half],
+                                        dz_smem.at[stage],
+                                        barrier.at[stage],
                                     )
 
-                            def _finish_compact_half(compact_block, half) -> None:
+                            def _accumulate_compact_block(compact_block, stage) -> None:
                                 valid_rows = compact_valid_rows_ref[expert, compact_block]
 
                                 @pl.when(valid_rows > 0)
-                                def _finish_live_half() -> None:
-                                    mgpu.barrier_wait(barrier.at[half])
+                                def _accumulate_live_block() -> None:
+                                    mgpu.barrier_wait(barrier.at[stage])
                                     row = mgpu.layout_cast(
                                         lax.broadcasted_iota(
                                             jnp.int32,
@@ -892,54 +888,40 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                         mgpu.Layout.WGMMA,
                                     )
                                     row_valid = (row < valid_rows).astype(jnp.float32)
-                                    half_start = half * config.compute_m
-                                    x_half = x_smem.at[pl.ds(half_start, config.compute_m)]
-                                    dz_half = dz_smem.at[pl.ds(half_start, config.compute_m)]
-                                    x_half[:, :] = (x_half[...].astype(jnp.float32) * row_valid).astype(dtype)
-                                    dz_half[:, :] = (dz_half[...].astype(jnp.float32) * row_valid).astype(dtype)
+                                    x_stage = x_smem.at[stage]
+                                    dz_stage = dz_smem.at[stage]
+                                    dz_stage[:, :] = (dz_stage[...].astype(jnp.float32) * row_valid).astype(dtype)
+                                    mgpu.commit_smem()
+                                    mgpu.wgmma(
+                                        acc_ref,
+                                        mgpu.transpose_ref(x_stage, (1, 0)),
+                                        dz_stage,
+                                    )
 
-                            @pl.loop(0, schedule.dw_reduction_pairs)
+                            @pl.loop(0, math.ceil(schedule.compact_m_blocks / WGMMA_PIPELINE_STAGES))
                             def _compact_m_pair_loop(pair) -> None:
-                                x_smem[:, :] = jnp.zeros(
-                                    (DW_REDUCTION_BLOCKS * config.compute_m, config.block_hidden), dtype=dtype
-                                )
-                                dz_smem[:, :] = jnp.zeros(
-                                    (DW_REDUCTION_BLOCKS * config.compute_m, config.block_output), dtype=dtype
-                                )
-                                mgpu.commit_smem()
-
-                                first_block = pair * DW_REDUCTION_BLOCKS
-                                _copy_compact_half(first_block, jnp.asarray(0, dtype=jnp.int32))
+                                first_block = pair * WGMMA_PIPELINE_STAGES
+                                _copy_compact_block(first_block, jnp.asarray(0, dtype=jnp.int32))
+                                _accumulate_compact_block(first_block, jnp.asarray(0, dtype=jnp.int32))
 
                                 second_block = first_block + 1
 
                                 @pl.when(second_block < schedule.compact_m_blocks)
-                                def _copy_second_half() -> None:
-                                    _copy_compact_half(second_block, jnp.asarray(1, dtype=jnp.int32))
+                                def _pipeline_second_block() -> None:
+                                    _copy_compact_block(second_block, jnp.asarray(1, dtype=jnp.int32))
+                                    _accumulate_compact_block(second_block, jnp.asarray(1, dtype=jnp.int32))
 
-                                _finish_compact_half(first_block, jnp.asarray(0, dtype=jnp.int32))
-
-                                @pl.when(second_block < schedule.compact_m_blocks)
-                                def _finish_second_half() -> None:
-                                    _finish_compact_half(second_block, jnp.asarray(1, dtype=jnp.int32))
-
-                                mgpu.commit_smem()
-                                mgpu.wgmma(
-                                    acc_ref,
-                                    mgpu.transpose_ref(x_smem, (1, 0)),
-                                    dz_smem,
-                                )
-                                # Reuse the single B128 reduction tile only after its
-                                # contribution has reached the fp32 accumulator.
+                                # Compact ownership can contain holes, so do not carry a
+                                # conditional WGMMA across reuse of either pair stage.
                                 mgpu.wgmma_wait(0)
 
                         pl.run_scoped(
                             _smem_scope,
-                            x_smem=_wgmma_smem((DW_REDUCTION_BLOCKS * config.compute_m, config.block_hidden), dtype),
-                            dz_smem=_wgmma_smem((DW_REDUCTION_BLOCKS * config.compute_m, config.block_output), dtype),
+                            x_smem=_wgmma_smem((WGMMA_PIPELINE_STAGES, config.compute_m, config.block_hidden), dtype),
+                            dz_smem=_wgmma_smem((WGMMA_PIPELINE_STAGES, config.compute_m, config.block_output), dtype),
                             barrier=mgpu.Barrier(
                                 num_arrivals=2,
-                                num_barriers=DW_REDUCTION_BLOCKS,
+                                num_barriers=WGMMA_PIPELINE_STAGES,
                             ),
                         )
                         dw_ref[

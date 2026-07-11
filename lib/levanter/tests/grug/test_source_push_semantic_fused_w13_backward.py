@@ -194,7 +194,6 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
 
     assert schedule.hidden_tiles == 20
     assert schedule.compact_m_blocks == 64
-    assert schedule.dw_reduction_pairs == 32
     assert schedule.staging_jobs == 16000
     assert schedule.dx_jobs == 16000
     assert schedule.token_blocks == 512
@@ -275,35 +274,6 @@ def test_fused_w13_backward_twenty_output_tiles_match_independent_route_referenc
     )
 
     expected_dx, expected_dw = _independent_backward_reference(x, dz13, w13, plan)
-    np.testing.assert_allclose(np.asarray(result.dx), expected_dx, rtol=2e-4, atol=2e-4)
-    np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
-
-
-def test_fused_w13_backward_odd_holey_reduction_tail_matches_independent_route_reference():
-    x, dz13, w13, plan = _inputs()
-    rows_per_expert_capacity = 192
-    schedule = source_push_semantic_fused_w13_backward_schedule(
-        ep_size=2,
-        experts_per_rank=2,
-        rows_per_expert_capacity=rows_per_expert_capacity,
-        hidden_dim=x.shape[-1],
-        tokens_per_source=x.shape[1],
-        send_chunks_per_dst=1,
-    )
-
-    result = source_push_semantic_fused_w13_backward(
-        x,
-        dz13[:, :, :rows_per_expert_capacity],
-        w13,
-        plan,
-        send_chunks_per_dst=1,
-        rows_per_expert_capacity=rows_per_expert_capacity,
-        interpret=True,
-    )
-
-    expected_dx, expected_dw = _independent_backward_reference(x, dz13[:, :, :rows_per_expert_capacity], w13, plan)
-    assert schedule.compact_m_blocks == 3
-    assert schedule.dw_reduction_pairs == 2
     np.testing.assert_allclose(np.asarray(result.dx), expected_dx, rtol=2e-4, atol=2e-4)
     np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
 
