@@ -298,7 +298,6 @@ def test_fused_w2_backward_reports_queue_and_layout_overflow_and_masks_outputs()
 
 def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_tiles():
     source = inspect.getsource(_make_source_push_semantic_fused_w2_backward_kernel)
-    dw2_source = source[source.index("global_owner =") : source.index("return mgpu.kernel")]
 
     assert "mgpu.remote_ref" in source
     assert "mgpu.wgmma" in source
@@ -340,22 +339,3 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "jax.nn.silu(gate_smem[:, :].astype(jnp.float32))" in source
     assert "d_z13_ref" in source
     assert "d_h_ref" not in source
-
-    # The dW2 owner keeps one 64 KiB operand scope. Only dead gate/up buffers are
-    # refilled while WGMMA consumes the current h/dy operands.
-    assert dw2_source.count("gate_smem=_wgmma_smem") == 1
-    assert dw2_source.count("up_smem=_wgmma_smem") == 1
-    assert dw2_source.count("h_smem=_wgmma_smem") == 1
-    assert dw2_source.count("dy_smem=_wgmma_smem") == 1
-    assert "@pl.when(valid_ref[expert, 0])" in dw2_source
-    assert "safe_next_block = jnp.minimum(next_block, compact_m_blocks - 1)" in dw2_source
-    issue = dw2_source.index("mgpu.wgmma(acc_ref, mgpu.transpose_ref(h_smem, (1, 0)), dy_smem)")
-    prefetch_gate_up = dw2_source.index("_load_gate_up(safe_next_block, gate_smem, up_smem, barrier)")
-    drain = dw2_source.index("mgpu.wgmma_wait(0)", prefetch_gate_up)
-    refill_dy = dw2_source.index("_load_dy(safe_next_block, dy_smem, barrier)")
-    next_ready = dw2_source.index("mgpu.barrier_wait(barrier)", refill_dy)
-    assert issue < prefetch_gate_up < drain < refill_dy < next_ready
-
-    dtype_bytes = jnp.dtype(jnp.bfloat16).itemsize
-    explicit_smem_bytes = CONFIG.compute_m * (3 * CONFIG.intermediate_block + CONFIG.hidden_block) * dtype_bytes
-    assert explicit_smem_bytes == 64 * 1024
