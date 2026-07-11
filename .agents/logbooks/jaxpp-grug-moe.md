@@ -33,6 +33,7 @@ author: dlwh
 - Explicit Triton token-routing kernels remove the profiled rank-2 floating scatter families from `ring_fused` and pass H100 value/VJP parity, but a pinned 10-step reduced A/B found no throughput gain. After excluding isolated duration outliers, bulk ring averaged `9.1735` MFU and `0.214968s`; `ring_fused` averaged `9.1595` MFU and `0.215344s`. Do not scale this backend to L24 without a new kernel-level signal.
 - Prioritizing explicit pipeline transfer construction ahead of local QB/loss/gradient accumulation is a clean negative. The pinned reduced run averaged `8.9243` MFU and `0.220987s`, versus `9.1735` and `0.214968s` for default ordering. Construction order is not the missing overlap mechanism; the next credible schedule change must split the combined activation/weight-gradient backward task.
 - Splitting backward into input-gradient and weight-gradient tasks is operational and gradient-correct but a hard performance negative. The reduced H100 gate averaged `6.5356` central MFU and `0.301733s`, versus `9.1735` and `0.214968s` for the combined-backward control. Independent block rematerialization costs more than zero-bubble placement can recover.
+- Exact two-chunk bulk ring preserves output/drop/VJP semantics and takes its fast path at the target EP8 microbatch, but direct H100 timing regresses forward by `5.30%` and forward-backward by `13.98%`. XLA latency hiding does not offset doubled collective and Pallas launch counts; do not register this backend for training.
 
 ## Hypothesis Queue
 
@@ -63,6 +64,7 @@ author: dlwh
 - Explicit Triton dispatch-backward and combine forward/backward routing kernels pass H100 value/VJP parity and remove rank-2 floating scatters from optimized HLO, but the pinned reduced A/B is neutral: central bulk-ring mean `9.1735` MFU versus `9.1595` for `ring_fused` (`-0.15%`). The apparent two-sample fused win did not replicate over ten steps.
 - Enqueuing forward and backward pipeline transfers before local accumulation tasks regresses the pinned reduced median MFU by `2.90%` (`8.9006` versus `9.1660`) and increases median duration by `2.98%`. JaxPP task construction order alone does not improve rendezvous overlap.
 - Input-gradient-first backward passes CPU loss, `d_hidden`, parameter-gradient, accumulated-gradient, and Adam-update parity in both remat modes and executes on 32 H100s, but regresses reduced central MFU by `28.75%` (`6.5356` versus `9.1735`). The extra per-block rematerialization dominates the intended bubble reduction.
+- A private exact two-chunk bulk-ring prototype passes BF16 output/drop and four-input VJP parity, including overflow and globally consistent fallback. At the exact e64/top-k4/d2560 EP8 microbatch it regresses median forward from `10.389ms` to `10.939ms` and forward-backward from `22.948ms` to `26.156ms` despite XLA latency hiding.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -2097,3 +2099,21 @@ author: dlwh
   - Do not scale this mode to L24. A useful B/W split would need a kernel/autodiff primitive that emits input gradients and reusable weight-gradient residuals in one traversal, not JAX-level block rematerialization.
 - Next action:
   - Move to the remaining profile-backed transport hypothesis: a two-chunk bulk ring that preserves AllGather/Pallas grouped-GEMM/ReduceScatter semantics while exposing chunk-N compute against chunk-N+1 communication. Require direct EP8 value/VJP parity and at least `5%` one-node kernel improvement before a pipeline gate.
+
+### 2026-07-11 07:14 PDT - exact two-chunk bulk ring regresses
+- Hypothesis: Splitting the proven bulk AllGather/grouped-GEMM/ReduceScatter dataflow into two equal token chunks will let XLA overlap chunk-1 gather with chunk-0 compute and chunk-0 ReduceScatter with chunk-1 compute while preserving total communication and padded GEMM work.
+- Commit Hash: `0dffb28f07` (`[grug] Add two-chunk EP ring benchmark`).
+- Validation:
+  - The private backend performs one full global routing prepass, preserves source-major capacity/drop selection, and uses a globally consistent `pmin` gate to fall back to bulk when either half exceeds its capacity.
+  - Forced-CPU EP8 tests cover balanced, overflow, boundary-spanning, odd-capacity, and one-half fallback routing. BF16 output/drop and VJPs for activations, combine weights, `w13`, and `w2` match bulk (`5 passed`); forward and `value_and_grad` lowering also pass.
+- Command: one-node H100 job `/dlwh/ep-ring-two-chunk-benchmark-20260711`, exact e64/top-k4/d2560/i1280 microbatch32x4096, capacity factor `1.25`, Pallas-Triton `block_k=32`/8 warps, `XLA_FLAGS=--xla_gpu_enable_latency_hiding_scheduler=true`, 5 warmups and 30 blocked iterations.
+- Results:
+  - Job succeeded in `52.17s`; the two-chunk fast path was selected, no assignments dropped, and output plus all four gradient groups passed parity. No failed job remains.
+  - Forward median: bulk `10.3885ms`, two-chunk `10.9390ms`, a `5.30%` regression.
+  - Forward-backward median: bulk `22.9477ms`, two-chunk `26.1564ms`, a `13.98%` regression (`0.877x` speedup).
+  - Forward added `0.5505ms`; forward-backward added `3.2086ms`, indicating that doubled backward collectives/Pallas launches serialize rather than hide.
+- Interpretation:
+  - The exactness and routing fallback are not the blocker. At this already-large chunk size, launch and backward collective overhead exceed any overlap exposed by the HLO DAG.
+  - Do not register or pipeline-gate the backend. Profiling its slower timeline would explain the negative but would not make it a credible route to 20 without a lower-level asynchronous/autodiff primitive.
+- Next action:
+  - Preserve the single-chunk bulk transport and investigate a faster grouped-GEMM implementation at its exact forward/dLHS/dRHS shapes, including whether the existing QuACK/Sonic kernels can operate on EP-local expert weights without the no-EP FSDP materialization penalty.
