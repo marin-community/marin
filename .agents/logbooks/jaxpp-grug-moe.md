@@ -1767,3 +1767,28 @@ author: dlwh
   - No MFU comparison is available, so the measured winner remains ring EP at `16.2004883`; old forward-QuACK/reference-backward no-EP remains `14.8455495`.
 - Next action:
   - Do not relaunch the exact whole-MLP path unchanged. Capture a bounded reduced-stage XLA dump or compile profile to isolate the pass/custom call responsible, or retain ring EP while pursuing schedule overlap; require a practical compile gate before another 32-H100 full run.
+
+### 2026-07-10 18:05 PDT - post-codegen JaxPP/QuACK execution isolation
+- Hypothesis: The apparent exact-shape compile regression is either an XLA pass/codegen bottleneck, rank-local lazy compilation skew, or a QuACK custom-call execution problem specific to JaxPP MPMD.
+- Commit Hashes:
+  - `2c91e4a357`: bounded direct/two-rank JaxPP custom-VJP reproducer with synchronized rank shutdown.
+  - `67400e6ec9`: legacy forward-QuACK/Pallas-VJP A/B source revision.
+- Commands:
+  - Exact current XLA dump: the 24-layer batch512/m16 recompute command with `TF_CPP_VMODULE=xla_compilation_cache=2,gpu_compiler=2` and per-rank `XLA_FLAGS=--xla_dump_to=... --xla_dump_hlo_pass_re=.* --xla_dump_hlo_as_text --xla_gpu_dump_llvmir --xla_gpu_dump_ptx`, parent `/dlwh/iris-run-job-20260711-000043`.
+  - Exact legacy A/B: the same command and dump flags from detached revision `67400e6ec9`, parent `/dlwh/iris-run-job-20260711-002146`.
+  - Eager-precompile probe: reduced L8/e64/top-k4/b32/m4/seq4096 job `/dlwh/iris-run-job-20260711-003809`, compiling every rank-local JaxPP task before a cross-rank barrier and then executing the compiled objects.
+  - Direct QuACK controls: `experiments/grug/moe/repro_jaxpp_custom_vjp_compile.py --mode quack --runtime direct --layers 1 --experts 64 --tokens-per-expert {256,1024} --hidden 2560 --intermediate 1280` on one RNO2A H100.
+  - Minimal JaxPP controls: the same reproducer on two local H100s with `--runtime jaxpp --fsdp 1`, comparing `--mode quack` with the opaque custom-VJP control.
+- Results:
+  - The current stage-3 graph completed numbered XLA passes, PTX, LLVM, and thunk metadata in about `92s` (948 files, `1.7449GB`), then stayed inside `pxla.__call__` for more than `11m` with no new dump/compiler output and all stage-3 GPUs idle. Artifacts and timeline are under `scratch/xla_sonic_compile_probe/`; the compact archive SHA256 is `8e825f272a668b643a25b7f5b875fabf01457a0e356354aca2b02e12c8b50dd8`.
+  - The exact legacy graph completed stage-3 pass/codegen in `101.02s`, returned to JaxPP within the next second, reached `keep_step`, and completed step 0 with finite loss `9.0436745`. Parent and all four ranks succeeded. Its artifacts are under `scratch/xla_sonic_compile_probe/legacy_stage3/`.
+  - Current and legacy optimized graphs are similar in size: `15,099/15,297` instructions, `304/298` custom calls, `1,157/1,169` fusions, and `1,782/1,795` thunks. The current graph has `126` custom-call thunks versus `90` in legacy.
+  - Eager precompile completed all 7-8 local tasks on every rank in `62.87-64.96s`, and every rank crossed the barrier. Execution then hung for about `8m43s`; stages 0/1 were GPU-busy while stages 2/3 were idle. Stage 0 was blocked in JaxPP/NCCL transfer startup and stage 3 in `pxla.__call__`. The temporary eager-precompile patch was removed.
+  - Standalone QuACK whole-MLP forward/backward returned at both production scales: `15.3191s` compile+execute for `16,384` assignments and `15.5425s` for `65,536` assignments. Both one-H100 Iris jobs succeeded.
+  - The minimal opaque two-rank JaxPP custom-VJP control returned in `3.90s`. The equivalent two-rank QuACK case remained in rank 1's `pxla.__call__` until the distributed barrier failed. No related job remains live.
+- Interpretation:
+  - The earlier label "compile regression" was too broad. XLA pass/codegen completes faster than the successful legacy control; lazy task compilation skew is also falsified by eager precompile.
+  - QuACK is healthy under ordinary JAX at both the reduced smoke and exact target assignment counts, while its opaque custom calls fail to return only inside JaxPP local task execution. This is now a minimal JaxPP/custom-call executable integration failure, not evidence of a slow QuACK kernel or an oversized HLO graph.
+  - Keep ring EP at `16.2004883` MFU as the performance winner. Do not spend another 32-H100 allocation on whole-MLP QuACK until the minimal two-rank reproducer returns.
+- Next action:
+  - Track the bounded upstream-ready reproducer and control matrix in [#7110](https://github.com/marin-community/marin/issues/7110), linked to #7024. Nothing was filed upstream; the issue contains a draft for human filing. Use #7110 to seek a JaxPP fix or a narrowly scoped workaround, then resume the no-EP Sonic performance comparison.
