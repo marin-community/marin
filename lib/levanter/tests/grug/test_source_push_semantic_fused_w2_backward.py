@@ -15,7 +15,6 @@ from levanter.grug._moe.source_push_plan import (
 )
 from levanter.grug._moe.source_push_semantic_fused_w2_backward import (
     SourcePushSemanticFusedW2BackwardConfig,
-    _WGMMA_PIPELINE_STAGES,
     _make_source_push_semantic_fused_w2_backward_kernel,
     source_push_semantic_fused_w2_backward,
     source_push_semantic_fused_w2_backward_generation_accounting,
@@ -337,13 +336,6 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "valid_ref[expert, row_start]" in source
     assert "] = acc_ref[...]" in source
     assert "mgpu.atomic_add" not in source
-    assert _WGMMA_PIPELINE_STAGES == 2
-    assert "current_stage = compact_block % _WGMMA_PIPELINE_STAGES" in source
-    assert "mgpu.wgmma_wait(_WGMMA_PIPELINE_STAGES - 1)" in source
-    assert "gate_smem_0" in source
-    assert "gate_smem_1" in source
-    issue_dw2_wgmma = source.split("def _issue_dw2_wgmma", maxsplit=1)[1].split("def _smem_scope", maxsplit=1)[0]
-    assert "mgpu.wgmma_wait(0)" not in issue_dw2_wgmma
     assert "jax.nn.silu(gate_smem[:, :].astype(jnp.float32))" in source
     assert "d_z13_ref" in source
     assert "d_h_ref" not in source
