@@ -2395,3 +2395,75 @@ This is a comparison-harness/reference-sharding failure, not evidence for or
 against the cohort W2 kernel. Keep the 44.087474 ms isolated timing as a
 candidate only; the integrated correctness gate remains open. Per the run
 instructions, no automatic retry or kernel change was made.
+
+## 2026-07-10 FUSED-MOE-083 - W2 cohort win survives the integrated boundary
+
+Job `/dlwh/bench-semantic-integrated-w2-cohort-20260710-2250` at
+`a8b05dc63e` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+task, and a 3m30s task duration. This boundary retains the W2 cohort-local
+combine and the selected W13-backward pipeline.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Selected baseline | Result |
+|---|---|---:|---:|---:|---|---|
+| Integrated forward | 30.636462, 30.669469, 30.852934 | 30.669469 | 84.068053 | 105.085067 | 49.538596 ms / 52.046743 useful | 18.869127 ms or 38.09% less time; 61.53% more useful throughput |
+| Integrated fwd+bwd | 217.732366, 218.166632, 218.824850 | 218.166632 | 35.454403 | 44.318004 | 236.813932 ms / 32.662638 useful | 18.647300 ms or 7.87% less time; 8.55% more useful throughput |
+
+Every repeat reported zero dropped routes, zero routing-policy drops, and zero
+metadata-overflow routes. Forward emitted `Infinity` on all repeats, matching
+the existing selected integrated-forward checksum. Forward+backward emitted
+`-1.1766203134195027e+26` on all repeats, exactly matching the selected
+integrated fwd+bwd checksum. The process logged the same recoverable 12.5 GiB
+BFC allocation failures and FABRIC-handle VMM fallbacks seen in prior integrated
+runs; both modes nevertheless produced all requested rows and Iris terminated
+successfully.
+
+The performance effect is real and nearly one-for-one with the isolated W2
+improvement: the integrated forward saves 18.87 ms versus the isolated stage's
+18.47 ms. This confirms that cohort-local combine removes fused W2 scheduling
+tax rather than merely shifting it elsewhere in the graph. Retain the cohort
+schedule as the current performance candidate.
+
+Correctness is not fully closed. Matching `Infinity` shows no new checksum
+regression relative to the selected path, but a non-finite checksum cannot
+validate either path. The reduced finite-reference comparison in FUSED-MOE-081
+failed before reaching the candidate due to ambiguous reference gather
+sharding. The next gate is to repair that comparison boundary or add a finite
+integrated error metric, then compare cohort output against the prior W2 path
+before declaring this schedule production-selected.
+
+## 2026-07-10 FUSED-MOE-083 - Reduced direct W2 cohort comparison passes
+
+Job `/dlwh/compare-semantic-w2-cohort-direct-20260710-2255` at
+`a8b05dc63e` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+task, and a 43.45-second task duration. This reduced EP8/T128/E4/K2 run bypassed
+the unrelated integrated W13 reference-sharding failure and compared
+`semantic_fused_w2_return_compare` directly.
+
+| Quantity | Result |
+|---|---:|
+| `return_y` max absolute difference | 0.1654167175 |
+| `return_y` mean absolute difference | 0.0064286510 |
+| final `y` max absolute difference | 0.375 |
+| final `y` mean absolute difference | 0.0049526617 |
+| expected/observed `return_y` nonfinite errors | 0 / 0 |
+| expected/observed `y` nonfinite errors | 0 / 0 |
+| validity errors | 0 |
+| queue-overflow route errors | 0 |
+| layout-overflow row errors | 0 |
+| live `return_y` elements | 5,217,280 |
+| output checksum | 5,217,280.5 |
+
+The random reduced shape had 10 metadata-capacity overflows and therefore 10
+capacity-dropped routes; routing-policy drops were zero. These drops are shared
+input-plan behavior, not a candidate/reference disagreement. The one-repeat
+steady-state time was 4.949592 ms, but this reduced correctness shape is not a
+target-shape performance measurement.
+
+The cohort-local combine candidate therefore passes the direct numerical and
+structural gate: all expected and observed outputs are finite, and there are no
+validity, queue, or layout errors. The bf16 route-buffer comparison has small
+mean error and bounded max error after the final weighted combine. Retain the
+target-shape 44.087474 ms timing candidate and proceed to integrated
+target-shape forward and fwd+bwd timing/correctness; the earlier integrated
+reference harness still needs an explicit gather output sharding before it can
+serve as that gate.
