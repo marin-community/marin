@@ -2057,3 +2057,29 @@ returned source-sharded `dx` (`8@expert,32768,2560`) for a replicated primal
 kernel failure. The next commit normalizes source tensors and destination
 weights to their production shardings before entering `custom_vjp`, so every
 returned gradient matches the custom rule's primal type.
+
+## 2026-07-10 FUSED-MOE-070 - Keep global semantic routing metadata replicated
+
+Commit `766d775637` fixed the first custom-VJP mismatch by source-sharding all
+leading-axis inputs. The target retry
+`/dlwh/bench-semantic-fused-766d-fwd-bwd-20260710-2101` reached terminal Iris
+state `succeeded` but failed before a kernel timing row with:
+
+```text
+ShardingTypeError: slicing on sharded dims where out dim (1) is not divisible
+by mesh axes (8) with spec (expert) is not implemented
+```
+
+The failure was in `build_source_push_semantic_plan_jax` while evaluating
+`receiver_counts[sender_index]`. The plan builder intentionally sees the full
+global routing tensors and cannot slice a source-sharded leading dimension in
+its current JAX formulation.
+
+Commit `4a3922ad1f` therefore keeps `selected_experts` and `route_weights`
+replicated while building the global semantic plan, source-shards only `x`,
+destination-shards the expert weights, and reshards the returned route-weight
+gradient to match its replicated primal. Focused semantic MLP and benchmark
+boundary tests passed (`10 passed`), and the changed source passed the required
+Marin pre-commit checks. Next action: rerun the target integrated forward and
+backward mode at `4a3922ad1f`; if it reaches the kernels, use its first numeric
+row or first kernel-specific failure as the next integration decision.
