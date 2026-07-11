@@ -84,12 +84,7 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         if not isinstance(prompt, str):
             self._write_json(400, {"error": "prompt must be a string"})
             return
-        pause = self._stub_server.state.prompt_pauses.get(prompt)
-        if pause is not None:
-            pause.wait()
-        callback = self._stub_server.state.completion_callbacks.get(prompt)
-        if callback is not None:
-            callback()
+        self._before_completion(prompt)
         if self._stub_server.state.completion_top_logprobs is not None:
             self._handle_logprob_completion(prompt)
             return
@@ -101,6 +96,45 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
             text += " answer"
         tokens, offsets = _tokenize_with_offsets(text)
         token_logprobs = [_token_logprob(token) for token in tokens]
+        self._write_completion(
+            text=text,
+            tokens=tokens,
+            token_logprobs=token_logprobs,
+            top_logprobs=[{token: score} for token, score in zip(tokens, token_logprobs, strict=True)],
+            offsets=offsets,
+        )
+
+    def _before_completion(self, prompt: str) -> None:
+        pause = self._stub_server.state.prompt_pauses.get(prompt)
+        if pause is not None:
+            pause.wait()
+        callback = self._stub_server.state.completion_callbacks.get(prompt)
+        if callback is not None:
+            callback()
+
+    def _handle_logprob_completion(self, prompt: str) -> None:
+        top_logprobs = self._stub_server.state.completion_top_logprobs.get(prompt)
+        if top_logprobs is None:
+            self._write_json(400, {"error": f"unknown prompt {prompt!r}"})
+            return
+        token, logprob = max(top_logprobs.items(), key=lambda item: item[1])
+        self._write_completion(
+            text=token,
+            tokens=[token],
+            token_logprobs=[logprob],
+            top_logprobs=[dict(top_logprobs)],
+            offsets=[len(prompt)],
+        )
+
+    def _write_completion(
+        self,
+        *,
+        text: str,
+        tokens: list[str],
+        token_logprobs: list[float],
+        top_logprobs: list[dict[str, float]],
+        offsets: list[int],
+    ) -> None:
         self._write_json(
             200,
             {
@@ -114,38 +148,8 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
                         "logprobs": {
                             "tokens": tokens,
                             "token_logprobs": token_logprobs,
-                            "top_logprobs": [
-                                {token: score} for token, score in zip(tokens, token_logprobs, strict=True)
-                            ],
+                            "top_logprobs": top_logprobs,
                             "text_offset": offsets,
-                        },
-                        "finish_reason": "length",
-                    }
-                ],
-            },
-        )
-
-    def _handle_logprob_completion(self, prompt: str) -> None:
-        top_logprobs = self._stub_server.state.completion_top_logprobs.get(prompt)
-        if top_logprobs is None:
-            self._write_json(400, {"error": f"unknown prompt {prompt!r}"})
-            return
-        token, logprob = max(top_logprobs.items(), key=lambda item: item[1])
-        self._write_json(
-            200,
-            {
-                "id": "cmpl-stub",
-                "object": "text_completion",
-                "model": self._stub_server.model,
-                "choices": [
-                    {
-                        "text": token,
-                        "index": 0,
-                        "logprobs": {
-                            "tokens": [token],
-                            "token_logprobs": [logprob],
-                            "top_logprobs": [dict(top_logprobs)],
-                            "text_offset": [len(prompt)],
                         },
                         "finish_reason": "length",
                     }
