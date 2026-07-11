@@ -3,7 +3,6 @@
 
 import contextlib
 import itertools
-import logging
 import math
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -43,9 +42,7 @@ from marin.inference.worker import (
     run_brokered_inference_worker,
 )
 
-logger = logging.getLogger(__name__)
-
-DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 64
+DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 20
 UPSTREAM_STATUS_CODE_KEY = "_upstream_status_code"
 LENGTH_FINISH_REASON = "length"
 
@@ -510,12 +507,10 @@ def _error_response(
     message: str,
     *,
     detail: str | None = None,
-    exc_info: bool = False,
 ) -> InferenceResponse:
     return inference_error_response(
         request,
         status_code,
         message,
         detail=detail,
-        exc_info=exc_info,
     )
