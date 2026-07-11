@@ -102,6 +102,37 @@ def test_whoami_offline_status_reports_the_failure_and_cached_email(monkeypatch)
     assert row["detail"] == "cached IAP credentials are no longer valid"
 
 
+def test_whoami_respects_explicit_non_iap_config_over_stale_cache(monkeypatch):
+    # A loaded non-IAP config is authoritative: a leftover credential file carrying
+    # a refresh token for the same cluster name must not flip it to a synthetic IAP
+    # login (which would mislead and trigger a needless edge-token mint).
+    captured = {}
+
+    def fake_resolve(cluster, auth):
+        captured["provider"] = auth.provider
+        return _status(cluster, method=LoginMethod.NETWORK_TRUST, state=LoginState.NO_LOGIN_REQUIRED, email=None)
+
+    monkeypatch.setattr(whoami_cli, "resolve_login_status", fake_resolve)
+    monkeypatch.setattr(
+        whoami_cli,
+        "load_credentials",
+        lambda cluster: credential_store.CredentialRecord(
+            cluster=cluster, endpoint="https://stale", edge_refresh_token="rt"
+        ),
+    )
+
+    non_iap_config = SimpleNamespace(auth=None)  # cluster_auth_for -> network trust
+    result = CliRunner().invoke(
+        whoami_cli.whoami,
+        ["--format", "json"],
+        obj={"cluster_name": "c", "config": non_iap_config},
+        catch_exceptions=False,
+    )
+
+    assert captured["provider"] is AuthProvider.NONE
+    assert json.loads(result.output)[0]["method"] == "network-trust"
+
+
 def test_whoami_all_enumerates_configured_and_cached_only_clusters(monkeypatch, tmp_path):
     # One cluster has a config; another was logged into by raw URL (cache only, no
     # config). --all must report both, without duplicating the configured one.

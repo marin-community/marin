@@ -40,12 +40,14 @@ _STATE_LABELS = {
 def _status_for(cluster: str, config) -> LoginStatus:
     """Resolve one cluster's login status from its config, falling back to the cache.
 
-    A cluster you logged into by raw ``--controller-url`` has a cached refresh token
-    but no IAP config; a cached refresh token is only ever an IAP browser login, so
-    synthesize a minimal IAP auth (default desktop client) to run the same mint path.
+    A loaded config is authoritative for the auth shape. Only when there is *no*
+    config to identify it — a cluster reached by raw ``--controller-url`` — do we
+    lean on the cache: a cached refresh token is only ever an IAP browser login, so
+    synthesize a minimal IAP auth (default desktop client) to run the same mint
+    path. A stale credential file must never flip an explicit non-IAP config to IAP.
     """
     auth = cluster_auth_for(config)
-    if auth.provider is not AuthProvider.IAP:
+    if config is None:
         record = load_credentials(cluster)
         if record is not None and record.edge_refresh_token is not None:
             auth = ClusterAuth(AuthProvider.IAP, iap=IapAuth(url=record.endpoint))
