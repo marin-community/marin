@@ -318,13 +318,21 @@ class _SubdomainProxyMiddleware:
             await deny(scope, receive, send)
             return
 
+        # Refuse an unknown or fail-closed-ambiguous name here rather than dial with
+        # address=None (which would let EndpointProxy re-resolve and pick one of the
+        # ambiguous rows), matching the path-style route's guard.
+        if resolved is None:
+            response: Response = JSONResponse({"error": f"No endpoint '{encoded_name}'"}, status_code=404)
+            await response(scope, receive, send)
+            return
+
         # Subdomain-style proxying of a federated endpoint is not supported: the
         # child rewrites redirects to its own /proxy/<name> path, which does not map
         # cleanly onto the bare-origin subdomain form. Use the path-style
         # /proxy/<name>/ URL for a remote endpoint instead. Fail closed rather than
         # serve broken navigation.
-        if resolved is not None and resolved.peer_id:
-            response: Response = JSONResponse(
+        if resolved.peer_id:
+            response = JSONResponse(
                 {"error": f"Endpoint '{encoded_name}' is federated; use its /proxy/{encoded_name}/ URL"},
                 status_code=502,
             )
@@ -336,7 +344,7 @@ class _SubdomainProxyMiddleware:
             encoded_name=encoded_name,
             sub_path=request.url.path.lstrip("/"),
             proxy_prefix="",
-            address=resolved.address if resolved is not None else None,
+            address=resolved.address,
         )
         await response(scope, receive, send)
 
@@ -449,9 +457,16 @@ class ControllerDashboard:
         async def _dispatch_resolved(
             request: Request, resolved: ResolvedEndpoint | None, *, encoded_name: str, sub_path: str, proxy_prefix: str
         ) -> Response:
+            # resolve_proxy_target returns None for an unknown name and, fail-closed,
+            # for an ambiguous one (a name shared by a local and a remote row, or two
+            # peers). Refuse here rather than dial with address=None, which would let
+            # EndpointProxy re-resolve via the single-row resolver and arbitrarily pick
+            # one of the ambiguous rows — defeating the fail-closed guard.
+            if resolved is None:
+                return JSONResponse({"error": f"No endpoint '{encoded_name}'"}, status_code=404)
             # A remote endpoint forwards to the peer that owns it; a local one dials
             # its address directly.
-            if resolved is not None and resolved.peer_id:
+            if resolved.peer_id:
                 if self._federated_proxy is None:
                     return JSONResponse({"error": "federation proxy unavailable"}, status_code=502)
                 return await self._federated_proxy.dispatch(
@@ -466,7 +481,7 @@ class ControllerDashboard:
                 encoded_name=encoded_name,
                 sub_path=sub_path,
                 proxy_prefix=proxy_prefix,
-                address=resolved.address if resolved is not None else None,
+                address=resolved.address,
             )
 
         # The proxy routes are @public so the route-annotation middleware does

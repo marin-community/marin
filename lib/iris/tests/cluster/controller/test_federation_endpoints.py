@@ -10,12 +10,14 @@ in ``test_federation_endpoint_sync.py`` and ``test_federated_endpoint_proxy.py``
 """
 
 import pytest
+from iris.cluster.controller import reads
 from iris.cluster.controller.dashboard import (
     _authorize_federation_peer_proxy,
     _authorize_proxy,
 )
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ResolvedEndpoint
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
+from iris.cluster.controller.writes import insert_received_handle
 from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc import controller_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -141,6 +143,33 @@ def test_resolve_proxy_target_ambiguous_local_and_remote_fails_closed(state):
         state._endpoints.replace_remote_for_peer(cur, PEER, [_remote_row("r1", "/serve/dup", task)])
 
     assert svc.resolve_proxy_target("serve.dup") is None
+
+
+def test_live_endpoints_scope_through_received_root(state):
+    """An endpoint on a child job spawned under a received root is surfaced too.
+
+    Only the handed-off root gets a RECEIVED handle; a job it spawns runs locally on
+    the peer under the same root, so its endpoint is matched via ``root_job_id``, not a
+    direct federated_jobs handle of its own.
+    """
+    root = submit_job(state, "root", make_job_request("root"))[0].task_id.root_job
+    with state._db.transaction() as cur:
+        insert_received_handle(cur, job_id=root, requester_id=PEER, owner_principal="alice")
+
+    child_task = submit_job(state, "/test-user/root/child", make_job_request("/test-user/root/child"))[0].task_id
+    _service(state).register_endpoint(
+        controller_pb2.Controller.RegisterEndpointRequest(
+            name="/serve/child",
+            address="10.0.0.5:8000",
+            task_id=child_task.to_wire(),
+            attempt_id=query_task(state, child_task).current_attempt_id,
+        ),
+        None,
+    )
+
+    with state._db.read_snapshot() as q:
+        names = [e.name for e in reads.live_endpoints_for_requester(q, PEER, Timestamp.now())]
+    assert names == ["/serve/child"]
 
 
 def test_list_endpoints_reports_peer_id(state):

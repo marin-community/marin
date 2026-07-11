@@ -2110,8 +2110,12 @@ class ReceivedEndpointRow:
 def live_endpoints_for_requester(tx: Tx, requester_id: str, now: Timestamp) -> list[ReceivedEndpointRow]:
     """Every live endpoint across the jobs this peer received from ``requester_id``.
 
-    Expired leases are excluded (parity with the endpoint registry's own reads), so
-    the parent mirror set-replaced from this matches what the child would serve.
+    Scoped through the received *root*: only the handed-off root gets a RECEIVED
+    ``federated_jobs`` row, but a job it spawns runs locally on this peer under the
+    same root, so an endpoint registered by such a child task is matched via its
+    job's ``root_job_id`` rather than a direct ``federated_jobs`` handle. Expired
+    leases are excluded (parity with the endpoint registry's own reads), so the
+    parent mirror set-replaced from this matches what the child would serve.
     """
     rows = tx.execute(
         select(
@@ -2124,7 +2128,9 @@ def live_endpoints_for_requester(tx: Tx, requester_id: str, now: Timestamp) -> l
             endpoints_table.c.lease_deadline_ms,
         )
         .select_from(
-            endpoints_table.join(federated_jobs_table, federated_jobs_table.c.job_id == endpoints_table.c.job_id)
+            endpoints_table.join(jobs_table, jobs_table.c.job_id == endpoints_table.c.job_id).join(
+                federated_jobs_table, federated_jobs_table.c.job_id == jobs_table.c.root_job_id
+            )
         )
         .where(
             federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
