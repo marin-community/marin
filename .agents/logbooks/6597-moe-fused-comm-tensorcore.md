@@ -3316,3 +3316,35 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-route-owner-compare-2f75 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 2f75259cb2 --jsonl scratch/w2b-route-owner-compare-2f75.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-106 - W2-backward route-gradient-on-owner target timing faults
+
+Job `/dlwh/w2b-route-owner-2f75` tested commit `2f75259cb2` on
+`cw-rno2a` with the target EP8, T32768/rank, H2560, I1280, E32/rank,
+top-k 4, capacity factor 1.25, random production routing seed 0, bf16, JAX
+plan metadata, one warmup, three timed steps, three repeat runs, and separate
+compilation. Iris reached terminal state `succeeded`: exit 0, zero failures,
+zero preemptions, one of one task succeeded, and a 1m42.92s task duration.
+This is a harness-level false success because device execution faulted.
+
+The route-gradient-on-owner candidate failed with:
+
+```text
+CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+```
+
+No repeat completed, so timing, useful or rounded TFLOP/s/rank, checksum, and
+drop/metadata/queue/layout counters are unavailable. The candidate therefore
+cannot be compared numerically with or replace the selected publish-first
+schedule at 38.325619 ms and 44.826071 useful TFLOP/s/rank. Together with
+FUSED-MOE-105's reduced comparison fault, this target failure rejects the
+route-gradient-on-owner schedule in its current form. The run emitted two
+12.50 GiB BFC allocation warnings before the device fault. Exactly one H100x8
+job was launched; there was no retry, duplicate, source edit, stop, resubmit,
+or Iris mutation.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-route-owner-2f75 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 2f75259cb2 --jsonl scratch/w2b-route-owner-2f75.jsonl
+```
