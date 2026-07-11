@@ -10,8 +10,8 @@ author: dlwh
 ## Current TL;DR
 
 - The CoreWeave node is a fully connected 8×H100 80GB SXM topology (`NV18` for every GPU pair), suitable for same-node peer-tensor experiments.
-- The checked-in GPU environment is not immediately viable: it pins NVSHMEM 3.4.5 and does not install NVSHMEM4Py, so `nvshmem.core.device.cute` cannot import.
-- A disposable pod upgrade to NVSHMEM 3.7.0 + NVSHMEM4Py 0.3.1 made all requested CuTe device APIs import with CUTLASS DSL 4.5.2. This is exploratory environment evidence, not yet a compile or correctness result.
+- Stage 1 passes on 2 and 8 H100s: collective symmetric allocation, host peer aliases, CuTe compilation linked with NVSHMEM device bitcode, and direct `get_peer_tensor` ring stores returned the expected rank-coded values.
+- The reproducible transport extra pins NVSHMEM 3.7.0, NVSHMEM4Py 0.3.1, and CUTLASS DSL 4.4.2. NVSHMEM4Py's CuTe integration is incompatible with Marin's normal CUTLASS DSL 4.5.2 environment.
 - All accelerator experiments will use CoreWeave H100 clusters. Host-only inspection may run locally.
 
 ## Scope
@@ -33,7 +33,6 @@ author: dlwh
 
 ### Active
 
-- `NVTP-001`: The installed CuTe DSL and NVSHMEM4Py stack on CoreWeave H100s supports a collectively allocated symmetric arena, deterministic peer addressing, and `get_peer_tensor`. Next test: inventory installed versions and run a two-PE address/read/write probe.
 - `NVTP-002`: NVSHMEM put-with-signal provides the simplest correct device-side push primitive and competitive transport performance. Next test: two-PE blocking and nonblocking correctness with deterministic payloads and monotonic epochs.
 - `NVTP-003`: Batched nonblocking gets amortize device-side completion enough for destination-directed pull to be viable. Next test: compare blocking get, per-get completion, and four-get batched completion.
 - `NVTP-004`: Direct peer tensor stores or loads reduce transport overhead relative to NVSHMEM RMA while retaining correct symmetric addressing. Next test: compare minimal cooperative peer store/load probes against RMA on the same arena.
@@ -50,12 +49,13 @@ author: dlwh
 
 ### Promoted
 
-- None.
+- `NVTP-001`: A coherent isolated stack supports collective symmetric allocation, deterministic addressing, host peer aliases, and CuTe `get_peer_tensor` on a fully connected CoreWeave 8×H100 node. Evidence: `NVTP-002` entry below.
 
 ## Decision Log
 
 - 2026-07-10: Use CoreWeave H100 clusters for all accelerator correctness and performance results, per user direction.
 - 2026-07-10: Keep NVSHMEM RMA and direct peer-tensor access as separate benchmark families.
+- 2026-07-10: Isolate NVSHMEM transport from the normal GPU/Torch extras and pin CUTLASS DSL 4.4.2 for compatibility with NVSHMEM4Py 0.3.1.
 
 ## Negative Results Index
 
@@ -149,3 +149,14 @@ author: dlwh
 - NVSHMEM ordering model: https://docs.nvidia.com/nvshmem/api/using.html
 - NVSHMEM topology FAQ: https://docs.nvidia.com/nvshmem/api/faq.html
 - CUTLASS CuTe runtime/DLPack API: https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_api/cute_runtime.html
+
+### 2026-07-10 - NVTP-002 Stage 1 symmetric arena and peer tensor
+
+- Hypothesis: A coherent NVSHMEM4Py stack can collectively allocate symmetric memory and construct working host and CuTe peer aliases across all eight H100s.
+- Commit Hash: `225960f42f`
+- Command: `NVTP_NUM_PES={2,8} uv run --package marin-levanter --extra nvshmem-transport python -m cute_nvshmem_transport.launch`
+- Config: CoreWeave `cw-us-east-02a`, one 8×H100 80GB node, all GPU pairs `NV18`; Python 3.12.13; CUDA Python 13.2.0; cuda-core 1.1.0; CUTLASS DSL 4.4.2; NVSHMEM 3.7.0; NVSHMEM4Py 0.3.1.
+- Result: Both 2-PE and 8-PE runs passed. Each process initialized one PE per GPU from a shared UID, collectively allocated corresponding buffers, read its successor through `get_peer_buffer`, compiled a CuTe kernel linked with NVSHMEM device bitcode, and stored its rank-coded value into its successor through `get_peer_tensor`. Every PE observed the expected successor value through the host alias and predecessor value through the device ring store.
+- Interpretation: `NVTP-001` is promoted. Same-node symmetric addressing and direct peer tensor construction are feasible on the target CoreWeave H100 topology. This does not yet establish RMA ordering, slot reuse, bandwidth, or JAX ownership semantics.
+- Negative results: Runtime 3.4.5 had no NVSHMEM4Py binding. NVSHMEM4Py 0.3.1 plus runtime 3.4.5 failed the CuTe import. Runtime 3.7.0 plus CUTLASS DSL 4.5.2 failed inside CuTe interop because `Constexpr` was removed. The eight-rank ring also exposed a two-rank-only oracle error: predecessor and successor coincide at two ranks but differ at eight; correcting the oracle made all observed values pass.
+- Next action: Implement blocking put and put-with-signal correctness with monotonic epochs and safe slot reuse.
