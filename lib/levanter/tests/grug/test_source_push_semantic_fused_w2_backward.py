@@ -221,7 +221,7 @@ def test_fused_w2_backward_generation_accounting_tracks_direct_compact_producers
     assert next_chunk.owner == 1
     assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_hidden_block)
     assert first.helper_tiles == 20
-    assert (first.helper_tiles + CONFIG.helper_programs_per_peer - 1) // CONFIG.helper_programs_per_peer == 4
+    assert (first.helper_tiles + CONFIG.helper_programs_per_peer - 1) // CONFIG.helper_programs_per_peer == 5
     assert first.prepare_generation == 1
     assert first.helper_done_generation == first.helper_tiles
     assert first.expert_block_ready_arrivals == 2560 // CONFIG.send_hidden_block
@@ -237,13 +237,13 @@ def test_fused_w2_backward_generation_accounting_tracks_direct_compact_producers
 def test_fused_w2_backward_config_reduces_producer_residency():
     assert CONFIG.chunk_owner_programs_per_peer == 2
     assert CONFIG.send_hidden_block == 512
-    assert CONFIG.helper_programs_per_peer == 5
+    assert CONFIG.helper_programs_per_peer == 4
     assert CONFIG.consumer_programs_per_peer == 20
     producer_programs = 8 * (CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer)
     total_programs = producer_programs + 8 * CONFIG.consumer_programs_per_peer
-    assert producer_programs == 56
-    assert total_programs == 216
-    assert 132 - producer_programs == 76
+    assert producer_programs == 48
+    assert total_programs == 208
+    assert 132 - producer_programs == 84
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():

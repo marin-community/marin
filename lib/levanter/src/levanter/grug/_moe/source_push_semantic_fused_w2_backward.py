@@ -39,7 +39,7 @@ class SourcePushSemanticFusedW2BackwardConfig:
     send_hidden_block: int = 512
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
-    helper_programs_per_peer: int = 5
+    helper_programs_per_peer: int = 4
     consumer_programs_per_peer: int = 20
 
     def validate(self) -> None:
@@ -50,7 +50,7 @@ class SourcePushSemanticFusedW2BackwardConfig:
             "send_hidden_block": 512,
             "inbox_slots": 12,
             "chunk_owner_programs_per_peer": 2,
-            "helper_programs_per_peer": 5,
+            "helper_programs_per_peer": 4,
             "consumer_programs_per_peer": 20,
         }
         for name, value in expected.items():
