@@ -482,7 +482,7 @@ def _make_source_push_semantic_fused_w13_kernel(
 
                     @pl.when(valid_rows > 0)
                     def _send_live_block() -> None:
-                        def _copy_scope(tile_smem, token_smem, token_barrier) -> None:
+                        def _copy_scope(tile_smem, tile_smem_next, token_smem, token_barrier) -> None:
                             mgpu.copy_gmem_to_smem(
                                 token_ids_ref.at[
                                     static_peer_ordinal,
@@ -522,12 +522,25 @@ def _make_source_push_semantic_fused_w13_kernel(
                             @pl.loop(0, hidden_dim // config.send_k)
                             def _k_loop(k_tile) -> None:
                                 k_start = k_tile * config.send_k
-                                _fill_and_send(tile_smem, k_start)
-                                mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                                @pl.when(k_tile >= 2)
+                                def _wait_for_reusable_buffer() -> None:
+                                    mgpu.wait_smem_to_gmem(1, wait_read_only=False)
+
+                                @pl.when((k_tile % 2) == 0)
+                                def _copy_even_buffer() -> None:
+                                    _fill_and_send(tile_smem, k_start)
+
+                                @pl.when((k_tile % 2) == 1)
+                                def _copy_odd_buffer() -> None:
+                                    _fill_and_send(tile_smem_next, k_start)
+
+                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                         pl.run_scoped(
                             _copy_scope,
                             tile_smem=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype),
+                            tile_smem_next=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype),
                             token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32),
                             token_barrier=mgpu.Barrier(num_arrivals=1),
                         )
