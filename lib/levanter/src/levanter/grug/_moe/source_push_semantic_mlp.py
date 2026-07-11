@@ -299,9 +299,7 @@ def _source_push_moe_mlp_semantic_fused_pallas_mgpu(
         if mesh is None:
             raise ValueError("non-interpreted fused semantic source-push MLP requires an explicit mesh")
         _validate_source_push_semantic_fused_mlp_profile(x, w13, w2, capacity)
-        selected_experts = _constrain_destination_major(selected_experts, mesh)
         x = _constrain_destination_major(x, mesh)
-        route_weights = _constrain_destination_major(route_weights, mesh)
         w13 = _constrain_destination_major(w13, mesh)
         w2 = _constrain_destination_major(w2, mesh)
 
@@ -454,9 +452,13 @@ def _source_push_semantic_fused_mlp_backward(
         mesh=mesh,
         interpret=interpret,
     )
+    d_route_weight = fused_w2_backward.d_route_weight.astype(residual.plan.route_weights.dtype)
+    if not interpret:
+        assert mesh is not None
+        d_route_weight = _constrain_replicated(d_route_weight, mesh)
     return (
         fused_w13_backward.dx.astype(residual.x.dtype),
-        fused_w2_backward.d_route_weight.astype(residual.plan.route_weights.dtype),
+        d_route_weight,
         fused_w13_backward.dw13.astype(residual.w13.dtype),
         fused_w2_backward.d_w2.astype(residual.w2.dtype),
     )
