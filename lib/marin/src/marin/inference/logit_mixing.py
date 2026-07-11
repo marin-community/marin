@@ -4,23 +4,20 @@
 import contextlib
 import math
 import random
-import socket
-import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
 
 import anyio
 import httpx
-import uvicorn
 from levanter.inference.openai_protocol import CompletionRequest
 from pydantic import ValidationError
-from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from marin.inference.quick_serve_dashboard import bind_serving_socket, serve_app_background
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm import (
     DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT,
@@ -195,8 +192,10 @@ def serve_logit_mixing_model(
 ) -> Iterator[RunningModel]:
     """Serve an OpenAI-compatible logit-mixed completion model."""
 
-    actual_port = _reserve_port(server.host, server.port)
-    with httpx.Client(timeout=request_timeout_seconds) as client:
+    with (
+        bind_serving_socket(server.host, server.port) as sock,
+        httpx.Client(timeout=request_timeout_seconds) as client,
+    ):
         service = LogitMixingService(
             client=client,
             teacher=teacher,
@@ -207,27 +206,12 @@ def serve_logit_mixing_model(
             top_logprobs=top_logprobs,
             clock=clock,
         )
-        uvicorn_server = uvicorn.Server(
-            uvicorn.Config(service.app, host=server.host, port=actual_port, log_level="error", log_config=None)
-        )
-        thread = threading.Thread(target=uvicorn_server.run, name="logit-mixing-server")
-        thread.start()
-        started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
-            lambda: uvicorn_server.started or not thread.is_alive(),
-            timeout=Duration.from_seconds(server.start_timeout_seconds),
-        )
-        if not started or not uvicorn_server.started:
-            uvicorn_server.should_exit = True
-            thread.join()
-            raise RuntimeError("logit mixing server failed to start")
-        try:
+        with serve_app_background(service.app, sock, start_timeout_seconds=server.start_timeout_seconds):
+            host, port = sock.getsockname()[:2]
             yield RunningModel(
-                endpoint=OpenAIEndpoint(base_url=f"http://{server.host}:{actual_port}/v1", model=model),
+                endpoint=OpenAIEndpoint(base_url=f"http://{host}:{port}/v1", model=model),
                 tokenizer=tokenizer,
             )
-        finally:
-            uvicorn_server.should_exit = True
-            thread.join()
 
 
 @contextlib.contextmanager
@@ -400,11 +384,3 @@ def _logsumexp(values: Iterable[float]) -> float:
     values = list(values)
     max_value = max(values)
     return max_value + math.log(sum(math.exp(value - max_value) for value in values))
-
-
-def _reserve_port(host: str, port: int) -> int:
-    if port != 0:
-        return port
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
