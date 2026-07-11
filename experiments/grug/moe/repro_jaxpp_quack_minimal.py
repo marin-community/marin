@@ -1,25 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone two-rank JaxPP/QuACK non-return diagnostic.
+"""Standalone concurrent multi-device jax-tvm-ffi/QuACK hang reproducer.
 
 This intentionally avoids Marin and Levanter imports. It uses one grouped
 QuACK GEMM so forward and custom-VJP-backward placement can be tested
 independently. Install the pinned runtime before invoking the script::
 
-    uv pip install cupy-cuda13x quack-kernels==0.5.0 jax-tvm-ffi==0.1.3
-    uv pip install --no-deps \
-      'jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9'
+    CUDA_VISIBLE_DEVICES=0,1,2 python -u repro_jaxpp_quack_minimal.py
 
-The default dimensions are the minimum failing shape. The two-rank JaxPP case
-needs six visible GPUs::
+The zero-argument command is the minimum failing direct-JAX shape: three
+concurrent devices, three experts, one token per expert, and 8x8 matrices. It
+exits 124 with a ``verdict=hang`` JSON event instead of hanging forever. The
+nearest passing control is::
+
+    CUDA_VISIBLE_DEVICES=0,1 python -u repro_jaxpp_quack_minimal.py \
+      --fsdp 2 --experts 2
+
+The optional two-rank JaxPP mode needs six visible GPUs and the pinned JaxPP
+revision documented in the adjacent README::
 
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -u repro_jaxpp_quack_minimal.py \
       --runtime jaxpp --operation quack --transform forward --transfer scalar
 
-The nearest passing topology uses four visible GPUs plus ``--fsdp 2
---experts 2``. A single-process direct run has the same fsdp=2/3 boundary.
-Each invocation is bounded by per-rank watchdogs and emits JSON-line events.
+Each invocation is supervised by a parent process, bounded by per-worker
+watchdogs, and emits JSON-line events suitable for an upstream bug report.
 """
 
 from __future__ import annotations
@@ -48,7 +53,6 @@ from jax.experimental import multihost_utils
 from jax.experimental import pallas as pl
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jaxpp.experimental import mpmd as jaxpp_mpmd
 from quack.compile_utils import make_fake_tensor  # pyrefly: ignore[missing-import]  # GPU-only dependency
 from quack.cute_dsl_utils import (  # pyrefly: ignore[missing-import]  # GPU-only dependency
     get_max_active_clusters,
@@ -62,7 +66,12 @@ from quack.tile_scheduler import TileSchedulerOptions  # pyrefly: ignore[missing
 from quack.varlen_utils import VarlenArguments  # pyrefly: ignore[missing-import]  # GPU-only dependency
 
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
-EXPECTED_PACKAGES = {"jaxpp": "0.10.2", "jax-tvm-ffi": "0.1.3", "quack-kernels": "0.5.0"}
+EXPECTED_PACKAGES = {
+    "jax": "0.10.1",
+    "jaxlib": "0.10.1",
+    "jax-tvm-ffi": "0.1.3",
+    "quack-kernels": "0.5.0",
+}
 TILE_SHAPE = (128, 192)
 CLUSTER_SHAPE = (2, 1, 1)
 ALIGNMENT = 8
@@ -82,13 +91,17 @@ def package_version(name: str) -> str:
 
 
 def jaxpp_revision() -> str:
-    direct_url = importlib.metadata.distribution("jaxpp").read_text("direct_url.json")
+    try:
+        distribution = importlib.metadata.distribution("jaxpp")
+    except importlib.metadata.PackageNotFoundError:
+        return "not-installed"
+    direct_url = distribution.read_text("direct_url.json")
     if direct_url is None:
         return "unknown"
     return json.loads(direct_url).get("vcs_info", {}).get("commit_id", "unknown")
 
 
-def check_versions() -> None:
+def check_versions(runtime: str) -> None:
     actual = {name: package_version(name) for name in EXPECTED_PACKAGES}
     mismatches = {
         name: {"expected": expected, "actual": actual[name]}
@@ -97,9 +110,10 @@ def check_versions() -> None:
     }
     if mismatches:
         raise RuntimeError(f"package version mismatch: {mismatches}")
-    actual_revision = jaxpp_revision()
-    if actual_revision != JAXPP_REVISION:
-        raise RuntimeError(f"JaxPP revision mismatch: expected {JAXPP_REVISION}, got {actual_revision}")
+    if runtime == "jaxpp":
+        actual_revision = jaxpp_revision()
+        if actual_revision != JAXPP_REVISION:
+            raise RuntimeError(f"JaxPP revision mismatch: expected {JAXPP_REVISION}, got {actual_revision}")
 
 
 def environment() -> dict[str, Any]:
@@ -393,7 +407,15 @@ def distributed_direct_worker(config: Config, process_id: int, local_device_ids:
         event("distributed_shutdown_returned", process_id=process_id)
 
 
+def direct_worker(config: Config) -> None:
+    start_watchdog(config, 0)
+    compute_on_mesh(config, jax.devices(), "direct_eval")
+
+
 def jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int]) -> None:
+    # Keep JaxPP optional for the smaller direct-JAX reproducer.
+    from jaxpp.experimental import mpmd as jaxpp_mpmd  # noqa: PLC0415  # pyrefly: ignore[missing-import]
+
     initialize_distributed(config, process_id, local_device_ids)
     start_watchdog(config, process_id)
     try:
@@ -488,18 +510,9 @@ def jaxpp_worker(config: Config, process_id: int, local_device_ids: list[int]) -
         event("distributed_shutdown_returned", process_id=process_id)
 
 
-def run_workers(config: Config, worker: Callable[[Config, int, list[int]], None]) -> None:
-    if len(jax.devices()) != 2 * config.fsdp:
-        raise ValueError(f"{config.runtime} requires {2 * config.fsdp} visible GPUs, got {len(jax.devices())}")
-    context = mp.get_context("spawn")
-    processes: list[mp.Process] = []
+def monitor_processes(processes: list[mp.Process], timeout: int) -> None:
     try:
-        for process_id in range(2):
-            local_device_ids = list(range(process_id * config.fsdp, (process_id + 1) * config.fsdp))
-            process = context.Process(target=worker, args=(config, process_id, local_device_ids))
-            process.start()
-            processes.append(process)
-        deadline = time.monotonic() + config.timeout + 30
+        deadline = time.monotonic() + timeout + 30
         while any(process.is_alive() for process in processes) and time.monotonic() < deadline:
             bad = next((process.exitcode for process in processes if process.exitcode not in (None, 0)), None)
             if bad is not None:
@@ -524,11 +537,32 @@ def run_workers(config: Config, worker: Callable[[Config, int, list[int]], None]
                 event("worker_killed", pid=process.pid, exitcode=process.exitcode)
 
 
+def run_direct(config: Config) -> None:
+    if len(jax.devices()) != config.fsdp:
+        raise ValueError(f"direct requires {config.fsdp} visible GPUs, got {len(jax.devices())}")
+    process = mp.get_context("spawn").Process(target=direct_worker, args=(config,))
+    process.start()
+    monitor_processes([process], config.timeout)
+
+
+def run_workers(config: Config, worker: Callable[[Config, int, list[int]], None]) -> None:
+    if len(jax.devices()) != 2 * config.fsdp:
+        raise ValueError(f"{config.runtime} requires {2 * config.fsdp} visible GPUs, got {len(jax.devices())}")
+    context = mp.get_context("spawn")
+    processes: list[mp.Process] = []
+    for process_id in range(2):
+        local_device_ids = list(range(process_id * config.fsdp, (process_id + 1) * config.fsdp))
+        process = context.Process(target=worker, args=(config, process_id, local_device_ids))
+        process.start()
+        processes.append(process)
+    monitor_processes(processes, config.timeout)
+
+
 def parse_args() -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime", choices=("direct", "distributed_direct", "jaxpp"), required=True)
-    parser.add_argument("--operation", choices=("plain", "opaque", "quack"), required=True)
-    parser.add_argument("--transform", choices=("forward", "gradient"), required=True)
+    parser.add_argument("--runtime", choices=("direct", "distributed_direct", "jaxpp"), default="direct")
+    parser.add_argument("--operation", choices=("plain", "opaque", "quack"), default="quack")
+    parser.add_argument("--transform", choices=("forward", "gradient"), default="forward")
     parser.add_argument("--transfer", choices=("none", "scalar"), default="none")
     parser.add_argument("--input-sharding", choices=("replicated", "sharded"), default="replicated")
     parser.add_argument("--compute-rank", type=int, choices=(0, 1), default=1)
@@ -554,16 +588,25 @@ def parse_args() -> Config:
 
 def main() -> None:
     config = parse_args()
-    check_versions()
+    check_versions(config.runtime)
     event("start", config=asdict(config), environment=environment())
-    if config.runtime == "direct":
-        start_watchdog(config, 0)
-        compute_on_mesh(config, jax.devices()[: config.fsdp], "direct_eval")
-    elif config.runtime == "distributed_direct":
-        run_workers(config, distributed_direct_worker)
-    else:
-        run_workers(config, jaxpp_worker)
-    event("complete")
+    try:
+        if config.runtime == "direct":
+            run_direct(config)
+        elif config.runtime == "distributed_direct":
+            run_workers(config, distributed_direct_worker)
+        else:
+            run_workers(config, jaxpp_worker)
+    except SystemExit as error:
+        if error.code == 124:
+            event("verdict", verdict="hang", exit_code=124)
+        else:
+            event("verdict", verdict="error", exit_code=error.code)
+        raise
+    except BaseException as error:
+        event("verdict", verdict="error", error_type=type(error).__name__, error=str(error))
+        raise
+    event("verdict", verdict="pass", exit_code=0)
 
 
 if __name__ == "__main__":
