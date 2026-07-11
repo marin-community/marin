@@ -135,7 +135,7 @@ def test_fused_w13_kernel_uses_block_readiness_and_slot_wide_release():
     assert "lowering_semantics=mgpu.LoweringSemantics.Lane" in source
 
 
-def test_fused_w13_kernel_reserves_eight_producers_and_twenty_four_consumers():
+def test_fused_w13_kernel_reserves_twelve_producers_and_twenty_consumers():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
     assert CONFIG.producer_programs_per_peer == 12
@@ -152,7 +152,7 @@ def test_fused_w13_hopper_profile_uses_four_independently_ready_compute_blocks()
     assert CONFIG.compute_blocks_per_send == 4
 
 
-def test_fused_w13_producer_stages_metadata_once_and_pipelines_large_copy_tiles():
+def test_fused_w13_producer_stages_metadata_once_and_serializes_large_copy_tiles():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
     assert RAW_GATHER_ROWS == 8
@@ -164,8 +164,8 @@ def test_fused_w13_producer_stages_metadata_once_and_pipelines_large_copy_tiles(
     assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
     assert TOKEN_TRANSFER_ROWS == 128
     assert "token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32)" in source
-    assert "tile_smem_next=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype)" in source
-    assert "mgpu.wait_smem_to_gmem(1, wait_read_only=False)" in source
+    assert "tile_smem_next" not in source
+    assert "mgpu.wait_smem_to_gmem(1, wait_read_only=False)" not in source
     assert source.index("mgpu.copy_gmem_to_smem(") < source.index("@pl.loop(0, hidden_dim // config.send_k)")
     assert source.index("mgpu.wait_smem_to_gmem(0, wait_read_only=False)") < source.index(
         "pl.semaphore_signal(block_ready_sem.at[rank, slot, block])"
