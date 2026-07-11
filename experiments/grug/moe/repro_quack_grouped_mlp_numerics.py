@@ -13,6 +13,7 @@ import numpy as np
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug._moe.sonic_quack import (
     _quack_gated_impl,
+    _quack_grouped_concat_impl,
     _quack_grouped_impl,
     _require_quack,
 )
@@ -98,7 +99,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     group_sizes = jnp.full((args.experts,), args.rows_per_expert, dtype=jnp.int32)
 
     pallas_preact, pallas_hidden, pallas_output = jax.jit(_pallas_mlp)(x, w13, w2, group_sizes)
-    quack_preact, quack_hidden = jax.jit(_quack_gated_impl)(x, w13, group_sizes)
+    _, quack_hidden = jax.jit(_quack_gated_impl)(x, w13, group_sizes)
+    quack_preact = jax.jit(_quack_grouped_concat_impl)(x, w13, group_sizes)
     quack_output = jax.jit(_quack_grouped_impl)(quack_hidden, w2, group_sizes)
 
     quack_gate, quack_up = jnp.split(quack_preact, 2, axis=-1)
@@ -150,6 +152,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "pallas_triton": "float32 accumulator, bfloat16 output",
             "quack": "Float32 accumulator, BFloat16 output",
         },
+        "quack_activation_math": "FP32 fast exp2 plus approximate reciprocal for sigmoid, then BF16 output",
         "tolerances": {"rtol": _BF16_RTOL, "atol": _BF16_ATOL},
         "comparisons": comparisons,
     }
