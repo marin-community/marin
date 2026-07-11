@@ -140,6 +140,31 @@ def test_fused_w2_backward_metadata_is_jittable_and_preserves_source_routes():
     np.testing.assert_array_equal(np.asarray(metadata.route_slots)[~np.asarray(metadata.row_valid)], 0)
     np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
 
+    produced_compact_blocks = set()
+    for dst in range(2):
+        for src_ordinal in range(2):
+            src = (dst + src_ordinal) % 2
+            dst_ordinal = (-src_ordinal) % 2
+            np.testing.assert_array_equal(
+                np.asarray(metadata.recv_expert[dst, src_ordinal]),
+                np.asarray(metadata.send_expert[src, dst_ordinal]),
+            )
+            np.testing.assert_array_equal(
+                np.asarray(metadata.recv_row_start[dst, src_ordinal]),
+                np.asarray(metadata.send_row_start[src, dst_ordinal]),
+            )
+            for chunk in range(metadata.send_chunks_per_dst):
+                for block in range(CONFIG.compute_blocks_per_send):
+                    if int(metadata.recv_valid_rows[dst, src_ordinal, chunk, block]) == 0:
+                        continue
+                    compact_block = (
+                        dst,
+                        int(metadata.recv_expert[dst, src_ordinal, chunk, block]),
+                        int(metadata.recv_row_start[dst, src_ordinal, chunk, block]) // CONFIG.compute_m,
+                    )
+                    assert compact_block not in produced_compact_blocks
+                    produced_compact_blocks.add(compact_block)
+
     for src in range(2):
         for dst_ordinal in range(2):
             dst = (src + dst_ordinal) % 2
@@ -158,15 +183,15 @@ def test_fused_w2_backward_metadata_is_jittable_and_preserves_source_routes():
                 assert pair_start >= 0
 
 
-def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse():
+def test_fused_w2_backward_generation_accounting_tracks_direct_compact_producers():
     first = source_push_semantic_fused_w2_backward_generation_accounting(
         0,
         hidden_dim=2560,
         intermediate_dim=1280,
         send_chunks_per_dst=24,
     )
-    reused = source_push_semantic_fused_w2_backward_generation_accounting(
-        CONFIG.inbox_slots,
+    later = source_push_semantic_fused_w2_backward_generation_accounting(
+        12,
         hidden_dim=2560,
         intermediate_dim=1280,
         send_chunks_per_dst=24,
@@ -177,27 +202,22 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
         intermediate_dim=1280,
         send_chunks_per_dst=24,
     )
-    assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
+    assert first.chunk == 0
     assert first.owner == 0
     assert next_chunk.owner == 1
     assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_hidden_block)
     assert first.prepare_generation == 1
     assert first.helper_done_generation == first.helper_tiles
-    assert first.block_ready_generation == 2560 // CONFIG.send_hidden_block
-    assert first.block_ready_generation * CONFIG.compute_blocks_per_send == first.helper_done_generation
-    assert reused.slot == first.slot
-    assert reused.generation == 2
-    assert reused.owner == 0
-    assert reused.helper_tiles == first.helper_tiles
-    assert reused.prepare_generation == 2
-    assert reused.helper_done_generation == 2 * first.helper_done_generation
-    assert reused.block_ready_generation == 2 * first.block_ready_generation
-    assert reused.consumer_done_generation == 2 * first.consumer_done_generation
-    assert first.consumer_done_generation == CONFIG.compute_blocks_per_send * (1280 // 128) * (1 + 2560 // 128)
-    assert reused.empty_generation == first.released_generation
+    assert first.expert_block_ready_arrivals == 2560 // CONFIG.send_hidden_block
+    assert later.chunk == 12
+    assert later.owner == 0
+    assert later.helper_tiles == first.helper_tiles
+    assert later.prepare_generation == 13
+    assert later.helper_done_generation == 13 * first.helper_done_generation
+    assert later.expert_block_ready_arrivals == first.expert_block_ready_arrivals
 
 
-def test_fused_w2_backward_config_uses_forward_send_and_compute_worker_split():
+def test_fused_w2_backward_config_keeps_safe_32_worker_topology():
     assert CONFIG.chunk_owner_programs_per_peer == 2
     assert CONFIG.helper_programs_per_peer == 10
     assert CONFIG.consumer_programs_per_peer == 20
@@ -205,6 +225,10 @@ def test_fused_w2_backward_config_uses_forward_send_and_compute_worker_split():
         CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer + CONFIG.consumer_programs_per_peer
         == 32
     )
+    producer_programs = 8 * (CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer)
+    total_programs = producer_programs + 8 * CONFIG.consumer_programs_per_peer
+    assert producer_programs == 96
+    assert total_programs == 256
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
@@ -265,7 +289,7 @@ def test_fused_w2_backward_reports_queue_and_layout_overflow_and_masks_outputs()
     np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
 
 
-def test_fused_w2_backward_kernel_contract_overlaps_dedicated_helpers_and_consumers():
+def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_tiles():
     source = inspect.getsource(_make_source_push_semantic_fused_w2_backward_kernel)
 
     assert "mgpu.remote_ref" in source
@@ -273,29 +297,38 @@ def test_fused_w2_backward_kernel_contract_overlaps_dedicated_helpers_and_consum
     assert "mgpu.transpose_ref" in source
     assert "lowering_semantics=mgpu.LoweringSemantics.Lane" in source
     assert "all_gather" not in source
-    assert "dy_expert" not in source
+    assert "config.inbox_slots" not in source
+    assert "jax.ShapeDtypeStruct((experts_per_rank, rows_per_expert_capacity, hidden_dim), dtype)" in source
     assert "pl.dot" not in source
     assert "(chunk % config.chunk_owner_programs_per_peer) == owner" in source
-    assert "prepare_sem.at[dst, slot]" in source
-    assert "value=generation * helper_tiles" in source
-    assert "(ep_size, config.inbox_slots, config.compute_blocks_per_send)" in source
+    assert "prepare_sem.at[dst]" in source
+    assert "value=(chunk + 1) * helper_tiles" in source
+    assert "mgpu.SemaphoreType.REGULAR((experts_per_rank, compact_m_blocks))" in source
+    assert "producer_programs_per_peer = consumer_start" in source
+    assert "producer_programs = ep_size * producer_programs_per_peer" in source
+    assert "total_programs = producer_programs + dw2_owner_programs" in source
+    assert "is_producer = physical_program < producer_programs" in source
+    assert "physical_program // producer_programs_per_peer" in source
+    assert "(physical_program - producer_programs) // config.consumer_programs_per_peer" in source
+    assert "consumer_start + (physical_program - producer_programs) % config.consumer_programs_per_peer" in source
+    assert "grid=(total_programs,)" in source
+    assert 'grid_names=("physical_program",)' in source
+    assert "pl.program_id(1)" not in source
     assert "(worker >= helper_start) & (worker < consumer_start)" in source
     assert "tile = helper + helper_iteration * config.helper_programs_per_peer" in source
-    assert "_signal_remote_block(block_ready_sem, peer, rank, slot, block)" in source
-    assert "pl.semaphore_signal(helper_done_sem.at[peer, slot])" in source
+    assert "remote_dy_expert = mgpu.remote_ref" in source
+    assert "pl.ds(row_start, config.compute_m)" in source
+    assert "_signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)" in source
+    assert "pl.semaphore_signal(helper_done_sem.at[peer])" in source
     assert "@pl.when(worker >= consumer_start)" in source
-    assert source.count("block_ready_sem.at[peer, slot, block]") == 2
-    assert "value=generation * send_hidden_tiles" in source
-    assert source.count("pl.semaphore_wait(full_sem.at[peer, slot], value=generation, decrement=False)") == 1
-    assert "value=generation * consumer_jobs" in source
-    assert "mgpu.atomic_add" in source
+    assert source.count("compact_ready_sem.at[expert, compact_block]") >= 3
+    assert source.count("value=send_hidden_tiles") == 2
+    assert "global_owner = peer_ordinal * config.consumer_programs_per_peer + consumer" in source
+    assert "tile = global_owner + tile_iteration * dw2_owner_programs" in source
+    assert "@pl.loop(0, compact_m_blocks)" in source
+    assert "valid_ref[expert, row_start]" in source
+    assert "] = acc_ref[...]" in source
+    assert "mgpu.atomic_add" not in source
     assert "jax.nn.silu(gate_smem[:, :].astype(jnp.float32))" in source
     assert "d_z13_ref" in source
     assert "d_h_ref" not in source
-    assert "_prepare_and_consume_peer" not in source
-    assert "_helper_consumer" not in source
-    assert "producer_tiles_per_program" not in source
-    assert "_compute_window_dw2" not in source
-    assert "chunk_windows" not in source
-    assert "consumer_programs_per_source" not in source
-    assert "dw2_turn" not in source
