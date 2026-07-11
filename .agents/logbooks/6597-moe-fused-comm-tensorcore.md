@@ -3119,6 +3119,35 @@ Exact launch command:
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-compare-replicated-7c1 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 7c1f9bca72 --jsonl scratch/w13b-role48-compare-replicated-7c1.jsonl
 ```
 
+## 2026-07-11 FUSED-MOE-101 - W2-backward publish-first candidate is bit-exact
+
+Job `/dlwh/w2b-publish-first-compare-d7db` tested commit `d7dbb9aa7c` on
+`cw-rno2a` with EP8, T128/rank, H2560, I1280, E4/rank, top-k 2, capacity
+factor 4.0, random routing seed 0, bf16, JAX plan metadata, no warmup, one
+timed step, one repeat, and separate compilation. Iris reported terminal state
+`succeeded`, exit 0, one of one task succeeded, and a 44.39s duration.
+
+The separately compiled finite reference and publish-before-route-dot candidate
+matched exactly:
+
+| Output | Max abs diff | Mean abs diff | Expected nonfinite | Observed nonfinite |
+|---|---:|---:|---:|---:|
+| `d_z13` | 0.0 | 0.0 | 0 | 0 |
+| `d_w2` | 0.0 | 0.0 | 0 | 0 |
+| `d_route_weight` | 0.0 | 0.0 | 0 | 0 |
+
+The run also reported zero validity errors, zero queue-overflow route errors,
+zero layout-overflow row errors, zero dropped routes, zero routing-policy
+drops, and zero metadata-overflow routes. This validates the selected
+publish-before-route-dot schedule that measured 38.325619 ms and 44.826071
+useful TFLOP/s/rank at the target shape in FUSED-MOE-098.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-publish-first-compare-d7db --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha d7dbb9aa7c --jsonl scratch/w2b-publish-first-compare-d7db.jsonl
+```
+
 ## 2026-07-11 FUSED-MOE-100 - Paired-B64 W13-backward dW candidate does not lower
 
 Job `/dlwh/w13b-paired-k128-d7db` tested commit `d7dbb9aa7c` on `cw-rno2a`
