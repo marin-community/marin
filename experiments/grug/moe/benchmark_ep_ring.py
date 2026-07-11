@@ -252,48 +252,35 @@ def _group_error_breakdown(
     group_ids: jax.Array,
     group_labels: tuple[str, ...],
 ) -> dict[str, dict[str, float | int]]:
-    group_ids = jnp.asarray(group_ids, dtype=jnp.int32)
-    if actual_f32.shape[: group_ids.ndim] != group_ids.shape:
-        raise ValueError(f"group IDs with shape {group_ids.shape} do not prefix tensor shape {actual_f32.shape}")
-    rows = group_ids.size
-    actual_rows = actual_f32.reshape(rows, -1)
-    expected_rows = expected_f32.reshape(rows, -1)
-    difference = jnp.abs(actual_rows - expected_rows)
-    mismatches = jnp.logical_not(difference <= _BF16_ATOL + _BF16_RTOL * jnp.abs(expected_rows))
-    segment_ids = group_ids.reshape(-1)
-    num_groups = len(group_labels)
+    group_ids_host = np.asarray(jax.device_get(group_ids), dtype=np.int32)
+    if actual_f32.shape[: group_ids_host.ndim] != group_ids_host.shape:
+        raise ValueError(f"group IDs with shape {group_ids_host.shape} do not prefix tensor shape {actual_f32.shape}")
+    rows = group_ids_host.size
+    actual_rows = np.asarray(jax.device_get(actual_f32)).reshape(rows, -1)
+    expected_rows = np.asarray(jax.device_get(expected_f32)).reshape(rows, -1)
+    segment_ids = group_ids_host.reshape(-1)
     values_per_row = actual_rows.shape[1]
-
-    mismatch_count = jax.ops.segment_sum(jnp.sum(mismatches, axis=1), segment_ids, num_segments=num_groups)
-    abs_error_sum = jax.ops.segment_sum(jnp.sum(difference, axis=1), segment_ids, num_segments=num_groups)
-    squared_error = jax.ops.segment_sum(jnp.sum(jnp.square(difference), axis=1), segment_ids, num_segments=num_groups)
-    reference_squared = jax.ops.segment_sum(
-        jnp.sum(jnp.square(expected_rows), axis=1), segment_ids, num_segments=num_groups
-    )
-    candidate_squared = jax.ops.segment_sum(
-        jnp.sum(jnp.square(actual_rows), axis=1), segment_ids, num_segments=num_groups
-    )
-    max_abs = jax.ops.segment_max(jnp.max(difference, axis=1), segment_ids, num_segments=num_groups)
-    row_count = jax.ops.segment_sum(jnp.ones(rows, dtype=jnp.int32), segment_ids, num_segments=num_groups)
-    aggregates = jax.device_get(
-        (mismatch_count, abs_error_sum, squared_error, reference_squared, candidate_squared, max_abs, row_count)
-    )
 
     breakdown = {}
     for index, label in enumerate(group_labels):
-        count = int(aggregates[6][index]) * values_per_row
-        if count == 0:
+        group_rows = np.flatnonzero(segment_ids == index)
+        if group_rows.size == 0:
             continue
-        reference_l2 = float(np.sqrt(aggregates[3][index]))
-        error_l2 = float(np.sqrt(aggregates[2][index]))
+        actual_group = actual_rows[group_rows]
+        expected_group = expected_rows[group_rows]
+        difference = np.abs(actual_group - expected_group)
+        mismatches = difference > _BF16_ATOL + _BF16_RTOL * np.abs(expected_group)
+        count = group_rows.size * values_per_row
+        reference_l2 = float(np.linalg.norm(expected_group.reshape(-1)))
+        error_l2 = float(np.linalg.norm(difference.reshape(-1)))
         breakdown[label] = {
             "element_count": count,
-            "mismatch_count": int(aggregates[0][index]),
-            "mismatch_fraction": float(aggregates[0][index] / count),
-            "mean_abs": float(aggregates[1][index] / count),
-            "max_abs": float(aggregates[5][index]),
+            "mismatch_count": int(np.sum(mismatches)),
+            "mismatch_fraction": float(np.mean(mismatches)),
+            "mean_abs": float(np.mean(difference)),
+            "max_abs": float(np.max(difference)),
             "reference_l2": reference_l2,
-            "candidate_l2": float(np.sqrt(aggregates[4][index])),
+            "candidate_l2": float(np.linalg.norm(actual_group.reshape(-1))),
             "relative_l2_error": error_l2 / reference_l2 if reference_l2 else (0.0 if error_l2 == 0.0 else float("inf")),
         }
     return breakdown
