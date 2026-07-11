@@ -29,7 +29,7 @@ author: dlwh
 - Unequal 24-layer splits, a narrower expert axis, ragged all-to-all, and DeepEP did not beat the ring baseline. Splits with a 7-layer stage either OOMed or failed to reach execution; expert-axis 4 stopped in compilation; ragged all-to-all reached only `3.6743` MFU at batch256/m8. DeepEP now builds and executes its SM90 transport on RNO2A, but training is numerically unstable: both 8-expert and 64-expert non-pipelined controls have a finite step-0 loss and NaN on step 1, while explicit JaxPP is NaN on step 0.
 - Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
 - The Sonic whole-MLP non-return was reduced below JaxPP to concurrent `jax-tvm-ffi` handler invocation. Plain JAX reproduces the same fsdp=2/3 boundary with a single QuACK grouped GEMM at only three experts, one token per expert, and 8x8 matrices. A per-handler host mutex fixes the minimal case, a full 65,536-assignment FSDP-8 forward/backward control, and the exact four-stage target. Proper whole-MLP Sonic is operational but reaches only `13.9598` mean MFU, `2.2407` points below the `16.2005` ring-EP winner. Workaround/setup snapshot: `89bae1453c`.
-- The exact proper-Sonic profile is `37.31%` compute, `50.47%` communication, and `12.22%` stall. AllGather remains nearly unchanged from old Sonic at `47.508s` aggregated over `48,192` device-track calls, 2.35x the ring profile's call count. Proper QuACK backward removed the old Pallas kernels but did not address repeated per-microbatch FSDP weight materialization; the next experiment is staggered once-per-stage materialization that overlaps each downstream stage's gather with upstream forward work.
+- The exact proper-Sonic profile is `37.31%` compute, `50.47%` communication, and `12.22%` stall. AllGather remains nearly unchanged from old Sonic at `47.508s` aggregated over `48,192` device-track calls, 2.35x the ring profile's call count. Staggered once-per-stage materialization improved the reduced smoke but regressed the exact target from `13.9598` to `13.8155` MFU, confirming that the fine-grained gathers were better overlapped than the hoisted critical-path gather.
 
 ## Hypothesis Queue
 
@@ -37,7 +37,6 @@ author: dlwh
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
-- `GRUG-JAXPP-010`: Proper whole-MLP SonicMoE without expert parallelism is executable after serializing concurrent host-side `jax-tvm-ffi` handler calls, but the exact target reaches only `13.9598` mean MFU. Evidence: direct FSDP-8 and four-stage smoke gates plus the exact finite run at `89bae1453c`. Next test: profile the exact path to quantify repeated FSDP weight all-gathers, QuACK compute, and host-launch serialization before changing sharding.
 - `GRUG-JAXPP-011`: XLA's zero-copy one-shot ragged all-to-all may improve the fallback transport path without a full NVIDIA container migration. Evidence: [OpenXLA PR #41580](https://github.com/openxla/xla/pull/41580) removes two device copies and a 512 MiB scratch request behind `--xla_gpu_experimental_ragged_all_to_all_zero_copy=true`; a later commit enables it by default after internal testing. Next test: one bounded ring/ragged transport A/B with the barrier and zero-copy flags if Sonic profiling does not expose a higher-value local fix.
 
 ### Blocked
@@ -53,6 +52,7 @@ author: dlwh
 - Increasing the FA4 microbatch size from 32 to 40 at fixed m16 regresses mean MFU from `16.1040` at batch512 to `15.6037` at batch640. More standard-schedule batch capacity is not the route to 20 MFU at this shape.
 - XLA ragged dot regresses the CuTe FA4 batch512/m16 point from `16.1040` to `8.1438` mean MFU. Pallas-Triton remains the grouped expert GEMM backend.
 - Increasing Pallas-Triton `block_k` from 32 to 64 at eight warps regresses mean MFU from `16.2005` to `16.0189`; halving the kernel's K-loop iterations does not improve the full step.
+- Proper whole-MLP Sonic without EP is operational but reaches only `13.9598` MFU. Staggering once-per-stage materialization regresses the exact target further to `13.8155`; eliminating repeated gather calls does not beat their existing overlap.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -1880,3 +1880,17 @@ author: dlwh
   - The reduced gain is large enough to justify the exact 24-layer comparison; no claim against ring or the 20-MFU target is made until that run completes.
 - Next action:
   - Babysit exact parent `/dlwh/iris-run-job-20260711-061854` and compare its distribution against `13.9598` per-task Sonic, `16.2004883` ring EP, and the `20` target.
+
+### 2026-07-10 23:35 PDT - exact staggered Sonic materialization negative
+- Hypothesis: The `2.80x` reduced-smoke gain from staggered once-per-stage materialization will persist at L24/b512/m16 by eliminating repeated FSDP all-gathers and overlapping each downstream stage's one-time gather with upstream forward work.
+- Commit Hash: `0d97125b50` (`[docs] Record staged Sonic smoke gate`), including implementation `8d7998dee2` and sharding fix `1478cdd3e3`.
+- Command: exact L24/d2560/e64/top-k4/b512/m16/seq4096 staged command under parent `/dlwh/iris-run-job-20260711-061854`.
+- Results:
+  - Parent and all four child tasks succeeded; every materialization task, stage 0-2 completion token, and `keep_step` executed. Training completed 8/8 steps with finite final loss `7.8731637`.
+  - Mean MFU was `13.8155`, with p10/p50/p90 `11.9343/14.0727/14.0813`, latest throughput `317,576.25` tokens/s, and duration `6.603617s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-stagedprefetch-l24-e64k4-b512-s4096-p4m16-20260710-2318>.
+  - Staging regressed per-task proper Sonic by `0.1443` MFU points and remains `2.3850` points below ring EP and `6.1845` points below the target.
+- Interpretation:
+  - The reduced smoke exaggerated startup/amortization effects. At the exact shape, fine-grained per-task FSDP all-gathers are sufficiently overlapped that replacing them with one dependency-chained gather per stage moves communication onto the critical path.
+  - Keep `staged_per_step` as an explicit reproducible negative, but use `per_task` for Sonic. Ring EP remains the measured winner.
+- Next action:
+  - Run one e64/b512/m16 ragged-all-to-all comparison with XLA's barrier and zero-copy flags. Stop the ragged path if it remains materially below ring; do not migrate to a nightly container without a positive bounded signal.
