@@ -19,6 +19,13 @@ from levanter.grug._moe.source_push_semantic_fused_w13_backward import (
 CONFIG = SourcePushSemanticFusedW13BackwardConfig()
 
 
+def test_fused_w13_backward_transport_rows_and_hidden_copy_width_are_independent():
+    config = SourcePushSemanticFusedW13BackwardConfig(send_m=128, send_hidden_block=256)
+
+    config.validate()
+    assert config.compute_blocks_per_send == 2
+
+
 def _plan(*, rows_per_src_dst_capacity: int = 12, rows_per_expert_capacity: int | None = None):
     selected_experts = jnp.asarray(
         [
@@ -77,12 +84,36 @@ def test_fused_w13_backward_metadata_inverts_chunk_rows_and_rotates_peers():
         block = int(metadata.route_block[source, token, route])
         row = int(metadata.route_row[source, token, route])
         assert token_ids[source, dst_ordinal, chunk, block, row] == token
+        destination = (source + dst_ordinal) % x.shape[0]
+        source_ordinal = (-dst_ordinal) % x.shape[0]
+        assert (
+            metadata.forward.recv_expert[destination, source_ordinal, chunk, block]
+            == metadata.forward.send_expert[source, dst_ordinal, chunk, block]
+        )
+        assert (
+            metadata.forward.recv_row_start[destination, source_ordinal, chunk, block]
+            == metadata.forward.send_row_start[source, dst_ordinal, chunk, block]
+        )
 
     ready = np.asarray(metadata.combine_ready_generation)
     for source, token, route in np.argwhere(route_valid):
         destination_ordinal = int(metadata.route_dst_ordinal[source, token, route])
         chunk = int(metadata.route_chunk[source, token, route])
         assert ready[source, 0, destination_ordinal, chunk % CONFIG.inbox_slots] >= (chunk // CONFIG.inbox_slots + 1)
+
+    recv_valid_rows = np.asarray(metadata.forward.recv_valid_rows)
+    recv_expert = np.asarray(metadata.forward.recv_expert)
+    recv_row_start = np.asarray(metadata.forward.recv_row_start)
+    expected_compact_rows = np.zeros_like(np.asarray(metadata.compact_valid_rows))
+    for destination, source_ordinal, chunk, block in np.argwhere(recv_valid_rows > 0):
+        expert = recv_expert[destination, source_ordinal, chunk, block]
+        compact_block = recv_row_start[destination, source_ordinal, chunk, block] // CONFIG.compute_m
+        expected_compact_rows[destination, expert, compact_block] = recv_valid_rows[
+            destination, source_ordinal, chunk, block
+        ]
+    np.testing.assert_array_equal(np.asarray(metadata.compact_valid_rows), expected_compact_rows)
+    assert np.any((expected_compact_rows > 0) & (expected_compact_rows < CONFIG.compute_m))
+    assert np.count_nonzero(expected_compact_rows) < expected_compact_rows.size
 
 
 def test_fused_w13_backward_metadata_tracks_three_peer_chunk_readiness():
@@ -151,31 +182,33 @@ def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_sen
         assert token_ids[source, dst_ordinal, chunk, block, row] == token
 
 
-def test_fused_w13_backward_schedule_separates_roles_and_publishes_compute_blocks():
+def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
     schedule = source_push_semantic_fused_w13_backward_schedule(
         ep_size=8,
+        experts_per_rank=8,
+        rows_per_expert_capacity=4096,
         hidden_dim=2560,
         tokens_per_source=32768,
         send_chunks_per_dst=25,
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.helper_tiles_per_block == 20
-    assert schedule.helper_tiles == 80
-    assert schedule.hidden_tile_jobs == 10
-    assert schedule.compute_jobs_per_chunk == 40
+    assert schedule.compact_m_blocks == 64
+    assert schedule.staging_jobs == 16000
+    assert schedule.dx_jobs == 16000
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
-    assert CONFIG.worker_programs_per_peer == 32
-    assert schedule.lifecycle_programs == 16
-    assert schedule.helper_programs == 80
-    assert schedule.consumer_programs == 160
-    assert schedule.peer_programs == 256
-    assert schedule.combine_programs == 32
-    assert schedule.active_combine_programs == 32
-    assert schedule.total_programs == 288
-    assert schedule.readiness_signals == 200
-    assert schedule.block_readiness_signals == 800
+    assert schedule.staging_programs == 64
+    assert schedule.dx_program_start == 64
+    assert schedule.dx_programs == 32
+    assert schedule.dw_program_start == 96
+    assert schedule.dw_programs == 32
+    assert schedule.combine_programs == 64
+    assert schedule.active_combine_programs == 64
+    assert schedule.total_programs == 128
+    assert schedule.max_stage_readiness_signals == 16000
+    assert schedule.compact_readiness_slots == 10240
+    assert schedule.dx_readiness_signals == 200
     assert schedule.readiness_waits == 983040
 
 

@@ -25,6 +25,13 @@ from levanter.grug._moe.source_push_semantic_fused_w2_backward import (
 CONFIG = SourcePushSemanticFusedW2BackwardConfig()
 
 
+def test_fused_w2_backward_transport_rows_are_independent_from_compute_rows():
+    config = SourcePushSemanticFusedW2BackwardConfig(send_m=128)
+
+    config.validate()
+    assert config.compute_blocks_per_send == 2
+
+
 def _plan(*, rows_per_pair: int = 12, rows_per_rank: int = 6):
     selected_experts = jnp.asarray(
         [

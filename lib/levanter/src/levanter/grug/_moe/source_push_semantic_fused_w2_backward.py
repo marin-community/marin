@@ -45,7 +45,6 @@ class SourcePushSemanticFusedW2BackwardConfig:
     def validate(self) -> None:
         expected = {
             "compute_m": 64,
-            "send_m": 256,
             "intermediate_block": 128,
             "hidden_block": 128,
             "send_hidden_block": 256,
@@ -58,6 +57,10 @@ class SourcePushSemanticFusedW2BackwardConfig:
             actual = getattr(self, name)
             if actual != value:
                 raise ValueError(f"the initial Hopper lowering requires {name}={value}, got {actual}")
+        if self.send_m <= 0 or self.send_m % self.compute_m:
+            raise ValueError(
+                f"send_m must be a positive multiple of compute_m, got {self.send_m=} and {self.compute_m=}"
+            )
 
     @property
     def compute_blocks_per_send(self) -> int:
