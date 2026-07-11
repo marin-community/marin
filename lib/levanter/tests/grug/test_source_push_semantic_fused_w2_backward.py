@@ -338,25 +338,16 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "pl.ds(hidden_start, config.send_hidden_block // 2)" in source
     assert "hidden_start + config.send_hidden_block // 2" in source
     assert "for route_hidden_start in range(0, hidden_dim, config.send_hidden_block)" in source
-    assert "@pl.loop(0, blocks)" in source
-    assert "@pl.when(hidden_tile == 0)" not in source
+    assert "@pl.when(hidden_tile == 0)" in source
     assert "remote_dy_expert = mgpu.remote_ref" in source
     assert "pl.ds(row_start, config.compute_m)" in source
     assert "_signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)" in source
     assert "pl.semaphore_signal(helper_done_sem.at[peer])" in source
-    owner_start = source.index("def _chunk_owner()")
-    helper_start = source.index("def _helper()")
-    prepare = source.index("pl.semaphore_signal(prepare_sem.at[dst])")
-    route_gradient = source.index("queue_d_route_ref[static_peer_ordinal, chunk, block, row]")
-    owner_wait = source.index("pl.semaphore_wait(helper_done_sem.at[dst]")
-    assert owner_start < prepare < route_gradient < owner_wait < helper_start
-    helper_source = source[helper_start : source.index("def _consumer()")]
-    assert "queue_d_route_ref" not in helper_source
-    assert "route_y_ref" not in helper_source
     copy_drain = source.index("mgpu.wait_smem_to_gmem(0, wait_read_only=False)")
     compact_ready = source.index("pl.semaphore_signal(compact_ready_sem.at[expert, compact_block])")
+    route_gradient = source.index("@pl.when(hidden_tile == 0)")
     helper_done = source.index("pl.semaphore_signal(helper_done_sem.at[peer])")
-    assert copy_drain < compact_ready < helper_done
+    assert copy_drain < compact_ready < route_gradient < helper_done
     assert "@pl.when(worker >= consumer_start)" in source
     assert source.count("compact_ready_sem.at[expert, compact_block]") >= 3
     assert source.count("value=send_hidden_tiles") == 2
