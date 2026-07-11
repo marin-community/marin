@@ -22,6 +22,7 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ring_fused",  # Bulk ring with output-oriented gather/reduce combine.
     "ring_local_combine",  # Bulk-ring dispatch + shard-local collective-permute combine.
     "ring_ppermute",  # Expert-parallel streamed collective-permute backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
@@ -30,7 +31,14 @@ MoeImplementation: TypeAlias = Literal[
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ring_local_combine", "ring_ppermute", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = (
+    "ring",
+    "ring_fused",
+    "ring_local_combine",
+    "ring_ppermute",
+    "ragged_all_to_all",
+    "deepep",
+)
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (

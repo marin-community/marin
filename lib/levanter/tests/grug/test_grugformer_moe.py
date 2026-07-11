@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+from functools import partial
 
 import numpy as np
 import pytest
@@ -15,6 +16,11 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring_fused import (
+    _moe_mlp_ep_ring_fused_local,
+    ring_combine,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -834,6 +840,122 @@ def test_moe_mlp_ring_local_combine_matches_ring_values_and_gradients(overflow: 
         assert int(local_dropped) > 0
     for local_grad, ring_grad in zip(local_grads, ring_grads, strict=True):
         np.testing.assert_allclose(np.asarray(local_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("overflow", [False, True])
+def test_moe_mlp_ring_fused_matches_ring_values_and_full_gradients(overflow: bool):
+    mesh = _make_ep_ring_test_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires >=2 devices")
+
+    expert_size = mesh.shape["expert"]
+    tokens = expert_size * 4
+    hidden_dim = 8
+    intermediate_dim = 12
+    num_experts = expert_size * 2
+    topk = 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(45),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    if overflow:
+        selected_experts = jnp.zeros_like(selected_experts)
+        combine_weights = jnp.full_like(combine_weights, 0.5)
+    cotangent = jax.random.normal(jax.random.key(46), x.shape, dtype=x.dtype)
+
+    with jax.set_mesh(mesh):
+        batch_spec = P(("data", "expert"), None)
+        expert_spec = P("expert", None, None)
+        batch_sharding = NamedSharding(mesh, batch_spec)
+        expert_sharding = NamedSharding(mesh, expert_spec)
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        cotangent = jax.sharding.reshard(cotangent, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        def shard_runner(local_fn, **kwargs):
+            return jax.shard_map(
+                partial(
+                    local_fn,
+                    activation_fn=jax.nn.silu,
+                    num_experts=num_experts,
+                    capacity_factor=1.0,
+                    **kwargs,
+                ),
+                mesh=mesh,
+                in_specs=(batch_spec, batch_spec, batch_spec, expert_spec, expert_spec),
+                out_specs=(batch_spec, P()),
+                check_vma=False,
+            )
+
+        ring = shard_runner(_moe_mlp_ep_ring_local)
+        fused = shard_runner(_moe_mlp_ep_ring_fused_local)
+
+        def run(runner, x, combine_weights, w_up_gate, w_down):
+            return runner(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+        ring_out, ring_dropped = run(ring, x, combine_weights, w_up_gate, w_down)
+        fused_out, fused_dropped = run(fused, x, combine_weights, w_up_gate, w_down)
+
+        def loss(runner, x, combine_weights, w_up_gate, w_down):
+            out, _ = run(runner, x, combine_weights, w_up_gate, w_down)
+            return jnp.sum(out * cotangent)
+
+        ring_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(ring, x, combine_weights, w_up_gate, w_down)
+        fused_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(fused, x, combine_weights, w_up_gate, w_down)
+
+    np.testing.assert_allclose(np.asarray(fused_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
+    assert int(fused_dropped) == int(ring_dropped)
+    if overflow:
+        assert int(fused_dropped) > 0
+    for fused_grad, ring_grad in zip(fused_grads, ring_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(fused_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
+
+
+def test_ring_combine_xla_matches_reference_values_and_gradients():
+    capacity = 7
+    tokens = 6
+    topk = 2
+    hidden_dim = 5
+    out_dispatch = jax.random.normal(jax.random.key(47), (capacity, hidden_dim), dtype=jnp.float32)
+    assignment_weights = jax.random.normal(jax.random.key(48), (tokens * topk,), dtype=jnp.float32)
+    local_assignment_indices = jnp.array([0, 5, 7, 2, 9, 1, 6], dtype=jnp.int32)
+    valid = jnp.array([True, True, True, True, False, False, False])
+    cotangent = jax.random.normal(jax.random.key(49), (tokens, hidden_dim), dtype=jnp.float32)
+
+    def combine(implementation, out_dispatch, assignment_weights):
+        return ring_combine(
+            out_dispatch,
+            local_assignment_indices,
+            valid,
+            assignment_weights,
+            tokens=tokens,
+            topk=topk,
+            implementation=implementation,
+        )
+
+    reference_out, reference_pullback = jax.vjp(
+        partial(combine, "reference"),
+        out_dispatch,
+        assignment_weights,
+    )
+    xla_out, xla_pullback = jax.vjp(
+        partial(combine, "xla"),
+        out_dispatch,
+        assignment_weights,
+    )
+    reference_grads = reference_pullback(cotangent)
+    xla_grads = xla_pullback(cotangent)
+
+    np.testing.assert_allclose(np.asarray(xla_out), np.asarray(reference_out), rtol=1e-5, atol=1e-5)
+    for xla_grad, reference_grad in zip(xla_grads, reference_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(xla_grad), np.asarray(reference_grad), rtol=1e-5, atol=1e-5)
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
