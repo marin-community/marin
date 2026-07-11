@@ -672,44 +672,6 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                             jnp.zeros((config.send_hidden_block // 2,), dtype=dtype),
                                         )
 
-                                        @pl.when(hidden_tile == 0)
-                                        def _compute_route_weight_gradient() -> None:
-                                            acc = jnp.asarray(0.0, dtype=jnp.float32)
-                                            entry = chunk * blocks + block
-                                            for route_hidden_start in range(0, hidden_dim, config.send_hidden_block):
-                                                dy_lower = dy_ref[
-                                                    token,
-                                                    pl.ds(route_hidden_start, config.send_hidden_block // 2),
-                                                ].astype(jnp.float32)
-                                                route_lower = route_y_ref[
-                                                    static_peer_ordinal,
-                                                    entry,
-                                                    row,
-                                                    pl.ds(route_hidden_start, config.send_hidden_block // 2),
-                                                ].astype(jnp.float32)
-                                                dy_upper = dy_ref[
-                                                    token,
-                                                    pl.ds(
-                                                        route_hidden_start + config.send_hidden_block // 2,
-                                                        config.send_hidden_block // 2,
-                                                    ),
-                                                ].astype(jnp.float32)
-                                                route_upper = route_y_ref[
-                                                    static_peer_ordinal,
-                                                    entry,
-                                                    row,
-                                                    pl.ds(
-                                                        route_hidden_start + config.send_hidden_block // 2,
-                                                        config.send_hidden_block // 2,
-                                                    ),
-                                                ].astype(jnp.float32)
-                                                acc += jnp.sum(dy_lower * route_lower) + jnp.sum(
-                                                    dy_upper * route_upper
-                                                )
-                                            queue_d_route_ref[static_peer_ordinal, chunk, block, row] = jnp.where(
-                                                live, acc, jnp.asarray(0.0, dtype=jnp.float32)
-                                            )
-
                                     mgpu.commit_smem()
                                     destination_ref = dy_expert_ref if static_peer_ordinal == 0 else remote_dy_expert
                                     mgpu.copy_smem_to_gmem(
@@ -748,6 +710,47 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     pl.semaphore_signal(compact_ready_sem.at[expert, compact_block])
                                 else:
                                     _signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)
+
+                                @pl.when(hidden_tile == 0)
+                                def _compute_route_weight_gradient() -> None:
+                                    entry = chunk * blocks + block
+
+                                    @pl.loop(0, config.compute_m)
+                                    def _route_row_loop(row) -> None:
+                                        token = token_ids_ref[static_peer_ordinal, chunk, block, row]
+                                        live = row < valid_rows
+                                        acc = jnp.asarray(0.0, dtype=jnp.float32)
+                                        for route_hidden_start in range(0, hidden_dim, config.send_hidden_block):
+                                            dy_lower = dy_ref[
+                                                token,
+                                                pl.ds(route_hidden_start, config.send_hidden_block // 2),
+                                            ].astype(jnp.float32)
+                                            route_lower = route_y_ref[
+                                                static_peer_ordinal,
+                                                entry,
+                                                row,
+                                                pl.ds(route_hidden_start, config.send_hidden_block // 2),
+                                            ].astype(jnp.float32)
+                                            dy_upper = dy_ref[
+                                                token,
+                                                pl.ds(
+                                                    route_hidden_start + config.send_hidden_block // 2,
+                                                    config.send_hidden_block // 2,
+                                                ),
+                                            ].astype(jnp.float32)
+                                            route_upper = route_y_ref[
+                                                static_peer_ordinal,
+                                                entry,
+                                                row,
+                                                pl.ds(
+                                                    route_hidden_start + config.send_hidden_block // 2,
+                                                    config.send_hidden_block // 2,
+                                                ),
+                                            ].astype(jnp.float32)
+                                            acc += jnp.sum(dy_lower * route_lower) + jnp.sum(dy_upper * route_upper)
+                                        queue_d_route_ref[static_peer_ordinal, chunk, block, row] = jnp.where(
+                                            live, acc, jnp.asarray(0.0, dtype=jnp.float32)
+                                        )
 
                             pl.semaphore_signal(helper_done_sem.at[peer])
 

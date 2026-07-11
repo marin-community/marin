@@ -343,6 +343,11 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "pl.ds(row_start, config.compute_m)" in source
     assert "_signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)" in source
     assert "pl.semaphore_signal(helper_done_sem.at[peer])" in source
+    copy_drain = source.index("mgpu.wait_smem_to_gmem(0, wait_read_only=False)")
+    compact_ready = source.index("pl.semaphore_signal(compact_ready_sem.at[expert, compact_block])")
+    route_gradient = source.index("@pl.when(hidden_tile == 0)")
+    helper_done = source.index("pl.semaphore_signal(helper_done_sem.at[peer])")
+    assert copy_drain < compact_ready < route_gradient < helper_done
     assert "@pl.when(worker >= consumer_start)" in source
     assert source.count("compact_ready_sem.at[expert, compact_block]") >= 3
     assert source.count("value=send_hidden_tiles") == 2
