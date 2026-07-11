@@ -49,7 +49,7 @@ class SourcePushSemanticFusedW13BackwardConfig:
 
     compute_m: int = 64
     send_m: int = 256
-    send_hidden_block: int = 256
+    send_hidden_block: int = 512
     block_hidden: int = 128
     block_output: int = 128
     inbox_slots: int = 12
@@ -58,7 +58,7 @@ class SourcePushSemanticFusedW13BackwardConfig:
     def validate(self) -> None:
         expected = {
             "compute_m": 64,
-            "send_hidden_block": 256,
+            "send_hidden_block": 512,
             "block_hidden": 128,
             "block_output": 128,
             "inbox_slots": 12,
@@ -75,6 +75,10 @@ class SourcePushSemanticFusedW13BackwardConfig:
     @property
     def compute_blocks_per_send(self) -> int:
         return self.send_m // self.compute_m
+
+    @property
+    def staging_tiles_per_group(self) -> int:
+        return self.send_hidden_block // self.block_hidden
 
 
 @jax.tree_util.register_dataclass
@@ -106,6 +110,7 @@ class SourcePushSemanticFusedW13BackwardSchedule:
     """Resident CTA partition and fixed semantic work counts for one rank."""
 
     hidden_tiles: int
+    staging_hidden_groups: int
     compact_m_blocks: int
     staging_jobs: int
     dx_jobs: int
@@ -164,6 +169,7 @@ def source_push_semantic_fused_w13_backward_schedule(
         )
 
     hidden_tiles = hidden_dim // config.block_hidden
+    staging_hidden_groups = (hidden_tiles + config.staging_tiles_per_group - 1) // config.staging_tiles_per_group
     compact_m_blocks = rows_per_expert_capacity // config.compute_m
     if hidden_tiles > STAGING_PROGRAMS:
         raise ValueError(f"hidden tiles {hidden_tiles} exceed the resident combine group {STAGING_PROGRAMS}")
@@ -176,8 +182,9 @@ def source_push_semantic_fused_w13_backward_schedule(
     )
     return SourcePushSemanticFusedW13BackwardSchedule(
         hidden_tiles=hidden_tiles,
+        staging_hidden_groups=staging_hidden_groups,
         compact_m_blocks=compact_m_blocks,
-        staging_jobs=block_jobs * hidden_tiles,
+        staging_jobs=block_jobs * staging_hidden_groups,
         dx_jobs=block_jobs * hidden_tiles,
         token_blocks=token_blocks,
         rounds=(send_chunks_per_dst + config.inbox_slots - 1) // config.inbox_slots,
@@ -558,7 +565,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         @pl.when(worker < schedule.staging_programs)
         def _stage_and_combine() -> None:
             producer = worker
-            staging_jobs_per_peer = send_chunks_per_dst * config.compute_blocks_per_send * hidden_tiles
+            staging_jobs_per_peer = (
+                send_chunks_per_dst * config.compute_blocks_per_send * schedule.staging_hidden_groups
+            )
 
             def _stage_peer(static_destination_ordinal: int) -> None:
                 destination = (rank + static_destination_ordinal) % ep_size
@@ -576,8 +585,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
                     @pl.when(job < staging_jobs_per_peer)
                     def _stage_owned_tile() -> None:
-                        hidden_tile = job % hidden_tiles
-                        block_job = job // hidden_tiles
+                        hidden_group = job % schedule.staging_hidden_groups
+                        block_job = job // schedule.staging_hidden_groups
                         block = block_job % config.compute_blocks_per_send
                         chunk = block_job // config.compute_blocks_per_send
                         valid_rows = send_valid_ref[static_destination_ordinal, chunk, block]
@@ -586,42 +595,63 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         def _stage_live_tile() -> None:
                             expert = send_expert_ref[static_destination_ordinal, chunk, block]
                             row_start = send_row_ref[static_destination_ordinal, chunk, block]
-                            hidden_start = hidden_tile * config.block_hidden
+                            first_hidden_tile = hidden_group * config.staging_tiles_per_group
 
-                            def _copy_scope(x_smem) -> None:
+                            def _copy_scope(x_smem_0, x_smem_1, x_smem_2, x_smem_3) -> None:
                                 @pl.loop(0, config.compute_m)
                                 def _row_loop(row) -> None:
                                     token = token_ids_ref[static_destination_ordinal, chunk, block, row]
-                                    x_smem[row, :] = jnp.where(
-                                        row < valid_rows,
-                                        x_ref[token, pl.ds(hidden_start, config.block_hidden)],
-                                        jnp.zeros((config.block_hidden,), dtype=dtype),
-                                    )
+                                    for tile_offset, x_smem in enumerate((x_smem_0, x_smem_1, x_smem_2, x_smem_3)):
+                                        hidden_tile = first_hidden_tile + tile_offset
+
+                                        @pl.when(hidden_tile < hidden_tiles)
+                                        def _load_hidden_tile() -> None:
+                                            hidden_start = hidden_tile * config.block_hidden
+                                            x_smem[row, :] = jnp.where(
+                                                row < valid_rows,
+                                                x_ref[token, pl.ds(hidden_start, config.block_hidden)],
+                                                jnp.zeros((config.block_hidden,), dtype=dtype),
+                                            )
 
                                 mgpu.commit_smem()
-                                mgpu.copy_smem_to_gmem(
-                                    x_smem,
-                                    destination_x.at[
-                                        expert,
-                                        pl.ds(row_start, config.compute_m),
-                                        pl.ds(hidden_start, config.block_hidden),
-                                    ],
-                                )
+                                for tile_offset, x_smem in enumerate((x_smem_0, x_smem_1, x_smem_2, x_smem_3)):
+                                    hidden_tile = first_hidden_tile + tile_offset
+
+                                    @pl.when(hidden_tile < hidden_tiles)
+                                    def _publish_hidden_tile() -> None:
+                                        hidden_start = hidden_tile * config.block_hidden
+                                        mgpu.copy_smem_to_gmem(
+                                            x_smem,
+                                            destination_x.at[
+                                                expert,
+                                                pl.ds(row_start, config.compute_m),
+                                                pl.ds(hidden_start, config.block_hidden),
+                                            ],
+                                        )
+
                                 mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                             pl.run_scoped(
                                 _copy_scope,
-                                x_smem=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
+                                x_smem_0=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
+                                x_smem_1=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
+                                x_smem_2=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
+                                x_smem_3=mgpu.SMEM((config.compute_m, config.block_hidden), dtype=dtype),
                             )
                             compact_block = row_start // config.compute_m
-                            if static_destination_ordinal == 0:
-                                pl.semaphore_signal(compact_ready_sem.at[expert, compact_block, hidden_tile])
-                            else:
-                                _signal_remote(
-                                    compact_ready_sem,
-                                    destination,
-                                    (expert, compact_block, hidden_tile),
-                                )
+                            for tile_offset in range(config.staging_tiles_per_group):
+                                hidden_tile = first_hidden_tile + tile_offset
+
+                                @pl.when(hidden_tile < hidden_tiles)
+                                def _signal_hidden_tile() -> None:
+                                    if static_destination_ordinal == 0:
+                                        pl.semaphore_signal(compact_ready_sem.at[expert, compact_block, hidden_tile])
+                                    else:
+                                        _signal_remote(
+                                            compact_ready_sem,
+                                            destination,
+                                            (expert, compact_block, hidden_tile),
+                                        )
 
             for destination_ordinal in range(ep_size):
                 _stage_peer(destination_ordinal)
@@ -981,11 +1011,8 @@ def _validate_kernel_dimensions(
     output_dim: int,
     config: SourcePushSemanticFusedW13BackwardConfig,
 ) -> None:
-    if hidden_dim % config.send_hidden_block or hidden_dim % config.block_hidden:
-        raise ValueError(
-            f"hidden_dim must be divisible by send_hidden_block and block_hidden, got {hidden_dim=} "
-            f"{config.send_hidden_block=} {config.block_hidden=}"
-        )
+    if hidden_dim % config.block_hidden:
+        raise ValueError(f"hidden_dim must be divisible by block_hidden, got {hidden_dim=} {config.block_hidden=}")
     if output_dim % config.block_output:
         raise ValueError(f"output_dim must be divisible by block_output, got {output_dim=} {config.block_output=}")
 
