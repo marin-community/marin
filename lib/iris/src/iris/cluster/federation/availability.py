@@ -27,8 +27,9 @@ heartbeat's ``observation_epoch_ms`` (its *generation*) and holds them until a
 strictly newer generation arrives — whose fresh number already reflects the
 delivered jobs — so effective availability decreases monotonically between
 heartbeats. Over-assignment is bounded to a peer's advertised free capacity per
-observation; the issue tolerates the residual staleness, and the peer's own
-scheduler is the backstop.
+observation. That residual staleness is acceptable by design — placement need not
+be exact; the peer's own scheduler rejects (and the parent requeues) anything that
+does not fit, which is the backstop.
 """
 
 import logging
@@ -107,7 +108,8 @@ class ReservationLedger:
     Keyed ``(peer_id, backend_id) -> (generation, {token: reserved})``. Reset for a
     backend when a strictly newer generation arrives. In-memory only: a controller
     restart forgets it, at worst a burst of re-assignment bounded by the next
-    heartbeat, which the issue explicitly tolerates.
+    heartbeat — an acceptable one-off, since placement need not be exact and the
+    peer's scheduler is the backstop.
     """
 
     def __init__(self) -> None:
