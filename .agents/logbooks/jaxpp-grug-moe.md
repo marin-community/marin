@@ -54,6 +54,7 @@ author: dlwh
 - Increasing Pallas-Triton `block_k` from 32 to 64 at eight warps regresses mean MFU from `16.2005` to `16.0189`; halving the kernel's K-loop iterations does not improve the full step.
 - Proper whole-MLP Sonic without EP is operational but reaches only `13.9598` MFU. Staggering once-per-stage materialization regresses the exact target further to `13.8155`; eliminating repeated gather calls does not beat their existing overlap.
 - XLA's zero-copy one-shot ragged all-to-all flags are accepted, but RNO2A pods cannot create the required exportable `FABRIC+POSIX_FD` CUDA VMM allocation. `cuMemCreate` returns `CUDA_ERROR_NOT_PERMITTED` and the process exits 139 before compilation completes.
+- The first true streamed `ring_ppermute` backend passes CPU output/gradient parity and removes global activation/output tensors, but its H100 smoke is numerically unstable after one finite step and over 1,100x slower on that first timed step because EP8 creates many small native XLA ragged GEMMs and collective permutes.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -1941,3 +1942,16 @@ author: dlwh
   - The streamed backend is correctness-ready for a reduced H100 gate. Its risks are EP8 smaller GEMMs, one assignment selection per round, and native XLA ragged-dot performance.
 - Next action:
   - Compare L8/b32/m4 `ring_ppermute` against the matching bulk-ring `9.4180` MFU smoke. Scale only if the reduced result is competitive.
+
+### 2026-07-11 00:24 PDT - streamed ring H100 hard negative
+- Hypothesis: Removing global activation/output tensors and exposing per-round collective-permute/GEMM overlap will compensate for splitting the EP8 expert work into source-shard rounds.
+- Commit Hash: `251629c83c` (`[grug] Add streamed expert ring backend`).
+- Command: L8/d2560/e64/top-k4/b32/m4/seq4096 four-stage `ring_ppermute` smoke under parent `/dlwh/iris-run-job-20260711-071233`.
+- Results:
+  - Compilation completed through `keep_step` and the executable ran. Step 0 had finite loss `9.0438070`; step 1 produced NaN and training stopped. The parent was stopped after W&B finalized; all child tasks are terminal and no live failed job remains.
+  - The only timed sample included startup and is not a steady-state metric: `0.0085168` MFU, `566.09` tokens/s, and `231.5379s` versus matching bulk-ring smoke `9.4180` MFU, `625,994.6` tokens/s, and `0.209382s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ringppermute-smoke-l8-e64k4-b32-s4096-p4m4-20260711-0012>.
+- Interpretation:
+  - The one-source-per-round design is not viable with native XLA ragged GEMMs at EP8. It expands each layer into many small grouped GEMMs/collectives and fails multi-step numerical behavior despite CPU parity.
+  - Do not scale or tune this backend. Preserve it only as a reproducible algorithmic negative; keep bulk ring as the working path.
+- Next action:
+  - Optimize the bulk ring combine locally: scatter only owner-local token rows into `zeros_like(x_local)` and `psum` that 80 MiB buffer, instead of scattering a 640 MiB global tensor and reduce-scattering it.
