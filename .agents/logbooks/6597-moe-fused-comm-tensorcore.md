@@ -2789,3 +2789,49 @@ FABRIC-handle VMM fallbacks, then produced all six repeat rows and both summary
 rows. There was no benchmark error, retry, or kernel edit. Promote this as the
 current performance-selected integrated schedule while keeping finite
 end-to-end comparison as the next correctness gate.
+
+## 2026-07-10 FUSED-MOE-094 - Split integrated finite comparison fails its gate
+
+Job `/dlwh/compare-split-integrated-selected-20260710-2410` at
+`4625779973` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, and
+one of one task succeeded. The reduced random-routing comparison shape was T128
+per rank, E4/rank, top-k 2, capacity factor 4.0, H2560, I1280, bf16, and eight
+H100 ranks. Reference and Pallas executions were compiled and run separately;
+the reference operands were replicated and the production candidate remained
+sharded.
+
+The forward comparison completed, but it did not pass numerically:
+
+| Metric | Result |
+|---|---:|
+| `y` max absolute difference | 1024.0 |
+| `y` mean absolute difference | 110.7229232788086 |
+| Expected `y` nonfinite errors | 0 |
+| Observed `y` nonfinite errors | 0 |
+| Dropped-route difference count | 0 |
+| Candidate dropped routes | 0 |
+| Candidate routing-policy drops | 0 |
+| Candidate metadata-overflow routes | 0 |
+
+The forward candidate remained finite and preserved routing cardinality, but
+the output error is far too large to treat the fully selected integrated path
+as correct. The comparison's diagnostic timing was 35.387899 ms and is not a
+target-shape performance result.
+
+The fwd+bwd comparison failed before compilation and emitted no `dx`,
+`d_route_weights`, `dw13`, or `dw2` error metrics. JAX rejected the custom VJP
+because it returned `d_route_weights` with type
+`float32[8@expert,128,2]` for a replicated primal input of type
+`float32[8,128,2]`. Therefore:
+
+| Gradient | Max/mean/nonfinite result |
+|---|---|
+| `dx` | unavailable; comparison did not compile |
+| `d_route_weights` | unavailable; output sharding/type mismatch |
+| `dw13` | unavailable; comparison did not compile |
+| `dw2` | unavailable; comparison did not compile |
+
+This run contradicts aggregate correctness rather than clearing the remaining
+gate. Keep the FUSED-MOE-093 target-shape timing as performance evidence only;
+do not promote the selected integrated path as numerically validated. Per the
+bounded babysitting request, no retry or code edit was made.
