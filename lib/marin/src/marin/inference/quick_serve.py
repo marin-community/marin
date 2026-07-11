@@ -241,6 +241,10 @@ def serve_in_job(config: QuickServeConfig) -> None:
     # the advertised interface (the address the controller proxy connects to), not
     # all interfaces.
     serving_socket = bind_serving_socket(advertise_host, port)
+    # On the k8s runtime (e.g. CoreWeave GPU pods) named ports are kernel-assigned:
+    # ``get_port`` returns 0 and the real port is only known after binding. Register
+    # the actual bound port so the controller proxy can reach the endpoint.
+    serving_port = serving_socket.getsockname()[1]
 
     model_path = resolve_model_path(config.model, config.cache_ttl_days)
     accelerator = config.accelerator_label
@@ -304,7 +308,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
         )
         app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id=model_id, info=info)
         with serve_app_background(app, serving_socket):
-            address = f"http://{advertise_host}:{port}"
+            address = f"http://{advertise_host}:{serving_port}"
             metadata = {
                 "model": str(model_id),
                 "kind": "quick-serve",
