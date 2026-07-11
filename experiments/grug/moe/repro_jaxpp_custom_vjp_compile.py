@@ -121,13 +121,12 @@ def plain_layer(x: jax.Array, up: jax.Array, down: jax.Array, config: Config) ->
 def _pallas_zero_like(x: jax.Array) -> jax.Array:
     flat = x.reshape((-1,))
     block = 256
-    blocks = (flat.size + block - 1) // block
+    if flat.size % block:
+        raise ValueError(f"opaque mode requires a multiple of {block} elements, got {flat.size}")
+    blocks = flat.size // block
 
     def kernel(x_ref, out_ref):
-        offsets = jnp.arange(block)
-        mask = pl.program_id(0) * block + offsets < flat.size
-        values = pl.load(x_ref, (offsets,), mask=mask, other=0)
-        pl.store(out_ref, (offsets,), values * jnp.asarray(0, values.dtype), mask=mask)
+        out_ref[...] = x_ref[...] * jnp.asarray(0, x_ref.dtype)
 
     out = pl.pallas_call(
         kernel,
