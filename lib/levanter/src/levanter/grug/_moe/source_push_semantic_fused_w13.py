@@ -28,6 +28,13 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
+RAW_GATHER_HIDDEN_LAYOUT = mgpu.Layout.WG_STRIDED((256,), vec_size=2)
+RAW_GATHER_ROW_LAYOUT = mgpu.Layout.TILED(
+    mgpu.Tiling(((RAW_GATHER_ROWS,),)),
+    warp_dims=(mgpu.Replicated(4),),
+    lane_dims=(mgpu.Replicated(32),),
+    vector_dim=-1,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +69,8 @@ class SourcePushSemanticFusedW13Config:
                 raise ValueError(f"{name} must be positive, got {getattr(self, name)}")
         if self.compute_m != 64:
             raise ValueError(f"the initial Hopper lowering requires compute_m=64, got {self.compute_m}")
-        if self.send_m != 4 * self.compute_m:
-            raise ValueError(f"send_m must aggregate four compute blocks, got {self.send_m=} and {self.compute_m=}")
+        if self.send_m % self.compute_m:
+            raise ValueError(f"send_m must be a multiple of compute_m, got {self.send_m=} and {self.compute_m=}")
         if self.block_n != 128 or self.block_k != 128:
             raise ValueError(
                 f"the initial Hopper lowering requires block_n=block_k=128, got {self.block_n=} {self.block_k=}"
@@ -528,7 +535,7 @@ def _make_source_push_semantic_fused_w13_kernel(
                         def _copy_scope(tile_smem) -> None:
                             hidden_offsets = mgpu.layout_cast(
                                 jnp.arange(config.send_k, dtype=jnp.int32),
-                                mgpu.Layout.TILED,
+                                RAW_GATHER_HIDDEN_LAYOUT,
                             )
                             hidden_offsets = k_start + hidden_offsets
 
@@ -537,7 +544,7 @@ def _make_source_push_semantic_fused_w13_kernel(
                                 row_start = row_group * RAW_GATHER_ROWS
                                 row_offsets = mgpu.layout_cast(
                                     jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32),
-                                    mgpu.Layout.TILED,
+                                    RAW_GATHER_ROW_LAYOUT,
                                 )
                                 row_valid = row_start + row_offsets < valid_rows
                                 tokens = token_ids_ref[
