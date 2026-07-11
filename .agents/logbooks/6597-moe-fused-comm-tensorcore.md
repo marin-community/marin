@@ -3581,3 +3581,18 @@ The median was `62.170948 ms`, with min/max `62.032635/62.464365 ms`. This is
 ms faster than the correct in-kernel serialized baseline. The production
 replacement now makes this queue explicit and launches a source-local Pallas
 combine kernel after the fused compute/transport kernel completes.
+
+## 2026-07-11 FUSED-MOE-117 - First standalone Pallas combine faults
+
+Job `/dlwh/w13b-split-combine-compare-e716` tested commit `e716de715c` at the
+reduced finite-comparison geometry. The first kernel returned the source-owned
+dX queue and dW, then a two-dimensional Pallas grid gathered top-k queue rows
+into dX. Iris and its only task succeeded at the orchestration level in 46.93s,
+but the observed sequence raised `CUDA_ERROR_ILLEGAL_ADDRESS` during
+`jax.device_get`. No dX or dW numerical metrics were produced; pre-run drop and
+metadata-overflow counters were zero.
+
+The next isolation keeps the same explicit queue-producing kernel but replaces
+the standalone Pallas gather with a source-sharded JAX top-k gather/reduce. A
+passing JAX combine proves the queue contract and confines the defect to the
+new Pallas combine lowering rather than the first kernel.
