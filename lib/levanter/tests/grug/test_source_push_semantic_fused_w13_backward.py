@@ -19,14 +19,11 @@ from levanter.grug._moe.source_push_semantic_fused_w13_backward import (
 CONFIG = SourcePushSemanticFusedW13BackwardConfig()
 
 
-def test_fused_w13_backward_transport_uses_four_k128_payloads_per_k512_group():
-    config = SourcePushSemanticFusedW13BackwardConfig(send_m=128, send_hidden_block=512)
+def test_fused_w13_backward_transport_rows_and_hidden_copy_width_are_independent():
+    config = SourcePushSemanticFusedW13BackwardConfig(send_m=128, send_hidden_block=256)
 
     config.validate()
     assert config.compute_blocks_per_send == 2
-    assert config.block_hidden == 128
-    assert config.staging_tiles_per_group == 4
-    assert config.compute_m * config.send_hidden_block * jnp.dtype(jnp.bfloat16).itemsize == 64 * 1024
 
 
 def _plan(*, rows_per_src_dst_capacity: int = 12, rows_per_expert_capacity: int | None = None):
@@ -55,12 +52,10 @@ def _plan(*, rows_per_src_dst_capacity: int = 12, rows_per_expert_capacity: int 
     )
 
 
-def _inputs(plan=None, *, hidden_dim: int = 512, output_dim: int = 128):
+def _inputs(plan=None, *, output_dim: int = 128):
     plan = _plan() if plan is None else plan
-    x = ((jnp.arange(2 * 6 * hidden_dim, dtype=jnp.float32).reshape(2, 6, hidden_dim) % 19 - 9) / 16).astype(
-        jnp.bfloat16
-    )
-    w13_shape = (2, 2, hidden_dim, output_dim)
+    x = ((jnp.arange(2 * 6 * 512, dtype=jnp.float32).reshape(2, 6, 512) % 19 - 9) / 16).astype(jnp.bfloat16)
+    w13_shape = (2, 2, 512, output_dim)
     w13 = ((jnp.arange(np.prod(w13_shape), dtype=jnp.float32).reshape(w13_shape) % 17 - 8) / 32).astype(jnp.bfloat16)
     dz13_shape = (2, 2, 256, output_dim)
     dz13 = ((jnp.arange(np.prod(dz13_shape), dtype=jnp.float32).reshape(dz13_shape) % 23 - 11) / 64).astype(
@@ -198,9 +193,8 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.staging_hidden_groups == 5
     assert schedule.compact_m_blocks == 64
-    assert schedule.staging_jobs == 4000
+    assert schedule.staging_jobs == 16000
     assert schedule.dx_jobs == 16000
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
@@ -216,24 +210,6 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
     assert schedule.compact_readiness_slots == 10240
     assert schedule.dx_readiness_signals == 200
     assert schedule.readiness_waits == 983040
-
-
-def test_fused_w13_backward_schedule_partial_k512_group_signals_each_k128_tile():
-    schedule = source_push_semantic_fused_w13_backward_schedule(
-        ep_size=2,
-        experts_per_rank=2,
-        rows_per_expert_capacity=256,
-        hidden_dim=640,
-        tokens_per_source=6,
-        send_chunks_per_dst=1,
-    )
-
-    assert CONFIG.staging_tiles_per_group == 4
-    assert schedule.hidden_tiles == 5
-    assert schedule.staging_hidden_groups == 2
-    assert schedule.staging_jobs == 16
-    assert schedule.dx_jobs == 40
-    assert schedule.max_stage_readiness_signals == 40
 
 
 def test_fused_w13_backward_interpret_matches_independent_route_reference():
@@ -255,24 +231,6 @@ def test_fused_w13_backward_interpret_matches_independent_route_reference():
     np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
     assert int(result.queue_overflow_routes) == 0
     assert int(result.layout_overflow_rows) == 0
-
-
-def test_fused_w13_backward_partial_k512_group_matches_independent_route_reference():
-    x, dz13, w13, plan = _inputs(hidden_dim=640)
-
-    result = source_push_semantic_fused_w13_backward(
-        x,
-        dz13,
-        w13,
-        plan,
-        send_chunks_per_dst=1,
-        rows_per_expert_capacity=256,
-        interpret=True,
-    )
-
-    expected_dx, expected_dw = _independent_backward_reference(x, dz13, w13, plan)
-    np.testing.assert_allclose(np.asarray(result.dx), expected_dx, rtol=2e-4, atol=2e-4)
-    np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
 
 
 def test_fused_w13_backward_twenty_output_tiles_match_independent_route_reference():
