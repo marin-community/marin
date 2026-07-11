@@ -2271,3 +2271,25 @@ to outweigh the removed per-block drains. The W2-return change is below the
 noise threshold and should not be selected on this run alone. Before changing
 the integrated boundary, retain the W13 candidate for a full fwd+bwd comparison
 and revert or redesign the W2-backward pipeline.
+
+## 2026-07-10 FUSED-MOE-078 - K512 helper transport lowering failure
+
+Job `/dlwh/bench-semantic-w13-k512-20260710-2225` tested
+`semantic_permute_w13_pallas` at `efdacd1ef6` on `cw-rno2a`. Iris reached
+`succeeded` (`exit=0`, one task, 1m22s), but the benchmark emitted one error
+row and no repeat rows. Mosaic rejected the helper's SMEM-to-GMEM copy during
+lowering:
+
+```text
+ValueError: Async copies only support copying <=256 elements along each
+dimension, got (1, 1, 64, 512)
+```
+
+The failing call is `mgpu.copy_smem_to_gmem` in
+`source_push_semantic_fused_w13.py`; therefore K512 produced no timing,
+checksum, or drop/overflow counters to compare with the selected K256 baseline
+(`25.922804 ms`, `66.273189` useful TFLOP/s/rank, checksum
+`1305986465792`). Per the experiment rule, do not resubmit this form. A future
+K512 experiment must keep each physical async-copy dimension at most 256, for
+example by issuing two K256 copies, while preserving the wider logical helper
+work unit.
