@@ -612,7 +612,7 @@ def test_download_ghalogs_shard_aborts_if_server_ignores_range(tmp_path, monkeyp
     server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, ignore_range=True), len(payload))
 
     with pytest.raises(RuntimeError, match="ignored Range"):
-        diagnostic_logs._download_ghalogs_shard(str(tmp_path), (0, 0, len(payload)))
+        diagnostic_logs._download_ghalogs_shard(str(tmp_path), diagnostic_logs._ShardRange(0, 0, len(payload)))
 
     assert server.ranges == [0]
 
@@ -624,7 +624,7 @@ def test_download_ghalogs_shard_gives_up_after_stalls_without_progress(tmp_path,
     _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[50] + [0] * 20), len(payload))
 
     with pytest.raises(RuntimeError, match="stalled"):
-        diagnostic_logs._download_ghalogs_shard(str(tmp_path), (0, 0, len(payload)))
+        diagnostic_logs._download_ghalogs_shard(str(tmp_path), diagnostic_logs._ShardRange(0, 0, len(payload)))
 
 
 def test_download_ghalogs_shard_gives_up_on_clean_empty_responses(tmp_path, monkeypatch):
@@ -634,7 +634,7 @@ def test_download_ghalogs_shard_gives_up_on_clean_empty_responses(tmp_path, monk
     server = _patch_zenodo(monkeypatch, _EmptyBodyServer(), declared_bytes=64)
 
     with pytest.raises(RuntimeError, match="stalled"):
-        diagnostic_logs._download_ghalogs_shard(str(tmp_path), (0, 0, 64))
+        diagnostic_logs._download_ghalogs_shard(str(tmp_path), diagnostic_logs._ShardRange(0, 0, 64))
 
     # Bounded by the stall budget rather than looping unboundedly.
     assert server.get_calls <= diagnostic_logs._GHALOGS_MAX_RESUME_STALLS + 1

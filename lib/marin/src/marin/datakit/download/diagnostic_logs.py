@@ -18,7 +18,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
-from typing import IO
+from typing import IO, NamedTuple
 
 import fsspec
 import requests
@@ -87,7 +87,7 @@ _DOWNLOAD_TIMEOUT = 300
 # GHALogs archive is ~142 GB; stream it in large chunks straight to the object
 # store without buffering the whole file locally.
 _GHALOGS_HTTP_CHUNK_BYTES = 64 * 1024 * 1024
-_GHALOGS_S3_BLOCK_BYTES = 256 * 1024 * 1024  # multipart part size (~558 parts)
+_GHALOGS_S3_BLOCK_BYTES = 256 * 1024 * 1024  # multipart upload part size (~17 parts per ~4.4 GB shard)
 _GHALOGS_LOG_EVERY_BYTES = 4 * 1024 * 1024 * 1024  # progress line every ~4 GB
 _GHALOGS_DOWNLOAD_TIMEOUT = (30, 600)  # (connect, read) seconds
 # The archive is downloaded as independent byte-range shards (zephyr tasks)
@@ -1089,17 +1089,25 @@ def _stream_range_resumable(session: requests.Session, out: IO[bytes], start: in
     return written
 
 
-def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[tuple[int, int, int]]:
-    """Split ``[0, total_bytes)`` into up to ``num_shards`` contiguous ``(index, start, stop)`` ranges."""
+class _ShardRange(NamedTuple):
+    """One contiguous byte range ``[start, stop)`` of the archive, downloaded as its own zephyr task."""
+
+    index: int
+    start: int
+    stop: int
+
+
+def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[_ShardRange]:
+    """Split ``[0, total_bytes)`` into up to ``num_shards`` contiguous ranges."""
     bounds = [total_bytes * i // num_shards for i in range(num_shards + 1)]
-    return [(i, bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
+    return [_ShardRange(i, bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
 
 
 def _ghalogs_part_path(parts_prefix: str, index: int) -> str:
     return prefix_join(parts_prefix, f"part-{index:05d}")
 
 
-def _download_ghalogs_shard(parts_prefix: str, shard: tuple[int, int, int]) -> str:
+def _download_ghalogs_shard(parts_prefix: str, shard: _ShardRange) -> str:
     """Download one byte range of the archive to its part object (idempotent).
 
     A part already present at its exact range length is reused, so a retried
