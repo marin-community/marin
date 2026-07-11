@@ -84,6 +84,16 @@ MAX_SHARD_FAILURES = 3
 # storms for any one shard in a multi-shard pipeline.
 MAX_SHARD_INFRA_FAILURES = 20
 
+# Cumulative failed worker-task attempts the iris worker gang tolerates before it
+# kills the whole group (maps to iris ``max_task_failures``). Preemptions that
+# exit uncleanly are counted here, so on a contended cluster a multi-hour
+# pipeline accumulates them steadily; a small budget trips mid-run and discards
+# hours of near-complete work (observed: a 7-hour dedup reduce killed at 97% by
+# ~13 preemption-induced failures against the old budget of 10). Set well above a
+# realistic preemption storm — genuinely deterministic crashes are still caught,
+# faster and per-shard, by MAX_SHARD_FAILURES / MAX_SHARD_INFRA_FAILURES.
+WORKER_GANG_MAX_TASK_RETRIES = 200
+
 # Typical status text for a 6-stage pipeline is ~300 chars.
 MAX_STATUS_TEXT_LENGTH = 1000
 
@@ -1576,7 +1586,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
                 name=worker_name,
                 count=actual_workers,
                 resources=config.worker_resources,
-                actor_config=ActorConfig(max_task_retries=10),
+                actor_config=ActorConfig(max_task_retries=WORKER_GANG_MAX_TASK_RETRIES),
             )
             ready_wait_s = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
             worker_group.wait_ready(count=1, timeout=ready_wait_s)
