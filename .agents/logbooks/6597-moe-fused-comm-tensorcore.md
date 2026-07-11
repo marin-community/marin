@@ -2643,3 +2643,46 @@ metadata-overflow routes, zero queue-overflow route errors, and zero
 layout-overflow row errors. The process emitted recoverable 12.5 GiB BFC
 allocation warnings and FABRIC-handle VMM fallbacks, then produced all six
 repeat rows and both summaries without a benchmark error.
+
+## 2026-07-10 FUSED-MOE-090 - Helper4 succeeds alone; composed comparison faults
+
+Job `/dlwh/debug-w2b-helper4-compare-20260710-2340` at `a00cf3bb02`
+completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one task, and a
+54.82s task duration. The reduced no-drop shape used T512, E4/rank, top-k 2,
+capacity factor 4.0, random routing, B64 compute, and logical K512 producer
+transport. It ran `semantic_fused_w2_backward_pallas` first and then
+`semantic_fused_w2_backward_compare` in the same benchmark process.
+
+The Pallas-only mode completed its compile, first execution, and timed repeat:
+
+| Metric | Result |
+|---|---:|
+| Lower/compile time | 5.089672s |
+| First execution time | 2.070099s |
+| Timed repeat | 4.743654 ms |
+| Useful TFLOP/s/rank | 2.829416 |
+| Capacity-rounded TFLOP/s/rank | 11.317666 |
+| Output checksum | 1,832,960 |
+| Dropped / metadata-overflow routes | 0 / 0 |
+| Queue-overflow routes / layout-overflow rows | 0 / 0 |
+
+This shape has 8,192 useful rows, 32,768 capacity-rounded rows, 25% row
+efficiency, and a 75% masked-row fraction. The timing is diagnostic rather than
+a target-shape performance result.
+
+The subsequent composed comparison failed in
+`jit_semantic_fused_w2_backward_compare` with `CUDA_ERROR_ILLEGAL_ADDRESS`
+while `_block_until_ready` queried the CUDA stream. It emitted one error row,
+zero repeat/comparison rows, and no `d_z13`, `d_w2`, or `d_route_weight`
+max/mean-error metrics. Drops and metadata overflow were still zero at the
+benchmark boundary, but queue/layout counters were unavailable after the
+fault.
+
+This run does not reproduce a fault when the helper4 Pallas kernel executes and
+synchronizes alone. The failure is specific to the executable that composes the
+interpreted reference and Pallas candidate, or to state/memory interaction
+created by that composition. The standalone checksum is not a numerical
+correctness proof. Keep the fast helper4 schedule quarantined until a comparison
+that isolates reference and candidate execution produces finite
+`d_z13`/`d_w2`/route-weight metrics. No retry or kernel edit was made during
+this bounded diagnostic.
