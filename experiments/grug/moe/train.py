@@ -197,6 +197,14 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
+    # Hybrid attention: every 4th layer plus the last layer runs full causal
+    # attention; the rest use a sliding window (see ``_long_layer_schedule``
+    # in model.py). At long context this makes the analytic FLOPs count much
+    # smaller than a naive ``all-layers-full-attention`` estimate, because
+    # each sliding-window layer's attention span is capped at the window.
+    n = model_config.num_layers
+    num_full_attention_layers = n // 4 + (0 if (n - 1) % 4 == 3 else 1)
+
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
@@ -210,12 +218,17 @@ def _compute_flops(
         num_experts=model_config.num_experts,
         num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
+        sliding_window=model_config.sliding_window,
+        num_full_attention_layers=num_full_attention_layers,
     )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
         "throughput/flops_per_token_analytic": flops_per_token,
         "throughput/flops_per_example_analytic": flops_per_example,
+        "throughput/num_full_attention_layers": float(num_full_attention_layers),
+        "throughput/num_sliding_attention_layers": float(n - num_full_attention_layers),
+        "throughput/sliding_window": float(model_config.sliding_window),
     }
 
     return flops_per_example, flops_summary

@@ -102,6 +102,12 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    qk_mult_long_scale: float = 1.0
+    """Extra multiplier on ``qk_mult`` applied ONLY on the long-attention branch
+    (every-4th-and-last layer, full causal). Short (sliding-window) layers are
+    unaffected. Intended for YaRN-style attention-temperature scaling at long
+    context extension, where softmax logits sharpen with sequence length but
+    sliding-window layers stay bounded by their window."""
     router_z_loss_coef: float = 0.0
     # When True, the every-4th-and-last "long" layers skip the Partial Key
     # Offset (no shift of the second half of K, no doc-start zeroing). They
@@ -236,6 +242,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
+        qk_mult_scale: float = 1.0,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -288,7 +295,7 @@ class CausalSelfAttention(eqx.Module):
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * cfg.qk_mult
+        q = q * cfg.qk_mult * qk_mult_scale
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
@@ -615,8 +622,14 @@ class Block(eqx.Module):
         # layers use the sliding-window mask, never PKO, and always RoPE.
         attn_out = jax.lax.cond(
             jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
+            lambda _: self.attn(
+                attn_in,
+                long_mask,
+                use_pko=use_pko,
+                disable_rope=disable_long_rope,
+                qk_mult_scale=self.attn.cfg.qk_mult_long_scale,
+            ),
+            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False, qk_mult_scale=1.0),
             operand=None,
         )
         x = x + attn_out

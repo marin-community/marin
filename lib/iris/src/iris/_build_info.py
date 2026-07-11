@@ -5,4 +5,4 @@
 # builds. Editable installs leave BUILD_DATE empty; iris.version falls back to
 # `git log` on the iris source tree.
 
-BUILD_DATE = "2026-06-24"
+BUILD_DATE = "2026-07-09"
