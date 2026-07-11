@@ -29,6 +29,7 @@ WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
 TOKEN_TRANSFER_ROWS = 128
+HELPER_STORE_K = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +40,7 @@ class SourcePushSemanticFusedW13Config:
     send_m: int = 256
     block_n: int = 128
     block_k: int = 128
-    send_k: int = 256
+    send_k: int = 512
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
     helper_programs_per_peer: int = 10
@@ -69,8 +70,8 @@ class SourcePushSemanticFusedW13Config:
             raise ValueError(
                 f"the initial Hopper lowering requires block_n=block_k=128, got {self.block_n=} {self.block_k=}"
             )
-        if self.send_k != 256:
-            raise ValueError(f"the initial Hopper lowering requires send_k=256, got {self.send_k}")
+        if self.send_k != 512:
+            raise ValueError(f"the Hopper lowering requires send_k=512, got {self.send_k}")
         if self.inbox_slots != 12:
             raise ValueError(f"the initial Hopper lowering requires inbox_slots=12, got {self.inbox_slots}")
         if self.chunk_owner_programs_per_peer != 2:
@@ -564,15 +565,19 @@ def _make_source_push_semantic_fused_w13_kernel(
                                 destination_ref = inbox_ref
                             else:
                                 destination_ref = remote_inbox
-                            mgpu.copy_smem_to_gmem(
-                                tile_smem,
-                                destination_ref.at[
-                                    rank,
-                                    slot,
-                                    pl.ds(block * config.compute_m, config.compute_m),
-                                    pl.ds(k_start, config.send_k),
-                                ],
-                            )
+                            for store_offset in range(0, config.send_k, HELPER_STORE_K):
+                                mgpu.copy_smem_to_gmem(
+                                    tile_smem.at[
+                                        pl.ds(0, config.compute_m),
+                                        pl.ds(store_offset, HELPER_STORE_K),
+                                    ],
+                                    destination_ref.at[
+                                        rank,
+                                        slot,
+                                        pl.ds(block * config.compute_m, config.compute_m),
+                                        pl.ds(k_start + store_offset, HELPER_STORE_K),
+                                    ],
+                                )
                             mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                         pl.run_scoped(
