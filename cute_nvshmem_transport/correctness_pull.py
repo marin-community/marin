@@ -5,6 +5,7 @@
 import json
 import multiprocessing
 import os
+import time
 import traceback
 from dataclasses import asdict, dataclass
 from queue import Empty
@@ -76,24 +77,32 @@ def run_pull_correctness(
     ]
     for process in processes:
         process.start()
-    for process in processes:
-        process.join(timeout=300)
-        if process.is_alive():
-            process.terminate()
-            raise TimeoutError(f"rank process {process.pid} did not finish")
 
     rank_results = []
     errors = []
-    for _ in range(num_pes):
+    deadline = time.monotonic() + 300
+    while len(rank_results) + len(errors) < num_pes and time.monotonic() < deadline:
         try:
-            result = results.get(timeout=5)
+            result = results.get(timeout=0.5)
         except Empty:
-            errors.append("a rank exited without returning a result")
+            if all(not process.is_alive() for process in processes):
+                errors.append("a rank exited without returning a result")
+                break
             continue
         if isinstance(result, tuple):
             errors.append(result[1])
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+            break
         else:
             rank_results.append(result)
+    if len(rank_results) + len(errors) < num_pes:
+        errors.append("timed out waiting for rank results")
+    for process in processes:
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
     if errors:
         raise RuntimeError("\n".join(errors))
 

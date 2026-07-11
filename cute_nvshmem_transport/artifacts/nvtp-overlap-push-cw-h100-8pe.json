@@ -1,0 +1,16 @@
+{
+  "communication_throughput_degradation": 0.5075787085144917,
+  "compute_throughput_degradation": 0.5522988546250713,
+  "concurrent_communication_gbps_per_pe": 0.42323441609667195,
+  "concurrent_compute_tflops_per_pe": 327.41877905687187,
+  "concurrent_wall_seconds": 1.4516777857206762,
+  "num_epochs": 100000,
+  "num_pes": 8,
+  "operation": "put_signal_nbi_warp_quiet",
+  "payload_bytes": 6144,
+  "protocol": "push",
+  "standalone_communication_gbps_per_pe": 0.8594965802958736,
+  "standalone_communication_seconds": 0.7148370500653982,
+  "standalone_compute_seconds": 0.3758585690520704,
+  "standalone_compute_tflops_per_pe": 731.3333513647235
+}

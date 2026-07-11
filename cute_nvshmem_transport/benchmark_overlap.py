@@ -36,6 +36,8 @@ class OverlapResult:
     num_epochs: int
     standalone_communication_seconds: float
     standalone_compute_seconds: float
+    concurrent_communication_seconds: float
+    concurrent_compute_seconds: float
     concurrent_wall_seconds: float
     standalone_compute_tflops_per_pe: float
     concurrent_compute_tflops_per_pe: float
@@ -209,11 +211,9 @@ def _run_concurrent(args: argparse.Namespace) -> tuple[TransportResult, GemmResu
         )
         try:
             _wait_for_markers(ready_dir, ("transport", "compute"), args.num_pes, args.compile_timeout)
-            start = time.perf_counter()
             start_file.touch()
             transport_stdout, transport_stderr = transport_process.communicate(timeout=args.run_timeout)
             compute_stdout, compute_stderr = compute_process.communicate(timeout=args.run_timeout)
-            wall_seconds = time.perf_counter() - start
         except BaseException:
             transport_process.kill()
             compute_process.kill()
@@ -222,11 +222,9 @@ def _run_concurrent(args: argparse.Namespace) -> tuple[TransportResult, GemmResu
             raise RuntimeError(f"transport overlap process failed:\n{transport_stderr}")
         if compute_process.returncode:
             raise RuntimeError(f"compute overlap process failed:\n{compute_stderr}")
-        return (
-            _parse_transport(transport_stdout, args.payload_bytes, args.num_epochs),
-            GemmResult(**json.loads(compute_stdout)),
-            wall_seconds,
-        )
+        transport = _parse_transport(transport_stdout, args.payload_bytes, args.num_epochs)
+        gemm = GemmResult(**json.loads(compute_stdout))
+        return transport, gemm, max(transport.seconds, gemm.seconds)
 
 
 def _degradation(concurrent: float, standalone: float) -> float:
@@ -245,6 +243,8 @@ def _main_benchmark(args: argparse.Namespace) -> None:
         num_epochs=args.num_epochs,
         standalone_communication_seconds=standalone_transport.seconds,
         standalone_compute_seconds=standalone_gemm.seconds,
+        concurrent_communication_seconds=concurrent_transport.seconds,
+        concurrent_compute_seconds=concurrent_gemm.seconds,
         concurrent_wall_seconds=wall_seconds,
         standalone_compute_tflops_per_pe=standalone_gemm.tflops_per_pe,
         concurrent_compute_tflops_per_pe=concurrent_gemm.tflops_per_pe,

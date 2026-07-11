@@ -1,0 +1,16 @@
+{
+  "communication_throughput_degradation": 0.25217063316260047,
+  "compute_throughput_degradation": 0.5360570298534049,
+  "concurrent_communication_gbps_per_pe": 0.26687748910371456,
+  "concurrent_compute_tflops_per_pe": 386.8086220385547,
+  "concurrent_wall_seconds": 2.3021799330599606,
+  "num_epochs": 100000,
+  "num_pes": 8,
+  "operation": "nbi_warp_quiet",
+  "payload_bytes": 6144,
+  "protocol": "pull",
+  "standalone_communication_gbps_per_pe": 0.3568694958214201,
+  "standalone_communication_seconds": 1.7216377616859972,
+  "standalone_compute_seconds": 0.3296919078566134,
+  "standalone_compute_tflops_per_pe": 833.7417461381776
+}

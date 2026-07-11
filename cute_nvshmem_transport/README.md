@@ -33,3 +33,28 @@ NVTP_JAX_REMOTE=1 uv run --package marin-levanter --extra nvshmem-transport \
 All remote endpoints are offsets within a collectively allocated symmetric
 arena. Peer tensor aliases are used only for direct CuTe loads and stores; RMA
 operations retain the original symmetric address plus the remote PE.
+
+The final result is documented in [report.md](report.md). The prototype is not
+recommended for production: warp push leads the transport microbenchmarks, but
+the JAX/XLA stream path does not compile and concurrent communication reduces
+GEMM throughput by more than half.
+
+Additional correctness and performance commands:
+
+```bash
+# Pair, ring, or all-to-all; push or pull.
+NVTP_NUM_PES=8 NVTP_DIRECTION=push NVTP_PATTERN=all_to_all \
+  uv run --package marin-levanter --extra nvshmem-transport \
+  python -m cute_nvshmem_transport.correctness_patterns
+
+# Select individual transport variants.
+uv run --package marin-levanter --extra nvshmem-transport \
+  python -m cute_nvshmem_transport.benchmark_transport \
+  --push-operations put_signal_warp peer_store_warp_signal \
+  --pull-operations blocking_warp peer_load_warp nbi_batched_quiet
+
+# Start-gated communication/GEMM overlap.
+uv run --package marin-levanter --extra nvshmem-transport \
+  python -m cute_nvshmem_transport.benchmark_overlap \
+  --protocol push --operation put_signal_nbi_warp_quiet
+```

@@ -1,0 +1,31 @@
+{
+  "block_scope": {
+    "operations": [
+      "put_signal_block",
+      "put_signal_nbi_block_quiet",
+      "blocking_block",
+      "nbi_block_quiet"
+    ],
+    "result": "compile_failed",
+    "error": "NVPTX compiler invocation failed: ptxas parsing error near .nvvm while linking NVSHMEM block symbols"
+  },
+  "jax_xla_stream": {
+    "result": "compile_failed",
+    "error": "CUTLASS JAX 4.4 dynamic tensor pointer and scalar types do not match NVSHMEM4Py 0.3.1 generated CuTe FFI prototypes",
+    "attempted_routes": [
+      "captured CuTe runtime tensors",
+      "JAX DLPack endpoint tensors",
+      "byte DLPack views with in-kernel uint64 signal reinterpretation",
+      "low-level NVSHMEM CuTe bindings"
+    ]
+  },
+  "pallas_source_push": {
+    "commit": "c53bbcdfba",
+    "result": "lowering_failed",
+    "error": "Unimplemented primitive in Pallas Mosaic GPU lowering: semaphore_wait for LoweringSemantics.Lane and PrimitiveSemantics.Warpgroup",
+    "variants": [
+      "semaphore_only",
+      "copy_release_only"
+    ]
+  }
+}
