@@ -2362,3 +2362,36 @@ consistent with the earlier decomposition: the prior fused path had roughly
 schedule removes 18.47 ms, nearly all of that measured tax. Next run it through
 integrated forward and fwd+bwd correctness/timing while retaining the selected
 W13-backward pipeline.
+
+## 2026-07-10 FUSED-MOE-081 - Reduced integrated W2 cohort compare blocked by reference sharding
+
+Job `/dlwh/compare-semantic-integrated-w2-cohort-20260710-2250` at
+`a8b05dc63e` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+task, and a 36.55-second task duration. The reduced EP8/T128/E4/K2 integrated
+forward comparison did not reach either the cohort kernel comparison or its
+numeric checks: the benchmark emitted one error row and zero repeat rows.
+
+The first actionable failure is a `ShardingTypeError` in the interpret/reference
+W13 path. `source_push_semantic_fused_w13_reference_jax` performs
+`w_gate_up.at[destination, safe_expert].get()` on expert-sharded weights, and
+JAX cannot infer the gather result sharding:
+
+```text
+Use `.at[...].get(out_sharding=)` to provide output PartitionSpec for the
+gather indexing as out sharding could not be resolved unambiguously (or would
+require collectives on inputs). Got
+operand=ShapedArray(bfloat16[8@expert,4,2560,2560]),
+indices=ShapedArray(int32[8,8,1,4,2])
+```
+
+The failing call is reached while constructing `expected_y` with
+`semantic_fused_mlp_forward(inputs, interpret=True)`, before the comparison
+metrics are calculated. Consequently this run produced no max or mean error,
+error counts, dropped-route difference, output checksum, or timing. Its input
+routing metadata reported 10 capacity-dropped/metadata-overflow routes and zero
+routing-policy drops, but those are not candidate-versus-reference differences.
+
+This is a comparison-harness/reference-sharding failure, not evidence for or
+against the cohort W2 kernel. Keep the 44.087474 ms isolated timing as a
+candidate only; the integrated correctness gate remains open. Per the run
+instructions, no automatic retry or kernel change was made.
