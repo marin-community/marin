@@ -900,24 +900,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
                             @pl.loop(0, schedule.dw_reduction_pairs)
                             def _compact_m_pair_loop(pair) -> None:
-                                x_row = mgpu.layout_cast(
-                                    lax.broadcasted_iota(
-                                        jnp.int32,
-                                        (DW_REDUCTION_BLOCKS * config.compute_m, config.block_hidden),
-                                        0,
-                                    ),
-                                    mgpu.Layout.WGMMA,
+                                x_smem[:, :] = jnp.zeros(
+                                    (DW_REDUCTION_BLOCKS * config.compute_m, config.block_hidden), dtype=dtype
                                 )
-                                dz_row = mgpu.layout_cast(
-                                    lax.broadcasted_iota(
-                                        jnp.int32,
-                                        (DW_REDUCTION_BLOCKS * config.compute_m, config.block_output),
-                                        0,
-                                    ),
-                                    mgpu.Layout.WGMMA,
+                                dz_smem[:, :] = jnp.zeros(
+                                    (DW_REDUCTION_BLOCKS * config.compute_m, config.block_output), dtype=dtype
                                 )
-                                x_smem[:, :] = (x_row < 0).astype(dtype)
-                                dz_smem[:, :] = (dz_row < 0).astype(dtype)
                                 mgpu.commit_smem()
 
                                 first_block = pair * DW_REDUCTION_BLOCKS
