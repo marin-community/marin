@@ -2718,3 +2718,32 @@ kernel. Keep the target-shape FUSED-MOE-089 result as its performance evidence:
 39.913566 ms and 43.042682 useful TFLOP/s/rank, 66.44% faster than the original
 118.949477 ms W2-backward baseline. No retry or kernel edit was made during
 this bounded babysitting run.
+
+## 2026-07-10 FUSED-MOE-092 - Adjacent-N W13 dW grouping regresses
+
+Job `/dlwh/bench-w13b-adjacent-n-20260710-2350` at `e4abeea048`
+completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one of one task
+succeeded, and a 1m43.43s task duration. It measured the adjacent-N W13
+gradient schedule from `930876778e`, where each dW13 owner shares an X tile
+across two neighboring O128 output tiles.
+
+| Metric | Adjacent-N result | Selected pipeline | Change |
+|---|---:|---:|---:|
+| Repeat times | 84.488504, 85.402947, 84.589032 ms | - | - |
+| Median time | 84.589032 ms | 66.282220 ms | 27.62% slower |
+| Useful TFLOP/s/rank | 40.619614 | 51.838545 | 21.64% lower |
+| Capacity-rounded TFLOP/s/rank | 50.774518 | 64.798181 | 21.64% lower |
+| Output checksum | 20,129,775,616 | 20,131,303,424 | -1,527,808 |
+
+All repeats reported zero dropped routes, zero routing-policy drops, zero
+metadata-overflow routes, zero queue-overflow route errors, and zero
+layout-overflow row errors. The process emitted recoverable 12.5 GiB BFC
+allocation warnings and FABRIC-handle VMM fallbacks, then produced all three
+repeat rows and the summary without a benchmark error.
+
+The shared X load does not repay the larger operand footprint and accumulator
+pressure at this target shape. Reject adjacent-N grouping and retain the
+selected one-output-tile W13-backward pipeline at 66.282220 ms and 51.838545
+useful TFLOP/s/rank. The checksum difference independently means this variant
+would require a finite numerical comparison even if its timing were favorable.
+Per the bounded request, no retry or kernel edit was made.
