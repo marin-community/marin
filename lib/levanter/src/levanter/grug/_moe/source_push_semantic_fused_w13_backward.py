@@ -48,18 +48,19 @@ class _SourcePushSemanticFusedW13BackwardDiagnostic(StrEnum):
     STAGING_ONLY = "staging_only"
     STAGING_DX = "staging_dx"
     STAGING_DW = "staging_dw"
+    STAGING_DX_DW_NO_COMBINE = "staging_dx_dw_no_combine"
 
     @property
     def includes_dx(self) -> bool:
-        return self in (self.FULL, self.STAGING_DX)
+        return self in (self.FULL, self.STAGING_DX, self.STAGING_DX_DW_NO_COMBINE)
 
     @property
     def includes_dw(self) -> bool:
-        return self in (self.FULL, self.STAGING_DW)
+        return self in (self.FULL, self.STAGING_DW, self.STAGING_DX_DW_NO_COMBINE)
 
     @property
     def includes_combine(self) -> bool:
-        return self.includes_dx
+        return self in (self.FULL, self.STAGING_DX)
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,7 +477,7 @@ def _source_push_semantic_fused_w13_backward_diagnostic(
             rows_per_expert_capacity=rows_per_expert_capacity,
         )
         reference_dx, reference_dw13 = source_push_semantic_fused_w13_backward_reference_jax(x, dz13, w13, metadata)
-        dx = reference_dx if diagnostic.includes_dx else jnp.zeros_like(x, dtype=jnp.float32)
+        dx = reference_dx if diagnostic.includes_combine else jnp.zeros_like(x, dtype=jnp.float32)
         dw13 = reference_dw13 if diagnostic.includes_dw else jnp.zeros_like(w13, dtype=jnp.float32)
     else:
         if jax.default_backend() != "gpu":
@@ -571,7 +572,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
             return dx_local[None, ...], dw_local[None, ...]
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
             return (x_expert_local[None, ...],)
-        if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX:
+        if diagnostic.includes_combine:
             return x_expert_local[None, ...], dx_local[None, ...]
         return x_expert_local[None, ...], dw_local[None, ...]
 
@@ -584,7 +585,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
         out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None), P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
         out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None, None),)
-    elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX:
+    elif diagnostic.includes_combine:
         out_specs = (
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
             P(SOURCE_PUSH_MESH_AXIS, None, None),
@@ -642,7 +643,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
         (x_expert,) = cast(tuple[Array], outputs)
         return x_expert, jnp.zeros_like(x, dtype=jnp.float32), jnp.zeros_like(w13, dtype=jnp.float32)
-    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX:
+    if diagnostic.includes_combine:
         x_expert, dx = cast(tuple[Array, Array], outputs)
         return x_expert, dx, jnp.zeros_like(w13, dtype=jnp.float32)
     x_expert, dw13 = cast(tuple[Array, Array], outputs)

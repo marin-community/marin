@@ -176,7 +176,8 @@ def test_source_push_semantic_plan_semantic_fused_stage_alias_includes_queue_sha
         bench_source_push_semantic_plan._parse_modes(
             "semantic_fused_w13_backward_staging_only_pallas,"
             "semantic_fused_w13_backward_staging_dx_pallas,"
-            "semantic_fused_w13_backward_staging_dw_pallas"
+            "semantic_fused_w13_backward_staging_dw_pallas,"
+            "semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas"
         )
         == bench_source_push_semantic_plan.SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
     )
@@ -2409,7 +2410,8 @@ def test_source_push_semantic_plan_bench_emits_fused_stage_rows(tmp_path):
         "semantic_fused_w13_backward_pallas,semantic_fused_w13_backward_compare,"
         "semantic_fused_w13_backward_staging_only_pallas,"
         "semantic_fused_w13_backward_staging_dx_pallas,"
-        "semantic_fused_w13_backward_staging_dw_pallas"
+        "semantic_fused_w13_backward_staging_dw_pallas,"
+        "semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas"
     )
 
     bench_source_push_semantic_plan.main(

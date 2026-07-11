@@ -3378,3 +3378,30 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-standalone-reduced-377 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_pallas --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 37729dc653 --jsonl scratch/w13b-role48-standalone-reduced-377.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-108 - Isolated W13 backward cohorts succeed
+
+Commit `c7585f7e2f` added package-private compile-time role diagnostics without
+changing the production full path. Focused tests passed (`13 passed`) and the
+four-file scoped pre-commit check passed. The branch-wide changed-file check
+was otherwise clean but retained the known oversized historical
+`.agents/logbooks/6597-moe-mgpu-forward.md` finding.
+
+Job `/dlwh/w13b-role-diagnostics-c7585f7e2f` ran all three diagnostics on
+`cw-rno2a` with EP8, T128/rank, H2560, I1280, E4/rank, top-k 2, capacity
+factor 4.0, random routing seed 0, bf16, JAX metadata, no warmup, one timed
+step, and separate compilation. Iris and its only task succeeded in 48.86s.
+
+| Resident roles | Time (ms) | Output checksum |
+|---|---:|---:|
+| staging only, 48 CTAs | 3.187271 | 176914.390625 |
+| staging + dX + source combine, 88 CTAs | 4.452068 | 19767040.0 |
+| staging + dW, 88 CTAs | 3.982255 | 26391238.0 |
+
+Every mode reported zero dropped routes, routing-policy drops, metadata
+overflows, queue overflows, and layout-overflow rows. Both isolated compute
+legs therefore survive the reduced geometry that faults in the 128-CTA full
+kernel. Sparse dW blocks alone are not sufficient to reproduce the fault, and
+dX plus source combine also succeeds. The next isolation is a 128-CTA
+staging+dX+dW mode with source combine compiled out; this distinguishes a
+dX/dW coexistence failure from a dW/source-combine interaction.

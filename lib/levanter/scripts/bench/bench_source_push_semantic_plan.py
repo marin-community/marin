@@ -211,6 +211,9 @@ MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE = "semantic_fused_w13_backward_compare"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS = "semantic_fused_w13_backward_staging_only_pallas"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS = "semantic_fused_w13_backward_staging_dx_pallas"
 MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS = "semantic_fused_w13_backward_staging_dw_pallas"
+MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS = (
+    "semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas"
+)
 MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS = "semantic_fused_mlp_forward_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE = "semantic_fused_mlp_forward_compare"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS = "semantic_fused_mlp_forward_backward_pallas"
@@ -233,6 +236,7 @@ SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES = (
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS,
 )
 SEMANTIC_FUSED_PALLAS_MODES = SEMANTIC_FUSED_STAGE_MODES + SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
@@ -577,6 +581,7 @@ MODES = (
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
@@ -1824,6 +1829,7 @@ def _mode_flops_per_rank(
         MODE_BACKWARD_W13_EXPERT_MAJOR_PREPACKED_COMPARE,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS,
     ):
         useful = useful_rows_total * (2.0 * w13_per_row)
         rounded = rounded_rows_total * (2.0 * w13_per_row)
@@ -4303,7 +4309,7 @@ def _mode_callable(
             "queue_overflow_route_error_count": result.queue_overflow_routes,
             "layout_overflow_row_error_count": result.layout_overflow_rows,
         }
-        if diagnostic.includes_dx:
+        if diagnostic.includes_combine:
             outputs["dx"] = result.dx
         if diagnostic.includes_dw:
             outputs["dw13"] = result.dw13
@@ -4325,6 +4331,14 @@ def _mode_callable(
         return semantic_fused_w13_backward_diagnostic(
             inputs,
             source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW,
+        )
+
+    def semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas(
+        inputs: SemanticFusedW13BackwardBenchInputs,
+    ):
+        return semantic_fused_w13_backward_diagnostic(
+            inputs,
+            source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE,
         )
 
     def semantic_fused_w13_backward_reference(inputs: SemanticFusedW13BackwardBenchInputs):
@@ -8573,6 +8587,9 @@ def _mode_callable(
         MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_ONLY_PALLAS: semantic_fused_w13_backward_staging_only_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS: semantic_fused_w13_backward_staging_dx_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS: semantic_fused_w13_backward_staging_dw_pallas,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS: (
+            semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas
+        ),
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: SplitComparison(
             reference=semantic_fused_w13_backward_reference,
             observed=semantic_fused_w13_backward_observed,

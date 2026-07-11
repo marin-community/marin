@@ -251,11 +251,15 @@ def test_fused_w13_backward_diagnostic_role_layouts_remove_inactive_roles():
     staging_dw = _source_push_semantic_fused_w13_backward_role_layout(
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW
     )
+    staging_dx_dw_no_combine = _source_push_semantic_fused_w13_backward_role_layout(
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE
+    )
     full = _source_push_semantic_fused_w13_backward_role_layout(_SourcePushSemanticFusedW13BackwardDiagnostic.FULL)
 
     assert staging_only.total_programs == 48
     assert staging_dx == (48, 88, 88)
     assert staging_dw == (48, 48, 88)
+    assert staging_dx_dw_no_combine == (48, 88, 128)
     assert full == (48, 88, 128)
 
 
@@ -268,6 +272,7 @@ def test_fused_w13_backward_diagnostics_interpret_isolate_role_outputs():
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY,
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX,
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW,
+        _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE,
     ):
         result = _source_push_semantic_fused_w13_backward_diagnostic(
             x,
@@ -280,7 +285,7 @@ def test_fused_w13_backward_diagnostics_interpret_isolate_role_outputs():
             interpret=True,
         )
         np.testing.assert_array_equal(np.asarray(result.x_expert), expected_x_expert)
-        expected_diagnostic_dx = expected_dx if diagnostic.includes_dx else np.zeros_like(expected_dx)
+        expected_diagnostic_dx = expected_dx if diagnostic.includes_combine else np.zeros_like(expected_dx)
         expected_diagnostic_dw = expected_dw if diagnostic.includes_dw else np.zeros_like(expected_dw)
         np.testing.assert_allclose(np.asarray(result.dx), expected_diagnostic_dx, rtol=2e-4, atol=2e-4)
         np.testing.assert_allclose(np.asarray(result.dw13), expected_diagnostic_dw, rtol=2e-4, atol=2e-4)
