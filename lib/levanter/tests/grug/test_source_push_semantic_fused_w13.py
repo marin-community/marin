@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -13,6 +15,7 @@ from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_
 from levanter.grug._moe.source_push_semantic_fused_w13 import (
     SourcePushSemanticFusedW13Config,
     SourcePushSemanticFusedW13Metadata,
+    _make_source_push_semantic_fused_w13_kernel,
     source_push_semantic_fused_w13,
     source_push_semantic_fused_w13_generation_accounting,
     source_push_semantic_fused_w13_metadata_jax,
@@ -98,9 +101,13 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
 
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
     assert (first.owner, next_chunk.owner) == (0, 1)
+    assert first.producer_side_programs == 16
+    assert first.consumer_programs == 32
+    assert CONFIG.worker_programs_per_peer == 48
     assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
+    assert first.helper_tiles_per_compute_block == 2560 // CONFIG.send_k
     assert first.prepare_generation == first.generation
-    assert first.helper_done_generation == first.helper_tiles
+    assert first.helper_done_generation == first.helper_tiles_per_compute_block
     assert reused.slot == first.slot
     assert reused.generation == 2
     assert reused.owner == first.owner
@@ -108,6 +115,18 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
     assert reused.helper_done_generation == 2 * first.helper_done_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
     assert reused.empty_generation == first.released_generation
+
+
+def test_fused_w13_kernel_uses_block_readiness_and_slot_wide_release():
+    source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
+
+    assert "(ep_size, config.inbox_slots, blocks_per_send)" in source
+    assert "helper_done_sem.at[peer, slot, block]" in source
+    assert "value=generation * (hidden_dim // config.send_k)" in source
+    assert "helper_done_sem.at[dst, slot]" not in source
+    assert "consumer_done_sem.at[peer, slot]" in source
+    assert "value=generation * consumer_jobs" in source
+    assert "mgpu.wgmma(" in source
 
 
 def test_fused_w13_reference_zeros_invalid_and_source_padding_rows():

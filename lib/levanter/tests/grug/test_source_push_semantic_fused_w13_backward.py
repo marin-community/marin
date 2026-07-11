@@ -151,7 +151,7 @@ def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_sen
         assert token_ids[source, dst_ordinal, chunk, block, row] == token
 
 
-def test_fused_w13_backward_schedule_uses_rolling_slots_and_fixed_compute_fan_in():
+def test_fused_w13_backward_schedule_separates_roles_and_publishes_compute_blocks():
     schedule = source_push_semantic_fused_w13_backward_schedule(
         ep_size=8,
         hidden_dim=2560,
@@ -160,16 +160,22 @@ def test_fused_w13_backward_schedule_uses_rolling_slots_and_fixed_compute_fan_in
     )
 
     assert schedule.hidden_tiles == 20
+    assert schedule.helper_tiles_per_block == 20
     assert schedule.helper_tiles == 80
     assert schedule.hidden_tile_jobs == 10
     assert schedule.compute_jobs_per_chunk == 40
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
-    assert schedule.producer_programs == 256
+    assert CONFIG.worker_programs_per_peer == 48
+    assert schedule.lifecycle_programs == 16
+    assert schedule.helper_programs == 112
+    assert schedule.consumer_programs == 256
+    assert schedule.peer_programs == 384
     assert schedule.combine_programs == 32
     assert schedule.active_combine_programs == 32
-    assert schedule.total_programs == 288
+    assert schedule.total_programs == 416
     assert schedule.readiness_signals == 200
+    assert schedule.block_readiness_signals == 800
     assert schedule.readiness_waits == 983040
 
 

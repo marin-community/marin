@@ -175,12 +175,15 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
     assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_hidden_block)
     assert first.prepare_generation == 1
     assert first.helper_done_generation == first.helper_tiles
+    assert first.block_ready_generation == 2560 // CONFIG.send_hidden_block
+    assert first.block_ready_generation * CONFIG.compute_blocks_per_send == first.helper_done_generation
     assert reused.slot == first.slot
     assert reused.generation == 2
     assert reused.owner == 0
     assert reused.helper_tiles == first.helper_tiles
     assert reused.prepare_generation == 2
     assert reused.helper_done_generation == 2 * first.helper_done_generation
+    assert reused.block_ready_generation == 2 * first.block_ready_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
     assert first.consumer_done_generation == CONFIG.compute_blocks_per_send * (1280 // 128) * (1 + 2560 // 128)
     assert reused.empty_generation == first.released_generation
@@ -188,8 +191,12 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
 
 def test_fused_w2_backward_config_uses_forward_send_and_compute_worker_split():
     assert CONFIG.chunk_owner_programs_per_peer == 2
-    assert CONFIG.consumer_programs_per_peer == 30
-    assert CONFIG.chunk_owner_programs_per_peer + CONFIG.consumer_programs_per_peer == 32
+    assert CONFIG.helper_programs_per_peer == 14
+    assert CONFIG.consumer_programs_per_peer == 32
+    assert (
+        CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer + CONFIG.consumer_programs_per_peer
+        == 48
+    )
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
@@ -249,7 +256,7 @@ def test_fused_w2_backward_reports_queue_and_layout_overflow_and_masks_outputs()
     np.testing.assert_array_equal(np.asarray(metadata.route_weights)[~np.asarray(metadata.row_valid)], 0)
 
 
-def test_fused_w2_backward_kernel_contract_uses_hierarchical_preparation_and_fixed_consumers():
+def test_fused_w2_backward_kernel_contract_overlaps_dedicated_helpers_and_consumers():
     source = inspect.getsource(_make_source_push_semantic_fused_w2_backward_kernel)
 
     assert "mgpu.remote_ref" in source
@@ -262,11 +269,19 @@ def test_fused_w2_backward_kernel_contract_uses_hierarchical_preparation_and_fix
     assert "(chunk % config.chunk_owner_programs_per_peer) == owner" in source
     assert "prepare_sem.at[dst, slot]" in source
     assert "value=generation * helper_tiles" in source
-    assert "tile = consumer + helper_iteration * config.consumer_programs_per_peer" in source
+    assert "(ep_size, config.inbox_slots, config.compute_blocks_per_send)" in source
+    assert "(worker >= helper_start) & (worker < consumer_start)" in source
+    assert "tile = helper + helper_iteration * config.helper_programs_per_peer" in source
+    assert "_signal_remote_block(block_ready_sem, peer, rank, slot, block)" in source
     assert "pl.semaphore_signal(helper_done_sem.at[peer, slot])" in source
+    assert "@pl.when(worker >= consumer_start)" in source
+    assert source.count("block_ready_sem.at[peer, slot, block]") == 2
+    assert "value=generation * send_hidden_tiles" in source
+    assert source.count("pl.semaphore_wait(full_sem.at[peer, slot], value=generation, decrement=False)") == 1
     assert "value=generation * consumer_jobs" in source
     assert "mgpu.atomic_add" in source
-    assert "@pl.when(worker >= config.chunk_owner_programs_per_peer)" in source
+    assert "_prepare_and_consume_peer" not in source
+    assert "_helper_consumer" not in source
     assert "producer_tiles_per_program" not in source
     assert "_compute_window_dw2" not in source
     assert "chunk_windows" not in source

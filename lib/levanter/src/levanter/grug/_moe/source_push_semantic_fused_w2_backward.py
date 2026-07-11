@@ -39,7 +39,8 @@ class SourcePushSemanticFusedW2BackwardConfig:
     send_hidden_block: int = 256
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
-    consumer_programs_per_peer: int = 30
+    helper_programs_per_peer: int = 14
+    consumer_programs_per_peer: int = 32
 
     def validate(self) -> None:
         expected = {
@@ -50,7 +51,8 @@ class SourcePushSemanticFusedW2BackwardConfig:
             "send_hidden_block": 256,
             "inbox_slots": 12,
             "chunk_owner_programs_per_peer": 2,
-            "consumer_programs_per_peer": 30,
+            "helper_programs_per_peer": 14,
+            "consumer_programs_per_peer": 32,
         }
         for name, value in expected.items():
             actual = getattr(self, name)
@@ -111,6 +113,7 @@ class SourcePushSemanticFusedW2BackwardGenerationAccounting:
     empty_generation: int
     prepare_generation: int
     helper_done_generation: int
+    block_ready_generation: int
     full_generation: int
     consumer_done_generation: int
     released_generation: int
@@ -131,7 +134,8 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
     if chunk < 0 or chunk >= send_chunks_per_dst:
         raise ValueError(f"invalid chunk coordinate {chunk=} for {send_chunks_per_dst=}")
     generation = chunk // config.inbox_slots + 1
-    helper_tiles = config.compute_blocks_per_send * (hidden_dim // config.send_hidden_block)
+    send_hidden_tiles = hidden_dim // config.send_hidden_block
+    helper_tiles = config.compute_blocks_per_send * send_hidden_tiles
     intermediate_tiles = intermediate_dim // config.intermediate_block
     hidden_tiles = hidden_dim // config.hidden_block
     consumer_jobs = config.compute_blocks_per_send * intermediate_tiles * (1 + hidden_tiles)
@@ -143,6 +147,7 @@ def source_push_semantic_fused_w2_backward_generation_accounting(
         empty_generation=generation,
         prepare_generation=generation,
         helper_done_generation=generation * helper_tiles,
+        block_ready_generation=generation * send_hidden_tiles,
         full_generation=generation,
         consumer_done_generation=generation * consumer_jobs,
         released_generation=generation + 1,
@@ -527,7 +532,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
     helper_tiles = blocks * send_hidden_tiles
     intermediate_tiles = intermediate_dim // config.intermediate_block
     hidden_tiles = hidden_dim // config.hidden_block
-    helper_iterations = (helper_tiles + config.consumer_programs_per_peer - 1) // config.consumer_programs_per_peer
+    helper_iterations = (helper_tiles + config.helper_programs_per_peer - 1) // config.helper_programs_per_peer
     dh_jobs = blocks * intermediate_tiles
     dw2_jobs = blocks * intermediate_tiles * hidden_tiles
     consumer_jobs = dh_jobs + dw2_jobs
@@ -535,7 +540,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
     zero_jobs_per_program = (
         dw2_output_tiles + config.consumer_programs_per_peer - 1
     ) // config.consumer_programs_per_peer
-    worker_programs = config.chunk_owner_programs_per_peer + config.consumer_programs_per_peer
+    helper_start = config.chunk_owner_programs_per_peer
+    consumer_start = helper_start + config.helper_programs_per_peer
+    worker_programs = consumer_start + config.consumer_programs_per_peer
 
     def body(
         dy_ref,
@@ -556,6 +563,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         empty_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         prepare_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         helper_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
+        block_ready_sem = pl.get_global(
+            mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, config.compute_blocks_per_send))
+        )
         full_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         consumer_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR(()))
@@ -567,9 +577,16 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         def _signal_remote(sem, peer, local_index, slot) -> None:
             pl.semaphore_signal(sem.at[local_index, slot], device_id=peer, device_id_type=pl.DeviceIdType.LOGICAL)
 
-        @pl.when((peer_ordinal == 0) & (worker >= config.chunk_owner_programs_per_peer))
+        def _signal_remote_block(sem, peer, local_index, slot, block) -> None:
+            pl.semaphore_signal(
+                sem.at[local_index, slot, block],
+                device_id=peer,
+                device_id_type=pl.DeviceIdType.LOGICAL,
+            )
+
+        @pl.when((peer_ordinal == 0) & (worker >= consumer_start))
         def _initialize() -> None:
-            consumer = worker - config.chunk_owner_programs_per_peer
+            consumer = worker - consumer_start
 
             @pl.loop(0, zero_jobs_per_program)
             def _zero_dw2(job_iteration) -> None:
@@ -633,13 +650,12 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
             branches = tuple((lambda ordinal: lambda _: _coordinate_peer(ordinal))(i) for i in range(ep_size))
             lax.switch(peer_ordinal, branches, None)
 
-        # Reuse the 30 compute CTAs as helpers so the semaphore-coordinated grid stays at 32 workers.
-        @pl.when(worker >= config.chunk_owner_programs_per_peer)
-        def _helper_consumer() -> None:
-            consumer = worker - config.chunk_owner_programs_per_peer
+        @pl.when((worker >= helper_start) & (worker < consumer_start))
+        def _helper() -> None:
+            helper = worker - helper_start
             pl.semaphore_wait(init_ready_sem, value=1, decrement=False)
 
-            def _prepare_and_consume_peer(static_peer_ordinal: int) -> None:
+            def _prepare_peer(static_peer_ordinal: int) -> None:
                 peer = (rank + static_peer_ordinal) % ep_size
                 remote_inbox = None
                 if static_peer_ordinal != 0:
@@ -654,7 +670,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
                     @pl.loop(0, helper_iterations)
                     def _helper_loop(helper_iteration) -> None:
-                        tile = consumer + helper_iteration * config.consumer_programs_per_peer
+                        tile = helper + helper_iteration * config.helper_programs_per_peer
 
                         @pl.when(tile < helper_tiles)
                         def _prepare_tile() -> None:
@@ -716,7 +732,27 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     tile_smem=mgpu.SMEM((config.compute_m, config.send_hidden_block), dtype=dtype),
                                 )
 
+                            if static_peer_ordinal == 0:
+                                pl.semaphore_signal(block_ready_sem.at[rank, slot, block])
+                            else:
+                                _signal_remote_block(block_ready_sem, peer, rank, slot, block)
                             pl.semaphore_signal(helper_done_sem.at[peer, slot])
+
+            branches = tuple((lambda ordinal: lambda _: _prepare_peer(ordinal))(i) for i in range(ep_size))
+            lax.switch(peer_ordinal, branches, None)
+
+        @pl.when(worker >= consumer_start)
+        def _consumer() -> None:
+            consumer = worker - consumer_start
+            pl.semaphore_wait(init_ready_sem, value=1, decrement=False)
+
+            def _consume_peer(static_peer_ordinal: int) -> None:
+                peer = (rank + static_peer_ordinal) % ep_size
+
+                @pl.loop(0, send_chunks_per_dst)
+                def _chunk_loop(chunk) -> None:
+                    slot = chunk % config.inbox_slots
+                    generation = chunk // config.inbox_slots + 1
 
                     @pl.loop(0, consumer_jobs)
                     def _job_loop(job) -> None:
@@ -724,12 +760,15 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
                         @pl.when((work_group % config.consumer_programs_per_peer) == consumer)
                         def _consume_job() -> None:
-                            pl.semaphore_wait(full_sem.at[peer, slot], value=generation, decrement=False)
-
                             @pl.when(job < dh_jobs)
                             def _compute_dh() -> None:
                                 block = job // intermediate_tiles
                                 i_tile = job % intermediate_tiles
+                                pl.semaphore_wait(
+                                    block_ready_sem.at[peer, slot, block],
+                                    value=generation * send_hidden_tiles,
+                                    decrement=False,
+                                )
                                 valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
 
                                 @pl.when(valid_rows > 0)
@@ -802,6 +841,11 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                 rem = dw_job % (intermediate_tiles * hidden_tiles)
                                 i_tile = rem // hidden_tiles
                                 h_tile = rem % hidden_tiles
+                                pl.semaphore_wait(
+                                    block_ready_sem.at[peer, slot, block],
+                                    value=generation * send_hidden_tiles,
+                                    decrement=False,
+                                )
                                 valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]
 
                                 @pl.when(valid_rows > 0)
@@ -874,6 +918,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
                     @pl.when((release_group % config.consumer_programs_per_peer) == consumer)
                     def _release_slot() -> None:
+                        pl.semaphore_wait(full_sem.at[peer, slot], value=generation, decrement=False)
                         pl.semaphore_wait(
                             consumer_done_sem.at[peer, slot],
                             value=generation * consumer_jobs,
@@ -884,7 +929,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                         else:
                             _signal_remote(empty_sem, peer, rank, slot)
 
-            branches = tuple((lambda ordinal: lambda _: _prepare_and_consume_peer(ordinal))(i) for i in range(ep_size))
+            branches = tuple((lambda ordinal: lambda _: _consume_peer(ordinal))(i) for i in range(ep_size))
             lax.switch(peer_ordinal, branches, None)
 
     return mgpu.kernel(

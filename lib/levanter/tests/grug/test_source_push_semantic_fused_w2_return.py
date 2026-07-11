@@ -27,7 +27,7 @@ INTERMEDIATE = 64
 HIDDEN = 128
 
 
-def test_fused_w2_return_target_schedule_runs_coarse_producers_before_combine():
+def test_fused_w2_return_target_schedule_balances_b64_jobs_over_resident_grid():
     schedule = source_push_semantic_fused_w2_return_schedule(
         ep_size=8,
         hidden_dim=2560,
@@ -36,13 +36,17 @@ def test_fused_w2_return_target_schedule_runs_coarse_producers_before_combine():
     )
 
     assert schedule.hidden_tiles == 20
+    assert schedule.w2_jobs == 46_080
+    assert schedule.min_w2_jobs_per_program == 360
+    assert schedule.max_w2_jobs_per_program == 360
+    assert schedule.resident_cta_smem_bytes == 128 * 1024
     assert schedule.producer_program_start == 0
-    assert schedule.producer_programs == 160
-    assert schedule.combine_program_start == 160
+    assert schedule.producer_programs == 128
+    assert schedule.combine_program_start == 0
     assert schedule.combine_programs == 32
     assert schedule.active_combine_programs == 32
-    assert schedule.total_programs == 192
-    assert schedule.readiness_signals == 160
+    assert schedule.total_programs == 128
+    assert schedule.readiness_signals == 1024
     assert schedule.readiness_waits == 256
 
 

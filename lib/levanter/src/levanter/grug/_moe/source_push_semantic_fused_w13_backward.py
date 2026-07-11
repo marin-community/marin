@@ -46,7 +46,8 @@ class SourcePushSemanticFusedW13BackwardConfig:
     inbox_slots: int = 12
     combine_token_block: int = 64
     chunk_owner_programs_per_peer: int = 2
-    worker_programs_per_peer: int = 32
+    helper_programs_per_peer: int = 14
+    consumer_programs_per_peer: int = 32
 
     def validate(self) -> None:
         expected = {
@@ -57,7 +58,8 @@ class SourcePushSemanticFusedW13BackwardConfig:
             "inbox_slots": 12,
             "combine_token_block": 64,
             "chunk_owner_programs_per_peer": 2,
-            "worker_programs_per_peer": 32,
+            "helper_programs_per_peer": 14,
+            "consumer_programs_per_peer": 32,
         }
         for name, value in expected.items():
             if getattr(self, name) != value:
@@ -66,6 +68,10 @@ class SourcePushSemanticFusedW13BackwardConfig:
     @property
     def compute_blocks_per_send(self) -> int:
         return self.send_m // self.compute_m
+
+    @property
+    def worker_programs_per_peer(self) -> int:
+        return self.chunk_owner_programs_per_peer + self.helper_programs_per_peer + self.consumer_programs_per_peer
 
 
 @jax.tree_util.register_dataclass
@@ -96,20 +102,25 @@ class SourcePushSemanticFusedW13BackwardSchedule:
     """Persistent CTA counts and fixed slot fan-in for one rank."""
 
     hidden_tiles: int
+    helper_tiles_per_block: int
     helper_tiles: int
     hidden_tile_jobs: int
     compute_jobs_per_chunk: int
     token_blocks: int
     rounds: int
-    producer_programs: int
+    lifecycle_programs: int
+    helper_programs: int
+    consumer_programs: int
+    peer_programs: int
     combine_programs: int
     active_combine_programs: int
     readiness_signals: int
+    block_readiness_signals: int
     readiness_waits: int
 
     @property
     def total_programs(self) -> int:
-        return self.producer_programs + self.combine_programs
+        return self.peer_programs + self.combine_programs
 
 
 def source_push_semantic_fused_w13_backward_schedule(
@@ -142,15 +153,20 @@ def source_push_semantic_fused_w13_backward_schedule(
     )
     return SourcePushSemanticFusedW13BackwardSchedule(
         hidden_tiles=hidden_tiles,
+        helper_tiles_per_block=hidden_tiles,
         helper_tiles=config.compute_blocks_per_send * hidden_tiles,
         hidden_tile_jobs=hidden_tile_jobs,
         compute_jobs_per_chunk=compute_jobs_per_chunk,
         token_blocks=token_blocks,
         rounds=(send_chunks_per_dst + config.inbox_slots - 1) // config.inbox_slots,
-        producer_programs=ep_size * config.worker_programs_per_peer,
+        lifecycle_programs=ep_size * config.chunk_owner_programs_per_peer,
+        helper_programs=ep_size * config.helper_programs_per_peer,
+        consumer_programs=ep_size * config.consumer_programs_per_peer,
+        peer_programs=ep_size * config.worker_programs_per_peer,
         combine_programs=combine_programs,
         active_combine_programs=active_combine_programs,
         readiness_signals=ep_size * send_chunks_per_dst,
+        block_readiness_signals=ep_size * send_chunks_per_dst * config.compute_blocks_per_send,
         readiness_waits=token_blocks * hidden_tiles * ep_size * config.inbox_slots,
     )
 
@@ -440,7 +456,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
     )
     hidden_tiles = schedule.hidden_tiles
     output_tiles = output_dim // config.block_output
-    compute_programs_per_peer = config.worker_programs_per_peer - config.chunk_owner_programs_per_peer
+    helper_start = config.chunk_owner_programs_per_peer
+    consumer_start = helper_start + config.helper_programs_per_peer
     dw_tiles = experts_per_rank * hidden_tiles * output_tiles
 
     def body(
@@ -465,8 +482,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
     ) -> None:
         empty_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         prepare_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
-        helper_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
-        start_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
+        helper_done_sem = pl.get_global(
+            mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, config.compute_blocks_per_send))
+        )
+        block_ready_sem = pl.get_global(
+            mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, config.compute_blocks_per_send))
+        )
         done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         dw_init_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((dw_tiles,)))
@@ -480,14 +501,14 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                 device_id_type=pl.DeviceIdType.LOGICAL,
             )
 
-        @pl.when(worker < schedule.producer_programs)
+        @pl.when(worker < schedule.peer_programs)
         def _producer() -> None:
             peer_ordinal = worker // config.worker_programs_per_peer
             peer_worker = worker % config.worker_programs_per_peer
 
-            @pl.loop(0, math.ceil(dw_tiles / schedule.producer_programs))
+            @pl.loop(0, math.ceil(dw_tiles / schedule.peer_programs))
             def _initialize_owned_dw(iteration) -> None:
-                tile = iteration * schedule.producer_programs + worker
+                tile = iteration * schedule.peer_programs + worker
 
                 @pl.when(tile < dw_tiles)
                 def _zero_tile() -> None:
@@ -536,7 +557,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                     @pl.loop(0, schedule.rounds)
                     def _round_loop(round_index) -> None:
                         @pl.loop(0, config.inbox_slots)
-                        def _slot_loop(slot) -> None:
+                        def _publish_slot_loop(slot) -> None:
                             send_task = static_destination_ordinal * config.inbox_slots + slot
                             chunk = round_index * config.inbox_slots + slot
 
@@ -544,27 +565,49 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 (chunk < send_chunks_per_dst)
                                 & ((send_task % config.chunk_owner_programs_per_peer) == owner)
                             )
-                            def _exchange_owned_chunk() -> None:
+                            def _publish_owned_chunk() -> None:
                                 pl.semaphore_wait(
                                     empty_sem.at[static_destination_ordinal, slot],
                                     value=round_index + 1,
                                     decrement=False,
                                 )
                                 pl.semaphore_signal(prepare_sem.at[static_destination_ordinal, slot])
-                                pl.semaphore_wait(
-                                    helper_done_sem.at[static_destination_ordinal, slot],
-                                    value=(round_index + 1) * schedule.helper_tiles,
-                                    decrement=False,
-                                )
-                                if static_destination_ordinal == 0:
-                                    pl.semaphore_signal(start_sem.at[0, slot])
-                                else:
-                                    _signal_remote(
-                                        start_sem,
-                                        destination,
-                                        (static_source_ordinal, slot),
-                                    )
 
+                        @pl.loop(0, config.inbox_slots)
+                        def _ready_slot_loop(slot) -> None:
+                            send_task = static_destination_ordinal * config.inbox_slots + slot
+                            chunk = round_index * config.inbox_slots + slot
+
+                            @pl.when(
+                                (chunk < send_chunks_per_dst)
+                                & ((send_task % config.chunk_owner_programs_per_peer) == owner)
+                            )
+                            def _publish_owned_blocks() -> None:
+                                for block in range(config.compute_blocks_per_send):
+                                    pl.semaphore_wait(
+                                        helper_done_sem.at[static_destination_ordinal, slot, block],
+                                        value=(round_index + 1) * schedule.helper_tiles_per_block,
+                                        decrement=False,
+                                    )
+                                    if static_destination_ordinal == 0:
+                                        pl.semaphore_signal(block_ready_sem.at[0, slot, block])
+                                    else:
+                                        _signal_remote(
+                                            block_ready_sem,
+                                            destination,
+                                            (static_source_ordinal, slot, block),
+                                        )
+
+                        @pl.loop(0, config.inbox_slots)
+                        def _complete_slot_loop(slot) -> None:
+                            send_task = static_destination_ordinal * config.inbox_slots + slot
+                            chunk = round_index * config.inbox_slots + slot
+
+                            @pl.when(
+                                (chunk < send_chunks_per_dst)
+                                & ((send_task % config.chunk_owner_programs_per_peer) == owner)
+                            )
+                            def _complete_owned_chunk() -> None:
                                 pl.semaphore_wait(
                                     done_sem.at[static_source_ordinal, slot],
                                     value=(round_index + 1) * schedule.compute_jobs_per_chunk,
@@ -585,9 +628,10 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                         (static_destination_ordinal, slot),
                                     )
 
-                @pl.when(peer_worker >= config.chunk_owner_programs_per_peer)
-                def _compute_worker() -> None:
-                    compute_worker = peer_worker - config.chunk_owner_programs_per_peer
+                @pl.when(peer_worker >= helper_start)
+                def _data_worker() -> None:
+                    helper = peer_worker - helper_start
+                    consumer = peer_worker - consumer_start
 
                     def _prepare_x_tile(chunk, slot, tile) -> None:
                         block = tile // hidden_tiles
@@ -781,52 +825,57 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                     def _chunk_loop(chunk) -> None:
                         slot = chunk % config.inbox_slots
                         generation = chunk // config.inbox_slots + 1
-                        pl.semaphore_wait(
-                            prepare_sem.at[static_destination_ordinal, slot],
-                            value=generation,
-                            decrement=False,
-                        )
 
-                        @pl.loop(0, math.ceil(schedule.helper_tiles / compute_programs_per_peer))
-                        def _helper_loop(iteration) -> None:
-                            tile = iteration * compute_programs_per_peer + compute_worker
+                        @pl.when(peer_worker < consumer_start)
+                        def _prepare_chunk() -> None:
+                            pl.semaphore_wait(
+                                prepare_sem.at[static_destination_ordinal, slot],
+                                value=generation,
+                                decrement=False,
+                            )
 
-                            @pl.when(tile < schedule.helper_tiles)
-                            def _prepare_owned_tile() -> None:
-                                _prepare_x_tile(chunk, slot, tile)
-                                pl.semaphore_signal(helper_done_sem.at[static_destination_ordinal, slot])
+                            @pl.loop(0, math.ceil(schedule.helper_tiles / config.helper_programs_per_peer))
+                            def _helper_loop(iteration) -> None:
+                                tile = iteration * config.helper_programs_per_peer + helper
 
-                        pl.semaphore_wait(
-                            start_sem.at[static_source_ordinal, slot],
-                            value=generation,
-                            decrement=False,
-                        )
+                                @pl.when(tile < schedule.helper_tiles)
+                                def _prepare_owned_tile() -> None:
+                                    _prepare_x_tile(chunk, slot, tile)
+                                    block = tile // schedule.helper_tiles_per_block
+                                    pl.semaphore_signal(helper_done_sem.at[static_destination_ordinal, slot, block])
 
-                        @pl.loop(0, math.ceil(schedule.compute_jobs_per_chunk / compute_programs_per_peer))
-                        def _job_loop(iteration) -> None:
-                            job = iteration * compute_programs_per_peer + compute_worker
+                        @pl.when(peer_worker >= consumer_start)
+                        def _consume_chunk() -> None:
+                            @pl.loop(0, math.ceil(schedule.compute_jobs_per_chunk / config.consumer_programs_per_peer))
+                            def _job_loop(iteration) -> None:
+                                job = iteration * config.consumer_programs_per_peer + consumer
 
-                            @pl.when(job < schedule.compute_jobs_per_chunk)
-                            def _owned_job() -> None:
-                                block = job // schedule.hidden_tile_jobs
-                                hidden_job = job % schedule.hidden_tile_jobs
+                                @pl.when(job < schedule.compute_jobs_per_chunk)
+                                def _owned_job() -> None:
+                                    block = job // schedule.hidden_tile_jobs
+                                    hidden_job = job % schedule.hidden_tile_jobs
+                                    pl.semaphore_wait(
+                                        block_ready_sem.at[static_source_ordinal, slot, block],
+                                        value=generation,
+                                        decrement=False,
+                                    )
 
-                                @pl.loop(0, RETURN_HIDDEN_TILES_PER_JOB)
-                                def _hidden_loop(hidden_offset) -> None:
-                                    hidden_tile = hidden_job * RETURN_HIDDEN_TILES_PER_JOB + hidden_offset
+                                    @pl.loop(0, RETURN_HIDDEN_TILES_PER_JOB)
+                                    def _hidden_loop(hidden_offset) -> None:
+                                        hidden_tile = hidden_job * RETURN_HIDDEN_TILES_PER_JOB + hidden_offset
 
-                                    @pl.when(hidden_tile < hidden_tiles)
-                                    def _owned_hidden_tile() -> None:
-                                        _compute_hidden_tile(chunk, slot, block, hidden_tile)
+                                        @pl.when(hidden_tile < hidden_tiles)
+                                        def _owned_hidden_tile() -> None:
+                                            _compute_hidden_tile(chunk, slot, block, hidden_tile)
 
-                                pl.semaphore_signal(done_sem.at[static_source_ordinal, slot])
+                                    pl.semaphore_signal(done_sem.at[static_source_ordinal, slot])
 
             branches = tuple((lambda ordinal: lambda _: _run_peer(ordinal))(i) for i in range(ep_size))
             lax.switch(peer_ordinal, branches, None)
 
-        @pl.when(worker >= schedule.producer_programs)
+        @pl.when(worker >= schedule.peer_programs)
         def _combine() -> None:
-            consumer = worker - schedule.producer_programs
+            consumer = worker - schedule.peer_programs
             hidden_tile = consumer % hidden_tiles
             consumer_lane = consumer // hidden_tiles
             consumers_for_tile = (schedule.combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles

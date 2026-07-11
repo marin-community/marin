@@ -26,7 +26,11 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
+# Leave residency headroom below the 132-SM H100 SXM target. Every program
+# participates in the completion barrier, so the grid must co-reside.
+PERSISTENT_W2_PROGRAMS = 128
 PERSISTENT_COMBINE_PROGRAMS = 32
+RESIDENT_CTA_SMEM_BYTES = 128 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,10 +90,14 @@ class SourcePushSemanticFusedW2ReturnResult(NamedTuple):
 
 @dataclass(frozen=True, slots=True)
 class SourcePushSemanticFusedW2ReturnSchedule:
-    """Persistent CTA and coarse-readiness counts for one rank."""
+    """Resident CTA work distribution and completion-barrier counts for one rank."""
 
     hidden_tiles: int
     token_blocks: int
+    w2_jobs: int
+    min_w2_jobs_per_program: int
+    max_w2_jobs_per_program: int
+    resident_cta_smem_bytes: int
     producer_program_start: int
     producer_programs: int
     combine_program_start: int
@@ -100,7 +108,7 @@ class SourcePushSemanticFusedW2ReturnSchedule:
 
     @property
     def total_programs(self) -> int:
-        return self.producer_programs + self.combine_programs
+        return max(self.producer_programs, self.combine_program_start + self.combine_programs)
 
 
 def source_push_semantic_fused_w2_return_schedule(
@@ -123,22 +131,28 @@ def source_push_semantic_fused_w2_return_schedule(
         raise ValueError(f"hidden dim {hidden_dim} must be divisible by block_n={config.block_n}")
 
     hidden_tiles = hidden_dim // config.block_n
+    if hidden_tiles > PERSISTENT_W2_PROGRAMS:
+        raise ValueError(f"hidden tiles {hidden_tiles} exceed the resident grid size {PERSISTENT_W2_PROGRAMS}")
     token_blocks = (tokens_per_source + config.combine_token_block - 1) // config.combine_token_block
     combine_programs = max(PERSISTENT_COMBINE_PROGRAMS, hidden_tiles)
     active_combine_programs = sum(
         min(token_blocks, (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles)
         for hidden_tile in range(hidden_tiles)
     )
-    producer_programs = ep_size * hidden_tiles
+    w2_jobs = ep_size * entries_per_dst * hidden_tiles
     return SourcePushSemanticFusedW2ReturnSchedule(
         hidden_tiles=hidden_tiles,
         token_blocks=token_blocks,
+        w2_jobs=w2_jobs,
+        min_w2_jobs_per_program=w2_jobs // PERSISTENT_W2_PROGRAMS,
+        max_w2_jobs_per_program=(w2_jobs + PERSISTENT_W2_PROGRAMS - 1) // PERSISTENT_W2_PROGRAMS,
+        resident_cta_smem_bytes=RESIDENT_CTA_SMEM_BYTES,
         producer_program_start=0,
-        producer_programs=producer_programs,
-        combine_program_start=producer_programs,
+        producer_programs=PERSISTENT_W2_PROGRAMS,
+        combine_program_start=0,
         combine_programs=combine_programs,
         active_combine_programs=active_combine_programs,
-        readiness_signals=producer_programs,
+        readiness_signals=PERSISTENT_W2_PROGRAMS * ep_size,
         readiness_waits=active_combine_programs * ep_size,
     )
 
@@ -473,125 +487,134 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         route_valid_ref,
         return_y_ref,
         y_ref,
+        residency_smem,
     ) -> None:
-        ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, hidden_tiles)))
+        completion_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size,)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
+        residency_smem[0] = worker.astype(jnp.uint8)
+        mgpu.commit_smem()
+        resident_worker = residency_smem[0].astype(jnp.int32)
 
-        def _signal_ready(peer, destination_ordinal, hidden_tile) -> None:
+        def _signal_completion(peer) -> None:
             pl.semaphore_signal(
-                ready_sem.at[destination_ordinal, hidden_tile],
+                completion_sem.at[rank],
                 device_id=peer,
                 device_id_type=pl.DeviceIdType.LOGICAL,
             )
 
-        @pl.when(worker < schedule.producer_programs)
-        def _producer() -> None:
-            producer = worker
-            source_ordinal = producer // hidden_tiles
-            hidden_tile = producer % hidden_tiles
+        def _produce_for_source(static_source_ordinal: int, job_args) -> None:
+            entry, hidden_tile = job_args
             hidden_start = hidden_tile * config.block_n
+            source = (rank + static_source_ordinal) % ep_size
+            destination_ordinal = (-static_source_ordinal) % ep_size
+            if static_source_ordinal == 0:
+                destination_ref = return_y_ref
+            else:
+                destination_ref = mgpu.remote_ref(
+                    return_y_ref,
+                    source,
+                    device_id_type=pl.DeviceIdType.LOGICAL,
+                )
 
-            def _produce_for_source(static_source_ordinal: int) -> None:
-                source = (rank + static_source_ordinal) % ep_size
-                destination_ordinal = (-static_source_ordinal) % ep_size
-                if static_source_ordinal == 0:
-                    destination_ref = return_y_ref
-                else:
-                    destination_ref = mgpu.remote_ref(
-                        return_y_ref,
-                        source,
-                        device_id_type=pl.DeviceIdType.LOGICAL,
-                    )
+            valid_rows = recv_valid_ref[static_source_ordinal, entry]
 
-                @pl.loop(0, entries_per_dst)
-                def _entry_loop(entry) -> None:
-                    valid_rows = recv_valid_ref[static_source_ordinal, entry]
+            @pl.when(valid_rows > 0)
+            def _produce_entry() -> None:
+                expert = recv_expert_ref[static_source_ordinal, entry]
+                expert_row_start = recv_row_ref[static_source_ordinal, entry]
 
-                    @pl.when(valid_rows > 0)
-                    def _produce_entry() -> None:
-                        expert = recv_expert_ref[static_source_ordinal, entry]
-                        expert_row_start = recv_row_ref[static_source_ordinal, entry]
-
-                        def _acc_scope(acc_ref) -> Array:
-                            def _smem_scope(gate_smem, up_smem, h_smem, w_smem, ready_barrier) -> None:
-                                row = mgpu.layout_cast(
-                                    lax.broadcasted_iota(jnp.int32, (config.compute_m, config.block_k), 0),
-                                    mgpu.Layout.WGMMA,
-                                )
-                                row_valid = (row < valid_rows).astype(jnp.float32)
-
-                                @pl.loop(0, intermediate_tiles)
-                                def _intermediate_loop(intermediate_tile) -> None:
-                                    intermediate_start = intermediate_tile * config.block_k
-                                    mgpu.copy_gmem_to_smem(
-                                        w_ref.at[
-                                            expert,
-                                            pl.ds(intermediate_start, config.block_k),
-                                            pl.ds(hidden_start, config.block_n),
-                                        ],
-                                        w_smem,
-                                        ready_barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        z_ref.at[
-                                            expert,
-                                            pl.ds(expert_row_start, config.compute_m),
-                                            pl.ds(intermediate_start, config.block_k),
-                                        ],
-                                        gate_smem,
-                                        ready_barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        z_ref.at[
-                                            expert,
-                                            pl.ds(expert_row_start, config.compute_m),
-                                            pl.ds(intermediate_dim + intermediate_start, config.block_k),
-                                        ],
-                                        up_smem,
-                                        ready_barrier,
-                                    )
-                                    mgpu.barrier_wait(ready_barrier)
-                                    gate = gate_smem[...].astype(jnp.float32)
-                                    up = up_smem[...].astype(jnp.float32)
-                                    h_smem[:, :] = (jax.nn.silu(gate) * up * row_valid).astype(dtype)
-                                    mgpu.commit_smem()
-                                    mgpu.wgmma(acc_ref, h_smem, w_smem)
-                                    mgpu.wgmma_wait(0)
-
-                            pl.run_scoped(
-                                _smem_scope,
-                                gate_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                                up_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                                h_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
-                                w_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
-                                ready_barrier=mgpu.Barrier(num_arrivals=3),
-                            )
-                            return acc_ref[...].astype(jnp.bfloat16)
-
-                        output = pl.run_scoped(
-                            _acc_scope,
-                            acc_ref=mgpu.ACC((config.compute_m, config.block_n)),
+                def _acc_scope(acc_ref) -> Array:
+                    def _smem_scope(gate_smem, up_smem, h_smem, w_smem, ready_barrier) -> None:
+                        row = mgpu.layout_cast(
+                            lax.broadcasted_iota(jnp.int32, (config.compute_m, config.block_k), 0),
+                            mgpu.Layout.WGMMA,
                         )
+                        row_valid = (row < valid_rows).astype(jnp.float32)
 
-                        destination_ref[
-                            destination_ordinal,
-                            entry,
-                            pl.ds(0, config.compute_m),
-                            pl.ds(hidden_start, config.block_n),
-                        ] = output
+                        @pl.loop(0, intermediate_tiles)
+                        def _intermediate_loop(intermediate_tile) -> None:
+                            intermediate_start = intermediate_tile * config.block_k
+                            mgpu.copy_gmem_to_smem(
+                                w_ref.at[
+                                    expert,
+                                    pl.ds(intermediate_start, config.block_k),
+                                    pl.ds(hidden_start, config.block_n),
+                                ],
+                                w_smem,
+                                ready_barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                z_ref.at[
+                                    expert,
+                                    pl.ds(expert_row_start, config.compute_m),
+                                    pl.ds(intermediate_start, config.block_k),
+                                ],
+                                gate_smem,
+                                ready_barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                z_ref.at[
+                                    expert,
+                                    pl.ds(expert_row_start, config.compute_m),
+                                    pl.ds(intermediate_dim + intermediate_start, config.block_k),
+                                ],
+                                up_smem,
+                                ready_barrier,
+                            )
+                            mgpu.barrier_wait(ready_barrier)
+                            gate = gate_smem[...].astype(jnp.float32)
+                            up = up_smem[...].astype(jnp.float32)
+                            h_smem[:, :] = (jax.nn.silu(gate) * up * row_valid).astype(dtype)
+                            mgpu.commit_smem()
+                            mgpu.wgmma(acc_ref, h_smem, w_smem)
+                            mgpu.wgmma_wait(0)
 
-                if static_source_ordinal == 0:
-                    pl.semaphore_signal(ready_sem.at[destination_ordinal, hidden_tile])
-                else:
-                    _signal_ready(source, destination_ordinal, hidden_tile)
+                    pl.run_scoped(
+                        _smem_scope,
+                        gate_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        up_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        h_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
+                        w_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        ready_barrier=mgpu.Barrier(num_arrivals=3),
+                    )
+                    return acc_ref[...].astype(jnp.bfloat16)
 
-            branches = tuple((lambda ordinal: lambda _: _produce_for_source(ordinal))(i) for i in range(ep_size))
-            lax.switch(source_ordinal, branches, None)
+                output = pl.run_scoped(
+                    _acc_scope,
+                    acc_ref=mgpu.ACC((config.compute_m, config.block_n)),
+                )
 
-        @pl.when(worker >= schedule.combine_program_start)
+                destination_ref[
+                    destination_ordinal,
+                    entry,
+                    pl.ds(0, config.compute_m),
+                    pl.ds(hidden_start, config.block_n),
+                ] = output
+
+        branches = tuple((lambda ordinal: lambda args: _produce_for_source(ordinal, args))(i) for i in range(ep_size))
+
+        @pl.loop(0, schedule.max_w2_jobs_per_program)
+        def _w2_job_loop(iteration) -> None:
+            job = resident_worker + iteration * schedule.producer_programs
+
+            @pl.when(job < schedule.w2_jobs)
+            def _w2_job() -> None:
+                source_ordinal = job // (entries_per_dst * hidden_tiles)
+                source_job = job % (entries_per_dst * hidden_tiles)
+                entry = source_job // hidden_tiles
+                hidden_tile = source_job % hidden_tiles
+                lax.switch(source_ordinal, branches, (entry, hidden_tile))
+
+        for peer_ordinal in range(ep_size):
+            if peer_ordinal == 0:
+                pl.semaphore_signal(completion_sem.at[rank])
+            else:
+                _signal_completion((rank + peer_ordinal) % ep_size)
+
+        @pl.when(resident_worker < schedule.combine_programs)
         def _combine() -> None:
-            consumer = worker - schedule.combine_program_start
+            consumer = resident_worker
             hidden_tile = consumer % hidden_tiles
             consumer_lane = consumer // hidden_tiles
             consumers_for_tile = (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
@@ -601,8 +624,8 @@ def _make_source_push_semantic_fused_w2_return_kernel(
             def _active_consumer() -> None:
                 for destination_ordinal in range(ep_size):
                     pl.semaphore_wait(
-                        ready_sem.at[destination_ordinal, hidden_tile],
-                        value=1,
+                        completion_sem.at[destination_ordinal],
+                        value=schedule.producer_programs,
                         decrement=False,
                     )
 
@@ -649,6 +672,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
             jax.ShapeDtypeStruct(return_shape, jnp.bfloat16),
             jax.ShapeDtypeStruct(y_shape, jnp.bfloat16),
         ),
+        scratch_shapes=(mgpu.SMEM((RESIDENT_CTA_SMEM_BYTES,), dtype=jnp.uint8),),
         grid=(worker_programs,),
         grid_names=("worker_program",),
         compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane),
