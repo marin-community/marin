@@ -3769,3 +3769,32 @@ The corrected-slice retry `/dlwh/mlp-stop-after-w2b-seq-49f7` also stopped in
 lowering: JAX's scatter update requested an unsharded `[8]` update from the
 source-sharded `[8@expert]` zero. The next retry uses a shard-preserving
 broadcasted add over `dy`, avoiding scatter lowering entirely.
+
+## 2026-07-11 FUSED-MOE-125 - Source-combine sequencing fixes W2-backward composition
+
+Reduced job `/dlwh/mlp-stop-after-w2b-seq-f002` at `f0028e13ce` succeeded on
+`cw-rno2a` with one repeat at `10.375633 ms`, checksum `78901821440`, and zero
+drop, metadata-overflow, queue-overflow, or layout-overflow errors. The same
+forward + W2-backward composition without a dependency on source-combined `y`
+illegal-addressed in FUSED-MOE-122.
+
+This confirms a missing cross-rank completion dependency: W2 backward could
+read the source-visible return queue before source combine established that
+all peer writes had arrived. The fused MLP custom-VJP residual now saves one
+per-source `forward_done` token from `y[:, 0, 0]`; backward injects its
+zero-valued dependency into `dy` before launching W2 backward. Four focused
+fused-MLP interpret/value-and-gradient tests and scoped pre-commit passed. The
+next gate is the full reduced forward+backward comparison including selected
+W13 backward.
+
+## 2026-07-11 FUSED-MOE-126 - B64 inbox candidate reaches reduced H100
+
+Reduced job `/dlwh/semantic-b64-w13-compare-c51f` at `c51fdbe8af` completed
+the new semantic B64 inbox candidate. It reported zero drops, metadata/queue
+overflows, layout-overflow mismatch, validity errors, and nonfinite values.
+Sampled W13 preactivation differences were `max=0.25`, `mean=0.00048828125`;
+the derived activation sample had `max=28.7075`, `mean=2.74992` under the
+large-magnitude synthetic inputs. The one-repeat reduced timing was
+`86.003749 ms` and is not a target performance result. Target random-routing
+timing remains required before deciding whether this old physical protocol
+recovers the 8.5 ms inbox behavior.

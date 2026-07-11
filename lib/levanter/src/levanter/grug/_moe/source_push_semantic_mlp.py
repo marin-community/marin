@@ -80,6 +80,7 @@ class _SourcePushSemanticFusedMlpResidual(NamedTuple):
     x: Float[Array, "S T H"]
     z: Float[Array, "Dst E C twoI"]
     return_y: Float[Array, "S DstOrd Q M H"]
+    forward_done: Float[Array, "S"]
     w13: Float[Array, "Dst E H twoI"]
     w2: Float[Array, "Dst E I H"]
 
@@ -416,7 +417,16 @@ def _source_push_semantic_fused_mlp_forward(
     queue_overflow_routes = jnp.maximum(fused_w13.queue_overflow_routes, fused_w2.queue_overflow_routes)
     layout_overflow_rows = jnp.maximum(fused_w13.layout_overflow_rows, fused_w2.layout_overflow_rows)
     dropped = plan.dropped_routes + queue_overflow_routes + layout_overflow_rows
-    residual = _SourcePushSemanticFusedMlpResidual(plan, x, fused_w13.z, fused_w2.return_y, w13, w2)
+    forward_done = jax.lax.optimization_barrier(fused_w2.y[:, 0, 0].astype(jnp.float32))
+    residual = _SourcePushSemanticFusedMlpResidual(
+        plan=plan,
+        x=x,
+        z=fused_w13.z,
+        return_y=fused_w2.return_y,
+        forward_done=forward_done,
+        w13=w13,
+        w2=w2,
+    )
     return fused_w2.y, dropped, residual
 
 
@@ -433,6 +443,8 @@ def _source_push_semantic_fused_mlp_backward(
     Float[Array, "Dst E H twoI"],
     Float[Array, "Dst E I H"],
 ]:
+    forward_zero = residual.forward_done - jax.lax.optimization_barrier(residual.forward_done)
+    dy = dy + forward_zero[:, None, None].astype(dy.dtype)
     fused_w2_backward = source_push_semantic_fused_w2_backward(
         dy.astype(jnp.bfloat16),
         residual.return_y,
