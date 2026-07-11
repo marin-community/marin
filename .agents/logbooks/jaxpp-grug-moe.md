@@ -28,6 +28,7 @@ author: dlwh
 - Explicit `interleaved_gpipe` now supports more logical stages than physical ranks and follows the pinned JaxPP per-rank task queues. At 8 logical/4 physical stages, batch128/m4 reached mean MFU `9.2547` and batch192/m6 reached `10.2190`; batch224/m7 hit a compile-complexity cliff. The four-stage `std_1f1b` schedule remains faster and reaches `16.2005` MFU with CuTe FA4 and eight-warp Pallas-Triton ragged dot.
 - Unequal 24-layer splits, a narrower expert axis, ragged all-to-all, and DeepEP did not beat the ring baseline. Splits with a 7-layer stage either OOMed or failed to reach execution; expert-axis 4 stopped in compilation; ragged all-to-all reached only `3.6743` MFU at batch256/m8. DeepEP now builds and executes its SM90 transport on RNO2A, but training is numerically unstable: both 8-expert and 64-expert non-pipelined controls have a finite step-0 loss and NaN on step 1, while explicit JaxPP is NaN on step 0.
 - Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
+- The Sonic whole-MLP non-return was reduced below JaxPP to concurrent `jax-tvm-ffi` handler invocation. Plain JAX reproduces the same fsdp=2/3 boundary with a single QuACK grouped GEMM at only three experts, one token per expert, and 8x8 matrices. A per-handler host mutex fixes the minimal case, a full 65,536-assignment FSDP-8 forward/backward control, and a four-stage JaxPP smoke. Workaround snapshot: `d0aa12393a`; exact 24-layer performance remains unmeasured.
 
 ## Hypothesis Queue
 
@@ -35,6 +36,7 @@ author: dlwh
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
+- `GRUG-JAXPP-010`: Proper whole-MLP SonicMoE without expert parallelism is executable after serializing concurrent host-side `jax-tvm-ffi` handler calls. Evidence: the direct FSDP-8 production-shape control and four-stage L8 smoke both return with finite results at `d0aa12393a`. Next test: benchmark the exact L24/d2560/e64/top-k4/b512/m16 target against `16.2004883` ring EP and the `20` MFU goal.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -1792,3 +1794,24 @@ author: dlwh
   - Keep ring EP at `16.2004883` MFU as the performance winner. Do not spend another 32-H100 allocation on whole-MLP QuACK until the minimal two-rank reproducer returns.
 - Next action:
   - Track the bounded upstream-ready reproducer and control matrix in [#7110](https://github.com/marin-community/marin/issues/7110), linked to #7024. Nothing was filed upstream; the issue contains a draft for human filing. Use #7110 to seek a JaxPP fix or a narrowly scoped workaround, then resume the no-EP Sonic performance comparison.
+
+### 2026-07-10 22:05 PDT - minimal multi-device TVM-FFI root cause and workaround
+- Hypothesis: The non-return is caused by a shared mutable launch path below JaxPP, so serializing host-side invocation packing for each compiled TVM-FFI handler will preserve asynchronous GPU execution while preventing concurrent device threads from corrupting handler state.
+- Commit Hashes:
+  - `adc27843a9`: standalone minimal QuACK/JaxPP diagnostic.
+  - `d0aa12393a`: pinned `jax-tvm-ffi` per-handler mutex patch and Iris setup hook.
+- Commands:
+  - Boundary/control matrix: `experiments/grug/moe/repro_jaxpp_quack_minimal.py --runtime {direct,jaxpp} --operation {quack,plain,opaque} --transform forward --transfer {none,scalar} --experts {2,3} --tokens-per-expert 1 --input-dim 8 --output-dim 8 --fsdp {2,3}` with bounded watchdogs on RNO2A H100s.
+  - CUDA graph control: the failing direct fsdp3 case with `JAXPP_QUACK_ALLOW_CUDA_GRAPH=false`.
+  - Production direct gate: whole-MLP Sonic forward/backward at d2560/i1280/e64 and 65,536 assignments across eight H100s with the per-handler patch.
+  - Pipeline gate: explicit `std_1f1b`, four physical/logical stages, L8/e64/top-k4/b32/m4/seq4096, CuTe FA4, whole-MLP Sonic, and XLA preallocation `0.65` under parent `/dlwh/iris-run-job-20260711-044839`.
+- Results:
+  - The minimum failing QuACK shape is three experts, one token per expert, 8x8 matrices, and fsdp3. Direct JAX and JaxPP both fail; fsdp2 passes. Forward versus gradient, rank placement, transfer/no-transfer, and replicated versus sharded inputs do not change the boundary. Plain JAX and Pallas opaque controls pass.
+  - Disabling QuACK CUDA graphs does not fix fsdp3. A process-global mutex around TVM-FFI stream setup/call/restore fixes it; narrowing the lock to one mutex per registered `JAXTVMFFIHandler` also fixes it.
+  - The narrow patch completed the full FSDP-8, 65,536-assignment whole-MLP forward/backward control in `15.3541s` compile+execute.
+  - The four-stage smoke and all four child tasks succeeded, completed 3/3 iterations, and finished W&B with finite final loss `8.9430628`. It reported `1.995244%` MFU, `132,619` tokens/s, and `0.98833s` duration; this reduced L8/b32 run is a correctness gate, not a performance comparison. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-ffimutex-smoke-l8-e64k4-b32-s4096-p4m4-20260710-2156>.
+- Interpretation:
+  - The earlier JaxPP-specific diagnosis is falsified. The failure is concurrent multi-device invocation of a shared compiled QuACK TVM function through `jax-tvm-ffi`; JaxPP merely exposes the same direct-JAX fsdp3 defect at pipeline scale.
+  - The workaround serializes only host-side argument/stream setup and launch per compiled handler. `safe_call` returns after enqueueing, so kernels on distinct device streams remain asynchronous; exact performance still needs measurement.
+- Next action:
+  - Run the exact 24-layer d2560/e64/top-k4/b512/m16/seq4096 whole-MLP Sonic comparison at `d0aa12393a`. Compare mean MFU against the `16.2004883` ring baseline and profile the exact path if it remains below `20`.
