@@ -34,18 +34,20 @@ author: dlwh
 - Prioritizing explicit pipeline transfer construction ahead of local QB/loss/gradient accumulation is a clean negative. The pinned reduced run averaged `8.9243` MFU and `0.220987s`, versus `9.1735` and `0.214968s` for default ordering. Construction order is not the missing overlap mechanism; the next credible schedule change must split the combined activation/weight-gradient backward task.
 - Splitting backward into input-gradient and weight-gradient tasks is operational and gradient-correct but a hard performance negative. The reduced H100 gate averaged `6.5356` central MFU and `0.301733s`, versus `9.1735` and `0.214968s` for the combined-backward control. Independent block rematerialization costs more than zero-bubble placement can recover.
 - Exact two-chunk bulk ring preserves output/drop/VJP semantics and takes its fast path at the target EP8 microbatch, but direct H100 timing regresses forward by `5.30%` and forward-backward by `13.98%`. XLA latency hiding does not offset doubled collective and Pallas launch counts; do not register this backend for training.
+- EP-local QuACK grouped GEMM is the first direct-kernel result to clear the performance gate: at the exact e64/top-k4/d2560 EP8 microbatch it improves median forward by `16.0%` and forward-backward by `10.8%`. It is not promotable because its BF16 output fails the existing tolerance with relative L2 `0.00613` and mismatch fraction `2.614%`; errors are uniform across ranks and all four gradient groups pass the configured tolerance. Keep it benchmark-only while resolving output parity.
 
 ## Hypothesis Queue
 
 ### Active
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
-- `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
+- `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the best full shape still needs another `9.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, and occupancy scaling reaches `18.2583` at batch8192/m256. EP-local QuACK clears the direct-kernel performance gate but remains blocked on output parity. Next test: isolate that numerical discrepancy before a reduced pipeline gate.
 - `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
+- `GRUG-JAXPP-013`: Replace EP-local Pallas expert MLPs with QuACK/Sonic grouped GEMMs while retaining the proven single-chunk ring transport. Blocker: the exact EP8 benchmark improves forward-backward by `10.8%`, but BF16 output parity fails with relative L2 `0.00613` and mismatch fraction `2.614%`. Resume after explaining or eliminating the output discrepancy without weakening the configured tolerance.
 
 ### Falsified / Dead End
 - Delaying data-parallel gradient reduction until after microbatch accumulation is performance-neutral at batch128/m4: mean MFU `7.5648` versus `7.5946` baseline.
@@ -69,7 +71,7 @@ author: dlwh
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
 - `GRUG-JAXPP-003`: GPU runtime availability is no longer blocked; CoreWeave east02 4x8 H100 jobs validated the implementation path.
-- `GRUG-JAXPP-004`: The May d=2560 family runs with measurable MFU on 4x 8xH100. Best measured point is explicit `std_1f1b` seq4096, 64 experts, batch512/m16 with CuTe FA4 and eight-warp Pallas-Triton ragged dot at mean MFU `16.2005`.
+- `GRUG-JAXPP-004`: The May d=2560 family runs with measurable MFU on 4x 8xH100. Best measured point is explicit `std_1f1b` seq4096, 64 experts, batch8192/m256 with CuTe FA4 and eight-warp Pallas-Triton ragged dot at mean MFU `18.2583`.
 
 ## Entry Log
 
@@ -2117,3 +2119,23 @@ author: dlwh
   - Do not register or pipeline-gate the backend. Profiling its slower timeline would explain the negative but would not make it a credible route to 20 without a lower-level asynchronous/autodiff primitive.
 - Next action:
   - Preserve the single-chunk bulk transport and investigate a faster grouped-GEMM implementation at its exact forward/dLHS/dRHS shapes, including whether the existing QuACK/Sonic kernels can operate on EP-local expert weights without the no-EP FSDP materialization penalty.
+
+### 2026-07-11 08:34 PDT - EP-local QuACK is faster but fails output parity
+- Hypothesis: Replacing only the EP-local Pallas expert MLP with QuACK's Sonic grouped GEMM, while preserving the proven single-chunk ring routing and collectives, will improve the exact target kernel shape without materializing experts across the FSDP axis.
+- Commit Hashes:
+  - `b920782234`: private EP-local QuACK benchmark adapter.
+  - `2427e8a3df`: sharding-safe host aggregation for diagnostic parity breakdowns.
+- Command: one-node H100 job `/dlwh/ep-ring-quack-diagnostic-r4-20260711-082636`, exact e64/top-k4/d2560/i1280 microbatch32x4096, capacity factor `1.25`, balanced routing, Pallas-Triton `block_k=32`/8 warps, QuACK through the mutex-patched NVIDIA `jax-tvm-ffi` revision `e238a28483123efc8f56b9de358c2fb8b8de77e5`, 5 warmups and 30 blocked iterations. The benchmark ran with `--parity-mode diagnostic`; this mode reports timings but explicitly marks a parity failure non-promotable.
+- Results:
+  - The eight-H100 job succeeded in `91.29s` with zero task failures or preemptions. No failed live job remains.
+  - Forward median improved from ring `10.410606ms` to `8.977512ms`, a `1.160x` speedup.
+  - Forward-backward median improved from ring `23.021085ms` to `20.778980ms`, a `1.108x` speedup. This clears the predeclared roughly `10%` directional performance gate.
+  - Output parity failed: relative L2 error `0.00612677`, mismatch fraction `0.02614194` (`8,771,779` elements), mean absolute error `0.00114951`, and maximum absolute error `0.03125`. No assignments were dropped.
+  - The discrepancy is uniform across the eight ranks: mismatch fractions span `0.0261151-0.0261711` and relative L2 errors span `0.0061210-0.0061323`. This rules out a single-rank or routing-shard concentration.
+  - Gradients for combine weights, `w13`, `w2`, and activations all pass the configured `allclose` tolerance with zero mismatch counts. Their maximum absolute errors are `4.47e-08`, `1.19e-06`, `1.86e-09`, and `5.09e-08`, respectively. Large relative errors for `w13` and activations come from very small reference norms.
+- Interpretation:
+  - QuACK is the first expert-kernel substitution in this series with enough direct forward-backward gain to plausibly close the remaining `9.5%` throughput gap from `18.2583` to 20 MFU.
+  - The result cannot be promoted or pipeline-gated while output parity fails. Uniform rank errors and passing gradients point toward a deterministic BF16 numerical difference inside the grouped MLP rather than a ring routing or collective ownership bug, but that attribution remains a hypothesis.
+  - Do not change tolerances to accept the result. Keep the adapter private and diagnostic-only until the output discrepancy is explained or removed under the existing gate.
+- Next action:
+  - Isolate the output discrepancy in the smallest direct QuACK-versus-Pallas grouped-MLP case at the exact dtype/activation shape, checking accumulation precision and activation implementation. Promote to a reduced JaxPP pipeline gate only after strict output parity passes.
