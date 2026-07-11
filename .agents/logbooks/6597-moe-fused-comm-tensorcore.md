@@ -2110,3 +2110,78 @@ dominant next work remains physical schedule replacement, beginning with the
 forward W13 path: preserve semantic metadata, but restore the proven inbox
 shape with two aggregated send producers, approximately 30 WGMMA consumers,
 B256 allocation, and independent B64 readiness.
+
+## 2026-07-10 FUSED-MOE-072 - W13 backward role split regresses
+
+Commit `0f130df981` split the 64 CTAs that previously performed all raw-x
+staging and then dX combine into separate resident groups of 32 staging and 32
+combine CTAs. It also changed dX publication from whole-B256 readiness to
+per-hidden-tile readiness. Job
+`/dlwh/bench-semantic-fused-0f130-w13b-overlap-20260710-2120` completed three
+target repeats with zero drops and overflows:
+
+```text
+times_ms:             88.264978, 89.238979, 88.997078
+median_ms:            88.997078
+useful_TFLOP/s/rank:  38.607715
+rounded_TFLOP/s/rank: 48.259644
+checksum:             20130811904
+```
+
+The previous selected compact-owner path was `72.465855 ms` / `47.415073`
+useful TFLOP/s/rank. The role split is 22.8% slower: halving raw-x staging
+residency costs more than overlapping source combine and publishing hidden
+tiles earlier. Commit `30334c4928` reverted this candidate. Keep the 64-CTA
+stage-then-combine allocation until staging itself is made cheaper; do not tune
+the 32/32 split further.
+
+## 2026-07-10 FUSED-MOE-073 - First inbox-shaped forward and adjacent-N ablations
+
+Job `/dlwh/bench-semantic-fused-30334-three-candidates-20260710-2125` tested
+three target candidates at `30334c4928`, with three repeats and zero route
+drops or metadata/layout overflows in every mode:
+
+| Candidate | Median ms | Useful TFLOP/s/rank | Prior ms | Decision |
+|---|---:|---:|---:|---|
+| W13 direct raw gather, 2 producers + 30 consumers | 53.762686 | 31.955005 | 25.922804 | reject; 107.4% slower |
+| W2 return, per-adjacent-N completion cohorts | 62.575497 | 13.727313 | 62.558136 | reject; no measurable change |
+| W2 backward, reuse gate SMEM for SwiGLU | 120.194554 | 14.293384 | 118.949477 | reject; 1.05% slower |
+
+The W13 checksum was `1305986465792`, W2 return checksum `3915106560`, and W2
+backward checksum `127795200`, matching their prior target rows. The W13 result
+isolates why the old `216.949` inbox profile does not transfer directly: two
+send CTAs are enough for prepacked contiguous B64 rows, but not for semantic
+raw-token gathers. The old semantic 2-owner + 10-helper arrangement supplies
+far more gather bandwidth despite leaving only 20 WGMMA consumers.
+
+Commits `1b284f02d7` and `7a1a651d94` reverted the neutral W2-return and slower
+W2-backward changes. The next W13 experiment keeps the direct B256/B64 protocol
+but uses eight gather producers and 24 WGMMA consumers, testing whether added
+raw-gather residency beats the old helper schedule without returning to twelve
+producer-side programs.
+
+## 2026-07-10 FUSED-MOE-074 - Direct W13 producer-residency curve
+
+Two additional target jobs measured the fixed direct raw-gather protocol while
+changing only the 32-program peer-local producer/consumer split:
+
+| Producers / consumers | Times (ms) | Median ms | Useful TFLOP/s/rank |
+|---|---|---:|---:|
+| 2 / 30 | 53.762686, 54.194796, 53.705101 | 53.762686 | 31.955005 |
+| 8 / 24 | 27.905820, 27.718614, 27.787361 | 27.787361 | 61.826199 |
+| 12 / 20 | 25.995065, 25.855658, 25.786619 | 25.855658 | 66.445300 |
+
+The 8/24 job was
+`/dlwh/bench-semantic-fused-7a1a-w13-8p24c-20260710-2130` at
+`7a1a651d94`; the 12/20 job was
+`/dlwh/bench-semantic-fused-81c9-w13-12p20c-20260710-2135` at
+`81c9b36490`. All repeats had zero route drops and queue/layout overflows and
+the same `1305986465792` checksum.
+
+The direct 12/20 schedule is 0.26% faster than the selected 2-owner + 10-helper
++ 20-consumer path (`25.922804 ms`, `66.273189` useful TFLOP/s/rank). This is a
+small speedup, but it removes owner/helper handoff and proves that approximately
+12 producer-side CTAs are required for raw semantic gathers. Keep 12/20 as the
+current candidate. Next isolate its two-buffer send scope: two B64xK256 SMEM
+tiles consume 64 KiB per producer CTA and may reduce co-resident WGMMA work;
+compare against one-buffer sequential sends before integrating the candidate.
