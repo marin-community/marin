@@ -2319,3 +2319,46 @@ The isolated W13-backward improvement (`72.465855 -> 66.282220 ms`) survives
 the integrated boundary: fwd+bwd saves 5.99 ms even though forward-only timing
 is about 0.49 ms noisier in this run. Keep the W13-backward pipeline selected;
 the aggregate fwd+bwd objective is the acceptance criterion.
+
+## 2026-07-10 FUSED-MOE-080 - Overlap round 2 isolates a W2-forward win
+
+Job `/dlwh/bench-semantic-overlap-round2-20260710-2240` at `62de1c1541`
+completed on `cw-rno2a` (`Iris succeeded`, exit 0, one task, 2m19s). It tested
+the split-publication K512 W13 helper, a 128-worker W2 forward schedule with
+cohort-local combine, and the low-SMEM W2-backward gate/up prefetch.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Baseline | Result |
+|---|---|---:|---:|---:|---|---|
+| Fused W13 forward, K512 gather | no repeat rows | n/a | n/a | n/a | 25.922804 ms / 66.273189 useful | reject: Mosaic lowering failure |
+| Fused W2 return, 128-worker cohort | 44.099458, 44.087474, 44.085326 | 44.087474 | 19.483844 | 24.354805 | 62.558136 ms / 13.731123 useful | candidate: 18.470662 ms or 29.52% less time |
+| Fused W2 backward, low-SMEM prefetch | 119.637949, 119.617371, 119.492700 | 119.617371 | 14.362353 | 17.952941 | 118.949477 ms / 14.442997 useful | reject: 0.667894 ms or 0.56% slower |
+
+The K512 W13 helper passed the prior per-dimension size check after splitting
+publication into two K256 copies, but each half is a strided view of the K512
+SMEM tile. Mosaic rejected the first publication with:
+
+```text
+ValueError: async_copy needs the SMEM reference to be contiguous, but got
+strides [512, 1] for shape [64, 256]
+```
+
+Therefore this W13 variant produced no checksum or drop/overflow counters. A
+valid physical implementation needs two separately contiguous K256 publication
+buffers, or a synchronous copy that supports the strided source view; do not
+retry the current form.
+
+The W2-forward candidate was stable across repeats and reported zero routing
+drops, metadata-overflow routes, queue-overflow route errors, and layout-overflow
+row errors. Its checksum was `3915118336` on every repeat, versus the supplied
+selected-baseline checksum `3915106560` (difference `11776`, about 3.0e-6
+relative). Treat the timing as a strong candidate but require the integrated
+correctness check before selection. The W2-backward checksum remained exactly
+`127795200`, with all drop and overflow counters zero; its small slowdown means
+the low-SMEM prefetch does not repay its scheduling cost.
+
+The W2-forward result is the first large improvement in this round and is
+consistent with the earlier decomposition: the prior fused path had roughly
+19.2 ms of execution tax beyond isolated W2, return, and combine. The cohort
+schedule removes 18.47 ms, nearly all of that measured tax. Next run it through
+integrated forward and fwd+bwd correctness/timing while retaining the selected
+W13-backward pipeline.
