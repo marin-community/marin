@@ -611,6 +611,52 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                     @pl.when((chunk % config.chunk_owner_programs_per_peer) == owner)
                     def _coordinate_chunk() -> None:
                         pl.semaphore_signal(prepare_sem.at[dst])
+
+                        @pl.loop(0, blocks)
+                        def _route_block_loop(block) -> None:
+                            valid_rows = send_valid_ref[static_peer_ordinal, chunk, block]
+
+                            @pl.when(valid_rows > 0)
+                            def _compute_live_route_block() -> None:
+                                entry = chunk * blocks + block
+
+                                @pl.loop(0, config.compute_m)
+                                def _route_row_loop(row) -> None:
+                                    token = token_ids_ref[static_peer_ordinal, chunk, block, row]
+                                    live = row < valid_rows
+                                    acc = jnp.asarray(0.0, dtype=jnp.float32)
+                                    for route_hidden_start in range(0, hidden_dim, config.send_hidden_block):
+                                        dy_lower = dy_ref[
+                                            token,
+                                            pl.ds(route_hidden_start, config.send_hidden_block // 2),
+                                        ].astype(jnp.float32)
+                                        route_lower = route_y_ref[
+                                            static_peer_ordinal,
+                                            entry,
+                                            row,
+                                            pl.ds(route_hidden_start, config.send_hidden_block // 2),
+                                        ].astype(jnp.float32)
+                                        dy_upper = dy_ref[
+                                            token,
+                                            pl.ds(
+                                                route_hidden_start + config.send_hidden_block // 2,
+                                                config.send_hidden_block // 2,
+                                            ),
+                                        ].astype(jnp.float32)
+                                        route_upper = route_y_ref[
+                                            static_peer_ordinal,
+                                            entry,
+                                            row,
+                                            pl.ds(
+                                                route_hidden_start + config.send_hidden_block // 2,
+                                                config.send_hidden_block // 2,
+                                            ),
+                                        ].astype(jnp.float32)
+                                        acc += jnp.sum(dy_lower * route_lower) + jnp.sum(dy_upper * route_upper)
+                                    queue_d_route_ref[static_peer_ordinal, chunk, block, row] = jnp.where(
+                                        live, acc, jnp.asarray(0.0, dtype=jnp.float32)
+                                    )
+
                         pl.semaphore_wait(helper_done_sem.at[dst], value=(chunk + 1) * helper_tiles, decrement=False)
 
             branches = tuple((lambda ordinal: lambda _: _coordinate_peer(ordinal))(i) for i in range(ep_size))
@@ -710,47 +756,6 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     pl.semaphore_signal(compact_ready_sem.at[expert, compact_block])
                                 else:
                                     _signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)
-
-                                @pl.when(hidden_tile == 0)
-                                def _compute_route_weight_gradient() -> None:
-                                    entry = chunk * blocks + block
-
-                                    @pl.loop(0, config.compute_m)
-                                    def _route_row_loop(row) -> None:
-                                        token = token_ids_ref[static_peer_ordinal, chunk, block, row]
-                                        live = row < valid_rows
-                                        acc = jnp.asarray(0.0, dtype=jnp.float32)
-                                        for route_hidden_start in range(0, hidden_dim, config.send_hidden_block):
-                                            dy_lower = dy_ref[
-                                                token,
-                                                pl.ds(route_hidden_start, config.send_hidden_block // 2),
-                                            ].astype(jnp.float32)
-                                            route_lower = route_y_ref[
-                                                static_peer_ordinal,
-                                                entry,
-                                                row,
-                                                pl.ds(route_hidden_start, config.send_hidden_block // 2),
-                                            ].astype(jnp.float32)
-                                            dy_upper = dy_ref[
-                                                token,
-                                                pl.ds(
-                                                    route_hidden_start + config.send_hidden_block // 2,
-                                                    config.send_hidden_block // 2,
-                                                ),
-                                            ].astype(jnp.float32)
-                                            route_upper = route_y_ref[
-                                                static_peer_ordinal,
-                                                entry,
-                                                row,
-                                                pl.ds(
-                                                    route_hidden_start + config.send_hidden_block // 2,
-                                                    config.send_hidden_block // 2,
-                                                ),
-                                            ].astype(jnp.float32)
-                                            acc += jnp.sum(dy_lower * route_lower) + jnp.sum(dy_upper * route_upper)
-                                        queue_d_route_ref[static_peer_ordinal, chunk, block, row] = jnp.where(
-                                            live, acc, jnp.asarray(0.0, dtype=jnp.float32)
-                                        )
 
                             pl.semaphore_signal(helper_done_sem.at[peer])
 
