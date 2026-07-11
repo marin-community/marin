@@ -27,6 +27,8 @@ from levanter.grug._moe.sonic_quack import _require_quack
 _EP_SIZE = 8
 _BF16_RTOL = 0.1
 _BF16_ATOL = 2e-4
+_QUANTILE_SAMPLE_SIZE = 65_536
+_ERROR_QUANTILES = (0.0, 0.5, 0.9, 0.99, 0.999, 1.0)
 _IMPLEMENTATIONS = {
     "ring": _moe_mlp_ep_ring_local,
     "ring_quack": _moe_mlp_ep_ring_quack_local,
@@ -50,6 +52,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=30)
     parser.add_argument("--lower-only", action="store_true")
+    parser.add_argument(
+        "--parity-mode",
+        choices=("strict", "diagnostic"),
+        default="strict",
+        help="strict raises on parity failure; diagnostic records failure, marks the run non-promotable, and times it",
+    )
     parser.add_argument("--output", choices=("human", "json", "both"), default="both")
     return parser
 
@@ -212,13 +220,163 @@ def _loss_with_aux(
     return jnp.mean(jnp.square(out.astype(jnp.float32))), (out, dropped)
 
 
-def _parity_metrics(actual: jax.Array, expected: jax.Array) -> dict[str, float | bool]:
+def _sampled_quantiles(difference: jax.Array) -> dict[str, Any]:
+    flat = difference.reshape(-1)
+    sample_size = min(flat.size, _QUANTILE_SAMPLE_SIZE)
+    if sample_size < flat.size:
+        indices = jnp.linspace(0, flat.size - 1, sample_size, dtype=jnp.int32)
+        sample = jnp.take(flat, indices)
+    else:
+        sample = flat
+    values = np.asarray(jax.device_get(jnp.quantile(sample, jnp.asarray(_ERROR_QUANTILES, dtype=jnp.float32))))
+    return {
+        "values": {
+            f"p{100 * quantile:g}": float(value) for quantile, value in zip(_ERROR_QUANTILES, values, strict=True)
+        },
+        "sample_size": sample_size,
+        "total_size": flat.size,
+        "exact": sample_size == flat.size,
+    }
+
+
+def _group_error_breakdown(
+    actual_f32: jax.Array,
+    expected_f32: jax.Array,
+    *,
+    group_ids: jax.Array,
+    group_labels: tuple[str, ...],
+) -> dict[str, dict[str, float | int]]:
+    group_ids = jnp.asarray(group_ids, dtype=jnp.int32)
+    if actual_f32.shape[: group_ids.ndim] != group_ids.shape:
+        raise ValueError(f"group IDs with shape {group_ids.shape} do not prefix tensor shape {actual_f32.shape}")
+    rows = group_ids.size
+    actual_rows = actual_f32.reshape(rows, -1)
+    expected_rows = expected_f32.reshape(rows, -1)
+    difference = jnp.abs(actual_rows - expected_rows)
+    mismatches = jnp.logical_not(difference <= _BF16_ATOL + _BF16_RTOL * jnp.abs(expected_rows))
+    segment_ids = group_ids.reshape(-1)
+    num_groups = len(group_labels)
+    values_per_row = actual_rows.shape[1]
+
+    mismatch_count = jax.ops.segment_sum(jnp.sum(mismatches, axis=1), segment_ids, num_segments=num_groups)
+    abs_error_sum = jax.ops.segment_sum(jnp.sum(difference, axis=1), segment_ids, num_segments=num_groups)
+    squared_error = jax.ops.segment_sum(jnp.sum(jnp.square(difference), axis=1), segment_ids, num_segments=num_groups)
+    reference_squared = jax.ops.segment_sum(
+        jnp.sum(jnp.square(expected_rows), axis=1), segment_ids, num_segments=num_groups
+    )
+    candidate_squared = jax.ops.segment_sum(
+        jnp.sum(jnp.square(actual_rows), axis=1), segment_ids, num_segments=num_groups
+    )
+    max_abs = jax.ops.segment_max(jnp.max(difference, axis=1), segment_ids, num_segments=num_groups)
+    row_count = jax.ops.segment_sum(jnp.ones(rows, dtype=jnp.int32), segment_ids, num_segments=num_groups)
+    aggregates = jax.device_get(
+        (mismatch_count, abs_error_sum, squared_error, reference_squared, candidate_squared, max_abs, row_count)
+    )
+
+    breakdown = {}
+    for index, label in enumerate(group_labels):
+        count = int(aggregates[6][index]) * values_per_row
+        if count == 0:
+            continue
+        reference_l2 = float(np.sqrt(aggregates[3][index]))
+        error_l2 = float(np.sqrt(aggregates[2][index]))
+        breakdown[label] = {
+            "element_count": count,
+            "mismatch_count": int(aggregates[0][index]),
+            "mismatch_fraction": float(aggregates[0][index] / count),
+            "mean_abs": float(aggregates[1][index] / count),
+            "max_abs": float(aggregates[5][index]),
+            "reference_l2": reference_l2,
+            "candidate_l2": float(np.sqrt(aggregates[4][index])),
+            "relative_l2_error": error_l2 / reference_l2 if reference_l2 else (0.0 if error_l2 == 0.0 else float("inf")),
+        }
+    return breakdown
+
+
+def _parity_metrics(
+    actual: jax.Array,
+    expected: jax.Array,
+    *,
+    group_ids: jax.Array | None = None,
+    group_labels: tuple[str, ...] = (),
+) -> dict[str, Any]:
     actual_f32 = actual.astype(jnp.float32)
     expected_f32 = expected.astype(jnp.float32)
     difference = jnp.abs(actual_f32 - expected_f32)
-    close = jnp.all(difference <= _BF16_ATOL + _BF16_RTOL * jnp.abs(expected_f32))
-    max_abs, mean_abs, is_close = jax.device_get((jnp.max(difference), jnp.mean(difference), close))
-    return {"max_abs": float(max_abs), "mean_abs": float(mean_abs), "allclose": bool(is_close)}
+    mismatches = jnp.logical_not(difference <= _BF16_ATOL + _BF16_RTOL * jnp.abs(expected_f32))
+    mismatch_count = jnp.sum(mismatches)
+    worst_flat_index = jnp.argmax(difference)
+    reference_l2 = jnp.linalg.norm(expected_f32.reshape(-1))
+    candidate_l2 = jnp.linalg.norm(actual_f32.reshape(-1))
+    error_l2 = jnp.linalg.norm(difference.reshape(-1))
+    scalars = jax.device_get(
+        (
+            jnp.max(difference),
+            jnp.mean(difference),
+            mismatch_count,
+            reference_l2,
+            candidate_l2,
+            error_l2,
+            worst_flat_index,
+            jnp.take(expected_f32.reshape(-1), worst_flat_index),
+            jnp.take(actual_f32.reshape(-1), worst_flat_index),
+        )
+    )
+    reference_l2_value = float(scalars[3])
+    error_l2_value = float(scalars[5])
+    mismatch_count_value = int(scalars[2])
+    metrics = {
+        "max_abs": float(scalars[0]),
+        "mean_abs": float(scalars[1]),
+        "allclose": mismatch_count_value == 0,
+        "mismatch_count": mismatch_count_value,
+        "mismatch_fraction": mismatch_count_value / actual.size,
+        "reference_l2": reference_l2_value,
+        "candidate_l2": float(scalars[4]),
+        "relative_l2_error": (
+            error_l2_value / reference_l2_value
+            if reference_l2_value
+            else (0.0 if error_l2_value == 0.0 else float("inf"))
+        ),
+        "worst_error": {
+            "flat_index": int(scalars[6]),
+            "index": [int(index) for index in np.unravel_index(int(scalars[6]), actual.shape)],
+            "reference_magnitude": abs(float(scalars[7])),
+            "candidate_magnitude": abs(float(scalars[8])),
+        },
+        "abs_error_quantiles": _sampled_quantiles(difference),
+    }
+    if group_ids is not None:
+        metrics["error_by_group"] = _group_error_breakdown(
+            actual_f32, expected_f32, group_ids=group_ids, group_labels=group_labels
+        )
+    return metrics
+
+
+def _parity_failures(parity: dict[str, Any]) -> list[dict[str, str]]:
+    failures = []
+    for implementation, implementation_parity in parity.items():
+        if not implementation_parity["dropped_matches"]:
+            failures.append({"implementation": implementation, "tensor": "dropped"})
+        if not implementation_parity["output"]["allclose"]:
+            failures.append({"implementation": implementation, "tensor": "output"})
+        for tensor, metrics in implementation_parity["gradients"].items():
+            if not metrics["allclose"]:
+                failures.append({"implementation": implementation, "tensor": f"gradient.{tensor}"})
+    return failures
+
+
+def _parity_status(parity: dict[str, Any], *, mode: str) -> dict[str, Any]:
+    failures = _parity_failures(parity)
+    if failures and mode == "strict":
+        raise AssertionError(f"parity failed: {failures}")
+    return {
+        "mode": mode,
+        "passed": not failures,
+        "failures": failures,
+        "promotable": mode == "strict" and not failures,
+        "non_promotable_reason": None if mode == "strict" and not failures else "diagnostic parity mode",
+    }
 
 
 def _time(
@@ -250,6 +408,11 @@ def _print_result(result: dict[str, Any], output: str) -> None:
             if output == "both":
                 print(json.dumps(result, sort_keys=True))
             return
+        if not result["promotable"]:
+            print(
+                f"NON-PROMOTABLE diagnostic run: parity_passed={result['parity_status']['passed']}, "
+                f"failures={result['parity_status']['failures']}"
+            )
         print(
             f"EP8 {result['routing']} routing: two_chunk_path={result['two_chunk_path']}, "
             f"tokens={result['tokens']}, shape={result['hidden_dim']}x{result['intermediate_dim']}, "
@@ -361,23 +524,47 @@ def main() -> None:
 
         ring_forward = jax.block_until_ready(compiled_forwards["ring"](*inputs))
         ring_vg = jax.block_until_ready(compiled_value_and_grads["ring"](*inputs))
+        tokens_per_rank = tokens // _EP_SIZE
+        token_owner_ids = jnp.arange(tokens, dtype=jnp.int32) // tokens_per_rank
+        token_owner_labels = tuple(f"owner_rank={rank}" for rank in range(_EP_SIZE))
+        expert_ids = jnp.arange(args.num_experts, dtype=jnp.int32)
+        local_experts = args.num_experts // _EP_SIZE
+        expert_labels = tuple(
+            f"owner_rank={expert // local_experts},local_expert={expert % local_experts}"
+            for expert in range(args.num_experts)
+        )
         parity = {}
         for name in implementations:
             actual_forward = jax.block_until_ready(compiled_forwards[name](*inputs))
             actual_vg = jax.block_until_ready(compiled_value_and_grads[name](*inputs))
-            output_parity = _parity_metrics(actual_forward[0], ring_forward[0])
-            if int(actual_forward[1]) != int(ring_forward[1]):
-                raise AssertionError(f"drop mismatch: {name}={int(actual_forward[1])}, ring={int(ring_forward[1])}")
+            output_parity = _parity_metrics(
+                actual_forward[0],
+                ring_forward[0],
+                group_ids=token_owner_ids,
+                group_labels=token_owner_labels,
+            )
+            dropped = int(actual_forward[1])
+            reference_dropped = int(ring_forward[1])
+            gradient_groups = (
+                (token_owner_ids, token_owner_labels),
+                (selected_experts, expert_labels),
+                (expert_ids, expert_labels),
+                (expert_ids, expert_labels),
+            )
             gradient_parity = [
-                _parity_metrics(actual, expected) for actual, expected in zip(actual_vg[1], ring_vg[1], strict=True)
+                _parity_metrics(actual, expected, group_ids=group_ids, group_labels=group_labels)
+                for actual, expected, (group_ids, group_labels) in zip(
+                    actual_vg[1], ring_vg[1], gradient_groups, strict=True
+                )
             ]
-            if not output_parity["allclose"] or not all(metric["allclose"] for metric in gradient_parity):
-                raise AssertionError(f"{name} parity failed: output={output_parity}, gradients={gradient_parity}")
             parity[name] = {
                 "output": output_parity,
                 "gradients": dict(zip(("x", "combine_weights", "w13", "w2"), gradient_parity, strict=True)),
-                "dropped": int(actual_forward[1]),
+                "dropped": dropped,
+                "reference_dropped": reference_dropped,
+                "dropped_matches": dropped == reference_dropped,
             }
+        parity_status = _parity_status(parity, mode=args.parity_mode)
 
         timings = {
             "forward": {
@@ -413,6 +600,8 @@ def main() -> None:
         "warmup": args.warmup,
         "iterations": args.iterations,
         "parity": parity,
+        "parity_status": parity_status,
+        "promotable": parity_status["promotable"],
         "timings": timings,
     }
     _print_result(result, args.output)

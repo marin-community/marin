@@ -1,9 +1,19 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
+import json
 
-from experiments.grug.moe.benchmark_ep_ring import _routing_statistics, _selected_experts
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from experiments.grug.moe.benchmark_ep_ring import (
+    _parity_metrics,
+    _parity_status,
+    _parser,
+    _routing_statistics,
+    _selected_experts,
+)
 
 
 def test_ep_ring_benchmark_balanced_routing_has_exact_expert_counts():
@@ -40,3 +50,98 @@ def test_ep_ring_benchmark_skew_routing_is_seeded_and_reports_padding():
     assert statistics["padding_total"] == sum(statistics["padding_by_rank"])
     for group_sizes in statistics["quack_group_sizes_by_rank"]:
         assert sum(group_sizes) == statistics["local_capacity"]
+
+
+def test_parity_metrics_reports_exact_errors_and_group_breakdown() -> None:
+    reference = jnp.asarray([[1.0, 0.0], [2.0, -4.0]], dtype=jnp.float32)
+    candidate = jnp.asarray([[1.05, 0.001], [2.5, -3.0]], dtype=jnp.float32)
+
+    metrics = _parity_metrics(
+        candidate,
+        reference,
+        group_ids=jnp.asarray([0, 1]),
+        group_labels=("owner_rank=0", "owner_rank=1"),
+    )
+
+    expected_difference = np.asarray([[0.05, 0.001], [0.5, 1.0]], dtype=np.float32)
+    assert metrics["allclose"] is False
+    assert metrics["mismatch_count"] == 3
+    assert metrics["mismatch_fraction"] == pytest.approx(0.75)
+    assert metrics["reference_l2"] == pytest.approx(np.linalg.norm(reference))
+    assert metrics["candidate_l2"] == pytest.approx(np.linalg.norm(candidate))
+    assert metrics["relative_l2_error"] == pytest.approx(
+        np.linalg.norm(expected_difference) / np.linalg.norm(reference)
+    )
+    assert metrics["worst_error"] == {
+        "flat_index": 3,
+        "index": [1, 1],
+        "reference_magnitude": 4.0,
+        "candidate_magnitude": 3.0,
+    }
+    assert metrics["abs_error_quantiles"]["exact"] is True
+    assert metrics["abs_error_quantiles"]["sample_size"] == 4
+    assert metrics["abs_error_quantiles"]["values"]["p100"] == pytest.approx(1.0)
+    assert metrics["error_by_group"]["owner_rank=0"]["mismatch_count"] == 1
+    assert metrics["error_by_group"]["owner_rank=1"]["mismatch_count"] == 2
+    assert json.loads(json.dumps(metrics))["worst_error"]["index"] == [1, 1]
+
+
+def test_parity_metrics_counts_nan_as_mismatch() -> None:
+    metrics = _parity_metrics(jnp.asarray([jnp.nan]), jnp.asarray([0.0]))
+
+    assert metrics["allclose"] is False
+    assert metrics["mismatch_count"] == 1
+
+
+def test_parity_mode_defaults_to_strict_and_accepts_diagnostic() -> None:
+    assert _parser().parse_args([]).parity_mode == "strict"
+    assert _parser().parse_args(["--parity-mode", "diagnostic"]).parity_mode == "diagnostic"
+
+
+def test_diagnostic_parity_failure_is_recorded_as_non_promotable() -> None:
+    parity = {
+        "ring_quack": {
+            "dropped_matches": True,
+            "output": {"allclose": False},
+            "gradients": {"x": {"allclose": True}},
+        }
+    }
+
+    status = _parity_status(parity, mode="diagnostic")
+
+    assert status == {
+        "mode": "diagnostic",
+        "passed": False,
+        "failures": [{"implementation": "ring_quack", "tensor": "output"}],
+        "promotable": False,
+        "non_promotable_reason": "diagnostic parity mode",
+    }
+
+
+def test_strict_parity_failure_still_raises() -> None:
+    parity = {
+        "ring_quack": {
+            "dropped_matches": False,
+            "output": {"allclose": True},
+            "gradients": {"w2": {"allclose": True}},
+        }
+    }
+
+    with pytest.raises(AssertionError):
+        _parity_status(parity, mode="strict")
+
+
+def test_diagnostic_parity_pass_is_still_non_promotable() -> None:
+    parity = {
+        "ring_quack": {
+            "dropped_matches": True,
+            "output": {"allclose": True},
+            "gradients": {"w2": {"allclose": True}},
+        }
+    }
+
+    status = _parity_status(parity, mode="diagnostic")
+
+    assert status["passed"] is True
+    assert status["promotable"] is False
+    assert status["non_promotable_reason"] == "diagnostic parity mode"
