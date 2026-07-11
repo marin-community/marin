@@ -3348,3 +3348,33 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-route-owner-2f75 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 2f75259cb2 --jsonl scratch/w2b-route-owner-2f75.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-107 - Restored W13 backward faults standalone at reduced shape
+
+Job `/dlwh/w13b-role48-standalone-reduced-377` tested the restored selected
+48-stager/40-dX/40-dW W13-backward kernel at commit `37729dc653` on
+`cw-rno2a`. The run used EP8, T128/rank, H2560, I1280, E4/rank, top-k 2,
+capacity factor 4.0, random routing seed 0, bf16, JAX plan metadata, no warmup,
+one timed step, one repeat, and separate compilation. Iris reported terminal
+state `succeeded`, exit 0, one of one task succeeded, and a 44.99s task
+duration. This is a harness-level false success because the benchmark's
+debug-exception path returned zero after device execution faulted.
+
+The standalone `semantic_fused_w13_backward_pallas` mode failed with:
+
+```text
+CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+```
+
+No repeat row completed. Timing, useful and rounded TFLOP/s/rank, output
+checksum, and drop/metadata/queue/layout counters are therefore unavailable.
+This proves the reduced-shape fault is in the selected candidate itself rather
+than an interaction with the split comparison harness. Exactly one H100x8 job
+was launched; there was no retry, duplicate, source edit, stop, resubmit, or
+Iris mutation.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-standalone-reduced-377 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_pallas --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 37729dc653 --jsonl scratch/w13b-role48-standalone-reduced-377.jsonl
+```
