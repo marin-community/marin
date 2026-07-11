@@ -1206,7 +1206,7 @@ def stage_ghalogs_archive(
     if total != GHALOGS_ARCHIVE_BYTES:
         fs.rm(path)
         raise RuntimeError(f"GHALogs archive size mismatch after merge: got {total}, expected {GHALOGS_ARCHIVE_BYTES}")
-    fs.rm(f"{path}.parts", recursive=True)
+    fs.rm(parts_prefix, recursive=True)
     logger.info("Staged GHALogs archive: %d bytes -> %s", total, archive_path)
 
 
