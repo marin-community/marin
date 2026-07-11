@@ -27,6 +27,7 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
+RAW_GATHER_ROWS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,13 +526,26 @@ def _make_source_push_semantic_fused_w13_kernel(
                     @pl.when(valid_rows > 0)
                     def _copy_live_tile() -> None:
                         def _copy_scope(tile_smem) -> None:
-                            @pl.loop(0, config.compute_m)
-                            def _row_loop(row) -> None:
-                                token = token_ids_ref[static_peer_ordinal, chunk, block, row]
-                                tile_smem[row, :] = jnp.where(
-                                    row < valid_rows,
-                                    x_ref[token, pl.ds(k_start, config.send_k)],
-                                    jnp.zeros((config.send_k,), dtype=dtype),
+                            hidden_offsets = k_start + jnp.arange(config.send_k, dtype=jnp.int32)
+                            hidden_offsets = mgpu.layout_cast(hidden_offsets, mgpu.Layout.TILED)
+
+                            @pl.loop(0, config.compute_m // RAW_GATHER_ROWS)
+                            def _row_group_loop(row_group) -> None:
+                                row_start = row_group * RAW_GATHER_ROWS
+                                row_offsets = jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32)
+                                row_valid = row_start + row_offsets < valid_rows
+                                tokens = token_ids_ref[
+                                    static_peer_ordinal,
+                                    chunk,
+                                    block,
+                                    pl.ds(row_start, RAW_GATHER_ROWS),
+                                ]
+                                safe_tokens = jnp.where(row_valid, tokens, 0)
+                                x_tile = x_ref[safe_tokens[:, None], hidden_offsets[None, :]]
+                                tile_smem[pl.ds(row_start, RAW_GATHER_ROWS), :] = jnp.where(
+                                    row_valid[:, None],
+                                    x_tile,
+                                    jnp.zeros((RAW_GATHER_ROWS, config.send_k), dtype=dtype),
                                 )
 
                             mgpu.commit_smem()

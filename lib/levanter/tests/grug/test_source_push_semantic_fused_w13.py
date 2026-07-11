@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 
 import jax
 import jax.numpy as jnp
@@ -15,6 +16,7 @@ from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_
 from levanter.grug._moe.source_push_semantic_fused_w13 import (
     SourcePushSemanticFusedW13Config,
     SourcePushSemanticFusedW13Metadata,
+    RAW_GATHER_ROWS,
     _make_source_push_semantic_fused_w13_kernel,
     source_push_semantic_fused_w13,
     source_push_semantic_fused_w13_generation_accounting,
@@ -127,6 +129,18 @@ def test_fused_w13_kernel_uses_block_readiness_and_slot_wide_release():
     assert "consumer_done_sem.at[peer, slot]" in source
     assert "value=generation * consumer_jobs" in source
     assert "mgpu.wgmma(" in source
+
+
+def test_fused_w13_raw_gather_groups_eight_rows_without_serial_row_loop():
+    source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
+
+    assert RAW_GATHER_ROWS == 8
+    assert CONFIG.compute_m // RAW_GATHER_ROWS == 8
+    assert "pl.loop(0, config.compute_m // RAW_GATHER_ROWS)" in source
+    assert "pl.ds(row_start, RAW_GATHER_ROWS)" in source
+    assert "x_ref[safe_tokens[:, None], hidden_offsets[None, :]]" in source
+    assert "mgpu.layout_cast(hidden_offsets, mgpu.Layout.TILED)" in source
+    assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
 
 
 def test_fused_w13_reference_zeros_invalid_and_source_padding_rows():
