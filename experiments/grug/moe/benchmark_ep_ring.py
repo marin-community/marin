@@ -225,14 +225,14 @@ def _sampled_quantiles(difference: jax.Array) -> dict[str, Any]:
     samples_per_shard = max(1, _QUANTILE_SAMPLE_SIZE // len(shards))
     samples = []
     for shard in shards:
-        flat_shard = shard.data.reshape(-1)
+        flat_shard = np.asarray(jax.device_get(shard.data)).reshape(-1)
         shard_sample_size = min(flat_shard.size, samples_per_shard)
         if shard_sample_size < flat_shard.size:
-            indices = jnp.linspace(0, flat_shard.size - 1, shard_sample_size, dtype=jnp.int32)
-            shard_sample = jnp.take(flat_shard, indices)
+            indices = np.linspace(0, flat_shard.size - 1, shard_sample_size, dtype=np.int64)
+            shard_sample = flat_shard[indices]
         else:
             shard_sample = flat_shard
-        samples.append(np.asarray(jax.device_get(shard_sample)))
+        samples.append(shard_sample)
     sample = np.concatenate(samples)
     values = np.quantile(sample, _ERROR_QUANTILES)
     return {
