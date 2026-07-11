@@ -30,7 +30,7 @@ WGMMA_TILE_M = 8
 # participates in the completion barrier, so the grid must co-reside.
 PERSISTENT_W2_PROGRAMS = 128
 PERSISTENT_COMBINE_PROGRAMS = 32
-N_GROUPS_PER_JOB = 2
+N_GROUPS_PER_JOB = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -503,7 +503,9 @@ def _make_source_push_semantic_fused_w2_return_kernel(
             entry, hidden_tile_job = job_args
             hidden_tile = hidden_tile_job * N_GROUPS_PER_JOB
             hidden_start = hidden_tile * config.block_n
-            has_second_hidden_tile = hidden_tile + 1 < hidden_tiles
+            has_hidden_tile_1 = hidden_tile + 1 < hidden_tiles
+            has_hidden_tile_2 = hidden_tile + 2 < hidden_tiles
+            has_hidden_tile_3 = hidden_tile + 3 < hidden_tiles
             source = (rank + static_source_ordinal) % ep_size
             destination_ordinal = (-static_source_ordinal) % ep_size
             if static_source_ordinal == 0:
@@ -522,15 +524,19 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                 expert = recv_expert_ref[static_source_ordinal, entry]
                 expert_row_start = recv_row_ref[static_source_ordinal, entry]
 
-                def _acc_scope(acc_0_ref, acc_1_ref) -> None:
+                def _acc_scope(acc_0_ref, acc_1_ref, acc_2_ref, acc_3_ref) -> None:
                     def _smem_scope(
                         gate_smem,
                         up_smem,
                         h_smem,
                         w_0_smem,
                         w_1_smem,
+                        w_2_smem,
+                        w_3_smem,
                         activation_barrier,
                         w_1_barrier,
+                        w_2_barrier,
+                        w_3_barrier,
                     ) -> None:
                         row = mgpu.layout_cast(
                             lax.broadcasted_iota(jnp.int32, (config.compute_m, config.block_k), 0),
@@ -569,8 +575,8 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                 activation_barrier,
                             )
 
-                            @pl.when(has_second_hidden_tile)
-                            def _load_second_weight_tile() -> None:
+                            @pl.when(has_hidden_tile_1)
+                            def _load_weight_tile_1() -> None:
                                 mgpu.copy_gmem_to_smem(
                                     w_ref.at[
                                         expert,
@@ -581,11 +587,43 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                                     w_1_barrier,
                                 )
 
+                            @pl.when(has_hidden_tile_2)
+                            def _load_weight_tile_2() -> None:
+                                mgpu.copy_gmem_to_smem(
+                                    w_ref.at[
+                                        expert,
+                                        pl.ds(intermediate_start, config.block_k),
+                                        pl.ds(hidden_start + 2 * config.block_n, config.block_n),
+                                    ],
+                                    w_2_smem,
+                                    w_2_barrier,
+                                )
+
+                            @pl.when(has_hidden_tile_3)
+                            def _load_weight_tile_3() -> None:
+                                mgpu.copy_gmem_to_smem(
+                                    w_ref.at[
+                                        expert,
+                                        pl.ds(intermediate_start, config.block_k),
+                                        pl.ds(hidden_start + 3 * config.block_n, config.block_n),
+                                    ],
+                                    w_3_smem,
+                                    w_3_barrier,
+                                )
+
                             mgpu.barrier_wait(activation_barrier)
 
-                            @pl.when(has_second_hidden_tile)
-                            def _wait_for_second_weight_tile() -> None:
+                            @pl.when(has_hidden_tile_1)
+                            def _wait_for_weight_tile_1() -> None:
                                 mgpu.barrier_wait(w_1_barrier)
+
+                            @pl.when(has_hidden_tile_2)
+                            def _wait_for_weight_tile_2() -> None:
+                                mgpu.barrier_wait(w_2_barrier)
+
+                            @pl.when(has_hidden_tile_3)
+                            def _wait_for_weight_tile_3() -> None:
+                                mgpu.barrier_wait(w_3_barrier)
 
                             gate = gate_smem[...].astype(jnp.float32)
                             up = up_smem[...].astype(jnp.float32)
@@ -593,9 +631,17 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                             mgpu.commit_smem()
                             mgpu.wgmma(acc_0_ref, h_smem, w_0_smem)
 
-                            @pl.when(has_second_hidden_tile)
-                            def _accumulate_second_hidden_tile() -> None:
+                            @pl.when(has_hidden_tile_1)
+                            def _accumulate_hidden_tile_1() -> None:
                                 mgpu.wgmma(acc_1_ref, h_smem, w_1_smem)
+
+                            @pl.when(has_hidden_tile_2)
+                            def _accumulate_hidden_tile_2() -> None:
+                                mgpu.wgmma(acc_2_ref, h_smem, w_2_smem)
+
+                            @pl.when(has_hidden_tile_3)
+                            def _accumulate_hidden_tile_3() -> None:
+                                mgpu.wgmma(acc_3_ref, h_smem, w_3_smem)
 
                             mgpu.wgmma_wait(0)
 
@@ -606,8 +652,12 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                         h_smem=_wgmma_smem((config.compute_m, config.block_k), dtype),
                         w_0_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
                         w_1_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        w_2_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
+                        w_3_smem=_wgmma_smem((config.block_k, config.block_n), dtype),
                         activation_barrier=mgpu.Barrier(num_arrivals=3),
                         w_1_barrier=mgpu.Barrier(num_arrivals=1),
+                        w_2_barrier=mgpu.Barrier(num_arrivals=1),
+                        w_3_barrier=mgpu.Barrier(num_arrivals=1),
                     )
                     destination_ref[
                         destination_ordinal,
@@ -616,8 +666,8 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                         pl.ds(hidden_start, config.block_n),
                     ] = acc_0_ref[...].astype(jnp.bfloat16)
 
-                    @pl.when(has_second_hidden_tile)
-                    def _store_second_hidden_tile() -> None:
+                    @pl.when(has_hidden_tile_1)
+                    def _store_hidden_tile_1() -> None:
                         destination_ref[
                             destination_ordinal,
                             entry,
@@ -625,10 +675,30 @@ def _make_source_push_semantic_fused_w2_return_kernel(
                             pl.ds(hidden_start + config.block_n, config.block_n),
                         ] = acc_1_ref[...].astype(jnp.bfloat16)
 
+                    @pl.when(has_hidden_tile_2)
+                    def _store_hidden_tile_2() -> None:
+                        destination_ref[
+                            destination_ordinal,
+                            entry,
+                            pl.ds(0, config.compute_m),
+                            pl.ds(hidden_start + 2 * config.block_n, config.block_n),
+                        ] = acc_2_ref[...].astype(jnp.bfloat16)
+
+                    @pl.when(has_hidden_tile_3)
+                    def _store_hidden_tile_3() -> None:
+                        destination_ref[
+                            destination_ordinal,
+                            entry,
+                            pl.ds(0, config.compute_m),
+                            pl.ds(hidden_start + 3 * config.block_n, config.block_n),
+                        ] = acc_3_ref[...].astype(jnp.bfloat16)
+
                 pl.run_scoped(
                     _acc_scope,
                     acc_0_ref=mgpu.ACC((config.compute_m, config.block_n)),
                     acc_1_ref=mgpu.ACC((config.compute_m, config.block_n)),
+                    acc_2_ref=mgpu.ACC((config.compute_m, config.block_n)),
+                    acc_3_ref=mgpu.ACC((config.compute_m, config.block_n)),
                 )
 
         branches = tuple((lambda ordinal: lambda args: _produce_for_source(ordinal, args))(i) for i in range(ep_size))
