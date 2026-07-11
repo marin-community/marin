@@ -30,7 +30,6 @@ WGMMA_TILE_M = 8
 # participates in the completion barrier, so the grid must co-reside.
 PERSISTENT_W2_PROGRAMS = 128
 PERSISTENT_COMBINE_PROGRAMS = 32
-RESIDENT_CTA_SMEM_BYTES = 128 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +96,6 @@ class SourcePushSemanticFusedW2ReturnSchedule:
     w2_jobs: int
     min_w2_jobs_per_program: int
     max_w2_jobs_per_program: int
-    resident_cta_smem_bytes: int
     producer_program_start: int
     producer_programs: int
     combine_program_start: int
@@ -146,7 +144,6 @@ def source_push_semantic_fused_w2_return_schedule(
         w2_jobs=w2_jobs,
         min_w2_jobs_per_program=w2_jobs // PERSISTENT_W2_PROGRAMS,
         max_w2_jobs_per_program=(w2_jobs + PERSISTENT_W2_PROGRAMS - 1) // PERSISTENT_W2_PROGRAMS,
-        resident_cta_smem_bytes=RESIDENT_CTA_SMEM_BYTES,
         producer_program_start=0,
         producer_programs=PERSISTENT_W2_PROGRAMS,
         combine_program_start=0,
@@ -487,14 +484,10 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         route_valid_ref,
         return_y_ref,
         y_ref,
-        residency_smem,
     ) -> None:
         completion_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size,)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
-        residency_smem[0] = worker.astype(jnp.uint8)
-        mgpu.commit_smem()
-        resident_worker = residency_smem[0].astype(jnp.int32)
 
         def _signal_completion(peer) -> None:
             pl.semaphore_signal(
@@ -596,7 +589,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
         @pl.loop(0, schedule.max_w2_jobs_per_program)
         def _w2_job_loop(iteration) -> None:
-            job = resident_worker + iteration * schedule.producer_programs
+            job = worker + iteration * schedule.producer_programs
 
             @pl.when(job < schedule.w2_jobs)
             def _w2_job() -> None:
@@ -612,9 +605,9 @@ def _make_source_push_semantic_fused_w2_return_kernel(
             else:
                 _signal_completion((rank + peer_ordinal) % ep_size)
 
-        @pl.when(resident_worker < schedule.combine_programs)
+        @pl.when(worker < schedule.combine_programs)
         def _combine() -> None:
-            consumer = resident_worker
+            consumer = worker
             hidden_tile = consumer % hidden_tiles
             consumer_lane = consumer // hidden_tiles
             consumers_for_tile = (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
@@ -672,7 +665,6 @@ def _make_source_push_semantic_fused_w2_return_kernel(
             jax.ShapeDtypeStruct(return_shape, jnp.bfloat16),
             jax.ShapeDtypeStruct(y_shape, jnp.bfloat16),
         ),
-        scratch_shapes=(mgpu.SMEM((RESIDENT_CTA_SMEM_BYTES,), dtype=jnp.uint8),),
         grid=(worker_programs,),
         grid_names=("worker_program",),
         compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane),

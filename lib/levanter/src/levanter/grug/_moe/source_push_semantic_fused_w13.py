@@ -40,8 +40,8 @@ class SourcePushSemanticFusedW13Config:
     send_k: int = 256
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
-    helper_programs_per_peer: int = 14
-    consumer_programs_per_peer: int = 32
+    helper_programs_per_peer: int = 10
+    consumer_programs_per_peer: int = 20
     n_groups_per_job: int = 2
 
     def validate(self) -> None:
@@ -76,10 +76,10 @@ class SourcePushSemanticFusedW13Config:
                 "the Hopper lowering requires two chunk-owner programs per peer, "
                 f"got {self.chunk_owner_programs_per_peer}"
             )
-        if self.helper_programs_per_peer != 14:
-            raise ValueError(f"helper_programs_per_peer must be 14, got {self.helper_programs_per_peer}")
-        if self.consumer_programs_per_peer != 32:
-            raise ValueError(f"consumer_programs_per_peer must be 32, got {self.consumer_programs_per_peer}")
+        if self.helper_programs_per_peer != 10:
+            raise ValueError(f"helper_programs_per_peer must be 10, got {self.helper_programs_per_peer}")
+        if self.consumer_programs_per_peer != 20:
+            raise ValueError(f"consumer_programs_per_peer must be 20, got {self.consumer_programs_per_peer}")
         if self.n_groups_per_job != 2:
             raise ValueError(f"the initial Hopper lowering requires n_groups_per_job=2, got {self.n_groups_per_job}")
 

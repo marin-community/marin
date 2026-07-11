@@ -39,7 +39,6 @@ def test_fused_w2_return_target_schedule_balances_b64_jobs_over_resident_grid():
     assert schedule.w2_jobs == 46_080
     assert schedule.min_w2_jobs_per_program == 360
     assert schedule.max_w2_jobs_per_program == 360
-    assert schedule.resident_cta_smem_bytes == 128 * 1024
     assert schedule.producer_program_start == 0
     assert schedule.producer_programs == 128
     assert schedule.combine_program_start == 0

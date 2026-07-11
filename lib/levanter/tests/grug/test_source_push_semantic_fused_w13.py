@@ -101,9 +101,9 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
 
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
     assert (first.owner, next_chunk.owner) == (0, 1)
-    assert first.producer_side_programs == 16
-    assert first.consumer_programs == 32
-    assert CONFIG.worker_programs_per_peer == 48
+    assert first.producer_side_programs == 12
+    assert first.consumer_programs == 20
+    assert CONFIG.worker_programs_per_peer == 32
     assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
     assert first.helper_tiles_per_compute_block == 2560 // CONFIG.send_k
     assert first.prepare_generation == first.generation
