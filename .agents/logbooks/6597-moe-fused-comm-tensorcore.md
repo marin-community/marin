@@ -1422,3 +1422,299 @@ W13, W2 backward, and W13 backward workers were redirected to implement
 block-local readiness with distinct helper and WGMMA CTA roles. The intended
 partial order is now copy tiles for B64 block `b` before WGMMA jobs for `b`,
 with all jobs in the B256 slot before slot reuse.
+
+## 2026-07-10 FUSED-MOE-054 - Independent-readiness W13 backward target hang
+
+Job `/dlwh/bench-semantic-fused-bc8c-w13b-20260710-1709` ran once on
+`cw-rno2a` at commit `bc8c101222`. It targeted
+`semantic_fused_w13_backward_pallas` on one H100x8 task. Iris initially
+reported `pending` with pending scheduler feedback, then `running` after the
+task began setup at `2026-07-10 17:09:21 PDT`.
+
+The benchmark logged failed 12.50 GiB BFC allocator requests at
+`2026-07-10 17:10:21.662714 PDT` and `2026-07-10 17:10:31.664153 PDT`. No
+structured repeat, summary, error, or other benchmark progress appeared in the
+following ten minutes. Under the explicit hang policy, the existing job was
+stopped at `2026-07-10 17:21:16 PDT`; no duplicate, resubmit, task kick, Iris
+restart, or cluster bounce was issued.
+
+Iris reached terminal state `killed` with reason `Terminated by user`. Its
+single task was killed with exit 0 after 12 minutes and 21.55 seconds, with
+zero failures and one preemption. The run produced zero structured repeat
+rows, zero structured summary rows, and zero structured error rows. Median,
+minimum, and maximum timing; useful and rounded TFLOP/s; correctness metrics;
+and drop, routing, metadata, queue, and layout counters are therefore
+unavailable.
+
+## 2026-07-10 FUSED-MOE-047 - Producer-first coarse W2 return target result
+
+Job `/dlwh/bench-semantic-fused-bc8c-w2f-20260710-1709` ran once on
+`cw-rno2a` at commit `bc8c101222` and reached terminal Iris state `succeeded`.
+Its single H100x8 task exited 0 after 1 minute and 52.29 seconds, with zero
+failures and preemptions. No duplicate, stop, resubmit, Iris restart, or cluster
+bounce was issued.
+
+The requested EP8 random-routing `semantic_fused_w2_return_pallas` mode emitted
+three structured repeat rows and one structured summary row, with zero error
+rows. Exact median/min/max steady-state time was `0.06641123168325673`/
+`0.06628185832717766`/`0.0665090666540588` seconds
+(`66.41123168325673`/`66.28185832717766`/`66.5090666540588` ms). Median
+useful/rounded throughput was `12.934460593908323`/`16.1680757423854`
+TFLOP/s/rank, and the output checksum was `3915118848.0` in every repeat.
+Repeat 0/1/2 steady-state times were `0.0665090666540588`/
+`0.06628185832717766`/`0.06641123168325673` seconds; useful throughput was
+`12.915433976362662`/`12.959706937603853`/`12.934460593908323` TFLOP/s/rank,
+and rounded throughput was `16.14429247045333`/`16.199633672004815`/
+`16.1680757423854` TFLOP/s/rank.
+
+Dropped routes, routing drops, metadata overflow, queue-route overflow, and
+layout-row overflow were all zero. The mode reported 64 live pairs, 1,048,576
+useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
+0.19999999999999996 masked-row fraction. Block sizes were K64, N128, M64, with
+16 producer programs per peer and 32 combine programs. Logs contained two
+non-fatal failed 12.50 GiB allocator attempts and CUDA VMM FABRIC+POSIX_FD
+handle fallback warnings before the successful structured rows.
+
+## 2026-07-10 FUSED-MOE-053 - Independent-readiness W2 backward target run
+
+Observation-only babysitting began for
+`/dlwh/bench-semantic-fused-bc8c-w2b-20260710-1709` on `cw-rno2a`, targeting
+`semantic_fused_w2_backward_pallas` at commit `bc8c101222`. Iris reported one
+matching job in `pending` state, submitted at `2026-07-11T00:07:55.970Z`, with
+reason `Pending scheduler feedback`; no task logs were present at the initial
+check. No duplicate, resubmit, restart, stop, task kick, or cluster bounce is
+authorized without a concrete main-thread handoff.
+
+The task began setup at `2026-07-11T00:09:21Z`. Its first failed 12.50 GiB
+allocator request was logged at `2026-07-11T00:10:22.054153Z`, followed by a
+second at `2026-07-11T00:10:32.055560Z`. At `2026-07-11T00:21:14Z`, more than
+10 minutes after the first warning, Iris still reported `running` and the logs
+still contained no structured repeat, error, or summary row. The job was
+therefore stopped under the requested hang policy; no duplicate or resubmit
+was issued.
+
+Iris reached terminal state `killed` with reason `Terminated by user`. Its
+single H100x8 task exited 0 after 12 minutes and 28.91 seconds, with zero
+failures and one preemption. The run produced zero structured repeat rows,
+zero structured error rows, and zero structured summary rows. Exact
+median/min/max timing, useful/rounded TFLOP/s, output checksum, correctness
+counters, and drop/overflow counters are unavailable because the benchmark
+never emitted a result row.
+
+## 2026-07-10 FUSED-MOE-051 - Independent-readiness W13 forward target run
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-bc8c-w13f-20260710-1709` on `cw-rno2a`, targeting
+`semantic_permute_w13_pallas` at commit `bc8c101222`. Iris reported terminal
+state `succeeded`; the single H100x8 task succeeded with exit 0 after 1 minute
+and 37.59 seconds, with zero failures and preemptions. No duplicate, resubmit,
+restart, stop, task kick, or cluster bounce was issued.
+
+The run emitted three structured repeat rows and one summary row, with zero
+error rows. Repeat 0 reported `29.973478328126173` ms and
+`57.31690194887708`/`71.64612743609635` useful/rounded TFLOP/s/rank; repeat 1
+reported `30.171285344598193` ms and
+`56.94112460832183`/`71.1764057604023`; repeat 2 reported
+`29.910045986374218` ms and `57.438457940942115`/`71.79807242617764`.
+The exact median/min/max steady-state time was
+`29.973478328126173`/`29.910045986374218`/`30.171285344598193` ms. Median
+useful/rounded throughput was `57.31690194887708`/`71.64612743609635`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`11.60969651886262`, `4.589810455916449`, and `7.019886062946171` seconds.
+
+The output checksum was `1305986465792.0`; every repeat had `error: null`.
+Dropped routes, routing drops, metadata overflow, queue-entry overflow,
+queue-route overflow, and layout-row overflow were all zero. The mode reported
+64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, 0.19999999999999996 masked-row fraction, and 288 queue entries per
+rank. Logs contained two non-fatal failed 12.50 GiB allocator attempts and
+CUDA VMM handle fallback warnings before all repeat and summary rows completed.
+
+## 2026-07-10 FUSED-MOE-052 - Independent-readiness W2 return target run
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-8769-w2f-20260710-1715` on `cw-rno2a`, targeting
+`semantic_fused_w2_return_pallas` with no synthetic scratch at commit
+`87694ad4dc`. Iris reached exact terminal state `succeeded`; its single H100x8
+task succeeded with exit 0 after 1 minute and 37.82 seconds, with zero failures
+and preemptions. No duplicate, resubmit, restart, stop, task kick, or cluster
+bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.06629139033611864` seconds (`66.29139033611864` ms) and
+`12.957843467222927`/`16.19730433402866` useful/rounded TFLOP/s/rank. Repeat 1
+reported `0.0661479876531909` seconds (`66.1479876531909` ms) and
+`12.98593486628256`/`16.2324185828532` useful/rounded TFLOP/s/rank. Repeat 2
+reported `0.06624067900702357` seconds (`66.24067900702357` ms) and
+`12.96776349633916`/`16.20970437042395` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.06624067900702357`/`0.0661479876531909`/`0.06629139033611864` seconds
+(`66.24067900702357`/`66.1479876531909`/`66.29139033611864` ms). Median
+useful/rounded throughput was `12.96776349633916`/`16.20970437042395`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`5.079508807975799`, `2.9137780469609424`, and `2.1657307610148564` seconds.
+
+The output checksum was `3915118848.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, metadata overflow,
+queue-route overflow, and layout-row overflow were all zero. The mode reported
+64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, and 0.19999999999999996 masked-row fraction. Block sizes were K64,
+N128, and compute M64, with 16 producer programs per peer and 32 combine
+programs. Logs contained two non-fatal failed 12.50 GiB allocator attempts and
+CUDA VMM FABRIC+POSIX_FD handle fallback warnings before all repeat and summary
+rows completed.
+
+## 2026-07-10 FUSED-MOE-053 - 32-worker W13 forward target run
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-8769-w13f-20260710-1715` on `cw-rno2a`, targeting
+`semantic_permute_w13_pallas` with the 32-worker split at commit `87694ad4dc`.
+Iris reached exact terminal state `succeeded`; its single H100x8 task succeeded
+with exit 0 after 1 minute and 38.87 seconds, with zero failures and
+preemptions. No duplicate, resubmit, restart, stop, task kick, or cluster
+bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.02595914698516329` seconds (`25.95914698516329` ms) and
+`66.18040721376167`/`82.72550901720207` useful/rounded TFLOP/s/rank. Repeat 1
+reported `0.0258783856794859` seconds (`25.8783856794859` ms) and
+`66.38694312999085`/`82.98367891248856` useful/rounded TFLOP/s/rank. Repeat 2
+reported `0.025977071995536487` seconds (`25.977071995536487` ms) and
+`66.13474061646336`/`82.6684257705792` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.02595914698516329`/`0.0258783856794859`/`0.025977071995536487` seconds
+(`25.95914698516329`/`25.8783856794859`/`25.977071995536487` ms). Median
+useful/rounded throughput was `66.18040721376167`/`82.72550901720207`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`11.547150690923445`, `4.232943148934282`, and `7.314207541989163` seconds.
+
+The output checksum was `1305986465792.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, metadata overflow, queue-entry
+overflow, queue-route overflow, and layout-row overflow were all zero. The mode
+reported 64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, 0.19999999999999996 masked-row fraction, and 288 queue entries per
+rank. The reported source-push profile was
+`hopper_source_push_inbox_rough_balanced_216` with block M64. Logs contained
+two non-fatal failed 12.50 GiB allocator attempts and CUDA VMM
+FABRIC+POSIX_FD handle fallback warnings before all repeat and summary rows
+completed.
+
+## 2026-07-10 FUSED-MOE-055 - Fused-SwiGLU W2 backward 32-worker target run
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-1072-w2b-20260710-1727` on `cw-rno2a`, targeting
+`semantic_fused_w2_backward_pallas` with 32 workers per peer at commit
+`1072877a0f`. Iris reached exact terminal state `succeeded`; its single H100x8
+task succeeded with exit 0 after 2 minutes and 17.57 seconds, with zero
+failures and preemptions. No duplicate, resubmit, restart, stop, task kick, or
+cluster bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.12864630300706872` seconds (`128.64630300706872` ms) and
+`13.354343484752933`/`16.692929355941168` useful/rounded TFLOP/s/rank. Repeat
+1 reported `0.13548123801592737` seconds (`135.48123801592737` ms) and
+`12.680626067190431`/`15.85078258398804` useful/rounded TFLOP/s/rank. Repeat 2
+reported `0.12819995067548007` seconds (`128.19995067548007` ms) and
+`13.400839152807784`/`16.75104894100973` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.12864630300706872`/`0.12819995067548007`/`0.13548123801592737` seconds
+(`128.64630300706872`/`128.19995067548007`/`135.48123801592737` ms). Median
+useful/rounded throughput was `13.354343484752933`/`16.692929355941168`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`19.733724814956076`, `17.54621010296978`, and `2.187514711986296` seconds.
+
+The output checksum was `124060752.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, metadata overflow,
+queue-route overflow, and layout-row overflow were all zero. The mode reported
+64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, and 0.19999999999999996 masked-row fraction. Block sizes were
+compute M64, hidden 128, intermediate 128, send M256, and send hidden 256,
+with 12 inbox slots.
+
+The first failed 12.50 GiB allocator request was logged at
+`2026-07-11T00:27:36.529145Z`, followed by a second at
+`2026-07-11T00:27:46.530708Z`. Structured repeat and summary rows arrived at
+`2026-07-11T00:28:28Z`, about 51.47 seconds after the first warning and well
+inside the 10-minute no-progress cutoff. Logs also contained non-fatal CUDA
+VMM FABRIC+POSIX_FD handle fallback warnings before the structured rows.
+
+## 2026-07-10 FUSED-MOE-056 - 32-worker W13 backward target run
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-1072-w13b-20260710-1727` on `cw-rno2a`, targeting
+`semantic_fused_w13_backward_pallas` with 32 workers per peer at commit
+`1072877a0f`. Iris reached exact terminal state `succeeded`
+(`JOB_STATE_SUCCEEDED`); its single H100x8 task succeeded with exit 0 after
+2 minutes and 28.2 seconds, with zero failures and preemptions. No duplicate,
+resubmit, restart, stop, task kick, or cluster bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.15760997500425825` seconds (`157.60997500425825` ms) and
+`21.800484624828908`/`27.250605781036132` useful/rounded TFLOP/s/rank. Repeat
+1 reported `0.15527769367326982` seconds (`155.27769367326982` ms) and
+`22.127929360091233`/`27.659911700114044` useful/rounded TFLOP/s/rank. Repeat
+2 reported `0.15693655433521295` seconds (`156.93655433521295` ms) and
+`21.89403132593849`/`27.36753915742311` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.15693655433521295`/`0.15527769367326982`/`0.15760997500425825` seconds
+(`156.93655433521295`/`155.27769367326982`/`157.60997500425825` ms). Median
+useful/rounded throughput was `21.89403132593849`/`27.36753915742311`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`16.07843820200651`, `13.806995096994797`, and `2.2714431050117128` seconds.
+
+The output checksum was `20131827712.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, metadata overflow, queue-route
+overflow, and layout-row overflow were all zero. The mode reported 64 live
+pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
+0.19999999999999996 masked-row fraction. Block sizes were hidden 128, output
+128, compute M64, send K256, send M256, with 12 inbox slots.
+
+The first failed 12.50 GiB BFC allocator request appeared at
+`2026-07-11T00:27:43.906995Z`, followed by a second at
+`2026-07-11T00:27:53.908432Z`. Structured rows appeared at `00:28:30Z`, well
+before the 10-minute no-progress cutoff. CUDA VMM FABRIC+POSIX_FD handle
+fallback warnings appeared on all eight ranks before the successful rows.
+
+## 2026-07-10 FUSED-MOE-057 - W2 return with two adjacent N tiles per job
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-4967-w2f-group2-20260710-1730` on `cw-rno2a`,
+targeting `semantic_fused_w2_return_pallas` with two adjacent N tiles per job
+at commit `4967039edc`. Iris reached exact terminal state `succeeded`; its
+single H100x8 task succeeded with exit 0 after 1 minute and 44.08 seconds,
+with zero failures and preemptions. No duplicate, resubmit, restart, stop,
+task kick, or cluster bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.06273619000179072` seconds (`62.73619000179072` ms) and
+`13.692152156123623`/`17.11519019515453` useful/rounded TFLOP/s/rank. Repeat
+1 reported `0.06255813567743947` seconds (`62.55813567743947` ms) and
+`13.731123056945277`/`17.163903821181595` useful/rounded TFLOP/s/rank.
+Repeat 2 reported `0.06223163831358155` seconds (`62.23163831358155` ms) and
+`13.803163189623623`/`17.25395398702953` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.06255813567743947`/`0.06223163831358155`/`0.06273619000179072` seconds
+(`62.55813567743947`/`62.23163831358155`/`62.73619000179072` ms). Median
+useful/rounded throughput was `13.731123056945277`/`17.163903821181595`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`5.880454795085825`, `3.843960358062759`, and `2.036494437023066` seconds.
+
+The output checksum was `3915118848.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, metadata overflow,
+queue-route overflow, and layout-row overflow were all zero. The mode reported
+64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, and 0.19999999999999996 masked-row fraction. Block sizes were K64,
+N128, and compute M64, with 16 producer programs per peer and 32 combine
+programs. Logs contained two non-fatal failed 12.50 GiB allocator attempts and
+CUDA VMM FABRIC+POSIX_FD handle fallback warnings before all repeat and summary
+rows completed.
