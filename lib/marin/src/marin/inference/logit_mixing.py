@@ -70,7 +70,7 @@ class _GenerationRequest:
     temperature: float
     top_p: float
     stop: tuple[str, ...]
-    seed: int
+    seed: int | None
 
 
 @dataclass(frozen=True)
@@ -289,7 +289,7 @@ def _generation_request(raw_payload: object, model: str) -> _GenerationRequest:
         temperature=payload.temperature,
         top_p=top_p,
         stop=stop,
-        seed=0 if payload.seed is None else payload.seed,
+        seed=payload.seed,
     )
 
 
@@ -341,8 +341,7 @@ def _mix_top_logprobs(
     return dict(
         sorted(
             ((token, score - normalizer) for token, score in finite_scores.items()),
-            key=lambda item: item[1],
-            reverse=True,
+            key=lambda item: (-item[1], item[0]),
         )
     )
 
@@ -360,7 +359,7 @@ def _sample_token(
     normalizer = _logsumexp(scaled.values())
     candidates: list[tuple[str, float]] = []
     cumulative = 0.0
-    for token, score in sorted(scaled.items(), key=lambda item: item[1], reverse=True):
+    for token, score in sorted(scaled.items(), key=lambda item: (-item[1], item[0])):
         probability = math.exp(score - normalizer)
         candidates.append((token, probability))
         cumulative += probability

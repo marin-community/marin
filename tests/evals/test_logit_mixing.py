@@ -69,6 +69,25 @@ def test_logit_mixing_alpha_zero_does_not_call_teacher() -> None:
 
 def test_logit_mixing_samples_from_mixed_distribution_with_seed() -> None:
     top_logprobs = {"A": {" B": -0.1, " C": -0.2}}
+    first = _mixed_completion(
+        teacher=top_logprobs,
+        student=top_logprobs,
+        payload={**GENERATION_REQUEST, "temperature": 1},
+    )
+    second = _mixed_completion(
+        teacher=top_logprobs,
+        student=top_logprobs,
+        payload={**GENERATION_REQUEST, "temperature": 1},
+    )
+
+    assert first.status_code == 200
+    first_choice = first.json()["choices"][0]
+    assert first_choice == second.json()["choices"][0]
+    assert first_choice["text"] == " C"
+
+
+def test_logit_mixing_seeded_sampling_breaks_probability_ties_by_token() -> None:
+    top_logprobs = {"A": {" C": -0.1, " B": -0.1}}
     response = _mixed_completion(
         teacher=top_logprobs,
         student=top_logprobs,
