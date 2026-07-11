@@ -17,7 +17,11 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
-from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring import (
+    _ep_ring_two_chunk_fast_path_local,
+    _moe_mlp_ep_ring_local,
+    _moe_mlp_ep_ring_two_chunk_local,
+)
 from levanter.grug._moe.ep_ring_fused import (
     _assignment_to_compact_rows,
     _moe_mlp_ep_ring_fused_local,
@@ -951,6 +955,143 @@ def test_moe_mlp_ring_fused_matches_ring_values_and_full_gradients(overflow: boo
         assert int(fused_dropped) > 0
     for fused_grad, ring_grad in zip(fused_grads, ring_grads, strict=True):
         _assert_allclose_with_error_metrics(fused_grad, ring_grad)
+
+
+def _two_chunk_routing_case(case: str, expert_size: int) -> tuple[jax.Array, int, float, bool]:
+    if case == "balanced":
+        tokens_per_shard = 4
+        num_experts = expert_size
+        capacity_factor = 1.0
+        routes = np.fromfunction(
+            lambda source, token: (source + token) % expert_size,
+            (expert_size, tokens_per_shard),
+            dtype=int,
+        )
+        expect_drops = False
+    elif case == "overflow":
+        tokens_per_shard = 3
+        num_experts = 2 * expert_size
+        capacity_factor = 2.0 / 3.0
+        routes = np.empty((expert_size, tokens_per_shard), dtype=np.int32)
+        for source in range(expert_size):
+            routes[source] = (2 * source + 1, 2 * source + 1, 2 * source)
+        expect_drops = True
+    elif case == "boundary_spanning":
+        tokens_per_shard = 4
+        num_experts = expert_size
+        capacity_factor = float(expert_size)
+        routes = np.zeros((expert_size, tokens_per_shard), dtype=np.int32)
+        expect_drops = False
+    elif case == "odd_capacity":
+        tokens_per_shard = 5
+        num_experts = expert_size
+        capacity_factor = 1.0
+        routes = np.fromfunction(
+            lambda source, token: (source + token) % expert_size,
+            (expert_size, tokens_per_shard),
+            dtype=int,
+        )
+        expect_drops = False
+    elif case == "one_half_fallback":
+        tokens_per_shard = 6
+        num_experts = expert_size
+        capacity_factor = 2.0 / 3.0
+        routes = np.zeros((expert_size, tokens_per_shard), dtype=np.int32)
+        expect_drops = True
+    else:
+        raise ValueError(f"unknown two-chunk routing case: {case}")
+    return jnp.asarray(routes.reshape(-1, 1)), num_experts, capacity_factor, expect_drops
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["balanced", "overflow", "boundary_spanning", "odd_capacity", "one_half_fallback"],
+)
+def test_moe_mlp_ring_two_chunk_matches_bulk_output_drop_and_vjp(case: str):
+    mesh = _make_ep_ring_test_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires >=2 devices")
+
+    expert_size = mesh.shape["expert"]
+    selected_experts, num_experts, capacity_factor, expect_drops = _two_chunk_routing_case(case, expert_size)
+    tokens = selected_experts.shape[0]
+    hidden_dim = 4
+    intermediate_dim = 6
+    key_x, key_weights, key_w13, key_w2, key_cotangent = jax.random.split(jax.random.key(53), 5)
+    x = jax.random.normal(key_x, (tokens, hidden_dim), dtype=jnp.bfloat16)
+    combine_weights = jax.nn.sigmoid(jax.random.normal(key_weights, selected_experts.shape, dtype=jnp.float32))
+    w_up_gate = 0.02 * jax.random.normal(key_w13, (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.bfloat16)
+    w_down = 0.02 * jax.random.normal(key_w2, (num_experts, intermediate_dim, hidden_dim), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(key_cotangent, x.shape, dtype=jnp.bfloat16)
+
+    with jax.set_mesh(mesh):
+        batch_spec = P(("data", "expert"), None)
+        expert_spec = P("expert", None, None)
+        batch_sharding = NamedSharding(mesh, batch_spec)
+        expert_sharding = NamedSharding(mesh, expert_spec)
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+        cotangent = jax.sharding.reshard(cotangent, batch_sharding)
+
+        def shard_runner(local_fn):
+            return jax.shard_map(
+                partial(
+                    local_fn,
+                    activation_fn=jax.nn.silu,
+                    num_experts=num_experts,
+                    capacity_factor=capacity_factor,
+                ),
+                mesh=mesh,
+                in_specs=(batch_spec, batch_spec, batch_spec, expert_spec, expert_spec),
+                out_specs=(batch_spec, P()),
+                check_vma=False,
+            )
+
+        bulk = shard_runner(_moe_mlp_ep_ring_local)
+        two_chunk = shard_runner(_moe_mlp_ep_ring_two_chunk_local)
+        fast_path_gate = jax.shard_map(
+            partial(
+                _ep_ring_two_chunk_fast_path_local,
+                local_experts=num_experts // expert_size,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(batch_spec,),
+            out_specs=P(),
+            check_vma=False,
+        )
+
+        bulk_out, bulk_dropped = bulk(x, selected_experts, combine_weights, w_up_gate, w_down)
+        chunked_out, chunked_dropped = two_chunk(x, selected_experts, combine_weights, w_up_gate, w_down)
+        use_fast_path = fast_path_gate(selected_experts)
+
+        def loss(runner, x, combine_weights, w_up_gate, w_down):
+            out, _ = runner(x, selected_experts, combine_weights, w_up_gate, w_down)
+            return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+        bulk_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(bulk, x, combine_weights, w_up_gate, w_down)
+        chunked_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(two_chunk, x, combine_weights, w_up_gate, w_down)
+
+    np.testing.assert_allclose(
+        np.asarray(chunked_out, dtype=np.float32),
+        np.asarray(bulk_out, dtype=np.float32),
+        rtol=0.1,
+        atol=2e-4,
+    )
+    assert int(chunked_dropped) == int(bulk_dropped)
+    assert (int(chunked_dropped) > 0) == expect_drops
+    assert bool(use_fast_path) == (case != "one_half_fallback")
+    for chunked_grad, bulk_grad in zip(chunked_grads, bulk_grads, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(chunked_grad, dtype=np.float32),
+            np.asarray(bulk_grad, dtype=np.float32),
+            rtol=0.1,
+            atol=2e-4,
+        )
 
 
 def test_ring_fused_triton_routing_matches_references_on_gpu():
