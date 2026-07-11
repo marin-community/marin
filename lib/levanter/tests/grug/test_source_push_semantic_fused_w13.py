@@ -139,7 +139,9 @@ def test_fused_w13_raw_gather_groups_eight_rows_without_serial_row_loop():
     assert "pl.loop(0, config.compute_m // RAW_GATHER_ROWS)" in source
     assert "pl.ds(row_start, RAW_GATHER_ROWS)" in source
     assert "x_ref[safe_tokens[:, None], hidden_offsets[None, :]]" in source
-    assert "mgpu.layout_cast(hidden_offsets, mgpu.Layout.TILED)" in source
+    assert "jnp.arange(config.send_k, dtype=jnp.int32)," in source
+    assert "jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32)," in source
+    assert source.count("mgpu.Layout.TILED") >= 2
     assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
 
 

@@ -526,13 +526,19 @@ def _make_source_push_semantic_fused_w13_kernel(
                     @pl.when(valid_rows > 0)
                     def _copy_live_tile() -> None:
                         def _copy_scope(tile_smem) -> None:
-                            hidden_offsets = k_start + jnp.arange(config.send_k, dtype=jnp.int32)
-                            hidden_offsets = mgpu.layout_cast(hidden_offsets, mgpu.Layout.TILED)
+                            hidden_offsets = mgpu.layout_cast(
+                                jnp.arange(config.send_k, dtype=jnp.int32),
+                                mgpu.Layout.TILED,
+                            )
+                            hidden_offsets = k_start + hidden_offsets
 
                             @pl.loop(0, config.compute_m // RAW_GATHER_ROWS)
                             def _row_group_loop(row_group) -> None:
                                 row_start = row_group * RAW_GATHER_ROWS
-                                row_offsets = jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32)
+                                row_offsets = mgpu.layout_cast(
+                                    jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32),
+                                    mgpu.Layout.TILED,
+                                )
                                 row_valid = row_start + row_offsets < valid_rows
                                 tokens = token_ids_ref[
                                     static_peer_ordinal,
