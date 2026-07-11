@@ -271,9 +271,9 @@ def _score(labels: list[dict], preds: dict[str, float], threshold: float) -> dic
     return {"overall": _prf(tp, fp, fn), "threshold": threshold, "by_mechanism": mech_report, "pr_curve": curve}
 
 
-def _log_comparison(a: dict, b: dict, n_dropped: int) -> None:
+def _log_comparison(a: dict, b: dict, n_dropped: int, delimiter: str) -> None:
     """Print arm A (no filter) vs arm B (DF filter) side by side."""
-    logger.info("=== decon contamination benchmark (delimiter=%r) ===", PARAGRAPH_DELIMITER)
+    logger.info("=== decon contamination benchmark (delimiter=%r) ===", delimiter)
     logger.info("DF filter dropped %d common ngrams (built from the benchmark corpus)", n_dropped)
     oa, ob = a["overall"], b["overall"]
     logger.info(
@@ -303,10 +303,15 @@ def main() -> None:
     ap.add_argument("--n-hard", type=int, default=40, help="docs per hard-negative family")
     ap.add_argument("--n-easy", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
-    args = ap.parse_args()
-    ngram = NGramConfig(
-        ngram_length=NGRAM_LENGTH, overlap_threshold=OVERLAP_THRESHOLD, paragraph_delimiter=PARAGRAPH_DELIMITER
+    ap.add_argument(
+        "--delimiter",
+        default=None,
+        help=r"paragraph delimiter override (backslash-escaped, e.g. '\n' per-line or '\n\n' true-paragraph); "
+        f"default is the production {PARAGRAPH_DELIMITER!r}",
     )
+    args = ap.parse_args()
+    delimiter = args.delimiter.encode().decode("unicode_escape") if args.delimiter else PARAGRAPH_DELIMITER
+    ngram = NGramConfig(ngram_length=NGRAM_LENGTH, overlap_threshold=OVERLAP_THRESHOLD, paragraph_delimiter=delimiter)
 
     eval_root = f"{marin_prefix()}/{_EVALS_RELATIVE}"
     eval_files = list(_discover_eval_files([eval_root], DECON_EXCLUDED_EVAL_TASKS))
@@ -358,7 +363,7 @@ def main() -> None:
         "arm_a_no_filter": metrics_a,
         "arm_b_df_filter": metrics_b,
         "config": {
-            "paragraph_delimiter": PARAGRAPH_DELIMITER,
+            "paragraph_delimiter": delimiter,
             "ngram_length": NGRAM_LENGTH,
             "n_docs": len(docs),
             "df_common_frac": DF_COMMON_FRAC,
@@ -369,7 +374,7 @@ def main() -> None:
     ofs, opath = url_to_fs(args.out)
     with ofs.open(opath, "w") as fh:
         json.dump(metrics, fh, indent=2)
-    _log_comparison(metrics_a, metrics_b, dropped.n_dropped)
+    _log_comparison(metrics_a, metrics_b, dropped.n_dropped, delimiter)
     logger.info("wrote %s", args.out)
 
 
