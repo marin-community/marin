@@ -2005,3 +2005,18 @@ author: dlwh
   - Keep the flag as an optional small median improvement, but do not stack speculative scheduler flags without profile evidence. Retain the m256 unflagged result (`18.2583` mean) as the headline best.
 - Next action:
   - Preserve the bulk AllGather/grouped-GEMM/ReduceScatter transport and target its large zero/scatter dispatch and combine fusions. Require full output/overflow/gradient parity and a reduced H100 gate before another exact run.
+
+### 2026-07-11 02:14 PDT - bounded standalone TVM-FFI reproducer
+- Hypothesis: Moving the direct-JAX probe behind a parent supervisor and making the known fsdp3 failure the zero-argument default will produce an upstream-ready artifact that terminates deterministically without requiring Marin, Levanter, or JaxPP.
+- Commit Hash: `a7684fa8d9` (`[grug] Bound the QuACK TVM-FFI reproducer`).
+- Commands:
+  - Failing case: `CUDA_VISIBLE_DEVICES=0,1,2 XLA_PYTHON_CLIENT_MEM_FRACTION=0.30 python -u experiments/grug/moe/repro_jaxpp_quack_minimal.py --timeout 30 --stack-after 10` under `/dlwh/quack-repro-bounded-hang-fsdp3-20260711` on three RNO2A H100s.
+  - Passing control: `CUDA_VISIBLE_DEVICES=0,1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.30 python -u experiments/grug/moe/repro_jaxpp_quack_minimal.py --fsdp 2 --experts 2 --timeout 30 --stack-after 10` under `/dlwh/quack-repro-bounded-pass-fsdp2-20260711` on two RNO2A H100s.
+- Results:
+  - The fsdp2 control returned from `direct_eval` in `2.3943s`, emitted `verdict=pass`, and exited 0.
+  - The fsdp3 case remained in `jax/_src/interpreters/pxla.py:388` during both 10-second stack dumps, emitted `watchdog_timeout` and `verdict=hang` at 30 seconds, and exited 124. Both Iris jobs are terminal.
+  - The script now defaults to direct JAX at experts3/tokens-per-expert1/dims8x8/fsdp3, lazily imports JaxPP only for the optional MPMD control, verifies JAX/JAXLIB/QuACK/TVM-FFI versions, and emits a stable pass/hang/error verdict. The adjacent README pins the tested Python packages and JaxPP revision and documents both commands and external CUDA/H100 prerequisites.
+- Interpretation:
+  - The reproducer is self-contained below the Marin stack and safely bounded for upstream triage. The validated boundary is unchanged: fsdp2 passes and fsdp3 hangs, so JaxPP is not required to trigger the concurrent shared-handler defect.
+- Next action:
+  - Keep #7110 as the Marin tracking issue and package this commit for human-selected upstream filing; do not file it upstream automatically.
