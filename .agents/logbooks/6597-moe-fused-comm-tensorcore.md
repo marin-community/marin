@@ -3764,3 +3764,8 @@ lowering before any kernel ran because indexing `y[0, 0, 0]` collapsed the
 source-sharded dimension to size one. The corrected diagnostic keeps the
 source axis as `y[:, 0, 0]` and adds the resulting per-source zero to
 `dy[:, 0, 0]`; this requires no collective and preserves the sharding.
+
+The corrected-slice retry `/dlwh/mlp-stop-after-w2b-seq-49f7` also stopped in
+lowering: JAX's scatter update requested an unsharded `[8]` update from the
+source-sharded `[8@expert]` zero. The next retry uses a shard-preserving
+broadcasted add over `dy`, avoiding scatter lowering entirely.

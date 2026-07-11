@@ -4475,7 +4475,7 @@ def _mode_callable(
     def semantic_fused_mlp_dy_after_forward(inputs: SemanticBenchInputs, y: Array) -> Array:
         forward_done = jax.lax.optimization_barrier(y[:, 0, 0].astype(jnp.float32))
         forward_zero = forward_done - jax.lax.optimization_barrier(forward_done)
-        return inputs.dy.at[:, 0, 0].add(forward_zero.astype(inputs.dy.dtype))
+        return inputs.dy + forward_zero[:, None, None].astype(inputs.dy.dtype)
 
     def semantic_fused_mlp_stop_after_w2_backward_pallas(inputs: SemanticBenchInputs):
         send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
