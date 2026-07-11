@@ -2185,3 +2185,37 @@ small speedup, but it removes owner/helper handoff and proves that approximately
 current candidate. Next isolate its two-buffer send scope: two B64xK256 SMEM
 tiles consume 64 KiB per producer CTA and may reduce co-resident WGMMA work;
 compare against one-buffer sequential sends before integrating the candidate.
+
+## 2026-07-10 FUSED-MOE-075 - Direct W13 helps forward but loses aggregate objective
+
+The one-buffer 12/20 variant at `6bdeffd5cf` measured `26.056364`,
+`25.863272`, and `25.753976 ms`, with median `25.863272 ms` and `66.425737`
+useful TFLOP/s/rank. It is indistinguishable from and 0.03% slower than the
+two-buffer `25.855658 ms` result. Commit `a6ab528f84` reverted the one-buffer
+variant; the async send overlap repays its second 32 KiB producer tile.
+
+Job `/dlwh/bench-semantic-fused-a6ab-integrated-20260710-2145` then measured
+the two-buffer 12/20 schedule through the integrated boundary:
+
+| Mode | Times (ms) | Median ms | Useful TFLOP/s/rank | Prior median ms |
+|---|---|---:|---:|---:|
+| forward | 48.740140, 48.517199, 48.682463 | 48.682463 | 52.962040 | 49.051833 |
+| fwd+bwd | 243.649039, 243.081268, 244.860232 | 243.649039 | 31.746350 | 242.802626 |
+
+Forward alone improves 0.75%, but fwd+bwd regresses 0.35%. A higher-confidence
+fwd+bwd-only job,
+`/dlwh/bench-semantic-fused-a6ab-fwd-bwd-repeat5-20260710-2150`, used two
+warmups, five timed steps, and five repeat runs. Times were `244.726842`,
+`245.273243`, `245.682916`, `244.498768`, and `244.382273 ms`; median was
+`244.726842 ms`, `31.606536` useful TFLOP/s/rank. This is 0.79% slower than the
+first complete selected-boundary baseline. All integrated runs had zero drops
+and metadata overflows.
+
+The project target is aggregate fwd+bwd throughput, so the direct producer
+series is rejected despite its small forward-only win. Commits `b37f188355`,
+`e067d9f2cf`, and `1f14e70fff` revert the 12/20, 8/24, and direct-producer
+schedule commits, respectively. The selected W13 path returns to two chunk
+owners + ten gather helpers + twenty WGMMA consumers. Future W13 work must make
+the raw gather itself cheaper or more coalesced; redistributing the same gather
+work among persistent CTAs has now been bracketed and does not improve the
+aggregate objective.
