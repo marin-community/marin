@@ -8,11 +8,11 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from time import monotonic
+from typing import Literal
 
 import anyio
 import httpx
-from levanter.inference.openai_protocol import CompletionRequest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -20,11 +20,7 @@ from starlette.routing import Route
 
 from marin.inference.quick_serve_dashboard import bind_serving_socket, serve_app_background
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm import (
-    DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT,
-    BrokeredVllmSystemConfig,
-    start_iris_brokered_vllm,
-)
+from marin.inference.vllm import BrokeredVllmSystemConfig, start_iris_brokered_vllm
 
 DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 20
 DEFAULT_LOGIT_MIXING_SERVER_START_TIMEOUT = 10.0
@@ -44,39 +40,55 @@ class LogitMixingBrokeredVllmConfig:
     teacher: BrokeredVllmSystemConfig
     student: BrokeredVllmSystemConfig
     alpha: float
-    tokenizer: str
+    request_timeout_seconds: float
     model: str = "logit-mix"
-    request_timeout_seconds: float = DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT.total_seconds()
     top_logprobs: int = DEFAULT_LOGIT_MIXING_TOP_LOGPROBS
     server: LogitMixingServerConfig = field(default_factory=LogitMixingServerConfig)
 
     def __post_init__(self) -> None:
-        if not 0 <= self.alpha <= 1:
-            raise ValueError(f"alpha must be in [0, 1]; got {self.alpha}.")
+        if not 0 < self.alpha < 1:
+            raise ValueError(f"alpha must be in (0, 1); got {self.alpha}.")
         if not 1 <= self.top_logprobs <= DEFAULT_LOGIT_MIXING_TOP_LOGPROBS:
             raise ValueError(f"top_logprobs must be in [1, {DEFAULT_LOGIT_MIXING_TOP_LOGPROBS}].")
-        if self.request_timeout_seconds <= 0:
-            raise ValueError("request_timeout_seconds must be positive.")
+        component_timeout = max(self.teacher.proxy.request_timeout_seconds, self.student.proxy.request_timeout_seconds)
+        if self.request_timeout_seconds <= component_timeout:
+            raise ValueError("request_timeout_seconds must exceed the teacher and student proxy request timeouts.")
         if self.server.start_timeout_seconds <= 0:
             raise ValueError("server.start_timeout_seconds must be positive.")
-        component_tokenizers = {tokenizer for tokenizer in (self.teacher.tokenizer, self.student.tokenizer) if tokenizer}
-        if component_tokenizers - {self.tokenizer}:
-            raise ValueError("tokenizer must match the teacher and student tokenizer.")
+        if self.teacher.tokenizer is None or self.teacher.tokenizer != self.student.tokenizer:
+            raise ValueError("teacher and student must use the same configured tokenizer.")
 
 
-@dataclass(frozen=True)
-class _GenerationRequest:
+class _GenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
     prompt: str
-    max_tokens: int
-    temperature: float
-    top_p: float
-    stop: tuple[str, ...]
-    seed: int | None
+    max_tokens: int = Field(default=1024, ge=0, strict=True)
+    temperature: float = Field(default=1.0, ge=0)
+    top_p: float = Field(default=1.0, gt=0, le=1)
+    stop: tuple[str, ...] = ()
+    seed: int | None = None
+    n: Literal[1] | None = None
+    echo: Literal[False] | None = None
+    logprobs: None = None
+    stream: Literal[False] | None = None
 
+    @field_validator("top_p", mode="before")
+    @classmethod
+    def _normalize_top_p(cls, top_p: object) -> object:
+        return 1.0 if top_p is None else top_p
 
-@dataclass(frozen=True)
-class _UpstreamStep:
-    top_logprobs: Mapping[str, float]
+    @field_validator("stop", mode="before")
+    @classmethod
+    def _normalize_stop(cls, stop: object) -> object:
+        if stop is None:
+            return ()
+        if isinstance(stop, str):
+            return (stop,) if stop else ()
+        if isinstance(stop, list | tuple):
+            return tuple(item for item in stop if item)
+        return stop
 
 
 class LogitMixingService:
@@ -94,6 +106,10 @@ class LogitMixingService:
         top_logprobs: int,
         clock: Callable[[], float] = monotonic,
     ) -> None:
+        if not 0 < alpha < 1:
+            raise ValueError(f"alpha must be in (0, 1); got {alpha}.")
+        if teacher.tokenizer != student.tokenizer:
+            raise ValueError("teacher and student must use the same tokenizer.")
         self._client = client
         self._teacher = teacher
         self._student = student
@@ -120,6 +136,14 @@ class LogitMixingService:
             return JSONResponse({"error": {"message": str(exc)}}, status_code=400)
         try:
             text, finish_reason = self._generate(generation)
+        except httpx.HTTPStatusError as exc:
+            try:
+                payload = exc.response.json()
+            except ValueError:
+                payload = {"error": {"message": str(exc)}}
+            retry_after = exc.response.headers.get("Retry-After")
+            headers = {"Retry-After": retry_after} if retry_after is not None else None
+            return JSONResponse(payload, status_code=exc.response.status_code, headers=headers)
         except httpx.TimeoutException:
             return JSONResponse({"error": {"message": "logit mixing request timed out"}}, status_code=504)
         except (httpx.HTTPError, ValueError) as exc:
@@ -134,24 +158,12 @@ class LogitMixingService:
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             for _ in range(request.max_tokens):
-                if 0 < self._alpha < 1:
-                    teacher_future = executor.submit(self._upstream_step, self._teacher.endpoint, current_text, deadline)
-                    student = self._upstream_step(self._student.endpoint, current_text, deadline)
-                    teacher = teacher_future.result()
-                else:
-                    teacher = (
-                        self._upstream_step(self._teacher.endpoint, current_text, deadline) if self._alpha else None
-                    )
-                    student = (
-                        self._upstream_step(self._student.endpoint, current_text, deadline) if self._alpha < 1 else None
-                    )
+                teacher_future = executor.submit(self._upstream_step, self._teacher.endpoint, current_text, deadline)
+                student = self._upstream_step(self._student.endpoint, current_text, deadline)
+                teacher = teacher_future.result()
                 if self._clock() >= deadline:
                     raise httpx.TimeoutException("logit mixing request deadline exceeded")
-                mixed = _mix_top_logprobs(
-                    {} if teacher is None else teacher.top_logprobs,
-                    {} if student is None else student.top_logprobs,
-                    alpha=self._alpha,
-                )
+                mixed = _mix_scores(teacher, student, alpha=self._alpha)
                 if not mixed:
                     raise ValueError("upstream completions returned no top logprobs")
                 token = _sample_token(mixed, temperature=request.temperature, top_p=request.top_p, rng=rng)
@@ -168,7 +180,7 @@ class LogitMixingService:
         endpoint: OpenAIEndpoint,
         prompt: str,
         deadline: float,
-    ) -> _UpstreamStep:
+    ) -> dict[str, float]:
         remaining = deadline - self._clock()
         if remaining <= 0:
             raise httpx.TimeoutException("logit mixing request deadline exceeded")
@@ -187,7 +199,7 @@ class LogitMixingService:
             timeout=remaining,
         )
         response.raise_for_status()
-        return _upstream_step(response.json())
+        return _top_logprobs(response.json())
 
 
 @contextlib.contextmanager
@@ -196,14 +208,13 @@ def serve_logit_mixing_model(
     teacher: RunningModel,
     student: RunningModel,
     model: str,
-    tokenizer: str | None,
     alpha: float,
     request_timeout_seconds: float,
     top_logprobs: int = DEFAULT_LOGIT_MIXING_TOP_LOGPROBS,
     server: LogitMixingServerConfig = LogitMixingServerConfig(),
     clock: Callable[[], float] = monotonic,
 ) -> Iterator[RunningModel]:
-    """Serve an OpenAI-compatible logit-mixed completion model."""
+    """Serve a logit-mixed subset of the OpenAI completions API."""
 
     with (
         bind_serving_socket(server.host, server.port) as sock,
@@ -223,7 +234,7 @@ def serve_logit_mixing_model(
             host, port = sock.getsockname()[:2]
             yield RunningModel(
                 endpoint=OpenAIEndpoint(base_url=f"http://{host}:{port}/v1", model=model),
-                tokenizer=tokenizer,
+                tokenizer=teacher.tokenizer,
             )
 
 
@@ -238,7 +249,6 @@ def start_iris_logit_mixing_brokered_vllm(config: LogitMixingBrokeredVllmConfig)
             teacher=teacher,
             student=student,
             model=config.model,
-            tokenizer=config.tokenizer,
             alpha=config.alpha,
             request_timeout_seconds=config.request_timeout_seconds,
             top_logprobs=config.top_logprobs,
@@ -249,64 +259,17 @@ def start_iris_logit_mixing_brokered_vllm(config: LogitMixingBrokeredVllmConfig)
 
 
 def _generation_request(raw_payload: object, model: str) -> _GenerationRequest:
-    if not isinstance(raw_payload, dict):
-        raise ValueError("completion request must be an object")
     try:
-        payload = CompletionRequest.model_validate(raw_payload)
+        payload = _GenerationRequest.model_validate(raw_payload)
     except ValidationError as exc:
         raise ValueError("invalid completion request") from exc
 
     if payload.model != model:
         raise ValueError(f"completion model must be {model!r}")
-    if not isinstance(payload.prompt, str):
-        raise ValueError("completion prompt must be a string")
-    if payload.echo:
-        raise ValueError("logit mixing generation does not support echo=true")
-    if payload.n not in {None, 1}:
-        raise ValueError("logit mixing generation requires n=1")
-    if payload.stream:
-        raise ValueError("logit mixing generation does not support streaming")
-    if payload.logprobs is not None:
-        raise ValueError("logit mixing generation does not return response logprobs")
-    supported_fields = {
-        "echo",
-        "logprobs",
-        "max_new_tokens",
-        "max_tokens",
-        "model",
-        "n",
-        "prompt",
-        "seed",
-        "stop",
-        "stream",
-        "temperature",
-        "top_p",
-    }
-    unsupported = sorted(raw_payload.keys() - supported_fields)
-    if unsupported:
-        raise ValueError(f"unsupported completion fields: {', '.join(unsupported)}")
-    max_tokens = raw_payload.get("max_new_tokens", payload.max_tokens)
-    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 0:
-        raise ValueError("max_tokens must be non-negative")
-    if payload.temperature < 0:
-        raise ValueError("temperature must be non-negative")
-    top_p = 1.0 if payload.top_p is None else payload.top_p
-    if not 0 < top_p <= 1:
-        raise ValueError("top_p must be in (0, 1]")
-    stop = (payload.stop,) if isinstance(payload.stop, str) else tuple(payload.stop or ())
-    stop = tuple(item for item in stop if item)
-
-    return _GenerationRequest(
-        prompt=payload.prompt,
-        max_tokens=max_tokens,
-        temperature=payload.temperature,
-        top_p=top_p,
-        stop=stop,
-        seed=payload.seed,
-    )
+    return payload
 
 
-def _upstream_step(payload: object) -> _UpstreamStep:
+def _top_logprobs(payload: object) -> dict[str, float]:
     if not isinstance(payload, dict):
         raise ValueError("upstream completion response must be an object")
     choices = payload.get("choices")
@@ -321,7 +284,7 @@ def _upstream_step(payload: object) -> _UpstreamStep:
     values = top_logprobs[-1]
     if any(not isinstance(value, int | float) or isinstance(value, bool) for value in values.values()):
         raise ValueError("upstream top_logprobs must be numeric")
-    return _UpstreamStep({str(token): float(value) for token, value in values.items()})
+    return {str(token): float(value) for token, value in values.items()}
 
 
 def _completion_payload(model: str, text: str, finish_reason: str) -> dict[str, object]:
@@ -333,35 +296,22 @@ def _completion_payload(model: str, text: str, finish_reason: str) -> dict[str, 
     }
 
 
-def _mix_top_logprobs(
+def _mix_scores(
     teacher: Mapping[str, float],
     student: Mapping[str, float],
     *,
     alpha: float,
 ) -> dict[str, float]:
-    if alpha == 1:
-        scores = dict(teacher)
-    elif alpha == 0:
-        scores = dict(student)
-    elif not teacher or not student:
+    if not teacher or not student:
         return {}
-    else:
-        teacher_floor = min(teacher.values())
-        student_floor = min(student.values())
-        scores = {
-            token: alpha * teacher.get(token, teacher_floor) + (1 - alpha) * student.get(token, student_floor)
-            for token in teacher.keys() | student.keys()
-        }
+    teacher_floor = min(teacher.values())
+    student_floor = min(student.values())
+    scores = {
+        token: alpha * teacher.get(token, teacher_floor) + (1 - alpha) * student.get(token, student_floor)
+        for token in teacher.keys() | student.keys()
+    }
     finite_scores = {token: score for token, score in scores.items() if math.isfinite(score)}
-    if not finite_scores:
-        return {}
-    normalizer = _logsumexp(finite_scores.values())
-    return dict(
-        sorted(
-            ((token, score - normalizer) for token, score in finite_scores.items()),
-            key=lambda item: (-item[1], item[0]),
-        )
-    )
+    return dict(sorted(finite_scores.items(), key=lambda item: (-item[1], item[0])))
 
 
 def _sample_token(
@@ -393,8 +343,6 @@ def _sample_token(
 
 
 def _text_before_stop(text: str, stop: tuple[str, ...]) -> str | None:
-    """Return text before the earliest stop, or None when no stop matched."""
-
     positions = [position for item in stop if (position := text.find(item)) >= 0]
     return text[: min(positions)] if positions else None
 

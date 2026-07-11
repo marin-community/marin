@@ -25,8 +25,9 @@ class OpenAIStubState:
     requests: list[OpenAIStubRequest] = field(default_factory=list)
     # Lets tests keep selected prompt requests in flight until the event is set.
     prompt_pauses: Mapping[str, threading.Event] = field(default_factory=dict)
-    completion_callbacks: Mapping[str, Callable[[], None]] = field(default_factory=dict)
+    before_completion: Callable[[str], None] | None = None
     completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None
+    completion_status_code: int = 200
 
 
 @dataclass
@@ -84,7 +85,19 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         if not isinstance(prompt, str):
             self._write_json(400, {"error": "prompt must be a string"})
             return
-        self._before_completion(prompt)
+        pause = self._stub_server.state.prompt_pauses.get(prompt)
+        if pause is not None:
+            pause.wait()
+        if self._stub_server.state.before_completion is not None:
+            self._stub_server.state.before_completion(prompt)
+        if self._stub_server.state.completion_status_code != 200:
+            headers = {"Retry-After": "1"} if self._stub_server.state.completion_status_code == 429 else None
+            self._write_json(
+                self._stub_server.state.completion_status_code,
+                {"error": "stub completion error"},
+                headers=headers,
+            )
+            return
         if self._stub_server.state.completion_top_logprobs is not None:
             self._handle_logprob_completion(prompt)
             return
@@ -103,14 +116,6 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
             top_logprobs=[{token: score} for token, score in zip(tokens, token_logprobs, strict=True)],
             offsets=offsets,
         )
-
-    def _before_completion(self, prompt: str) -> None:
-        pause = self._stub_server.state.prompt_pauses.get(prompt)
-        if pause is not None:
-            pause.wait()
-        callback = self._stub_server.state.completion_callbacks.get(prompt)
-        if callback is not None:
-            callback()
 
     def _handle_logprob_completion(self, prompt: str) -> None:
         top_logprobs = self._stub_server.state.completion_top_logprobs.get(prompt)
@@ -187,11 +192,19 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers["Content-Length"])
         return json.loads(self.rfile.read(content_length))
 
-    def _write_json(self, status: int, payload: dict[str, object]) -> None:
+    def _write_json(
+        self,
+        status: int,
+        payload: dict[str, object],
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -201,18 +214,20 @@ def serve_deterministic_openai_stub(
     *,
     model: str = "gpt2",
     prompt_pauses: Mapping[str, threading.Event] | None = None,
-    completion_callbacks: Mapping[str, Callable[[], None]] | None = None,
+    before_completion: Callable[[str], None] | None = None,
     completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None,
+    completion_status_code: int = 200,
 ) -> Iterator[DeterministicOpenAIStub]:
     state = OpenAIStubState(
         prompt_pauses={} if prompt_pauses is None else prompt_pauses,
-        completion_callbacks={} if completion_callbacks is None else completion_callbacks,
+        before_completion=before_completion,
         completion_top_logprobs=completion_top_logprobs,
+        completion_status_code=completion_status_code,
     )
     server = _DeterministicOpenAIServer(("127.0.0.1", 0), _DeterministicOpenAIHandler)
     server.model = model
     server.state = state
-    thread = threading.Thread(target=server.serve_forever)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
     thread.start()
     try:
         yield DeterministicOpenAIStub(base_url=f"http://127.0.0.1:{server.server_port}/v1", model=model, state=state)
