@@ -27,7 +27,6 @@ class OpenAIStubState:
     prompt_pauses: Mapping[str, threading.Event] = field(default_factory=dict)
     completion_callbacks: Mapping[str, Callable[[], None]] = field(default_factory=dict)
     completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None
-    completion_finish_reasons: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -148,7 +147,7 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
                             "top_logprobs": [dict(top_logprobs)],
                             "text_offset": [len(prompt)],
                         },
-                        "finish_reason": self._stub_server.state.completion_finish_reasons.get(prompt, "length"),
+                        "finish_reason": "length",
                     }
                 ],
             },
@@ -200,13 +199,11 @@ def serve_deterministic_openai_stub(
     prompt_pauses: Mapping[str, threading.Event] | None = None,
     completion_callbacks: Mapping[str, Callable[[], None]] | None = None,
     completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None,
-    completion_finish_reasons: Mapping[str, str] | None = None,
 ) -> Iterator[DeterministicOpenAIStub]:
     state = OpenAIStubState(
         prompt_pauses={} if prompt_pauses is None else prompt_pauses,
         completion_callbacks={} if completion_callbacks is None else completion_callbacks,
         completion_top_logprobs=completion_top_logprobs,
-        completion_finish_reasons={} if completion_finish_reasons is None else completion_finish_reasons,
     )
     server = _DeterministicOpenAIServer(("127.0.0.1", 0), _DeterministicOpenAIHandler)
     server.model = model

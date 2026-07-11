@@ -17,9 +17,10 @@ from rigging.timing import ExponentialBackoff
 from tests.evals.openai_stub import serve_deterministic_openai_stub
 
 REQUEST_TIMEOUT = 5
-EVALCHEMY_REQUEST = MappingProxyType(
+MIXED_MODEL = "mixed"
+GENERATION_REQUEST = MappingProxyType(
     {
-        "model": "mixed",
+        "model": MIXED_MODEL,
         "prompt": "A",
         "max_tokens": 256,
         "max_new_tokens": 1,
@@ -31,7 +32,7 @@ EVALCHEMY_REQUEST = MappingProxyType(
 )
 
 
-def test_logit_mixing_evalchemy_request_selects_mixed_token() -> None:
+def test_logit_mixing_generation_selects_mixed_token() -> None:
     response = _mixed_completion(
         teacher={"A": {" T": -0.1, " C": -0.2, " S": -5.0}},
         student={"A": {" S": -0.1, " C": -0.2, " T": -5.0}},
@@ -50,7 +51,7 @@ def test_logit_mixing_detects_stop_across_generated_tokens() -> None:
     response = _mixed_completion(
         teacher=top_logprobs,
         student=top_logprobs,
-        payload={**EVALCHEMY_REQUEST, "max_new_tokens": 2, "stop": [" B C"]},
+        payload={**GENERATION_REQUEST, "max_new_tokens": 2, "stop": [" B C"]},
     )
 
     assert response.status_code == 200
@@ -69,12 +70,12 @@ def test_logit_mixing_alpha_zero_does_not_call_teacher() -> None:
     assert response.json()["choices"][0]["text"] == " B"
 
 
-def test_logit_mixing_samples_from_mixed_distribution_with_evalchemy_seed() -> None:
+def test_logit_mixing_samples_from_mixed_distribution_with_seed() -> None:
     top_logprobs = {"A": {" B": -0.1, " C": -0.2}}
     response = _mixed_completion(
         teacher=top_logprobs,
         student=top_logprobs,
-        payload={**EVALCHEMY_REQUEST, "temperature": 1},
+        payload={**GENERATION_REQUEST, "temperature": 1},
     )
 
     assert response.status_code == 200
@@ -98,11 +99,11 @@ def test_logit_mixing_enforces_end_to_end_timeout() -> None:
 
 
 @pytest.mark.parametrize(("field", "value"), [("echo", True), ("logprobs", 1), ("stream", True)])
-def test_logit_mixing_rejects_non_evalchemy_generation_fields(field: str, value: object) -> None:
+def test_logit_mixing_rejects_unsupported_generation_fields(field: str, value: object) -> None:
     response = _mixed_completion(
         teacher={"A": {" B": -0.1}},
         student={"A": {" B": -0.1}},
-        payload={**EVALCHEMY_REQUEST, field: value},
+        payload={**GENERATION_REQUEST, field: value},
     )
 
     assert response.status_code == 400
@@ -112,7 +113,7 @@ def _mixed_completion(
     *,
     teacher: Mapping[str, Mapping[str, float]],
     student: Mapping[str, Mapping[str, float]],
-    payload: Mapping[str, object] = EVALCHEMY_REQUEST,
+    payload: Mapping[str, object] = GENERATION_REQUEST,
     alpha: float = 0.5,
     teacher_callbacks: Mapping[str, Callable[[], None]] | None = None,
     clock: Callable[[], float] = monotonic,
@@ -129,7 +130,7 @@ def _mixed_completion(
         handler = LogitMixingInferenceHandler(
             teacher=RunningModel(endpoint=OpenAIEndpoint(teacher_stub.base_url, teacher_stub.model)),
             student=RunningModel(endpoint=OpenAIEndpoint(student_stub.base_url, student_stub.model)),
-            model="mixed",
+            model=MIXED_MODEL,
             alpha=alpha,
             request_timeout_seconds=REQUEST_TIMEOUT,
             top_logprobs=8,
@@ -139,7 +140,7 @@ def _mixed_completion(
         with (
             serve_inference_proxy(
                 broker=broker,
-                model="mixed",
+                model=MIXED_MODEL,
                 request_timeout_seconds=REQUEST_TIMEOUT,
                 readiness_timeout_seconds=REQUEST_TIMEOUT,
                 max_pending_requests=8,

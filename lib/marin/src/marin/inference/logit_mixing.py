@@ -34,20 +34,6 @@ from marin.inference.vllm import (
 from marin.inference.worker import InferenceWorker, inference_error_response, run_inference_worker
 
 DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 20
-EVALCHEMY_COMPLETION_FIELDS = {
-    "echo",
-    "logprobs",
-    "max_new_tokens",
-    "max_tokens",
-    "model",
-    "n",
-    "prompt",
-    "seed",
-    "stop",
-    "stream",
-    "temperature",
-    "top_p",
-}
 
 
 @dataclass(frozen=True)
@@ -99,7 +85,7 @@ class _UpstreamStep:
 
 
 class LogitMixingInferenceHandler:
-    """Handle Evalchemy-style text generation by mixing two model distributions."""
+    """Handle text generation by mixing two model distributions."""
 
     def __init__(
         self,
@@ -241,14 +227,28 @@ def _generation_request(request: InferenceRequest, model: str) -> _GenerationReq
     if not isinstance(payload.prompt, str):
         raise ValueError("completion prompt must be a string")
     if payload.echo:
-        raise ValueError("Evalchemy generation does not support echo=true")
+        raise ValueError("logit mixing generation does not support echo=true")
     if payload.n not in {None, 1}:
-        raise ValueError("Evalchemy generation requires n=1")
+        raise ValueError("logit mixing generation requires n=1")
     if payload.stream:
-        raise ValueError("Evalchemy generation does not support streaming")
+        raise ValueError("logit mixing generation does not support streaming")
     if payload.logprobs is not None:
-        raise ValueError("Evalchemy generation does not request response logprobs")
-    unsupported = sorted(raw_payload.keys() - EVALCHEMY_COMPLETION_FIELDS)
+        raise ValueError("logit mixing generation does not return response logprobs")
+    supported_fields = {
+        "echo",
+        "logprobs",
+        "max_new_tokens",
+        "max_tokens",
+        "model",
+        "n",
+        "prompt",
+        "seed",
+        "stop",
+        "stream",
+        "temperature",
+        "top_p",
+    }
+    unsupported = sorted(raw_payload.keys() - supported_fields)
     if unsupported:
         raise ValueError(f"unsupported completion fields: {', '.join(unsupported)}")
     max_tokens = raw_payload.get("max_new_tokens", payload.max_tokens)
@@ -259,9 +259,10 @@ def _generation_request(request: InferenceRequest, model: str) -> _GenerationReq
     top_p = 1.0 if payload.top_p is None else payload.top_p
     if not 0 < top_p <= 1:
         raise ValueError("top_p must be in (0, 1]")
-    stop = _stop_sequences(payload.stop)
+    stop = (payload.stop,) if isinstance(payload.stop, str) else tuple(payload.stop or ())
+    stop = tuple(item for item in stop if item)
     if not stop:
-        raise ValueError("Evalchemy generation requires a stop sequence")
+        raise ValueError("logit mixing generation requires a stop sequence")
 
     return _GenerationRequest(
         prompt=payload.prompt,
@@ -271,14 +272,6 @@ def _generation_request(request: InferenceRequest, model: str) -> _GenerationReq
         stop=stop,
         seed=0 if payload.seed is None else payload.seed,
     )
-
-
-def _stop_sequences(stop: str | list[str] | None) -> tuple[str, ...]:
-    if stop is None:
-        return ()
-    if isinstance(stop, str):
-        return (stop,) if stop else ()
-    return tuple(item for item in stop if item)
 
 
 def _upstream_step(payload: object) -> _UpstreamStep:
