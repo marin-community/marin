@@ -77,9 +77,13 @@ from experiments.datakit.cluster.quality.fast_transformer.scorer import (
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 512
-# Scoring is I/O-bound (workers sit ~25% CPU streaming parquet) and holds ~1.1 GB
-# resident, so a small footprint packs many workers per node.
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
+# Scoring is I/O-bound (workers sit ~25% CPU streaming parquet). load_file reads a
+# parquet row group at a time and materializes it to Python dicts, so peak memory
+# tracks the largest row group, not the file: a file of long docs (books/pdfs) can
+# spike to many GB. Packing is CPU-bound (cpu=2 -> <=64 workers/node vs 2 TB RAM), so
+# the memory headroom is effectively free -- give it enough that a fat row group of
+# long documents can't OOM the worker (4g did, on the 100B corpus).
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="24g")
 MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 SAMPLE_TEXT_CHARS = 4_000  # text kept per sampled doc for the report spot-check
 DEFAULT_SAMPLE_PCT = 0.02  # fraction of each shard emitted (with text) as the samples side output
