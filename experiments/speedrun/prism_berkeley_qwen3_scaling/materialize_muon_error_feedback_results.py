@@ -225,7 +225,7 @@ def build_payload(runs: list[SweepRun]) -> dict[str, Any]:
                 "context_only": True,
                 "bpb": 1.1702665090560913,
                 "learning_rate": 0.016,
-                "url": ("https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_prism_berkeley_o5_4096_lrx1-2fd229"),
+                "url": "https://wandb.ai/understanding-sam/marin/runs/qwen3_130m_prism_berkeley_o5_4096_lrx1-2fd229",
                 "comparison_caveat": "Fresh in-sweep Muon outperforms this run at the shared LR of 0.016.",
             },
         },
