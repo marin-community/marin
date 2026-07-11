@@ -861,7 +861,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     decrement=False,
                                 )
 
-                                def _smem_scope(gate_smem, up_smem, h_smem, dy_smem, barrier) -> None:
+                                def _smem_scope(gate_smem, up_smem, dy_smem, barrier) -> None:
                                     mgpu.copy_gmem_to_smem(
                                         z13_ref.at[
                                             expert,
@@ -899,19 +899,18 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                         barrier,
                                     )
                                     mgpu.barrier_wait(barrier)
-                                    h_smem[:, :] = (
+                                    gate_smem[:, :] = (
                                         jax.nn.silu(gate_smem[:, :].astype(jnp.float32))
                                         * up_smem[:, :].astype(jnp.float32)
                                     ).astype(dtype)
                                     mgpu.commit_smem()
-                                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(h_smem, (1, 0)), dy_smem)
+                                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(gate_smem, (1, 0)), dy_smem)
                                     mgpu.wgmma_wait(0)
 
                                 pl.run_scoped(
                                     _smem_scope,
                                     gate_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
                                     up_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    h_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
                                     dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
                                     barrier=mgpu.Barrier(num_arrivals=3),
                                 )
