@@ -36,11 +36,10 @@ WGMMA_TILE_M = 8
 # the complete producer -> {dX, dW} partial order in one co-resident grid below
 # the 132-SM H100 SXM target instead.
 PERSISTENT_BACKWARD_PROGRAMS = 128
-STAGING_PROGRAMS = 32
-COMBINE_PROGRAMS = 32
+STAGING_PROGRAMS = 64
 DX_PROGRAMS = 32
 DW_PROGRAMS = 32
-assert STAGING_PROGRAMS + COMBINE_PROGRAMS + DX_PROGRAMS + DW_PROGRAMS == PERSISTENT_BACKWARD_PROGRAMS
+assert STAGING_PROGRAMS + DX_PROGRAMS + DW_PROGRAMS == PERSISTENT_BACKWARD_PROGRAMS
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,12 +111,11 @@ class SourcePushSemanticFusedW13BackwardSchedule:
     token_blocks: int
     rounds: int
     staging_programs: int
-    combine_program_start: int
-    combine_programs: int
     dx_program_start: int
     dx_programs: int
     dw_program_start: int
     dw_programs: int
+    combine_programs: int
     active_combine_programs: int
     max_stage_readiness_signals: int
     compact_readiness_slots: int
@@ -170,7 +168,7 @@ def source_push_semantic_fused_w13_backward_schedule(
         raise ValueError(f"hidden tiles {hidden_tiles} exceed the resident combine group {STAGING_PROGRAMS}")
     block_jobs = ep_size * send_chunks_per_dst * config.compute_blocks_per_send
     token_blocks = (tokens_per_source + config.combine_token_block - 1) // config.combine_token_block
-    combine_programs = COMBINE_PROGRAMS
+    combine_programs = STAGING_PROGRAMS
     active_combine_programs = sum(
         min(token_blocks, (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles)
         for hidden_tile in range(hidden_tiles)
@@ -183,16 +181,15 @@ def source_push_semantic_fused_w13_backward_schedule(
         token_blocks=token_blocks,
         rounds=(send_chunks_per_dst + config.inbox_slots - 1) // config.inbox_slots,
         staging_programs=STAGING_PROGRAMS,
-        combine_program_start=STAGING_PROGRAMS,
-        combine_programs=COMBINE_PROGRAMS,
-        dx_program_start=STAGING_PROGRAMS + COMBINE_PROGRAMS,
+        dx_program_start=STAGING_PROGRAMS,
         dx_programs=DX_PROGRAMS,
-        dw_program_start=STAGING_PROGRAMS + COMBINE_PROGRAMS + DX_PROGRAMS,
+        dw_program_start=STAGING_PROGRAMS + DX_PROGRAMS,
         dw_programs=DW_PROGRAMS,
+        combine_programs=combine_programs,
         active_combine_programs=active_combine_programs,
         max_stage_readiness_signals=block_jobs * hidden_tiles,
         compact_readiness_slots=experts_per_rank * compact_m_blocks * hidden_tiles,
-        dx_readiness_signals=ep_size * send_chunks_per_dst * hidden_tiles,
+        dx_readiness_signals=ep_size * send_chunks_per_dst,
         readiness_waits=token_blocks * hidden_tiles * ep_size * config.inbox_slots,
     )
 
@@ -545,8 +542,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         compact_ready_sem = pl.get_global(
             mgpu.SemaphoreType.REGULAR((experts_per_rank, schedule.compact_m_blocks, hidden_tiles))
         )
-        dx_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, send_chunks_per_dst, hidden_tiles)))
-        ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots, hidden_tiles)))
+        dx_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, send_chunks_per_dst)))
+        ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
 
@@ -558,7 +555,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
             )
 
         @pl.when(worker < schedule.staging_programs)
-        def _stage_x() -> None:
+        def _stage_and_combine() -> None:
             producer = worker
             staging_jobs_per_peer = send_chunks_per_dst * config.compute_blocks_per_send * hidden_tiles
 
@@ -628,11 +625,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
             for destination_ordinal in range(ep_size):
                 _stage_peer(destination_ordinal)
 
-        @pl.when((worker >= schedule.combine_program_start) & (worker < schedule.dx_program_start))
-        def _combine_dx() -> None:
-            consumer = worker - schedule.combine_program_start
-            hidden_tile = consumer % hidden_tiles
-            consumer_lane = consumer // hidden_tiles
+            hidden_tile = producer % hidden_tiles
+            consumer_lane = producer // hidden_tiles
             consumers_for_tile = (schedule.combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
             hidden_start = hidden_tile * config.block_hidden
 
@@ -651,7 +645,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 @pl.when(required_generation > 0)
                                 def _wait_for_required_round() -> None:
                                     pl.semaphore_wait(
-                                        ready_sem.at[destination_ordinal, slot, hidden_tile],
+                                        ready_sem.at[destination_ordinal, slot],
                                         value=required_generation,
                                         decrement=False,
                                     )
@@ -779,20 +773,15 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                 acc_ref=mgpu.ACC((config.compute_m, config.block_hidden)),
                             )
 
-                        pl.semaphore_signal(dx_done_sem.at[static_source_ordinal, chunk, hidden_tile])
+                        pl.semaphore_signal(dx_done_sem.at[static_source_ordinal, chunk])
 
-                # Preserve cumulative slot generations independently for each hidden tile.
-                publish_jobs = config.inbox_slots * hidden_tiles
-
-                @pl.loop(0, math.ceil(publish_jobs / schedule.dx_programs))
+                # Preserve cumulative slot generations by publishing chunks in order.
+                @pl.loop(0, math.ceil(config.inbox_slots / schedule.dx_programs))
                 def _publish_dx_loop(iteration) -> None:
-                    publish_job = iteration * schedule.dx_programs + consumer
+                    slot = iteration * schedule.dx_programs + consumer
 
-                    @pl.when(publish_job < publish_jobs)
+                    @pl.when(slot < config.inbox_slots)
                     def _publish_owned_slot() -> None:
-                        slot = publish_job // hidden_tiles
-                        hidden_tile = publish_job % hidden_tiles
-
                         @pl.loop(0, schedule.rounds)
                         def _round_loop(round_index) -> None:
                             chunk = round_index * config.inbox_slots + slot
@@ -800,14 +789,14 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                             @pl.when(chunk < send_chunks_per_dst)
                             def _publish_chunk() -> None:
                                 pl.semaphore_wait(
-                                    dx_done_sem.at[static_source_ordinal, chunk, hidden_tile],
-                                    value=config.compute_blocks_per_send,
+                                    dx_done_sem.at[static_source_ordinal, chunk],
+                                    value=config.compute_blocks_per_send * hidden_tiles,
                                     decrement=False,
                                 )
                                 if static_source_ordinal == 0:
-                                    pl.semaphore_signal(ready_sem.at[0, slot, hidden_tile])
+                                    pl.semaphore_signal(ready_sem.at[0, slot])
                                 else:
-                                    _signal_remote(ready_sem, source, (destination_ordinal, slot, hidden_tile))
+                                    _signal_remote(ready_sem, source, (destination_ordinal, slot))
 
             for source_ordinal in range(ep_size):
                 _compute_source(source_ordinal)
