@@ -2748,6 +2748,74 @@ useful TFLOP/s/rank. The checksum difference independently means this variant
 would require a finite numerical comparison even if its timing were favorable.
 Per the bounded request, no retry or kernel edit was made.
 
+## 2026-07-11 FUSED-MOE-096 - Integrated comparison still fails backward VJP sharding
+
+Job `/dlwh/integrated-compare-45d6-20260711-0002` at `45d6402623`
+completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one of one task
+succeeded, and a 1m27.23s task duration. This was the single requested reduced
+H100x8 correctness run: EP8, T128/rank, H2560, I1280, E4/rank, top-k 2,
+capacity factor 4.0, random routing seed 0, bf16, zero warmups, one timed step,
+one repeat, and separate reference/Pallas compilation.
+
+Command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name integrated-compare-45d6-20260711-0002 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_mlp_forward_compare,semantic_fused_mlp_forward_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 45d6402623 --jsonl scratch/integrated-compare-45d6-20260711-0002.jsonl
+```
+
+The forward host comparison completed with finite outputs and matching route
+cardinality. The absolute error is large in isolation because the synthetic
+outputs have an expected absolute sum of `3.54325823985625e10`; the normalized
+metrics are scale `0.9994649892` and cosine similarity `0.9996123629`.
+
+| Forward host metric | Result |
+|---|---:|
+| `y_max_abs_diff` | 34816.0 |
+| `y_mean_abs_diff` | 121.29826354980469 |
+| `y_expected_abs_sum` | 35432582398.5625 |
+| `y_observed_abs_sum` | 35428997866.515625 |
+| `y_least_squares_scale` | 0.9994649892214961 |
+| `y_cosine_similarity` | 0.9996123629170338 |
+| `expected_y_nonfinite_error_count` | 0.0 |
+| `observed_y_nonfinite_error_count` | 0.0 |
+| `dropped_routes_error_count` | 0.0 |
+| candidate `dropped_routes` | 0 |
+| candidate `routing_dropped_routes` | 0 |
+| candidate `metadata_overflow_routes` | 0 |
+
+The forward diagnostic time was 57.320585 ms, 0.087853 useful TFLOP/s/rank,
+and 0.351412 rounded TFLOP/s/rank. It is a reduced-shape correctness diagnostic,
+not a target-shape performance result.
+
+The backward comparison failed while lowering the separately compiled
+reference and emitted no host metrics for `dx`, `d_route_weights`, `dw13`, or
+`dw2`. The first actionable failure remains the custom-VJP output sharding
+mismatch:
+
+```text
+ValueError: Custom VJP bwd rule must produce an output with the same type as the args tuple of the primal function, but at output[2] the bwd rule produced an output of type float32[8@expert,128,2] corresponding to an input of type float32[8,128,2]
+```
+
+Raw forward repeat row:
+
+```json
+{"backend":"gpu","compile_time":15.293175374856219,"config":{"capacity_factor":4.0,"dtype":"bfloat16","ep_size":8,"experts_per_rank":4,"hidden_dim":2560,"intermediate_dim":1280,"plan_builder":"jax","routing":"random","routing_seed":0,"rows_per_src_dst_capacity":128,"tokens_per_rank":128,"topk":2},"device_count":8,"device_type":"NVIDIA H100 80GB HBM3","dropped_routes":0,"dropped_routes_error_count":0.0,"error":null,"expected_y_nonfinite_error_count":0.0,"first_call_time":15.293175374856219,"first_run_time":2.129469515872188,"git_sha":"45d6402623","lower_compile_time":13.16370585898403,"metadata_overflow_routes":0,"mode":"semantic_fused_mlp_forward_compare","observed_y_nonfinite_error_count":0.0,"output_checksum":70861619200.0,"repeat_run":0,"repeat_runs":1,"rounded_tflops_per_rank":0.3514120617739505,"routing_dropped_routes":0,"row_type":"repeat","semantic_live_pairs":64,"semantic_masked_row_fraction":0.75,"semantic_rounded_rows":8192,"semantic_row_efficiency":0.25,"semantic_useful_rows":2048,"steady_state_time":0.05732058500871062,"useful_tflops_per_rank":0.08785301544348763,"y_cosine_similarity":0.9996123629170338,"y_expected_abs_sum":35432582398.5625,"y_least_squares_scale":0.9994649892214961,"y_max_abs_diff":34816.0,"y_mean_abs_diff":121.29826354980469,"y_observed_abs_sum":35428997866.515625}
+```
+
+Raw backward error row, with the traceback elided after its first actionable
+exception because it repeats the same type mismatch through the JIT boundary:
+
+```json
+{"compile_time":null,"dropped_routes":0,"error":"Custom VJP bwd rule must produce an output with the same type as the args tuple of the primal function, but at output[2] the bwd rule produced an output of type float32[8@expert,128,2] corresponding to an input of type float32[8,128,2]","error_message":"Custom VJP bwd rule must produce an output with the same type as the args tuple of the primal function, but at output[2] the bwd rule produced an output of type float32[8@expert,128,2] corresponding to an input of type float32[8,128,2]","error_type":"ValueError","git_sha":"45d6402623","metadata_overflow_routes":0,"mode":"semantic_fused_mlp_forward_backward_compare","routing_dropped_routes":0,"row_type":"error","steady_state_time":null}
+```
+
+Interpretation: the forward comparison now supplies useful normalized evidence
+and has no nonfinite or route-count errors, but the integrated fwd+bwd
+correctness gate remains unexecuted. The next fix must make the custom VJP
+return `d_route_weights` with the same replicated sharding/type as its primal
+argument at the reference boundary before rerunning this gate. No kernel or
+harness code was edited and no retry or duplicate H100 job was launched.
+
 ## 2026-07-10 FUSED-MOE-093 - Fully selected helper4 path reaches 57.1 useful TFLOP/s/rank
 
 Job `/dlwh/bench-semantic-integrated-helper4-selected-20260710-2400` at
