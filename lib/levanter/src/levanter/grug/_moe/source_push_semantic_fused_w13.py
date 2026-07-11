@@ -29,13 +29,6 @@ WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
 TOKEN_TRANSFER_ROWS = 128
-RAW_GATHER_HIDDEN_LAYOUT = mgpu.Layout.WG_STRIDED((256,), vec_size=2)
-RAW_GATHER_ROW_LAYOUT = mgpu.Layout.TILED(
-    mgpu.Tiling(((RAW_GATHER_ROWS,),)),
-    warp_dims=(mgpu.Replicated(4),),
-    lane_dims=(mgpu.Replicated(32),),
-    vector_dim=-1,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,33 +543,21 @@ def _make_source_push_semantic_fused_w13_kernel(
                                 token_barrier,
                             )
                             mgpu.barrier_wait(token_barrier)
-                            hidden_offsets = mgpu.layout_cast(
-                                jnp.arange(config.send_k, dtype=jnp.int32),
-                                RAW_GATHER_HIDDEN_LAYOUT,
-                            )
-                            hidden_offsets = k_start + hidden_offsets
-
                             for row_group in range(config.compute_m // RAW_GATHER_ROWS):
                                 row_start = row_group * RAW_GATHER_ROWS
-                                row_offsets = mgpu.layout_cast(
-                                    jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32),
-                                    RAW_GATHER_ROW_LAYOUT,
-                                )
-                                row_valid = row_start + row_offsets < valid_rows
-                                tokens = jnp.zeros_like(row_offsets)
                                 for row in range(RAW_GATHER_ROWS):
-                                    tokens = jnp.where(
-                                        row_offsets == row,
-                                        token_smem[row_start + row],
-                                        tokens,
+                                    output_row = row_start + row
+                                    row_valid = output_row < valid_rows
+                                    token = jnp.where(row_valid, token_smem[output_row], 0)
+                                    x_row = x_ref[
+                                        token,
+                                        pl.ds(k_start, config.send_k),
+                                    ]
+                                    tile_smem[output_row, :] = jnp.where(
+                                        row_valid,
+                                        x_row,
+                                        jnp.zeros((config.send_k,), dtype=dtype),
                                     )
-                                safe_tokens = jnp.where(row_valid, tokens, 0)
-                                x_tile = x_ref[safe_tokens[:, None], hidden_offsets[None, :]]
-                                tile_smem[pl.ds(row_start, RAW_GATHER_ROWS), :] = jnp.where(
-                                    row_valid[:, None],
-                                    x_tile,
-                                    jnp.zeros((RAW_GATHER_ROWS, config.send_k), dtype=dtype),
-                                )
 
                             mgpu.commit_smem()
                             if static_peer_ordinal == 0:

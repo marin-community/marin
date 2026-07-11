@@ -16,8 +16,6 @@ from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_
 from levanter.grug._moe.source_push_semantic_fused_w13 import (
     SourcePushSemanticFusedW13Config,
     SourcePushSemanticFusedW13Metadata,
-    RAW_GATHER_HIDDEN_LAYOUT,
-    RAW_GATHER_ROW_LAYOUT,
     RAW_GATHER_ROWS,
     TOKEN_TRANSFER_ROWS,
     _make_source_push_semantic_fused_w13_kernel,
@@ -141,25 +139,19 @@ def test_fused_w13_transport_rows_are_independent_from_compute_rows():
     assert config.compute_blocks_per_send == 2
 
 
-def test_fused_w13_raw_gather_groups_eight_rows_without_serial_row_loop():
+def test_fused_w13_bulk_metadata_load_groups_eight_contiguous_row_loads():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
     assert RAW_GATHER_ROWS == 8
     assert CONFIG.compute_m // RAW_GATHER_ROWS == 8
     assert "range(config.compute_m // RAW_GATHER_ROWS)" in source
-    assert "pl.ds(row_start, RAW_GATHER_ROWS)" in source
-    assert "x_ref[safe_tokens[:, None], hidden_offsets[None, :]]" in source
-    assert "RAW_GATHER_HIDDEN_LAYOUT" in source
-    assert "RAW_GATHER_ROW_LAYOUT" in source
-    assert "mgpu.Layout.TILED" not in source
+    assert "for row in range(RAW_GATHER_ROWS)" in source
+    assert "pl.ds(k_start, config.send_k)" in source
+    assert "token_smem[output_row]" in source
     assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
     assert TOKEN_TRANSFER_ROWS == 128
     assert "token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32)" in source
-    assert "token_smem[row_start + row]" in source
-    assert "jnp.stack" not in source
-
-    assert RAW_GATHER_HIDDEN_LAYOUT.to_mgpu().registers_shape((CONFIG.send_k,)) == (1,)
-    assert RAW_GATHER_ROW_LAYOUT.to_mgpu().registers_shape((RAW_GATHER_ROWS,)) == (1, 1)
+    assert "safe_tokens[:, None]" not in source
 
 
 def test_fused_w13_reference_zeros_invalid_and_source_padding_rows():
