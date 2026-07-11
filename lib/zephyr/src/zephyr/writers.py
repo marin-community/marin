@@ -261,7 +261,7 @@ def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
 
 @contextmanager
 def _parquet_sink(temp_path: str):
-    """Yield ``(where, filesystem)`` for ``pq.ParquetWriter``/``pq.write_table``.
+    """Yield ``(where_fd, native_fs)`` for ``pq.ParquetWriter``/``pq.write_table``.
 
     Prefers a native pyarrow filesystem for flat-memory streaming; falls back
     to a buffered fsspec handle (``filesystem=None``) for protocols pyarrow
@@ -299,12 +299,12 @@ def write_parquet_file(
     count = 0
 
     with atomic_rename(output_path) as temp_path:
-        with _parquet_sink(temp_path) as (where, native_fs):
+        with _parquet_sink(temp_path) as (where_fd, native_fs):
             writer: pq.ParquetWriter | None = None
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                     if writer is None:
-                        writer = pq.ParquetWriter(where, table.schema, filesystem=native_fs)
+                        writer = pq.ParquetWriter(where_fd, table.schema, filesystem=native_fs)
                     writer.write_table(table)
                     count += len(table)
                     counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
@@ -314,7 +314,7 @@ def write_parquet_file(
 
             if writer is None:
                 actual_schema = schema or pa.schema([])
-                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), where, filesystem=native_fs)
+                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), where_fd, filesystem=native_fs)
 
     return {"path": output_path, "count": count}
 
