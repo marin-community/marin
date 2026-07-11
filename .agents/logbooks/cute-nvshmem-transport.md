@@ -14,6 +14,7 @@ author: dlwh
 - The reproducible transport extra pins NVSHMEM 3.7.0, NVSHMEM4Py 0.3.1, and CUTLASS DSL 4.4.2. NVSHMEM4Py's CuTe integration is incompatible with Marin's normal CUTLASS DSL 4.5.2 environment.
 - Device-only push and pull correctness passes on 8 H100s for RMA and direct peer variants, 1/2/4/8 slots, and one million aggregate single-slot transfers per principal variant. Ordinary CuTe payload loads after `signal_wait` can observe stale data; a system fence plus cache-volatile loads is required by the validated implementation.
 - JAX interoperability is zero-copy when ownership is explicit: NVSHMEM buffers import into JAX at the identical pointer, and JAX-owned sources work as local RMA operands through a non-owning `cuda.core.Buffer` plus DLPack stream handoff. A two-PE JAX→NVSHMEM→JAX push passed with pointer identity on the receiver.
+- The corrected 8-PE transport sweep contains 77 rows across 16 B–384 KiB payloads. At the 6144-byte production anchor, warp `put_signal` reaches 5.30 µs, 1.16 GB/s per PE, and 9.27 GB/s aggregate; warp blocking pull reaches 14.68 µs and 0.419 GB/s per PE. Scalar direct-peer loops are noncompetitive and are not a valid proxy for cooperative peer copies.
 - All accelerator experiments will use CoreWeave H100 clusters. Host-only inspection may run locally.
 
 ## Scope
@@ -40,10 +41,11 @@ author: dlwh
 - `NVTP-004`: Direct peer stores and loads are device-side correct with explicit system memory operations. Next test: compare performance against RMA on production payload sizes.
 - `NVTP-005`: JAX buffers participate without payload copies when wrapped with explicit owner/lifetime and DLPack stream handoff. Next test: integrate the handoff into device-kernel launch chaining without test-only host stream synchronization.
 - `NVTP-006`: A transport can overlap with a production-relevant GEMM without unacceptable compute-throughput degradation. Next test: establish standalone communication and compute baselines before concurrent execution.
+- `NVTP-007`: Warp-cooperative put-with-signal is the leading measured transport. Next test: add block/cooperative direct-peer variants, Pallas comparison, and GEMM overlap before making a production recommendation.
 
 ### Blocked
 
-- None.
+- Scalar direct-peer copies at production sizes: one-thread word loops plateau near 0.0025 GB/s for stores and 0.0046 GB/s for loads. Evidence: `NVTP-005` entry and artifact `cute_nvshmem_transport/artifacts/nvtp-benchmark-cw-h100-8pe.json`.
 
 ### Falsified / Dead End
 
@@ -63,6 +65,7 @@ author: dlwh
 - 2026-07-10: Use explicit system fencing plus cache-volatile payload loads after signal waits; ordinary CuTe indexing produced reproducible stale-epoch failures.
 - 2026-07-10: Use `nvshmem.bindings.device.cute.quiet` for device `_nbi` completion because the high-level `nvshmem.core.device.cute` module does not export quiet.
 - 2026-07-10: Wrap JAX device pointers in non-owning `cuda.core.Buffer` objects with the JAX array as owner; raw JAX objects are not accepted by NVSHMEM host RMA.
+- 2026-07-10: Benchmark repetitions use all-PE barriers before signal reset and after each kernel. Per-rank local completion is insufficient because late remote signals can cross a repetition boundary.
 
 ## Negative Results Index
 
@@ -190,3 +193,15 @@ author: dlwh
 - Interpretation: Questions 1–3 and the push-consume row of the interoperability matrix are feasible with a thin ownership wrapper. NVSHMEM owns symmetric allocations; JAX may own local sources or view symmetric destinations. Direct JAX objects are not an accepted NVSHMEM host operand type. Existing host materializations must not be reused as coherence evidence.
 - Limitations: The correctness probe synchronizes the CUDA stream before final validation. DLPack establishes JAX→external-stream producer handoff, but a fused steady-state launch chain still needs an explicit external-stream/event integration rather than test-only host synchronization.
 - Next action: Build machine-readable transport benchmarks for production payload sizes, cooperative scopes, completion batching, and overlap.
+
+### 2026-07-10 - NVTP-005 corrected 8-PE transport sweep
+
+- Hypothesis: Cooperative NVSHMEM operations outperform thread-scoped RMA and scalar direct-peer loops for routed-row payloads on the fully connected CoreWeave H100 node.
+- Commit Hash: `74b485ca7b`
+- Command: `uv run --package marin-levanter --extra nvshmem-transport python -m cute_nvshmem_transport.benchmark_transport --num-pes 8 --num-slots 8 --repetitions 3 --payload-bytes 16 256 4096 6144 24576 98304 393216 --output /tmp/nvtp-benchmark-v2.json`
+- Config: CoreWeave `cw-us-east-02a`, 8×H100 80GB, fully connected `NV18`; 8 PEs; 8 reusable slots; three repetitions; payload-dependent epochs targeting 64 MiB for payloads above 256 bytes. Timings cover kernel launch through an all-PE post-kernel barrier and use the maximum rank median.
+- Result: All 77 rows passed payload and epoch validation. At 6144 bytes, warp `put_signal` measured 5.304 µs, 1.158 GB/s per PE, and 9.267 GB/s aggregate. Warp `put_signal_nbi+quiet` measured 7.156 µs and 0.859 GB/s per PE. Warp blocking pull measured 14.677 µs and 0.419 GB/s per PE; warp `get_nbi+quiet` measured 16.385 µs and 0.375 GB/s per PE. Thread-scoped put measured 43.929 µs and 0.140 GB/s per PE. Scalar peer store/load loops measured 0.00246/0.00461 GB/s per PE. Warp put rose to 2.564 GB/s per PE at 384 KiB; warp pull plateaued near 0.548 GB/s per PE.
+- Negative result: The first sweep failed on repetition two because ranks reset their local signals before slower peers globally completed repetition one; rank 7 consumed epoch 7 from an epoch-15 overwrite. A pre-reset barrier removed the stale payload, and a post-kernel barrier was additionally required before final host validation so the last remote consumed signal was visible. The corrected failing-case retest (8 PEs, 256 bytes, 10,000 epochs, 3 repetitions, direct peer load) passed before the full relaunch.
+- Interpretation: Warp `put_signal` is the leading implemented path across the measured payload range. Blocking warp put consistently beats nonblocking-plus-quiet for this one-transfer-per-epoch protocol. Pull is substantially slower. Scalar peer results falsify only the scalar implementation, not cooperative/vectorized peer copies. Results are exploratory because the sweep is one node and lacks the Pallas and overlap baselines.
+- Artifact: `cute_nvshmem_transport/artifacts/nvtp-benchmark-cw-h100-8pe.json` (structured rows) and `.jsonl` (streamed run record).
+- Next action: Implement block/cooperative direct-peer variants and batched pull completion, then run the Pallas comparison and GEMM-overlap matrix.
