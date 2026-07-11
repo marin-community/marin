@@ -46,6 +46,7 @@ from marin.inference.worker import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 64
+UPSTREAM_STATUS_CODE_KEY = "_upstream_status_code"
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ class LogitMixingInferenceWorker:
             parsed = response.json()
         except ValueError:
             return {
-                "status_code": response.status_code,
+                UPSTREAM_STATUS_CODE_KEY: response.status_code,
                 "error": {
                     "message": "upstream endpoint returned a non-JSON response",
                     "body": response.content[:ERROR_BODY_LIMIT_BYTES].decode(errors="replace"),
@@ -275,10 +276,10 @@ class LogitMixingInferenceWorker:
             }
         if not isinstance(parsed, dict):
             return {
-                "status_code": response.status_code,
+                UPSTREAM_STATUS_CODE_KEY: response.status_code,
                 "error": {"message": "upstream endpoint returned a non-object JSON response"},
             }
-        parsed["status_code"] = response.status_code
+        parsed[UPSTREAM_STATUS_CODE_KEY] = response.status_code
         return parsed
 
 
@@ -489,7 +490,7 @@ def _upstream_error(
     student: Mapping[str, Any],
 ) -> InferenceResponse | None:
     for name, payload in [("teacher", teacher), ("student", student)]:
-        status_code = int(payload.get("status_code", 200))
+        status_code = int(payload.get(UPSTREAM_STATUS_CODE_KEY, 200))
         if status_code >= 400:
             return _error_response(
                 request,
