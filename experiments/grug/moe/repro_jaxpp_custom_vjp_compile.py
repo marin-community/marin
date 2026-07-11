@@ -43,7 +43,7 @@ from levanter.grug._moe.sonic_quack import quack_mlp_varlen
 JAXPP_REVISION = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9"
 SONIC_IMPLEMENTATION_REVISION = "7952c5e5fd"
 Mode = Literal["plain", "opaque", "quack"]
-Runtime = Literal["direct", "jaxpp"]
+Runtime = Literal["direct", "distributed_direct", "jaxpp"]
 
 
 def event(name: str, **fields: Any) -> None:
@@ -204,8 +204,10 @@ def initialize_array(shape: tuple[int, ...], sharding: NamedSharding) -> jax.Arr
         return jax.jit(lambda: jnp.zeros(shape, jnp.bfloat16), out_shardings=sharding)()
 
 
-def run_direct(config: Config) -> None:
-    mesh = Mesh(np.asarray(jax.devices()[:1], dtype=object), ("fsdp",), axis_types=(AxisType.Explicit,))
+def run_direct(config: Config, devices: list[jax.Device] | None = None, event_prefix: str = "direct") -> None:
+    if devices is None:
+        devices = jax.devices()[: config.fsdp]
+    mesh = Mesh(np.asarray(devices, dtype=object), ("fsdp",), axis_types=(AxisType.Explicit,))
     replicated = NamedSharding(mesh, P())
     ups_shape, downs_shape, x_shape = shapes(config, replicated)
     ups = tuple(initialize_array(shape.shape, replicated) for shape in ups_shape)
@@ -213,11 +215,33 @@ def run_direct(config: Config) -> None:
     x = initialize_array(x_shape, replicated)
     dependency = jax.device_put(np.asarray(0, np.float32), replicated)
     step = jax.jit(partial(loss_and_grads, config=config))
-    event("direct_compile_execute_entered")
+    event(f"{event_prefix}_compile_execute_entered", process_id=jax.process_index())
     started = time.perf_counter()
     result = step(ups, downs, x, dependency)
     jax.block_until_ready(result)
-    event("direct_compile_execute_returned", elapsed=time.perf_counter() - started)
+    event(
+        f"{event_prefix}_compile_execute_returned",
+        process_id=jax.process_index(),
+        elapsed=time.perf_counter() - started,
+    )
+
+
+def run_distributed_direct_worker(config: Config, process_id: int, coordinator: str, devices: list[int]) -> None:
+    jax.distributed.initialize(
+        coordinator_address=coordinator,
+        num_processes=2,
+        process_id=process_id,
+        local_device_ids=devices,
+        cluster_detection_method="deactivate",
+    )
+    start_watchdog(config)
+    try:
+        if process_id == 1:
+            run_direct(config, devices=jax.local_devices(), event_prefix="distributed_direct")
+        multihost_utils.sync_global_devices("distributed_direct_complete")
+        event("distributed_direct_barrier_returned", process_id=process_id)
+    finally:
+        jax.distributed.shutdown()
 
 
 def run_jaxpp_worker(config: Config, process_id: int, coordinator: str, devices: list[int]) -> None:
@@ -275,7 +299,7 @@ def run_jaxpp_worker(config: Config, process_id: int, coordinator: str, devices:
 
         seed = (
             jax.device_put(np.asarray(0, np.float32), stage0_scalar)
-            if process_id == 0
+            if mpmd_mesh.my_mpmd_axis_index == 0
             else jax.make_array_from_single_device_arrays((), stage0_scalar, [], dtype=jnp.float32)
         )
         ups = tuple(initialize_array(shape.shape, stage1_weight) for shape in up_shapes)
@@ -330,10 +354,48 @@ def run_jaxpp(config: Config) -> None:
                 process.join()
 
 
+def run_distributed_direct(config: Config) -> None:
+    if len(jax.devices()) != 2 * config.fsdp:
+        raise ValueError(f"distributed_direct runtime requires {2 * config.fsdp} visible GPUs, got {len(jax.devices())}")
+    context = mp.get_context("spawn")
+    coordinator = "127.0.0.1:5790"
+    processes = []
+    try:
+        for process_id in range(2):
+            local_devices = list(range(process_id * config.fsdp, (process_id + 1) * config.fsdp))
+            process = context.Process(
+                target=run_distributed_direct_worker,
+                args=(config, process_id, coordinator, local_devices),
+            )
+            process.start()
+            processes.append(process)
+        deadline = time.monotonic() + config.timeout + 60
+        while any(process.is_alive() for process in processes) and time.monotonic() < deadline:
+            for process in processes:
+                if process.exitcode not in (None, 0):
+                    raise SystemExit(process.exitcode)
+            time.sleep(1)
+        if any(process.is_alive() for process in processes):
+            raise TimeoutError("worker cleanup deadline exceeded")
+        bad = next((process.exitcode for process in processes if process.exitcode), None)
+        if bad is not None:
+            raise SystemExit(bad)
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+        for process in processes:
+            process.join(timeout=10)
+        for process in processes:
+            if process.is_alive():
+                process.kill()
+                process.join()
+
+
 def parse_args() -> Config:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("plain", "opaque", "quack"), required=True)
-    parser.add_argument("--runtime", choices=("direct", "jaxpp"), required=True)
+    parser.add_argument("--runtime", choices=("direct", "distributed_direct", "jaxpp"), required=True)
     parser.add_argument("--layers", type=int, default=6)
     parser.add_argument("--experts", type=int, default=64)
     parser.add_argument("--tokens-per-expert", type=int, default=1024)
@@ -352,6 +414,8 @@ def main() -> None:
     if config.runtime == "direct":
         start_watchdog(config)
         run_direct(config)
+    elif config.runtime == "distributed_direct":
+        run_distributed_direct(config)
     else:
         run_jaxpp(config)
 

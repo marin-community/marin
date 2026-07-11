@@ -66,6 +66,7 @@ EXPECTED_PACKAGES = {"jaxpp": "0.10.2", "jax-tvm-ffi": "0.1.3", "quack-kernels":
 TILE_SHAPE = (128, 192)
 CLUSTER_SHAPE = (2, 1, 1)
 ALIGNMENT = 8
+ALLOW_CUDA_GRAPH = os.environ.get("JAXPP_QUACK_ALLOW_CUDA_GRAPH", "true").lower() in ("1", "true", "yes", "on")
 
 
 def event(name: str, **fields: Any) -> None:
@@ -115,6 +116,7 @@ def environment() -> dict[str, Any]:
         "backend_platform": backend.platform,
         "backend_platform_version": backend.platform_version,
         "devices": [str(device) for device in jax.devices()],
+        "allow_cuda_graph": ALLOW_CUDA_GRAPH,
         "xla_python_client_mem_fraction": os.environ.get("XLA_PYTHON_CLIENT_MEM_FRACTION", ""),
     }
 
@@ -231,7 +233,7 @@ def _compile_grouped_varlen() -> Any:
 GROUPED_VARLEN = TvmFfiKernel(
     "jaxpp_quack_minimal_grouped_varlen",
     _compile_grouped_varlen,
-    allow_cuda_graph=True,
+    allow_cuda_graph=ALLOW_CUDA_GRAPH,
 )
 
 

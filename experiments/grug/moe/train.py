@@ -326,12 +326,18 @@ def _pipeline_schedule(pipeline: GrugJaxPPConfig):
 def jaxpp_setup_scripts(*, revision: str = "7091a9b5ce02cd1a6bdc905f6a36e89370a5fba9") -> tuple[str, ...]:
     """Install JaxPP into an Iris worker venv after the normal GPU sync."""
     package = f"jaxpp @ git+https://github.com/NVIDIA/jaxpp.git@{revision}"
+    jax_tvm_ffi_revision = "e238a28483123efc8f56b9de358c2fb8b8de77e5"
     return (
         "\n".join(
             [
                 'cd "$IRIS_WORKDIR"',
                 "echo 'installing JaxPP runtime deps'",
                 "uv pip install --link-mode symlink cupy-cuda13x",
+                "rm -rf /tmp/jax-tvm-ffi",
+                "git clone --quiet --filter=blob:none https://github.com/NVIDIA/jax-tvm-ffi.git /tmp/jax-tvm-ffi",
+                f"git -C /tmp/jax-tvm-ffi checkout --quiet {jax_tvm_ffi_revision}",
+                'git -C /tmp/jax-tvm-ffi apply "$IRIS_WORKDIR/experiments/grug/moe/jax_tvm_ffi_multidevice.patch"',
+                "uv pip install --link-mode symlink --force-reinstall --no-deps /tmp/jax-tvm-ffi",
                 "uv pip install --link-mode symlink --no-deps " + repr(package),
             ]
         )
