@@ -24,10 +24,10 @@ EXPERTS_PER_RANK = 2
 ROWS_PER_EXPERT = 128
 ENTRIES_PER_DST = 4
 INTERMEDIATE = 64
-HIDDEN = 128
+HIDDEN = 256
 
 
-def test_fused_w2_return_target_schedule_balances_b64_jobs_over_resident_grid():
+def test_fused_w2_return_target_schedule_balances_two_hidden_tiles_per_job():
     schedule = source_push_semantic_fused_w2_return_schedule(
         ep_size=8,
         hidden_dim=2560,
@@ -36,9 +36,9 @@ def test_fused_w2_return_target_schedule_balances_b64_jobs_over_resident_grid():
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.w2_jobs == 46_080
-    assert schedule.min_w2_jobs_per_program == 360
-    assert schedule.max_w2_jobs_per_program == 360
+    assert schedule.w2_jobs == 23_040
+    assert schedule.min_w2_jobs_per_program == 180
+    assert schedule.max_w2_jobs_per_program == 180
     assert schedule.producer_program_start == 0
     assert schedule.producer_programs == 128
     assert schedule.combine_program_start == 0
@@ -47,6 +47,20 @@ def test_fused_w2_return_target_schedule_balances_b64_jobs_over_resident_grid():
     assert schedule.total_programs == 128
     assert schedule.readiness_signals == 1024
     assert schedule.readiness_waits == 256
+
+
+def test_fused_w2_return_schedule_keeps_odd_hidden_tile_tail():
+    schedule = source_push_semantic_fused_w2_return_schedule(
+        ep_size=2,
+        hidden_dim=3 * CONFIG.block_n,
+        tokens_per_source=64,
+        entries_per_dst=5,
+    )
+
+    assert schedule.hidden_tiles == 3
+    assert schedule.w2_jobs == 20
+    assert schedule.min_w2_jobs_per_program == 0
+    assert schedule.max_w2_jobs_per_program == 1
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):
