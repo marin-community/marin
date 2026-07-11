@@ -3,17 +3,13 @@
 
 from __future__ import annotations
 
-import inspect
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
 from levanter.grug._moe.source_push_semantic_fused_w2_return import (
-    N_GROUPS_PER_JOB,
     SourcePushSemanticFusedW2ReturnConfig,
-    _make_source_push_semantic_fused_w2_return_kernel,
     source_push_semantic_fused_w2_return,
     source_push_semantic_fused_w2_return_metadata_jax,
     source_push_semantic_fused_w2_return_schedule,
@@ -28,10 +24,10 @@ EXPERTS_PER_RANK = 2
 ROWS_PER_EXPERT = 128
 ENTRIES_PER_DST = 4
 INTERMEDIATE = 64
-HIDDEN = 512
+HIDDEN = 256
 
 
-def test_fused_w2_return_target_schedule_balances_four_hidden_tiles_per_job():
+def test_fused_w2_return_target_schedule_balances_two_hidden_tiles_per_job():
     schedule = source_push_semantic_fused_w2_return_schedule(
         ep_size=8,
         hidden_dim=2560,
@@ -40,9 +36,9 @@ def test_fused_w2_return_target_schedule_balances_four_hidden_tiles_per_job():
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.w2_jobs == 11_520
-    assert schedule.min_w2_jobs_per_program == 90
-    assert schedule.max_w2_jobs_per_program == 90
+    assert schedule.w2_jobs == 23_040
+    assert schedule.min_w2_jobs_per_program == 180
+    assert schedule.max_w2_jobs_per_program == 180
     assert schedule.producer_program_start == 0
     assert schedule.producer_programs == 128
     assert schedule.combine_program_start == 0
@@ -56,27 +52,15 @@ def test_fused_w2_return_target_schedule_balances_four_hidden_tiles_per_job():
 def test_fused_w2_return_schedule_keeps_odd_hidden_tile_tail():
     schedule = source_push_semantic_fused_w2_return_schedule(
         ep_size=2,
-        hidden_dim=7 * CONFIG.block_n,
+        hidden_dim=3 * CONFIG.block_n,
         tokens_per_source=64,
         entries_per_dst=5,
     )
 
-    assert schedule.hidden_tiles == 7
+    assert schedule.hidden_tiles == 3
     assert schedule.w2_jobs == 20
     assert schedule.min_w2_jobs_per_program == 0
     assert schedule.max_w2_jobs_per_program == 1
-
-
-def test_fused_w2_return_kernel_contract_has_four_explicit_accumulator_tiles():
-    source = inspect.getsource(_make_source_push_semantic_fused_w2_return_kernel)
-
-    assert N_GROUPS_PER_JOB == 4
-    for tile in range(N_GROUPS_PER_JOB):
-        assert f"acc_{tile}_ref=mgpu.ACC((config.compute_m, config.block_n))" in source
-        assert f"mgpu.wgmma(acc_{tile}_ref, h_smem, w_{tile}_smem)" in source
-    assert "has_hidden_tile_1 = hidden_tile + 1 < hidden_tiles" in source
-    assert "has_hidden_tile_2 = hidden_tile + 2 < hidden_tiles" in source
-    assert "has_hidden_tile_3 = hidden_tile + 3 < hidden_tiles" in source
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):
