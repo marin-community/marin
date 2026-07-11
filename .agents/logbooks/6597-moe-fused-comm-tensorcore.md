@@ -3758,3 +3758,9 @@ H100 result.
 
 Local validation: benchmark `py_compile`, two focused benchmark tests, scoped
 pre-commit, and `git diff --check` passed.
+
+The first reduced launch, `/dlwh/mlp-stop-after-w2b-seq-2043`, failed during
+lowering before any kernel ran because indexing `y[0, 0, 0]` collapsed the
+source-sharded dimension to size one. The corrected diagnostic keeps the
+source axis as `y[:, 0, 0]` and adds the resulting per-source zero to
+`dy[:, 0, 0]`; this requires no collective and preserves the sharding.
