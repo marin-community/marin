@@ -3049,3 +3049,40 @@ shape and cannot be compared numerically with the selected 23.025404 ms /
 payload implementation and investigate the B32 remote-write indexing or
 payload publication lifetime before reconsidering this schedule. Exactly one
 H100x8 job was launched; no retry or kernel edit was made.
+
+## 2026-07-11 FUSED-MOE-098 - Publishing W2-backward payload before route dot saves 3.98%
+
+Job `/dlwh/w2b-publish-first-8b0f` tested commit `8b0f46e8c8` on `cw-rno2a`
+with the target EP8, T32768/rank, H2560, I1280, E32/rank, top-k 4, capacity
+factor 1.25, random production routing seed 0, bf16, JAX plan metadata, one
+warmup, three timed steps, three repeat runs, and separate compilation. Iris
+reported terminal state `succeeded`, exit 0, one of one task succeeded, and a
+2m04.89s task duration.
+
+The candidate publishes each K512 `dy_route` payload and signals
+`compact_ready_sem` before computing the `hidden_tile == 0` route-gradient dot.
+The route dot still completes before `helper_done_sem`; helper4 distribution,
+buffers, arithmetic, and semaphore counts are unchanged.
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Checksum |
+|---:|---:|---:|---:|---:|
+| 0 | 38.325619 | 44.826071 | 56.032589 | 127795200 |
+| 1 | 38.475174 | 44.651830 | 55.814788 | 127795200 |
+| 2 | 38.268151 | 44.893387 | 56.116733 | 127795200 |
+| Median | **38.325619** | **44.826071** | **56.032589** | **127795200** |
+
+Against the selected 39.913566 ms / 43.042682 useful TFLOP/s/rank result, this
+saves 1.587947 ms or 3.98% and raises useful throughput by 1.783389
+TFLOP/s/rank or 4.14%. Every repeat reported zero dropped routes, zero routing-
+policy drops, zero metadata-overflow routes, zero queue-overflow route errors,
+and zero layout-overflow row errors. The checksum exactly matches the selected
+result. The process emitted recoverable 12.5 GiB BFC allocation warnings and
+FABRIC-handle VMM fallbacks, then produced all requested rows. This candidate
+should replace the selected W2-backward schedule, subject to preserving the
+already-established split numerical comparison coverage.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-publish-first-8b0f --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 8b0f46e8c8 --jsonl scratch/w2b-publish-first-8b0f.jsonl
+```
