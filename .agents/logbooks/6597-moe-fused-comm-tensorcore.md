@@ -2835,3 +2835,31 @@ This run contradicts aggregate correctness rather than clearing the remaining
 gate. Keep the FUSED-MOE-093 target-shape timing as performance evidence only;
 do not promote the selected integrated path as numerically validated. Per the
 bounded babysitting request, no retry or code edit was made.
+
+## 2026-07-10 FUSED-MOE-095 - W13-backward 48/40/40 role split improves latency by 4.23%
+
+Job `/dlwh/bench-w13b-role48-40-40-20260710-2410` at `4625779973`
+completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one of one task
+succeeded, and a 1m37.13s task duration. The target-shape kernel used 48
+staging, 40 dX, and 40 dW persistent programs while preserving K128 staging,
+single-N dW ownership, and the two-stage WGMMA pipelines.
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 63.576811 | 54.044451 | 67.555564 |
+| 1 | 63.099683 | 54.453108 | 68.066385 |
+| 2 | 63.478141 | 54.128457 | 67.660571 |
+| Median | **63.478141** | **54.128457** | **67.660571** |
+
+Against the selected 64-staging/32-dX/32-dW schedule at 66.282220 ms and
+51.838545 useful TFLOP/s/rank, the 48/40/40 split saves 2.804079 ms or 4.23%
+and raises useful throughput by 2.289912 TFLOP/s/rank or 4.42%.
+
+All repeats reported zero dropped routes, zero routing-policy drops, zero
+metadata-overflow routes, zero queue-overflow route errors, and zero
+layout-overflow row errors. The checksum was stable at `20131207168`, which is
+`96256` below the selected schedule's `20131303424`; therefore this is a
+performance candidate pending a finite numerical comparison, not yet a
+correctness promotion. The process emitted recoverable 12.5 GiB BFC allocation
+warnings and FABRIC-handle VMM fallbacks, then produced all requested rows.
+Per the bounded request, no retry or kernel edit was made.
