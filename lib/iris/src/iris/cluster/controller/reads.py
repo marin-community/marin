@@ -40,6 +40,7 @@ from iris.cluster.controller.db import Tx
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
+    endpoints_table,
     federated_jobs_table,
     federated_tasks_table,
     federation_changelog_table,
@@ -68,6 +69,7 @@ from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
     AttemptUid,
+    EndpointAccess,
     JobName,
     PendingTask,
     WorkerId,
@@ -1944,6 +1946,23 @@ def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
     return row.job_id if row is not None else None
 
 
+def has_received_job_from_peer(tx: Tx, peer_id: str, job_id: JobName) -> bool:
+    """Whether ``job_id`` is a RECEIVED handle this cluster took from ``peer_id``.
+
+    Authorizes a federated /proxy: a peer's federation bearer may reach an endpoint
+    only on a job that peer actually handed here. Received ownership is recorded on
+    the root, so pass the endpoint job's root id.
+    """
+    row = tx.execute(
+        select(federated_jobs_table.c.job_id).where(
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+            federated_jobs_table.c.peer_id == peer_id,
+            federated_jobs_table.c.job_id == job_id,
+        )
+    ).first()
+    return row is not None
+
+
 def parent_mirror_seed(tx: Tx, parent_job_id: JobName):
     """The ``submitting_user`` and ``root_submitted_at_ms`` of an existing parent row.
 
@@ -2073,6 +2092,62 @@ def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
         )
     ).all()
     return [r.job_id for r in rows]
+
+
+@dataclass(frozen=True)
+class ReceivedEndpointRow:
+    """One live endpoint on a RECEIVED job, for the federation endpoint snapshot."""
+
+    endpoint_id: str
+    name: str
+    address: str
+    task_id: JobName
+    access: int
+    metadata: dict
+    lease_deadline: Timestamp | None
+
+
+def live_endpoints_for_requester(tx: Tx, requester_id: str, now: Timestamp) -> list[ReceivedEndpointRow]:
+    """Every live endpoint across the jobs this peer received from ``requester_id``.
+
+    Expired leases are excluded (parity with the endpoint registry's own reads), so
+    the parent mirror set-replaced from this matches what the child would serve.
+    """
+    rows = tx.execute(
+        select(
+            endpoints_table.c.endpoint_id,
+            endpoints_table.c.name,
+            endpoints_table.c.address,
+            endpoints_table.c.task_id,
+            endpoints_table.c.access,
+            endpoints_table.c.metadata_json,
+            endpoints_table.c.lease_deadline_ms,
+        )
+        .select_from(
+            endpoints_table.join(federated_jobs_table, federated_jobs_table.c.job_id == endpoints_table.c.job_id)
+        )
+        .where(
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+            federated_jobs_table.c.peer_id == requester_id,
+        )
+    ).all()
+    result: list[ReceivedEndpointRow] = []
+    for r in rows:
+        deadline = r.lease_deadline_ms
+        if deadline is not None and deadline <= now:
+            continue
+        result.append(
+            ReceivedEndpointRow(
+                endpoint_id=r.endpoint_id,
+                name=r.name,
+                address=r.address,
+                task_id=r.task_id,
+                access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE if r.access is None else int(r.access),
+                metadata=r.metadata_json,
+                lease_deadline=deadline,
+            )
+        )
+    return result
 
 
 def changelog_rows_since(tx: Tx, requester_id: str, cursor_seq: int) -> list[ChangelogRow]:

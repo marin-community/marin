@@ -56,9 +56,10 @@ def list_(ctx, prefix: str, exact: bool, task_ids: tuple[str, ...]):
     if not resp.endpoints:
         click.echo("No endpoints found.")
         return
-    click.echo(f"{'NAME':<44s} {'ACCESS':<8s} {'ADDRESS':<28s} TASK")
+    click.echo(f"{'NAME':<44s} {'ACCESS':<8s} {'PEER':<16s} {'ADDRESS':<28s} TASK")
     for e in sorted(resp.endpoints, key=lambda e: e.name):
-        click.echo(f"{e.name:<44s} {_access_label(e.access):<8s} {e.address:<28s} {e.task_id}")
+        peer = e.peer_id or "local"
+        click.echo(f"{e.name:<44s} {_access_label(e.access):<8s} {peer:<16s} {e.address:<28s} {e.task_id}")
 
 
 @endpoints.command("mint")

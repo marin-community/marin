@@ -15,7 +15,7 @@ disk.
 
 import logging
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from threading import RLock
 from typing import ClassVar
@@ -59,6 +59,10 @@ class EndpointRow:
     lease_deadline: Timestamp | None = None
     # A Controller.EndpointAccess value; who may reach this endpoint via /proxy.
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
+    # Owning peer cluster id when this row is mirrored from a federated child; None
+    # for a locally-registered endpoint. A remote row's ``address`` is the peer-side
+    # bind (display only); /proxy forwards to the peer's controller instead.
+    peer_id: str | None = None
 
     def is_expired(self, now: Timestamp) -> bool:
         return self.lease_deadline is not None and self.lease_deadline <= now
@@ -139,6 +143,7 @@ class EndpointsProjection(Projection):
                         registered_at=row.registered_at_ms,
                         lease_deadline=row.lease_deadline_ms,
                         access=access_from_db(row.access),
+                        peer_id=row.peer_id,
                     )
                     self._index(endpoint)
         logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(self._by_id))
@@ -219,6 +224,17 @@ class EndpointsProjection(Projection):
                     return row
             return None
 
+    def resolve_all(self, name: str) -> list[EndpointRow]:
+        """Every live (unexpired) endpoint row with exact ``name``.
+
+        A name is not unique in the schema — a local registration and rows mirrored
+        from one or more peers can share a name — so all live matches are returned,
+        not just the first. Expired-lease rows are omitted."""
+        now = Timestamp.now()
+        with self._lock:
+            ids = self._by_name.get(name, ())
+            return [self._by_id[eid] for eid in ids if not self._by_id[eid].is_expired(now)]
+
     def get(self, endpoint_id: str) -> EndpointRow | None:
         with self._lock:
             row = self._by_id.get(endpoint_id)
@@ -274,6 +290,7 @@ class EndpointsProjection(Projection):
                 "registered_at_ms": endpoint.registered_at,
                 "lease_deadline_ms": endpoint.lease_deadline,
                 "access": endpoint.access,
+                "peer_id": endpoint.peer_id,
             },
         )
 
@@ -286,6 +303,75 @@ class EndpointsProjection(Projection):
 
         cur.register(apply)
         return AddEndpointOutcome.OK
+
+    def replace_remote_for_peer(self, cur: db.Tx, peer_id: str, rows: Sequence[EndpointRow]) -> None:
+        """Set-replace all endpoints mirrored from ``peer_id`` with ``rows``.
+
+        The federation sync loop reports a peer's full current endpoint set every
+        tick; this makes the parent's mirror match it. Rows previously mirrored under
+        this peer but absent from ``rows`` are deleted; the rest are upserted. Every
+        change registers a post-commit cache update so ``_by_name`` never serves a
+        dropped remote row (raw CASCADE would desync the cache — see pruner).
+
+        Each row must reference a task already mirrored on this controller (the job
+        deltas in the same sync batch create them). A row whose task row is absent is
+        skipped defensively — the FK would otherwise abort the whole sync batch.
+        """
+        with self._lock:
+            existing_ids = {eid for eid, row in self._by_id.items() if row.peer_id == peer_id}
+
+        present = self._present_task_ids(cur, [row.task_id for row in rows])
+        # Stamp peer_id so the persisted column and the cached row never disagree,
+        # whatever peer_id the caller's row objects carried.
+        keep = [replace(row, peer_id=peer_id) for row in rows if row.task_id in present]
+        for row in rows:
+            if row.task_id not in present:
+                logger.debug("skipping remote endpoint %s: task %s not mirrored yet", row.name, row.task_id)
+
+        new_by_id = {row.endpoint_id: row for row in keep}
+        stale = existing_ids - new_by_id.keys()
+        if stale:
+            cur.execute(
+                delete(endpoints_table).where(endpoints_table.c.endpoint_id.in_(bindparam("ids", expanding=True))),
+                {"ids": list(stale)},
+            )
+        for row in keep:
+            job_id, _ = row.task_id.require_task()
+            cur.execute(
+                _INSERT_OR_REPLACE_ENDPOINT,
+                {
+                    "endpoint_id": row.endpoint_id,
+                    "name": row.name,
+                    "address": row.address,
+                    "job_id": job_id,
+                    "task_id": row.task_id,
+                    "metadata_json": row.metadata,
+                    "registered_at_ms": row.registered_at,
+                    "lease_deadline_ms": row.lease_deadline,
+                    "access": row.access,
+                    "peer_id": peer_id,
+                },
+            )
+
+        def apply() -> None:
+            with self._lock:
+                for eid in stale:
+                    self._unindex(eid)
+                for row in keep:
+                    self._unindex(row.endpoint_id)
+                    self._index(row)
+
+        cur.register(apply)
+
+    def _present_task_ids(self, cur: db.Tx, task_ids: Sequence[JobName]) -> set[JobName]:
+        """Which of ``task_ids`` have a persisted task row (FK target for an endpoint)."""
+        if not task_ids:
+            return set()
+        found = cur.execute(
+            select(tasks_table.c.task_id).where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
+            {"task_ids": list(task_ids)},
+        ).all()
+        return {r.task_id for r in found}
 
     def remove(self, cur: db.Tx, endpoint_id: str) -> EndpointRow | None:
         """Remove a single endpoint by id. Returns the removed row snapshot, if any."""

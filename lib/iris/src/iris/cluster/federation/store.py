@@ -129,12 +129,14 @@ class FederationStore(Protocol):
         *,
         next_cursor: str,
         cursor_stale: bool,
+        endpoints: Sequence[controller_pb2.Controller.FederationEndpoint] = (),
     ) -> None:
         """Apply one sync batch in a single transaction: mirror each delta's job
         and task state into the local ``jobs``/``tasks`` rows (stamped ``cluster``),
         apply tombstones, advance the cursor. When ``cursor_stale`` the batch is the
         peer's full active set, so also set-replace: drop any local handle for
-        ``peer_id`` absent from it."""
+        ``peer_id`` absent from it. ``endpoints`` is the peer's full current endpoint
+        set; the parent set-replaces its mirrored endpoints for ``peer_id`` from it."""
         ...
 
     def bump_cancel_intent(self, local_job_id: JobName) -> CancelTarget | None:

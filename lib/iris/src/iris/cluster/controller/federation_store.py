@@ -12,7 +12,7 @@ on the ``FederationStore`` protocol.
 
 import logging
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import (
     Constraint,
@@ -25,6 +25,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.federation.availability import QueuedCandidate
 from iris.cluster.federation.store import (
     CancelTarget,
@@ -34,9 +35,15 @@ from iris.cluster.federation.store import (
 )
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2
-from iris.time_proto import timestamp_from_proto
+from iris.time_proto import duration_from_proto, timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+# Cap on a mirrored federated endpoint's local lease. The peer re-reports its full
+# endpoint set every sync (~3s), refreshing this, so the cap only bounds how long a
+# stale mirror keeps forwarding after the peer goes silent — short enough to stop
+# routing to a lost peer, long enough to ride out sync jitter.
+FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
 
 
 def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
@@ -81,6 +88,34 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
 def _proto_ms(has: bool, ts) -> int | None:
     """Epoch ms of a proto ``Timestamp`` field, or ``None`` when unset."""
     return timestamp_from_proto(ts).epoch_ms() if has else None
+
+
+def _endpoint_rows_from_protos(peer_id: str, protos, now: Timestamp) -> list[EndpointRow]:
+    """Build mirror ``EndpointRow``s from a peer's reported endpoint snapshot.
+
+    The lease deadline is ``now`` plus the reported remaining time, capped at
+    :data:`FEDERATED_ENDPOINT_MIRROR_TTL` so a mirror never outlives contact with
+    the peer. A snapshot without ``lease_remaining`` still expires under the cap.
+    """
+    rows: list[EndpointRow] = []
+    for ep in protos:
+        remaining = duration_from_proto(ep.lease_remaining) if ep.HasField("lease_remaining") else None
+        remaining_ms = FEDERATED_ENDPOINT_MIRROR_TTL.to_ms() if remaining is None else remaining.to_ms()
+        remaining_ms = min(remaining_ms, FEDERATED_ENDPOINT_MIRROR_TTL.to_ms())
+        rows.append(
+            EndpointRow(
+                endpoint_id=ep.endpoint_id,
+                name=ep.name,
+                address=ep.address,
+                task_id=JobName.from_wire(ep.task_id),
+                metadata=dict(ep.metadata),
+                registered_at=now,
+                lease_deadline=now.add_ms(remaining_ms),
+                access=ep.access,
+                peer_id=peer_id,
+            )
+        )
+    return rows
 
 
 class ControllerFederationStore:
@@ -209,6 +244,7 @@ class ControllerFederationStore:
         *,
         next_cursor: str,
         cursor_stale: bool,
+        endpoints=(),
     ) -> None:
         with self._db.transaction() as cur:
             for delta in deltas:
@@ -223,12 +259,22 @@ class ControllerFederationStore:
                     logger.warning("peer %s reported job %s it was not handed; ignoring", peer_id, local_job_id)
                     continue
                 if delta.tombstone:
+                    # Drop the job's mirrored endpoints through the projection first;
+                    # delete_job CASCADEs the rows in SQL but would leave the in-memory
+                    # endpoint cache serving them (mirrors the pruner's ordering).
+                    cur.caches[EndpointsProjection].remove_by_job_ids(cur, [local_job_id])
                     writes.delete_job(cur, local_job_id)
                     continue
                 self._mirror_delta(cur, peer_id, local_job_id, delta)
 
             if cursor_stale:
                 self._set_replace(cur, peer_id, deltas)
+
+            # Set-replace this peer's mirrored endpoints from its full reported set
+            # (applied after the job/task deltas above create the FK targets).
+            cur.caches[EndpointsProjection].replace_remote_for_peer(
+                cur, peer_id, _endpoint_rows_from_protos(peer_id, endpoints, Timestamp.now())
+            )
 
             writes.upsert_sync_cursor(cur, peer_id, next_cursor)
 

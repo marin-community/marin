@@ -352,7 +352,7 @@ class Controller(_message.Message):
         accepted: bool
         def __init__(self, worker_id: _Optional[str] = ..., accepted: _Optional[bool] = ...) -> None: ...
     class Endpoint(_message.Message):
-        __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata", "access")
+        __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata", "access", "peer_id")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -366,13 +366,15 @@ class Controller(_message.Message):
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         ACCESS_FIELD_NUMBER: _ClassVar[int]
+        PEER_ID_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
         name: str
         address: str
         task_id: str
         metadata: _containers.ScalarMap[str, str]
         access: Controller.EndpointAccess
-        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ...) -> None: ...
+        peer_id: str
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., peer_id: _Optional[str] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
         __slots__ = ("name", "address", "task_id", "metadata", "attempt_id", "endpoint_id", "lease_duration", "access")
         class MetadataEntry(_message.Message):
@@ -825,15 +827,41 @@ class Controller(_message.Message):
         changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         tombstone: bool
         def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+    class FederationEndpoint(_message.Message):
+        __slots__ = ("endpoint_id", "name", "address", "task_id", "access", "metadata", "lease_remaining")
+        class MetadataEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: str
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
+        NAME_FIELD_NUMBER: _ClassVar[int]
+        ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ACCESS_FIELD_NUMBER: _ClassVar[int]
+        METADATA_FIELD_NUMBER: _ClassVar[int]
+        LEASE_REMAINING_FIELD_NUMBER: _ClassVar[int]
+        endpoint_id: str
+        name: str
+        address: str
+        task_id: str
+        access: Controller.EndpointAccess
+        metadata: _containers.ScalarMap[str, str]
+        lease_remaining: _time_pb2.Duration
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., lease_remaining: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
-        __slots__ = ("deltas", "next_cursor", "cursor_stale")
+        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints")
         DELTAS_FIELD_NUMBER: _ClassVar[int]
         NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
         CURSOR_STALE_FIELD_NUMBER: _ClassVar[int]
+        ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
         deltas: _containers.RepeatedCompositeFieldContainer[Controller.FederationJobDelta]
         next_cursor: str
         cursor_stale: bool
-        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ...) -> None: ...
+        endpoints: _containers.RepeatedCompositeFieldContainer[Controller.FederationEndpoint]
+        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

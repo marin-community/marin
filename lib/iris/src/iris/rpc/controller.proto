@@ -396,6 +396,10 @@ message Controller {
     string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 5;
     EndpointAccess access = 6;       // Proxy access mode.
+    // Owning peer cluster id when this endpoint lives on a federated child (the
+    // controller reaches it by forwarding /proxy to that peer); empty for a local
+    // endpoint served from this controller's own registry.
+    string peer_id = 7;
   }
 
   message RegisterEndpointRequest {
@@ -754,6 +758,24 @@ message Controller {
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
   }
 
+  // One service endpoint exported by a handed-off (RECEIVED) job on the peer.
+  // Reported as the peer's full current set each sync (independent of the job
+  // changelog cursor), so the parent set-replaces and a re-register, access
+  // change, or lease expiry self-heals within one sync interval. No proxy
+  // address of the parent's is carried: the parent reaches the endpoint by
+  // forwarding /proxy to the peer, keyed by the reporting peer's id.
+  message FederationEndpoint {
+    string endpoint_id = 1;
+    string name = 2;                 // Globally-unique wire name, e.g. "/serve/foo"
+    string address = 3;              // Peer-side host:port (service-discovery parity / display)
+    string task_id = 4;              // Wire-format task id that registered it; FKs the mirrored task
+    EndpointAccess access = 5;       // Proxy access mode the parent enforces for its users
+    map<string, string> metadata = 6;
+    // Lease time remaining, not an absolute deadline: the parent sets its mirror's
+    // expiry to now + this (clamped), sidestepping cross-cluster clock skew.
+    iris.time.Duration lease_remaining = 7;
+  }
+
   message FederationSyncResponse {
     repeated FederationJobDelta deltas = 1;
     string next_cursor = 2;   // persisted to federation_sync_state.cursor; sent back next tick
@@ -761,6 +783,10 @@ message Controller {
     // `deltas` is the peer's entire active set for this requester and the parent
     // must set-replace: drop any local handle for this peer absent from the set.
     bool cursor_stale = 3;
+    // The requester's full current endpoint set across all its RECEIVED jobs, sent
+    // every sync regardless of `cursor_stale`. The parent set-replaces its remote
+    // endpoints for this peer from it.
+    repeated FederationEndpoint endpoints = 4;
   }
 }
 

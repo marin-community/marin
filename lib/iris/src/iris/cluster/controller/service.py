@@ -105,7 +105,7 @@ from iris.rpc.proto_display import (
     resolve_container_profile,
     task_state_friendly,
 )
-from iris.time_proto import duration_from_proto, timestamp_to_proto
+from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -3279,6 +3279,32 @@ class ControllerServiceImpl:
             changed_tasks=changed_tasks,
         )
 
+    def _federation_endpoint_snapshot(
+        self, q, requester_id: str, now: Timestamp
+    ) -> list[controller_pb2.Controller.FederationEndpoint]:
+        """The requester's full current endpoint set across its RECEIVED jobs.
+
+        Sent every sync so the parent set-replaces; a re-register, access change, or
+        lease expiry on this peer self-heals within one sync interval. Lease time is
+        reported as remaining duration (parent adds it to its own clock), avoiding
+        cross-cluster skew.
+        """
+        endpoints: list[controller_pb2.Controller.FederationEndpoint] = []
+        for e in reads.live_endpoints_for_requester(q, requester_id, now):
+            ep = controller_pb2.Controller.FederationEndpoint(
+                endpoint_id=e.endpoint_id,
+                name=e.name,
+                address=e.address,
+                task_id=e.task_id.to_wire(),
+                access=e.access,
+                metadata=e.metadata,
+            )
+            if e.lease_deadline is not None:
+                remaining_ms = max(0, e.lease_deadline.epoch_ms() - now.epoch_ms())
+                ep.lease_remaining.CopyFrom(duration_to_proto(Duration.from_ms(remaining_ms)))
+            endpoints.append(ep)
+        return endpoints
+
     def federation_sync(
         self,
         request: controller_pb2.Controller.FederationSyncRequest,
@@ -3312,6 +3338,9 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as q:
             min_seq = reads.changelog_min_seq(q)
             next_cursor = str(reads.changelog_max_seq(q))
+            # Endpoints are the requester's full current set, sent every sync
+            # independently of the changelog cursor, so the parent set-replaces.
+            endpoints = self._federation_endpoint_snapshot(q, requester_id, Timestamp.now())
             # Stale when the requester has no cursor, or its cursor sits below the
             # oldest retained event (an unconsumed event, including a tombstone, may
             # be gone). A full resync subsumes everything, so it advances to the max.
@@ -3323,7 +3352,7 @@ class ControllerServiceImpl:
                     if delta is not None:
                         deltas.append(delta)
                 return controller_pb2.Controller.FederationSyncResponse(
-                    deltas=deltas, next_cursor=next_cursor, cursor_stale=True
+                    deltas=deltas, next_cursor=next_cursor, cursor_stale=True, endpoints=endpoints
                 )
 
             tombstoned: dict[JobName, bool] = {}
@@ -3352,5 +3381,5 @@ class ControllerServiceImpl:
                     deltas.append(delta)
 
         return controller_pb2.Controller.FederationSyncResponse(
-            deltas=deltas, next_cursor=next_cursor, cursor_stale=False
+            deltas=deltas, next_cursor=next_cursor, cursor_stale=False, endpoints=endpoints
         )

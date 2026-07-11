@@ -50,6 +50,7 @@ from iris.cluster.controller.checkpoint import (
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.endpoint_proxy import FederatedEndpointProxy
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
@@ -462,6 +463,19 @@ class Controller:
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
         )
+        # Forwards a /proxy request for an endpoint that lives on a federated child
+        # to that peer's controller, presenting this cluster's federation bearer.
+        # Present only when this controller has peers and a signing key to mint with.
+        federated_proxy = (
+            FederatedEndpointProxy(self._federation.peer_controller_address, federation_token_provider.get_token)
+            if federation_token_provider is not None
+            else None
+        )
+
+        def _federation_owner_check(root_job: JobName, peer_id: str) -> bool:
+            with self._db.read_snapshot() as q:
+                return reads.has_received_job_from_peer(q, peer_id, root_job)
+
         self._dashboard = ControllerDashboard(
             self._service,
             endpoint_service=self._endpoint_service,
@@ -470,6 +484,8 @@ class Controller:
             auth_provider=config.auth_provider,
             auth_policy=request_auth_policy(config.auth),
             jwt_manager=config.auth.jwt_manager if config.auth else None,
+            federated_proxy=federated_proxy,
+            federation_owner_check=_federation_owner_check,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only

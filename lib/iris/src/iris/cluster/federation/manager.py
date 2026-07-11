@@ -136,6 +136,11 @@ class FederationManager:
         """Whether ``peer_id`` names a configured federation peer."""
         return peer_id in self._peers
 
+    def peer_controller_address(self, peer_id: str) -> str | None:
+        """The configured controller base URL of ``peer_id``, or None when it is not a peer."""
+        peer = self._peers.get(peer_id)
+        return peer.controller_address if peer is not None else None
+
     def peer_summaries(self) -> list[controller_pb2.Controller.PeerSummary]:
         """A ``PeerSummary`` for every configured peer, ordered by peer id."""
         return [self._build_summary(peer) for _, peer in sorted(self._peers.items())]
@@ -414,6 +419,7 @@ class FederationManager:
             list(response.deltas),
             next_cursor=response.next_cursor,
             cursor_stale=response.cursor_stale,
+            endpoints=list(response.endpoints),
         )
 
     # -- helpers -------------------------------------------------------------
