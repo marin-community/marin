@@ -3468,3 +3468,26 @@ material difference is the `shard_map` output contract: the diagnostic exports
 candidate adds a value-preserving scalar dependency from the remote-written
 `x_expert` scratch output to dX, preventing XLA from treating that custom-call
 output as dead or reusable without materializing a dense checksum.
+
+## 2026-07-11 FUSED-MOE-112 - Scratch-liveness fix is bit-exact
+
+Job `/dlwh/w13b-scratch-live-compare-b362` tested commit `b36296e1b7` on
+`cw-rno2a` at the reduced finite-comparison geometry. The production `FULL`
+path retained serialized source combine and added a scalar, value-preserving
+dependency from `x_expert` to dX after the custom call. This keeps the
+remote-written scratch output live through the `shard_map` boundary without a
+dense checksum or API return. Iris and its only task succeeded with exit 0 in
+55.29s.
+
+The separately compiled reference and Pallas result matched exactly:
+
+| Output | Max abs diff | Mean abs diff | Scale | Cosine | Nonfinite |
+|---|---:|---:|---:|---:|---:|
+| dX | 0.0 | 0.0 | 1.0 | 1.0 | 0 / 0 |
+| dW13 | 0.0 | 0.0 | 1.0 | 1.0 | 0 / 0 |
+
+Dropped routes, routing-policy drops, metadata overflows, queue overflows, and
+layout-overflow rows were all zero. This proves the reduced illegal address was
+caused by the production output-liveness contract rather than WGMMA arithmetic
+or route metadata. The target-shape timing run is the next gate; restoring
+combine/dW overlap remains separate work after the correct baseline is measured.
