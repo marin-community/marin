@@ -31,6 +31,7 @@ WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
 TOKEN_TRANSFER_ROWS = 128
 HELPER_PAYLOAD_K = 256
+HELPER_COMPUTE_BLOCKS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +173,7 @@ def source_push_semantic_fused_w13_generation_accounting(
         raise ValueError(f"chunk must be nonnegative, got {chunk}")
     generation = chunk // config.inbox_slots + 1
     helper_tiles_per_compute_block = hidden_dim // config.send_k
-    helper_tiles = config.compute_blocks_per_send * helper_tiles_per_compute_block
+    helper_tiles = config.compute_blocks_per_send // HELPER_COMPUTE_BLOCKS * helper_tiles_per_compute_block
     n_jobs = math.ceil((intermediate_dim // config.block_n) / config.n_groups_per_job)
     consumer_jobs = config.compute_blocks_per_send * n_jobs
     return SourcePushSemanticFusedW13GenerationAccounting(
@@ -619,7 +620,8 @@ def _make_source_push_semantic_fused_w13_kernel(
     config.validate()
     _validate_kernel_dimensions(hidden_dim, intermediate_dim, config)
     blocks_per_send = config.compute_blocks_per_send
-    helper_tiles = blocks_per_send * (hidden_dim // config.send_k)
+    helper_block_groups = blocks_per_send // HELPER_COMPUTE_BLOCKS
+    helper_tiles = helper_block_groups * (hidden_dim // config.send_k)
     helper_iterations = math.ceil(helper_tiles / config.helper_programs_per_peer)
     n_tiles = intermediate_dim // config.block_n
     n_jobs = math.ceil(n_tiles / config.n_groups_per_job)
@@ -713,73 +715,83 @@ def _make_source_push_semantic_fused_w13_kernel(
                     remote_inbox = mgpu.remote_ref(inbox_ref, peer, device_id_type=pl.DeviceIdType.LOGICAL)
 
                 def _prepare_tile(chunk, slot, tile) -> None:
-                    block = tile // (hidden_dim // config.send_k)
+                    block_group = tile // (hidden_dim // config.send_k)
                     k_tile = tile % (hidden_dim // config.send_k)
                     k_start = k_tile * config.send_k
-                    valid_rows = send_valid_ref[static_peer_ordinal, chunk, block]
+                    first_block = block_group * HELPER_COMPUTE_BLOCKS
+                    valid_rows0 = send_valid_ref[static_peer_ordinal, chunk, first_block]
+                    valid_rows1 = send_valid_ref[static_peer_ordinal, chunk, first_block + 1]
 
-                    @pl.when(valid_rows > 0)
+                    @pl.when((valid_rows0 > 0) | (valid_rows1 > 0))
                     def _copy_live_tile() -> None:
                         def _copy_scope(payload0_smem, payload1_smem, token_smem, token_barrier) -> None:
                             mgpu.copy_gmem_to_smem(
                                 token_ids_ref.at[
                                     static_peer_ordinal,
                                     chunk,
-                                    pl.ds(block * config.compute_m, TOKEN_TRANSFER_ROWS),
+                                    pl.ds(first_block * config.compute_m, TOKEN_TRANSFER_ROWS),
                                 ],
                                 token_smem,
                                 token_barrier,
                             )
                             mgpu.barrier_wait(token_barrier)
-                            for row_group in range(config.compute_m // RAW_GATHER_ROWS):
-                                row_start = row_group * RAW_GATHER_ROWS
-                                for row in range(RAW_GATHER_ROWS):
-                                    output_row = row_start + row
-                                    row_valid = output_row < valid_rows
-                                    token = jnp.where(row_valid, token_smem[output_row], 0)
-                                    x_row0 = x_ref[
-                                        token,
-                                        pl.ds(k_start, HELPER_PAYLOAD_K),
-                                    ]
-                                    x_row1 = x_ref[
-                                        token,
-                                        pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
-                                    ]
-                                    payload0_smem[output_row, :] = jnp.where(
-                                        row_valid,
-                                        x_row0,
-                                        jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
-                                    )
-                                    payload1_smem[output_row, :] = jnp.where(
-                                        row_valid,
-                                        x_row1,
-                                        jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
-                                    )
+                            for block_in_group in range(HELPER_COMPUTE_BLOCKS):
+                                valid_rows = valid_rows0 if block_in_group == 0 else valid_rows1
 
-                            mgpu.commit_smem()
-                            if static_peer_ordinal == 0:
-                                destination_ref = inbox_ref
-                            else:
-                                destination_ref = remote_inbox
-                            mgpu.copy_smem_to_gmem(
-                                payload0_smem,
-                                destination_ref.at[
-                                    rank,
-                                    slot,
-                                    pl.ds(block * config.compute_m, config.compute_m),
-                                    pl.ds(k_start, HELPER_PAYLOAD_K),
-                                ],
-                            )
-                            mgpu.copy_smem_to_gmem(
-                                payload1_smem,
-                                destination_ref.at[
-                                    rank,
-                                    slot,
-                                    pl.ds(block * config.compute_m, config.compute_m),
-                                    pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
-                                ],
-                            )
-                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+                                @pl.when(valid_rows > 0)
+                                def _copy_live_block() -> None:
+                                    token_start = block_in_group * config.compute_m
+                                    for row_group in range(config.compute_m // RAW_GATHER_ROWS):
+                                        row_start = row_group * RAW_GATHER_ROWS
+                                        for row in range(RAW_GATHER_ROWS):
+                                            output_row = row_start + row
+                                            row_valid = output_row < valid_rows
+                                            token = jnp.where(
+                                                row_valid,
+                                                token_smem[token_start + output_row],
+                                                0,
+                                            )
+                                            x_row0 = x_ref[
+                                                token,
+                                                pl.ds(k_start, HELPER_PAYLOAD_K),
+                                            ]
+                                            x_row1 = x_ref[
+                                                token,
+                                                pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
+                                            ]
+                                            payload0_smem[output_row, :] = jnp.where(
+                                                row_valid,
+                                                x_row0,
+                                                jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
+                                            )
+                                            payload1_smem[output_row, :] = jnp.where(
+                                                row_valid,
+                                                x_row1,
+                                                jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
+                                            )
+
+                                    mgpu.commit_smem()
+                                    destination_ref = inbox_ref if static_peer_ordinal == 0 else remote_inbox
+                                    destination_block = first_block + block_in_group
+                                    mgpu.copy_smem_to_gmem(
+                                        payload0_smem,
+                                        destination_ref.at[
+                                            rank,
+                                            slot,
+                                            pl.ds(destination_block * config.compute_m, config.compute_m),
+                                            pl.ds(k_start, HELPER_PAYLOAD_K),
+                                        ],
+                                    )
+                                    mgpu.copy_smem_to_gmem(
+                                        payload1_smem,
+                                        destination_ref.at[
+                                            rank,
+                                            slot,
+                                            pl.ds(destination_block * config.compute_m, config.compute_m),
+                                            pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
+                                        ],
+                                    )
+                                    mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                         pl.run_scoped(
                             _copy_scope,
@@ -803,11 +815,14 @@ def _make_source_push_semantic_fused_w13_kernel(
                         @pl.when(tile < helper_tiles)
                         def _prepare_assigned_tile() -> None:
                             _prepare_tile(chunk, slot, tile)
-                            block = tile // (hidden_dim // config.send_k)
-                            if static_peer_ordinal == 0:
-                                pl.semaphore_signal(helper_done_sem.at[rank, slot, block])
-                            else:
-                                _signal_remote_block(helper_done_sem, peer, rank, slot, block)
+                            block_group = tile // (hidden_dim // config.send_k)
+                            first_block = block_group * HELPER_COMPUTE_BLOCKS
+                            for block_in_group in range(HELPER_COMPUTE_BLOCKS):
+                                block = first_block + block_in_group
+                                if static_peer_ordinal == 0:
+                                    pl.semaphore_signal(helper_done_sem.at[rank, slot, block])
+                                else:
+                                    _signal_remote_block(helper_done_sem, peer, rank, slot, block)
 
             branches = tuple((lambda ordinal: lambda _: _prepare_peer(ordinal))(i) for i in range(ep_size))
             lax.switch(peer_ordinal, branches, None)
@@ -973,6 +988,11 @@ def _validate_kernel_dimensions(
         raise ValueError(
             f"hidden_dim must be divisible by send_k and block_k, got {hidden_dim=} "
             f"{config.send_k=} {config.block_k=}"
+        )
+    if config.compute_blocks_per_send % HELPER_COMPUTE_BLOCKS:
+        raise ValueError(
+            "send_m must contain an even number of compute_m blocks for grouped helper gathers, "
+            f"got {config.send_m=} and {config.compute_m=}"
         )
     if intermediate_dim % config.block_n:
         raise ValueError(f"intermediate_dim must be divisible by block_n, got {intermediate_dim=} {config.block_n=}")

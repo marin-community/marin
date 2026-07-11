@@ -17,6 +17,7 @@ from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_
 from levanter.grug._moe.source_push_semantic_fused_w13 import (
     SourcePushSemanticFusedW13Config,
     SourcePushSemanticFusedW13Metadata,
+    HELPER_COMPUTE_BLOCKS,
     HELPER_PAYLOAD_K,
     RAW_GATHER_ROWS,
     TOKEN_TRANSFER_ROWS,
@@ -114,8 +115,8 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
     assert CONFIG.worker_programs_per_peer == 32
     assert CONFIG.send_k == 512
     assert first.helper_tiles_per_compute_block == 5
-    assert first.helper_tiles == 20
-    assert math.ceil(first.helper_tiles / CONFIG.helper_programs_per_peer) == 2
+    assert first.helper_tiles == 10
+    assert math.ceil(first.helper_tiles / CONFIG.helper_programs_per_peer) == 1
     assert first.prepare_generation == first.generation
     assert first.helper_done_generation == first.helper_tiles_per_compute_block
     assert reused.slot == first.slot
@@ -146,36 +147,41 @@ def test_fused_w13_transport_rows_are_independent_from_compute_rows():
     assert config.compute_blocks_per_send == 2
 
 
-def test_fused_w13_bulk_metadata_load_groups_eight_contiguous_row_loads():
+def test_fused_w13_bulk_metadata_load_covers_two_compute_blocks():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
     assert RAW_GATHER_ROWS == 8
+    assert HELPER_COMPUTE_BLOCKS == 2
+    assert TOKEN_TRANSFER_ROWS == HELPER_COMPUTE_BLOCKS * CONFIG.compute_m
     assert CONFIG.compute_m // RAW_GATHER_ROWS == 8
     assert "range(config.compute_m // RAW_GATHER_ROWS)" in source
     assert "for row in range(RAW_GATHER_ROWS)" in source
+    assert "token_start = block_in_group * config.compute_m" in source
     assert "pl.ds(k_start, HELPER_PAYLOAD_K)" in source
-    assert "token_smem[output_row]" in source
+    assert "token_smem[token_start + output_row]" in source
     assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
     assert TOKEN_TRANSFER_ROWS == 128
     assert "token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32)" in source
     assert "safe_tokens[:, None]" not in source
 
 
-def test_fused_w13_helper_shares_tokens_across_two_contiguous_k256_payloads():
+def test_fused_w13_helper_reuses_b64_payloads_across_two_blocks():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
     payload_bytes = CONFIG.compute_m * HELPER_PAYLOAD_K * jnp.dtype(jnp.bfloat16).itemsize
     token_bytes = TOKEN_TRANSFER_ROWS * jnp.dtype(jnp.int32).itemsize
 
     assert (CONFIG.compute_m, CONFIG.send_k, HELPER_PAYLOAD_K) == (64, 512, 256)
+    assert TOKEN_TRANSFER_ROWS == 2 * CONFIG.compute_m
     assert 2 * payload_bytes == 64 * 1024
     assert 2 * payload_bytes + token_bytes == 66_048
     assert source.count("token_ids_ref.at[") == 1
     assert source.count("mgpu.barrier_wait(token_barrier)") == 1
     assert "payload0_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype)" in source
     assert "payload1_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype)" in source
-    assert "mgpu.copy_smem_to_gmem(\n                                payload0_smem," in source
-    assert "mgpu.copy_smem_to_gmem(\n                                payload1_smem," in source
+    assert "for block_in_group in range(HELPER_COMPUTE_BLOCKS)" in source
+    assert "mgpu.copy_smem_to_gmem(\n                                        payload0_smem," in source
+    assert "mgpu.copy_smem_to_gmem(\n                                        payload1_smem," in source
     assert "pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K)" in source
     assert source.index("mgpu.wait_smem_to_gmem(0, wait_read_only=False)") < source.index(
         "pl.semaphore_signal(helper_done_sem.at[rank, slot, block])"

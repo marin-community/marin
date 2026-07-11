@@ -3834,3 +3834,37 @@ backward and W13 backward. Production backward now reduces one `d_w2` and one
 `d_route_weight` element per rank to a scalar completion token and injects its
 zero-valued dependency into `d_z13`. The next gate is the actual target custom
 VJP with three repeat medians.
+
+## 2026-07-11 FUSED-MOE-129 - Production custom VJP completes target
+
+Target job `/dlwh/mlp-fwd-bwd-barriers-target-0888` at `088831b4bb`
+completed all three production custom-VJP repeats:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 135.025072 | 57.285418 | 71.606772 |
+| 1 | 135.515737 | 57.078003 | 71.347504 |
+| 2 | 135.487599 | 57.089857 | 71.362321 |
+| Median | **135.487599** | **57.089857** | **71.362321** |
+
+Dropped routes, routing-policy drops, metadata overflows, and benchmark error
+rows were zero. The synthetic aggregate checksum was nonfinite, so this is a
+target execution/performance gate rather than a new finite end-to-end numerical
+comparison. Each selected component already has a reduced finite comparison;
+the monolithic split-comparison harness was stopped after fourteen silent
+minutes of reference/custom-VJP compilation.
+
+Relative to the earlier unsequenced selected timing (`135.414665 ms`,
+`57.120606` useful), the explicit barriers are performance-neutral within
+noise while converting an illegal-addressing production graph into a stable
+three-repeat target path. The all-stages diagnostic with the same barriers was
+`129.673339 ms`, `59.649638` useful.
+
+The B64 inbox candidate is rejected: target job
+`/dlwh/semantic-b64-w13-target-73fe` measured a `92.606033 ms` median,
+`18.551566` useful and `23.189457` rounded TFLOP/s/rank, versus the selected
+K512 helper path at `23.025404 ms` and `74.612671` useful. This confirms the
+old 216 inbox schedule relied on contiguous/prepacked sender input; its two
+senders cannot sustain raw semantic gathers. Future W13 work stays on the
+selected 12/20 helper/consumer structure and targets the gather implementation
+itself.
