@@ -5,6 +5,7 @@ import contextlib
 import math
 import random
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from time import monotonic
 
@@ -131,22 +132,34 @@ class LogitMixingService:
         deadline = self._clock() + self._request_timeout_seconds
         rng = random.Random(request.seed)
 
-        for _ in range(request.max_tokens):
-            teacher = self._upstream_step(self._teacher.endpoint, current_text, deadline) if self._alpha else None
-            student = self._upstream_step(self._student.endpoint, current_text, deadline) if self._alpha < 1 else None
-            mixed = _mix_top_logprobs(
-                {} if teacher is None else teacher.top_logprobs,
-                {} if student is None else student.top_logprobs,
-                alpha=self._alpha,
-            )
-            if not mixed:
-                raise ValueError("upstream completions returned no shared top logprobs")
-            token = _sample_token(mixed, temperature=request.temperature, top_p=request.top_p, rng=rng)
-            generated_text += token
-            current_text += token
-            stopped_text = _text_before_stop(generated_text, request.stop)
-            if stopped_text is not None:
-                return stopped_text, "stop"
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for _ in range(request.max_tokens):
+                if 0 < self._alpha < 1:
+                    teacher_future = executor.submit(self._upstream_step, self._teacher.endpoint, current_text, deadline)
+                    student = self._upstream_step(self._student.endpoint, current_text, deadline)
+                    teacher = teacher_future.result()
+                else:
+                    teacher = (
+                        self._upstream_step(self._teacher.endpoint, current_text, deadline) if self._alpha else None
+                    )
+                    student = (
+                        self._upstream_step(self._student.endpoint, current_text, deadline) if self._alpha < 1 else None
+                    )
+                if self._clock() >= deadline:
+                    raise httpx.TimeoutException("logit mixing request deadline exceeded")
+                mixed = _mix_top_logprobs(
+                    {} if teacher is None else teacher.top_logprobs,
+                    {} if student is None else student.top_logprobs,
+                    alpha=self._alpha,
+                )
+                if not mixed:
+                    raise ValueError("upstream completions returned no top logprobs")
+                token = _sample_token(mixed, temperature=request.temperature, top_p=request.top_p, rng=rng)
+                generated_text += token
+                current_text += token
+                stopped_text = _text_before_stop(generated_text, request.stop)
+                if stopped_text is not None:
+                    return stopped_text, "stop"
 
         return generated_text, "length"
 
@@ -330,9 +343,14 @@ def _mix_top_logprobs(
         scores = dict(teacher)
     elif alpha == 0:
         scores = dict(student)
+    elif not teacher or not student:
+        return {}
     else:
+        teacher_floor = min(teacher.values())
+        student_floor = min(student.values())
         scores = {
-            token: alpha * teacher[token] + (1 - alpha) * student[token] for token in teacher.keys() & student.keys()
+            token: alpha * teacher.get(token, teacher_floor) + (1 - alpha) * student.get(token, student_floor)
+            for token in teacher.keys() | student.keys()
         }
     finite_scores = {token: score for token, score in scores.items() if math.isfinite(score)}
     if not finite_scores:

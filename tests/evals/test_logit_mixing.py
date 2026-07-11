@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 from collections.abc import Callable, Mapping
 from time import monotonic
 from types import MappingProxyType
@@ -37,6 +38,44 @@ def test_logit_mixing_generation_selects_mixed_token() -> None:
     assert response.status_code == 200
     choice = response.json()["choices"][0]
     assert choice == {"text": " C", "index": 0, "logprobs": None, "finish_reason": "length"}
+
+
+def test_logit_mixing_considers_tokens_returned_by_only_one_model() -> None:
+    response = _mixed_completion(
+        teacher={"A": {" T": 0, " C": -10}},
+        student={"A": {" S": 0, " C": -20}},
+        alpha=0.8,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["text"] == " T"
+
+
+def test_logit_mixing_handles_disjoint_top_logprobs() -> None:
+    response = _mixed_completion(
+        teacher={"A": {" T": -0.1}},
+        student={"A": {" S": -0.1}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["text"] == " S"
+
+
+def test_logit_mixing_queries_models_concurrently() -> None:
+    both_started = threading.Barrier(2)
+
+    def wait_for_other_model() -> None:
+        both_started.wait(timeout=REQUEST_TIMEOUT / 2)
+
+    response = _mixed_completion(
+        teacher={"A": {" B": -0.1}},
+        student={"A": {" B": -0.1}},
+        teacher_callbacks={"A": wait_for_other_model},
+        student_callbacks={"A": wait_for_other_model},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["text"] == " B"
 
 
 def test_logit_mixing_detects_stop_across_generated_tokens() -> None:
@@ -132,6 +171,7 @@ def _mixed_completion(
     payload: Mapping[str, object] = GENERATION_REQUEST,
     alpha: float = 0.5,
     teacher_callbacks: Mapping[str, Callable[[], None]] | None = None,
+    student_callbacks: Mapping[str, Callable[[], None]] | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> httpx.Response:
     with (
@@ -140,7 +180,11 @@ def _mixed_completion(
             completion_callbacks=teacher_callbacks,
             completion_top_logprobs=teacher,
         ) as teacher_stub,
-        serve_deterministic_openai_stub(model="student", completion_top_logprobs=student) as student_stub,
+        serve_deterministic_openai_stub(
+            model="student",
+            completion_callbacks=student_callbacks,
+            completion_top_logprobs=student,
+        ) as student_stub,
         serve_logit_mixing_model(
             teacher=RunningModel(endpoint=OpenAIEndpoint(teacher_stub.base_url, teacher_stub.model)),
             student=RunningModel(endpoint=OpenAIEndpoint(student_stub.base_url, student_stub.model)),
