@@ -199,11 +199,11 @@ def test_source_push_semantic_plan_builds_fused_w2_backward_inputs_directly_shar
 
     assert inputs.dy.shape == (1, 2, 256)
     assert inputs.return_y.shape[-2:] == (64, 256)
-    assert inputs.h_expert.shape == (1, 1, 256, 128)
+    assert inputs.z13_expert.shape == (1, 1, 256, 256)
     assert inputs.w_down.shape == (1, 1, 128, 256)
     assert inputs.dy.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None)
     assert inputs.return_y.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None, None)
-    assert inputs.h_expert.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
+    assert inputs.z13_expert.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
 
 
 def test_source_push_semantic_plan_source_padded_h_reference_uses_stored_bf16_z():

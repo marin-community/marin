@@ -166,14 +166,14 @@ def test_fused_w13_backward_schedule_separates_roles_and_publishes_compute_block
     assert schedule.compute_jobs_per_chunk == 40
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
-    assert CONFIG.worker_programs_per_peer == 48
+    assert CONFIG.worker_programs_per_peer == 32
     assert schedule.lifecycle_programs == 16
-    assert schedule.helper_programs == 112
-    assert schedule.consumer_programs == 256
-    assert schedule.peer_programs == 384
+    assert schedule.helper_programs == 80
+    assert schedule.consumer_programs == 160
+    assert schedule.peer_programs == 256
     assert schedule.combine_programs == 32
     assert schedule.active_combine_programs == 32
-    assert schedule.total_programs == 416
+    assert schedule.total_programs == 288
     assert schedule.readiness_signals == 200
     assert schedule.block_readiness_signals == 800
     assert schedule.readiness_waits == 983040

@@ -39,8 +39,8 @@ class SourcePushSemanticFusedW2BackwardConfig:
     send_hidden_block: int = 256
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
-    helper_programs_per_peer: int = 14
-    consumer_programs_per_peer: int = 32
+    helper_programs_per_peer: int = 10
+    consumer_programs_per_peer: int = 20
 
     def validate(self) -> None:
         expected = {
@@ -51,8 +51,8 @@ class SourcePushSemanticFusedW2BackwardConfig:
             "send_hidden_block": 256,
             "inbox_slots": 12,
             "chunk_owner_programs_per_peer": 2,
-            "helper_programs_per_peer": 14,
-            "consumer_programs_per_peer": 32,
+            "helper_programs_per_peer": 10,
+            "consumer_programs_per_peer": 20,
         }
         for name, value in expected.items():
             actual = getattr(self, name)
@@ -92,7 +92,7 @@ class SourcePushSemanticFusedW2BackwardMetadata:
 class SourcePushSemanticFusedW2BackwardResult(NamedTuple):
     """W2 gradients without a replicated or expert-major route-dy tensor."""
 
-    d_h: Float[Array, "Dst E C I"]
+    d_z13: Float[Array, "Dst E C twoI"]
     d_w2: Float[Array, "Dst E I H"]
     d_route_weight: Float[Array, "S T K"]
     valid: Bool[Array, "Dst E C"]
@@ -245,10 +245,10 @@ def source_push_semantic_fused_w2_backward_metadata_jax(
 def source_push_semantic_fused_w2_backward_reference_jax(
     dy: Float[Array, "S T H"],
     return_y: Float[Array, "S DstOrd Q M H"],
-    h_expert: Float[Array, "Dst E C I"],
+    z13_expert: Float[Array, "Dst E C twoI"],
     w_down: Float[Array, "Dst E I H"],
     metadata: SourcePushSemanticFusedW2BackwardMetadata,
-) -> tuple[Float[Array, "Dst E C I"], Float[Array, "Dst E I H"], Float[Array, "S T K"]]:
+) -> tuple[Float[Array, "Dst E C twoI"], Float[Array, "Dst E I H"], Float[Array, "S T K"]]:
     """Obvious gather/matmul/scatter reference for the fused stage."""
 
     source_count, destination_count, _chunks, _blocks, compute_m = metadata.token_ids.shape
@@ -283,23 +283,28 @@ def source_push_semantic_fused_w2_backward_reference_jax(
         scatter_expert = jax.sharding.reshard(scatter_expert, replicated_rows)
         scatter_row = jax.sharding.reshard(scatter_row, replicated_rows)
         dy_route_for_expert = jax.sharding.reshard(dy_route, replicated_values)
-    d_h = jnp.zeros(
-        (*h_expert.shape[:3], h_expert.shape[-1]),
-        dtype=jnp.float32,
-    )
+    intermediate_dim = z13_expert.shape[-1] // 2
+    d_h = jnp.zeros((*z13_expert.shape[:3], intermediate_dim), dtype=jnp.float32)
     d_h = jnp.pad(d_h, ((0, 0), (0, 0), (0, 1), (0, 0)))
     d_h = d_h.at[scatter_destination, scatter_expert, scatter_row].set(
         jnp.where(row_valid[..., None], queue_dh, jnp.zeros((), dtype=jnp.float32))
     )
     d_h = d_h[..., : metadata.rows_per_expert_capacity, :]
 
-    safe_row = jnp.minimum(metadata.send_row_start[..., None] + row, h_expert.shape[2] - 1)
+    safe_row = jnp.minimum(metadata.send_row_start[..., None] + row, z13_expert.shape[2] - 1)
     if gathered_sharding is not None:
         safe_row = jax.sharding.reshard(safe_row, P(None, None, None, None, None))
-    h_rows_sharding = None if gathered_sharding is None else P(None, None, None, None, None, None)
-    h_rows = h_expert.at[scatter_destination, scatter_expert, safe_row].get(out_sharding=h_rows_sharding)
-    h_rows = h_rows.astype(jnp.float32)
+    z_rows_sharding = None if gathered_sharding is None else P(None, None, None, None, None, None)
+    z_rows = z13_expert.at[scatter_destination, scatter_expert, safe_row].get(out_sharding=z_rows_sharding)
+    gate_rows, up_rows = jnp.split(z_rows.astype(jnp.float32), 2, axis=-1)
+    h_rows = (jax.nn.silu(gate_rows) * up_rows).astype(jnp.bfloat16).astype(jnp.float32)
     h_rows = jnp.where(row_valid[..., None], h_rows, jnp.zeros((), dtype=jnp.float32))
+    sigmoid_gate = jax.nn.sigmoid(z13_expert[..., :intermediate_dim].astype(jnp.float32))
+    silu_gate = z13_expert[..., :intermediate_dim].astype(jnp.float32) * sigmoid_gate
+    d_silu_gate = sigmoid_gate * (1.0 + z13_expert[..., :intermediate_dim].astype(jnp.float32) * (1.0 - sigmoid_gate))
+    up = z13_expert[..., intermediate_dim:].astype(jnp.float32)
+    d_z13 = jnp.concatenate((d_h * up * d_silu_gate, d_h * silu_gate), axis=-1).astype(jnp.bfloat16)
+
     dw2 = jnp.zeros(w_down.shape, dtype=jnp.float32)
     for dst in range(w_down.shape[0]):
         for expert in range(w_down.shape[1]):
@@ -339,7 +344,7 @@ def source_push_semantic_fused_w2_backward_reference_jax(
         queue_d_route,
     )
     return (
-        jnp.where(metadata.valid[..., None], d_h, jnp.zeros((), dtype=d_h.dtype)),
+        jnp.where(metadata.valid[..., None], d_z13, jnp.zeros((), dtype=d_z13.dtype)),
         dw2,
         d_route,
     )
@@ -348,7 +353,7 @@ def source_push_semantic_fused_w2_backward_reference_jax(
 def source_push_semantic_fused_w2_backward(
     dy: Float[Array, "S T H"],
     return_y: Float[Array, "S DstOrd Q M H"],
-    h_expert: Float[Array, "Dst E C I"],
+    z13_expert: Float[Array, "Dst E C twoI"],
     w_down: Float[Array, "Dst E I H"],
     plan: SourcePushSemanticPlan,
     *,
@@ -363,7 +368,7 @@ def source_push_semantic_fused_w2_backward(
     _validate_request(
         dy,
         return_y,
-        h_expert,
+        z13_expert,
         w_down,
         plan,
         send_chunks_per_dst,
@@ -378,8 +383,8 @@ def source_push_semantic_fused_w2_backward(
         config=config,
     )
     if interpret:
-        d_h, d_w2, d_route = source_push_semantic_fused_w2_backward_reference_jax(
-            dy, return_y, h_expert, w_down, metadata
+        d_z13, d_w2, d_route = source_push_semantic_fused_w2_backward_reference_jax(
+            dy, return_y, z13_expert, w_down, metadata
         )
     else:
         if jax.default_backend() != "gpu":
@@ -388,18 +393,18 @@ def source_push_semantic_fused_w2_backward(
             mesh = jax.sharding.get_abstract_mesh()
             if mesh.empty:
                 raise ValueError("mesh is required for persistent semantic fused W2 backward")
-        d_h, d_w2, d_route = _source_push_semantic_fused_w2_backward_sharded(
+        d_z13, d_w2, d_route = _source_push_semantic_fused_w2_backward_sharded(
             dy,
             return_y,
-            h_expert,
+            z13_expert,
             w_down,
             metadata,
             config=config,
             mesh=mesh,
         )
-    d_h = jnp.where(metadata.valid[..., None], d_h, jnp.zeros((), dtype=d_h.dtype))
+    d_z13 = jnp.where(metadata.valid[..., None], d_z13, jnp.zeros((), dtype=d_z13.dtype))
     return SourcePushSemanticFusedW2BackwardResult(
-        d_h=d_h,
+        d_z13=d_z13,
         d_w2=d_w2,
         d_route_weight=d_route,
         valid=metadata.valid,
@@ -413,7 +418,7 @@ def source_push_semantic_fused_w2_backward(
 def _source_push_semantic_fused_w2_backward_sharded(
     dy: Array,
     return_y: Array,
-    h_expert: Array,
+    z13_expert: Array,
     w_down: Array,
     metadata: SourcePushSemanticFusedW2BackwardMetadata,
     *,
@@ -428,8 +433,8 @@ def _source_push_semantic_fused_w2_backward_sharded(
     kernel = _make_source_push_semantic_fused_w2_backward_kernel(
         ep_size=dy.shape[0],
         hidden_dim=dy.shape[-1],
-        intermediate_dim=h_expert.shape[-1],
-        experts_per_rank=h_expert.shape[1],
+        intermediate_dim=z13_expert.shape[-1] // 2,
+        experts_per_rank=z13_expert.shape[1],
         rows_per_expert_capacity=metadata.rows_per_expert_capacity,
         send_chunks_per_dst=metadata.send_chunks_per_dst,
         dtype=dy.dtype,
@@ -446,10 +451,10 @@ def _source_push_semantic_fused_w2_backward_sharded(
         recv_expert_local,
         recv_row_local,
         recv_valid_local,
-        h_local,
+        z13_local,
         w_local,
     ):
-        _inbox, d_h_local, d_w2_local, queue_d_route_local = kernel(
+        _inbox, d_z13_local, d_w2_local, queue_d_route_local = kernel(
             dy_local[0],
             route_y_local[0],
             token_local[0],
@@ -458,7 +463,7 @@ def _source_push_semantic_fused_w2_backward_sharded(
             recv_expert_local[0],
             recv_row_local[0],
             recv_valid_local[0],
-            h_local[0],
+            z13_local[0],
             w_local[0],
         )
         compute_m = token_local.shape[-1]
@@ -468,7 +473,7 @@ def _source_push_semantic_fused_w2_backward_sharded(
         d_route_local = d_route_local.at[token_local[0], slot_local[0]].add(
             jnp.where(row_valid, queue_d_route_local, jnp.zeros((), dtype=queue_d_route_local.dtype))
         )
-        return d_h_local[None], d_w2_local[None], d_route_local[None]
+        return d_z13_local[None], d_w2_local[None], d_route_local[None]
 
     source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
     source_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
@@ -507,7 +512,7 @@ def _source_push_semantic_fused_w2_backward_sharded(
         jax.sharding.reshard(metadata.recv_expert, destination_4d),
         jax.sharding.reshard(metadata.recv_row_start, destination_4d),
         jax.sharding.reshard(metadata.recv_valid_rows, destination_4d),
-        jax.sharding.reshard(h_expert, destination_4d),
+        jax.sharding.reshard(z13_expert, destination_4d),
         jax.sharding.reshard(w_down, destination_4d),
     )
 
@@ -553,10 +558,10 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         recv_expert_ref,
         recv_row_ref,
         recv_valid_ref,
-        h_ref,
+        z13_ref,
         w_ref,
         inbox_ref,
-        d_h_ref,
+        d_z13_ref,
         d_w2_ref,
         queue_d_route_ref,
     ) -> None:
@@ -776,7 +781,38 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     expert = recv_expert_ref[static_peer_ordinal, chunk, block]
 
                                     def _acc_scope(acc_ref) -> None:
-                                        def _smem_scope(dy_smem, w_smem, barrier) -> None:
+                                        def _smem_scope(
+                                            dy_smem,
+                                            w_smem,
+                                            gate_smem,
+                                            up_smem,
+                                            matmul_barrier,
+                                            z13_barrier,
+                                        ) -> None:
+                                            row_start = recv_row_ref[static_peer_ordinal, chunk, block]
+                                            intermediate_start = i_tile * config.intermediate_block
+                                            mgpu.copy_gmem_to_smem(
+                                                z13_ref.at[
+                                                    expert,
+                                                    pl.ds(row_start, config.compute_m),
+                                                    pl.ds(intermediate_start, config.intermediate_block),
+                                                ],
+                                                gate_smem,
+                                                z13_barrier,
+                                            )
+                                            mgpu.copy_gmem_to_smem(
+                                                z13_ref.at[
+                                                    expert,
+                                                    pl.ds(row_start, config.compute_m),
+                                                    pl.ds(
+                                                        intermediate_dim + intermediate_start,
+                                                        config.intermediate_block,
+                                                    ),
+                                                ],
+                                                up_smem,
+                                                z13_barrier,
+                                            )
+
                                             @pl.loop(0, hidden_tiles)
                                             def _hidden_loop(h_tile) -> None:
                                                 h_start = h_tile * config.hidden_block
@@ -788,7 +824,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                                         pl.ds(h_start, config.hidden_block),
                                                     ],
                                                     dy_smem,
-                                                    barrier,
+                                                    matmul_barrier,
                                                 )
                                                 mgpu.copy_gmem_to_smem(
                                                     w_ref.at[
@@ -800,9 +836,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                                         pl.ds(h_start, config.hidden_block),
                                                     ],
                                                     w_smem,
-                                                    barrier,
+                                                    matmul_barrier,
                                                 )
-                                                mgpu.barrier_wait(barrier)
+                                                mgpu.barrier_wait(matmul_barrier)
                                                 mgpu.commit_smem()
                                                 mgpu.wgmma(
                                                     acc_ref,
@@ -811,23 +847,40 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                                 )
                                                 mgpu.wgmma_wait(0)
 
+                                            mgpu.barrier_wait(z13_barrier)
+                                            gate = gate_smem[:, :].astype(jnp.float32)
+                                            up = up_smem[:, :].astype(jnp.float32)
+                                            d_h = acc_ref[...]
+                                            sigmoid_gate = jax.nn.sigmoid(gate)
+                                            silu_gate = gate * sigmoid_gate
+                                            d_silu_gate = sigmoid_gate * (1.0 + gate * (1.0 - sigmoid_gate))
+                                            d_z13_ref[
+                                                expert,
+                                                pl.ds(row_start, config.compute_m),
+                                                pl.ds(intermediate_start, config.intermediate_block),
+                                            ] = (d_h * up * d_silu_gate).astype(dtype)
+                                            d_z13_ref[
+                                                expert,
+                                                pl.ds(row_start, config.compute_m),
+                                                pl.ds(
+                                                    intermediate_dim + intermediate_start,
+                                                    config.intermediate_block,
+                                                ),
+                                            ] = (d_h * silu_gate).astype(dtype)
+
                                         pl.run_scoped(
                                             _smem_scope,
                                             dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
                                             w_smem=_wgmma_smem(
                                                 (config.intermediate_block, config.hidden_block), dtype
                                             ),
-                                            barrier=mgpu.Barrier(num_arrivals=2),
-                                        )
-                                        row_start = recv_row_ref[static_peer_ordinal, chunk, block]
-                                        d_h_ref[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                i_tile * config.intermediate_block,
-                                                config.intermediate_block,
+                                            gate_smem=_wgmma_smem(
+                                                (config.compute_m, config.intermediate_block), dtype
                                             ),
-                                        ] = acc_ref[...]
+                                            up_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                                            matmul_barrier=mgpu.Barrier(num_arrivals=2),
+                                            z13_barrier=mgpu.Barrier(num_arrivals=2),
+                                        )
 
                                     pl.run_scoped(
                                         _acc_scope,
@@ -854,9 +907,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     row_start = recv_row_ref[static_peer_ordinal, chunk, block]
 
                                     def _acc_scope(acc_ref) -> None:
-                                        def _smem_scope(h_smem, dy_smem, barrier) -> None:
+                                        def _smem_scope(gate_smem, up_smem, h_smem, dy_smem, barrier) -> None:
                                             mgpu.copy_gmem_to_smem(
-                                                h_ref.at[
+                                                z13_ref.at[
                                                     expert,
                                                     pl.ds(row_start, config.compute_m),
                                                     pl.ds(
@@ -864,7 +917,19 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                                         config.intermediate_block,
                                                     ),
                                                 ],
-                                                h_smem,
+                                                gate_smem,
+                                                barrier,
+                                            )
+                                            mgpu.copy_gmem_to_smem(
+                                                z13_ref.at[
+                                                    expert,
+                                                    pl.ds(row_start, config.compute_m),
+                                                    pl.ds(
+                                                        intermediate_dim + i_tile * config.intermediate_block,
+                                                        config.intermediate_block,
+                                                    ),
+                                                ],
+                                                up_smem,
                                                 barrier,
                                             )
                                             mgpu.copy_gmem_to_smem(
@@ -881,6 +946,10 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                                 barrier,
                                             )
                                             mgpu.barrier_wait(barrier)
+                                            h_smem[:, :] = (
+                                                jax.nn.silu(gate_smem[:, :].astype(jnp.float32))
+                                                * up_smem[:, :].astype(jnp.float32)
+                                            ).astype(dtype)
                                             mgpu.commit_smem()
                                             mgpu.wgmma(
                                                 acc_ref,
@@ -891,9 +960,13 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
 
                                         pl.run_scoped(
                                             _smem_scope,
+                                            gate_smem=_wgmma_smem(
+                                                (config.compute_m, config.intermediate_block), dtype
+                                            ),
+                                            up_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
                                             h_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
                                             dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
-                                            barrier=mgpu.Barrier(num_arrivals=2),
+                                            barrier=mgpu.Barrier(num_arrivals=3),
                                         )
                                         mgpu.atomic_add(
                                             d_w2_ref.at[
@@ -936,7 +1009,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
         body,
         out_shape=(
             jax.ShapeDtypeStruct((ep_size, config.inbox_slots, config.send_m, hidden_dim), dtype),
-            jax.ShapeDtypeStruct((experts_per_rank, rows_per_expert_capacity, intermediate_dim), jnp.float32),
+            jax.ShapeDtypeStruct((experts_per_rank, rows_per_expert_capacity, 2 * intermediate_dim), dtype),
             jax.ShapeDtypeStruct((experts_per_rank, intermediate_dim, hidden_dim), jnp.float32),
             jax.ShapeDtypeStruct(
                 (
@@ -982,7 +1055,7 @@ def _validate_kernel_dimensions(
 def _validate_request(
     dy: Array,
     return_y: Array,
-    h_expert: Array,
+    z13_expert: Array,
     w_down: Array,
     plan: SourcePushSemanticPlan,
     send_chunks_per_dst: int,
@@ -1002,28 +1075,32 @@ def _validate_request(
     )
     if return_y.shape != expected_return_shape:
         raise ValueError(f"return_y shape {return_y.shape} must be {expected_return_shape}")
-    if h_expert.ndim != 4 or w_down.ndim != 4:
-        raise ValueError(f"h_expert and w_down must be rank four, got {h_expert.shape=} {w_down.shape=}")
+    if z13_expert.ndim != 4 or w_down.ndim != 4:
+        raise ValueError(f"z13_expert and w_down must be rank four, got {z13_expert.shape=} {w_down.shape=}")
     if source_count != destination_count or dy.shape[:2] != (source_count, plan.tokens_per_source):
         raise ValueError(f"dy shape {dy.shape} is incompatible with semantic plan {plan.xcounts.shape}")
-    if h_expert.shape[:3] != (destination_count, experts_per_rank, rows_per_expert_capacity):
+    if z13_expert.shape[:3] != (destination_count, experts_per_rank, rows_per_expert_capacity):
         raise ValueError(
-            f"h_expert leading shape {h_expert.shape[:3]} must be "
+            f"z13_expert leading shape {z13_expert.shape[:3]} must be "
             f"{(destination_count, experts_per_rank, rows_per_expert_capacity)}"
         )
-    if w_down.shape != (destination_count, experts_per_rank, h_expert.shape[-1], dy.shape[-1]):
+    if z13_expert.shape[-1] != 2 * w_down.shape[-2]:
+        raise ValueError(
+            f"z13_expert output dim {z13_expert.shape[-1]} must be twice w_down intermediate dim {w_down.shape[-2]}"
+        )
+    if w_down.shape != (destination_count, experts_per_rank, z13_expert.shape[-1] // 2, dy.shape[-1]):
         raise ValueError(
             f"w_down shape {w_down.shape} must be "
-            f"{(destination_count, experts_per_rank, h_expert.shape[-1], dy.shape[-1])}"
+            f"{(destination_count, experts_per_rank, z13_expert.shape[-1] // 2, dy.shape[-1])}"
         )
-    if dy.dtype != jnp.bfloat16 or h_expert.dtype != jnp.bfloat16 or w_down.dtype != jnp.bfloat16:
+    if dy.dtype != jnp.bfloat16 or z13_expert.dtype != jnp.bfloat16 or w_down.dtype != jnp.bfloat16:
         raise ValueError(
-            f"WGMMA inputs dy, h_expert, and w_down must use bfloat16, got "
-            f"{dy.dtype}, {h_expert.dtype}, {w_down.dtype}"
+            f"WGMMA inputs dy, z13_expert, and w_down must use bfloat16, got "
+            f"{dy.dtype}, {z13_expert.dtype}, {w_down.dtype}"
         )
     if rows_per_expert_capacity % config.compute_m:
         raise ValueError(
             f"rows_per_expert_capacity must be divisible by compute_m={config.compute_m}, "
             f"got {rows_per_expert_capacity}"
         )
-    _validate_kernel_dimensions(dy.shape[-1], h_expert.shape[-1], config)
+    _validate_kernel_dimensions(dy.shape[-1], z13_expert.shape[-1] // 2, config)

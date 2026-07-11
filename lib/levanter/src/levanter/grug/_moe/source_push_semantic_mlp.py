@@ -428,11 +428,10 @@ def _source_push_semantic_fused_mlp_backward(
     Float[Array, "Dst E H twoI"],
     Float[Array, "Dst E I H"],
 ]:
-    h = _source_push_semantic_fused_mlp_rematerialize_h(residual.z)
     fused_w2_backward = source_push_semantic_fused_w2_backward(
         dy.astype(jnp.bfloat16),
         residual.return_y,
-        h,
+        residual.z,
         residual.w2,
         residual.plan,
         send_chunks_per_dst=send_chunks_per_dst,
@@ -440,14 +439,9 @@ def _source_push_semantic_fused_mlp_backward(
         mesh=mesh,
         interpret=interpret,
     )
-    dz = source_push_semantic_swiglu_backward_expert_major_jax(
-        fused_w2_backward.d_h,
-        residual.z,
-        fused_w2_backward.valid,
-    ).astype(residual.w13.dtype)
     fused_w13_backward = source_push_semantic_fused_w13_backward(
         residual.x,
-        dz,
+        fused_w2_backward.d_z13.astype(residual.w13.dtype),
         residual.w13,
         residual.plan,
         send_chunks_per_dst=send_chunks_per_dst,
@@ -461,13 +455,6 @@ def _source_push_semantic_fused_mlp_backward(
         fused_w13_backward.dw13.astype(residual.w13.dtype),
         fused_w2_backward.d_w2.astype(residual.w2.dtype),
     )
-
-
-def _source_push_semantic_fused_mlp_rematerialize_h(
-    z: Float[Array, "Dst E C twoI"],
-) -> Float[Array, "Dst E C I"]:
-    gate, up = jnp.split(z.astype(jnp.float32), 2, axis=-1)
-    return (jax.nn.silu(gate) * up).astype(jnp.bfloat16)
 
 
 def _source_push_semantic_fused_queue_geometry(*, rows_per_src_dst: int, experts_per_rank: int) -> tuple[int, int]:

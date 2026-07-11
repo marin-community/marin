@@ -880,7 +880,7 @@ class SemanticBackwardReturnQueueBenchInputs:
 class SemanticFusedW2BackwardBenchInputs:
     dy: Float[Array, "S T H"]
     return_y: Float[Array, "S DstOrd Q M H"]
-    h_expert: Float[Array, "Dst E C I"]
+    z13_expert: Float[Array, "Dst E C twoI"]
     w_down: Float[Array, "Dst E I H"]
 
 
@@ -1147,8 +1147,8 @@ def _make_semantic_fused_w2_backward_inputs(
         0.0625,
         source_5d,
     )
-    h_expert = full(
-        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, args.intermediate_dim),
+    z13_expert = full(
+        (args.ep_size, args.experts_per_rank, rows_per_expert_capacity, 2 * args.intermediate_dim),
         0.03125,
         destination_4d,
     )
@@ -1160,7 +1160,7 @@ def _make_semantic_fused_w2_backward_inputs(
     return SemanticFusedW2BackwardBenchInputs(
         dy=dy,
         return_y=return_y,
-        h_expert=h_expert,
+        z13_expert=z13_expert,
         w_down=w_down,
     )
 
@@ -1443,7 +1443,7 @@ def _shard_semantic_fused_w2_backward_inputs(
     return SemanticFusedW2BackwardBenchInputs(
         dy=jax.device_put(inputs.dy, source_3d),
         return_y=jax.device_put(inputs.return_y, source_5d),
-        h_expert=jax.device_put(inputs.h_expert, destination_4d),
+        z13_expert=jax.device_put(inputs.z13_expert, destination_4d),
         w_down=jax.device_put(inputs.w_down, destination_4d),
     )
 
@@ -4080,7 +4080,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         return source_push_semantic_fused_w2_backward.source_push_semantic_fused_w2_backward(
             inputs.dy,
             inputs.return_y,
-            inputs.h_expert,
+            inputs.z13_expert,
             inputs.w_down,
             plan,
             send_chunks_per_dst=send_chunks_per_dst,
@@ -4092,7 +4092,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
     def semantic_fused_w2_backward_pallas(inputs: SemanticFusedW2BackwardBenchInputs):
         result = semantic_fused_w2_backward(inputs, interpret=args.pallas_interpret)
         return {
-            "d_h": result.d_h,
+            "d_z13": result.d_z13,
             "d_w2": result.d_w2,
             "d_route_weight": result.d_route_weight,
             "queue_overflow_route_error_count": result.queue_overflow_routes,
@@ -4103,7 +4103,7 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         expected = semantic_fused_w2_backward(inputs, interpret=True)
         observed = semantic_fused_w2_backward(inputs, interpret=args.pallas_interpret)
         return {
-            **_comparison_metrics("d_h", observed.d_h, expected.d_h),
+            **_comparison_metrics("d_z13", observed.d_z13, expected.d_z13),
             **_comparison_metrics("d_w2", observed.d_w2, expected.d_w2),
             **_comparison_metrics(
                 "d_route_weight",

@@ -50,10 +50,10 @@ def _inputs(*, rows_per_expert_capacity: int = 256):
     return_y = ((jnp.arange(2 * 2 * 4 * 64 * 256, dtype=jnp.float32).reshape(2, 2, 4, 64, 256) % 13 - 6) / 32).astype(
         jnp.bfloat16
     )
-    h_expert = (
+    z13_expert = (
         (
-            jnp.arange(2 * 2 * rows_per_expert_capacity * 128, dtype=jnp.float32).reshape(
-                2, 2, rows_per_expert_capacity, 128
+            jnp.arange(2 * 2 * rows_per_expert_capacity * 256, dtype=jnp.float32).reshape(
+                2, 2, rows_per_expert_capacity, 256
             )
             % 11
             - 5
@@ -63,13 +63,16 @@ def _inputs(*, rows_per_expert_capacity: int = 256):
     w_down = ((jnp.arange(2 * 2 * 128 * 256, dtype=jnp.float32).reshape(2, 2, 128, 256) % 7 - 3) / 64).astype(
         jnp.bfloat16
     )
-    return dy, return_y, h_expert, w_down, plan
+    return dy, return_y, z13_expert, w_down, plan
 
 
-def _independent_reference(dy, return_y, h_expert, w_down, plan, *, capacity: int):
+def _independent_reference(dy, return_y, z13_expert, w_down, plan, *, capacity: int):
     dy_host = np.asarray(dy, dtype=np.float32)
     return_y_host = np.asarray(return_y, dtype=np.float32)
-    h_host = np.asarray(h_expert, dtype=np.float32)
+    z13_host = np.asarray(z13_expert, dtype=np.float32)
+    gate_host, up_host = np.split(z13_host, 2, axis=-1)
+    silu_host = gate_host / (1.0 + np.exp(-gate_host))
+    h_host = np.asarray(jnp.asarray(silu_host * up_host).astype(jnp.bfloat16), dtype=np.float32)
     w_host = np.asarray(w_down, dtype=np.float32)
     assignment_ids = np.asarray(plan.assignment_ids)
     pair_valid = np.asarray(plan.valid_mask)
@@ -110,7 +113,12 @@ def _independent_reference(dy, return_y, h_expert, w_down, plan, *, capacity: in
                     d_w2[dst, expert] += np.outer(h_host[dst, expert, expert_row], dy_route)
                     d_route[src, token, slot] += np.dot(dy_token, return_y_host[src, dst_ordinal, entry, row])
                     valid[dst, expert, expert_row] = True
-    return d_h, d_w2, d_route, valid
+    sigmoid_gate = 1.0 / (1.0 + np.exp(-gate_host))
+    d_silu_gate = sigmoid_gate * (1.0 + gate_host * (1.0 - sigmoid_gate))
+    d_z13 = np.concatenate((d_h * up_host * d_silu_gate, d_h * silu_host), axis=-1)
+    d_z13 = np.asarray(jnp.asarray(d_z13).astype(jnp.bfloat16), dtype=np.float32)
+    d_z13[~valid] = 0.0
+    return d_z13, d_w2, d_route, valid
 
 
 def test_fused_w2_backward_metadata_is_jittable_and_preserves_source_routes():
@@ -191,37 +199,38 @@ def test_fused_w2_backward_generation_accounting_tracks_source_owned_slot_reuse(
 
 def test_fused_w2_backward_config_uses_forward_send_and_compute_worker_split():
     assert CONFIG.chunk_owner_programs_per_peer == 2
-    assert CONFIG.helper_programs_per_peer == 14
-    assert CONFIG.consumer_programs_per_peer == 32
+    assert CONFIG.helper_programs_per_peer == 10
+    assert CONFIG.consumer_programs_per_peer == 20
     assert (
         CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer + CONFIG.consumer_programs_per_peer
-        == 48
+        == 32
     )
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
-    dy, return_y, h_expert, w_down, plan = _inputs()
+    dy, return_y, z13_expert, w_down, plan = _inputs()
     observed = jax.jit(
-        lambda dy_arg, return_y_arg, h_arg, w_arg, plan_arg: source_push_semantic_fused_w2_backward(
+        lambda dy_arg, return_y_arg, z13_arg, w_arg, plan_arg: source_push_semantic_fused_w2_backward(
             dy_arg,
             return_y_arg,
-            h_arg,
+            z13_arg,
             w_arg,
             plan_arg,
             send_chunks_per_dst=1,
             rows_per_expert_capacity=256,
             interpret=True,
         )
-    )(dy, return_y, h_expert, w_down, plan)
-    expected_dh, expected_dw2, expected_droute, expected_valid = _independent_reference(
-        dy, return_y, h_expert, w_down, plan, capacity=256
+    )(dy, return_y, z13_expert, w_down, plan)
+    expected_dz13, expected_dw2, expected_droute, expected_valid = _independent_reference(
+        dy, return_y, z13_expert, w_down, plan, capacity=256
     )
 
-    np.testing.assert_allclose(np.asarray(observed.d_h), expected_dh, rtol=2e-4, atol=2e-4)
+    assert observed.d_z13.dtype == jnp.bfloat16
+    np.testing.assert_allclose(np.asarray(observed.d_z13, dtype=np.float32), expected_dz13, rtol=2e-4, atol=2e-4)
     np.testing.assert_allclose(np.asarray(observed.d_w2), expected_dw2, rtol=2e-4, atol=2e-4)
     np.testing.assert_allclose(np.asarray(observed.d_route_weight), expected_droute, rtol=2e-4, atol=2e-4)
     np.testing.assert_array_equal(np.asarray(observed.valid), expected_valid)
-    np.testing.assert_array_equal(np.asarray(observed.d_h)[~expected_valid], 0)
+    np.testing.assert_array_equal(np.asarray(observed.d_z13)[~expected_valid], 0)
     assert int(observed.queue_overflow_routes) == 0
     assert int(observed.layout_overflow_rows) == 0
 
@@ -280,6 +289,9 @@ def test_fused_w2_backward_kernel_contract_overlaps_dedicated_helpers_and_consum
     assert source.count("pl.semaphore_wait(full_sem.at[peer, slot], value=generation, decrement=False)") == 1
     assert "value=generation * consumer_jobs" in source
     assert "mgpu.atomic_add" in source
+    assert "jax.nn.silu(gate_smem[:, :].astype(jnp.float32))" in source
+    assert "d_z13_ref" in source
+    assert "d_h_ref" not in source
     assert "_prepare_and_consume_peer" not in source
     assert "_helper_consumer" not in source
     assert "producer_tiles_per_program" not in source

@@ -46,8 +46,8 @@ class SourcePushSemanticFusedW13BackwardConfig:
     inbox_slots: int = 12
     combine_token_block: int = 64
     chunk_owner_programs_per_peer: int = 2
-    helper_programs_per_peer: int = 14
-    consumer_programs_per_peer: int = 32
+    helper_programs_per_peer: int = 10
+    consumer_programs_per_peer: int = 20
 
     def validate(self) -> None:
         expected = {
@@ -58,8 +58,8 @@ class SourcePushSemanticFusedW13BackwardConfig:
             "inbox_slots": 12,
             "combine_token_block": 64,
             "chunk_owner_programs_per_peer": 2,
-            "helper_programs_per_peer": 14,
-            "consumer_programs_per_peer": 32,
+            "helper_programs_per_peer": 10,
+            "consumer_programs_per_peer": 20,
         }
         for name, value in expected.items():
             if getattr(self, name) != value:
