@@ -95,6 +95,14 @@ gpu = [
   # forcing an exact patch version.
   "triton>=3.6.0,<3.7; sys_platform == 'linux'",
 ]
+nvshmem_transport = [
+  # Keep this separate from `gpu`: the CUDA 12.8 Torch wheel requires
+  # cuda-bindings<13, while NVSHMEM4Py-CUDA13 requires cuda-python>=13.
+  # NVSHMEM4Py 0.3.1 imports CuTe typing APIs removed in CUTLASS DSL 4.5.
+  "nvidia-cutlass-dsl[cu13]==4.4.2; sys_platform == 'linux'",
+  "nvidia-nvshmem-cu13==3.7.0; sys_platform == 'linux'",
+  "nvshmem4py-cu13==0.3.1; sys_platform == 'linux'",
+]
 deepep = [
   # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
   # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
@@ -178,6 +186,14 @@ conflicts = [
   [
     { extra = "gpu" },
     { extra = "tpu" },
+  ],
+  [
+    { extra = "nvshmem-transport" },
+    { extra = "gpu" },
+  ],
+  [
+    { extra = "nvshmem-transport" },
+    { extra = "torch-test" },
   ],
 ]  # Never solve for both GPU and TPU at once
 
