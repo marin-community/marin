@@ -2431,7 +2431,7 @@ sharding. The next gate is to repair that comparison boundary or add a finite
 integrated error metric, then compare cohort output against the prior W2 path
 before declaring this schedule production-selected.
 
-## 2026-07-10 FUSED-MOE-083 - Reduced direct W2 cohort comparison passes
+## 2026-07-10 FUSED-MOE-082 - Reduced direct W2 cohort comparison passes
 
 Job `/dlwh/compare-semantic-w2-cohort-direct-20260710-2255` at
 `a8b05dc63e` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
