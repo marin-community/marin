@@ -4472,6 +4472,11 @@ def _mode_callable(
         y, dropped_routes = semantic_fused_mlp_forward(inputs, interpret=True, mesh=None)
         return {"y": y, "dropped_routes": dropped_routes}
 
+    def semantic_fused_mlp_dy_after_forward(inputs: SemanticBenchInputs, y: Array) -> Array:
+        forward_done = jax.lax.optimization_barrier(y[0, 0, 0].astype(jnp.float32))
+        forward_zero = forward_done - jax.lax.optimization_barrier(forward_done)
+        return inputs.dy.at[0, 0, 0].add(forward_zero.astype(inputs.dy.dtype))
+
     def semantic_fused_mlp_stop_after_w2_backward_pallas(inputs: SemanticBenchInputs):
         send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
         fused_w13 = source_push_semantic_fused_w13.source_push_semantic_fused_w13(
@@ -4492,7 +4497,7 @@ def _mode_callable(
             interpret=args.pallas_interpret,
         )
         fused_w2_backward = source_push_semantic_fused_w2_backward.source_push_semantic_fused_w2_backward(
-            inputs.dy.astype(jnp.bfloat16),
+            semantic_fused_mlp_dy_after_forward(inputs, fused_w2.y).astype(jnp.bfloat16),
             fused_w2.return_y,
             fused_w13.z,
             inputs.w_down,
@@ -4539,7 +4544,7 @@ def _mode_callable(
             interpret=args.pallas_interpret,
         )
         fused_w2_backward = source_push_semantic_fused_w2_backward.source_push_semantic_fused_w2_backward(
-            inputs.dy.astype(jnp.bfloat16),
+            semantic_fused_mlp_dy_after_forward(inputs, fused_w2.y).astype(jnp.bfloat16),
             fused_w2.return_y,
             fused_w13.z,
             inputs.w_down,

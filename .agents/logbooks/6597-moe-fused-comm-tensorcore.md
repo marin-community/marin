@@ -3742,3 +3742,19 @@ Local validation:
 - `python -m py_compile` passed for the kernel and benchmark modules.
 - The candidate remains diagnostic-only; the selected production schedule is
   unchanged until reduced correctness and target timing complete.
+
+## 2026-07-11 FUSED-MOE-124 - Sequence W2 backward after source combine
+
+The current reduced integrated forward comparison succeeds, while
+FUSED-MOE-122 faults only after adding W2 backward. The leading hypothesis is
+that W2 backward can consume the source-visible `return_y` buffer before the
+source combine has established completion of every peer's remote writes.
+
+The stop-after-W2 and all-stages-live diagnostics now add a zero-valued data
+dependency from one source-combined `y` scalar to the W2-backward `dy` input.
+This changes no numerical value but forces W2 backward after the source-local
+combine completion point. Production code is unchanged pending the reduced
+H100 result.
+
+Local validation: benchmark `py_compile`, two focused benchmark tests, scoped
+pre-commit, and `git diff --check` passed.
