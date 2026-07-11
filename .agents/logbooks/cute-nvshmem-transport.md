@@ -15,6 +15,8 @@ author: dlwh
 - Device-only push and pull correctness passes on 8 H100s for RMA and direct peer variants, 1/2/4/8 slots, and one million aggregate single-slot transfers per principal variant. Ordinary CuTe payload loads after `signal_wait` can observe stale data; a system fence plus cache-volatile loads is required by the validated implementation.
 - JAX interoperability is zero-copy when ownership is explicit: NVSHMEM buffers import into JAX at the identical pointer, and JAX-owned sources work as local RMA operands through a non-owning `cuda.core.Buffer` plus DLPack stream handoff. A two-PE JAX→NVSHMEM→JAX push passed with pointer identity on the receiver.
 - The corrected 8-PE transport sweep contains 77 rows across 16 B–384 KiB payloads. At the 6144-byte production anchor, warp `put_signal` reaches 5.30 µs, 1.16 GB/s per PE, and 9.27 GB/s aggregate; warp blocking pull reaches 14.68 µs and 0.419 GB/s per PE. Scalar direct-peer loops are noncompetitive and are not a valid proxy for cooperative peer copies.
+- Cooperative peer access, batched pull, all-to-all correctness, large-volume reuse, and GEMM overlap are complete. Warp peer stores/loads remain slower than NVSHMEM RMA; four gets per quiet do not improve pull. Pair/ring/all-to-all push and pull pass on 8 H100s across 2/4/8 slots and 20 B–6144 B payloads. Warp push and pull each pass 314.6 GB aggregate large-volume gates.
+- Final decision: keep Mosaic. Concurrent push reduces GEMM throughput 55.2% and concurrent pull reduces it 53.6%. The host-free JAX/XLA custom-call chain fails at the CUTLASS/NVSHMEM FFI type boundary. Report: `cute_nvshmem_transport/report.md`; snapshot: `99dd26cd25`.
 - All accelerator experiments will use CoreWeave H100 clusters. Host-only inspection may run locally.
 
 ## Scope
@@ -36,16 +38,14 @@ author: dlwh
 
 ### Active
 
-- `NVTP-002`: NVSHMEM put-with-signal is device-side correct with monotonic epochs and safe reuse. Next test: measure latency/bandwidth and cooperative scopes against explicit put+signal.
-- `NVTP-003`: Blocking get and `get_nbi` plus low-level device `quiet` are device-side correct. Next test: compare per-get quiet with multiple gets per quiet and measure completion cost.
-- `NVTP-004`: Direct peer stores and loads are device-side correct with explicit system memory operations. Next test: compare performance against RMA on production payload sizes.
-- `NVTP-005`: JAX buffers participate without payload copies when wrapped with explicit owner/lifetime and DLPack stream handoff. Next test: integrate the handoff into device-kernel launch chaining without test-only host stream synchronization.
-- `NVTP-006`: A transport can overlap with a production-relevant GEMM without unacceptable compute-throughput degradation. Next test: establish standalone communication and compute baselines before concurrent execution.
-- `NVTP-007`: Warp-cooperative put-with-signal is the leading measured transport. Next test: add block/cooperative direct-peer variants, Pallas comparison, and GEMM overlap before making a production recommendation.
+- None. The final decision is sealed in `NVTP-006` below.
 
 ### Blocked
 
 - Scalar direct-peer copies at production sizes: one-thread word loops plateau near 0.0025 GB/s for stores and 0.0046 GB/s for loads. Evidence: `NVTP-005` entry and artifact `cute_nvshmem_transport/artifacts/nvtp-benchmark-cw-h100-8pe.json`.
+- CTA-wide NVSHMEM block operations: CUDA 13 `ptxas` rejects linked `nvshmemx_*_block` code near `.nvvm`. Evidence: `NVTP-006` and `artifacts/nvtp-negative-results.json`.
+- Host-free JAX/XLA launch chain: CUTLASS JAX 4.4 dynamic arguments do not type-match NVSHMEM4Py CuTe FFI prototypes. Evidence: `NVTP-006`.
+- Historical Mosaic baseline replay: both pinned variants fail `semaphore_wait` lowering for Lane/Warpgroup semantics on JAX 0.10.1. Evidence: `artifacts/pallas-source-push-c53bbcdfba-cw-h100.jsonl`.
 
 ### Falsified / Dead End
 
@@ -56,6 +56,7 @@ author: dlwh
 - `NVTP-001`: A coherent isolated stack supports collective symmetric allocation, deterministic addressing, host peer aliases, and CuTe `get_peer_tensor` on a fully connected CoreWeave 8×H100 node. Evidence: `NVTP-002` entry below.
 - `NVTP-002-CORRECTNESS`: Push and pull RMA/direct-peer protocols pass deterministic device-only ring validation through repeated slot reuse. Evidence: `NVTP-003` entry below and commit `c58969f590`.
 - `NVTP-005-LOCAL`: JAX source and destination aliases interoperate zero-copy with symmetric transport when wrapped at the boundary. Evidence: `NVTP-004` entry below and commit `abebeb98dd`.
+- `NVTP-006-DECISION`: Keep Mosaic; do not promote the CuTe/NVSHMEM prototype. Evidence: final report and commit `99dd26cd25`.
 
 ## Decision Log
 
@@ -66,6 +67,7 @@ author: dlwh
 - 2026-07-10: Use `nvshmem.bindings.device.cute.quiet` for device `_nbi` completion because the high-level `nvshmem.core.device.cute` module does not export quiet.
 - 2026-07-10: Wrap JAX device pointers in non-owning `cuda.core.Buffer` objects with the JAX array as owner; raw JAX objects are not accepted by NVSHMEM host RMA.
 - 2026-07-10: Benchmark repetitions use all-PE barriers before signal reset and after each kernel. Per-rank local completion is insufficient because late remote signals can cross a repetition boundary.
+- 2026-07-10: Stop the production path. JAX stream integration still requires host synchronization and both push and pull reduce concurrent GEMM throughput by more than half.
 
 ## Negative Results Index
 
@@ -205,3 +207,15 @@ author: dlwh
 - Interpretation: Warp `put_signal` is the leading implemented path across the measured payload range. Blocking warp put consistently beats nonblocking-plus-quiet for this one-transfer-per-epoch protocol. Pull is substantially slower. Scalar peer results falsify only the scalar implementation, not cooperative/vectorized peer copies. Results are exploratory because the sweep is one node and lacks the Pallas and overlap baselines.
 - Artifact: `cute_nvshmem_transport/artifacts/nvtp-benchmark-cw-h100-8pe.json` (structured rows) and `.jsonl` (streamed run record).
 - Next action: Implement block/cooperative direct-peer variants and batched pull completion, then run the Pallas comparison and GEMM-overlap matrix.
+
+### 2026-07-10 - NVTP-006 final transport decision
+
+- Hypothesis: Warp/block cooperation, batched pull completion, or direct peer access can preserve the push microbenchmark lead while providing a host-free JAX chain and acceptable GEMM overlap.
+- Commit Hash: `99dd26cd25`
+- Commands: See `cute_nvshmem_transport/report.md`; headline runs were the selected-variant transport sweep, pair/ring/all-to-all correctness matrix, 100,000×393,216-byte large-volume gates, start-gated push/pull GEMM overlap, `NVTP_JAX_STREAM=1` custom-call probe, and pinned Mosaic diagnostic at `c53bbcdfba`.
+- Config: CoreWeave `cw-us-east-02a`, 8×H100 80GB, fully connected `NV18`; transport dependency matrix from NVTP-002. GEMM overlap used one 4096×4096 bf16 JAX GEMM worker per GPU and one transport PE per GPU.
+- Result: Pair, ring, and all-to-all push and pull pass on all eight GPUs. The all-to-all matrix passes 2/4/8 slots and 20/256/6144-byte payloads. Warp push and pull each pass 39.3 GB per PE (314.6 GB aggregate). At 6144 bytes, cooperative peer store/load achieve 0.036/0.124 GB/s per PE, and four `get_nbi` slices plus one quiet achieves 0.033 GB/s per PE. Push overlap reduces GEMM from 731 to 327 TFLOP/s per PE and communication from 0.859 to 0.423 GB/s per PE. Pull overlap reduces GEMM from 834 to 387 TFLOP/s per PE and communication from 0.357 to 0.267 GB/s per PE.
+- Negative results: Block-scope NVSHMEM operations fail PTX assembly. Four custom-call endpoint representations fail at CUTLASS JAX/NVSHMEM FFI pointer-alignment or scalar-width checks before launch. The pinned Mosaic diagnostic cannot lower `semaphore_wait` under Lane/Warpgroup semantics, so no valid speedup ratio exists.
+- Interpretation: `NVTP-006` is falsified. Warp put-with-signal remains the best isolated copy primitive, but it fails the stream-integration and shared-resource acceptance gates. Pull and direct peer paths do not compensate. Keep Mosaic and retain this harness as ordering and feasibility evidence.
+- Artifacts: `cute_nvshmem_transport/report.md` and `cute_nvshmem_transport/artifacts/` at commit `99dd26cd25`.
+- Next action: Close issue #7114. Reopen only after a CUTLASS/NVSHMEM release provides a working JAX custom-call ABI or a new scheduling design materially reduces compute interference.
