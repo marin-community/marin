@@ -3285,3 +3285,34 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-selected-compare-2f04 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 2f04c25dd3 --jsonl scratch/w13b-role48-selected-compare-2f04.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-105 - W2-backward route-gradient-on-owner comparison faults
+
+Job `/dlwh/w2b-route-owner-compare-2f75` tested commit `2f75259cb2` on
+`cw-rno2a` with EP8, T128/rank, H2560, I1280, E4/rank, top-k 2, capacity
+factor 4.0, random routing seed 0, bf16, JAX plan metadata, no warmup, one
+timed step, one repeat, and separate compilation. Iris reached terminal state
+`succeeded`: exit 0, zero failures, zero preemptions, one of one task
+succeeded, and a 44.18s task duration. This is a harness-level false success
+because the debug-exception path returned zero after device execution faulted.
+
+The separately compiled reference completed, but the route-gradient-on-owner
+candidate failed while `jax.device_get` materialized the observed outputs:
+
+```text
+CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+```
+
+No comparison row completed. Therefore `d_z13`, `d_w2`, and
+`d_route_weight` max/mean absolute differences and nonfinite counts are
+unavailable, as are validity, queue-overflow, and layout-overflow metrics. The
+error row reported zero dropped routes, zero routing-policy drops, and zero
+metadata-overflow routes. This run does not validate the owner-route-gradient
+schedule. Exactly one H100x8 job was launched; there was no retry, source edit,
+duplicate, stop, resubmit, or Iris mutation.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-route-owner-compare-2f75 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 2f75259cb2 --jsonl scratch/w2b-route-owner-compare-2f75.jsonl
+```
