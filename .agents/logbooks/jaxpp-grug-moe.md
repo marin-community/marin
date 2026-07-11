@@ -1861,3 +1861,22 @@ author: dlwh
   - The previous once-per-stage hoist reduced gather repetition but regressed because all stages materialized at startup. A narrower next test is a staggered prefetch chain: materialize stage 0, then overlap stage 1 materialization with stage 0 forward, and continue down the pipeline while reusing each replicated stage view across microbatches.
 - Next action:
   - Implement the staggered materialization mode behind an explicit opt-in, validate a reduced four-stage smoke, then run the exact comparison only if the smoke is finite. Compare against `13.9598` proper Sonic and `16.2004883` ring EP.
+
+### 2026-07-10 23:18 PDT - staggered Sonic materialization smoke gate
+- Hypothesis: Materializing each stage's replicated Sonic expert weights once per step, then transferring a completion dependency downstream, will overlap stage N+1 gathering with stage N forward while eliminating per-microbatch weight gathers.
+- Commit Hashes:
+  - `8d7998dee2`: opt-in `staged_per_step` materialization mode and launcher control.
+  - `1478cdd3e3`: sharding-safe completion dependency.
+- Commands:
+  - Initial L8/e64/top-k4/b32/m4/seq4096 four-stage smoke under parent `/dlwh/iris-run-job-20260711-060358`.
+  - Corrected identical smoke under parent `/dlwh/iris-run-job-20260711-060935`.
+- Results:
+  - The initial smoke failed during JaxPP tracing because `weight.reshape(-1)[0]` selected a size-one result from an explicitly sharded dimension. No metric was produced; all tasks terminated and no failed live job remained.
+  - The completion task now reduces one complete sharded vector from each `w_gate`, `w_up`, and `w_down` leaf. This is a real dependency on every replicated expert buffer and yields a legal replicated scalar without reducing an entire weight.
+  - The corrected smoke compiled all four materialization tasks and stage 0-2 completion-token tasks, completed 3/3 finite steps, and finished W&B. Final loss was `8.9430542`, MFU `5.59637`, throughput `371,978` tokens/s, and duration `0.352365s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-sonicquack-stagedprefetch-smoke-r2-l8-e64k4-b32-s4096-p4m4-20260710-2309>.
+  - The matching per-task proper-Sonic smoke reported `1.995244` MFU and `132,619` tokens/s. The reduced staged result is a `2.80x` MFU/throughput improvement, though the short three-step smoke is a correctness and directional gate rather than the target benchmark.
+- Interpretation:
+  - Replicated compute parameters can remain live across all microbatch forward/backward tasks while gradients and optimizer state retain the original FSDP shardings. The explicit dependency chain executes as designed.
+  - The reduced gain is large enough to justify the exact 24-layer comparison; no claim against ring or the 20-MFU target is made until that run completes.
+- Next action:
+  - Babysit exact parent `/dlwh/iris-run-job-20260711-061854` and compare its distribution against `13.9598` per-task Sonic, `16.2004883` ring EP, and the `20` target.
