@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,6 +12,7 @@ import numpy as np
 from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
 from levanter.grug._moe.source_push_semantic_fused_w2_return import (
     SourcePushSemanticFusedW2ReturnConfig,
+    _make_source_push_semantic_fused_w2_return_kernel,
     source_push_semantic_fused_w2_return,
     source_push_semantic_fused_w2_return_metadata_jax,
     source_push_semantic_fused_w2_return_schedule,
@@ -27,7 +30,7 @@ INTERMEDIATE = 64
 HIDDEN = 256
 
 
-def test_fused_w2_return_target_schedule_balances_two_hidden_tiles_per_job():
+def test_fused_w2_return_target_schedule_uses_all_cohort_workers_for_combine():
     schedule = source_push_semantic_fused_w2_return_schedule(
         ep_size=8,
         hidden_dim=2560,
@@ -36,17 +39,22 @@ def test_fused_w2_return_target_schedule_balances_two_hidden_tiles_per_job():
     )
 
     assert schedule.hidden_tiles == 20
+    assert schedule.hidden_tile_jobs == 10
     assert schedule.w2_jobs == 23_040
-    assert schedule.min_w2_jobs_per_program == 180
-    assert schedule.max_w2_jobs_per_program == 180
+    assert schedule.min_w2_jobs_per_program == 177
+    assert schedule.max_w2_jobs_per_program == 192
+    assert schedule.min_combine_jobs_per_program == 78
+    assert schedule.max_combine_jobs_per_program == 86
+    assert schedule.min_producers_per_hidden_tile_job == 12
+    assert schedule.max_producers_per_hidden_tile_job == 13
     assert schedule.producer_program_start == 0
     assert schedule.producer_programs == 128
     assert schedule.combine_program_start == 0
-    assert schedule.combine_programs == 32
-    assert schedule.active_combine_programs == 32
+    assert schedule.combine_programs == 128
+    assert schedule.active_combine_programs == 128
     assert schedule.total_programs == 128
     assert schedule.readiness_signals == 1024
-    assert schedule.readiness_waits == 256
+    assert schedule.readiness_waits == 1024
 
 
 def test_fused_w2_return_schedule_keeps_odd_hidden_tile_tail():
@@ -58,9 +66,27 @@ def test_fused_w2_return_schedule_keeps_odd_hidden_tile_tail():
     )
 
     assert schedule.hidden_tiles == 3
+    assert schedule.hidden_tile_jobs == 2
     assert schedule.w2_jobs == 20
     assert schedule.min_w2_jobs_per_program == 0
     assert schedule.max_w2_jobs_per_program == 1
+    assert schedule.min_combine_jobs_per_program == 0
+    assert schedule.max_combine_jobs_per_program == 1
+    assert schedule.min_producers_per_hidden_tile_job == 64
+    assert schedule.max_producers_per_hidden_tile_job == 64
+    assert schedule.active_combine_programs == 3
+
+
+def test_fused_w2_return_kernel_combines_with_cohort_local_readiness():
+    source = inspect.getsource(_make_source_push_semantic_fused_w2_return_kernel)
+
+    assert "mgpu.SemaphoreType.REGULAR((ep_size, hidden_tile_jobs))" in source
+    assert "completion_sem.at[destination_ordinal, producer_hidden_tile_job]" in source
+    assert "value=producers_for_hidden_tile_job" in source
+    assert "combine_job = producer_lane + iteration * producers_for_hidden_tile_job" in source
+    assert "completion_sem.at[destination_ordinal]," not in source
+    assert "mgpu.wgmma(" in source
+    assert "lowering_semantics=mgpu.LoweringSemantics.Lane" in source
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):

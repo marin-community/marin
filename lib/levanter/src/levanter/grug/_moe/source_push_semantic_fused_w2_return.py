@@ -26,10 +26,9 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
-# Leave residency headroom below the 132-SM H100 SXM target. Every program
-# participates in the completion barrier, so the grid must co-reside.
+# Leave residency headroom below the 132-SM H100 SXM target. Producer cohorts
+# publish and combine independent adjacent-N groups, so the grid must co-reside.
 PERSISTENT_W2_PROGRAMS = 128
-PERSISTENT_COMBINE_PROGRAMS = 32
 N_GROUPS_PER_JOB = 2
 
 
@@ -90,13 +89,18 @@ class SourcePushSemanticFusedW2ReturnResult(NamedTuple):
 
 @dataclass(frozen=True, slots=True)
 class SourcePushSemanticFusedW2ReturnSchedule:
-    """Resident CTA work distribution and completion-barrier counts for one rank."""
+    """Resident cohort work distribution and readiness counts for one rank."""
 
     hidden_tiles: int
+    hidden_tile_jobs: int
     token_blocks: int
     w2_jobs: int
     min_w2_jobs_per_program: int
     max_w2_jobs_per_program: int
+    min_combine_jobs_per_program: int
+    max_combine_jobs_per_program: int
+    min_producers_per_hidden_tile_job: int
+    max_producers_per_hidden_tile_job: int
     producer_program_start: int
     producer_programs: int
     combine_program_start: int
@@ -133,23 +137,42 @@ def source_push_semantic_fused_w2_return_schedule(
     if hidden_tiles > PERSISTENT_W2_PROGRAMS:
         raise ValueError(f"hidden tiles {hidden_tiles} exceed the resident grid size {PERSISTENT_W2_PROGRAMS}")
     token_blocks = (tokens_per_source + config.combine_token_block - 1) // config.combine_token_block
-    combine_programs = max(PERSISTENT_COMBINE_PROGRAMS, hidden_tiles)
-    active_combine_programs = sum(
-        min(token_blocks, (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles)
-        for hidden_tile in range(hidden_tiles)
-    )
     hidden_tile_jobs = (hidden_tiles + N_GROUPS_PER_JOB - 1) // N_GROUPS_PER_JOB
-    w2_jobs = ep_size * entries_per_dst * hidden_tile_jobs
+    entry_jobs = ep_size * entries_per_dst
+    producer_counts = tuple(
+        (PERSISTENT_W2_PROGRAMS + hidden_tile_jobs - 1 - hidden_tile_job) // hidden_tile_jobs
+        for hidden_tile_job in range(hidden_tile_jobs)
+    )
+    combine_jobs = tuple(
+        min(N_GROUPS_PER_JOB, hidden_tiles - hidden_tile_job * N_GROUPS_PER_JOB) * token_blocks
+        for hidden_tile_job in range(hidden_tile_jobs)
+    )
+    active_combine_programs = sum(
+        min(producer_count, jobs) for producer_count, jobs in zip(producer_counts, combine_jobs, strict=True)
+    )
+    w2_jobs = entry_jobs * hidden_tile_jobs
     return SourcePushSemanticFusedW2ReturnSchedule(
         hidden_tiles=hidden_tiles,
+        hidden_tile_jobs=hidden_tile_jobs,
         token_blocks=token_blocks,
         w2_jobs=w2_jobs,
-        min_w2_jobs_per_program=w2_jobs // PERSISTENT_W2_PROGRAMS,
-        max_w2_jobs_per_program=(w2_jobs + PERSISTENT_W2_PROGRAMS - 1) // PERSISTENT_W2_PROGRAMS,
+        min_w2_jobs_per_program=min(entry_jobs // producer_count for producer_count in producer_counts),
+        max_w2_jobs_per_program=max(
+            (entry_jobs + producer_count - 1) // producer_count for producer_count in producer_counts
+        ),
+        min_combine_jobs_per_program=min(
+            jobs // producer_count for producer_count, jobs in zip(producer_counts, combine_jobs, strict=True)
+        ),
+        max_combine_jobs_per_program=max(
+            (jobs + producer_count - 1) // producer_count
+            for producer_count, jobs in zip(producer_counts, combine_jobs, strict=True)
+        ),
+        min_producers_per_hidden_tile_job=min(producer_counts),
+        max_producers_per_hidden_tile_job=max(producer_counts),
         producer_program_start=0,
         producer_programs=PERSISTENT_W2_PROGRAMS,
         combine_program_start=0,
-        combine_programs=combine_programs,
+        combine_programs=PERSISTENT_W2_PROGRAMS,
         active_combine_programs=active_combine_programs,
         readiness_signals=PERSISTENT_W2_PROGRAMS * ep_size,
         readiness_waits=active_combine_programs * ep_size,
@@ -468,10 +491,9 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         config=config,
     )
     hidden_tiles = schedule.hidden_tiles
-    hidden_tile_jobs = (hidden_tiles + N_GROUPS_PER_JOB - 1) // N_GROUPS_PER_JOB
+    hidden_tile_jobs = schedule.hidden_tile_jobs
     intermediate_tiles = intermediate_dim // config.block_k
     token_blocks = schedule.token_blocks
-    combine_programs = schedule.combine_programs
     worker_programs = schedule.total_programs
 
     def body(
@@ -488,13 +510,13 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         return_y_ref,
         y_ref,
     ) -> None:
-        completion_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size,)))
+        completion_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, hidden_tile_jobs)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
 
-        def _signal_completion(peer) -> None:
+        def _signal_completion(peer, hidden_tile_job) -> None:
             pl.semaphore_signal(
-                completion_sem.at[rank],
+                completion_sem.at[rank, hidden_tile_job],
                 device_id=peer,
                 device_id_type=pl.DeviceIdType.LOGICAL,
             )
@@ -633,75 +655,81 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
         branches = tuple((lambda ordinal: lambda args: _produce_for_source(ordinal, args))(i) for i in range(ep_size))
 
+        producer_hidden_tile_job = worker % hidden_tile_jobs
+        producer_lane = worker // hidden_tile_jobs
+        producers_for_hidden_tile_job = (
+            schedule.producer_programs + hidden_tile_jobs - 1 - producer_hidden_tile_job
+        ) // hidden_tile_jobs
+
         @pl.loop(0, schedule.max_w2_jobs_per_program)
         def _w2_job_loop(iteration) -> None:
-            job = worker + iteration * schedule.producer_programs
+            entry_job = producer_lane + iteration * producers_for_hidden_tile_job
 
-            @pl.when(job < schedule.w2_jobs)
+            @pl.when(entry_job < ep_size * entries_per_dst)
             def _w2_job() -> None:
-                source_ordinal = job // (entries_per_dst * hidden_tile_jobs)
-                source_job = job % (entries_per_dst * hidden_tile_jobs)
-                entry = source_job // hidden_tile_jobs
-                hidden_tile_job = source_job % hidden_tile_jobs
-                lax.switch(source_ordinal, branches, (entry, hidden_tile_job))
+                source_ordinal = entry_job // entries_per_dst
+                entry = entry_job % entries_per_dst
+                lax.switch(source_ordinal, branches, (entry, producer_hidden_tile_job))
 
         for peer_ordinal in range(ep_size):
             if peer_ordinal == 0:
-                pl.semaphore_signal(completion_sem.at[rank])
+                pl.semaphore_signal(completion_sem.at[rank, producer_hidden_tile_job])
             else:
-                _signal_completion((rank + peer_ordinal) % ep_size)
+                _signal_completion((rank + peer_ordinal) % ep_size, producer_hidden_tile_job)
 
-        @pl.when(worker < schedule.combine_programs)
-        def _combine() -> None:
-            consumer = worker
-            hidden_tile = consumer % hidden_tiles
-            consumer_lane = consumer // hidden_tiles
-            consumers_for_tile = (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
-            hidden_start = hidden_tile * config.block_n
+        hidden_tiles_for_job = jnp.minimum(
+            N_GROUPS_PER_JOB,
+            hidden_tiles - producer_hidden_tile_job * N_GROUPS_PER_JOB,
+        )
+        combine_jobs_for_hidden_tile_job = hidden_tiles_for_job * token_blocks
 
-            @pl.when(consumer_lane < token_blocks)
-            def _active_consumer() -> None:
-                for destination_ordinal in range(ep_size):
-                    pl.semaphore_wait(
-                        completion_sem.at[destination_ordinal],
-                        value=schedule.producer_programs,
-                        decrement=False,
-                    )
+        @pl.when(producer_lane < combine_jobs_for_hidden_tile_job)
+        def _combine_cohort() -> None:
+            for destination_ordinal in range(ep_size):
+                pl.semaphore_wait(
+                    completion_sem.at[destination_ordinal, producer_hidden_tile_job],
+                    value=producers_for_hidden_tile_job,
+                    decrement=False,
+                )
 
-                @pl.loop(0, token_blocks)
-                def _token_block_loop(iteration) -> None:
-                    token_block = consumer_lane + iteration * consumers_for_tile
+            @pl.loop(0, schedule.max_combine_jobs_per_program)
+            def _combine_job_loop(iteration) -> None:
+                combine_job = producer_lane + iteration * producers_for_hidden_tile_job
 
-                    @pl.when(token_block < token_blocks)
-                    def _combine_token_block() -> None:
-                        token_start = token_block * config.combine_token_block
+                @pl.when(combine_job < combine_jobs_for_hidden_tile_job)
+                def _combine_token_block() -> None:
+                    hidden_tile_offset = combine_job // token_blocks
+                    token_block = combine_job % token_blocks
+                    hidden_tile = producer_hidden_tile_job * N_GROUPS_PER_JOB + hidden_tile_offset
+                    hidden_start = hidden_tile * config.block_n
+                    token_start = token_block * config.combine_token_block
 
-                        @pl.loop(0, config.combine_token_block)
-                        def _token_loop(token_offset) -> None:
-                            token = token_start + token_offset
+                    @pl.loop(0, config.combine_token_block)
+                    def _token_loop(token_offset) -> None:
+                        token = token_start + token_offset
 
-                            @pl.when(token < tokens_per_source)
-                            def _combine_token() -> None:
-                                acc = jnp.zeros((config.block_n,), dtype=jnp.float32)
-                                for route_slot in range(topk):
-                                    destination_ordinal = queue_dst_ref[token, route_slot]
-                                    entry = queue_entry_ref[token, route_slot]
-                                    queue_row = queue_row_ref[token, route_slot]
-                                    route_value = return_y_ref[
-                                        destination_ordinal,
-                                        entry,
-                                        queue_row,
-                                        pl.ds(hidden_start, config.block_n),
-                                    ].astype(jnp.float32)
-                                    weight = route_weight_ref[token, route_slot].astype(jnp.float32)
-                                    valid = route_valid_ref[token, route_slot] != 0
-                                    acc += jnp.where(
-                                        valid,
-                                        route_value * weight,
-                                        jnp.zeros((), dtype=jnp.float32),
-                                    )
+                        @pl.when(token < tokens_per_source)
+                        def _combine_token() -> None:
+                            acc = jnp.zeros((config.block_n,), dtype=jnp.float32)
+                            for route_slot in range(topk):
+                                destination_ordinal = queue_dst_ref[token, route_slot]
+                                entry = queue_entry_ref[token, route_slot]
+                                queue_row = queue_row_ref[token, route_slot]
+                                route_value = return_y_ref[
+                                    destination_ordinal,
+                                    entry,
+                                    queue_row,
+                                    pl.ds(hidden_start, config.block_n),
+                                ].astype(jnp.float32)
+                                weight = route_weight_ref[token, route_slot].astype(jnp.float32)
+                                valid = route_valid_ref[token, route_slot] != 0
+                                acc += jnp.where(
+                                    valid,
+                                    route_value * weight,
+                                    jnp.zeros((), dtype=jnp.float32),
+                                )
 
-                                y_ref[token, pl.ds(hidden_start, config.block_n)] = acc.astype(jnp.bfloat16)
+                            y_ref[token, pl.ds(hidden_start, config.block_n)] = acc.astype(jnp.bfloat16)
 
     return_shape = (ep_size, entries_per_dst, config.compute_m, hidden_dim)
     y_shape = (tokens_per_source, hidden_dim)
