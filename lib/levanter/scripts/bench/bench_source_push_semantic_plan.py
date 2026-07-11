@@ -1907,6 +1907,23 @@ def _host_comparison_metrics(prefix: str, observed: Any, expected: Any) -> dict[
     }
 
 
+def _host_scale_comparison_metrics(prefix: str, observed: Any, expected: Any) -> dict[str, Any]:
+    observed_f32 = np.asarray(observed, dtype=np.float32)
+    expected_f32 = np.asarray(expected, dtype=np.float32)
+    finite = np.isfinite(observed_f32) & np.isfinite(expected_f32)
+    observed_finite = np.where(finite, observed_f32, 0.0)
+    expected_finite = np.where(finite, expected_f32, 0.0)
+    dot = np.sum(observed_finite * expected_finite, dtype=np.float64)
+    observed_norm_sq = np.sum(np.square(observed_finite), dtype=np.float64)
+    expected_norm_sq = np.sum(np.square(expected_finite), dtype=np.float64)
+    return {
+        f"{prefix}_expected_abs_sum": np.asarray(np.sum(np.abs(expected_finite), dtype=np.float64)),
+        f"{prefix}_observed_abs_sum": np.asarray(np.sum(np.abs(observed_finite), dtype=np.float64)),
+        f"{prefix}_least_squares_scale": np.asarray(dot / max(expected_norm_sq, 1.0e-30)),
+        f"{prefix}_cosine_similarity": np.asarray(dot / np.sqrt(max(observed_norm_sq * expected_norm_sq, 1.0e-30))),
+    }
+
+
 def _semantic_fused_w2_backward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
     return {
         **_host_comparison_metrics("d_z13", observed.d_z13, expected.d_z13),
@@ -1925,6 +1942,7 @@ def _semantic_fused_w2_backward_host_metrics(observed: Any, expected: Any) -> di
 def _semantic_fused_mlp_forward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
     return {
         **_host_comparison_metrics("y", observed["y"], expected["y"]),
+        **_host_scale_comparison_metrics("y", observed["y"], expected["y"]),
         "dropped_routes_error_count": np.asarray(
             np.abs(np.asarray(observed["dropped_routes"]) - np.asarray(expected["dropped_routes"]))
         ),
@@ -1934,14 +1952,23 @@ def _semantic_fused_mlp_forward_host_metrics(observed: Any, expected: Any) -> di
 def _semantic_fused_mlp_forward_backward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
     return {
         **_host_comparison_metrics("y", observed["y"], expected["y"]),
+        **_host_scale_comparison_metrics("y", observed["y"], expected["y"]),
         **_host_comparison_metrics("dx", observed["dx"], expected["dx"]),
+        **_host_scale_comparison_metrics("dx", observed["dx"], expected["dx"]),
         **_host_comparison_metrics(
             "d_route_weights",
             observed["d_route_weights"],
             expected["d_route_weights"],
         ),
+        **_host_scale_comparison_metrics(
+            "d_route_weights",
+            observed["d_route_weights"],
+            expected["d_route_weights"],
+        ),
         **_host_comparison_metrics("dw13", observed["dw13"], expected["dw13"]),
+        **_host_scale_comparison_metrics("dw13", observed["dw13"], expected["dw13"]),
         **_host_comparison_metrics("dw2", observed["dw2"], expected["dw2"]),
+        **_host_scale_comparison_metrics("dw2", observed["dw2"], expected["dw2"]),
         "dropped_routes_error_count": np.asarray(
             np.abs(np.asarray(observed["dropped_routes"]) - np.asarray(expected["dropped_routes"]))
         ),

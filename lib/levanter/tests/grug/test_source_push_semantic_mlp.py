@@ -196,10 +196,10 @@ def test_fused_semantic_mlp_interpret_matches_dense_value_and_gradients_with_dup
         dtype=jnp.int32,
     )
     keys = jax.random.split(jax.random.key(17), 5)
-    x = jax.random.normal(keys[0], (2, 2, 256), dtype=jnp.bfloat16) / 8
+    x = jax.random.normal(keys[0], (2, 2, 512), dtype=jnp.bfloat16) / 8
     route_weights = jax.random.normal(keys[1], selected_experts.shape, dtype=jnp.bfloat16) / 8
-    w13 = jax.random.normal(keys[2], (2, 2, 256, 256), dtype=jnp.bfloat16) / 16
-    w2 = jax.random.normal(keys[3], (2, 2, 128, 256), dtype=jnp.bfloat16) / 16
+    w13 = jax.random.normal(keys[2], (2, 2, 512, 256), dtype=jnp.bfloat16) / 16
+    w2 = jax.random.normal(keys[3], (2, 2, 128, 512), dtype=jnp.bfloat16) / 16
     cotangent = jax.random.normal(keys[4], x.shape, dtype=jnp.bfloat16) / 8
     capacity = SourcePushSemanticMlpCapacity(rows_per_src_dst=4, rows_per_expert=128)
     plan = _build_source_push_semantic_mlp_plan(
@@ -268,10 +268,10 @@ def test_fused_semantic_mlp_queue_geometry_covers_expert_fragmentation():
 
 def test_fused_semantic_mlp_reports_layout_overflow_in_dropped_accounting():
     selected_experts = jnp.zeros((2, 1, 1), dtype=jnp.int32)
-    x = jnp.zeros((2, 1, 256), dtype=jnp.bfloat16)
+    x = jnp.zeros((2, 1, 512), dtype=jnp.bfloat16)
     route_weights = jnp.ones(selected_experts.shape, dtype=jnp.bfloat16)
-    w13 = jnp.zeros((2, 1, 256, 256), dtype=jnp.bfloat16)
-    w2 = jnp.zeros((2, 1, 128, 256), dtype=jnp.bfloat16)
+    w13 = jnp.zeros((2, 1, 512, 256), dtype=jnp.bfloat16)
+    w2 = jnp.zeros((2, 1, 128, 512), dtype=jnp.bfloat16)
     capacity = SourcePushSemanticMlpCapacity(rows_per_src_dst=1, rows_per_expert=64)
 
     _y, dropped = jax.jit(
