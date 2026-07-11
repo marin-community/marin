@@ -288,7 +288,7 @@ def run_logit_mixing_worker(
     max_in_flight: int,
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[None]:
-    """Run a logit-mixing worker in a background thread."""
+    """Stop and join the logit-mixing worker thread when the context exits."""
 
     with run_brokered_inference_worker(
         worker,

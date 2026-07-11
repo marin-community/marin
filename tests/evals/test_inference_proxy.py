@@ -181,13 +181,13 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
             return _FakeJob()
 
     @contextmanager
-    def _fake_start_proxy(config, response_provider):
-        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=config.model))
+    def _fake_start_proxy(proxy_config, *, model, broker, tokenizer=None):
+        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=model))
 
     client = _FakeClient()
     monkeypatch.setattr(vllm_module, "current_client", lambda: client)
     monkeypatch.setattr(vllm_module, "get_job_info", lambda: SimpleNamespace(job_id="parent"))
-    monkeypatch.setattr(vllm_module, "_start_proxy", _fake_start_proxy)
+    monkeypatch.setattr(vllm_module, "start_brokered_inference_proxy", _fake_start_proxy)
     monkeypatch.setattr(vllm_module, "_wait_for_brokered_vllm_ready", lambda *args, **kwargs: None)
 
     config = BrokeredVllmSystemConfig(

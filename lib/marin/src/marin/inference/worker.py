@@ -197,7 +197,7 @@ def run_inference_worker(
     max_in_flight: int,
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[None]:
-    """Run an inference worker in a background thread."""
+    """Stop and join the inference worker thread when the context exits."""
 
     with run_brokered_inference_worker(
         worker,

@@ -124,7 +124,12 @@ def start_local_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runn
             request_timeout_seconds=config.workers.request_timeout_seconds,
         )
         with (
-            _start_proxy(config, broker) as proxy_model,
+            start_brokered_inference_proxy(
+                config.proxy,
+                model=config.model,
+                broker=broker,
+                tokenizer=config.tokenizer,
+            ) as proxy_model,
             run_inference_worker(worker, max_in_flight=config.workers.max_in_flight_per_worker),
         ):
             _wait_for_brokered_vllm_ready(proxy_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
@@ -182,7 +187,12 @@ def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runni
             worker_jobs.append(job)
             logger.info("Submitted vLLM worker job_id=%s index=%d", job.job_id, worker_index)
 
-        with _start_proxy(config, response_provider) as running_model:
+        with start_brokered_inference_proxy(
+            config.proxy,
+            model=config.model,
+            broker=response_provider,
+            tokenizer=config.tokenizer,
+        ) as running_model:
             _wait_for_brokered_vllm_ready(running_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
             yield running_model
     finally:
@@ -230,17 +240,6 @@ def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: 
         )
         # Worker jobs poll until the parent job terminates them after the eval client exits.
         worker.run_forever(max_in_flight=config.workers.max_in_flight_per_worker)
-
-
-@contextlib.contextmanager
-def _start_proxy(config: BrokeredVllmSystemConfig, broker: InferenceResponseProvider) -> Iterator[RunningModel]:
-    with start_brokered_inference_proxy(
-        config.proxy,
-        model=config.model,
-        broker=broker,
-        tokenizer=config.tokenizer,
-    ) as running_model:
-        yield running_model
 
 
 @contextlib.contextmanager
