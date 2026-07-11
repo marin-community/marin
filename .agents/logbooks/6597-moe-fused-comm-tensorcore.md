@@ -3181,3 +3181,37 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-paired-k128-d7db --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha d7dbb9aa7c --jsonl scratch/w13b-paired-k128-d7db.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-102 - Paired-B64 W13-backward comparison reaches runtime and faults
+
+Job `/dlwh/w13b-paired-compare-055` tested commit `055159bed85c` on
+`cw-rno2a` with EP8, T128/rank, H2560, I1280, E4/rank, top-k 2, capacity
+factor 4.0, random routing seed 0, bf16, JAX plan metadata, no warmup, one
+timed step, one repeat, and separate compilation. Iris reported terminal state
+`succeeded`, exit 0, one of one task succeeded, and a 44.02s task duration.
+This is a harness-level false success because the debug-exception path returned
+zero after the candidate faulted.
+
+The replicated reference and WGMMA-layout-safe B128 zero-fill both passed their
+previous failure points. The observed paired-B64/K128 candidate then failed
+when `jax.device_get` synchronized its outputs:
+
+```text
+jax.errors.JaxRuntimeError: INTERNAL: CUDA error: :
+CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+```
+
+No repeat completed, so `dx` and `dw13` max/mean absolute differences,
+least-squares scales, cosine similarities, and nonfinite counts are
+unavailable. Pre-run metadata reported zero dropped routes, zero
+routing-policy drops, and zero metadata-overflow routes. Queue- and
+layout-overflow fields were not reached. This single reduced retry therefore
+does not validate the paired-B64 candidate; the runtime memory access remains
+the first actionable failure. Exactly one H100x8 job was launched, with no
+retry, source edit, duplicate, or Iris mutation.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-paired-compare-055 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 055159bed85c --jsonl scratch/w13b-paired-compare-055.jsonl
+```
