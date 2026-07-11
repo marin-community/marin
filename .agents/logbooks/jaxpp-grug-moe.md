@@ -32,6 +32,7 @@ author: dlwh
 - The exact proper-Sonic profile is `37.31%` compute, `50.47%` communication, and `12.22%` stall. AllGather remains nearly unchanged from old Sonic at `47.508s` aggregated over `48,192` device-track calls, 2.35x the ring profile's call count. Staggered once-per-stage materialization improved the reduced smoke but regressed the exact target from `13.9598` to `13.8155` MFU, confirming that the fine-grained gathers were better overlapped than the hoisted critical-path gather.
 - Explicit Triton token-routing kernels remove the profiled rank-2 floating scatter families from `ring_fused` and pass H100 value/VJP parity, but a pinned 10-step reduced A/B found no throughput gain. After excluding isolated duration outliers, bulk ring averaged `9.1735` MFU and `0.214968s`; `ring_fused` averaged `9.1595` MFU and `0.215344s`. Do not scale this backend to L24 without a new kernel-level signal.
 - Prioritizing explicit pipeline transfer construction ahead of local QB/loss/gradient accumulation is a clean negative. The pinned reduced run averaged `8.9243` MFU and `0.220987s`, versus `9.1735` and `0.214968s` for default ordering. Construction order is not the missing overlap mechanism; the next credible schedule change must split the combined activation/weight-gradient backward task.
+- Splitting backward into input-gradient and weight-gradient tasks is operational and gradient-correct but a hard performance negative. The reduced H100 gate averaged `6.5356` central MFU and `0.301733s`, versus `9.1735` and `0.214968s` for the combined-backward control. Independent block rematerialization costs more than zero-bubble placement can recover.
 
 ## Hypothesis Queue
 
@@ -61,6 +62,7 @@ author: dlwh
 - Expert-axis 4 at e64 reaches every stage's first backward compile but then stalls in accumulation compilation for over 24 minutes; it was stopped after 34m37s with no metric. Doubling local expert state remains operationally intractable.
 - Explicit Triton dispatch-backward and combine forward/backward routing kernels pass H100 value/VJP parity and remove rank-2 floating scatters from optimized HLO, but the pinned reduced A/B is neutral: central bulk-ring mean `9.1735` MFU versus `9.1595` for `ring_fused` (`-0.15%`). The apparent two-sample fused win did not replicate over ten steps.
 - Enqueuing forward and backward pipeline transfers before local accumulation tasks regresses the pinned reduced median MFU by `2.90%` (`8.9006` versus `9.1660`) and increases median duration by `2.98%`. JaxPP task construction order alone does not improve rendezvous overlap.
+- Input-gradient-first backward passes CPU loss, `d_hidden`, parameter-gradient, accumulated-gradient, and Adam-update parity in both remat modes and executes on 32 H100s, but regresses reduced central MFU by `28.75%` (`6.5356` versus `9.1735`). The extra per-block rematerialization dominates the intended bubble reduction.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -2077,3 +2079,21 @@ author: dlwh
   - Do not scale this mode to L24. Keep it opt-in as a reproducible schedule-ordering experiment.
 - Next action:
   - Prototype input-gradient-first backward: produce and transfer `d_hidden` before deferrable parameter-gradient work without recomputing the full stage backward twice. Require CPU value/gradient parity and at least a `5%` reduced H100 duration gain before an exact run.
+
+### 2026-07-11 06:25 PDT - input-gradient-first backward is a hard negative
+- Hypothesis: Splitting middle/last-stage backward into activation-gradient (`BWD_I`) and independently rematerialized per-block weight-gradient (`BWD_W`) tasks will transfer `d_hidden` earlier and fill pipeline bubbles without replaying the full six-layer cotangent chain.
+- Commit Hash: `82ad228b18` (`[grug] Split input and weight gradients`).
+- Validation:
+  - Tiny FP32 CPU tests compare the split against combined `jax.grad(argnums=(0, 1))` for middle and final stages under `recompute_all` and `save_moe`. Loss, `d_hidden`, every parameter-gradient leaf, two-microbatch accumulation, and one Adam update match within `2e-5` (`4 passed`).
+  - Two-device explicit-MPMD lowering produced two local programs.
+- Command: pinned L8/d2560/e64/top-k4/seq4096/b32/m4/vocab8192/XLA-loss bulk-ring run with `--explicit-mpmd-schedule-mode input_gradient_first --steps 10` under parent `/dlwh/iris-run-job-20260711-131818`.
+- Results:
+  - The 32-H100 child compiled every `BWD_I`, `BWD_W`, accumulation, and update task and completed 10 finite steps. W&B finished: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-inputgradfirst-v8192-ab-l8-e64k4-b32-s4096-p4m4-20260711-0525>.
+  - Excluding the final `0.9375s` runtime stall, seven central samples averaged/median `6.5356/6.5368` MFU, `434,406.26/434,488.75` tokens/s, and `0.301733/0.301669s`.
+  - The matching combined-backward control averaged/median `9.1735/9.1660` MFU and `0.214968/0.215138s`. The split regressed central mean MFU by `28.75%` and increased mean duration by `40.36%`.
+  - Final loss was finite at `8.7114143`; CPU parity and the close training trajectory rule out a gross gradient-semantics failure.
+- Interpretation:
+  - The intended schedule mechanism is real: `d_hidden` becomes available after `BWD_I`, and ZeroBubble places `BWD_W` separately. However, recomputing each block independently for both input and weight gradients adds enough work to dominate any recovered bubble.
+  - Do not scale this mode to L24. A useful B/W split would need a kernel/autodiff primitive that emits input gradients and reusable weight-gradient residuals in one traversal, not JAX-level block rematerialization.
+- Next action:
+  - Move to the remaining profile-backed transport hypothesis: a two-chunk bulk ring that preserves AllGather/Pallas grouped-GEMM/ReduceScatter semantics while exposing chunk-N compute against chunk-N+1 communication. Require direct EP8 value/VJP parity and at least `5%` one-node kernel improvement before a pipeline gate.
