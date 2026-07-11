@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import inspect
-import math
 import re
 
 import jax
@@ -50,8 +49,8 @@ def _plan():
 
 def _inputs():
     plan = _plan()
-    x = (jnp.arange(2 * 6 * 512, dtype=jnp.float32).reshape(2, 6, 512) % 17 - 8).astype(jnp.bfloat16)
-    weights = ((jnp.arange(2 * 2 * 512 * 256, dtype=jnp.float32).reshape(2, 2, 512, 256) % 13 - 6) / 64).astype(
+    x = (jnp.arange(2 * 6 * 256, dtype=jnp.float32).reshape(2, 6, 256) % 17 - 8).astype(jnp.bfloat16)
+    weights = ((jnp.arange(2 * 2 * 256 * 256, dtype=jnp.float32).reshape(2, 2, 256, 256) % 13 - 6) / 64).astype(
         jnp.bfloat16
     )
     return x, weights, plan
@@ -108,10 +107,8 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
     assert first.producer_side_programs == 12
     assert first.consumer_programs == 20
     assert CONFIG.worker_programs_per_peer == 32
-    assert CONFIG.send_k == 512
-    assert first.helper_tiles_per_compute_block == 5
-    assert first.helper_tiles == 20
-    assert math.ceil(first.helper_tiles / CONFIG.helper_programs_per_peer) == 2
+    assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
+    assert first.helper_tiles_per_compute_block == 2560 // CONFIG.send_k
     assert first.prepare_generation == first.generation
     assert first.helper_done_generation == first.helper_tiles_per_compute_block
     assert reused.slot == first.slot
@@ -155,19 +152,6 @@ def test_fused_w13_bulk_metadata_load_groups_eight_contiguous_row_loads():
     assert TOKEN_TRANSFER_ROWS == 128
     assert "token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32)" in source
     assert "safe_tokens[:, None]" not in source
-
-
-def test_fused_w13_helper_uses_fixed_b64_k512_transport_tile():
-    source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
-
-    tile_smem_bytes = CONFIG.compute_m * CONFIG.send_k * jnp.dtype(jnp.bfloat16).itemsize
-    token_smem_bytes = TOKEN_TRANSFER_ROWS * jnp.dtype(jnp.int32).itemsize
-
-    assert (CONFIG.compute_m, CONFIG.send_k) == (64, 512)
-    assert tile_smem_bytes == 64 * 1024
-    assert token_smem_bytes == 512
-    assert tile_smem_bytes + token_smem_bytes == 66_048
-    assert "tile_smem=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype)" in source
 
 
 def test_fused_w13_reference_zeros_invalid_and_source_padding_rows():

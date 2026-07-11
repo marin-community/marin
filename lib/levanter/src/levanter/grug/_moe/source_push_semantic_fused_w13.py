@@ -39,7 +39,7 @@ class SourcePushSemanticFusedW13Config:
     send_m: int = 256
     block_n: int = 128
     block_k: int = 128
-    send_k: int = 512
+    send_k: int = 256
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
     helper_programs_per_peer: int = 10
@@ -69,8 +69,8 @@ class SourcePushSemanticFusedW13Config:
             raise ValueError(
                 f"the initial Hopper lowering requires block_n=block_k=128, got {self.block_n=} {self.block_k=}"
             )
-        if self.send_k != 512:
-            raise ValueError(f"the Hopper lowering requires send_k=512, got {self.send_k}")
+        if self.send_k != 256:
+            raise ValueError(f"the initial Hopper lowering requires send_k=256, got {self.send_k}")
         if self.inbox_slots != 12:
             raise ValueError(f"the initial Hopper lowering requires inbox_slots=12, got {self.inbox_slots}")
         if self.chunk_owner_programs_per_peer != 2:
