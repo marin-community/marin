@@ -15,7 +15,7 @@ author: dlwh
 ## Current TL;DR
 - `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state, contiguous layer splits, explicit GPipe and explicit `std_1f1b` schedules. Milestone implementation commit: `abd979b82a` (`[grug] Add explicit JaxPP pipeline training`).
 - The requested 24-layer, d2560, 256-expert, top-k 4 shape now fits and executes on 4x 8xH100 CoreWeave east02 after optimizer state is initialized from stage-local pipeline weights instead of from the full 61B-param model.
-- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 64 experts, top-k 4, seq 4096, batch 2048, four physical/logical stages, 64 microbatches, ring EP, CuTe FA4 attention, Pallas-Triton ragged dot with eight warps, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260711-065554/grug-train-jaxpp-rno2a-ring-l24-e64k4-b2048-s4096-p4m64-20260710-2355` reported mean MFU `17.4430`, p50 `17.7193`, p90 `18.0223`, and latest throughput `393,396.56` tokens/s. This improves b512/m16 by `1.2425` mean points but remains `2.5570` points below 20.
+- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 64 experts, top-k 4, seq 4096, batch 4096, four physical/logical stages, 128 microbatches, ring EP, CuTe FA4 attention, Pallas-Triton ragged dot with eight warps, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260711-072442/grug-train-jaxpp-rno2a-ring-l24-e64k4-b4096-s4096-p4m128-20260711-0024` reported mean MFU `18.1334`, p50 `18.2729`, p90 `18.3056`, and latest throughput `400,643.27` tokens/s. This remains `1.8666` mean points below 20.
 - RNO2A is healthy and performance-equivalent to east02 for this workload. The exact batch128/m4 baseline reported mean MFU `7.5946` and `170,329.97` tokens/s, within noise of the east02 `7.5981` result. NCCL debug logs confirmed `NET/IB/.../GDRDMA`, ruling out socket fallback.
 - Profile captured for explicit MPMD GPipe at the stable batch-96 seq4096 point after commit `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`). W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>. Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`.
 - Profile readout: communication-dominated exclusive timeline, with `48.75%` communication, `45.10%` compute, and `6.15%` stall. Largest exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather and reduce-scatter collectives.
@@ -37,7 +37,7 @@ author: dlwh
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
-- `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble. Evidence: b1024/m32 reaches `16.6677` mean MFU and b2048/m64 reaches `17.4430` mean / `17.7193` p50. Next test: occupancy is near its asymptote; only run m128 if the streamed ring gate is negative and the compile cost remains acceptable.
+- `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, and b4096/m128 `18.1334` mean MFU. Next test: b8192/m256 is the final occupancy point; the asymptote remains below 20 without a separate kernel/communication gain.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -55,6 +55,7 @@ author: dlwh
 - Proper whole-MLP Sonic without EP is operational but reaches only `13.9598` MFU. Staggering once-per-stage materialization regresses the exact target further to `13.8155`; eliminating repeated gather calls does not beat their existing overlap.
 - XLA's zero-copy one-shot ragged all-to-all flags are accepted, but RNO2A pods cannot create the required exportable `FABRIC+POSIX_FD` CUDA VMM allocation. `cuMemCreate` returns `CUDA_ERROR_NOT_PERMITTED` and the process exits 139 before compilation completes.
 - The first true streamed `ring_ppermute` backend passes CPU output/gradient parity and removes global activation/output tensors, but its H100 smoke is numerically unstable after one finite step and over 1,100x slower on that first timed step because EP8 creates many small native XLA ragged GEMMs and collective permutes.
+- Owner-local bulk-ring combine passes CPU output/gradient parity and removes the 640 MiB global output temporary, but seven owner-directed permutations make even the reduced L8 stage-3 backward graph compile for about 28 minutes without completing. It was stopped without a metric.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -1955,3 +1956,22 @@ author: dlwh
   - Do not scale or tune this backend. Preserve it only as a reproducible algorithmic negative; keep bulk ring as the working path.
 - Next action:
   - Optimize the bulk ring combine locally: scatter only owner-local token rows into `zeros_like(x_local)` and `psum` that 80 MiB buffer, instead of scattering a 640 MiB global tensor and reduce-scattering it.
+
+### 2026-07-11 01:07 PDT - m128 occupancy best and local-combine compile negative
+- Hypothesis: m128 will recover more standard-schedule bubble overhead, while owner-local combine can reduce the bulk ring's peak output temporary without changing dispatch/GEMMs.
+- Commit Hashes:
+  - `a6d9214108`: streamed-ring negative snapshot.
+  - `abe0428689`: opt-in `ring_local_combine` backend.
+- Commands:
+  - Exact b4096/m128 ring parent `/dlwh/iris-run-job-20260711-072442`.
+  - L8/b32/m4 `ring_local_combine` smoke parent `/dlwh/iris-run-job-20260711-073658`.
+- Results:
+  - m128 and all four ranks succeeded with 8/8 finite steps and final loss `5.7604752`. Mean MFU was `18.1334`, p10/p50/p90 `17.7645/18.2729/18.3056`, latest throughput `400,643.27` tokens/s, and duration `41.875697s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-l24-e64k4-b4096-s4096-p4m128-20260711-0024>.
+  - m128 improves m64 by `0.6904` mean and `0.5536` p50 points, remaining `1.8666` mean points below 20.
+  - A direct local-buffer `psum` is not semantically valid because local indices refer to different token owners. The parity-correct local-combine backend instead uses seven 80 MiB owner-directed collective permutes at EP8. CPU output/overflow/full-gradient parity passed (`6 passed`).
+  - The reduced local-combine smoke reached stage-3 loss/backward compilation, then produced no new marker or metric for about 28 minutes. All ranks remained live with zero failures; the parent was intentionally stopped at 29m55s. All tasks are terminal and no failed live job remains.
+- Interpretation:
+  - Occupancy remains the only validated positive direction and now reaches 18.13 mean MFU, but its theoretical bubble asymptote still falls short of 20.
+  - Owner-local combine preserves aggregate traffic and replaces one optimized reduce-scatter with seven explicit permutations; its differentiated graph is operationally intractable even at L8. Do not scale it.
+- Next action:
+  - Run b8192/m256 as the final occupancy point. For further code optimization, retain bulk collectives and target dispatch/scatter fusion within the existing AllGather/ReduceScatter dataflow rather than expanding collective count.
