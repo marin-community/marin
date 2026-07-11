@@ -2020,3 +2020,20 @@ author: dlwh
   - The reproducer is self-contained below the Marin stack and safely bounded for upstream triage. The validated boundary is unchanged: fsdp2 passes and fsdp3 hangs, so JaxPP is not required to trigger the concurrent shared-handler defect.
 - Next action:
   - Keep #7110 as the Marin tracking issue and package this commit for human-selected upstream filing; do not file it upstream automatically.
+
+### 2026-07-11 02:28 PDT - output-oriented XLA ring combine hard negative
+- Hypothesis: Replacing the bulk ring's zero-initialize plus atomic scatter-add combine with an assignment-to-dispatch inverse map and a top-k gather/reduction will let XLA emit one dense producer for the existing ReduceScatter operand.
+- Commit Hashes:
+  - `3636f7242c`: opt-in `ring_fused` backend with balanced/overflow output and full-gradient parity.
+  - `18e86f5763`: launcher support for the backend.
+- Command: L8/d2560/e64/top-k4/b32/m4/seq4096 four-stage EP8 `ring_fused` smoke under parent `/dlwh/iris-run-job-20260711-092136`, with CuTe FA4 and Pallas-Triton grouped GEMM (`block_k=32`, 8 warps).
+- Results:
+  - Parent and all four child tasks succeeded; all tasks are terminal. Compilation took about `195s`, and the first complete metric row followed after about `197.9s`.
+  - The run completed finite steps with losses `11.7210522` and `11.7035103`. Mean MFU was `6.2896`, final throughput `301,763.37` tokens/s, and final duration `0.434354s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ringfused-smoke-l8-e64k4-b32-s4096-p4m4-20260711-0220>.
+  - The matching bulk-ring smoke reached `9.4180` MFU, `625,994.6` tokens/s, and `0.209382s`. The inverse-gather path regressed MFU by `33.22%`, throughput by `51.79%`, and step duration by `107.45%`.
+  - XPlane/HLO attribution for the bulk baseline projects three 640 MiB scatter families at about `8.21s` per m256 step. Eliminating all three has an estimated ceiling near `20.32` MFU; combine alone has a ceiling near `18.79`.
+- Interpretation:
+  - XLA does not lower the logical `[tokens, top-k, hidden]` gather/reduction efficiently enough. Correctness and finite H100 execution are insufficient; this pure-XLA formulation is a hard performance negative and must not be scaled.
+  - A viable continuation must use an explicit GPU kernel that writes `[tokens, hidden]` directly and explicit VJPs that replace dispatch-backward and combine-forward/backward scatters. Do not pursue more ordinary JAX rearrangements of the same inverse map.
+- Next action:
+  - Prototype the token-oriented primitive as a Mosaic GPU or Triton kernel with controlled backward. Require a reduced microbenchmark or L8 gate to beat bulk ring before any exact L24 run.
