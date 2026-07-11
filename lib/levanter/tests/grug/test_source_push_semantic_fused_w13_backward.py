@@ -198,17 +198,18 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
     assert schedule.dx_jobs == 16000
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
-    assert schedule.staging_programs == 64
+    assert schedule.staging_programs == 32
+    assert schedule.combine_program_start == 32
+    assert schedule.combine_programs == 32
+    assert schedule.active_combine_programs == 32
     assert schedule.dx_program_start == 64
     assert schedule.dx_programs == 32
     assert schedule.dw_program_start == 96
     assert schedule.dw_programs == 32
-    assert schedule.combine_programs == 64
-    assert schedule.active_combine_programs == 64
     assert schedule.total_programs == 128
     assert schedule.max_stage_readiness_signals == 16000
     assert schedule.compact_readiness_slots == 10240
-    assert schedule.dx_readiness_signals == 200
+    assert schedule.dx_readiness_signals == 4000
     assert schedule.readiness_waits == 983040
 
 
