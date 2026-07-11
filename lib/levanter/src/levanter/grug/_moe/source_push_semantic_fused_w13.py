@@ -28,7 +28,6 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
-HELPER_ROWS = 32
 TOKEN_TRANSFER_ROWS = 128
 HELPER_PAYLOAD_K = 256
 
@@ -44,8 +43,8 @@ class SourcePushSemanticFusedW13Config:
     send_k: int = 512
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
-    helper_programs_per_peer: int = 8
-    consumer_programs_per_peer: int = 22
+    helper_programs_per_peer: int = 10
+    consumer_programs_per_peer: int = 20
     n_groups_per_job: int = 2
 
     def validate(self) -> None:
@@ -80,10 +79,10 @@ class SourcePushSemanticFusedW13Config:
                 "the Hopper lowering requires two chunk-owner programs per peer, "
                 f"got {self.chunk_owner_programs_per_peer}"
             )
-        if self.helper_programs_per_peer != 8:
-            raise ValueError(f"helper_programs_per_peer must be 8, got {self.helper_programs_per_peer}")
-        if self.consumer_programs_per_peer != 22:
-            raise ValueError(f"consumer_programs_per_peer must be 22, got {self.consumer_programs_per_peer}")
+        if self.helper_programs_per_peer != 10:
+            raise ValueError(f"helper_programs_per_peer must be 10, got {self.helper_programs_per_peer}")
+        if self.consumer_programs_per_peer != 20:
+            raise ValueError(f"consumer_programs_per_peer must be 20, got {self.consumer_programs_per_peer}")
         if self.n_groups_per_job != 2:
             raise ValueError(f"the initial Hopper lowering requires n_groups_per_job=2, got {self.n_groups_per_job}")
 
@@ -137,8 +136,8 @@ class SourcePushSemanticFusedW13GenerationAccounting:
     owner: int
     producer_side_programs: int
     consumer_programs: int
-    helper_tasks: int
-    helper_tasks_per_compute_block: int
+    helper_tiles: int
+    helper_tiles_per_compute_block: int
     empty_generation: int
     prepare_generation: int
     helper_done_generation: int
@@ -161,8 +160,8 @@ def source_push_semantic_fused_w13_generation_accounting(
     if chunk < 0:
         raise ValueError(f"chunk must be nonnegative, got {chunk}")
     generation = chunk // config.inbox_slots + 1
-    helper_tasks_per_compute_block = config.compute_m // HELPER_ROWS
-    helper_tasks = config.compute_blocks_per_send * helper_tasks_per_compute_block
+    helper_tiles_per_compute_block = hidden_dim // config.send_k
+    helper_tiles = config.compute_blocks_per_send * helper_tiles_per_compute_block
     n_jobs = math.ceil((intermediate_dim // config.block_n) / config.n_groups_per_job)
     consumer_jobs = config.compute_blocks_per_send * n_jobs
     return SourcePushSemanticFusedW13GenerationAccounting(
@@ -171,11 +170,11 @@ def source_push_semantic_fused_w13_generation_accounting(
         owner=chunk % config.chunk_owner_programs_per_peer,
         producer_side_programs=config.producer_side_programs_per_peer,
         consumer_programs=config.consumer_programs_per_peer,
-        helper_tasks=helper_tasks,
-        helper_tasks_per_compute_block=helper_tasks_per_compute_block,
+        helper_tiles=helper_tiles,
+        helper_tiles_per_compute_block=helper_tiles_per_compute_block,
         empty_generation=generation,
         prepare_generation=generation,
-        helper_done_generation=generation * helper_tasks_per_compute_block,
+        helper_done_generation=generation * helper_tiles_per_compute_block,
         full_generation=generation,
         consumer_done_generation=generation * consumer_jobs,
         released_generation=generation + 1,
@@ -433,9 +432,8 @@ def _make_source_push_semantic_fused_w13_kernel(
     config.validate()
     _validate_kernel_dimensions(hidden_dim, intermediate_dim, config)
     blocks_per_send = config.compute_blocks_per_send
-    helper_tasks_per_block = config.compute_m // HELPER_ROWS
-    helper_tasks = blocks_per_send * helper_tasks_per_block
-    helper_iterations = math.ceil(helper_tasks / config.helper_programs_per_peer)
+    helper_tiles = blocks_per_send * (hidden_dim // config.send_k)
+    helper_iterations = math.ceil(helper_tiles / config.helper_programs_per_peer)
     n_tiles = intermediate_dim // config.block_n
     n_jobs = math.ceil(n_tiles / config.n_groups_per_job)
     consumer_jobs = blocks_per_send * n_jobs
@@ -527,14 +525,14 @@ def _make_source_push_semantic_fused_w13_kernel(
                 if static_peer_ordinal != 0:
                     remote_inbox = mgpu.remote_ref(inbox_ref, peer, device_id_type=pl.DeviceIdType.LOGICAL)
 
-                def _prepare_rows(chunk, slot, task) -> None:
-                    block = task // helper_tasks_per_block
-                    row_half = task % helper_tasks_per_block
-                    row_start = row_half * HELPER_ROWS
+                def _prepare_tile(chunk, slot, tile) -> None:
+                    block = tile // (hidden_dim // config.send_k)
+                    k_tile = tile % (hidden_dim // config.send_k)
+                    k_start = k_tile * config.send_k
                     valid_rows = send_valid_ref[static_peer_ordinal, chunk, block]
 
-                    @pl.when(valid_rows > row_start)
-                    def _copy_live_rows() -> None:
+                    @pl.when(valid_rows > 0)
+                    def _copy_live_tile() -> None:
                         def _copy_scope(payload0_smem, payload1_smem, token_smem, token_barrier) -> None:
                             mgpu.copy_gmem_to_smem(
                                 token_ids_ref.at[
@@ -546,65 +544,60 @@ def _make_source_push_semantic_fused_w13_kernel(
                                 token_barrier,
                             )
                             mgpu.barrier_wait(token_barrier)
-
-                            @pl.loop(0, hidden_dim // config.send_k)
-                            def _k_loop(k_tile) -> None:
-                                k_start = k_tile * config.send_k
-                                for row_group in range(HELPER_ROWS // RAW_GATHER_ROWS):
-                                    helper_row_start = row_group * RAW_GATHER_ROWS
-                                    for row in range(RAW_GATHER_ROWS):
-                                        output_row = helper_row_start + row
-                                        block_row = row_start + output_row
-                                        row_valid = block_row < valid_rows
-                                        token = jnp.where(row_valid, token_smem[block_row], 0)
-                                        x_row0 = x_ref[
-                                            token,
-                                            pl.ds(k_start, HELPER_PAYLOAD_K),
-                                        ]
-                                        x_row1 = x_ref[
-                                            token,
-                                            pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
-                                        ]
-                                        payload0_smem[output_row, :] = jnp.where(
-                                            row_valid,
-                                            x_row0,
-                                            jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
-                                        )
-                                        payload1_smem[output_row, :] = jnp.where(
-                                            row_valid,
-                                            x_row1,
-                                            jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
-                                        )
-
-                                mgpu.commit_smem()
-                                if static_peer_ordinal == 0:
-                                    destination_ref = inbox_ref
-                                else:
-                                    destination_ref = remote_inbox
-                                mgpu.copy_smem_to_gmem(
-                                    payload0_smem,
-                                    destination_ref.at[
-                                        rank,
-                                        slot,
-                                        pl.ds(block * config.compute_m + row_start, HELPER_ROWS),
+                            for row_group in range(config.compute_m // RAW_GATHER_ROWS):
+                                row_start = row_group * RAW_GATHER_ROWS
+                                for row in range(RAW_GATHER_ROWS):
+                                    output_row = row_start + row
+                                    row_valid = output_row < valid_rows
+                                    token = jnp.where(row_valid, token_smem[output_row], 0)
+                                    x_row0 = x_ref[
+                                        token,
                                         pl.ds(k_start, HELPER_PAYLOAD_K),
-                                    ],
-                                )
-                                mgpu.copy_smem_to_gmem(
-                                    payload1_smem,
-                                    destination_ref.at[
-                                        rank,
-                                        slot,
-                                        pl.ds(block * config.compute_m + row_start, HELPER_ROWS),
+                                    ]
+                                    x_row1 = x_ref[
+                                        token,
                                         pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
-                                    ],
-                                )
-                                mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+                                    ]
+                                    payload0_smem[output_row, :] = jnp.where(
+                                        row_valid,
+                                        x_row0,
+                                        jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
+                                    )
+                                    payload1_smem[output_row, :] = jnp.where(
+                                        row_valid,
+                                        x_row1,
+                                        jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
+                                    )
+
+                            mgpu.commit_smem()
+                            if static_peer_ordinal == 0:
+                                destination_ref = inbox_ref
+                            else:
+                                destination_ref = remote_inbox
+                            mgpu.copy_smem_to_gmem(
+                                payload0_smem,
+                                destination_ref.at[
+                                    rank,
+                                    slot,
+                                    pl.ds(block * config.compute_m, config.compute_m),
+                                    pl.ds(k_start, HELPER_PAYLOAD_K),
+                                ],
+                            )
+                            mgpu.copy_smem_to_gmem(
+                                payload1_smem,
+                                destination_ref.at[
+                                    rank,
+                                    slot,
+                                    pl.ds(block * config.compute_m, config.compute_m),
+                                    pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
+                                ],
+                            )
+                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                         pl.run_scoped(
                             _copy_scope,
-                            payload0_smem=mgpu.SMEM((HELPER_ROWS, HELPER_PAYLOAD_K), dtype=dtype),
-                            payload1_smem=mgpu.SMEM((HELPER_ROWS, HELPER_PAYLOAD_K), dtype=dtype),
+                            payload0_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype),
+                            payload1_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype),
                             token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32),
                             token_barrier=mgpu.Barrier(num_arrivals=1),
                         )
@@ -617,13 +610,13 @@ def _make_source_push_semantic_fused_w13_kernel(
                     pl.semaphore_wait(prepare_sem.at[peer, slot], value=generation, decrement=False)
 
                     @pl.loop(0, helper_iterations)
-                    def _helper_loop(task_iteration) -> None:
-                        task = helper + task_iteration * config.helper_programs_per_peer
+                    def _helper_loop(tile_iteration) -> None:
+                        tile = helper + tile_iteration * config.helper_programs_per_peer
 
-                        @pl.when(task < helper_tasks)
-                        def _prepare_assigned_rows() -> None:
-                            _prepare_rows(chunk, slot, task)
-                            block = task // helper_tasks_per_block
+                        @pl.when(tile < helper_tiles)
+                        def _prepare_assigned_tile() -> None:
+                            _prepare_tile(chunk, slot, tile)
+                            block = tile // (hidden_dim // config.send_k)
                             if static_peer_ordinal == 0:
                                 pl.semaphore_signal(helper_done_sem.at[rank, slot, block])
                             else:
@@ -719,7 +712,7 @@ def _make_source_push_semantic_fused_w13_kernel(
                             n_job = job % n_jobs
                             pl.semaphore_wait(
                                 helper_done_sem.at[peer, slot, block],
-                                value=generation * helper_tasks_per_block,
+                                value=generation * (hidden_dim // config.send_k),
                                 decrement=False,
                             )
                             valid_rows = recv_valid_ref[static_peer_ordinal, chunk, block]

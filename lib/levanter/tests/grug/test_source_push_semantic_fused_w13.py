@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import math
 import re
 
 import jax
@@ -17,7 +18,6 @@ from levanter.grug._moe.source_push_semantic_fused_w13 import (
     SourcePushSemanticFusedW13Config,
     SourcePushSemanticFusedW13Metadata,
     HELPER_PAYLOAD_K,
-    HELPER_ROWS,
     RAW_GATHER_ROWS,
     TOKEN_TRANSFER_ROWS,
     _make_source_push_semantic_fused_w13_kernel,
@@ -106,20 +106,19 @@ def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
 
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
     assert (first.owner, next_chunk.owner) == (0, 1)
-    assert first.producer_side_programs == 10
-    assert first.consumer_programs == 22
+    assert first.producer_side_programs == 12
+    assert first.consumer_programs == 20
     assert CONFIG.worker_programs_per_peer == 32
     assert CONFIG.send_k == 512
-    assert 2560 // CONFIG.send_k == 5
-    assert first.helper_tasks_per_compute_block == 2
-    assert first.helper_tasks == 8
-    assert first.helper_tasks == CONFIG.helper_programs_per_peer
+    assert first.helper_tiles_per_compute_block == 5
+    assert first.helper_tiles == 20
+    assert math.ceil(first.helper_tiles / CONFIG.helper_programs_per_peer) == 2
     assert first.prepare_generation == first.generation
-    assert first.helper_done_generation == first.helper_tasks_per_compute_block
+    assert first.helper_done_generation == first.helper_tiles_per_compute_block
     assert reused.slot == first.slot
     assert reused.generation == 2
     assert reused.owner == first.owner
-    assert reused.helper_tasks == first.helper_tasks
+    assert reused.helper_tiles == first.helper_tiles
     assert reused.helper_done_generation == 2 * first.helper_done_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
     assert reused.empty_generation == first.released_generation
@@ -130,7 +129,7 @@ def test_fused_w13_kernel_uses_block_readiness_and_slot_wide_release():
 
     assert "(ep_size, config.inbox_slots, blocks_per_send)" in source
     assert "helper_done_sem.at[peer, slot, block]" in source
-    assert "value=generation * helper_tasks_per_block" in source
+    assert "value=generation * (hidden_dim // config.send_k)" in source
     assert "helper_done_sem.at[dst, slot]" not in source
     assert "consumer_done_sem.at[peer, slot]" in source
     assert "value=generation * consumer_jobs" in source
@@ -144,18 +143,15 @@ def test_fused_w13_transport_rows_are_independent_from_compute_rows():
     assert config.compute_blocks_per_send == 2
 
 
-def test_fused_w13_row_split_helpers_gather_full_k_from_one_metadata_load():
+def test_fused_w13_bulk_metadata_load_groups_eight_contiguous_row_loads():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
     assert RAW_GATHER_ROWS == 8
-    assert HELPER_ROWS == 32
-    assert CONFIG.compute_m // HELPER_ROWS == 2
-    assert "range(HELPER_ROWS // RAW_GATHER_ROWS)" in source
+    assert CONFIG.compute_m // RAW_GATHER_ROWS == 8
+    assert "range(config.compute_m // RAW_GATHER_ROWS)" in source
     assert "for row in range(RAW_GATHER_ROWS)" in source
-    assert "@pl.loop(0, hidden_dim // config.send_k)" in source
     assert "pl.ds(k_start, HELPER_PAYLOAD_K)" in source
-    assert "pl.ds(block * config.compute_m + row_start, HELPER_ROWS)" in source
-    assert "token_smem[block_row]" in source
+    assert "token_smem[output_row]" in source
     assert re.search(r"pl\.loop\(0,\s*config\.compute_m\)", source) is None
     assert TOKEN_TRANSFER_ROWS == 128
     assert "token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32)" in source
@@ -165,18 +161,18 @@ def test_fused_w13_row_split_helpers_gather_full_k_from_one_metadata_load():
 def test_fused_w13_helper_shares_tokens_across_two_contiguous_k256_payloads():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
-    payload_bytes = HELPER_ROWS * HELPER_PAYLOAD_K * jnp.dtype(jnp.bfloat16).itemsize
+    payload_bytes = CONFIG.compute_m * HELPER_PAYLOAD_K * jnp.dtype(jnp.bfloat16).itemsize
     token_bytes = TOKEN_TRANSFER_ROWS * jnp.dtype(jnp.int32).itemsize
 
     assert (CONFIG.compute_m, CONFIG.send_k, HELPER_PAYLOAD_K) == (64, 512, 256)
-    assert 2 * payload_bytes == 32 * 1024
-    assert 2 * payload_bytes + token_bytes == 33_280
+    assert 2 * payload_bytes == 64 * 1024
+    assert 2 * payload_bytes + token_bytes == 66_048
     assert source.count("token_ids_ref.at[") == 1
     assert source.count("mgpu.barrier_wait(token_barrier)") == 1
-    assert "payload0_smem=mgpu.SMEM((HELPER_ROWS, HELPER_PAYLOAD_K), dtype=dtype)" in source
-    assert "payload1_smem=mgpu.SMEM((HELPER_ROWS, HELPER_PAYLOAD_K), dtype=dtype)" in source
-    assert re.search(r"mgpu\.copy_smem_to_gmem\(\s+payload0_smem,", source)
-    assert re.search(r"mgpu\.copy_smem_to_gmem\(\s+payload1_smem,", source)
+    assert "payload0_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype)" in source
+    assert "payload1_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype)" in source
+    assert "mgpu.copy_smem_to_gmem(\n                                payload0_smem," in source
+    assert "mgpu.copy_smem_to_gmem(\n                                payload1_smem," in source
     assert "pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K)" in source
     assert source.index("mgpu.wait_smem_to_gmem(0, wait_read_only=False)") < source.index(
         "pl.semaphore_signal(helper_done_sem.at[rank, slot, block])"
