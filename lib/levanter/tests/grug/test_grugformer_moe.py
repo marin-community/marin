@@ -52,6 +52,19 @@ def _make_ep_mesh_or_none() -> Mesh | None:
     )
 
 
+def _make_ep_ring_test_mesh_or_none() -> Mesh | None:
+    devices = jax.devices()
+    if len(devices) < 2:
+        return None
+    expert_size = 4 if len(devices) >= 4 else 2
+    mesh_devices = np.array(devices[:expert_size]).reshape(1, expert_size, 1)
+    return Mesh(
+        mesh_devices,
+        axis_names=("data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+
+
 def _make_abstract_moe_mesh(*, data: int, expert: int, model: int) -> AbstractMesh:
     return AbstractMesh(
         axis_sizes=(data, expert, model),
@@ -557,7 +570,7 @@ def test_moe_no_ep_fsdp_weights_match_unsharded_reference():
     np.testing.assert_allclose(np.asarray(actual), np.asarray(reference), rtol=1e-5, atol=1e-5)
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize("implementation", ["ring", "ring_ppermute", "ragged_all_to_all"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -691,6 +704,71 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
 
     np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
     assert int(ragged_dropped) == int(ring_dropped)
+
+
+@pytest.mark.parametrize("overflow", [False, True])
+def test_moe_mlp_ring_ppermute_matches_ring_values_and_gradients(overflow: bool):
+    mesh = _make_ep_ring_test_mesh_or_none()
+    if mesh is None:
+        pytest.skip("requires >=2 devices")
+
+    expert_size = mesh.shape["expert"]
+    tokens = expert_size * 4
+    hidden_dim = 8
+    intermediate_dim = 12
+    num_experts = expert_size * 2
+    topk = 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(41),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    if overflow:
+        selected_experts = jnp.zeros_like(selected_experts)
+        combine_weights = jnp.full_like(combine_weights, 0.5)
+    cotangent = jax.random.normal(jax.random.key(42), x.shape, dtype=x.dtype)
+
+    with jax.set_mesh(mesh):
+        batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.sharding.reshard(x, batch_sharding)
+        selected_experts = jax.sharding.reshard(selected_experts, batch_sharding)
+        combine_weights = jax.sharding.reshard(combine_weights, batch_sharding)
+        cotangent = jax.sharding.reshard(cotangent, batch_sharding)
+        w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
+        w_down = jax.sharding.reshard(w_down, expert_sharding)
+
+        def run(implementation, x, combine_weights, w_up_gate, w_down):
+            return moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                implementation=implementation,
+                mesh=None,
+                report_capacity_overflow=True,
+            )
+
+        ring_out, ring_dropped = run("ring", x, combine_weights, w_up_gate, w_down)
+        streamed_out, streamed_dropped = run("ring_ppermute", x, combine_weights, w_up_gate, w_down)
+
+        def loss(implementation, x, combine_weights, w_up_gate, w_down):
+            out, _ = run(implementation, x, combine_weights, w_up_gate, w_down)
+            return jnp.sum(out * cotangent)
+
+        ring_grads = jax.grad(loss, argnums=(1, 2, 3, 4))("ring", x, combine_weights, w_up_gate, w_down)
+        streamed_grads = jax.grad(loss, argnums=(1, 2, 3, 4))("ring_ppermute", x, combine_weights, w_up_gate, w_down)
+
+    np.testing.assert_allclose(np.asarray(streamed_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
+    assert int(streamed_dropped) == int(ring_dropped)
+    if overflow:
+        assert int(streamed_dropped) > 0
+    for streamed_grad, ring_grad in zip(streamed_grads, ring_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(streamed_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():

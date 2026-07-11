@@ -87,7 +87,7 @@ Options:
   --vocab-size N            MAY_VOCAB_SIZE. Omit to use the May heuristic default.
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
-  --moe-implementation NAME ring, ragged_all_to_all, deepep, scatter, or sonic (default: ring).
+  --moe-implementation NAME ring, ring_ppermute, ragged_all_to_all, deepep, scatter, or sonic (default: ring).
   --attention-implementation NAME
                             reference, gpu_fa4_cute, or gpu_fa4_thd.
                             Omit to use the model default.
@@ -176,6 +176,14 @@ case "$IMPLEMENTATION" in
     auto|explicit_mpmd) ;;
     *)
         echo "ERROR: unsupported implementation: $IMPLEMENTATION" >&2
+        exit 1
+        ;;
+esac
+
+case "$MOE_IMPLEMENTATION" in
+    ring|ring_ppermute|ragged_all_to_all|deepep|scatter|sonic) ;;
+    *)
+        echo "ERROR: unsupported MoE implementation: $MOE_IMPLEMENTATION" >&2
         exit 1
         ;;
 esac
@@ -400,6 +408,7 @@ stage_layer_counts: ${STAGE_LAYER_COUNTS:-even}
 microbatches: $MICROBATCHES
 model: d2560 L${LAYERS} experts=${NUM_EXPERTS} top_k=${TOP_K} seq_len=${SEQ_LEN} vocab=${VOCAB_SIZE:-default}
 batch: $BATCH
+moe_implementation: $MOE_IMPLEMENTATION
 attention_implementation: ${ATTENTION_IMPLEMENTATION:-default}
 ragged_dot_implementation: ${RAGGED_DOT_IMPLEMENTATION:-auto}
 ragged_dot_block_k: ${RAGGED_DOT_BLOCK_K:-32}
