@@ -1992,3 +1992,16 @@ author: dlwh
   - The e64 state fits initial compilation farther than the prior e256 probe, but doubled local expert state still makes accumulation/update compilation operationally intractable. Retain expert-axis8.
 - Next action:
   - Run an exact m128 A/B with `--xla_gpu_enable_latency_hiding_scheduler=true`; the existing HLO already uses async collectives but overlaps expert GEMMs with AllGather below 2%.
+
+### 2026-07-11 02:10 PDT - latency-hiding scheduler bounded negative
+- Hypothesis: XLA's GPU latency-hiding scheduler will move the existing asynchronous expert AllGather and ReduceScatter collectives off the critical path enough to close a material fraction of the `1.7417` MFU-point gap to 20.
+- Commit Hash: `64d21b7fc0` (`[docs] Record occupancy saturation`).
+- Command: exact L24/d2560/e64/top-k4/b4096/m128/seq4096 EP8 bulk-ring command under parent `/dlwh/iris-run-job-20260711-084837`, with `XLA_FLAGS='--xla_gpu_enable_latency_hiding_scheduler=true'`.
+- Results:
+  - Parent and all four child tasks succeeded; the flag was accepted on every worker and W&B finished. Mean MFU was `18.2043`, with p10/p50/p90 `17.6869/18.4017/18.4242`, MFU standard deviation `0.3535`, final throughput `398,893.97` tokens/s, duration `42.059338s`, and finite final loss `5.7603002`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-lhs-l24-e64k4-b4096-s4096-p4m128-20260711-0148>.
+  - Against the matching unflagged m128 run, mean MFU changed by `+0.0708` points (`+0.39%` relative) and p50 by `+0.1288` points, while final throughput changed by `-0.44%`. Five central samples clustered at `18.4013-18.4228` MFU, but the tail fell to `17.6869`.
+- Interpretation:
+  - The scheduler is functional, but its mean gain is smaller than run noise and only closes about `4%` of the remaining gap. It is not a credible path to 20 by itself.
+  - Keep the flag as an optional small median improvement, but do not stack speculative scheduler flags without profile evidence. Retain the m256 unflagged result (`18.2583` mean) as the headline best.
+- Next action:
+  - Preserve the bulk AllGather/grouped-GEMM/ReduceScatter transport and target its large zero/scatter dispatch and combine fusions. Require full output/overflow/gradient parity and a reduced H100 gate before another exact run.
