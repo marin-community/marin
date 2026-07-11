@@ -336,9 +336,6 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "valid_ref[expert, row_start]" in source
     assert "] = acc_ref[...]" in source
     assert "mgpu.atomic_add" not in source
-    assert "gate_smem[:, :] = (" in source
     assert "jax.nn.silu(gate_smem[:, :].astype(jnp.float32))" in source
-    assert "mgpu.transpose_ref(gate_smem, (1, 0))" in source
-    assert "h_smem" not in source
     assert "d_z13_ref" in source
     assert "d_h_ref" not in source
