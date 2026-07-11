@@ -1133,20 +1133,20 @@ def _download_ghalogs_shard(parts_prefix: str, shard: _ShardRange) -> str:
 
 
 def _concat_parts_server_side(fs: fsspec.AbstractFileSystem, target: str, parts: list[str]) -> None:
-    """Assemble ``target`` from ``parts`` without streaming bytes through this process.
+    """Assemble ``target`` from ``parts`` in order, without streaming bytes through this process.
 
-    Object stores concatenate server-side via ``fs.merge`` — S3 UploadPartCopy
-    on R2/CoreWeave, compose on GCS — and materialize the target atomically on
-    completion. The local filesystem (tests) has no such primitive, so parts
-    are byte-appended and published with an atomic rename.
+    ``target`` appears only once fully assembled; the source parts are left in place.
     """
     if isinstance(fs, LocalFileSystem):
+        # No server to concatenate on: byte-append, publish with an atomic rename.
         with atomic_rename(target, fs=fs) as tmp:
             with fs.open(tmp, "wb") as out:
                 for part in parts:
                     with fs.open(part, "rb") as src:
                         shutil.copyfileobj(src, out, _GHALOGS_HTTP_CHUNK_BYTES)
         return
+    # Server-side concat — S3 UploadPartCopy on R2/CoreWeave, compose on GCS —
+    # which materializes the target atomically on completion.
     fs.merge(target, parts)
 
 
