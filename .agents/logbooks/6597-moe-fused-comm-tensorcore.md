@@ -3086,3 +3086,35 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w2b-publish-first-8b0f --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 8b0f46e8c8 --jsonl scratch/w2b-publish-first-8b0f.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-099 - Replicated W13-backward comparison reaches candidate lowering
+
+Job `/dlwh/w13b-role48-compare-replicated-7c1` tested commit `7c1f9bca72`
+on `cw-rno2a` with EP8, T128/rank, H2560, I1280, E4/rank, top-k 2,
+capacity factor 4.0, random routing seed 0, bf16, JAX plan metadata, no warmup,
+one timed step, one repeat, and separate compilation. Iris reported terminal
+state `succeeded`, exit 0, one of one task succeeded, and a 43.26s duration.
+This is a harness-level false success because the debug-exception path returned
+zero after candidate lowering failed.
+
+The replicated reference-input fix cleared the prior `ShardingTypeError`, but
+the observed W13-backward kernel failed while lowering the `x_smem` zero-fill
+at `source_push_semantic_fused_w13_backward.py:903`:
+
+```text
+NotImplementedError: WGSplatFragLayout(shape=(128, 128))
+```
+
+The failing operation was `x_smem[:, :] = jnp.zeros((128, 128), ...)`, lowered
+through Mosaic GPU's swap/load-tiled path. No repeat completed, so `dx` and
+`dw13` max/mean absolute differences, least-squares scales, cosine
+similarities, and nonfinite counts are unavailable. Pre-run metadata reported
+zero dropped routes, zero routing-policy drops, and zero metadata-overflow
+routes; queue- and layout-overflow fields were not reached. Exactly one H100x8
+job was launched, with no retry, source edit, duplicate, or Iris mutation.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-compare-replicated-7c1 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 7c1f9bca72 --jsonl scratch/w13b-role48-compare-replicated-7c1.jsonl
+```
