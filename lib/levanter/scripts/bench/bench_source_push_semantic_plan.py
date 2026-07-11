@@ -1939,6 +1939,17 @@ def _semantic_fused_w2_backward_host_metrics(observed: Any, expected: Any) -> di
     }
 
 
+def _semantic_fused_w13_backward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
+    return {
+        **_host_comparison_metrics("dx", observed.dx, expected.dx),
+        **_host_scale_comparison_metrics("dx", observed.dx, expected.dx),
+        **_host_comparison_metrics("dw13", observed.dw13, expected.dw13),
+        **_host_scale_comparison_metrics("dw13", observed.dw13, expected.dw13),
+        "queue_overflow_route_error_count": np.asarray(observed.queue_overflow_routes),
+        "layout_overflow_row_error_count": np.asarray(observed.layout_overflow_rows),
+    }
+
+
 def _semantic_fused_mlp_forward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
     return {
         **_host_comparison_metrics("y", observed["y"], expected["y"]),
@@ -4236,16 +4247,11 @@ def _mode_callable(
             "layout_overflow_row_error_count": result.layout_overflow_rows,
         }
 
-    def semantic_fused_w13_backward_compare(inputs: SemanticFusedW13BackwardBenchInputs):
-        expected = semantic_fused_w13_backward(inputs, interpret=True)
-        observed = semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
-        return {
-            **_comparison_metrics("dx", observed.dx, expected.dx),
-            **_scale_comparison_metrics("dx", observed.dx, expected.dx),
-            **_comparison_metrics("dw13", observed.dw13, expected.dw13),
-            "queue_overflow_route_error_count": observed.queue_overflow_routes,
-            "layout_overflow_row_error_count": observed.layout_overflow_rows,
-        }
+    def semantic_fused_w13_backward_reference(inputs: SemanticFusedW13BackwardBenchInputs):
+        return semantic_fused_w13_backward(inputs, interpret=True)
+
+    def semantic_fused_w13_backward_observed(inputs: SemanticFusedW13BackwardBenchInputs):
+        return semantic_fused_w13_backward(inputs, interpret=args.pallas_interpret)
 
     def semantic_fused_mlp_forward(
         inputs: SemanticBenchInputs,
@@ -8480,7 +8486,11 @@ def _mode_callable(
             host_metrics=_semantic_fused_w2_backward_host_metrics,
         ),
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS: semantic_fused_w13_backward_pallas,
-        MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: semantic_fused_w13_backward_compare,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: SplitComparison(
+            reference=semantic_fused_w13_backward_reference,
+            observed=semantic_fused_w13_backward_observed,
+            host_metrics=_semantic_fused_w13_backward_host_metrics,
+        ),
         MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS: semantic_fused_mlp_forward_pallas,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE: SplitComparison(
             reference=semantic_fused_mlp_forward_reference,

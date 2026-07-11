@@ -317,6 +317,53 @@ def test_source_push_semantic_plan_split_w2_backward_compare_preserves_metric_sc
     assert int(metrics["layout_overflow_row_error_count"]) == 3
 
 
+def test_source_push_semantic_plan_split_w13_backward_compare_preserves_metric_schema():
+    bench = _bench_module()
+    expected = SimpleNamespace(
+        dx=np.asarray([1.0, 2.0], dtype=np.float32),
+        dw13=np.asarray([3.0, 4.0], dtype=np.float32),
+        queue_overflow_routes=np.asarray(0, dtype=np.int32),
+        layout_overflow_rows=np.asarray(0, dtype=np.int32),
+    )
+    observed = SimpleNamespace(
+        dx=np.asarray([1.5, 2.0], dtype=np.float32),
+        dw13=np.asarray([3.0, 5.0], dtype=np.float32),
+        queue_overflow_routes=np.asarray(2, dtype=np.int32),
+        layout_overflow_rows=np.asarray(3, dtype=np.int32),
+    )
+
+    metrics = bench._semantic_fused_w13_backward_host_metrics(observed, expected)
+
+    assert set(metrics) == {
+        "dx_max_abs_diff",
+        "dx_mean_abs_diff",
+        "expected_dx_nonfinite_error_count",
+        "observed_dx_nonfinite_error_count",
+        "dx_expected_abs_sum",
+        "dx_observed_abs_sum",
+        "dx_least_squares_scale",
+        "dx_cosine_similarity",
+        "dw13_max_abs_diff",
+        "dw13_mean_abs_diff",
+        "expected_dw13_nonfinite_error_count",
+        "observed_dw13_nonfinite_error_count",
+        "dw13_expected_abs_sum",
+        "dw13_observed_abs_sum",
+        "dw13_least_squares_scale",
+        "dw13_cosine_similarity",
+        "queue_overflow_route_error_count",
+        "layout_overflow_row_error_count",
+    }
+    assert float(metrics["dx_max_abs_diff"]) == 0.5
+    assert float(metrics["dw13_max_abs_diff"]) == 1.0
+    assert float(metrics["dx_least_squares_scale"]) == 1.1
+    assert float(metrics["dw13_least_squares_scale"]) == 1.16
+    assert float(metrics["dx_cosine_similarity"]) == pytest.approx(5.5 / np.sqrt(6.25 * 5.0))
+    assert float(metrics["dw13_cosine_similarity"]) == pytest.approx(29.0 / np.sqrt(34.0 * 25.0))
+    assert int(metrics["queue_overflow_route_error_count"]) == 2
+    assert int(metrics["layout_overflow_row_error_count"]) == 3
+
+
 def test_source_push_semantic_plan_fused_mlp_reference_inputs_are_replicated():
     bench = _bench_module()
     selected = jnp.asarray([[[0], [0]]], dtype=jnp.int32)
@@ -2383,6 +2430,10 @@ def test_source_push_semantic_plan_bench_emits_fused_stage_rows(tmp_path):
     w13_backward_compare = repeats["semantic_fused_w13_backward_compare"]
     assert w13_backward_compare["dx_max_abs_diff"] == 0.0
     assert w13_backward_compare["dw13_max_abs_diff"] == 0.0
+    assert w13_backward_compare["dx_least_squares_scale"] == 1.0
+    assert w13_backward_compare["dx_cosine_similarity"] == 1.0
+    assert w13_backward_compare["dw13_least_squares_scale"] == 1.0
+    assert w13_backward_compare["dw13_cosine_similarity"] == 1.0
 
 
 def test_source_push_semantic_plan_fused_mlp_modes_use_target_shape_flops():
