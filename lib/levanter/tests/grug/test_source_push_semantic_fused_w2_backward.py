@@ -23,6 +23,7 @@ from levanter.grug._moe.source_push_semantic_fused_w2_backward import (
 
 
 CONFIG = SourcePushSemanticFusedW2BackwardConfig()
+TEST_HIDDEN_DIM = 512
 
 
 def test_fused_w2_backward_transport_rows_are_independent_from_compute_rows():
@@ -53,10 +54,16 @@ def _plan(*, rows_per_pair: int = 12, rows_per_rank: int = 6):
 
 def _inputs(*, rows_per_expert_capacity: int = 256):
     plan = _plan()
-    dy = ((jnp.arange(2 * 6 * 256, dtype=jnp.float32).reshape(2, 6, 256) % 17 - 8) / 16).astype(jnp.bfloat16)
-    return_y = ((jnp.arange(2 * 2 * 4 * 64 * 256, dtype=jnp.float32).reshape(2, 2, 4, 64, 256) % 13 - 6) / 32).astype(
-        jnp.bfloat16
-    )
+    dy = (
+        (jnp.arange(2 * 6 * TEST_HIDDEN_DIM, dtype=jnp.float32).reshape(2, 6, TEST_HIDDEN_DIM) % 17 - 8) / 16
+    ).astype(jnp.bfloat16)
+    return_y = (
+        (
+            jnp.arange(2 * 2 * 4 * 64 * TEST_HIDDEN_DIM, dtype=jnp.float32).reshape(2, 2, 4, 64, TEST_HIDDEN_DIM) % 13
+            - 6
+        )
+        / 32
+    ).astype(jnp.bfloat16)
     z13_expert = (
         (
             jnp.arange(2 * 2 * rows_per_expert_capacity * 256, dtype=jnp.float32).reshape(
@@ -67,9 +74,9 @@ def _inputs(*, rows_per_expert_capacity: int = 256):
         )
         / 32
     ).astype(jnp.bfloat16)
-    w_down = ((jnp.arange(2 * 2 * 128 * 256, dtype=jnp.float32).reshape(2, 2, 128, 256) % 7 - 3) / 64).astype(
-        jnp.bfloat16
-    )
+    w_down = (
+        (jnp.arange(2 * 2 * 128 * TEST_HIDDEN_DIM, dtype=jnp.float32).reshape(2, 2, 128, TEST_HIDDEN_DIM) % 7 - 3) / 64
+    ).astype(jnp.bfloat16)
     return dy, return_y, z13_expert, w_down, plan
 
 
@@ -95,7 +102,7 @@ def _independent_reference(dy, return_y, z13_expert, w_down, plan, *, capacity: 
     queue_valid_rows = np.asarray(queue.valid_rows)
 
     d_h = np.zeros((2, 2, capacity, 128), dtype=np.float32)
-    d_w2 = np.zeros((2, 2, 128, 256), dtype=np.float32)
+    d_w2 = np.zeros(w_host.shape, dtype=np.float32)
     d_route = np.zeros((2, 6, 2), dtype=np.float32)
     valid = np.zeros((2, 2, capacity), dtype=np.bool_)
     for src in range(2):
@@ -213,9 +220,12 @@ def test_fused_w2_backward_generation_accounting_tracks_direct_compact_producers
     assert first.owner == 0
     assert next_chunk.owner == 1
     assert first.helper_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_hidden_block)
+    assert first.helper_tiles == 20
+    assert (first.helper_tiles + CONFIG.helper_programs_per_peer - 1) // CONFIG.helper_programs_per_peer == 4
     assert first.prepare_generation == 1
     assert first.helper_done_generation == first.helper_tiles
     assert first.expert_block_ready_arrivals == 2560 // CONFIG.send_hidden_block
+    assert first.expert_block_ready_arrivals == 5
     assert later.chunk == 12
     assert later.owner == 0
     assert later.helper_tiles == first.helper_tiles
@@ -224,18 +234,16 @@ def test_fused_w2_backward_generation_accounting_tracks_direct_compact_producers
     assert later.expert_block_ready_arrivals == first.expert_block_ready_arrivals
 
 
-def test_fused_w2_backward_config_keeps_safe_32_worker_topology():
+def test_fused_w2_backward_config_reduces_producer_residency():
     assert CONFIG.chunk_owner_programs_per_peer == 2
-    assert CONFIG.helper_programs_per_peer == 10
+    assert CONFIG.send_hidden_block == 512
+    assert CONFIG.helper_programs_per_peer == 5
     assert CONFIG.consumer_programs_per_peer == 20
-    assert (
-        CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer + CONFIG.consumer_programs_per_peer
-        == 32
-    )
     producer_programs = 8 * (CONFIG.chunk_owner_programs_per_peer + CONFIG.helper_programs_per_peer)
     total_programs = producer_programs + 8 * CONFIG.consumer_programs_per_peer
-    assert producer_programs == 96
-    assert total_programs == 256
+    assert producer_programs == 56
+    assert total_programs == 216
+    assert 132 - producer_programs == 76
 
 
 def test_fused_w2_backward_interpret_matches_independent_rough_route_reference():
@@ -323,6 +331,14 @@ def test_fused_w2_backward_kernel_contract_streams_compact_rows_to_owned_dw2_til
     assert "pl.program_id(1)" not in source
     assert "(worker >= helper_start) & (worker < consumer_start)" in source
     assert "tile = helper + helper_iteration * config.helper_programs_per_peer" in source
+    assert "lower_smem" in source
+    assert "upper_smem" in source
+    assert source.count("mgpu.copy_smem_to_gmem(") == 2
+    assert source.count("mgpu.wait_smem_to_gmem(0, wait_read_only=False)") == 1
+    assert "pl.ds(hidden_start, config.send_hidden_block // 2)" in source
+    assert "hidden_start + config.send_hidden_block // 2" in source
+    assert "for route_hidden_start in range(0, hidden_dim, config.send_hidden_block)" in source
+    assert "@pl.when(hidden_tile == 0)" in source
     assert "remote_dy_expert = mgpu.remote_ref" in source
     assert "pl.ds(row_start, config.compute_m)" in source
     assert "_signal_remote_compact_block(compact_ready_sem, peer, expert, compact_block)" in source

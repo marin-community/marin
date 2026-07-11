@@ -36,10 +36,10 @@ class SourcePushSemanticFusedW2BackwardConfig:
     send_m: int = 256
     intermediate_block: int = 128
     hidden_block: int = 128
-    send_hidden_block: int = 256
+    send_hidden_block: int = 512
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
-    helper_programs_per_peer: int = 10
+    helper_programs_per_peer: int = 5
     consumer_programs_per_peer: int = 20
 
     def validate(self) -> None:
@@ -47,10 +47,10 @@ class SourcePushSemanticFusedW2BackwardConfig:
             "compute_m": 64,
             "intermediate_block": 128,
             "hidden_block": 128,
-            "send_hidden_block": 256,
+            "send_hidden_block": 512,
             "inbox_slots": 12,
             "chunk_owner_programs_per_peer": 2,
-            "helper_programs_per_peer": 10,
+            "helper_programs_per_peer": 5,
             "consumer_programs_per_peer": 20,
         }
         for name, value in expected.items():
@@ -646,18 +646,30 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                 expert = send_expert_ref[static_peer_ordinal, chunk, block]
                                 row_start = send_row_ref[static_peer_ordinal, chunk, block]
 
-                                def _copy_scope(tile_smem) -> None:
+                                def _copy_scope(lower_smem, upper_smem) -> None:
 
                                     @pl.loop(0, config.compute_m)
                                     def _row_loop(row) -> None:
                                         token = token_ids_ref[static_peer_ordinal, chunk, block, row]
                                         weight = route_weights_ref[static_peer_ordinal, chunk, block, row]
                                         live = row < valid_rows
-                                        source_dy = dy_ref[token, pl.ds(hidden_start, config.send_hidden_block)]
-                                        tile_smem[row, :] = jnp.where(
+                                        lower_dy = dy_ref[token, pl.ds(hidden_start, config.send_hidden_block // 2)]
+                                        upper_dy = dy_ref[
+                                            token,
+                                            pl.ds(
+                                                hidden_start + config.send_hidden_block // 2,
+                                                config.send_hidden_block // 2,
+                                            ),
+                                        ]
+                                        lower_smem[row, :] = jnp.where(
                                             live,
-                                            source_dy * weight.astype(source_dy.dtype),
-                                            jnp.zeros((config.send_hidden_block,), dtype=dtype),
+                                            lower_dy * weight.astype(lower_dy.dtype),
+                                            jnp.zeros((config.send_hidden_block // 2,), dtype=dtype),
+                                        )
+                                        upper_smem[row, :] = jnp.where(
+                                            live,
+                                            upper_dy * weight.astype(upper_dy.dtype),
+                                            jnp.zeros((config.send_hidden_block // 2,), dtype=dtype),
                                         )
 
                                         @pl.when(hidden_tile == 0)
@@ -665,16 +677,35 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                             acc = jnp.asarray(0.0, dtype=jnp.float32)
                                             entry = chunk * blocks + block
                                             for route_hidden_start in range(0, hidden_dim, config.send_hidden_block):
-                                                dy_part = dy_ref[
-                                                    token, pl.ds(route_hidden_start, config.send_hidden_block)
+                                                dy_lower = dy_ref[
+                                                    token,
+                                                    pl.ds(route_hidden_start, config.send_hidden_block // 2),
                                                 ].astype(jnp.float32)
-                                                route_part = route_y_ref[
+                                                route_lower = route_y_ref[
                                                     static_peer_ordinal,
                                                     entry,
                                                     row,
-                                                    pl.ds(route_hidden_start, config.send_hidden_block),
+                                                    pl.ds(route_hidden_start, config.send_hidden_block // 2),
                                                 ].astype(jnp.float32)
-                                                acc += jnp.sum(dy_part * route_part)
+                                                dy_upper = dy_ref[
+                                                    token,
+                                                    pl.ds(
+                                                        route_hidden_start + config.send_hidden_block // 2,
+                                                        config.send_hidden_block // 2,
+                                                    ),
+                                                ].astype(jnp.float32)
+                                                route_upper = route_y_ref[
+                                                    static_peer_ordinal,
+                                                    entry,
+                                                    row,
+                                                    pl.ds(
+                                                        route_hidden_start + config.send_hidden_block // 2,
+                                                        config.send_hidden_block // 2,
+                                                    ),
+                                                ].astype(jnp.float32)
+                                                acc += jnp.sum(dy_lower * route_lower) + jnp.sum(
+                                                    dy_upper * route_upper
+                                                )
                                             queue_d_route_ref[static_peer_ordinal, chunk, block, row] = jnp.where(
                                                 live, acc, jnp.asarray(0.0, dtype=jnp.float32)
                                             )
@@ -682,18 +713,34 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     mgpu.commit_smem()
                                     destination_ref = dy_expert_ref if static_peer_ordinal == 0 else remote_dy_expert
                                     mgpu.copy_smem_to_gmem(
-                                        tile_smem,
+                                        lower_smem,
                                         destination_ref.at[
                                             expert,
                                             pl.ds(row_start, config.compute_m),
-                                            pl.ds(hidden_start, config.send_hidden_block),
+                                            pl.ds(hidden_start, config.send_hidden_block // 2),
+                                        ],
+                                    )
+                                    mgpu.copy_smem_to_gmem(
+                                        upper_smem,
+                                        destination_ref.at[
+                                            expert,
+                                            pl.ds(row_start, config.compute_m),
+                                            pl.ds(
+                                                hidden_start + config.send_hidden_block // 2,
+                                                config.send_hidden_block // 2,
+                                            ),
                                         ],
                                     )
                                     mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                                 pl.run_scoped(
                                     _copy_scope,
-                                    tile_smem=mgpu.SMEM((config.compute_m, config.send_hidden_block), dtype=dtype),
+                                    lower_smem=mgpu.SMEM(
+                                        (config.compute_m, config.send_hidden_block // 2), dtype=dtype
+                                    ),
+                                    upper_smem=mgpu.SMEM(
+                                        (config.compute_m, config.send_hidden_block // 2), dtype=dtype
+                                    ),
                                 )
 
                                 compact_block = row_start // config.compute_m
