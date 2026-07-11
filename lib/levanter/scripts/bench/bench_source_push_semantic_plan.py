@@ -201,6 +201,8 @@ MODE_W13_SOURCE_PADDED_INBOX_PALLAS = "w13_source_padded_inbox_pallas"
 MODE_W13_SOURCE_PADDED_INBOX_COMPARE = "w13_source_padded_inbox_compare"
 MODE_SEMANTIC_PERMUTE_W13_PALLAS = "semantic_permute_w13_pallas"
 MODE_SEMANTIC_PERMUTE_W13_COMPARE = "semantic_permute_w13_compare"
+MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS = "semantic_permute_w13_b64_inbox_pallas"
+MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE = "semantic_permute_w13_b64_inbox_compare"
 MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS = "semantic_fused_w2_return_pallas"
 MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE = "semantic_fused_w2_return_compare"
 MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS = "semantic_fused_w2_backward_pallas"
@@ -577,6 +579,8 @@ MODES = (
     MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
     MODE_SEMANTIC_PERMUTE_W13_PALLAS,
     MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+    MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+    MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
     MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS,
     MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE,
     MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS,
@@ -837,6 +841,8 @@ SOURCE_PADDED_MODES = (
     MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
     MODE_SEMANTIC_PERMUTE_W13_PALLAS,
     MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+    MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+    MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
     MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
     MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_COMPARE,
     MODE_FORWARD_BACKWARD_SOURCE_PADDED_INBOX_DIRECT_QUEUE_PALLAS,
@@ -1718,6 +1724,8 @@ def _mode_flops_per_rank(
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
         MODE_SEMANTIC_PERMUTE_W13_PALLAS,
         MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
     ):
@@ -3053,6 +3061,8 @@ def _is_pallas_mode(mode: str) -> bool:
         MODE_SEMANTIC_FUSED_MLP_ALL_STAGES_LIVE_PALLAS,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
         MODE_METADATA_PALLAS,
         MODE_METADATA_TILE_PALLAS,
         MODE_GATHER_X_PALLAS,
@@ -3273,6 +3283,8 @@ def _block_sizes_for_mode(args: argparse.Namespace, mode: str) -> dict[str, Any]
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
         MODE_SEMANTIC_PERMUTE_W13_PALLAS,
         MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
     ):
         return {
             "source_push_profile": SOURCE_PUSH_PROFILE_STABLE_216,
@@ -3772,6 +3784,8 @@ def _mode_callable(
                 MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
                 MODE_SEMANTIC_PERMUTE_W13_PALLAS,
                 MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+                MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+                MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
                 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS,
                 MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE,
                 MODE_FORWARD_SOURCE_PADDED_INBOX_DIRECT_RETURN_COMBINE_PALLAS,
@@ -4152,6 +4166,32 @@ def _mode_callable(
         )
         return result, h, queue
 
+    def semantic_permute_w13_b64_inbox(inputs: SemanticBenchInputs):
+        assert source_padded_config is not None
+        fused_config = source_push_semantic_fused_w13.SourcePushSemanticFusedW13Config()
+        send_chunks_per_dst = (
+            source_padded_config.entries_per_rank + fused_config.compute_blocks_per_send - 1
+        ) // fused_config.compute_blocks_per_send
+        rows_per_expert_capacity = args.ep_size * send_chunks_per_dst * fused_config.send_m // args.experts_per_rank
+        result = source_push_semantic_fused_w13._source_push_semantic_fused_w13_b64_inbox(
+            inputs.x,
+            inputs.w_gate_up,
+            plan,
+            send_chunks_per_dst=send_chunks_per_dst,
+            rows_per_expert_capacity=rows_per_expert_capacity,
+            config=fused_config,
+            mesh=expert_mesh,
+            interpret=args.pallas_interpret,
+        )
+        gate, up = jnp.split(result.z.astype(jnp.float32), 2, axis=-1)
+        h = jnp.where(result.valid[..., None], jax.nn.silu(gate) * up, 0)
+        queue = source_push_semantic_queue_metadata_jax(
+            plan,
+            return_row_block=SOURCE_PADDED_ROW_BLOCK,
+            entries_per_dst=send_chunks_per_dst * fused_config.compute_blocks_per_send,
+        )
+        return result, h, queue
+
     def semantic_permute_overflow_metrics(result, queue) -> dict[str, Array]:
         return {
             "queue_overflow_entry_error_count": queue.overflow_entries,
@@ -4169,8 +4209,16 @@ def _mode_callable(
             **semantic_permute_overflow_metrics(result, queue),
         }
 
-    def semantic_permute_w13_compare(inputs: SemanticBenchInputs):
-        result, h, queue = semantic_permute_w13(inputs)
+    def semantic_permute_w13_b64_inbox_pallas(inputs: SemanticBenchInputs):
+        result, h, queue = semantic_permute_w13_b64_inbox(inputs)
+        return {
+            "z": result.z,
+            "h": h,
+            "valid": result.valid,
+            **semantic_permute_overflow_metrics(result, queue),
+        }
+
+    def semantic_permute_w13_metrics(inputs: SemanticBenchInputs, result, h, queue):
         expected_source_bases, expected_overflow = _source_padded_layout_metadata_jax(
             plan,
             rows_per_expert_capacity=result.valid.shape[-1],
@@ -4195,6 +4243,14 @@ def _mode_callable(
         }
         metrics.update(semantic_permute_overflow_metrics(result, queue))
         return metrics
+
+    def semantic_permute_w13_compare(inputs: SemanticBenchInputs):
+        result, h, queue = semantic_permute_w13(inputs)
+        return semantic_permute_w13_metrics(inputs, result, h, queue)
+
+    def semantic_permute_w13_b64_inbox_compare(inputs: SemanticBenchInputs):
+        result, h, queue = semantic_permute_w13_b64_inbox(inputs)
+        return semantic_permute_w13_metrics(inputs, result, h, queue)
 
     def semantic_fused_w2_return(inputs: SemanticBenchInputs, *, interpret: bool):
         _send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
@@ -8705,6 +8761,8 @@ def _mode_callable(
         MODE_W13_SOURCE_PADDED_INBOX_COMPARE: w13_source_padded_inbox_compare,
         MODE_SEMANTIC_PERMUTE_W13_PALLAS: semantic_permute_w13_pallas,
         MODE_SEMANTIC_PERMUTE_W13_COMPARE: semantic_permute_w13_compare,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS: semantic_permute_w13_b64_inbox_pallas,
+        MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE: semantic_permute_w13_b64_inbox_compare,
         MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS: semantic_fused_w2_return_pallas,
         MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE: semantic_fused_w2_return_compare,
         MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS: semantic_fused_w2_backward_pallas,
@@ -9647,6 +9705,8 @@ def _run_stage_mode(
                     MODE_W13_SOURCE_PADDED_INBOX_COMPARE,
                     MODE_SEMANTIC_PERMUTE_W13_PALLAS,
                     MODE_SEMANTIC_PERMUTE_W13_COMPARE,
+                    MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_PALLAS,
+                    MODE_SEMANTIC_PERMUTE_W13_B64_INBOX_COMPARE,
                     MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS,
                     MODE_W2_EXPERT_MAJOR_PREPACKED_COMPARE,
                     MODE_W2_EXPERT_MAJOR_PREPACKED_PALLAS_ASSUME_ZERO_INVALID,

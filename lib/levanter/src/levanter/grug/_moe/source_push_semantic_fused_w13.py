@@ -17,6 +17,7 @@ from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import AbstractMesh, Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.grug._moe import source_push_inbox
 from levanter.grug._moe.source_push_plan import (
     SOURCE_PUSH_MESH_AXIS,
     SourcePushSemanticPlan,
@@ -125,6 +126,16 @@ class SourcePushSemanticFusedW13Result(NamedTuple):
     valid: Bool[Array, "Dst E C"]
     queue_overflow_routes: Int[Array, ""]
     layout_overflow_rows: Int[Array, ""]
+
+
+class _SourcePushSemanticFusedW13B64InboxInputs(NamedTuple):
+    """Old-inbox B64 queue views derived from semantic W13 metadata."""
+
+    token_ids: Int[Array, "S DstOrd Q M"]
+    send_meta: Int[Array, "S DstOrd Q F"]
+    recv_meta: Int[Array, "Dst SrcOrd Q F"]
+    expert_base: Int[Array, "Dst E"]
+    src_base_by_expert: Int[Array, "Dst S E"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +302,182 @@ def source_push_semantic_fused_w13_reference_jax(
     output = output.at[scatter_destination, scatter_expert, scatter_row].set(queue_z)
     output = output[..., : metadata.rows_per_expert_capacity, :]
     return jnp.where(metadata.valid[..., None], output, jnp.zeros((), dtype=output.dtype))
+
+
+def _source_push_semantic_fused_w13_b64_inbox_inputs_jax(
+    metadata: SourcePushSemanticFusedW13Metadata,
+    *,
+    experts_per_rank: int,
+) -> _SourcePushSemanticFusedW13B64InboxInputs:
+    """Flatten semantic chunks into independently publishable B64 inbox entries."""
+
+    source_count, destination_count, chunks, blocks, block_m = metadata.token_ids.shape
+    entries_per_dst = chunks * blocks
+    token_ids = metadata.token_ids.reshape(source_count, destination_count, entries_per_dst, block_m)
+
+    send_expert = metadata.send_expert.reshape(source_count, destination_count, entries_per_dst)
+    send_row = metadata.send_row_start.reshape(source_count, destination_count, entries_per_dst)
+    send_valid = metadata.send_valid_rows.reshape(source_count, destination_count, entries_per_dst)
+    send_source = jnp.broadcast_to(
+        jnp.arange(source_count, dtype=jnp.int32)[:, None, None],
+        send_expert.shape,
+    )
+    send_flat_row = jnp.maximum(send_expert, 0) * metadata.rows_per_expert_capacity + send_row
+    send_meta = jnp.stack((send_source, send_expert, send_flat_row, send_valid), axis=-1).astype(jnp.int32)
+
+    recv_expert = metadata.recv_expert.reshape(destination_count, source_count, entries_per_dst)
+    recv_row = metadata.recv_row_start.reshape(destination_count, source_count, entries_per_dst)
+    recv_valid = metadata.recv_valid_rows.reshape(destination_count, source_count, entries_per_dst)
+    destination = jnp.arange(destination_count, dtype=jnp.int32)[:, None, None]
+    source_ordinal = jnp.arange(source_count, dtype=jnp.int32)[None, :, None]
+    recv_source = jnp.broadcast_to((destination + source_ordinal) % source_count, recv_expert.shape)
+    recv_flat_row = jnp.maximum(recv_expert, 0) * metadata.rows_per_expert_capacity + recv_row
+    recv_meta = jnp.stack((recv_source, recv_expert, recv_flat_row, recv_valid), axis=-1).astype(jnp.int32)
+
+    expert_base = jnp.broadcast_to(
+        jnp.arange(experts_per_rank, dtype=jnp.int32)[None, :] * metadata.rows_per_expert_capacity,
+        (destination_count, experts_per_rank),
+    )
+    src_base_by_expert = jnp.zeros(
+        (destination_count, source_count, experts_per_rank),
+        dtype=jnp.int32,
+    )
+    return _SourcePushSemanticFusedW13B64InboxInputs(
+        token_ids=token_ids,
+        send_meta=send_meta,
+        recv_meta=recv_meta,
+        expert_base=expert_base,
+        src_base_by_expert=src_base_by_expert,
+    )
+
+
+def _source_push_semantic_fused_w13_b64_inbox_config(
+    *,
+    ep_size: int,
+    entries_per_dst: int,
+    hidden_dim: int,
+    intermediate_dim: int,
+    experts_per_rank: int,
+    tokens_per_rank: int,
+    config: SourcePushSemanticFusedW13Config,
+) -> source_push_inbox.PushInboxConfig:
+    """Build the fixed old-inbox physical profile for the semantic candidate."""
+
+    return source_push_inbox.PushInboxConfig(
+        ep_size=ep_size,
+        entries_per_rank=entries_per_dst,
+        inbox_slots=config.inbox_slots,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        block_m=config.compute_m,
+        block_n=config.block_n,
+        block_k=config.block_k,
+        n_group=1,
+        experts_per_rank=experts_per_rank,
+        send_worker_programs_per_peer=2,
+        worker_programs_per_peer=32,
+        send_pipeline_depth=1,
+        n_groups_per_job=config.n_groups_per_job,
+        tokens_per_rank=tokens_per_rank,
+        topk=1,
+    )
+
+
+def _source_push_semantic_fused_w13_b64_inbox(
+    x: Float[Array, "S T H"],
+    w_gate_up: Float[Array, "Dst E H twoI"],
+    plan: SourcePushSemanticPlan,
+    *,
+    send_chunks_per_dst: int,
+    rows_per_expert_capacity: int,
+    config: SourcePushSemanticFusedW13Config = SourcePushSemanticFusedW13Config(),
+    mesh: Mesh | None = None,
+    interpret: bool = False,
+) -> SourcePushSemanticFusedW13Result:
+    """Diagnostic semantic W13 using the old independent-B64 inbox protocol."""
+
+    _validate_request(x, w_gate_up, plan, config)
+    metadata = source_push_semantic_fused_w13_metadata_jax(
+        x,
+        plan,
+        send_chunks_per_dst=send_chunks_per_dst,
+        rows_per_expert_capacity=rows_per_expert_capacity,
+        config=config,
+    )
+    if interpret:
+        z = source_push_semantic_fused_w13_reference_jax(x, w_gate_up, metadata)
+    else:
+        if jax.default_backend() != "gpu":
+            raise NotImplementedError("the semantic B64 inbox W13 candidate requires a GPU backend")
+        if mesh is None:
+            raise ValueError("mesh is required for the semantic B64 inbox W13 candidate")
+        z = _source_push_semantic_fused_w13_b64_inbox_sharded(
+            x,
+            w_gate_up,
+            metadata,
+            config=config,
+            mesh=mesh,
+        )
+    z = jnp.where(metadata.valid[..., None], z, jnp.zeros((), dtype=z.dtype))
+    return SourcePushSemanticFusedW13Result(
+        z=z,
+        valid=metadata.valid,
+        queue_overflow_routes=metadata.queue_overflow_routes,
+        layout_overflow_rows=metadata.layout_overflow_rows,
+    )
+
+
+def _source_push_semantic_fused_w13_b64_inbox_sharded(
+    x: Array,
+    w_gate_up: Array,
+    metadata: SourcePushSemanticFusedW13Metadata,
+    *,
+    config: SourcePushSemanticFusedW13Config,
+    mesh: Mesh,
+) -> Array:
+    """Run semantic raw-token W13 through the proven B64 empty/full/done kernel."""
+
+    if mesh.shape[SOURCE_PUSH_MESH_AXIS] != x.shape[0]:
+        raise ValueError(
+            f"mesh {SOURCE_PUSH_MESH_AXIS!r} size must match source count {x.shape[0]}, "
+            f"got {mesh.shape[SOURCE_PUSH_MESH_AXIS]}"
+        )
+    inputs = _source_push_semantic_fused_w13_b64_inbox_inputs_jax(
+        metadata,
+        experts_per_rank=w_gate_up.shape[1],
+    )
+    entries_per_dst = metadata.send_chunks_per_dst * config.compute_blocks_per_send
+    inbox_config = _source_push_semantic_fused_w13_b64_inbox_config(
+        ep_size=x.shape[0],
+        entries_per_dst=entries_per_dst,
+        hidden_dim=x.shape[-1],
+        intermediate_dim=w_gate_up.shape[-1] // 2,
+        experts_per_rank=w_gate_up.shape[1],
+        tokens_per_rank=x.shape[1],
+        config=config,
+    )
+    kernel = source_push_inbox._sharded_raw_token_w13_h_compact_kernel(
+        mesh,
+        inbox_config,
+        compact_expert_capacity=metadata.rows_per_expert_capacity,
+        use_exact_expert_major=False,
+    )
+    source_x_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_token_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    rank_metadata_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    destination_2d_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None))
+    destination_3d_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    weights_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+    _inbox, z = kernel(
+        jax.sharding.reshard(x, source_x_sharding),
+        jax.sharding.reshard(inputs.token_ids, source_token_sharding),
+        jax.sharding.reshard(inputs.send_meta, rank_metadata_sharding),
+        jax.sharding.reshard(inputs.recv_meta, rank_metadata_sharding),
+        jax.sharding.reshard(inputs.expert_base, destination_2d_sharding),
+        jax.sharding.reshard(inputs.src_base_by_expert, destination_3d_sharding),
+        jax.sharding.reshard(w_gate_up, weights_sharding),
+    )
+    return z
 
 
 def source_push_semantic_fused_w13(

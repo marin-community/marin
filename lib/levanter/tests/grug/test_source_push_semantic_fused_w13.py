@@ -20,6 +20,9 @@ from levanter.grug._moe.source_push_semantic_fused_w13 import (
     HELPER_PAYLOAD_K,
     RAW_GATHER_ROWS,
     TOKEN_TRANSFER_ROWS,
+    _source_push_semantic_fused_w13_b64_inbox,
+    _source_push_semantic_fused_w13_b64_inbox_config,
+    _source_push_semantic_fused_w13_b64_inbox_inputs_jax,
     _make_source_push_semantic_fused_w13_kernel,
     source_push_semantic_fused_w13,
     source_push_semantic_fused_w13_generation_accounting,
@@ -192,6 +195,81 @@ def test_fused_w13_reference_zeros_invalid_and_source_padding_rows():
     assert np.count_nonzero(np.asarray(metadata.valid)) == int(np.asarray(jnp.sum(plan.xcounts)))
     np.testing.assert_array_equal(np.asarray(z)[~np.asarray(metadata.valid)], 0)
     assert np.any(np.asarray(z)[np.asarray(metadata.valid)] != 0)
+
+
+def test_fused_w13_b64_inbox_inputs_flatten_each_semantic_block_to_an_entry():
+    x, _weights, plan = _inputs()
+    metadata = source_push_semantic_fused_w13_metadata_jax(
+        x,
+        plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=256,
+    )
+    inputs = _source_push_semantic_fused_w13_b64_inbox_inputs_jax(metadata, experts_per_rank=2)
+
+    assert inputs.token_ids.shape == (2, 2, 4, 64)
+    np.testing.assert_array_equal(
+        np.asarray(inputs.token_ids),
+        np.asarray(metadata.token_ids).reshape(2, 2, 4, 64),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(inputs.send_meta[..., 3]),
+        np.asarray(metadata.send_valid_rows).reshape(2, 2, 4),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(inputs.recv_meta[..., 1]),
+        np.asarray(metadata.recv_expert).reshape(2, 2, 4),
+    )
+    expected_recv_rows = np.maximum(
+        np.asarray(inputs.recv_meta[..., 1]), 0
+    ) * metadata.rows_per_expert_capacity + np.asarray(metadata.recv_row_start).reshape(2, 2, 4)
+    np.testing.assert_array_equal(np.asarray(inputs.recv_meta[..., 2]), expected_recv_rows)
+    np.testing.assert_array_equal(np.asarray(inputs.expert_base), [[0, 256], [0, 256]])
+
+
+def test_fused_w13_b64_inbox_profile_has_two_senders_and_thirty_consumers():
+    inbox_config = _source_push_semantic_fused_w13_b64_inbox_config(
+        ep_size=8,
+        entries_per_dst=128,
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        experts_per_rank=32,
+        tokens_per_rank=32768,
+        config=CONFIG,
+    )
+
+    inbox_config.validate()
+    assert inbox_config.block_m == 64
+    assert inbox_config.entries_per_rank == 128
+    assert inbox_config.send_worker_programs_per_peer == 2
+    assert inbox_config.worker_programs_per_peer - inbox_config.send_worker_programs_per_peer == 30
+    assert inbox_config.send_pipeline_depth == 1
+
+
+def test_fused_w13_b64_inbox_interpret_matches_independent_semantic_scatter_reference():
+    x, weights, plan = _inputs()
+    result = jax.jit(
+        lambda x_arg, weights_arg, plan_arg: _source_push_semantic_fused_w13_b64_inbox(
+            x_arg,
+            weights_arg,
+            plan_arg,
+            send_chunks_per_dst=1,
+            rows_per_expert_capacity=256,
+            interpret=True,
+        )
+    )(x, weights, plan)
+    metadata = source_push_semantic_fused_w13_metadata_jax(
+        x,
+        plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=256,
+    )
+    expected = source_push_semantic_fused_w13_reference_jax(x, weights, metadata)
+
+    np.testing.assert_array_equal(np.asarray(result.z), np.asarray(expected))
+    np.testing.assert_array_equal(np.asarray(result.valid), np.asarray(metadata.valid))
+    assert int(result.queue_overflow_routes) == 0
+    assert int(result.layout_overflow_rows) == 0
 
 
 def test_fused_w13_interpret_matches_independent_semantic_scatter_reference():

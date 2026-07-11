@@ -3682,3 +3682,63 @@ The reduced stop-after-W2 H100 run is delegated and active on `cw-rno2a`; no
 duplicate job was launched. In parallel, a separate worker is adapting the
 semantic metadata to the old B64 inbox physical protocol so forward W13 can
 recover independent B64 readiness and the proven lightweight lifecycle.
+
+## 2026-07-11 FUSED-MOE-122 - Stop-after-W2-backward composition faults
+
+Job `/dlwh/mlp-stop-after-w2b-3b0c` tested commit `3b0cdc156e` on `cw-rno2a`
+at the reduced integrated geometry (`EP=8`, `T=128`, `H=2560`, `I=1280`, four
+experts/rank, top-k 2, capacity factor 4.0). Iris reached terminal
+`succeeded`; its only task exited 0 after 59.38 seconds because
+`--debug-exceptions` converted the benchmark exception into an error row.
+
+The benchmark mode
+`semantic_fused_mlp_stop_after_w2_backward_pallas` did not produce numeric
+outputs or counters. Its first actionable result was:
+
+```text
+row_type=error
+error_type=JaxRuntimeError
+error=INTERNAL: CUDA error: Could not synchronize CUDA stream:
+  CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+executable_name=jit_semantic_fused_mlp_stop_after_w2_backward_pallas
+dropped_routes=0
+metadata_overflow_routes=0
+output_checksum=null
+steady_state_time=null
+```
+
+The exception surfaced while `_time_callable` recursively called
+`block_until_ready()` on the composed result. All eight devices subsequently
+reported illegal-address cleanup failures. The summary row reported
+`error="all repeats failed"`, `error_rows=1`, and `repeat_rows=0`.
+
+This isolation excludes W13 backward: composing fused W13 forward, direct W2
+forward/return/combine, and fused W2 backward is already sufficient to fault.
+The remaining integrated failure is therefore before the W2-to-W13-backward
+boundary, despite those stages passing independently. The next isolation must
+split this composition at its earlier stage boundaries and preserve returned
+intermediates to identify the first incompatible producer/consumer pair.
+
+## 2026-07-11 FUSED-MOE-123 - Semantic B64 inbox W13 candidate
+
+Added a package-private forward-W13 diagnostic that lowers the JAX-native
+semantic queue into independent B64 entries and invokes the proven old inbox
+physical protocol. The candidate keeps raw source tokens and semantic token
+IDs as inputs, uses two send programs plus thirty WGMMA consumers per peer,
+and restores the simple empty/full/done slot lifecycle. It does not prepack X
+outside the fused stage. The send pipeline depth is fixed to one, matching the
+stable 216 profile rather than the previously measured slower depth-two
+ablation.
+
+New benchmark modes:
+
+- `semantic_permute_w13_b64_inbox_pallas`
+- `semantic_permute_w13_b64_inbox_compare`
+
+Local validation:
+
+- Focused semantic metadata, profile, interpret-reference, benchmark-flop, and
+  benchmark-emission tests passed (`5 passed`, 11 warnings).
+- `python -m py_compile` passed for the kernel and benchmark modules.
+- The candidate remains diagnostic-only; the selected production schedule is
+  unchanged until reduced correctness and target timing complete.
