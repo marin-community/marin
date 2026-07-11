@@ -103,7 +103,10 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     quack_preact = jax.jit(_quack_grouped_concat_impl)(x, w13, group_sizes)
     quack_output = jax.jit(_quack_grouped_impl)(quack_hidden, w2, group_sizes)
 
-    quack_gate, quack_up = jnp.split(quack_preact, 2, axis=-1)
+    pallas_gate, pallas_up = jnp.split(pallas_preact, 2, axis=-1)
+    pallas_preact_interleaved = jnp.stack((pallas_gate, pallas_up), axis=-1).reshape(pallas_preact.shape)
+    quack_gate = quack_preact[:, 0::2]
+    quack_up = quack_preact[:, 1::2]
     quack_preact_jax_hidden = jax.nn.silu(quack_gate) * quack_up
     pallas_down_from_quack_hidden = jax.jit(
         lambda hidden, weights, sizes: ragged_dot(hidden, weights, sizes, implementation="triton")
@@ -111,8 +114,9 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     quack_down_from_pallas_hidden = jax.jit(_quack_grouped_impl)(pallas_hidden, w2, group_sizes)
 
     comparisons = {
-        "w13_preact_quack_vs_pallas": _error_metrics(quack_preact, pallas_preact),
-        "swiglu_quack_fused_vs_jax_from_quack_preact": _error_metrics(quack_hidden, quack_preact_jax_hidden),
+        "w13_storage_quack_vs_pallas_concatenated": _error_metrics(quack_preact, pallas_preact),
+        "w13_storage_quack_vs_pallas_interleaved": _error_metrics(quack_preact, pallas_preact_interleaved),
+        "swiglu_quack_fused_vs_jax_from_interleaved_preact": _error_metrics(quack_hidden, quack_preact_jax_hidden),
         "hidden_quack_vs_pallas": _error_metrics(quack_hidden, pallas_hidden),
         "w2_quack_vs_pallas_shared_quack_hidden": _error_metrics(quack_output, pallas_down_from_quack_hidden),
         "w2_quack_vs_pallas_shared_pallas_hidden": _error_metrics(quack_down_from_pallas_hidden, pallas_output),
@@ -123,7 +127,6 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         comparisons.update(
             {
                 "w13_pallas_vs_xla": _error_metrics(pallas_preact, xla_preact),
-                "w13_quack_vs_xla": _error_metrics(quack_preact, xla_preact),
                 "hidden_pallas_vs_xla": _error_metrics(pallas_hidden, xla_hidden),
                 "hidden_quack_vs_xla": _error_metrics(quack_hidden, xla_hidden),
                 "full_output_pallas_vs_xla": _error_metrics(pallas_output, xla_output),
