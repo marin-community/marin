@@ -12,6 +12,7 @@ author: dlwh
 - The CoreWeave node is a fully connected 8×H100 80GB SXM topology (`NV18` for every GPU pair), suitable for same-node peer-tensor experiments.
 - Stage 1 passes on 2 and 8 H100s: collective symmetric allocation, host peer aliases, CuTe compilation linked with NVSHMEM device bitcode, and direct `get_peer_tensor` ring stores returned the expected rank-coded values.
 - The reproducible transport extra pins NVSHMEM 3.7.0, NVSHMEM4Py 0.3.1, and CUTLASS DSL 4.4.2. NVSHMEM4Py's CuTe integration is incompatible with Marin's normal CUTLASS DSL 4.5.2 environment.
+- Device-only push and pull correctness passes on 8 H100s for RMA and direct peer variants, 1/2/4/8 slots, and one million aggregate single-slot transfers per principal variant. Ordinary CuTe payload loads after `signal_wait` can observe stale data; a system fence plus cache-volatile loads is required by the validated implementation.
 - All accelerator experiments will use CoreWeave H100 clusters. Host-only inspection may run locally.
 
 ## Scope
@@ -33,9 +34,9 @@ author: dlwh
 
 ### Active
 
-- `NVTP-002`: NVSHMEM put-with-signal provides the simplest correct device-side push primitive and competitive transport performance. Next test: two-PE blocking and nonblocking correctness with deterministic payloads and monotonic epochs.
-- `NVTP-003`: Batched nonblocking gets amortize device-side completion enough for destination-directed pull to be viable. Next test: compare blocking get, per-get completion, and four-get batched completion.
-- `NVTP-004`: Direct peer tensor stores or loads reduce transport overhead relative to NVSHMEM RMA while retaining correct symmetric addressing. Next test: compare minimal cooperative peer store/load probes against RMA on the same arena.
+- `NVTP-002`: NVSHMEM put-with-signal is device-side correct with monotonic epochs and safe reuse. Next test: measure latency/bandwidth and cooperative scopes against explicit put+signal.
+- `NVTP-003`: Blocking get and `get_nbi` plus low-level device `quiet` are device-side correct. Next test: compare per-get quiet with multiple gets per quiet and measure completion cost.
+- `NVTP-004`: Direct peer stores and loads are device-side correct with explicit system memory operations. Next test: compare performance against RMA on production payload sizes.
 - `NVTP-005`: JAX buffers can participate in the local endpoint or symmetric allocation views without payload copies or host synchronization. Next test: build an ownership, DLPack lifetime, and stream-handoff interoperability matrix.
 - `NVTP-006`: A transport can overlap with a production-relevant GEMM without unacceptable compute-throughput degradation. Next test: establish standalone communication and compute baselines before concurrent execution.
 
@@ -50,12 +51,15 @@ author: dlwh
 ### Promoted
 
 - `NVTP-001`: A coherent isolated stack supports collective symmetric allocation, deterministic addressing, host peer aliases, and CuTe `get_peer_tensor` on a fully connected CoreWeave 8×H100 node. Evidence: `NVTP-002` entry below.
+- `NVTP-002-CORRECTNESS`: Push and pull RMA/direct-peer protocols pass deterministic device-only ring validation through repeated slot reuse. Evidence: `NVTP-003` entry below and commit `c58969f590`.
 
 ## Decision Log
 
 - 2026-07-10: Use CoreWeave H100 clusters for all accelerator correctness and performance results, per user direction.
 - 2026-07-10: Keep NVSHMEM RMA and direct peer-tensor access as separate benchmark families.
 - 2026-07-10: Isolate NVSHMEM transport from the normal GPU/Torch extras and pin CUTLASS DSL 4.4.2 for compatibility with NVSHMEM4Py 0.3.1.
+- 2026-07-10: Use explicit system fencing plus cache-volatile payload loads after signal waits; ordinary CuTe indexing produced reproducible stale-epoch failures.
+- 2026-07-10: Use `nvshmem.bindings.device.cute.quiet` for device `_nbi` completion because the high-level `nvshmem.core.device.cute` module does not export quiet.
 
 ## Negative Results Index
 
@@ -160,3 +164,15 @@ author: dlwh
 - Interpretation: `NVTP-001` is promoted. Same-node symmetric addressing and direct peer tensor construction are feasible on the target CoreWeave H100 topology. This does not yet establish RMA ordering, slot reuse, bandwidth, or JAX ownership semantics.
 - Negative results: Runtime 3.4.5 had no NVSHMEM4Py binding. NVSHMEM4Py 0.3.1 plus runtime 3.4.5 failed the CuTe import. Runtime 3.7.0 plus CUTLASS DSL 4.5.2 failed inside CuTe interop because `Constexpr` was removed. The eight-rank ring also exposed a two-rank-only oracle error: predecessor and successor coincide at two ranks but differ at eight; correcting the oracle made all observed values pass.
 - Next action: Implement blocking put and put-with-signal correctness with monotonic epochs and safe slot reuse.
+
+### 2026-07-10 - NVTP-003 push/pull correctness matrix
+
+- Hypothesis: Push, pull, and direct peer transport can run device-only with monotonic epochs, payload-before-ready ordering, completion-before-consumption, and safe slot reuse.
+- Commit Hash: `c58969f590`
+- Commands: `NVTP_NUM_PES=8 NVTP_NUM_EPOCHS=125000 NVTP_NUM_SLOTS=1 NVTP_{PUSH,PULL}_OPERATION=<variant> uv run --package marin-levanter --extra nvshmem-transport python -m cute_nvshmem_transport.correctness_{push,pull}`; repeat with `NVTP_NUM_EPOCHS=1000` and `NVTP_NUM_SLOTS={2,4,8}`.
+- Config: Same CoreWeave 8×H100 `NV18` node and dependency matrix as NVTP-002. Payloads encode producer rank, monotonic epoch, slot, and rank-XOR-epoch checksum. Each PE runs producer and consumer warps in one kernel; no host synchronization occurs inside the transfer loop.
+- Result: Zero validation errors for blocking `put_signal`, `put_signal_nbi+quiet`, `put_nbi+quiet+signal`, peer stores+signal, blocking get, `get_nbi+quiet`, and peer loads. Every variant passed 8 PEs with 8 slots and 1,000 epochs. Each principal variant also passed 8 PEs × 125,000 one-slot epochs, or one million aggregate transfers. Final ready and consumed epochs matched every slot's expected last epoch.
+- Timing note: End-to-end process times for the million-transfer runs were about 11.7–13.5 seconds, including eight Python process startups, per-rank compilation, NVSHMEM initialization/finalization, and output. These are correctness-run wall times and must not be interpreted as transport performance.
+- Interpretation: Device-initiated push, pull, direct peer stores, and direct peer loads are all feasible on the target topology. Completion is available for `_nbi` through the generated low-level `quiet` binding even though the high-level CuTe module omits it. Performance, batching, cooperative scopes, large payload volume, and JAX interoperability remain open.
+- Negative results: Ordinary `inbox[i]` loads after `signal_wait` observed a complete but stale previous-epoch payload (for example epoch 9 saw epoch 8). A system-scope fence followed by PTX cache-volatile loads eliminated the failure through millions of transfers. Combining acquire ordering and `.cv` on one PTX load is rejected by the NVVM verifier, so the working sequence separates the fence from weak cache-volatile loads. Initial multi-slot reuse also deadlocked when a negative `epoch-slots` threshold cast to `uint64`; initial fills now skip the consumed wait and wrapped epochs wait for the previous matching slot epoch.
+- Next action: Validate JAX DLPack ownership/lifetime and stream handoff, then build payload-size and completion-batching benchmarks.
