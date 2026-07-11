@@ -2579,3 +2579,67 @@ correctness from this timing run alone.
 The process emitted recoverable 12.5 GiB BFC allocation warnings and
 FABRIC-handle VMM fallbacks, then produced all requested repeat and summary
 rows. There was no lowering error, benchmark error row, or retry.
+
+## 2026-07-10 FUSED-MOE-088 - Reduced K512 W2-backward comparison hits an illegal address
+
+Job `/dlwh/compare-semantic-w2b-k512-20260710-2330` at `f84e84957a`
+completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one task, and a
+1m04s task duration. The requested reduced-shape
+`semantic_fused_w2_backward_compare` benchmark did not complete: the candidate
+kernel triggered `CUDA_ERROR_ILLEGAL_ADDRESS`, which surfaced while JAX tried
+to record the next CUDA event for the output checksum.
+
+| Comparison | Max abs error | Mean abs error | Nonfinite / error count |
+|---|---:|---:|---:|
+| `d_z13` | unavailable | unavailable | unavailable |
+| `d_w2` | unavailable | unavailable | unavailable |
+| `d_route_weight` | unavailable | unavailable | unavailable |
+
+The benchmark emitted one error row, zero comparison/repeat rows, and a summary
+with `error="all repeats failed"`. It therefore produced no output checksum,
+timing, or numerical comparison metrics. The reduced random-routing shape had
+10 metadata-capacity drops, 10 total dropped routes, zero routing-policy drops,
+2,038 useful rows, 2,560 rounded rows, and 79.609375% row efficiency. No queue
+or layout-overflow counters were emitted before the device fault.
+
+This contradicts correctness for the `f84e84957a` four-helper K512 W2-backward
+candidate on the reduced comparison shape. The target-shape timing and stable
+checksum do not supersede an illegal-address failure. Keep the target-shape
+timing as performance evidence only; do not promote this schedule until the
+memory fault is isolated and a finite `d_z13`/`d_w2`/route-weight comparison
+succeeds. Per the bounded babysitting request, no kernel edit or retry was made.
+
+## 2026-07-10 FUSED-MOE-088 - Four-helper K512 W2 backward nearly halves stage time
+
+Job `/dlwh/bench-semantic-backward-aggregation-20260710-2330` at
+`f84e84957a` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, and
+one task. It measured the four-helper K512 W2-backward producer schedule and
+the four-publication K512 W13-backward staging schedule at the target random
+routing shape.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---|---|---:|---:|---:|
+| W2 backward, four helpers per peer | 39.824625, 40.296294, 39.913566 | 39.913566 | 43.042682 | 53.803352 |
+| W13 backward, four K128 publications | 65.808347, 65.906800, 66.310181 | 65.906800 | 52.133829 | 65.167286 |
+
+The four-helper W2-backward schedule saves 36.924177 ms or 48.05% against the
+five-helper K512 result of 76.837743 ms and raises useful throughput from
+22.358633 to 43.042682 TFLOP/s/rank. Against the original 118.949477 ms
+baseline, it saves 79.035911 ms or 66.44% and raises useful throughput from
+14.442997 by 198.02%. Its checksum remains `127795200`. The reduced-shape
+comparison in FUSED-MOE-087 nevertheless hit an illegal address, so quarantine
+this performance candidate until that fault is isolated and finite numerical
+correctness passes.
+
+The aggregated W13-backward staging schedule saves only 0.375420 ms or 0.57%
+against the selected 66.282220 ms pipeline and raises useful throughput from
+51.838545 by 0.57%. Its checksum is `20131401728`, which is 98,304 above the
+selected pipeline checksum `20131303424`. This is too small a performance gain
+to justify promotion without a finite numerical comparison; retain the prior
+W13-backward schedule for now.
+
+Both modes reported zero dropped routes, zero routing-policy drops, zero
+metadata-overflow routes, zero queue-overflow route errors, and zero
+layout-overflow row errors. The process emitted recoverable 12.5 GiB BFC
+allocation warnings and FABRIC-handle VMM fallbacks, then produced all six
+repeat rows and both summaries without a benchmark error.
