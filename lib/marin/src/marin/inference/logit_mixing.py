@@ -13,6 +13,7 @@ from levanter.inference.openai_protocol import CompletionRequest
 from pydantic import ValidationError
 
 from marin.inference.broker import InferenceBroker
+from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
     InferenceResponse,
@@ -28,10 +29,9 @@ from marin.inference.vllm import (
     BrokeredVllmSystemConfig,
     VllmProxyConfig,
     _wait_for_brokered_vllm_ready,
-    start_brokered_inference_proxy,
     start_iris_brokered_vllm,
 )
-from marin.inference.worker import InferenceWorker, inference_error_response, run_inference_worker
+from marin.inference.worker import InferenceWorker, run_inference_worker
 
 DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 20
 
@@ -110,7 +110,7 @@ class LogitMixingInferenceHandler:
         if request.method.upper() == "GET" and request.path == "/v1/models":
             return _models_response(request, self._model)
         if request.method.upper() != "POST" or request.path != "/v1/completions":
-            return inference_error_response(
+            return _error_response(
                 request,
                 405,
                 "logit mixing supports GET /v1/models and POST /v1/completions",
@@ -119,7 +119,7 @@ class LogitMixingInferenceHandler:
         try:
             generation = _generation_request(request, self._model)
         except ValueError as exc:
-            return inference_error_response(request, 400, str(exc))
+            return _error_response(request, 400, str(exc))
         text, finish_reason = self._generate(client, generation)
         return _completion_response(request, self._model, text, finish_reason)
 
@@ -203,14 +203,20 @@ def start_iris_logit_mixing_brokered_vllm(config: LogitMixingBrokeredVllmConfig)
             request_timeout_seconds=config.request_timeout_seconds,
         )
         with (
-            start_brokered_inference_proxy(
-                config.proxy,
-                model=config.model,
+            serve_inference_proxy(
                 broker=broker,
-                tokenizer=config.tokenizer,
-            ) as running_model,
+                model=config.model,
+                host=config.proxy.host,
+                port=config.proxy.port,
+                request_timeout_seconds=config.proxy.request_timeout_seconds,
+                readiness_timeout_seconds=config.proxy.readiness_timeout_seconds,
+                max_pending_requests=config.proxy.max_pending_requests,
+                response_fetch_batch_size=config.proxy.response_fetch_batch_size,
+                server_start_timeout_seconds=config.proxy.server_start_timeout_seconds,
+            ) as proxy_model,
             run_inference_worker(worker, max_in_flight=config.max_in_flight),
         ):
+            running_model = RunningModel(endpoint=proxy_model.endpoint, tokenizer=config.tokenizer)
             _wait_for_brokered_vllm_ready(running_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
             yield running_model
 
@@ -297,6 +303,14 @@ def _models_response(request: InferenceRequest, model: str) -> InferenceResponse
         request_id=request.request_id,
         status_code=200,
         payload=pack_json_payload({"object": "list", "data": [{"id": model, "object": "model"}]}),
+    )
+
+
+def _error_response(request: InferenceRequest, status_code: int, message: str) -> InferenceResponse:
+    return InferenceResponse(
+        request_id=request.request_id,
+        status_code=status_code,
+        payload=pack_json_payload({"error": {"message": message}}),
     )
 
 

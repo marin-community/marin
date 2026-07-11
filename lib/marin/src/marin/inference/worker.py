@@ -139,7 +139,7 @@ class ForwardingInferenceHandler:
                 request,
                 client.post(url, json=unpack_json_payload(request.payload)),
             )
-        return inference_error_response(request, 405, f"unsupported brokered request method {request.method!r}")
+        return _inference_error_response(request, 405, f"unsupported brokered request method {request.method!r}")
 
 
 @contextmanager
@@ -149,8 +149,6 @@ def run_inference_worker(
     max_in_flight: int,
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[None]:
-    """Stop and join the inference worker thread when the context exits."""
-
     stop_event = threading.Event()
     thread = threading.Thread(
         target=lambda: worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff),
@@ -170,14 +168,14 @@ def _response_from_upstream(request: InferenceRequest, response: httpx.Response)
     try:
         payload = response.json()
     except ValueError:
-        return inference_error_response(
+        return _inference_error_response(
             request,
             response.status_code,
             "upstream endpoint returned a non-JSON response",
             body=response.content[:ERROR_BODY_LIMIT_BYTES].decode(errors="replace"),
         )
     if not isinstance(payload, dict):
-        return inference_error_response(
+        return _inference_error_response(
             request, response.status_code, "upstream endpoint returned a non-object JSON response"
         )
     return InferenceResponse(
@@ -194,15 +192,17 @@ def _response_from_exception(
     timeout_seconds: float,
 ) -> InferenceResponse:
     if isinstance(exc, httpx.TimeoutException):
-        return inference_error_response(
+        return _inference_error_response(
             request,
             504,
             "timed out forwarding request to upstream endpoint",
             detail=f"timeout_seconds={timeout_seconds:.1f}",
         )
     if isinstance(exc, httpx.HTTPError):
-        return inference_error_response(request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc))
-    return inference_error_response(
+        return _inference_error_response(
+            request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc)
+        )
+    return _inference_error_response(
         request,
         502,
         "unexpected worker failure while forwarding request to upstream endpoint",
@@ -211,7 +211,7 @@ def _response_from_exception(
     )
 
 
-def inference_error_response(
+def _inference_error_response(
     request: InferenceRequest,
     status_code: int,
     message: str,
@@ -220,8 +220,6 @@ def inference_error_response(
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
-    """Build a JSON error response for a brokered request."""
-
     logger.warning(
         "InferenceWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
         request.request_id,

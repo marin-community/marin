@@ -158,8 +158,6 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
 
 
 def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
-    response_provider = object()
-
     class _FakeJob:
         job_id = "worker-0"
 
@@ -170,7 +168,7 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
         def wait_ready(self, *, count: int, timeout: float):
             assert count == 1
             assert timeout > 0
-            return [response_provider]
+            return [object()]
 
         def shutdown(self) -> None:
             pass
@@ -187,16 +185,13 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
             return _FakeJob()
 
     @contextmanager
-    def _fake_start_proxy(proxy_config, *, model, broker, tokenizer=None):
-        assert proxy_config == config.proxy
-        assert broker is response_provider
-        assert tokenizer == config.tokenizer
-        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=model))
+    def _fake_start_proxy(config, response_provider):
+        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=config.model))
 
     client = _FakeClient()
     monkeypatch.setattr(vllm_module, "current_client", lambda: client)
     monkeypatch.setattr(vllm_module, "get_job_info", lambda: SimpleNamespace(job_id="parent"))
-    monkeypatch.setattr(vllm_module, "start_brokered_inference_proxy", _fake_start_proxy)
+    monkeypatch.setattr(vllm_module, "_start_proxy", _fake_start_proxy)
     monkeypatch.setattr(vllm_module, "_wait_for_brokered_vllm_ready", lambda *args, **kwargs: None)
 
     config = BrokeredVllmSystemConfig(
