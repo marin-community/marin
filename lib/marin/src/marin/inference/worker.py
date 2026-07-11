@@ -69,7 +69,7 @@ class InferenceWorker:
                     if available_slots:
                         leased_requests = self._broker.fetch_requests(max_items=available_slots)
                         for leased_request in leased_requests:
-                            in_flight.add(pool.submit(self._forward_one, client, leased_request))
+                            in_flight.add(pool.submit(self._handle_one, client, leased_request))
                         if leased_requests:
                             logger.info(
                                 "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
@@ -107,7 +107,7 @@ class InferenceWorker:
         finally:
             logger.info("InferenceWorker stopping in_flight=%d", len(in_flight))
 
-    def _forward_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
+    def _handle_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
         request = leased_request.request
         try:
             inference_response = self._handler(client, request)

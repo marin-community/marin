@@ -158,6 +158,8 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
 
 
 def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
+    response_provider = object()
+
     class _FakeJob:
         job_id = "worker-0"
 
@@ -168,7 +170,7 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
         def wait_ready(self, *, count: int, timeout: float):
             assert count == 1
             assert timeout > 0
-            return [object()]
+            return [response_provider]
 
         def shutdown(self) -> None:
             pass
@@ -186,6 +188,9 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
 
     @contextmanager
     def _fake_start_proxy(proxy_config, *, model, broker, tokenizer=None):
+        assert proxy_config == config.proxy
+        assert broker is response_provider
+        assert tokenizer == config.tokenizer
         yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=model))
 
     client = _FakeClient()
