@@ -28,6 +28,7 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
+TOKEN_TRANSFER_ROWS = 128
 RAW_GATHER_HIDDEN_LAYOUT = mgpu.Layout.WG_STRIDED((256,), vec_size=2)
 RAW_GATHER_ROW_LAYOUT = mgpu.Layout.TILED(
     mgpu.Tiling(((RAW_GATHER_ROWS,),)),
@@ -371,9 +372,15 @@ def _source_push_semantic_fused_w13_sharded(
         recv_valid_local,
         weights_local,
     ):
+        token_ids_flat = token_ids_local[0].reshape(
+            token_ids_local.shape[1],
+            metadata.send_chunks_per_dst,
+            config.send_m,
+        )
+        token_ids_padded = jnp.pad(token_ids_flat, ((0, 0), (0, 0), (0, config.compute_m)))
         _inbox, z_flat_local = kernel(
             x_local[0],
-            token_ids_local[0],
+            token_ids_padded,
             send_valid_local[0],
             recv_expert_local[0],
             recv_row_local[0],
@@ -532,27 +539,34 @@ def _make_source_push_semantic_fused_w13_kernel(
 
                     @pl.when(valid_rows > 0)
                     def _copy_live_tile() -> None:
-                        def _copy_scope(tile_smem) -> None:
+                        def _copy_scope(tile_smem, token_smem, token_barrier) -> None:
+                            mgpu.copy_gmem_to_smem(
+                                token_ids_ref.at[
+                                    static_peer_ordinal,
+                                    chunk,
+                                    pl.ds(block * config.compute_m, TOKEN_TRANSFER_ROWS),
+                                ],
+                                token_smem,
+                                token_barrier,
+                            )
+                            mgpu.barrier_wait(token_barrier)
                             hidden_offsets = mgpu.layout_cast(
                                 jnp.arange(config.send_k, dtype=jnp.int32),
                                 RAW_GATHER_HIDDEN_LAYOUT,
                             )
                             hidden_offsets = k_start + hidden_offsets
 
-                            @pl.loop(0, config.compute_m // RAW_GATHER_ROWS)
-                            def _row_group_loop(row_group) -> None:
+                            for row_group in range(config.compute_m // RAW_GATHER_ROWS):
                                 row_start = row_group * RAW_GATHER_ROWS
                                 row_offsets = mgpu.layout_cast(
                                     jnp.arange(RAW_GATHER_ROWS, dtype=jnp.int32),
                                     RAW_GATHER_ROW_LAYOUT,
                                 )
                                 row_valid = row_start + row_offsets < valid_rows
-                                tokens = token_ids_ref[
-                                    static_peer_ordinal,
-                                    chunk,
-                                    block,
-                                    pl.ds(row_start, RAW_GATHER_ROWS),
-                                ]
+                                tokens = mgpu.layout_cast(
+                                    token_smem[pl.ds(row_start, RAW_GATHER_ROWS)],
+                                    RAW_GATHER_ROW_LAYOUT,
+                                )
                                 safe_tokens = jnp.where(row_valid, tokens, 0)
                                 x_tile = x_ref[safe_tokens[:, None], hidden_offsets[None, :]]
                                 tile_smem[pl.ds(row_start, RAW_GATHER_ROWS), :] = jnp.where(
@@ -580,6 +594,8 @@ def _make_source_push_semantic_fused_w13_kernel(
                         pl.run_scoped(
                             _copy_scope,
                             tile_smem=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype),
+                            token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32),
+                            token_barrier=mgpu.Barrier(num_arrivals=1),
                         )
 
                 @pl.loop(0, send_chunks_per_dst)
