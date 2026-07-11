@@ -29,6 +29,7 @@ WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 RAW_GATHER_ROWS = 8
 TOKEN_TRANSFER_ROWS = 128
+HELPER_PAYLOAD_K = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +40,7 @@ class SourcePushSemanticFusedW13Config:
     send_m: int = 256
     block_n: int = 128
     block_k: int = 128
-    send_k: int = 256
+    send_k: int = 512
     inbox_slots: int = 12
     chunk_owner_programs_per_peer: int = 2
     helper_programs_per_peer: int = 10
@@ -69,8 +70,8 @@ class SourcePushSemanticFusedW13Config:
             raise ValueError(
                 f"the initial Hopper lowering requires block_n=block_k=128, got {self.block_n=} {self.block_k=}"
             )
-        if self.send_k != 256:
-            raise ValueError(f"the initial Hopper lowering requires send_k=256, got {self.send_k}")
+        if self.send_k != 2 * HELPER_PAYLOAD_K:
+            raise ValueError(f"the Hopper lowering requires send_k={2 * HELPER_PAYLOAD_K}, got {self.send_k}")
         if self.inbox_slots != 12:
             raise ValueError(f"the initial Hopper lowering requires inbox_slots=12, got {self.inbox_slots}")
         if self.chunk_owner_programs_per_peer != 2:
@@ -532,7 +533,7 @@ def _make_source_push_semantic_fused_w13_kernel(
 
                     @pl.when(valid_rows > 0)
                     def _copy_live_tile() -> None:
-                        def _copy_scope(tile_smem, token_smem, token_barrier) -> None:
+                        def _copy_scope(payload0_smem, payload1_smem, token_smem, token_barrier) -> None:
                             mgpu.copy_gmem_to_smem(
                                 token_ids_ref.at[
                                     static_peer_ordinal,
@@ -549,14 +550,23 @@ def _make_source_push_semantic_fused_w13_kernel(
                                     output_row = row_start + row
                                     row_valid = output_row < valid_rows
                                     token = jnp.where(row_valid, token_smem[output_row], 0)
-                                    x_row = x_ref[
+                                    x_row0 = x_ref[
                                         token,
-                                        pl.ds(k_start, config.send_k),
+                                        pl.ds(k_start, HELPER_PAYLOAD_K),
                                     ]
-                                    tile_smem[output_row, :] = jnp.where(
+                                    x_row1 = x_ref[
+                                        token,
+                                        pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
+                                    ]
+                                    payload0_smem[output_row, :] = jnp.where(
                                         row_valid,
-                                        x_row,
-                                        jnp.zeros((config.send_k,), dtype=dtype),
+                                        x_row0,
+                                        jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
+                                    )
+                                    payload1_smem[output_row, :] = jnp.where(
+                                        row_valid,
+                                        x_row1,
+                                        jnp.zeros((HELPER_PAYLOAD_K,), dtype=dtype),
                                     )
 
                             mgpu.commit_smem()
@@ -565,19 +575,29 @@ def _make_source_push_semantic_fused_w13_kernel(
                             else:
                                 destination_ref = remote_inbox
                             mgpu.copy_smem_to_gmem(
-                                tile_smem,
+                                payload0_smem,
                                 destination_ref.at[
                                     rank,
                                     slot,
                                     pl.ds(block * config.compute_m, config.compute_m),
-                                    pl.ds(k_start, config.send_k),
+                                    pl.ds(k_start, HELPER_PAYLOAD_K),
+                                ],
+                            )
+                            mgpu.copy_smem_to_gmem(
+                                payload1_smem,
+                                destination_ref.at[
+                                    rank,
+                                    slot,
+                                    pl.ds(block * config.compute_m, config.compute_m),
+                                    pl.ds(k_start + HELPER_PAYLOAD_K, HELPER_PAYLOAD_K),
                                 ],
                             )
                             mgpu.wait_smem_to_gmem(0, wait_read_only=False)
 
                         pl.run_scoped(
                             _copy_scope,
-                            tile_smem=mgpu.SMEM((config.compute_m, config.send_k), dtype=dtype),
+                            payload0_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype),
+                            payload1_smem=mgpu.SMEM((config.compute_m, HELPER_PAYLOAD_K), dtype=dtype),
                             token_smem=mgpu.SMEM((TOKEN_TRANSFER_ROWS,), dtype=jnp.int32),
                             token_barrier=mgpu.Barrier(num_arrivals=1),
                         )
