@@ -317,6 +317,74 @@ def test_source_push_semantic_plan_split_w2_backward_compare_preserves_metric_sc
     assert int(metrics["layout_overflow_row_error_count"]) == 3
 
 
+def test_source_push_semantic_plan_fused_mlp_reference_inputs_are_replicated():
+    bench = _bench_module()
+    selected = jnp.asarray([[[0], [0]]], dtype=jnp.int32)
+    weights = jnp.ones(selected.shape, dtype=jnp.float32)
+    plan = bench.build_source_push_semantic_plan_jax(
+        selected,
+        weights,
+        ep_size=1,
+        experts_per_rank=1,
+        rows_per_src_dst_capacity=2,
+        capacity_factor=1.0,
+    )
+    args = SimpleNamespace(
+        ep_size=1,
+        tokens_per_rank=2,
+        topk=1,
+        experts_per_rank=1,
+        hidden_dim=256,
+        intermediate_dim=128,
+        dtype="bfloat16",
+        routing="balanced",
+        routing_seed=0,
+    )
+    mesh = bench._make_mesh(1)
+    production = bench._shard_w13_expert_major_inputs(bench._make_inputs(args, plan), mesh)
+
+    reference = bench._replicate_semantic_fused_mlp_reference_inputs(production, mesh)
+
+    for field in ("selected_experts", "route_weights", "x", "w_gate_up", "w_down", "dy"):
+        reference_value = getattr(reference, field)
+        assert reference_value.sharding == bench.NamedSharding(
+            mesh,
+            bench.P(*(None for _ in range(reference_value.ndim))),
+        )
+        np.testing.assert_array_equal(np.asarray(reference_value), np.asarray(getattr(production, field)))
+    assert production.w_gate_up.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
+    assert production.w_down.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
+
+
+def test_source_push_semantic_plan_split_fused_mlp_metrics_preserve_schema():
+    bench = _bench_module()
+    expected = {
+        "y": np.asarray([1.0, 2.0], dtype=np.float32),
+        "dropped_routes": np.asarray(0, dtype=np.int32),
+        "dx": np.asarray([3.0, 4.0], dtype=np.float32),
+        "d_route_weights": np.asarray([5.0], dtype=np.float32),
+        "dw13": np.asarray([6.0], dtype=np.float32),
+        "dw2": np.asarray([7.0], dtype=np.float32),
+    }
+    observed = {key: np.array(value, copy=True) for key, value in expected.items()}
+
+    forward_metrics = bench._semantic_fused_mlp_forward_host_metrics(observed, expected)
+    backward_metrics = bench._semantic_fused_mlp_forward_backward_host_metrics(observed, expected)
+
+    assert set(forward_metrics) == {
+        "y_max_abs_diff",
+        "y_mean_abs_diff",
+        "expected_y_nonfinite_error_count",
+        "observed_y_nonfinite_error_count",
+        "dropped_routes_error_count",
+    }
+    for output in ("y", "dx", "d_route_weights", "dw13", "dw2"):
+        assert float(backward_metrics[f"{output}_max_abs_diff"]) == 0.0
+        assert int(backward_metrics[f"expected_{output}_nonfinite_error_count"]) == 0
+        assert int(backward_metrics[f"observed_{output}_nonfinite_error_count"]) == 0
+    assert int(backward_metrics["dropped_routes_error_count"]) == 0
+
+
 def test_source_push_semantic_plan_source_padded_h_reference_uses_stored_bf16_z():
     bench_source_push_semantic_plan = _bench_module()
     x = jnp.asarray([[[1.1, 0.0]]], dtype=jnp.bfloat16)
@@ -2362,7 +2430,7 @@ def test_source_push_semantic_plan_bench_emits_full_fused_mlp_rows(tmp_path):
             "--experts-per-rank",
             "1",
             "--hidden-dim",
-            "256",
+            "512",
             "--intermediate-dim",
             "128",
             "--capacity-factor",

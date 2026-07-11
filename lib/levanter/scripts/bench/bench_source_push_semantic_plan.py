@@ -946,6 +946,7 @@ class SplitComparison:
     reference: Callable[..., Any]
     observed: Callable[..., Any]
     host_metrics: Callable[[Any, Any], dict[str, Any]]
+    prepare_reference_args: Callable[..., tuple[Any, ...]] | None = None
 
 
 def _parse_csv(value: str) -> tuple[str, ...]:
@@ -1541,6 +1542,25 @@ def _shard_w13_expert_major_inputs(inputs: SemanticBenchInputs, mesh: Mesh) -> S
     )
 
 
+def _replicate_semantic_fused_mlp_reference_inputs(
+    inputs: SemanticBenchInputs,
+    mesh: Mesh,
+) -> SemanticBenchInputs:
+    def replicate(value: Array) -> Array:
+        sharding = NamedSharding(mesh, P(*(None for _ in range(value.ndim))))
+        return jax.device_put(jax.device_get(value), sharding)
+
+    return replace(
+        inputs,
+        selected_experts=replicate(inputs.selected_experts),
+        route_weights=replicate(inputs.route_weights),
+        x=replicate(inputs.x),
+        w_gate_up=replicate(inputs.w_gate_up),
+        w_down=replicate(inputs.w_down),
+        dy=replicate(inputs.dy),
+    )
+
+
 def _constrain_destination_major(value: Array, mesh: Mesh | None) -> Array:
     if mesh is None:
         return value
@@ -1899,6 +1919,32 @@ def _semantic_fused_w2_backward_host_metrics(observed: Any, expected: Any) -> di
         "valid_error_count": np.asarray(np.count_nonzero(np.asarray(observed.valid) != np.asarray(expected.valid))),
         "queue_overflow_route_error_count": np.asarray(observed.queue_overflow_routes),
         "layout_overflow_row_error_count": np.asarray(observed.layout_overflow_rows),
+    }
+
+
+def _semantic_fused_mlp_forward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
+    return {
+        **_host_comparison_metrics("y", observed["y"], expected["y"]),
+        "dropped_routes_error_count": np.asarray(
+            np.abs(np.asarray(observed["dropped_routes"]) - np.asarray(expected["dropped_routes"]))
+        ),
+    }
+
+
+def _semantic_fused_mlp_forward_backward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
+    return {
+        **_host_comparison_metrics("y", observed["y"], expected["y"]),
+        **_host_comparison_metrics("dx", observed["dx"], expected["dx"]),
+        **_host_comparison_metrics(
+            "d_route_weights",
+            observed["d_route_weights"],
+            expected["d_route_weights"],
+        ),
+        **_host_comparison_metrics("dw13", observed["dw13"], expected["dw13"]),
+        **_host_comparison_metrics("dw2", observed["dw2"], expected["dw2"]),
+        "dropped_routes_error_count": np.asarray(
+            np.abs(np.asarray(observed["dropped_routes"]) - np.asarray(expected["dropped_routes"]))
+        ),
     }
 
 
@@ -4178,6 +4224,7 @@ def _mode_callable(
         inputs: SemanticBenchInputs,
         *,
         interpret: bool,
+        mesh: Mesh | None,
     ) -> tuple[Array, Array]:
         _send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
         capacity = SourcePushSemanticMlpCapacity(
@@ -4193,10 +4240,10 @@ def _mode_callable(
                 inputs.w_down,
                 capacity=capacity,
                 capacity_factor=args.capacity_factor,
-                mesh=expert_mesh,
+                mesh=mesh,
                 interpret=True,
             )
-        assert expert_mesh is not None
+        assert mesh is not None
         return source_push_moe_mlp_semantic_fused_pallas_mgpu(
             inputs.selected_experts,
             inputs.x,
@@ -4205,22 +4252,27 @@ def _mode_callable(
             inputs.w_down,
             capacity=capacity,
             capacity_factor=args.capacity_factor,
-            mesh=expert_mesh,
+            mesh=mesh,
         )
 
     def semantic_fused_mlp_forward_pallas(inputs: SemanticBenchInputs):
-        y, dropped_routes = semantic_fused_mlp_forward(inputs, interpret=args.pallas_interpret)
+        y, dropped_routes = semantic_fused_mlp_forward(
+            inputs,
+            interpret=args.pallas_interpret,
+            mesh=expert_mesh,
+        )
         return {"y": y, "dropped_routes": dropped_routes}
 
-    def semantic_fused_mlp_forward_compare(inputs: SemanticBenchInputs):
-        expected_y, expected_dropped = semantic_fused_mlp_forward(inputs, interpret=True)
-        observed_y, observed_dropped = semantic_fused_mlp_forward(inputs, interpret=args.pallas_interpret)
-        return {
-            **_comparison_metrics("y", observed_y, expected_y),
-            "dropped_routes_error_count": jnp.abs(observed_dropped - expected_dropped),
-        }
+    def semantic_fused_mlp_forward_reference(inputs: SemanticBenchInputs):
+        y, dropped_routes = semantic_fused_mlp_forward(inputs, interpret=True, mesh=None)
+        return {"y": y, "dropped_routes": dropped_routes}
 
-    def semantic_fused_mlp_forward_backward(inputs: SemanticBenchInputs, *, interpret: bool):
+    def semantic_fused_mlp_forward_backward(
+        inputs: SemanticBenchInputs,
+        *,
+        interpret: bool,
+        mesh: Mesh | None,
+    ):
         def loss(x_arg, route_weights_arg, w13_arg, w2_arg):
             boundary_inputs = replace(
                 inputs,
@@ -4229,7 +4281,11 @@ def _mode_callable(
                 w_gate_up=w13_arg,
                 w_down=w2_arg,
             )
-            y, dropped_routes = semantic_fused_mlp_forward(boundary_inputs, interpret=interpret)
+            y, dropped_routes = semantic_fused_mlp_forward(
+                boundary_inputs,
+                interpret=interpret,
+                mesh=mesh,
+            )
             loss_value = jnp.sum(y.astype(jnp.float32) * inputs.dy.astype(jnp.float32))
             return loss_value, (y, dropped_routes)
 
@@ -4249,6 +4305,7 @@ def _mode_callable(
         y, dropped_routes, dx, d_route_weights, dw13, dw2 = semantic_fused_mlp_forward_backward(
             inputs,
             interpret=args.pallas_interpret,
+            mesh=expert_mesh,
         )
         return {
             "y": y,
@@ -4259,18 +4316,19 @@ def _mode_callable(
             "dw2": dw2,
         }
 
-    def semantic_fused_mlp_forward_backward_compare(inputs: SemanticBenchInputs):
-        expected = semantic_fused_mlp_forward_backward(inputs, interpret=True)
-        observed = semantic_fused_mlp_forward_backward(inputs, interpret=args.pallas_interpret)
-        expected_y, expected_dropped, expected_dx, expected_d_route_weights, expected_dw13, expected_dw2 = expected
-        observed_y, observed_dropped, observed_dx, observed_d_route_weights, observed_dw13, observed_dw2 = observed
+    def semantic_fused_mlp_forward_backward_reference(inputs: SemanticBenchInputs):
+        y, dropped_routes, dx, d_route_weights, dw13, dw2 = semantic_fused_mlp_forward_backward(
+            inputs,
+            interpret=True,
+            mesh=None,
+        )
         return {
-            **_comparison_metrics("y", observed_y, expected_y),
-            **_comparison_metrics("dx", observed_dx, expected_dx),
-            **_comparison_metrics("d_route_weights", observed_d_route_weights, expected_d_route_weights),
-            **_comparison_metrics("dw13", observed_dw13, expected_dw13),
-            **_comparison_metrics("dw2", observed_dw2, expected_dw2),
-            "dropped_routes_error_count": jnp.abs(observed_dropped - expected_dropped),
+            "y": y,
+            "dropped_routes": dropped_routes,
+            "dx": dx,
+            "d_route_weights": d_route_weights,
+            "dw13": dw13,
+            "dw2": dw2,
         }
 
     def forward_source_padded_components(inputs: SemanticBenchInputs, *, output_dtype: jnp.dtype):
@@ -8362,7 +8420,11 @@ def _mode_callable(
             use_direct_return_combine_y=True,
         )
 
-    table: dict[str, Callable[[SemanticBenchInputs], Any]] = {
+    def semantic_fused_mlp_reference_args(inputs: SemanticBenchInputs) -> tuple[SemanticBenchInputs]:
+        reference_mesh = expert_mesh if expert_mesh is not None else _make_mesh(args.ep_size)
+        return (_replicate_semantic_fused_mlp_reference_inputs(inputs, reference_mesh),)
+
+    table: dict[str, Callable[..., Any] | SplitComparison] = {
         MODE_GATHER_X: gather_x,
         MODE_GATHER_X_PALLAS: gather_x_pallas,
         MODE_W13: w13,
@@ -8393,9 +8455,19 @@ def _mode_callable(
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS: semantic_fused_w13_backward_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: semantic_fused_w13_backward_compare,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS: semantic_fused_mlp_forward_pallas,
-        MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE: semantic_fused_mlp_forward_compare,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE: SplitComparison(
+            reference=semantic_fused_mlp_forward_reference,
+            observed=semantic_fused_mlp_forward_pallas,
+            host_metrics=_semantic_fused_mlp_forward_host_metrics,
+            prepare_reference_args=semantic_fused_mlp_reference_args,
+        ),
         MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS: semantic_fused_mlp_forward_backward_pallas,
-        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE: semantic_fused_mlp_forward_backward_compare,
+        MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_COMPARE: SplitComparison(
+            reference=semantic_fused_mlp_forward_backward_reference,
+            observed=semantic_fused_mlp_forward_backward_pallas,
+            host_metrics=_semantic_fused_mlp_forward_backward_host_metrics,
+            prepare_reference_args=semantic_fused_mlp_reference_args,
+        ),
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS: w13_source_padded_direct_pack_pallas,
         MODE_W13_SOURCE_PADDED_DIRECT_PACK_COMPARE: w13_source_padded_direct_pack_compare,
         MODE_W2: w2,
@@ -8803,14 +8875,15 @@ def _run_split_comparison_once(
     comparison: SplitComparison,
     reference_call: Callable[..., Any],
     observed_call: Callable[..., Any],
-    *args: Any,
+    reference_args: tuple[Any, ...],
+    observed_args: tuple[Any, ...],
 ) -> dict[str, Any]:
-    reference_device = reference_call(*args)
+    reference_device = reference_call(*reference_args)
     _block_until_ready(reference_device)
     reference_host = _device_get_and_release(reference_device)
     del reference_device
 
-    observed_device = observed_call(*args)
+    observed_device = observed_call(*observed_args)
     _block_until_ready(observed_device)
     observed_host = _device_get_and_release(observed_device)
     del observed_device
@@ -8827,15 +8900,18 @@ def _time_split_comparison(
     steps: int,
     repeat_runs: int,
 ) -> Timing:
+    reference_args = (
+        comparison.prepare_reference_args(*args) if comparison.prepare_reference_args is not None else args
+    )
     reference_jit = jax.jit(comparison.reference)
-    reference_lowered = reference_jit.lower(*args)
+    reference_lowered = reference_jit.lower(*reference_args)
     start = time.perf_counter()
     reference_call = reference_lowered.compile()
     reference_compile_time = time.perf_counter() - start
 
     # Run and release the interpreted result before compiling or launching Pallas.
     start = time.perf_counter()
-    reference_device = reference_call(*args)
+    reference_device = reference_call(*reference_args)
     _block_until_ready(reference_device)
     reference_host = _device_get_and_release(reference_device)
     del reference_device
@@ -8857,13 +8933,13 @@ def _time_split_comparison(
     observed_first_run_time = time.perf_counter() - start
 
     for _ in range(warmup):
-        output = _run_split_comparison_once(comparison, reference_call, observed_call, *args)
+        output = _run_split_comparison_once(comparison, reference_call, observed_call, reference_args, args)
 
     steady_state_times = []
     for _ in range(repeat_runs):
         start = time.perf_counter()
         for _ in range(steps):
-            output = _run_split_comparison_once(comparison, reference_call, observed_call, *args)
+            output = _run_split_comparison_once(comparison, reference_call, observed_call, reference_args, args)
         steady_state_times.append((time.perf_counter() - start) / steps)
 
     lower_compile_time = reference_compile_time + observed_compile_time
