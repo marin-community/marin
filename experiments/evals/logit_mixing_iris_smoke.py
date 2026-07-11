@@ -28,6 +28,7 @@ WORKER_REQUEST_TIMEOUT = 900
 ALPHA = 0.5
 PROMPT = "The capital of France is"
 TOP_LOGPROBS = 16
+LOGPROB_ABS_TOL = 1e-5
 
 
 def brokered_config(model: str) -> BrokeredVllmSystemConfig:
@@ -170,13 +171,13 @@ def verify_mixed_logprobs(
     mixed_token = mixed_choice["text"]
     mixed_logprob = mixed_choice["logprobs"]["token_logprobs"][0]
     assert mixed_token == expected_token
-    assert math.isclose(mixed_logprob, expected_logprob, abs_tol=1e-5)
+    assert math.isclose(mixed_logprob, expected_logprob, abs_tol=LOGPROB_ABS_TOL)
 
     max_delta = 0.0
     for token, expected in expected_top.items():
         assert token in mixed_top
         delta = abs(mixed_top[token] - expected)
-        assert delta < 1e-5
+        assert delta < LOGPROB_ABS_TOL
         max_delta = max(max_delta, delta)
 
     return {

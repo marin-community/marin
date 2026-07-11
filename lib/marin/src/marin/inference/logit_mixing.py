@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 64
 UPSTREAM_STATUS_CODE_KEY = "_upstream_status_code"
+LENGTH_FINISH_REASON = "length"
 
 
 @dataclass(frozen=True)
@@ -215,7 +216,7 @@ class LogitMixingInferenceWorker:
         token_logprobs: list[float] = []
         top_logprobs: list[dict[str, float]] = []
         current_text = str(payload["prompt"])
-        finish_reason = "length"
+        finish_reason = LENGTH_FINISH_REASON
         deadline = self._clock() + self._request_timeout_seconds
 
         for _ in range(max_tokens):
@@ -431,7 +432,7 @@ def _mixed_finish_reason(
 def _selected_token_finish_reason(payload: Mapping[str, Any], token: str) -> str | None:
     choice = _completion_choice(payload)
     reason = _completion_finish_reason(payload)
-    if choice is None or choice.get("text") != token or reason in {None, "length"}:
+    if choice is None or choice.get("text") != token or reason in {None, LENGTH_FINISH_REASON}:
         return None
     return reason
 
