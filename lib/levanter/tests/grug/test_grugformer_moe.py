@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import re
 from functools import partial
 
 import numpy as np
@@ -18,8 +19,12 @@ from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispat
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.ep_ring_fused import (
+    _assignment_to_compact_rows,
     _moe_mlp_ep_ring_fused_local,
     ring_combine,
+    ring_combine_triton,
+    ring_dispatch_reference,
+    ring_dispatch_triton,
 )
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
@@ -116,6 +121,29 @@ def _make_unique_topk_experts(*, tokens: int, topk: int, num_experts: int) -> ja
     return (token_ids + expert_offsets) % num_experts
 
 
+def _absolute_error_metrics(actual: jax.Array, expected: jax.Array) -> tuple[float, float]:
+    difference = np.abs(np.asarray(actual) - np.asarray(expected))
+    return float(np.max(difference)), float(np.mean(difference))
+
+
+def _assert_allclose_with_error_metrics(actual: jax.Array, expected: jax.Array) -> tuple[float, float]:
+    max_error, mean_error = _absolute_error_metrics(actual, expected)
+    np.testing.assert_allclose(
+        np.asarray(actual),
+        np.asarray(expected),
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg=f"max_absolute_error={max_error}, mean_absolute_error={mean_error}",
+    )
+    return max_error, mean_error
+
+
+def _optimized_hlo_rank_two_float_scatter_lines(lowered: jax.stages.Lowered) -> list[str]:
+    hlo = lowered.compile().as_text()
+    rank_two_float = re.compile(r"(?:bf16|f32)\[[^\]]*,[^\]]*\].*\bscatter\(")
+    return [line.strip() for line in hlo.splitlines() if rank_two_float.search(line)]
+
+
 def _gather_sum_reference(
     dispatch_output: jax.Array,
     dispatch_positions: jax.Array,
@@ -134,6 +162,13 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic optional dependencies are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("raw Sonic triton_call tests require a GPU")
+
+
+def _skip_without_triton_gpu_runtime() -> None:
+    if not all(importlib.util.find_spec(module) is not None for module in ("jax_triton", "triton")):
+        pytest.skip("jax-triton and triton are not installed")
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("triton_call tests require a GPU")
 
 
 def test_moe_mlp_runs_without_ep_axis():
@@ -895,7 +930,7 @@ def test_moe_mlp_ring_fused_matches_ring_values_and_full_gradients(overflow: boo
             )
 
         ring = shard_runner(_moe_mlp_ep_ring_local)
-        fused = shard_runner(_moe_mlp_ep_ring_fused_local)
+        fused = shard_runner(_moe_mlp_ep_ring_fused_local, routing_implementation="reference")
 
         def run(runner, x, combine_weights, w_up_gate, w_down):
             return runner(x, selected_experts, combine_weights, w_up_gate, w_down)
@@ -910,24 +945,69 @@ def test_moe_mlp_ring_fused_matches_ring_values_and_full_gradients(overflow: boo
         ring_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(ring, x, combine_weights, w_up_gate, w_down)
         fused_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(fused, x, combine_weights, w_up_gate, w_down)
 
-    np.testing.assert_allclose(np.asarray(fused_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
+    _assert_allclose_with_error_metrics(fused_out, ring_out)
     assert int(fused_dropped) == int(ring_dropped)
     if overflow:
         assert int(fused_dropped) > 0
     for fused_grad, ring_grad in zip(fused_grads, ring_grads, strict=True):
-        np.testing.assert_allclose(np.asarray(fused_grad), np.asarray(ring_grad), rtol=1e-5, atol=1e-5)
+        _assert_allclose_with_error_metrics(fused_grad, ring_grad)
 
 
-def test_ring_combine_xla_matches_reference_values_and_gradients():
-    capacity = 7
-    tokens = 6
-    topk = 2
-    hidden_dim = 5
-    out_dispatch = jax.random.normal(jax.random.key(47), (capacity, hidden_dim), dtype=jnp.float32)
-    assignment_weights = jax.random.normal(jax.random.key(48), (tokens * topk,), dtype=jnp.float32)
-    local_assignment_indices = jnp.array([0, 5, 7, 2, 9, 1, 6], dtype=jnp.int32)
-    valid = jnp.array([True, True, True, True, False, False, False])
-    cotangent = jax.random.normal(jax.random.key(49), (tokens, hidden_dim), dtype=jnp.float32)
+def test_ring_fused_triton_routing_matches_references_on_gpu():
+    _skip_without_triton_gpu_runtime()
+    tokens = 32
+    topk = 4
+    hidden_dim = 128
+    compact_rows_with_sentinel = 33
+    assignments = tokens * topk
+    local_assignment_indices = jax.random.permutation(jax.random.key(47), assignments)[:compact_rows_with_sentinel]
+    valid = jnp.arange(compact_rows_with_sentinel) < compact_rows_with_sentinel - 1
+    dispatch_rows = _assignment_to_compact_rows(
+        local_assignment_indices,
+        valid,
+        tokens=tokens,
+        topk=topk,
+    )
+    x_global = jax.random.normal(jax.random.key(48), (tokens, hidden_dim), dtype=jnp.float32)
+    out_dispatch = (
+        jax.random.normal(
+            jax.random.key(49),
+            (compact_rows_with_sentinel, hidden_dim),
+            dtype=jnp.float32,
+        )
+        .at[-1]
+        .set(0)
+    )
+    assignment_weights = jax.random.normal(jax.random.key(50), (assignments,), dtype=jnp.float32)
+    dispatch_cotangent = jax.random.normal(
+        jax.random.key(51),
+        out_dispatch.shape,
+        dtype=jnp.float32,
+    )
+    combine_cotangent = jax.random.normal(
+        jax.random.key(52),
+        x_global.shape,
+        dtype=jnp.float32,
+    )
+
+    reference_dispatch, reference_dispatch_pullback = jax.vjp(
+        partial(
+            ring_dispatch_reference,
+            local_assignment_indices=local_assignment_indices,
+            valid=valid,
+            topk=topk,
+        ),
+        x_global,
+    )
+    triton_dispatch, triton_dispatch_pullback = jax.vjp(
+        partial(
+            ring_dispatch_triton,
+            local_assignment_indices=local_assignment_indices,
+            valid=valid,
+            dispatch_rows=dispatch_rows,
+        ),
+        x_global,
+    )
 
     def combine(implementation, out_dispatch, assignment_weights):
         return ring_combine(
@@ -940,22 +1020,60 @@ def test_ring_combine_xla_matches_reference_values_and_gradients():
             implementation=implementation,
         )
 
-    reference_out, reference_pullback = jax.vjp(
+    reference_combine, reference_combine_pullback = jax.vjp(
         partial(combine, "reference"),
         out_dispatch,
         assignment_weights,
     )
-    xla_out, xla_pullback = jax.vjp(
-        partial(combine, "xla"),
+    triton_combine, triton_combine_pullback = jax.vjp(
+        partial(
+            ring_combine_triton,
+            local_assignment_indices=local_assignment_indices,
+            valid=valid,
+            tokens=tokens,
+            topk=topk,
+        ),
         out_dispatch,
         assignment_weights,
     )
-    reference_grads = reference_pullback(cotangent)
-    xla_grads = xla_pullback(cotangent)
 
-    np.testing.assert_allclose(np.asarray(xla_out), np.asarray(reference_out), rtol=1e-5, atol=1e-5)
-    for xla_grad, reference_grad in zip(xla_grads, reference_grads, strict=True):
-        np.testing.assert_allclose(np.asarray(xla_grad), np.asarray(reference_grad), rtol=1e-5, atol=1e-5)
+    _assert_allclose_with_error_metrics(triton_dispatch, reference_dispatch)
+    _assert_allclose_with_error_metrics(
+        triton_dispatch_pullback(dispatch_cotangent)[0],
+        reference_dispatch_pullback(dispatch_cotangent)[0],
+    )
+    _assert_allclose_with_error_metrics(triton_combine, reference_combine)
+    for triton_grad, reference_grad in zip(
+        triton_combine_pullback(combine_cotangent),
+        reference_combine_pullback(combine_cotangent),
+        strict=True,
+    ):
+        _assert_allclose_with_error_metrics(triton_grad, reference_grad)
+
+    def dispatch_loss(x_global):
+        dispatched = ring_dispatch_triton(
+            x_global,
+            local_assignment_indices,
+            valid,
+            dispatch_rows,
+        )
+        return jnp.sum(dispatched * dispatch_cotangent)
+
+    def combine_loss(out_dispatch, assignment_weights):
+        combined = ring_combine_triton(
+            out_dispatch,
+            local_assignment_indices,
+            valid,
+            assignment_weights,
+            tokens=tokens,
+            topk=topk,
+        )
+        return jnp.sum(combined * combine_cotangent)
+
+    dispatch_backward = jax.jit(jax.grad(dispatch_loss)).lower(x_global)
+    combine_backward = jax.jit(jax.grad(combine_loss, argnums=(0, 1))).lower(out_dispatch, assignment_weights)
+    assert _optimized_hlo_rank_two_float_scatter_lines(dispatch_backward) == []
+    assert _optimized_hlo_rank_two_float_scatter_lines(combine_backward) == []
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():
