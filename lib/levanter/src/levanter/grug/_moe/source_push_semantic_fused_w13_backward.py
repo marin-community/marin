@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 import jax
@@ -952,12 +952,12 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
 
 def _forward_config(config: SourcePushSemanticFusedW13BackwardConfig) -> SourcePushSemanticFusedW13Config:
-    return SourcePushSemanticFusedW13Config(
+    return replace(
+        SourcePushSemanticFusedW13Config(),
         compute_m=config.compute_m,
         send_m=config.send_m,
         block_n=config.block_output,
         block_k=config.block_hidden,
-        send_k=config.send_hidden_block,
         inbox_slots=config.inbox_slots,
     )
 

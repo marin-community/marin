@@ -54,8 +54,8 @@ def _plan(*, rows_per_src_dst_capacity: int = 12, rows_per_expert_capacity: int 
 
 def _inputs(plan=None, *, output_dim: int = 128):
     plan = _plan() if plan is None else plan
-    x = ((jnp.arange(2 * 6 * 256, dtype=jnp.float32).reshape(2, 6, 256) % 19 - 9) / 16).astype(jnp.bfloat16)
-    w13_shape = (2, 2, 256, output_dim)
+    x = ((jnp.arange(2 * 6 * 512, dtype=jnp.float32).reshape(2, 6, 512) % 19 - 9) / 16).astype(jnp.bfloat16)
+    w13_shape = (2, 2, 512, output_dim)
     w13 = ((jnp.arange(np.prod(w13_shape), dtype=jnp.float32).reshape(w13_shape) % 17 - 8) / 32).astype(jnp.bfloat16)
     dz13_shape = (2, 2, 256, output_dim)
     dz13 = ((jnp.arange(np.prod(dz13_shape), dtype=jnp.float32).reshape(dz13_shape) % 23 - 11) / 64).astype(
@@ -134,7 +134,7 @@ def test_fused_w13_backward_metadata_tracks_three_peer_chunk_readiness():
         capacity_factor=4.0,
     )
     metadata = source_push_semantic_fused_w13_backward_metadata_jax(
-        jnp.zeros((3, 3, 256), dtype=jnp.bfloat16),
+        jnp.zeros((3, 3, 512), dtype=jnp.bfloat16),
         plan,
         send_chunks_per_dst=1,
         rows_per_expert_capacity=256,
@@ -158,7 +158,7 @@ def test_fused_w13_backward_metadata_invalidates_routes_clipped_from_forward_sen
         rows_per_src_dst_capacity=80,
         capacity_factor=4.0,
     )
-    x = jnp.zeros((2, 40, 256), dtype=jnp.bfloat16)
+    x = jnp.zeros((2, 40, 512), dtype=jnp.bfloat16)
 
     metadata = source_push_semantic_fused_w13_backward_metadata_jax(
         x,
