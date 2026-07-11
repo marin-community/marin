@@ -3798,3 +3798,18 @@ large-magnitude synthetic inputs. The one-repeat reduced timing was
 `86.003749 ms` and is not a target performance result. Target random-routing
 timing remains required before deciding whether this old physical protocol
 recovers the 8.5 ms inbox behavior.
+
+## 2026-07-11 FUSED-MOE-127 - Target composition needs a second phase edge
+
+The sequenced target stop-after-W2 job
+`/dlwh/mlp-stop-after-w2b-target-73fe` succeeded at `66.309086 ms` with stable
+checksum `21117603414016` and zero drop/overflow errors. The full custom-VJP
+target `/dlwh/mlp-fwd-bwd-sequenced-target-73fe` still illegal-addressed, and
+the all-stages-live target `/dlwh/mlp-all-stages-live-target-73fe` produced no
+row after ten minutes and was stopped. Reduced all-stages-live had passed.
+
+This confines the target-scale failure to the W2-backward -> W13-backward
+handoff. The all-stages diagnostic now injects a zero-valued dependency from
+destination-owned `d_w2[:, 0, 0, 0]` into `d_z13` before W13 backward. This
+tests whether the W13 phase was starting before W2-backward owner work and
+remote transport had fully retired.
