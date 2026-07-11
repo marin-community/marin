@@ -67,6 +67,10 @@ class _SourcePushSemanticFusedW13BackwardDiagnostic(StrEnum):
     def serializes_combine(self) -> bool:
         return self is self.FULL_SERIAL_COMBINE
 
+    @property
+    def combines_on_dx_workers(self) -> bool:
+        return self is self.FULL
+
 
 @dataclass(frozen=True, slots=True)
 class SourcePushSemanticFusedW13BackwardConfig:
@@ -743,6 +747,57 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                 device_id_type=pl.DeviceIdType.LOGICAL,
             )
 
+        def _combine_routes(combine_worker, combine_programs: int) -> None:
+            hidden_tile = combine_worker % hidden_tiles
+            consumer_lane = combine_worker // hidden_tiles
+            consumers_for_tile = (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
+            hidden_start = hidden_tile * config.block_hidden
+
+            @pl.when(consumer_lane < schedule.token_blocks)
+            def _active_consumer() -> None:
+                @pl.loop(0, schedule.token_blocks)
+                def _token_block_loop(iteration) -> None:
+                    token_block = consumer_lane + iteration * consumers_for_tile
+
+                    @pl.when(token_block < schedule.token_blocks)
+                    def _combine_token_block() -> None:
+                        for destination_ordinal in range(ep_size):
+                            for slot in range(config.inbox_slots):
+                                required_generation = combine_ready_ref[token_block, destination_ordinal, slot]
+
+                                @pl.when(required_generation > 0)
+                                def _wait_for_required_round() -> None:
+                                    pl.semaphore_wait(
+                                        ready_sem.at[destination_ordinal, slot],
+                                        value=required_generation,
+                                        decrement=False,
+                                    )
+
+                        token_start = token_block * config.combine_token_block
+
+                        @pl.loop(0, config.combine_token_block)
+                        def _token_loop(token_offset) -> None:
+                            token = token_start + token_offset
+
+                            @pl.when(token < tokens_per_source)
+                            def _combine_token() -> None:
+                                acc = jnp.zeros((config.block_hidden,), dtype=jnp.float32)
+                                for route_slot in range(route_valid_ref.shape[-1]):
+                                    destination_ordinal = route_dst_ref[token, route_slot]
+                                    chunk = route_chunk_ref[token, route_slot]
+                                    block = route_block_ref[token, route_slot]
+                                    row = route_row_ref[token, route_slot]
+                                    route_value = dx_return_ref[
+                                        destination_ordinal,
+                                        chunk,
+                                        block * config.compute_m + row,
+                                        pl.ds(hidden_start, config.block_hidden),
+                                    ].astype(jnp.float32)
+                                    valid = route_valid_ref[token, route_slot] != 0
+                                    acc += jnp.where(valid, route_value, jnp.zeros((), dtype=jnp.float32))
+
+                                dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = acc
+
         @pl.when(worker < schedule.staging_programs)
         def _stage_and_combine() -> None:
             producer = worker
@@ -815,62 +870,10 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
             for destination_ordinal in range(ep_size):
                 _stage_peer(destination_ordinal)
 
-            if diagnostic.includes_combine:
+            if diagnostic.includes_combine and not diagnostic.combines_on_dx_workers:
                 if diagnostic.serializes_combine:
                     pl.semaphore_wait(dw_done_sem.at[0], value=schedule.dw_programs, decrement=False)
-                hidden_tile = producer % hidden_tiles
-                consumer_lane = producer // hidden_tiles
-                consumers_for_tile = (schedule.combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
-                hidden_start = hidden_tile * config.block_hidden
-
-                @pl.when(consumer_lane < schedule.token_blocks)
-                def _active_consumer() -> None:
-                    @pl.loop(0, schedule.token_blocks)
-                    def _token_block_loop(iteration) -> None:
-                        token_block = consumer_lane + iteration * consumers_for_tile
-
-                        @pl.when(token_block < schedule.token_blocks)
-                        def _combine_token_block() -> None:
-                            for destination_ordinal in range(ep_size):
-                                for slot in range(config.inbox_slots):
-                                    required_generation = combine_ready_ref[token_block, destination_ordinal, slot]
-
-                                    @pl.when(required_generation > 0)
-                                    def _wait_for_required_round() -> None:
-                                        pl.semaphore_wait(
-                                            ready_sem.at[destination_ordinal, slot],
-                                            value=required_generation,
-                                            decrement=False,
-                                        )
-
-                            token_start = token_block * config.combine_token_block
-
-                            @pl.loop(0, config.combine_token_block)
-                            def _token_loop(token_offset) -> None:
-                                token = token_start + token_offset
-
-                                @pl.when(token < tokens_per_source)
-                                def _combine_token() -> None:
-                                    acc = jnp.zeros((config.block_hidden,), dtype=jnp.float32)
-                                    for route_slot in range(route_valid_ref.shape[-1]):
-                                        destination_ordinal = route_dst_ref[token, route_slot]
-                                        chunk = route_chunk_ref[token, route_slot]
-                                        block = route_block_ref[token, route_slot]
-                                        row = route_row_ref[token, route_slot]
-                                        route_value = dx_return_ref[
-                                            destination_ordinal,
-                                            chunk,
-                                            block * config.compute_m + row,
-                                            pl.ds(hidden_start, config.block_hidden),
-                                        ].astype(jnp.float32)
-                                        valid = route_valid_ref[token, route_slot] != 0
-                                        acc += jnp.where(
-                                            valid,
-                                            route_value,
-                                            jnp.zeros((), dtype=jnp.float32),
-                                        )
-
-                                    dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = acc
+                _combine_routes(producer, schedule.staging_programs)
 
         def _compute_and_publish_dx() -> None:
             consumer = worker - dx_program_start
@@ -1014,6 +1017,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
             for source_ordinal in range(ep_size):
                 _compute_source(source_ordinal)
+
+            if diagnostic.includes_combine and diagnostic.combines_on_dx_workers:
+                _combine_routes(consumer, schedule.dx_programs)
 
         if diagnostic.includes_dx:
             pl.when((worker >= dx_program_start) & (worker < dw_program_start))(_compute_and_publish_dx)

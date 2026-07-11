@@ -3517,3 +3517,20 @@ The next candidate therefore restores concurrent combine/dW execution while
 retaining only the scalar `x_expert` liveness dependency that made the reduced
 finite comparison bit-exact. If it passes, serialization was unnecessary and
 the original overlap schedule can be recovered safely.
+
+## 2026-07-11 FUSED-MOE-114 - Liveness alone does not fix overlap
+
+Job `/dlwh/w13b-overlap-live-compare-8cb9` tested commit `8cb9d06989` at the
+reduced finite-comparison geometry after restoring concurrent source combine
+and dW while retaining the `x_expert` liveness dependency. Iris and its only
+task succeeded at the orchestration level in 44.42s, but the observed kernel
+again raised `CUDA_ERROR_ILLEGAL_ADDRESS` during `jax.device_get`. No dX or
+dW comparison metrics were produced. Pre-run dropped-route, routing-drop, and
+metadata-overflow counters were zero.
+
+Therefore scratch liveness and combine/dW ordering are independent
+requirements in the current role assignment. The next candidate preserves
+overlap but moves source combine from the 48 staging CTAs to the 40 dX CTAs
+after they publish all return chunks. Staging CTAs then perform only remote
+`x_expert` writes and exit, removing the unsafe staging-write-to-combine role
+transition while dW remains concurrent.
