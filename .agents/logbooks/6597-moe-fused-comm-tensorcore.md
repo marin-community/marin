@@ -2467,3 +2467,35 @@ target-shape 44.087474 ms timing candidate and proceed to integrated
 target-shape forward and fwd+bwd timing/correctness; the earlier integrated
 reference harness still needs an explicit gather output sharding before it can
 serve as that gate.
+
+## 2026-07-10 FUSED-MOE-084 - Two-buffer K512 W13 transport wins
+
+Job `/dlwh/bench-semantic-w13-k512-two-buffers-20260710-2300` at
+`d2ce47ca35` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+task, and a 1m48s task duration. The semantic W13 helper shares one token-ID
+load across two independent contiguous B64xK256 SMEM payloads and publishes
+them as one logical K512 helper item.
+
+| Quantity | Result |
+|---|---:|
+| Repeat times | 23.025404, 23.000391, 23.202345 ms |
+| Median time | 23.025404 ms |
+| Useful TFLOP/s/rank | 74.612671 |
+| Rounded TFLOP/s/rank | 93.265839 |
+| Min / max time | 23.000391 / 23.202345 ms |
+| Output checksum | 1,305,986,465,792 |
+| Dropped routes | 0 |
+| Metadata-overflow routes | 0 |
+| Queue entry / route overflows | 0 / 0 |
+| Layout row overflows | 0 |
+
+Against the selected K256 baseline of 25.922804 ms and 66.273189 useful
+TFLOP/s/rank, K512 saves 2.897400 ms or 11.18% of stage time and raises useful
+throughput by 12.58%. Its checksum exactly matches the K256 baseline. Keep the
+two-buffer K512 helper transport as the W13-forward candidate and evaluate it
+at the integrated forward and fwd+bwd boundaries before making it the selected
+production schedule.
+
+The process emitted recoverable 12.5 GiB BFC allocation warnings and FABRIC
+handle VMM fallbacks before producing all requested rows. There was no Mosaic
+lowering error, benchmark error row, or runtime correctness counter failure.
