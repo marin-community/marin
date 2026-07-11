@@ -666,7 +666,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
     )
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
         dx_return, dw13 = cast(tuple[Array, Array], outputs)
-        dx = _source_push_semantic_dx_combine_jax(
+        dx = _source_push_semantic_dx_combine_sharded(
             dx_return,
             metadata.route_dst_ordinal,
             metadata.route_chunk,
@@ -674,6 +674,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
             metadata.route_row,
             metadata.route_valid,
             config=config,
+            mesh=mesh,
         )
         return dx, dw13
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
@@ -783,7 +784,7 @@ def _make_source_push_semantic_dx_combine_kernel(
 ):
     if hidden_dim % config.block_hidden:
         raise ValueError(f"hidden dim {hidden_dim} must be divisible by block_hidden={config.block_hidden}")
-    token_blocks = math.ceil(tokens_per_source / config.combine_token_block)
+    token_blocks = math.ceil(tokens_per_source / config.compute_m)
     hidden_tiles = hidden_dim // config.block_hidden
 
     def body(
@@ -797,10 +798,10 @@ def _make_source_push_semantic_dx_combine_kernel(
     ) -> None:
         token_block = pl.program_id(0)
         hidden_tile = pl.program_id(1)
-        token_start = token_block * config.combine_token_block
+        token_start = token_block * config.compute_m
         hidden_start = hidden_tile * config.block_hidden
 
-        @pl.loop(0, config.combine_token_block)
+        @pl.loop(0, config.compute_m)
         def _token_loop(token_offset) -> None:
             token = token_start + token_offset
 

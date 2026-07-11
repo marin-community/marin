@@ -3596,3 +3596,26 @@ The next isolation keeps the same explicit queue-producing kernel but replaces
 the standalone Pallas gather with a source-sharded JAX top-k gather/reduce. A
 passing JAX combine proves the queue contract and confines the defect to the
 new Pallas combine lowering rather than the first kernel.
+
+## 2026-07-11 FUSED-MOE-118 - JAX combine validates queue but costs 25 ms
+
+Job `/dlwh/w13b-jax-combine-compare-ade6` tested commit `ade668f16a` at the
+reduced finite-comparison geometry. The explicit returned queue followed by a
+source-sharded JAX top-k gather/reduce matched exactly: dX and dW13 both had
+zero max/mean error, scale and cosine 1.0, no nonfinite values, and zero drop or
+overflow counters.
+
+Target job `/dlwh/w13b-jax-combine-target-ade6` also succeeded with stable
+checksum `20131827712` and all counters zero:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 87.499361 | 39.268559 | 49.085699 |
+| 1 | 87.112243 | 39.443065 | 49.303831 |
+| 2 | 86.729823 | 39.616982 | 49.521228 |
+
+The median was `87.112243 ms`, so JAX combine adds about `24.94 ms` over the
+`62.170948 ms` queue producer. It is a correctness/isolation path, not a
+performance candidate. The queue and first kernel are sound; the standalone
+Pallas combine is now aligned with the proven source-combine kernel's 64-row
+token block instead of the failed 256-row Lane-lowered loop.
