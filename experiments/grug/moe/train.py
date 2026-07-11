@@ -75,6 +75,7 @@ JaxPPSchedule = Literal[
     "kimi_k2",
 ]
 JaxPPImplementation = Literal["auto", "explicit_mpmd"]
+SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
 
 
 @dataclass(frozen=True)
@@ -88,8 +89,11 @@ class GrugJaxPPConfig:
     mpmd_dim: int | None = None
     stage_axis_name: str = "pipeline"
     stage_layer_counts: tuple[int, ...] | None = None
+    sonic_fsdp_materialization: SonicFsdpMaterialization = "per_task"
 
     def __post_init__(self) -> None:
+        if self.sonic_fsdp_materialization not in ("per_task", "staged_per_step"):
+            raise ValueError(f"unknown Sonic FSDP materialization mode: {self.sonic_fsdp_materialization}")
         if self.stages <= 0:
             raise ValueError(f"stages must be positive, got {self.stages}")
         if self.microbatches <= 0:
@@ -121,6 +125,14 @@ class GrugJaxPPConfig:
                 )
             if self.schedule != "interleaved_gpipe" and mpmd_dim != self.stages:
                 raise ValueError("explicit_mpmd requires PP_MPMD_DIM to match PP_STAGES")
+        if self.sonic_fsdp_materialization == "staged_per_step":
+            if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
+                raise ValueError(
+                    "staged_per_step Sonic FSDP materialization requires "
+                    "implementation='explicit_mpmd' and schedule='std_1f1b'"
+                )
+            if self.microbatches == 1:
+                raise ValueError("staged_per_step Sonic FSDP materialization requires microbatches > 1")
         if self.schedule in ("zero_bubble", "dualpipe_v") and self.microbatches < self.stages:
             raise ValueError(
                 f"{self.schedule} requires microbatches >= stages; got "
@@ -911,6 +923,7 @@ def _make_explicit_mpmd_train_step(
     stage0_loss_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
     last_loss_sharding = NamedSharding(mpmd_mesh.unstack[stage_mpmd_indices[-1]], P())
     stage0_step_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
+    stage_token_shardings = tuple(NamedSharding(mpmd_mesh.unstack[mpmd_index], P()) for mpmd_index in stage_mpmd_indices)
 
     param_shardings = tuple(
         _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, params)
@@ -920,6 +933,37 @@ def _make_explicit_mpmd_train_step(
         _tree_named_shardings_on_stage(mpmd_mesh, mpmd_index, opt_state)
         for mpmd_index, opt_state in zip(stage_mpmd_indices, sample_state.opt_state, strict=True)
     )
+
+    compute_param_shardings = []
+    stages_with_sonic_weights = []
+    for mpmd_index, stage_params, stage_shardings in zip(
+        stage_mpmd_indices, sample_state.params, param_shardings, strict=True
+    ):
+        stage_mesh = mpmd_mesh.unstack[mpmd_index]
+        has_sonic_weights = False
+        for block_index, block in enumerate(stage_params.blocks):
+            if block.mlp is None or block.mlp.expert_mlp.implementation != "sonic":
+                continue
+            has_sonic_weights = True
+            replicated_expert_sharding = NamedSharding(stage_mesh, P())
+            for weight_name in ("w_gate", "w_up", "w_down"):
+                stage_shardings = eqx.tree_at(
+                    lambda tree, block_index=block_index, weight_name=weight_name: getattr(
+                        tree.blocks[block_index].mlp.expert_mlp, weight_name
+                    ),
+                    stage_shardings,
+                    replicated_expert_sharding,
+                )
+        compute_param_shardings.append(stage_shardings)
+        stages_with_sonic_weights.append(has_sonic_weights)
+    compute_param_shardings = tuple(compute_param_shardings)
+    stages_with_sonic_weights = tuple(stages_with_sonic_weights)
+    if pipeline.sonic_fsdp_materialization == "staged_per_step" and not all(stages_with_sonic_weights):
+        missing_stages = tuple(index for index, has_weights in enumerate(stages_with_sonic_weights) if not has_weights)
+        raise ValueError(
+            "staged_per_step Sonic FSDP materialization requires Sonic expert weights on every stage; "
+            f"missing stages: {missing_stages}"
+        )
 
     def stage_batch_shardings(stage_batches):
         return tuple(
@@ -1028,6 +1072,21 @@ def _make_explicit_mpmd_train_step(
 
     def keep_step(step: jax.Array):
         return step
+
+    def materialize_compute_params(params: TransformerPipelineStage):
+        return params
+
+    def sonic_materialization_completion_token(
+        params: TransformerPipelineStage,
+        incoming_token: jax.Array,
+    ) -> jax.Array:
+        completion_token = incoming_token.astype(jnp.float32)
+        for block in params.blocks:
+            if block.mlp is None or block.mlp.expert_mlp.implementation != "sonic":
+                continue
+            for weight in (block.mlp.expert_mlp.w_gate, block.mlp.expert_mlp.w_up, block.mlp.expert_mlp.w_down):
+                completion_token = completion_token + weight.reshape(-1)[0].astype(jnp.float32)
+        return completion_token
 
     def add_trees(left, right):
         return jax.tree.map(lambda x, y: x + y, left, right)
@@ -1508,19 +1567,51 @@ def _make_explicit_mpmd_train_step(
         d_hidden_futures = {}
         forward_done = set()
         backward_done = set()
+        compute_params = (
+            {}
+            if pipeline.sonic_fsdp_materialization == "staged_per_step"
+            else {stage_index: stage_params for stage_index, stage_params in enumerate(params)}
+        )
+        materialization_token_futures = {}
+
+        def stage_compute_params(stage_index: int):
+            if stage_index in compute_params:
+                return compute_params[stage_index]
+            if stage_index == 0:
+                incoming_token = state.step
+            else:
+                incoming_token = materialization_token_futures[stage_index].done()
+            stage_params = mpmd.task(
+                materialize_compute_params,
+                name=f"grug_1f1b_stage{stage_index}_materialize_sonic_weights",
+                out_shardings=compute_param_shardings[stage_index],
+            )(params[stage_index])
+            compute_params[stage_index] = stage_params
+            if stage_index + 1 < num_stages:
+                completion_token = mpmd.task(
+                    sonic_materialization_completion_token,
+                    name=f"grug_1f1b_stage{stage_index}_sonic_materialization_completion_token",
+                    out_shardings=stage_token_shardings[stage_index],
+                )(stage_params, incoming_token)
+                materialization_token_futures[stage_index + 1] = mpmd.transfer(
+                    completion_token,
+                    out_shardings=stage_token_shardings[stage_index + 1],
+                )
+            return stage_params
 
         def ensure_forward(stage_index: int, microbatch_index: int):
             key = (stage_index, microbatch_index)
             if key in forward_done:
                 return
             microbatches = batches_by_microbatch[microbatch_index]
+            stage_params = stage_compute_params(stage_index)
 
             if stage_index == 0:
                 hidden, stage_qb_betas = mpmd.task(
                     stage0_forward,
                     name=f"grug_1f1b_mb{microbatch_index}_stage0_forward",
                     out_shardings=(activation_shardings[0], qb_shardings[0]),
-                )(params[0], qb_betas[0], microbatches[0])
+                )(stage_params, qb_betas[0], microbatches[0])
                 qb_betas_next[0] = accumulate_or_set(
                     qb_betas_next[0],
                     stage_qb_betas,
@@ -1545,7 +1636,7 @@ def _make_explicit_mpmd_train_step(
                 stage_forward,
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward",
                 out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
-            )(params[stage_index], qb_betas[stage_index], hidden, microbatches[stage_index])
+            )(stage_params, qb_betas[stage_index], hidden, microbatches[stage_index])
             qb_betas_next[stage_index] = accumulate_or_set(
                 qb_betas_next[stage_index],
                 stage_qb_betas,
@@ -1564,6 +1655,7 @@ def _make_explicit_mpmd_train_step(
             if key in backward_done:
                 return
             microbatches = batches_by_microbatch[microbatch_index]
+            stage_params = stage_compute_params(stage_index)
 
             if stage_index == num_stages - 1:
                 ensure_forward(stage_index, microbatch_index)
@@ -1577,7 +1669,7 @@ def _make_explicit_mpmd_train_step(
                         activation_shardings[stage_index],
                     ),
                 )(
-                    params[stage_index],
+                    stage_params,
                     qb_betas[stage_index],
                     stage_inputs[key],
                     microbatches[stage_index],
@@ -1614,7 +1706,7 @@ def _make_explicit_mpmd_train_step(
                     stage0_backward,
                     name=f"grug_1f1b_mb{microbatch_index}_stage0_backward",
                     out_shardings=param_shardings[0],
-                )(params[0], qb_betas[0], microbatches[0], d_hidden)
+                )(stage_params, qb_betas[0], microbatches[0], d_hidden)
                 grads[0] = accumulate_or_set(
                     grads[0],
                     stage_grads,
@@ -1630,7 +1722,7 @@ def _make_explicit_mpmd_train_step(
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_backward",
                 out_shardings=(param_shardings[stage_index], activation_shardings[stage_index]),
             )(
-                params[stage_index],
+                stage_params,
                 qb_betas[stage_index],
                 stage_inputs[key],
                 microbatches[stage_index],

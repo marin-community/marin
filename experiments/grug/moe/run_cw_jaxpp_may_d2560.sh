@@ -21,6 +21,7 @@ SUBMIT=false
 RUN_ID=""
 SCHEDULE="std_1f1b"
 IMPLEMENTATION="auto"
+SONIC_FSDP_MATERIALIZATION="per_task"
 PIPELINE="true"
 PHYSICAL_STAGES=4
 LOGICAL_STAGES=""
@@ -70,6 +71,8 @@ Options:
   --schedule NAME           gpipe, std_1f1b, eager_1f1b, zero_bubble, interleaved_gpipe,
                             interleaved_1f1b, dualpipe_v, or kimi_k2 (default: std_1f1b).
   --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
+  --sonic-fsdp-materialization NAME
+                            per_task or staged_per_step (default: per_task).
   --no-pipeline             Run the same model/backend without JaxPP for isolation.
   --physical-stages N       PP_MPMD_DIM / physical pipeline ranks (default: 4).
   --logical-stages N        PP_STAGES / logical pipeline stage cuts. Omit to infer per schedule.
@@ -119,6 +122,7 @@ while [ "$#" -gt 0 ]; do
         --run-id) RUN_ID="$2"; shift 2 ;;
         --schedule) SCHEDULE="$2"; shift 2 ;;
         --implementation) IMPLEMENTATION="$2"; shift 2 ;;
+        --sonic-fsdp-materialization) SONIC_FSDP_MATERIALIZATION="$2"; shift 2 ;;
         --no-pipeline) PIPELINE="false"; shift ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
         --logical-stages) LOGICAL_STAGES="$2"; shift 2 ;;
@@ -175,6 +179,33 @@ case "$IMPLEMENTATION" in
         exit 1
         ;;
 esac
+
+case "$SONIC_FSDP_MATERIALIZATION" in
+    per_task|staged_per_step) ;;
+    *)
+        echo "ERROR: unsupported Sonic FSDP materialization mode: $SONIC_FSDP_MATERIALIZATION" >&2
+        exit 1
+        ;;
+esac
+
+if [ "$SONIC_FSDP_MATERIALIZATION" = staged_per_step ]; then
+    if [ "$IMPLEMENTATION" != explicit_mpmd ] || [ "$SCHEDULE" != std_1f1b ]; then
+        echo "ERROR: staged_per_step requires --implementation explicit_mpmd --schedule std_1f1b" >&2
+        exit 1
+    fi
+    if [ "$MICROBATCHES" -le 1 ]; then
+        echo "ERROR: staged_per_step requires --microbatches greater than 1" >&2
+        exit 1
+    fi
+    if [ "$MOE_IMPLEMENTATION" != sonic ]; then
+        echo "ERROR: staged_per_step requires --moe-implementation sonic" >&2
+        exit 1
+    fi
+    if [ "$EXPERT_AXIS" -ne 1 ]; then
+        echo "ERROR: staged_per_step requires --expert-axis 1 because Sonic does not support expert parallelism" >&2
+        exit 1
+    fi
+fi
 
 case "$REMAT" in
     recompute_all|save_moe) ;;
@@ -267,6 +298,7 @@ ENV_ARGS=(
     -e MAY_PROFILER_START "$PROFILER_START"
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
     -e PP_IMPLEMENTATION "$IMPLEMENTATION"
+    -e PP_SONIC_FSDP_MATERIALIZATION "$SONIC_FSDP_MATERIALIZATION"
     -e PP_SCHEDULE "$SCHEDULE"
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
     -e PP_MICROBATCHES "$MICROBATCHES"
@@ -360,6 +392,7 @@ nodes: $NODES
 gpus_per_replica: $GPUS_PER_REPLICA
 schedule: $SCHEDULE
 implementation: $IMPLEMENTATION
+sonic_fsdp_materialization: $SONIC_FSDP_MATERIALIZATION
 pipeline: $PIPELINE
 physical_stages: $PHYSICAL_STAGES
 logical_stages: ${LOGICAL_STAGES:-inferred}

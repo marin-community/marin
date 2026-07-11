@@ -34,6 +34,7 @@ from experiments.grug.moe.train import (
     GrugTrainerConfig,
     JaxPPImplementation,
     JaxPPSchedule,
+    SonicFsdpMaterialization,
     jaxpp_setup_scripts,
 )
 
@@ -237,6 +238,10 @@ def build_pipeline_config() -> GrugJaxPPConfig:
         implementation=implementation,
         mpmd_dim=mpmd_dim,
         stage_layer_counts=env_optional_int_tuple("PP_STAGE_LAYER_COUNTS"),
+        sonic_fsdp_materialization=cast(
+            SonicFsdpMaterialization,
+            os.environ.get("PP_SONIC_FSDP_MATERIALIZATION", "per_task"),
+        ),
     )
 
 
@@ -250,6 +255,14 @@ def build_jaxpp_may_checkpoint(*, version: str = "dev") -> ArtifactStep[Levanter
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     model = build_model()
     pipeline = build_pipeline_config() if env_bool("MAY_PIPELINE", True) else None
+    if pipeline is not None and pipeline.sonic_fsdp_materialization == "staged_per_step":
+        if model.moe_implementation != "sonic":
+            raise ValueError("staged_per_step Sonic FSDP materialization requires MAY_MOE_IMPLEMENTATION=sonic")
+        if expert_axis != 1:
+            raise ValueError(
+                "staged_per_step Sonic FSDP materialization requires MAY_EXPERT_AXIS=1 because Sonic does not "
+                "support expert parallelism"
+            )
     if (
         pipeline is not None
         and pipeline.stage_layer_counts is not None
