@@ -689,32 +689,6 @@ def _source_push_semantic_fused_w13_backward_sharded(
     return x_expert, jnp.zeros_like(x, dtype=jnp.float32), dw13
 
 
-def _source_push_semantic_dx_combine_jax(
-    dx_return: Array,
-    route_dst_ordinal: Array,
-    route_chunk: Array,
-    route_block: Array,
-    route_row: Array,
-    route_valid: Array,
-    *,
-    config: SourcePushSemanticFusedW13BackwardConfig,
-) -> Array:
-    source_count, tokens_per_source, topk = route_valid.shape
-    source = jnp.arange(source_count, dtype=jnp.int32)[:, None]
-    dx = jnp.zeros((source_count, tokens_per_source, dx_return.shape[-1]), dtype=jnp.float32)
-    out_sharding = P(SOURCE_PUSH_MESH_AXIS, None, None)
-    for route_slot in range(topk):
-        queue_row = route_block[:, :, route_slot] * config.compute_m + route_row[:, :, route_slot]
-        route_value = dx_return.at[
-            source,
-            route_dst_ordinal[:, :, route_slot],
-            route_chunk[:, :, route_slot],
-            queue_row,
-        ].get(out_sharding=out_sharding)
-        dx += jnp.where(route_valid[:, :, route_slot, None], route_value.astype(jnp.float32), 0.0)
-    return dx
-
-
 def _source_push_semantic_dx_combine_sharded(
     dx_return: Array,
     route_dst_ordinal: Array,

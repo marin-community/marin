@@ -3619,3 +3619,26 @@ The median was `87.112243 ms`, so JAX combine adds about `24.94 ms` over the
 performance candidate. The queue and first kernel are sound; the standalone
 Pallas combine is now aligned with the proven source-combine kernel's 64-row
 token block instead of the failed 256-row Lane-lowered loop.
+
+## 2026-07-11 FUSED-MOE-119 - Pallas64 combine is exact and fast
+
+Reduced job `/dlwh/w13b-pallas64-combine-compare-3884` tested commit
+`388408ee81` after changing the standalone Lane-lowered source combine from a
+256-row token loop to the proven 64-row shape. The separately compiled result
+was bit-exact for dX and dW13: zero max/mean error, scale and cosine 1.0, no
+nonfinite values, and zero drop or overflow counters.
+
+Target job `/dlwh/w13b-pallas64-combine-target-3884` also succeeded with
+stable checksum `19830183936` and all counters zero:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 63.123062 | 54.432940 | 68.041175 |
+| 1 | 62.697307 | 54.802574 | 68.503218 |
+| 2 | 62.420632 | 55.045483 | 68.806853 |
+
+The median was `62.697307 ms`, with min/max `62.420632/63.123062 ms`. The
+standalone Pallas combine adds only `0.526359 ms` over the `62.170948 ms`
+no-combine kernel. This correct path is `20.682013 ms` faster than the
+serialized in-kernel baseline and `0.780834 ms` faster than the previous
+unvalidated 48/40/40 target timing. It is the selected W13-backward path.
