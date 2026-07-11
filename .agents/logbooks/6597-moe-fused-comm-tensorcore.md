@@ -3427,3 +3427,26 @@ next experiment preserves the full path but gates combine on completion of all
 40 dW owners. A passing serialized-combine variant would identify an overlap
 race; a failure would instead implicate the combine/dW memory footprints even
 without temporal overlap.
+
+## 2026-07-11 FUSED-MOE-110 - Serializing source combine removes the fault
+
+Job `/dlwh/w13b-full-serial-combine-c992` tested commit `c9920db6f6` at the
+same reduced geometry. It retained all full-path staging, dX return,
+publication, dW, and source-combine operations, but made each staging/combine
+CTA wait for completion signals from all 40 dW owners before reading the dX
+return queue. Iris and its only task succeeded with exit 0 in 41.78s.
+
+The kernel took `5.056301 ms`, reported `1.327232` useful and `5.308929`
+rounded TFLOP/s/rank, and produced checksum `39498520.0`. All drop,
+metadata-overflow, queue-overflow, and layout-overflow counters were zero. The
+increment over staging+dX+dW without combine was only `0.219389 ms` at this
+reduced geometry.
+
+Together with FUSED-MOE-108 and FUSED-MOE-109, this identifies a temporal
+overlap defect: each constituent cohort succeeds, all 128 compute CTAs coexist
+successfully, and the full memory footprints succeed when combine follows dW.
+The production `FULL` role profile now uses this ordering as a correctness
+baseline. The next gates are the existing reduced finite split comparison and
+then target-shape timing. Restoring overlap requires a separate handoff design;
+the previously concurrent path is not safe merely because it happens to finish
+at the target geometry.

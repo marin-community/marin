@@ -265,6 +265,7 @@ def test_fused_w13_backward_diagnostic_role_layouts_remove_inactive_roles():
     assert staging_dx_dw_no_combine == (48, 88, 128)
     assert full_serial_combine == (48, 88, 128)
     assert full == (48, 88, 128)
+    assert _SourcePushSemanticFusedW13BackwardDiagnostic.FULL.serializes_combine
 
 
 def test_fused_w13_backward_diagnostics_interpret_isolate_role_outputs():
