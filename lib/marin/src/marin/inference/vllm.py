@@ -234,19 +234,37 @@ def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: 
 
 @contextlib.contextmanager
 def _start_proxy(config: BrokeredVllmSystemConfig, broker: InferenceResponseProvider) -> Iterator[RunningModel]:
-    proxy_config = config.proxy
+    with start_brokered_inference_proxy(
+        config.proxy,
+        model=config.model,
+        broker=broker,
+        tokenizer=config.tokenizer,
+    ) as running_model:
+        yield running_model
+
+
+@contextlib.contextmanager
+def start_brokered_inference_proxy(
+    proxy_config: VllmProxyConfig,
+    *,
+    model: str,
+    broker: InferenceResponseProvider,
+    tokenizer: str | None = None,
+) -> Iterator[RunningModel]:
+    """Start a configured local proxy for an inference broker."""
+
     with serve_inference_proxy(
         broker=broker,
-        model=config.model,
+        model=model,
         host=proxy_config.host,
         port=proxy_config.port,
         request_timeout_seconds=proxy_config.request_timeout_seconds,
-        readiness_timeout_seconds=config.proxy.readiness_timeout_seconds,
+        readiness_timeout_seconds=proxy_config.readiness_timeout_seconds,
         max_pending_requests=proxy_config.max_pending_requests,
         response_fetch_batch_size=proxy_config.response_fetch_batch_size,
         server_start_timeout_seconds=proxy_config.server_start_timeout_seconds,
     ) as running_model:
-        yield RunningModel(endpoint=running_model.endpoint, tokenizer=config.tokenizer)
+        yield RunningModel(endpoint=running_model.endpoint, tokenizer=tokenizer)
 
 
 def _terminate_jobs(jobs: list[JobHandle]) -> None:

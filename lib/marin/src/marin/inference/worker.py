@@ -7,7 +7,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from rigging.timing import ExponentialBackoff
@@ -85,6 +85,18 @@ class InferenceWorker:
         )
 
 
+class BrokeredInferenceWorker(Protocol):
+    """A worker that processes requests from an inference broker."""
+
+    def run_forever(
+        self,
+        *,
+        max_in_flight: int,
+        stop_event: threading.Event | None = None,
+        backoff: ExponentialBackoff | None = None,
+    ) -> None: ...
+
+
 def run_brokered_inference_loop(
     *,
     broker: InferenceRequestProvider,
@@ -154,39 +166,60 @@ def run_brokered_inference_loop(
 
 
 @contextmanager
+def run_brokered_inference_worker(
+    worker: BrokeredInferenceWorker,
+    *,
+    max_in_flight: int,
+    thread_name: str,
+    backoff: ExponentialBackoff | None = None,
+) -> Iterator[None]:
+    """Run a brokered inference worker in a background thread."""
+
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=lambda: worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff),
+        name=thread_name,
+    )
+    logger.info("Starting brokered inference worker thread name=%s max_in_flight=%d", thread_name, max_in_flight)
+    thread.start()
+    try:
+        yield
+    finally:
+        logger.info("Stopping brokered inference worker thread name=%s", thread_name)
+        stop_event.set()
+        thread.join()
+
+
+@contextmanager
 def run_inference_worker(
     worker: InferenceWorker,
     *,
     max_in_flight: int,
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[None]:
-    stop_event = threading.Event()
-    thread = threading.Thread(
-        target=lambda: worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff),
-        name="inference-worker",
-    )
-    logger.info("Starting InferenceWorker thread max_in_flight=%d", max_in_flight)
-    thread.start()
-    try:
+    """Run an inference worker in a background thread."""
+
+    with run_brokered_inference_worker(
+        worker,
+        max_in_flight=max_in_flight,
+        thread_name="inference-worker",
+        backoff=backoff,
+    ):
         yield
-    finally:
-        logger.info("Stopping InferenceWorker thread")
-        stop_event.set()
-        thread.join()
 
 
 def _response_from_upstream(request: InferenceRequest, response: httpx.Response) -> InferenceResponse:
     try:
         payload = response.json()
     except ValueError:
-        return _inference_error_response(
+        return inference_error_response(
             request,
             response.status_code,
             "upstream endpoint returned a non-JSON response",
             body=response.content[:ERROR_BODY_LIMIT_BYTES].decode(errors="replace"),
         )
     if not isinstance(payload, dict):
-        return _inference_error_response(
+        return inference_error_response(
             request, response.status_code, "upstream endpoint returned a non-object JSON response"
         )
     return InferenceResponse(
@@ -203,17 +236,15 @@ def _response_from_exception(
     timeout_seconds: float,
 ) -> InferenceResponse:
     if isinstance(exc, httpx.TimeoutException):
-        return _inference_error_response(
+        return inference_error_response(
             request,
             504,
             "timed out forwarding request to upstream endpoint",
             detail=f"timeout_seconds={timeout_seconds:.1f}",
         )
     if isinstance(exc, httpx.HTTPError):
-        return _inference_error_response(
-            request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc)
-        )
-    return _inference_error_response(
+        return inference_error_response(request, 502, "failed forwarding request to upstream endpoint", detail=repr(exc))
+    return inference_error_response(
         request,
         502,
         "unexpected worker failure while forwarding request to upstream endpoint",
@@ -222,7 +253,7 @@ def _response_from_exception(
     )
 
 
-def _inference_error_response(
+def inference_error_response(
     request: InferenceRequest,
     status_code: int,
     message: str,
@@ -231,6 +262,8 @@ def _inference_error_response(
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
+    """Build a bounded JSON error response for a brokered request."""
+
     logger.warning(
         "InferenceWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
         request.request_id,

@@ -6,7 +6,7 @@ import itertools
 import logging
 import math
 import threading
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any
@@ -15,7 +15,6 @@ import httpx
 from rigging.timing import ExponentialBackoff
 
 from marin.inference.broker import InferenceBroker
-from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
     InferenceRequestProvider,
@@ -34,9 +33,15 @@ from marin.inference.vllm import (
     BrokeredVllmSystemConfig,
     VllmProxyConfig,
     _wait_for_brokered_vllm_ready,
+    start_brokered_inference_proxy,
     start_iris_brokered_vllm,
 )
-from marin.inference.worker import run_brokered_inference_loop
+from marin.inference.worker import (
+    ERROR_BODY_LIMIT_BYTES,
+    inference_error_response,
+    run_brokered_inference_loop,
+    run_brokered_inference_worker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +94,15 @@ class RunningLogitMixingModel(RunningModel):
     student: RunningModel
 
 
+@dataclass(frozen=True)
+class _MixedCompletion:
+    text: str
+    tokens: list[str]
+    token_logprobs: list[float]
+    top_logprobs: list[dict[str, float]]
+    finish_reason: str
+
+
 class LogitMixingInferenceWorker:
     """Generate completions from weighted teacher and student logprobs."""
 
@@ -102,6 +116,7 @@ class LogitMixingInferenceWorker:
         alpha: float,
         request_timeout_seconds: float,
         top_logprobs: int,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._broker = broker
         self._teacher = teacher
@@ -110,6 +125,7 @@ class LogitMixingInferenceWorker:
         self._alpha = alpha
         self._request_timeout_seconds = request_timeout_seconds
         self._top_logprobs = top_logprobs
+        self._clock = clock
 
     def run_forever(
         self,
@@ -159,7 +175,8 @@ class LogitMixingInferenceWorker:
 
     def _mixed_completion_response(self, client: httpx.Client, request: InferenceRequest) -> InferenceResponse:
         payload = unpack_json_payload(request.payload)
-        if not isinstance(payload.get("prompt"), str):
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str):
             return _error_response(request, 400, "logit mixing completions require a string prompt")
         if payload.get("echo", False):
             return _error_response(request, 400, "logit mixing completions do not support echo=true")
@@ -174,12 +191,31 @@ class LogitMixingInferenceWorker:
         if max_tokens < 0:
             return _error_response(request, 400, "max_tokens must be non-negative")
 
+        completion = self._generate_mixed_completion(client, request, payload, max_tokens=max_tokens)
+        if isinstance(completion, InferenceResponse):
+            return completion
+        return _completion_response(
+            request,
+            model=self._model,
+            prompt=prompt,
+            requested_logprobs=requested_logprobs,
+            completion=completion,
+        )
+
+    def _generate_mixed_completion(
+        self,
+        client: httpx.Client,
+        request: InferenceRequest,
+        payload: Mapping[str, Any],
+        *,
+        max_tokens: int,
+    ) -> _MixedCompletion | InferenceResponse:
         generated_tokens: list[str] = []
         token_logprobs: list[float] = []
         top_logprobs: list[dict[str, float]] = []
         current_text = str(payload["prompt"])
         finish_reason = "length"
-        deadline = monotonic() + self._request_timeout_seconds
+        deadline = self._clock() + self._request_timeout_seconds
 
         for _ in range(max_tokens):
             step_payload = _step_payload(payload, current_text, self._top_logprobs)
@@ -205,34 +241,12 @@ class LogitMixingInferenceWorker:
                 finish_reason = mixed_finish_reason
                 break
 
-        text = "".join(generated_tokens)
-        response_logprobs = None
-        if requested_logprobs is not None:
-            response_logprobs = {
-                "tokens": generated_tokens,
-                "token_logprobs": token_logprobs,
-                "top_logprobs": [
-                    dict(itertools.islice(logprobs.items(), requested_logprobs)) for logprobs in top_logprobs
-                ],
-                "text_offset": _text_offsets(str(payload["prompt"]), generated_tokens),
-            }
-        response_payload = {
-            "id": "cmpl-logit-mix",
-            "object": "text_completion",
-            "model": self._model,
-            "choices": [
-                {
-                    "text": text,
-                    "index": 0,
-                    "logprobs": response_logprobs,
-                    "finish_reason": finish_reason,
-                }
-            ],
-        }
-        return InferenceResponse(
-            request_id=request.request_id,
-            status_code=200,
-            payload=pack_json_payload(response_payload),
+        return _MixedCompletion(
+            text="".join(generated_tokens),
+            tokens=generated_tokens,
+            token_logprobs=token_logprobs,
+            top_logprobs=top_logprobs,
+            finish_reason=finish_reason,
         )
 
     def _post_completion(
@@ -245,7 +259,7 @@ class LogitMixingInferenceWorker:
     ) -> dict[str, Any]:
         upstream_payload = dict(payload)
         upstream_payload["model"] = endpoint.model
-        remaining = deadline - monotonic()
+        remaining = deadline - self._clock()
         if remaining <= 0:
             raise httpx.TimeoutException("logit mixing request deadline exceeded")
         response = client.post(endpoint.url("completions"), json=upstream_payload, timeout=remaining)
@@ -256,7 +270,7 @@ class LogitMixingInferenceWorker:
                 "status_code": response.status_code,
                 "error": {
                     "message": "upstream endpoint returned a non-JSON response",
-                    "body": response.content[:1000].decode(errors="replace"),
+                    "body": response.content[:ERROR_BODY_LIMIT_BYTES].decode(errors="replace"),
                 },
             }
         if not isinstance(parsed, dict):
@@ -277,19 +291,13 @@ def run_logit_mixing_worker(
 ) -> Iterator[None]:
     """Run a logit-mixing worker in a background thread."""
 
-    stop_event = threading.Event()
-    thread = threading.Thread(
-        target=lambda: worker.run_forever(stop_event=stop_event, max_in_flight=max_in_flight, backoff=backoff),
-        name="logit-mixing-worker",
-    )
-    logger.info("Starting LogitMixingInferenceWorker thread max_in_flight=%d", max_in_flight)
-    thread.start()
-    try:
+    with run_brokered_inference_worker(
+        worker,
+        max_in_flight=max_in_flight,
+        thread_name="logit-mixing-worker",
+        backoff=backoff,
+    ):
         yield
-    finally:
-        logger.info("Stopping LogitMixingInferenceWorker thread")
-        stop_event.set()
-        thread.join()
 
 
 @contextlib.contextmanager
@@ -311,7 +319,7 @@ def start_iris_logit_mixing_brokered_vllm(config: LogitMixingBrokeredVllmConfig)
             top_logprobs=config.worker.top_logprobs,
         )
         with (
-            _start_logit_mixing_proxy(config, broker) as running_model,
+            start_brokered_inference_proxy(config.proxy, model=config.model, broker=broker) as running_model,
             run_logit_mixing_worker(worker, max_in_flight=config.worker.max_in_flight),
         ):
             _wait_for_brokered_vllm_ready(running_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
@@ -323,32 +331,46 @@ def start_iris_logit_mixing_brokered_vllm(config: LogitMixingBrokeredVllmConfig)
             )
 
 
-@contextlib.contextmanager
-def _start_logit_mixing_proxy(
-    config: LogitMixingBrokeredVllmConfig,
-    broker: InferenceBroker,
-) -> Iterator[RunningModel]:
-    proxy_config = config.proxy
-    with serve_inference_proxy(
-        broker=broker,
-        model=config.model,
-        host=proxy_config.host,
-        port=proxy_config.port,
-        request_timeout_seconds=proxy_config.request_timeout_seconds,
-        readiness_timeout_seconds=proxy_config.readiness_timeout_seconds,
-        max_pending_requests=proxy_config.max_pending_requests,
-        response_fetch_batch_size=proxy_config.response_fetch_batch_size,
-        server_start_timeout_seconds=proxy_config.server_start_timeout_seconds,
-    ) as running_model:
-        yield running_model
-
-
 def _models_response(request: InferenceRequest, model: str) -> InferenceResponse:
     return InferenceResponse(
         request_id=request.request_id,
         status_code=200,
         payload=pack_json_payload({"object": "list", "data": [{"id": model, "object": "model"}]}),
     )
+
+
+def _completion_response(
+    request: InferenceRequest,
+    *,
+    model: str,
+    prompt: str,
+    requested_logprobs: int | None,
+    completion: _MixedCompletion,
+) -> InferenceResponse:
+    response_logprobs = None
+    if requested_logprobs is not None:
+        response_logprobs = {
+            "tokens": completion.tokens,
+            "token_logprobs": completion.token_logprobs,
+            "top_logprobs": [
+                dict(itertools.islice(logprobs.items(), requested_logprobs)) for logprobs in completion.top_logprobs
+            ],
+            "text_offset": _text_offsets(prompt, completion.tokens),
+        }
+    payload = {
+        "id": "cmpl-logit-mix",
+        "object": "text_completion",
+        "model": model,
+        "choices": [
+            {
+                "text": completion.text,
+                "index": 0,
+                "logprobs": response_logprobs,
+                "finish_reason": completion.finish_reason,
+            }
+        ],
+    }
+    return InferenceResponse(request_id=request.request_id, status_code=200, payload=pack_json_payload(payload))
 
 
 def _step_payload(payload: Mapping[str, Any], prompt: str, top_logprobs: int) -> dict[str, Any]:
@@ -473,7 +495,7 @@ def _upstream_error(
                 request,
                 502,
                 f"{name} upstream returned an error",
-                detail=str(payload.get("error", payload))[:1000],
+                detail=str(payload.get("error", payload))[:ERROR_BODY_LIMIT_BYTES],
             )
     return None
 
@@ -486,22 +508,10 @@ def _error_response(
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
-    logger.warning(
-        "LogitMixingInferenceWorker returning error request_id=%s method=%s path=%s status_code=%d error=%s "
-        "detail=%s",
-        request.request_id,
-        request.method,
-        request.path,
+    return inference_error_response(
+        request,
         status_code,
         message,
-        detail or "-",
+        detail=detail,
         exc_info=exc_info,
-    )
-    error: dict[str, Any] = {"message": message}
-    if detail is not None:
-        error["detail"] = detail
-    return InferenceResponse(
-        request_id=request.request_id,
-        status_code=status_code,
-        payload=pack_json_payload({"error": error}),
     )

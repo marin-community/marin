@@ -19,9 +19,12 @@ from rigging.log_setup import configure_logging
 TEACHER_MODEL = "Qwen/Qwen3-0.6B-Base"
 STUDENT_MODEL = "Qwen/Qwen3-1.7B-Base"
 TOKENIZER = "Qwen/Qwen3-0.6B"
-REGIONS = ["us-east5", "us-central1"]
+REGIONS = ("us-east5", "us-central1")
 TPU_TYPE = "v6e-4"
 TIMEOUT_SECONDS = 2400
+REQUEST_LEASE_TIMEOUT = 1000
+REQUEST_TIMEOUT = 1200
+WORKER_REQUEST_TIMEOUT = 900
 ALPHA = 0.5
 PROMPT = "The capital of France is"
 TOP_LOGPROBS = 16
@@ -31,9 +34,13 @@ def brokered_config(model: str) -> BrokeredVllmSystemConfig:
     config = BrokeredVllmSystemConfig(
         model=model,
         tokenizer=TOKENIZER,
-        request_lease_timeout_seconds=1000,
-        proxy=VllmProxyConfig(request_timeout_seconds=1200, readiness_timeout_seconds=TIMEOUT_SECONDS),
-        workers=InferenceWorkerConfig(count=1, max_in_flight_per_worker=1, request_timeout_seconds=900),
+        request_lease_timeout_seconds=REQUEST_LEASE_TIMEOUT,
+        proxy=VllmProxyConfig(request_timeout_seconds=REQUEST_TIMEOUT, readiness_timeout_seconds=TIMEOUT_SECONDS),
+        workers=InferenceWorkerConfig(
+            count=1,
+            max_in_flight_per_worker=1,
+            request_timeout_seconds=WORKER_REQUEST_TIMEOUT,
+        ),
         worker_resources=ResourceConfig.with_tpu(
             TPU_TYPE,
             regions=REGIONS,
@@ -72,9 +79,13 @@ def main() -> None:
         model="qwen3-logit-mix-smoke",
         alpha=ALPHA,
         tokenizer=TOKENIZER,
-        request_lease_timeout_seconds=1000,
-        proxy=VllmProxyConfig(request_timeout_seconds=1200, readiness_timeout_seconds=TIMEOUT_SECONDS),
-        worker=LogitMixingWorkerConfig(max_in_flight=1, request_timeout_seconds=900, top_logprobs=TOP_LOGPROBS),
+        request_lease_timeout_seconds=REQUEST_LEASE_TIMEOUT,
+        proxy=VllmProxyConfig(request_timeout_seconds=REQUEST_TIMEOUT, readiness_timeout_seconds=TIMEOUT_SECONDS),
+        worker=LogitMixingWorkerConfig(
+            max_in_flight=1,
+            request_timeout_seconds=WORKER_REQUEST_TIMEOUT,
+            top_logprobs=TOP_LOGPROBS,
+        ),
     )
     with start_iris_logit_mixing_brokered_vllm(config) as running_model:
         print(
@@ -99,12 +110,12 @@ def main() -> None:
                 "max_tokens": 1,
                 "logprobs": TOP_LOGPROBS,
             },
-            timeout=1200,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         teacher_response = completion(running_model.teacher.endpoint.base_url, running_model.teacher.endpoint.model)
         student_response = completion(running_model.student.endpoint.base_url, running_model.student.endpoint.model)
-        verification = verify_mixed_logits(
+        verification = verify_mixed_logprobs(
             teacher_response=teacher_response,
             student_response=student_response,
             mixed_response=response.json(),
@@ -134,7 +145,7 @@ def completion(base_url: str, model: str) -> dict[str, Any]:
             "logprobs": TOP_LOGPROBS,
             "temperature": 0,
         },
-        timeout=1200,
+        timeout=REQUEST_TIMEOUT,
     )
     response.raise_for_status()
     payload = response.json()
@@ -142,7 +153,7 @@ def completion(base_url: str, model: str) -> dict[str, Any]:
     return payload
 
 
-def verify_mixed_logits(
+def verify_mixed_logprobs(
     *,
     teacher_response: dict[str, Any],
     student_response: dict[str, Any],

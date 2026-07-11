@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from time import monotonic
 
 import httpx
 import pytest
@@ -39,9 +39,7 @@ def test_logit_mixing_worker_returns_mixed_completion() -> None:
     choice = payload["choices"][0]
     assert choice["text"] == " T"
     assert choice["logprobs"]["tokens"] == [" T"]
-    assert choice["logprobs"]["top_logprobs"][0] == pytest.approx(
-        {" T": -0.326956432, " S": -1.276956432}
-    )
+    assert choice["logprobs"]["top_logprobs"][0] == pytest.approx({" T": -0.326956432, " S": -1.276956432})
 
 
 def test_logit_mixing_worker_omits_unrequested_logprobs() -> None:
@@ -119,32 +117,29 @@ def test_logit_mixing_worker_ignores_inactive_teacher_stop() -> None:
 
 
 def test_logit_mixing_worker_enforces_end_to_end_timeout() -> None:
-    teacher_pause = threading.Event()
-    try:
-        with (
-            serve_deterministic_openai_stub(
-                model="teacher",
-                completion_top_logprobs={"A": {" B": -0.1}},
-                prompt_pauses={"A": teacher_pause},
-            ) as teacher,
-            serve_deterministic_openai_stub(
-                model="student",
-                completion_top_logprobs={"A": {" B": -0.1}},
-            ) as student,
-            _serve_logit_mixing_proxy(
-                teacher=teacher,
-                student=student,
-                alpha=0.5,
-                request_timeout_seconds=0.05,
-            ) as mixed,
-        ):
-            response = httpx.post(
-                f"{mixed.endpoint.base_url}/completions",
-                json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 2},
-                timeout=5,
-            )
-    finally:
-        teacher_pause.set()
+    times = iter([0.0, 0.0, 6.0])
+    with (
+        serve_deterministic_openai_stub(
+            model="teacher",
+            completion_top_logprobs={"A": {" B": -0.1}},
+        ) as teacher,
+        serve_deterministic_openai_stub(
+            model="student",
+            completion_top_logprobs={"A": {" B": -0.1}},
+        ) as student,
+        _serve_logit_mixing_proxy(
+            teacher=teacher,
+            student=student,
+            alpha=0.5,
+            request_timeout_seconds=5,
+            clock=lambda: next(times),
+        ) as mixed,
+    ):
+        response = httpx.post(
+            f"{mixed.endpoint.base_url}/completions",
+            json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 2},
+            timeout=5,
+        )
 
     assert response.status_code == 504
 
@@ -168,6 +163,7 @@ def _serve_logit_mixing_proxy(
     student: DeterministicOpenAIStub,
     alpha: float,
     request_timeout_seconds: float = 5,
+    clock: Callable[[], float] = monotonic,
 ) -> Iterator[RunningModel]:
     broker = InferenceBroker(request_lease_timeout_seconds=30)
     teacher_model = RunningModel(endpoint=OpenAIEndpoint(base_url=teacher.base_url, model=teacher.model))
@@ -180,6 +176,7 @@ def _serve_logit_mixing_proxy(
         alpha=alpha,
         request_timeout_seconds=request_timeout_seconds,
         top_logprobs=8,
+        clock=clock,
     )
     with (
         serve_inference_proxy(

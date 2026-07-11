@@ -4,7 +4,7 @@
 import json
 import threading
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
@@ -186,8 +186,7 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        with suppress(BrokenPipeError, ConnectionResetError):
-            self.wfile.write(body)
+        self.wfile.write(body)
 
 
 @contextmanager
