@@ -206,6 +206,117 @@ def test_source_push_semantic_plan_builds_fused_w2_backward_inputs_directly_shar
     assert inputs.z13_expert.sharding.spec == bench.P(bench.SOURCE_PUSH_MESH_AXIS, None, None, None)
 
 
+def test_source_push_semantic_plan_split_compare_compiles_and_runs_reference_before_pallas(monkeypatch):
+    bench = _bench_module()
+    events = []
+    jitted = []
+
+    def reference(value):
+        events.append("reference_run")
+        return {"value": value + 1}
+
+    def observed(value):
+        events.append("pallas_run")
+        return {"value": value + 2}
+
+    def host_metrics(observed_output, reference_output):
+        events.append("host_metrics")
+        return {"value_max_abs_diff": np.asarray(np.max(np.abs(observed_output["value"] - reference_output["value"])))}
+
+    class FakeLowered:
+        def __init__(self, fn):
+            self.fn = fn
+
+        def compile(self):
+            events.append(f"{self.fn.__name__}_compile")
+            return self.fn
+
+    class FakeJit:
+        def __init__(self, fn):
+            self.fn = fn
+
+        def lower(self, *_args):
+            events.append(f"{self.fn.__name__}_lower")
+            return FakeLowered(self.fn)
+
+    def fake_jit(fn):
+        jitted.append(fn)
+        return FakeJit(fn)
+
+    monkeypatch.setattr(bench.jax, "jit", fake_jit)
+    comparison = bench.SplitComparison(reference=reference, observed=observed, host_metrics=host_metrics)
+
+    timing = bench._time_split_comparison(
+        comparison,
+        np.asarray(3, dtype=np.int32),
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+    )
+
+    assert jitted == [reference, observed]
+    assert host_metrics not in jitted
+    assert events == [
+        "reference_lower",
+        "reference_compile",
+        "reference_run",
+        "observed_lower",
+        "observed_compile",
+        "pallas_run",
+        "host_metrics",
+        "reference_run",
+        "pallas_run",
+        "host_metrics",
+    ]
+    assert float(timing.output["value_max_abs_diff"]) == 1.0
+
+
+def test_source_push_semantic_plan_split_w2_backward_compare_preserves_metric_schema():
+    bench = _bench_module()
+    expected = SimpleNamespace(
+        d_z13=np.asarray([1.0, 2.0], dtype=np.float32),
+        d_w2=np.asarray([3.0, 4.0], dtype=np.float32),
+        d_route_weight=np.asarray([5.0, 6.0], dtype=np.float32),
+        valid=np.asarray([True, False]),
+        queue_overflow_routes=np.asarray(0, dtype=np.int32),
+        layout_overflow_rows=np.asarray(0, dtype=np.int32),
+    )
+    observed = SimpleNamespace(
+        d_z13=np.asarray([1.5, 2.0], dtype=np.float32),
+        d_w2=np.asarray([3.0, 5.0], dtype=np.float32),
+        d_route_weight=np.asarray([4.0, 6.0], dtype=np.float32),
+        valid=np.asarray([True, True]),
+        queue_overflow_routes=np.asarray(2, dtype=np.int32),
+        layout_overflow_rows=np.asarray(3, dtype=np.int32),
+    )
+
+    metrics = bench._semantic_fused_w2_backward_host_metrics(observed, expected)
+
+    assert set(metrics) == {
+        "d_z13_max_abs_diff",
+        "d_z13_mean_abs_diff",
+        "expected_d_z13_nonfinite_error_count",
+        "observed_d_z13_nonfinite_error_count",
+        "d_w2_max_abs_diff",
+        "d_w2_mean_abs_diff",
+        "expected_d_w2_nonfinite_error_count",
+        "observed_d_w2_nonfinite_error_count",
+        "d_route_weight_max_abs_diff",
+        "d_route_weight_mean_abs_diff",
+        "expected_d_route_weight_nonfinite_error_count",
+        "observed_d_route_weight_nonfinite_error_count",
+        "valid_error_count",
+        "queue_overflow_route_error_count",
+        "layout_overflow_row_error_count",
+    }
+    assert float(metrics["d_z13_max_abs_diff"]) == 0.5
+    assert float(metrics["d_w2_max_abs_diff"]) == 1.0
+    assert float(metrics["d_route_weight_mean_abs_diff"]) == 0.5
+    assert int(metrics["valid_error_count"]) == 1
+    assert int(metrics["queue_overflow_route_error_count"]) == 2
+    assert int(metrics["layout_overflow_row_error_count"]) == 3
+
+
 def test_source_push_semantic_plan_source_padded_h_reference_uses_stored_bf16_z():
     bench_source_push_semantic_plan = _bench_module()
     x = jnp.asarray([[[1.1, 0.0]]], dtype=jnp.bfloat16)

@@ -941,6 +941,13 @@ class Timing:
     output: Any
 
 
+@dataclass(frozen=True)
+class SplitComparison:
+    reference: Callable[..., Any]
+    observed: Callable[..., Any]
+    host_metrics: Callable[[Any, Any], dict[str, Any]]
+
+
 def _parse_csv(value: str) -> tuple[str, ...]:
     parts = tuple(part.strip() for part in value.split(",") if part.strip())
     if not parts:
@@ -1865,6 +1872,33 @@ def _comparison_metrics(prefix: str, observed: Array, expected: Array) -> dict[s
         f"{prefix}_mean_abs_diff": jnp.mean(jnp.abs(diff)),
         f"expected_{prefix}_nonfinite_error_count": _nonfinite_error_count(expected),
         f"observed_{prefix}_nonfinite_error_count": _nonfinite_error_count(observed),
+    }
+
+
+def _host_comparison_metrics(prefix: str, observed: Any, expected: Any) -> dict[str, Any]:
+    observed_f32 = np.asarray(observed, dtype=np.float32)
+    expected_f32 = np.asarray(expected, dtype=np.float32)
+    diff = observed_f32 - expected_f32
+    return {
+        f"{prefix}_max_abs_diff": np.asarray(np.max(np.abs(diff))),
+        f"{prefix}_mean_abs_diff": np.asarray(np.mean(np.abs(diff))),
+        f"expected_{prefix}_nonfinite_error_count": np.asarray(np.count_nonzero(~np.isfinite(expected_f32))),
+        f"observed_{prefix}_nonfinite_error_count": np.asarray(np.count_nonzero(~np.isfinite(observed_f32))),
+    }
+
+
+def _semantic_fused_w2_backward_host_metrics(observed: Any, expected: Any) -> dict[str, Any]:
+    return {
+        **_host_comparison_metrics("d_z13", observed.d_z13, expected.d_z13),
+        **_host_comparison_metrics("d_w2", observed.d_w2, expected.d_w2),
+        **_host_comparison_metrics(
+            "d_route_weight",
+            observed.d_route_weight,
+            expected.d_route_weight,
+        ),
+        "valid_error_count": np.asarray(np.count_nonzero(np.asarray(observed.valid) != np.asarray(expected.valid))),
+        "queue_overflow_route_error_count": np.asarray(observed.queue_overflow_routes),
+        "layout_overflow_row_error_count": np.asarray(observed.layout_overflow_rows),
     }
 
 
@@ -3527,7 +3561,9 @@ def _block_sizes_for_mode(args: argparse.Namespace, mode: str) -> dict[str, Any]
     return {}
 
 
-def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Namespace) -> Callable[..., Any]:
+def _mode_callable(
+    mode: str, plan: SourcePushSemanticPlan, args: argparse.Namespace
+) -> Callable[..., Any] | SplitComparison:
     rows_per_expert_capacity = _rows_per_expert_capacity(
         plan,
         row_multiple=_expert_capacity_row_multiple(args),
@@ -4099,21 +4135,11 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
             "layout_overflow_row_error_count": result.layout_overflow_rows,
         }
 
-    def semantic_fused_w2_backward_compare(inputs: SemanticFusedW2BackwardBenchInputs):
-        expected = semantic_fused_w2_backward(inputs, interpret=True)
-        observed = semantic_fused_w2_backward(inputs, interpret=args.pallas_interpret)
-        return {
-            **_comparison_metrics("d_z13", observed.d_z13, expected.d_z13),
-            **_comparison_metrics("d_w2", observed.d_w2, expected.d_w2),
-            **_comparison_metrics(
-                "d_route_weight",
-                observed.d_route_weight,
-                expected.d_route_weight,
-            ),
-            "valid_error_count": jnp.sum(observed.valid != expected.valid, dtype=jnp.int32),
-            "queue_overflow_route_error_count": observed.queue_overflow_routes,
-            "layout_overflow_row_error_count": observed.layout_overflow_rows,
-        }
+    def semantic_fused_w2_backward_reference(inputs: SemanticFusedW2BackwardBenchInputs):
+        return semantic_fused_w2_backward(inputs, interpret=True)
+
+    def semantic_fused_w2_backward_observed(inputs: SemanticFusedW2BackwardBenchInputs):
+        return semantic_fused_w2_backward(inputs, interpret=args.pallas_interpret)
 
     def semantic_fused_w13_backward(inputs: SemanticFusedW13BackwardBenchInputs, *, interpret: bool):
         send_chunks_per_dst, _entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
@@ -8359,7 +8385,11 @@ def _mode_callable(mode: str, plan: SourcePushSemanticPlan, args: argparse.Names
         MODE_SEMANTIC_FUSED_W2_RETURN_PALLAS: semantic_fused_w2_return_pallas,
         MODE_SEMANTIC_FUSED_W2_RETURN_COMPARE: semantic_fused_w2_return_compare,
         MODE_SEMANTIC_FUSED_W2_BACKWARD_PALLAS: semantic_fused_w2_backward_pallas,
-        MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE: semantic_fused_w2_backward_compare,
+        MODE_SEMANTIC_FUSED_W2_BACKWARD_COMPARE: SplitComparison(
+            reference=semantic_fused_w2_backward_reference,
+            observed=semantic_fused_w2_backward_observed,
+            host_metrics=_semantic_fused_w2_backward_host_metrics,
+        ),
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS: semantic_fused_w13_backward_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: semantic_fused_w13_backward_compare,
         MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS: semantic_fused_mlp_forward_pallas,
@@ -8750,6 +8780,95 @@ def _time_callable(
             _block_until_ready(output)
         steady_state_times.append((time.perf_counter() - start) / steps)
 
+    return Timing(
+        compile_time=first_call_time,
+        lower_compile_time=lower_compile_time,
+        first_run_time=first_run_time,
+        first_call_time=first_call_time,
+        steady_state_times=steady_state_times,
+        output=output,
+    )
+
+
+def _device_get_and_release(value: Any) -> Any:
+    host_value = jax.device_get(value)
+    for leaf in jax.tree_util.tree_leaves(value):
+        delete = getattr(leaf, "delete", None)
+        if delete is not None:
+            delete()
+    return host_value
+
+
+def _run_split_comparison_once(
+    comparison: SplitComparison,
+    reference_call: Callable[..., Any],
+    observed_call: Callable[..., Any],
+    *args: Any,
+) -> dict[str, Any]:
+    reference_device = reference_call(*args)
+    _block_until_ready(reference_device)
+    reference_host = _device_get_and_release(reference_device)
+    del reference_device
+
+    observed_device = observed_call(*args)
+    _block_until_ready(observed_device)
+    observed_host = _device_get_and_release(observed_device)
+    del observed_device
+
+    metrics = comparison.host_metrics(observed_host, reference_host)
+    del observed_host, reference_host
+    return metrics
+
+
+def _time_split_comparison(
+    comparison: SplitComparison,
+    *args: Any,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+) -> Timing:
+    reference_jit = jax.jit(comparison.reference)
+    reference_lowered = reference_jit.lower(*args)
+    start = time.perf_counter()
+    reference_call = reference_lowered.compile()
+    reference_compile_time = time.perf_counter() - start
+
+    # Run and release the interpreted result before compiling or launching Pallas.
+    start = time.perf_counter()
+    reference_device = reference_call(*args)
+    _block_until_ready(reference_device)
+    reference_host = _device_get_and_release(reference_device)
+    del reference_device
+    reference_first_run_time = time.perf_counter() - start
+
+    observed_jit = jax.jit(comparison.observed)
+    observed_lowered = observed_jit.lower(*args)
+    start = time.perf_counter()
+    observed_call = observed_lowered.compile()
+    observed_compile_time = time.perf_counter() - start
+
+    start = time.perf_counter()
+    observed_device = observed_call(*args)
+    _block_until_ready(observed_device)
+    observed_host = _device_get_and_release(observed_device)
+    del observed_device
+    output = comparison.host_metrics(observed_host, reference_host)
+    del observed_host, reference_host
+    observed_first_run_time = time.perf_counter() - start
+
+    for _ in range(warmup):
+        output = _run_split_comparison_once(comparison, reference_call, observed_call, *args)
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        start = time.perf_counter()
+        for _ in range(steps):
+            output = _run_split_comparison_once(comparison, reference_call, observed_call, *args)
+        steady_state_times.append((time.perf_counter() - start) / steps)
+
+    lower_compile_time = reference_compile_time + observed_compile_time
+    first_run_time = reference_first_run_time + observed_first_run_time
+    first_call_time = lower_compile_time + first_run_time
     return Timing(
         compile_time=first_call_time,
         lower_compile_time=lower_compile_time,
@@ -9660,18 +9779,17 @@ def _run_stage_mode(
         fn = _mode_callable(mode, plan, args)
         implementation = "pallas_mgpu" if _is_pallas_mode(mode) else "jax_reference"
         block_sizes = _block_sizes_for_mode(args, mode)
-        if expert_mesh is not None:
-            with jax.set_mesh(expert_mesh):
-                timing = _time_callable(
+
+        def time_mode() -> Timing:
+            if isinstance(fn, SplitComparison):
+                return _time_split_comparison(
                     fn,
                     inputs,
                     warmup=args.warmup,
                     steps=args.steps,
                     repeat_runs=args.repeat_runs,
-                    separate_compile=args.separate_compile,
                 )
-        else:
-            timing = _time_callable(
+            return _time_callable(
                 fn,
                 inputs,
                 warmup=args.warmup,
@@ -9679,6 +9797,12 @@ def _run_stage_mode(
                 repeat_runs=args.repeat_runs,
                 separate_compile=args.separate_compile,
             )
+
+        if expert_mesh is not None:
+            with jax.set_mesh(expert_mesh):
+                timing = time_mode()
+        else:
+            timing = time_mode()
         return _repeat_rows(
             mode=mode,
             timing=timing,
