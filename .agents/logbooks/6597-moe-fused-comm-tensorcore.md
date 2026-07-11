@@ -3254,3 +3254,34 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-paired-k128-zero-layout-055 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 055159bed8 --jsonl scratch/w13b-paired-k128-zero-layout-055.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-104 - Restored 48/40/40 W13-backward comparison faults
+
+Job `/dlwh/w13b-role48-selected-compare-2f04` tested the restored selected
+48-stager/40-dX/40-dW schedule at commit `2f04c25dd3` on `cw-rno2a` with EP8,
+T128/rank, H2560, I1280, E4/rank, top-k 2, capacity factor 4.0, random routing
+seed 0, bf16, JAX plan metadata, no warmup, one timed step, one repeat, and
+separate compilation. Iris reported terminal state `succeeded`, exit 0, one of
+one task succeeded, and a 49.27s task duration. This is a harness-level false
+success because the debug-exception path returned zero after device execution
+faulted.
+
+The restored selected candidate reached device execution and failed with:
+
+```text
+CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered
+```
+
+No comparison row completed, so `dx` and `dw13` max/mean absolute differences,
+least-squares scales, cosine similarities, nonfinite counts, and queue/layout
+overflow counters are unavailable. The fault also prevented buffered pre-run
+drop and metadata counters from being emitted. This single requested run does
+not validate the selected 48/40/40 schedule. Exactly one H100x8 job was
+launched; there was no retry, source edit, duplicate, stop, resubmit, or Iris
+mutation. Concurrent W2-backward edits were left untouched.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-selected-compare-2f04 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 2f04c25dd3 --jsonl scratch/w13b-role48-selected-compare-2f04.jsonl
+```
