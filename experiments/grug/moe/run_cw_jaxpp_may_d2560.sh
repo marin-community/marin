@@ -87,7 +87,8 @@ Options:
   --vocab-size N            MAY_VOCAB_SIZE. Omit to use the May heuristic default.
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
-  --moe-implementation NAME ring, ring_ppermute, ragged_all_to_all, deepep, scatter, or sonic (default: ring).
+  --moe-implementation NAME ring, ring_local_combine, ring_ppermute, ragged_all_to_all, deepep, scatter, or sonic
+                            (default: ring).
   --attention-implementation NAME
                             reference, gpu_fa4_cute, or gpu_fa4_thd.
                             Omit to use the model default.
@@ -181,7 +182,7 @@ case "$IMPLEMENTATION" in
 esac
 
 case "$MOE_IMPLEMENTATION" in
-    ring|ring_ppermute|ragged_all_to_all|deepep|scatter|sonic) ;;
+    ring|ring_local_combine|ring_ppermute|ragged_all_to_all|deepep|scatter|sonic) ;;
     *)
         echo "ERROR: unsupported MoE implementation: $MOE_IMPLEMENTATION" >&2
         exit 1

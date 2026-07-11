@@ -46,6 +46,7 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring_local_combine import _moe_mlp_ep_ring_local_combine_local
 from levanter.grug._moe.ep_ring_ppermute import _moe_mlp_ep_ring_ppermute_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
@@ -211,6 +212,8 @@ def moe_mlp(
 
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
+        elif resolved_implementation == "ring_local_combine":
+            shard_local_fn = _moe_mlp_ep_ring_local_combine_local
         elif resolved_implementation == "ring_ppermute":
             shard_local_fn = _moe_mlp_ep_ring_ppermute_local
         elif resolved_implementation == "ragged_all_to_all":
