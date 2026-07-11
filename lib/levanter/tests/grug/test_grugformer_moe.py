@@ -1025,14 +1025,19 @@ def test_ring_fused_triton_routing_matches_references_on_gpu():
         out_dispatch,
         assignment_weights,
     )
-    triton_combine, triton_combine_pullback = jax.vjp(
-        partial(
-            ring_combine_triton,
-            local_assignment_indices=local_assignment_indices,
-            valid=valid,
+
+    def triton_combine_fn(out_dispatch, assignment_weights):
+        return ring_combine_triton(
+            out_dispatch,
+            local_assignment_indices,
+            valid,
+            assignment_weights,
             tokens=tokens,
             topk=topk,
-        ),
+        )
+
+    triton_combine, triton_combine_pullback = jax.vjp(
+        triton_combine_fn,
         out_dispatch,
         assignment_weights,
     )
