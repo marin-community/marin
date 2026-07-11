@@ -2537,3 +2537,45 @@ until the backward metadata uses the selected W13 transport configuration.
 The process emitted the same recoverable 12.5 GiB BFC allocation warnings and
 FABRIC-handle VMM fallbacks as earlier integrated runs. No retry or kernel
 change was made while babysitting this job.
+
+## 2026-07-10 FUSED-MOE-086 - K512 W2 backward cuts the integrated boundary to 174.8 ms
+
+Job `/dlwh/bench-semantic-w2b-k512-integrated-20260710-2320` at
+`7528a3fa2c` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+task, and a 3m08s task duration. The candidate uses logical B64xK512 W2-backward
+producer items published as two contiguous B64xK256 payloads, together with the
+cohort-local W2 forward schedule, two-buffer K512 W13 forward transport,
+pipelined W13 backward, and the shared-forward-config metadata fix.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---|---|---:|---:|---:|
+| W2 backward | 76.733521, 77.179025, 76.837743 | 76.837743 | 22.358633 | 27.948292 |
+| Integrated fwd+bwd | 174.834816, 175.590344, 174.689098 | 174.834816 | 44.241575 | 55.301969 |
+
+The isolated W2-backward candidate saves 42.111734 ms or 35.40% against the
+118.949477 ms baseline and raises useful throughput from 14.442997 to
+22.358633 TFLOP/s/rank, a 54.81% increase. Its checksum is unchanged at
+`127795200`. All repeats reported zero dropped routes, zero routing-policy
+drops, zero metadata-overflow routes, zero queue-overflow route errors, and
+zero layout-overflow row errors.
+
+The integrated candidate saves 43.331816 ms or 19.86% against the selected
+K256-forward 218.166632 ms boundary and raises useful throughput from
+35.454 to 44.241575 TFLOP/s/rank. Against the original 242.802626 ms boundary,
+it saves 67.967810 ms or 27.99%; useful throughput rises from 31.857018 to
+44.241575 TFLOP/s/rank, a 38.88% increase. Integrated repeats reported zero
+dropped routes, zero routing-policy drops, and zero metadata-overflow routes.
+The integrated schema did not emit separate queue or layout counters.
+
+The integrated checksum was stable within this run at
+`-1.0907506275226644e26`, but differs from the prior selected boundary's
+`-1.1766203134195027e26`. The isolated W2-backward checksum and the previously
+validated forward components match their baselines, but this aggregate checksum
+change means the full candidate still needs a finite numerical integrated
+comparison before it is considered correctness-proven. Keep the K512 W2
+backward schedule as the performance candidate; do not claim final integration
+correctness from this timing run alone.
+
+The process emitted recoverable 12.5 GiB BFC allocation warnings and
+FABRIC-handle VMM fallbacks, then produced all requested repeat and summary
+rows. There was no lowering error, benchmark error row, or retry.
