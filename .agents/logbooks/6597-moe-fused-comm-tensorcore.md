@@ -3215,3 +3215,42 @@ Exact launch command:
 ```bash
 uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-paired-compare-055 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha 055159bed85c --jsonl scratch/w13b-paired-compare-055.jsonl
 ```
+
+## 2026-07-11 FUSED-MOE-103 - Paired-B64 W13-backward target timing retry
+
+Job `/dlwh/w13b-paired-k128-zero-layout-055` tested commit `055159bed85c`
+on `cw-rno2a` with the target EP8, T32768/rank, H2560, I1280, E32/rank,
+top-k 4, capacity factor 1.25, random production routing seed 0, bf16, JAX
+plan metadata, one warmup, three timed steps, three repeat runs, and separate
+compilation. Iris reached terminal state `succeeded`: exit 0, zero failures,
+zero preemptions, one of one task succeeded, and a 1m40.33s task duration.
+Exactly one H100x8 job was launched; there was no retry, duplicate, source
+edit, stop, resubmit, or Iris mutation.
+
+The WGMMA-layout-safe paired-B64/K128 candidate completed all repeats:
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Checksum |
+|---:|---:|---:|---:|---:|
+| 0 | 64.869818 | 52.967219 | 66.209023 | 20131459072 |
+| 1 | 64.620335 | 53.171712 | 66.464640 | 20131459072 |
+| 2 | 65.033155 | 52.834186 | 66.042733 | 20131459072 |
+
+The median was 64.869818 ms, 52.967219 useful TFLOP/s/rank, and 66.209023
+rounded TFLOP/s/rank; the min/max times were 64.620335/65.033155 ms. Relative
+to the current 48/40/40 result at 63.478141 ms and 54.128457 useful
+TFLOP/s/rank, pairing adjacent B64 reduction rows is 2.19% slower in time and
+2.15% lower in useful throughput. Dropped routes, routing-policy drops,
+metadata-overflow routes, queue-overflow route errors, and layout-overflow row
+errors were all zero. The run emitted two recoverable 12.50 GiB BFC allocation
+warnings before successful compilation and execution.
+
+This is a timing result only. FUSED-MOE-102's reduced direct comparison reached
+the candidate but faulted with `CUDA_ERROR_ILLEGAL_ADDRESS`, so the paired-B64
+candidate remains unvalidated and should not replace the current 48/40/40
+path.
+
+Exact launch command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-paired-k128-zero-layout-055 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha 055159bed8 --jsonl scratch/w13b-paired-k128-zero-layout-055.jsonl
+```
