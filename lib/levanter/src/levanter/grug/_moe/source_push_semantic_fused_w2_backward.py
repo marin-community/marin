@@ -757,7 +757,7 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                 decrement=False,
                             )
 
-                            def _dh_acc_scope(dh_acc_ref) -> None:
+                            def _acc_scope(dh_acc_ref, dw2_acc_ref) -> None:
                                 def _smem_scope(
                                     dy_smem,
                                     w_smem,
@@ -798,45 +798,37 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                     @pl.loop(0, hidden_tiles)
                                     def _hidden_loop(h_tile) -> None:
                                         h_start = h_tile * config.hidden_block
-
-                                        def _dw2_acc_scope(dw2_acc_ref) -> Array:
-                                            mgpu.copy_gmem_to_smem(
-                                                dy_expert_ref.at[
-                                                    expert,
-                                                    pl.ds(row_start, config.compute_m),
-                                                    pl.ds(h_start, config.hidden_block),
-                                                ],
-                                                dy_smem,
-                                                matmul_barrier,
-                                            )
-                                            mgpu.copy_gmem_to_smem(
-                                                w_ref.at[
-                                                    expert,
-                                                    pl.ds(intermediate_start, config.intermediate_block),
-                                                    pl.ds(h_start, config.hidden_block),
-                                                ],
-                                                w_smem,
-                                                matmul_barrier,
-                                            )
-                                            mgpu.barrier_wait(matmul_barrier)
-                                            mgpu.commit_smem()
-                                            mgpu.wgmma(
-                                                dh_acc_ref,
-                                                dy_smem,
-                                                mgpu.transpose_ref(w_smem, (1, 0)),
-                                            )
-                                            mgpu.wgmma(
-                                                dw2_acc_ref,
-                                                mgpu.transpose_ref(h_smem, (1, 0)),
-                                                dy_smem,
-                                            )
-                                            mgpu.wgmma_wait(0)
-                                            return dw2_acc_ref[...]
-
-                                        dw2_partial = pl.run_scoped(
-                                            _dw2_acc_scope,
-                                            dw2_acc_ref=mgpu.ACC((config.intermediate_block, config.hidden_block)),
+                                        mgpu.copy_gmem_to_smem(
+                                            dy_expert_ref.at[
+                                                expert,
+                                                pl.ds(row_start, config.compute_m),
+                                                pl.ds(h_start, config.hidden_block),
+                                            ],
+                                            dy_smem,
+                                            matmul_barrier,
                                         )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(intermediate_start, config.intermediate_block),
+                                                pl.ds(h_start, config.hidden_block),
+                                            ],
+                                            w_smem,
+                                            matmul_barrier,
+                                        )
+                                        mgpu.barrier_wait(matmul_barrier)
+                                        mgpu.commit_smem()
+                                        mgpu.wgmma(
+                                            dh_acc_ref,
+                                            dy_smem,
+                                            mgpu.transpose_ref(w_smem, (1, 0)),
+                                        )
+                                        mgpu.wgmma(
+                                            dw2_acc_ref,
+                                            mgpu.transpose_ref(h_smem, (1, 0)),
+                                            dy_smem,
+                                        )
+                                        mgpu.wgmma_wait(0)
                                         pl.semaphore_wait(
                                             dw2_initialized_sem.at[expert, i_tile, h_tile],
                                             value=1,
@@ -848,7 +840,11 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                                 pl.ds(intermediate_start, config.intermediate_block),
                                                 pl.ds(h_start, config.hidden_block),
                                             ],
-                                            dw2_partial,
+                                            dw2_acc_ref[...],
+                                        )
+                                        dw2_acc_ref[...] = jnp.zeros(
+                                            (config.intermediate_block, config.hidden_block),
+                                            dtype=jnp.float32,
                                         )
 
                                     d_h = dh_acc_ref[...]
@@ -881,8 +877,9 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                                 )
 
                             pl.run_scoped(
-                                _dh_acc_scope,
+                                _acc_scope,
                                 dh_acc_ref=mgpu.ACC((config.compute_m, config.intermediate_block)),
+                                dw2_acc_ref=mgpu.ACC((config.intermediate_block, config.hidden_block)),
                             )
 
             branches = tuple((lambda ordinal: lambda _: _consume_peer(ordinal))(i) for i in range(ep_size))

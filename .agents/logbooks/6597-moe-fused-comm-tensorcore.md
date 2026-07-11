@@ -1965,3 +1965,37 @@ useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
 attempts were logged at `2026-07-11T01:00:32.175519Z` and
 `2026-07-11T01:00:42.176949Z` before the structured failure, well inside the
 10-minute no-progress cutoff.
+
+## 2026-07-10 FUSED-MOE-065 - B64 atomic W2 backward target failure
+
+Launched exactly one H100x8 benchmark on `cw-rno2a` for commit
+`f08be40c5a`. Job:
+`/dlwh/bench-semantic-fused-f08b-w2b-b64-atomic-20260710-1807`.
+
+Exact command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name bench-semantic-fused-f08b-w2b-b64-atomic-20260710-1807 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 3600s bash -lc 'set -euo pipefail; uv pip install --reinstall nvidia-cudnn-cu13==9.19.0.56; exec uv run --no-sync --package marin-levanter --extra gpu --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w2_backward_pallas --warmup 1 --steps 3 --repeat-runs 3 --separate-compile --debug-exceptions --git-sha f08be40c5a --jsonl scratch/bench-semantic-fused-f08b-w2b-b64-atomic.jsonl'
+```
+
+Iris reached terminal state `succeeded`; its single task exited 0 after
+1 minute and 46.63 seconds, with zero Iris failures and preemptions. No
+duplicate, resubmit, restart, cluster bounce, task kick, or kernel edit was
+issued.
+
+The benchmark failed during Mosaic GPU lowering before producing a numeric
+repeat row. The first structured failure arrived at `2026-07-11T01:08:32Z`:
+
+```jsonl
+{"row_type":"error","mode":"semantic_fused_w2_backward_pallas","git_sha":"f08be40c5a","error_type":"TypeError","error_message":"Expected WGMMAAbstractAccumulatorRef got Ref<regs>{float32[128,128]}","compile_time":null,"lower_compile_time":null,"first_call_time":null,"first_run_time":null,"steady_state_time":null,"output_checksum":null,"useful_tflops_per_rank":null,"rounded_tflops_per_rank":null,"dropped_routes":0,"routing_dropped_routes":0,"metadata_overflow_routes":0,"semantic_live_pairs":64,"semantic_useful_rows":1048576,"semantic_rounded_rows":1310720,"semantic_row_efficiency":0.8,"semantic_masked_row_fraction":0.19999999999999996}
+{"row_type":"summary","mode":"semantic_fused_w2_backward_pallas","error":"all repeats failed","repeat_rows":0,"error_rows":1}
+```
+
+The first actionable source location is
+`lib/levanter/src/levanter/grug/_moe/source_push_semantic_fused_w2_backward.py:828`
+inside `_dw2_acc_scope`, where `mgpu.wgmma` received a discharged
+`Ref<regs>{float32[128,128]}` instead of a `WGMMAAbstractAccumulatorRef`.
+Failed 12.50 GiB BFC allocator attempts were logged at
+`2026-07-11T01:07:54.405280Z` and `2026-07-11T01:08:04.406734Z`; the structured
+failure arrived about 38 seconds after the first warning, inside the 10-minute
+no-progress cutoff.
