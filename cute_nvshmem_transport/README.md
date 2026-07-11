@@ -18,6 +18,18 @@ The NVSHMEM transport extra conflicts with the normal GPU and Torch-test extras
 because the CUDA 12.8 Torch wheel requires `cuda-bindings<13`, while
 NVSHMEM4Py-CUDA13 requires CUDA Python 13.
 
+JAX interoperability probes:
+
+```bash
+# Local pointer identity, visibility, and endpoint acceptance.
+uv run --package marin-levanter --extra nvshmem-transport \
+  python -m cute_nvshmem_transport.jax_interop
+
+# Two-PE JAX source to remote symmetric inbox to JAX consumer.
+NVTP_JAX_REMOTE=1 uv run --package marin-levanter --extra nvshmem-transport \
+  python -m cute_nvshmem_transport.jax_interop
+```
+
 All remote endpoints are offsets within a collectively allocated symmetric
 arena. Peer tensor aliases are used only for direct CuTe loads and stores; RMA
 operations retain the original symmetric address plus the remote PE.
