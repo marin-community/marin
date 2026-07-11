@@ -37,7 +37,6 @@ author: dlwh
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
-- `GRUG-JAXPP-011`: XLA's zero-copy one-shot ragged all-to-all may improve the fallback transport path without a full NVIDIA container migration. Evidence: [OpenXLA PR #41580](https://github.com/openxla/xla/pull/41580) removes two device copies and a 512 MiB scratch request behind `--xla_gpu_experimental_ragged_all_to_all_zero_copy=true`; a later commit enables it by default after internal testing. Next test: one bounded ring/ragged transport A/B with the barrier and zero-copy flags if Sonic profiling does not expose a higher-value local fix.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -53,6 +52,7 @@ author: dlwh
 - XLA ragged dot regresses the CuTe FA4 batch512/m16 point from `16.1040` to `8.1438` mean MFU. Pallas-Triton remains the grouped expert GEMM backend.
 - Increasing Pallas-Triton `block_k` from 32 to 64 at eight warps regresses mean MFU from `16.2005` to `16.0189`; halving the kernel's K-loop iterations does not improve the full step.
 - Proper whole-MLP Sonic without EP is operational but reaches only `13.9598` MFU. Staggering once-per-stage materialization regresses the exact target further to `13.8155`; eliminating repeated gather calls does not beat their existing overlap.
+- XLA's zero-copy one-shot ragged all-to-all flags are accepted, but RNO2A pods cannot create the required exportable `FABRIC+POSIX_FD` CUDA VMM allocation. `cuMemCreate` returns `CUDA_ERROR_NOT_PERMITTED` and the process exits 139 before compilation completes.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -1894,3 +1894,16 @@ author: dlwh
   - Keep `staged_per_step` as an explicit reproducible negative, but use `per_task` for Sonic. Ring EP remains the measured winner.
 - Next action:
   - Run one e64/b512/m16 ragged-all-to-all comparison with XLA's barrier and zero-copy flags. Stop the ragged path if it remains materially below ring; do not migrate to a nightly container without a positive bounded signal.
+
+### 2026-07-10 23:41 PDT - zero-copy ragged-all-to-all infrastructure blocker
+- Hypothesis: The XLA zero-copy one-shot ragged-all-to-all path can remove two D2D copies and a 512 MiB scratch allocation on the exact e64/b512/m16 target without changing the container.
+- Commit Hash: `d27b886fea` (`[docs] Record staged Sonic exact result`).
+- Command: exact L24/d2560/e64/top-k4/b512/m16/seq4096 ragged-all-to-all command under parent `/dlwh/iris-run-job-20260711-063505`, with `XLA_FLAGS='--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=true --xla_gpu_experimental_ragged_all_to_all_zero_copy=true'`.
+- Results:
+  - Both flags were accepted and emitted on all four workers. During first-stage forward compilation, rank 0 repeatedly failed `VMM cuMemCreate ... FABRIC+POSIX_FD` with `CUDA_ERROR_NOT_PERMITTED`, then segfaulted with exit 139. Other ranks terminated after coordination loss.
+  - Parent and all four child tasks are terminal; no live failed job remains. No compile completion, loss, or MFU was produced. W&B has no history: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ragged-zerocopy-l24-e64k4-b512-s4096-p4m16-20260710-2335>.
+- Interpretation:
+  - The implementation is present in the current JAX/XLA build, so a nightly NVIDIA container migration is not the missing step. The zero-copy path requires exportable CUDA VMM allocations that the current RNO2A pod permissions/runtime reject.
+  - Do not retry zero-copy ragged all-to-all on RNO2A without an explicit runtime/permission change. Unflagged ragged all-to-all remains measured at only `3.6743` MFU on the earlier e256/b256/m8 shape; ring remains the only performant transport.
+- Next action:
+  - Increase ring pipeline occupancy at fixed microbatch size 32 using b1024/m32, then inspect the ring round scheduling for overlap opportunities.
