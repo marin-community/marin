@@ -459,3 +459,13 @@ def test_semantic_mlp_constrains_destination_pull_dy_to_replicated():
         constrained = jax.jit(lambda value_arg: _constrain_replicated(value_arg, mesh))(value)
 
     assert constrained.sharding.spec == P(None, None, None)
+
+
+def test_semantic_mlp_constrains_interpret_gradient_under_explicit_mesh():
+    mesh = Mesh(np.asarray(jax.devices("cpu")[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    value = jnp.ones((1, 3, 4), dtype=jnp.float32)
+
+    with jax.set_mesh(mesh):
+        constrained = jax.jit(lambda value_arg: _constrain_replicated(value_arg, None))(value)
+
+    assert constrained.sharding.spec == P(None, None, None)

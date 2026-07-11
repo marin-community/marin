@@ -455,9 +455,7 @@ def _source_push_semantic_fused_mlp_backward(
         interpret=interpret,
     )
     d_route_weight = fused_w2_backward.d_route_weight.astype(residual.plan.route_weights.dtype)
-    if not interpret:
-        assert mesh is not None
-        d_route_weight = _constrain_replicated(d_route_weight, mesh)
+    d_route_weight = _constrain_replicated(d_route_weight, mesh)
     return (
         fused_w13_backward.dx.astype(residual.x.dtype),
         d_route_weight,
@@ -782,8 +780,10 @@ def _constrain_destination_major(value: Array, mesh: Mesh) -> Array:
     return jax.sharding.reshard(value, NamedSharding(mesh, spec))
 
 
-def _constrain_replicated(value: Array, mesh: Mesh) -> Array:
+def _constrain_replicated(value: Array, mesh: Mesh | None) -> Array:
     spec = P(*(None for _ in range(value.ndim)))
     if jax.sharding.get_abstract_mesh().are_all_axes_explicit:
         return jax.sharding.reshard(value, spec)
+    if mesh is None:
+        return value
     return jax.sharding.reshard(value, NamedSharding(mesh, spec))
