@@ -33,6 +33,7 @@ from typing import Any, Literal
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.experimental import multihost_utils
 from jax.experimental import pallas as pl
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -288,6 +289,8 @@ def run_jaxpp_worker(config: Config, process_id: int, coordinator: str, devices:
         result = lowered.eval_local(*local_args)
         jax.block_until_ready(result)
         event("jaxpp_eval_local_returned", process_id=process_id, elapsed=time.perf_counter() - started)
+        multihost_utils.sync_global_devices("jaxpp_compile_repro_complete")
+        event("jaxpp_completion_barrier_returned", process_id=process_id)
     finally:
         jax.distributed.shutdown()
 
