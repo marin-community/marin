@@ -217,8 +217,8 @@ def _write_docs(docs: list[dict], out_dir: str) -> str:
 
 
 def _read_predictions(decon_out: str) -> dict[str, float]:
-    """id -> max_overlap from the decon attributes."""
-    fs, resolved = url_to_fs(decon_out)
+    """id -> max_overlap from the decon attributes (under outputs/main)."""
+    fs, resolved = url_to_fs(f"{decon_out.rstrip('/')}/outputs/main")
     preds: dict[str, float] = {}
     for f in sorted(x for x in fs.find(resolved) if x.endswith(".parquet")):
         with fs.open(f, "rb") as fh:

@@ -138,9 +138,10 @@ def _counts_from_artifact(output_dir: str) -> tuple[int, int] | None:
 
 
 def _flagged_from_sidecar(output_dir: str, k: int, rng: random.Random) -> list[dict] | None:
-    """Reservoir of ``k`` flagged docs (with text) from the mark-time ``_flagged``
-    sidecar, or None if the run didn't write one. O(sample), not O(corpus)."""
-    fs, root = url_to_fs(f"{output_dir.rstrip('/')}/_flagged")
+    """Reservoir of ``k`` flagged docs (with text) from the mark-time
+    ``outputs/flagged_sample`` sidecar, or None if the run didn't write one.
+    O(sample), not O(corpus)."""
+    fs, root = url_to_fs(f"{output_dir.rstrip('/')}/outputs/flagged_sample")
     files = sorted(f for f in fs.find(root) if f.endswith(".parquet")) if fs.exists(root) else []
     if not files:
         return None
@@ -175,7 +176,7 @@ def _source_rows(decon_out: str, k: int, rng: random.Random) -> tuple[int, int, 
     """
     n_docs = n_flagged = 0
     reservoir: list[dict] = []
-    for tbl in _read_parquet(decon_out, columns=["id", "attributes"]):
+    for tbl in _read_parquet(f"{decon_out.rstrip('/')}/outputs/main", columns=["id", "attributes"]):
         ids = tbl.column("id").to_pylist()
         attrs = tbl.column("attributes").to_pylist()
         n_docs += len(ids)

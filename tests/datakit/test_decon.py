@@ -57,7 +57,7 @@ def _read_attributes(output_dir: Path) -> dict[str, dict]:
     ``rows[doc_id]["contaminated"]`` instead of ``rows[doc_id]["attributes"]["contaminated"]``.
     """
     rows: dict[str, dict] = {}
-    for pf in sorted(output_dir.glob("part-*.parquet")):
+    for pf in sorted(output_dir.glob("outputs/main/part-*.parquet")):
         for row in pq.read_table(str(pf)).to_pylist():
             attrs = row.pop("attributes", {}) or {}
             rows[row["id"]] = {**row, **attrs}
@@ -187,7 +187,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
         false_positive_rate=1e-9,
     )
     input_names = sorted(p.name for p in Path(fox_corpus["input_dir"]).glob("*.parquet"))
-    output_names = sorted(p.name for p in Path(fox_corpus["output_dir"]).glob("part-*.parquet"))
+    output_names = sorted(p.name for p in Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
     assert input_names == output_names
 
 
@@ -206,7 +206,7 @@ def test_decon_output_schema(fox_corpus):
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
-    output_files = sorted(Path(fox_corpus["output_dir"]).glob("part-*.parquet"))
+    output_files = sorted(Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
     assert set(schema.names) == {"id", "partition_id", "attributes"}
@@ -590,8 +590,8 @@ def test_decon_catches_eval_paragraph_among_other_paragraphs(tmp_path: Path):
                 "id": "doc_buried",
                 "partition_id": 0,
                 "text": (
-                    "Various unrelated physics notes go here.\n"
-                    "What is the speed of light in vacuum\n"
+                    "Various unrelated physics notes go here.\n\n"
+                    "What is the speed of light in vacuum\n\n"
                     "And here is some commentary after the question."
                 ),
             },
@@ -1225,8 +1225,8 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
 
 
 def test_decon_flagged_sample_sidecar(fox_corpus):
-    """flagged_sample_size writes a `_flagged` sidecar of contaminated docs + text,
-    so reports read O(sample) instead of rescanning the corpus."""
+    """flagged_sample_size writes an `outputs/flagged_sample` sidecar of contaminated
+    docs + text, so reports read O(sample) instead of rescanning the corpus."""
     decon_to_parquet(
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
@@ -1236,8 +1236,8 @@ def test_decon_flagged_sample_sidecar(fox_corpus):
         estimated_doc_count=10_000,
         false_positive_rate=1e-9,
     )
-    side = sorted(Path(fox_corpus["output_dir"]).glob("_flagged/*.parquet"))
-    assert side, "expected a _flagged sidecar"
+    side = sorted(Path(fox_corpus["output_dir"]).glob("outputs/flagged_sample/*.parquet"))
+    assert side, "expected an outputs/flagged_sample sidecar"
     rows = [r for f in side for r in pq.read_table(str(f)).to_pylist()]
     ids = {r["id"] for r in rows}
     assert "doc_arctic_exact" in ids and "doc_red_exact" in ids  # flagged docs captured

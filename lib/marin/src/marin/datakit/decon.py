@@ -22,7 +22,10 @@ Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 Join ``attributes.matched_hashes`` against this sidecar to attribute
 contamination back to specific eval records.
 
-Output is co-partitioned with the source: one ``part-NNNNN-of-MMMMM.parquet``
+Output follows the normalize job's layout: main attributes land in
+``<output>/outputs/main/`` and (when ``flagged_sample_size`` > 0) a sample of
+flagged docs with text lands in ``<output>/outputs/flagged_sample/``. The main
+output is co-partitioned with the source — one ``part-NNNNN-of-MMMMM.parquet``
 per input partition, preserving the source filenames so consolidate can
 sorted-merge-join without a shuffle.
 
@@ -47,7 +50,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
@@ -77,17 +80,17 @@ class NGramConfig:
         overlap_threshold: Minimum fraction of paragraph ngrams that must hit
             the filter for the paragraph to count as contaminated.
         paragraph_delimiter: String the text is split on to form paragraphs (the
-            unit the overlap fraction is computed over). ``"\n"`` treats each
-            line as a paragraph; ``"\n\n"`` treats a blank-line-delimited block
-            as a paragraph, so ngrams span single line breaks — this both
-            dilutes isolated-line coincidences (precision) and lets short-line
-            / inline-embedded eval text be matched (recall). See marin#6852.
+            unit the overlap fraction is computed over). Defaults to ``"\n\n"``, a
+            blank-line-delimited block, so ngrams span single line breaks — this
+            both dilutes isolated-line coincidences (precision) and lets short-line
+            / inline-embedded eval text be matched (recall). ``"\n"`` instead treats
+            each line as its own paragraph. See marin#6852.
     """
 
     ngram_length: int = 13
     stride: int = 0
     overlap_threshold: float = 0.5
-    paragraph_delimiter: str = "\n"
+    paragraph_delimiter: str = "\n\n"
 
 
 class DeconAttributes(BaseModel):
@@ -97,7 +100,10 @@ class DeconAttributes(BaseModel):
     the output without re-running the pipeline.
 
     Attributes:
-        output_dir: Directory containing ``part-NNNNN-of-MMMMM.parquet`` files.
+        main_output_dir: Directory of ``part-NNNNN-of-MMMMM.parquet`` attribute
+            files (``<output>/outputs/main``, mirroring the normalize job).
+        flagged_output_dir: Directory of the mark-time flagged-doc sample sidecar
+            (``<output>/outputs/flagged_sample``); empty when no sample was taken.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
             Join the per-record ``attributes.matched_hashes`` column against
@@ -105,8 +111,9 @@ class DeconAttributes(BaseModel):
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
-    version: str = "v2"
-    output_dir: str
+    version: str = "v3"
+    main_output_dir: str
+    flagged_output_dir: str
     num_partitions: int
     eval_hash_index_path: str
     counters: dict[str, int | float]
@@ -466,16 +473,17 @@ def _make_marker(
                         },
                     }
 
-            out_filename = os.path.basename(input_path)
-            out_path = f"{output_dir.rstrip('/')}/{out_filename}"
+            # Follow the normalize job's output layout: main attributes under
+            # outputs/main/, the flagged-doc sample under outputs/flagged_sample/,
+            # co-partitioned by the source filename.
+            shard_filename = os.path.basename(input_path)
+            out_path = prefix_join(output_dir, f"outputs/main/{shard_filename}")
             result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=_OUTPUT_SCHEMA)
             yield result
 
         if flagged_sample_size and reservoir:
-            side = f"{output_dir.rstrip('/')}/_flagged/part-{shard.shard_idx:05d}.parquet"
-            StoragePath(os.path.dirname(side)).mkdirs()
-            with StoragePath(side).open("wb") as fh:
-                pq.write_table(pa.Table.from_pylist(reservoir, schema=_FLAGGED_SCHEMA), fh, compression="zstd")
+            flagged_path = prefix_join(output_dir, f"outputs/flagged_sample/{shard_filename}")
+            write_parquet_file(iter(reservoir), output_path=flagged_path, schema=_FLAGGED_SCHEMA)
 
     return mark_shard
 
@@ -590,7 +598,8 @@ def decon_to_parquet(
     outcome = ctx.execute(pipeline)
 
     return DeconAttributes(
-        output_dir=output_path,
+        main_output_dir=prefix_join(output_path, "outputs/main"),
+        flagged_output_dir=prefix_join(output_path, "outputs/flagged_sample"),
         num_partitions=num_partitions,
         eval_hash_index_path=index_path,
         counters=dict(outcome.counters),
@@ -749,7 +758,7 @@ def build_eval_bloom_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
-    paragraph_delimiter: str = "\n",
+    paragraph_delimiter: str = "\n\n",
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
@@ -999,7 +1008,7 @@ def all_source_drop_sets_step(
     prebuilt_bloom: StepSpec,
     text_field: str = "text",
     ngram_length: int | None = 13,
-    paragraph_delimiter: str = "\n",
+    paragraph_delimiter: str = "\n\n",
     sample_docs: int = 5000,
     common_frac: float = 0.005,
     common_min_abs: int = 5,
@@ -1066,7 +1075,7 @@ def decon_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
-    paragraph_delimiter: str = "\n",
+    paragraph_delimiter: str = "\n\n",
     flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
