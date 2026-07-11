@@ -19,6 +19,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_EXPERT_HIDDEN,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.sonic_quack import quack_mlp_varlen
 from levanter.grug.sharding import _batch_axes
 
 
@@ -122,6 +123,63 @@ def _bulk_ring_from_routing(
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
             ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes),
+            _CHECKPOINT_DISPATCH_OUTPUT,
+        )
+
+    with jax.named_scope("scatter"):
+        out_global = (
+            jnp.zeros_like(x_global).at[token_global].add(out_dispatch * weight_dispatch[:, None], mode="drop")
+        )
+        return jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
+
+
+def _validate_quack_bulk_ring_contract(
+    x_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> None:
+    if activation_fn is not jax.nn.silu:
+        raise ValueError("EP-local QuACK bulk ring only supports SiLU/SwiGLU activation")
+    if x_local.dtype != jnp.bfloat16 or moe_w13_local.dtype != jnp.bfloat16 or moe_w2_local.dtype != jnp.bfloat16:
+        raise TypeError("EP-local QuACK bulk ring requires bfloat16 activations and weights")
+    if x_local.ndim != 2 or moe_w13_local.ndim != 3 or moe_w2_local.ndim != 3:
+        raise ValueError("EP-local QuACK inputs must have shapes [C,H], [Elocal,H,2I], and [Elocal,I,H]")
+    if moe_w13_local.shape[0] != moe_w2_local.shape[0]:
+        raise ValueError("EP-local QuACK W13 and W2 must have the same local expert count")
+    if moe_w13_local.shape[1] != x_local.shape[1] or moe_w2_local.shape[2] != x_local.shape[1]:
+        raise ValueError("EP-local QuACK W13/W2 hidden dimensions must match the activation hidden dimension")
+    if moe_w13_local.shape[2] != 2 * moe_w2_local.shape[1]:
+        raise ValueError("EP-local QuACK W13 output must be twice the W2 intermediate dimension")
+
+
+def _bulk_ring_quack_from_routing(
+    x_local: Float[Array, "Tlocal H"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    routing: _RingRouting,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+) -> Float[Array, "Tlocal H"]:
+    _validate_quack_bulk_ring_contract(x_local, moe_w13_local, moe_w2_local, activation_fn=activation_fn)
+
+    with jax.named_scope("gather"):
+        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
+        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
+        weight_flat = combine_weights_global.reshape(-1)
+        token_global = jnp.floor_divide(routing.assignment_indices, routing.topk)
+        weight = jnp.take(weight_flat, routing.assignment_indices, axis=0).astype(x_local.dtype)
+        x_take = jnp.take(x_global, token_global, axis=0)
+        x_dispatch = jnp.where(routing.valid[:, None], x_take, jnp.zeros_like(x_take))
+        x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+        weight_dispatch = jnp.where(routing.valid, weight, jnp.zeros_like(weight))
+
+    group_sizes = _group_sizes_with_padding(routing.accepted_counts, routing.local_capacity)
+    with jax.named_scope("moe_up_down"):
+        out_dispatch = tree_checkpoint_name(
+            quack_mlp_varlen(x_dispatch, moe_w13_local, moe_w2_local, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
@@ -289,6 +347,37 @@ def _moe_mlp_ep_ring_local(
         capacity_factor=capacity_factor,
     )
     out_local = _bulk_ring_from_routing(
+        x_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        routing,
+        activation_fn=activation_fn,
+    )
+    dropped_total = jax.lax.psum(routing.dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
+    return out_local, dropped_total
+
+
+def _moe_mlp_ep_ring_quack_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Benchmark-only bulk-ring path using the EP-local QuACK expert MLP."""
+    _validate_quack_bulk_ring_contract(x_local, moe_w13_local, moe_w2_local, activation_fn=activation_fn)
+    routing = _ring_routing_prepass(
+        selected_experts_local,
+        local_experts=moe_w13_local.shape[0],
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+    out_local = _bulk_ring_quack_from_routing(
         x_local,
         combine_weights_local,
         moe_w13_local,

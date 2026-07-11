@@ -21,6 +21,7 @@ from levanter.grug._moe.ep_ring import (
     _ep_ring_two_chunk_fast_path_local,
     _moe_mlp_ep_ring_local,
     _moe_mlp_ep_ring_two_chunk_local,
+    _validate_quack_bulk_ring_contract,
 )
 from levanter.grug._moe.ep_ring_fused import (
     _assignment_to_compact_rows,
@@ -31,6 +32,7 @@ from levanter.grug._moe.ep_ring_fused import (
     ring_dispatch_triton,
 )
 from levanter.grug._moe.sonic import sonic_gather_sum
+from levanter.grug._moe.sonic_quack import _require_quack, quack_mlp_varlen
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -173,6 +175,15 @@ def _skip_without_triton_gpu_runtime() -> None:
         pytest.skip("jax-triton and triton are not installed")
     if not any(device.platform == "gpu" for device in jax.devices()):
         pytest.skip("triton_call tests require a GPU")
+
+
+def _skip_without_quack_gpu_runtime() -> None:
+    try:
+        _require_quack()
+    except ImportError:
+        pytest.skip("QuACK optional GPU dependencies are not installed")
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("QuACK tests require a GPU")
 
 
 def test_moe_mlp_runs_without_ep_axis():
@@ -388,6 +399,64 @@ def test_moe_mlp_sonic_backend_reports_missing_optional_dependencies():
             w_down,
             mesh=None,
             implementation="sonic",
+        )
+
+
+@pytest.mark.parametrize(
+    ("x_dtype", "w13_shape", "w2_shape", "activation_fn", "error", "match"),
+    [
+        (jnp.float32, (8, 2560, 2560), (8, 1280, 2560), jax.nn.silu, TypeError, "bfloat16"),
+        (jnp.bfloat16, (8, 2560, 2558), (8, 1280, 2560), jax.nn.silu, ValueError, "twice"),
+        (jnp.bfloat16, (8, 2560, 2560), (8, 1280, 2552), jax.nn.silu, ValueError, "hidden"),
+        (jnp.bfloat16, (8, 2560, 2560), (8, 1280, 2560), jax.nn.gelu, ValueError, "SiLU/SwiGLU"),
+    ],
+)
+def test_ep_ring_quack_rejects_unsupported_dtype_layout_and_activation(
+    x_dtype, w13_shape, w2_shape, activation_fn, error, match
+):
+    x = jax.ShapeDtypeStruct((81920, 2560), x_dtype)
+    w13 = jax.ShapeDtypeStruct(w13_shape, jnp.bfloat16)
+    w2 = jax.ShapeDtypeStruct(w2_shape, jnp.bfloat16)
+
+    with pytest.raises(error, match=match):
+        _validate_quack_bulk_ring_contract(x, w13, w2, activation_fn=activation_fn)
+
+
+def test_quack_mlp_varlen_matches_ragged_dot_output_and_vjp_on_gpu():
+    _skip_without_quack_gpu_runtime()
+    assignments = 256
+    local_experts = 8
+    hidden_dim = 128
+    intermediate_dim = 128
+    group_sizes = jnp.array([0, 17, 31, 64, 1, 80, 48, 15], dtype=jnp.int32)
+    assert int(group_sizes.sum()) == assignments
+    key_x, key_w13, key_w2, key_cotangent = jax.random.split(jax.random.key(58), 4)
+    x = jax.random.normal(key_x, (assignments, hidden_dim), dtype=jnp.bfloat16)
+    w13 = 0.02 * jax.random.normal(key_w13, (local_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.bfloat16)
+    w2 = 0.02 * jax.random.normal(key_w2, (local_experts, intermediate_dim, hidden_dim), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(key_cotangent, x.shape, dtype=jnp.bfloat16)
+
+    def reference(x, w13, w2):
+        preactivation = ragged_dot(x, w13, group_sizes)
+        gate, up = jnp.split(preactivation, 2, axis=-1)
+        return ragged_dot(jax.nn.silu(gate) * up, w2, group_sizes)
+
+    def loss(compute, x, w13, w2):
+        return jnp.sum(compute(x, w13, w2).astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    quack_out = jax.jit(quack_mlp_varlen)(x, w13, w2, group_sizes)
+    reference_out = jax.jit(reference)(x, w13, w2)
+    quack_grads = jax.jit(jax.grad(partial(loss, quack_mlp_varlen), argnums=(0, 1, 2)))(x, w13, w2)
+    reference_grads = jax.jit(jax.grad(partial(loss, reference), argnums=(0, 1, 2)))(x, w13, w2)
+    jax.block_until_ready((quack_out, reference_out, quack_grads, reference_grads))
+
+    np.testing.assert_allclose(np.asarray(quack_out), np.asarray(reference_out), rtol=0.1, atol=2e-4)
+    for quack_grad, reference_grad in zip(quack_grads, reference_grads, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(quack_grad, dtype=np.float32),
+            np.asarray(reference_grad, dtype=np.float32),
+            rtol=0.1,
+            atol=2e-4,
         )
 
 
