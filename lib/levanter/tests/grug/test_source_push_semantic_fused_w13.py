@@ -98,21 +98,24 @@ def test_fused_w13_metadata_aggregates_four_semantic_blocks_and_rotates_peers():
 def test_fused_w13_generation_accounting_reuses_slots_with_cumulative_targets():
     first = source_push_semantic_fused_w13_generation_accounting(0, hidden_dim=2560, intermediate_dim=1280)
     next_chunk = source_push_semantic_fused_w13_generation_accounting(1, hidden_dim=2560, intermediate_dim=1280)
+    last_producer = source_push_semantic_fused_w13_generation_accounting(7, hidden_dim=2560, intermediate_dim=1280)
+    wrapped_producer = source_push_semantic_fused_w13_generation_accounting(8, hidden_dim=2560, intermediate_dim=1280)
     reused = source_push_semantic_fused_w13_generation_accounting(
         CONFIG.inbox_slots, hidden_dim=2560, intermediate_dim=1280
     )
 
     assert (first.slot, first.generation, first.empty_generation, first.released_generation) == (0, 1, 1, 2)
     assert (first.owner, next_chunk.owner) == (0, 1)
-    assert first.producer_programs == 2
-    assert first.consumer_programs == 30
+    assert first.producer_programs == 8
+    assert first.consumer_programs == 24
     assert CONFIG.worker_programs_per_peer == 32
+    assert (last_producer.owner, wrapped_producer.owner) == (7, 0)
     assert first.copy_tiles == CONFIG.compute_blocks_per_send * (2560 // CONFIG.send_k)
     assert first.copy_tiles_per_compute_block == 2560 // CONFIG.send_k
     assert first.block_ready_generation == first.generation
     assert reused.slot == first.slot
     assert reused.generation == 2
-    assert reused.owner == first.owner
+    assert reused.owner == CONFIG.inbox_slots % CONFIG.producer_programs_per_peer
     assert reused.copy_tiles == first.copy_tiles
     assert reused.block_ready_generation == 2 * first.block_ready_generation
     assert reused.consumer_done_generation == 2 * first.consumer_done_generation
@@ -132,11 +135,11 @@ def test_fused_w13_kernel_uses_block_readiness_and_slot_wide_release():
     assert "lowering_semantics=mgpu.LoweringSemantics.Lane" in source
 
 
-def test_fused_w13_kernel_reserves_two_producers_and_thirty_consumers():
+def test_fused_w13_kernel_reserves_eight_producers_and_twenty_four_consumers():
     source = inspect.getsource(_make_source_push_semantic_fused_w13_kernel)
 
-    assert CONFIG.producer_programs_per_peer == 2
-    assert CONFIG.consumer_programs_per_peer == 30
+    assert CONFIG.producer_programs_per_peer == 8
+    assert CONFIG.consumer_programs_per_peer == 24
     assert CONFIG.worker_programs_per_peer == 32
     assert "worker < config.producer_programs_per_peer" in source
     assert "consumer_start = config.producer_programs_per_peer" in source
