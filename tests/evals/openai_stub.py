@@ -4,7 +4,7 @@
 import json
 import threading
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
@@ -25,6 +25,8 @@ class OpenAIStubState:
     requests: list[OpenAIStubRequest] = field(default_factory=list)
     # Lets tests keep selected prompt requests in flight until the event is set.
     prompt_pauses: Mapping[str, threading.Event] = field(default_factory=dict)
+    completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None
+    completion_finish_reasons: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -82,12 +84,15 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         if not isinstance(prompt, str):
             self._write_json(400, {"error": "prompt must be a string"})
             return
-        if request.echo is not True or request.logprobs is None:
-            self._write_json(400, {"error": "scoring requests must set echo=true and logprobs"})
-            return
         pause = self._stub_server.state.prompt_pauses.get(prompt)
         if pause is not None:
             pause.wait()
+        if self._stub_server.state.completion_top_logprobs is not None:
+            self._handle_logprob_completion(prompt)
+            return
+        if request.echo is not True or request.logprobs is None:
+            self._write_json(400, {"error": "scoring requests must set echo=true and logprobs"})
+            return
         text = prompt
         if request.max_tokens > 0:
             text += " answer"
@@ -112,6 +117,34 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
                             "text_offset": offsets,
                         },
                         "finish_reason": "length",
+                    }
+                ],
+            },
+        )
+
+    def _handle_logprob_completion(self, prompt: str) -> None:
+        top_logprobs = self._stub_server.state.completion_top_logprobs.get(prompt)
+        if top_logprobs is None:
+            self._write_json(400, {"error": f"unknown prompt {prompt!r}"})
+            return
+        token, logprob = max(top_logprobs.items(), key=lambda item: item[1])
+        self._write_json(
+            200,
+            {
+                "id": "cmpl-stub",
+                "object": "text_completion",
+                "model": self._stub_server.model,
+                "choices": [
+                    {
+                        "text": token,
+                        "index": 0,
+                        "logprobs": {
+                            "tokens": [token],
+                            "token_logprobs": [logprob],
+                            "top_logprobs": [dict(top_logprobs)],
+                            "text_offset": [len(prompt)],
+                        },
+                        "finish_reason": self._stub_server.state.completion_finish_reasons.get(prompt, "length"),
                     }
                 ],
             },
@@ -153,7 +186,8 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        with suppress(BrokenPipeError, ConnectionResetError):
+            self.wfile.write(body)
 
 
 @contextmanager
@@ -161,8 +195,14 @@ def serve_deterministic_openai_stub(
     *,
     model: str = "gpt2",
     prompt_pauses: Mapping[str, threading.Event] | None = None,
+    completion_top_logprobs: Mapping[str, Mapping[str, float]] | None = None,
+    completion_finish_reasons: Mapping[str, str] | None = None,
 ) -> Iterator[DeterministicOpenAIStub]:
-    state = OpenAIStubState(prompt_pauses={} if prompt_pauses is None else prompt_pauses)
+    state = OpenAIStubState(
+        prompt_pauses={} if prompt_pauses is None else prompt_pauses,
+        completion_top_logprobs=completion_top_logprobs,
+        completion_finish_reasons={} if completion_finish_reasons is None else completion_finish_reasons,
+    )
     server = _DeterministicOpenAIServer(("127.0.0.1", 0), _DeterministicOpenAIHandler)
     server.model = model
     server.state = state

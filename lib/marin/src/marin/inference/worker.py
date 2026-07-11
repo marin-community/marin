@@ -4,7 +4,7 @@
 import logging
 import threading
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from typing import Any
@@ -51,67 +51,14 @@ class InferenceWorker:
         stop_event: threading.Event | None = None,
         backoff: ExponentialBackoff | None = None,
     ) -> None:
-        if max_in_flight < 1:
-            raise ValueError("max_in_flight must be at least 1")
-        if stop_event is None:
-            stop_event = threading.Event()
-        backoff = ExponentialBackoff() if backoff is None else backoff.copy()
-        in_flight: set[Future[LeasedInferenceResponse]] = set()
-        logger.info(
-            "InferenceWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
-            self._upstream.endpoint.base_url,
-            self._upstream.endpoint.model,
-            max_in_flight,
-            self._request_timeout_seconds,
+        run_brokered_inference_loop(
+            broker=self._broker,
+            handle_request=self._forward_one,
+            max_in_flight=max_in_flight,
+            request_timeout_seconds=self._request_timeout_seconds,
+            stop_event=stop_event,
+            backoff=backoff,
         )
-        try:
-            with (
-                httpx.Client(timeout=self._request_timeout_seconds) as client,
-                ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
-            ):
-                while not stop_event.is_set():
-                    available_slots = max_in_flight - len(in_flight)
-                    if available_slots:
-                        # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
-                        leased_requests = self._broker.fetch_requests(max_items=available_slots)
-                        for leased_request in leased_requests:
-                            in_flight.add(pool.submit(self._forward_one, client, leased_request))
-                        if leased_requests:
-                            logger.info(
-                                "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
-                                len(leased_requests),
-                                len(in_flight),
-                                max_in_flight,
-                                format_request_ids(
-                                    [leased_request.request.request_id for leased_request in leased_requests]
-                                ),
-                            )
-                            backoff.reset()
-
-                    if not in_flight:
-                        stop_event.wait(backoff.next_interval())
-                        continue
-
-                    done, _ = wait(
-                        in_flight,
-                        timeout=backoff.next_interval(),
-                        return_when=FIRST_COMPLETED,
-                    )
-                    in_flight.difference_update(done)
-                    if done:
-                        responses = [future.result() for future in done]
-                        self._broker.submit_responses(responses)
-                        logger.info(
-                            "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
-                            len(responses),
-                            len(in_flight),
-                            max_in_flight,
-                            dict(Counter(response.response.status_code for response in responses)),
-                            format_request_ids([response.response.request_id for response in responses]),
-                        )
-                        backoff.reset()
-        finally:
-            logger.info("InferenceWorker stopping in_flight=%d", len(in_flight))
 
     def _forward_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
         request = leased_request.request
@@ -136,6 +83,74 @@ class InferenceWorker:
             json={"error": f"unsupported brokered request method {request.method!r}"},
             request=httpx.Request(method, url),
         )
+
+
+def run_brokered_inference_loop(
+    *,
+    broker: InferenceRequestProvider,
+    handle_request: Callable[[httpx.Client, LeasedInferenceRequest], LeasedInferenceResponse],
+    max_in_flight: int,
+    request_timeout_seconds: float,
+    stop_event: threading.Event | None = None,
+    backoff: ExponentialBackoff | None = None,
+) -> None:
+    """Poll brokered requests and process them concurrently."""
+
+    if max_in_flight < 1:
+        raise ValueError("max_in_flight must be at least 1")
+    if stop_event is None:
+        stop_event = threading.Event()
+    backoff = ExponentialBackoff() if backoff is None else backoff.copy()
+    in_flight: set[Future[LeasedInferenceResponse]] = set()
+    logger.info("Brokered inference worker starting max_in_flight=%d", max_in_flight)
+    try:
+        with (
+            httpx.Client(timeout=request_timeout_seconds) as client,
+            ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
+        ):
+            while not stop_event.is_set():
+                available_slots = max_in_flight - len(in_flight)
+                if available_slots:
+                    leased_requests = broker.fetch_requests(max_items=available_slots)
+                    for leased_request in leased_requests:
+                        in_flight.add(pool.submit(handle_request, client, leased_request))
+                    if leased_requests:
+                        logger.info(
+                            "Brokered inference worker fetched requests count=%d in_flight=%d/%d request_ids=%s",
+                            len(leased_requests),
+                            len(in_flight),
+                            max_in_flight,
+                            format_request_ids(
+                                [leased_request.request.request_id for leased_request in leased_requests]
+                            ),
+                        )
+                        backoff.reset()
+
+                if not in_flight:
+                    stop_event.wait(backoff.next_interval())
+                    continue
+
+                done, _ = wait(
+                    in_flight,
+                    timeout=backoff.next_interval(),
+                    return_when=FIRST_COMPLETED,
+                )
+                in_flight.difference_update(done)
+                if done:
+                    responses = [future.result() for future in done]
+                    broker.submit_responses(responses)
+                    logger.info(
+                        "Brokered inference worker submitted responses count=%d in_flight=%d/%d statuses=%s "
+                        "request_ids=%s",
+                        len(responses),
+                        len(in_flight),
+                        max_in_flight,
+                        dict(Counter(response.response.status_code for response in responses)),
+                        format_request_ids([response.response.request_id for response in responses]),
+                    )
+                    backoff.reset()
+    finally:
+        logger.info("Brokered inference worker stopping in_flight=%d", len(in_flight))
 
 
 @contextmanager
