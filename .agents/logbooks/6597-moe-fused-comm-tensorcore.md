@@ -2244,3 +2244,30 @@ The next experiment is a manual two-stage SMEM K pipeline in the Lane-lowered
 fused kernel. Peer-id refs prevent using the existing warp-specialized pipeline
 helper, but the current K loop can still prefetch tile `k+1` while WGMMA consumes
 tile `k` before the final wait and remote return.
+
+## 2026-07-10 FUSED-MOE-077 - Manual WGMMA pipeline ablation
+
+Job `/dlwh/bench-semantic-fused-pipelines-20260710-2215` at `68c6eb6f89`
+completed successfully on `cw-rno2a` (`exit=0`, one task, 2m37s). It measured
+the three manual two-stage SMEM pipeline candidates on the target random-routing
+shape, with three repeats per mode:
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Selected baseline | Decision |
+|---|---|---:|---:|---:|---|
+| Fused W2 return | 62.135641, 62.654210, 62.459036 | 62.459036 | 13.752909 | 62.558136 ms / 13.731123 | neutral: 0.16% faster |
+| Fused W2 backward | 129.846319, 131.135306, 129.984515 | 129.984515 | 13.216858 | 118.949477 ms / 14.442997 | reject: 9.28% slower |
+| Fused W13 backward | 66.068675, 66.282220, 67.336677 | 66.282220 | 51.838545 | 72.465855 ms / 47.415073 | keep candidate: 8.53% less time, 9.33% more throughput |
+
+Rounded-throughput medians were `17.191137`, `16.521073`, and `64.798181`
+TFLOP/s/rank, respectively. Checksums were stable across all three repeats:
+`3915118848` for W2 return, `127795200` for W2 backward, and `20131303424`
+for W13 backward. Every repeat reported zero routing drops, metadata-overflow
+routes, queue-overflow route errors, and layout-overflow row errors.
+
+The W13 backward result validates overlapping SMEM refill with explicit WGMMA
+for its dX and dW13 scans. The same technique does not automatically transfer
+to W2 backward: its 128 KiB dW2 operand staging likely reduces occupancy enough
+to outweigh the removed per-block drains. The W2-return change is below the
+noise threshold and should not be selected on this run alone. Before changing
+the integrated boundary, retain the W13 candidate for a full fwd+bwd comparison
+and revert or redesign the W2-backward pipeline.
