@@ -13,6 +13,7 @@ author: dlwh
 - Stage 1 passes on 2 and 8 H100s: collective symmetric allocation, host peer aliases, CuTe compilation linked with NVSHMEM device bitcode, and direct `get_peer_tensor` ring stores returned the expected rank-coded values.
 - The reproducible transport extra pins NVSHMEM 3.7.0, NVSHMEM4Py 0.3.1, and CUTLASS DSL 4.4.2. NVSHMEM4Py's CuTe integration is incompatible with Marin's normal CUTLASS DSL 4.5.2 environment.
 - Device-only push and pull correctness passes on 8 H100s for RMA and direct peer variants, 1/2/4/8 slots, and one million aggregate single-slot transfers per principal variant. Ordinary CuTe payload loads after `signal_wait` can observe stale data; a system fence plus cache-volatile loads is required by the validated implementation.
+- JAX interoperability is zero-copy when ownership is explicit: NVSHMEM buffers import into JAX at the identical pointer, and JAX-owned sources work as local RMA operands through a non-owning `cuda.core.Buffer` plus DLPack stream handoff. A two-PE JAX→NVSHMEM→JAX push passed with pointer identity on the receiver.
 - All accelerator experiments will use CoreWeave H100 clusters. Host-only inspection may run locally.
 
 ## Scope
@@ -37,7 +38,7 @@ author: dlwh
 - `NVTP-002`: NVSHMEM put-with-signal is device-side correct with monotonic epochs and safe reuse. Next test: measure latency/bandwidth and cooperative scopes against explicit put+signal.
 - `NVTP-003`: Blocking get and `get_nbi` plus low-level device `quiet` are device-side correct. Next test: compare per-get quiet with multiple gets per quiet and measure completion cost.
 - `NVTP-004`: Direct peer stores and loads are device-side correct with explicit system memory operations. Next test: compare performance against RMA on production payload sizes.
-- `NVTP-005`: JAX buffers can participate in the local endpoint or symmetric allocation views without payload copies or host synchronization. Next test: build an ownership, DLPack lifetime, and stream-handoff interoperability matrix.
+- `NVTP-005`: JAX buffers participate without payload copies when wrapped with explicit owner/lifetime and DLPack stream handoff. Next test: integrate the handoff into device-kernel launch chaining without test-only host stream synchronization.
 - `NVTP-006`: A transport can overlap with a production-relevant GEMM without unacceptable compute-throughput degradation. Next test: establish standalone communication and compute baselines before concurrent execution.
 
 ### Blocked
@@ -52,6 +53,7 @@ author: dlwh
 
 - `NVTP-001`: A coherent isolated stack supports collective symmetric allocation, deterministic addressing, host peer aliases, and CuTe `get_peer_tensor` on a fully connected CoreWeave 8×H100 node. Evidence: `NVTP-002` entry below.
 - `NVTP-002-CORRECTNESS`: Push and pull RMA/direct-peer protocols pass deterministic device-only ring validation through repeated slot reuse. Evidence: `NVTP-003` entry below and commit `c58969f590`.
+- `NVTP-005-LOCAL`: JAX source and destination aliases interoperate zero-copy with symmetric transport when wrapped at the boundary. Evidence: `NVTP-004` entry below and commit `abebeb98dd`.
 
 ## Decision Log
 
@@ -60,6 +62,7 @@ author: dlwh
 - 2026-07-10: Isolate NVSHMEM transport from the normal GPU/Torch extras and pin CUTLASS DSL 4.4.2 for compatibility with NVSHMEM4Py 0.3.1.
 - 2026-07-10: Use explicit system fencing plus cache-volatile payload loads after signal waits; ordinary CuTe indexing produced reproducible stale-epoch failures.
 - 2026-07-10: Use `nvshmem.bindings.device.cute.quiet` for device `_nbi` completion because the high-level `nvshmem.core.device.cute` module does not export quiet.
+- 2026-07-10: Wrap JAX device pointers in non-owning `cuda.core.Buffer` objects with the JAX array as owner; raw JAX objects are not accepted by NVSHMEM host RMA.
 
 ## Negative Results Index
 
@@ -176,3 +179,14 @@ author: dlwh
 - Interpretation: Device-initiated push, pull, direct peer stores, and direct peer loads are all feasible on the target topology. Completion is available for `_nbi` through the generated low-level `quiet` binding even though the high-level CuTe module omits it. Performance, batching, cooperative scopes, large payload volume, and JAX interoperability remain open.
 - Negative results: Ordinary `inbox[i]` loads after `signal_wait` observed a complete but stale previous-epoch payload (for example epoch 9 saw epoch 8). A system-scope fence followed by PTX cache-volatile loads eliminated the failure through millions of transfers. Combining acquire ordering and `.cv` on one PTX load is rejected by the NVVM verifier, so the working sequence separates the fence from weak cache-volatile loads. Initial multi-slot reuse also deadlocked when a negative `epoch-slots` threshold cast to `uint64`; initial fills now skip the consumed wait and wrapped epochs wait for the previous matching slot epoch.
 - Next action: Validate JAX DLPack ownership/lifetime and stream handoff, then build payload-size and completion-batching benchmarks.
+
+### 2026-07-10 - NVTP-004 JAX zero-copy interoperability
+
+- Hypothesis: JAX-owned local operands and JAX views of symmetric memory can participate without payload copies when ownership and stream handoff are explicit.
+- Commit Hash: `abebeb98dd`
+- Commands: `uv run --package marin-levanter --extra nvshmem-transport python -m cute_nvshmem_transport.jax_interop`; repeat with `NVTP_JAX_REMOTE=1` for the two-PE path.
+- Config: CoreWeave 8×H100 node; one-PE local probe and two-PE remote push; 16-byte `uint8` payload; JAX 0.10.1 plus the validated NVSHMEM transport stack.
+- Result: `jax.dlpack.from_dlpack` imported an NVSHMEM symmetric buffer at the identical device pointer. JAX GPU computation observed external writes, while a previously materialized NumPy host array remained stale. Pure JAX operations produced a distinct output allocation. NVSHMEM host `put` rejected a raw JAX array but accepted a non-owning `cuda.core.Buffer.from_handle` with the JAX array as owner. JAX accepted DLPack handoff to the NVSHMEM CUDA stream, and the wrapped put reproduced all source values. In the two-PE test, a JAX-owned rank-0 source was put-with-signal into rank-1 symmetric memory; a pre-existing rank-1 JAX view had identical pointer ownership and computed the expected sum 120 without a payload copy.
+- Interpretation: Questions 1–3 and the push-consume row of the interoperability matrix are feasible with a thin ownership wrapper. NVSHMEM owns symmetric allocations; JAX may own local sources or view symmetric destinations. Direct JAX objects are not an accepted NVSHMEM host operand type. Existing host materializations must not be reused as coherence evidence.
+- Limitations: The correctness probe synchronizes the CUDA stream before final validation. DLPack establishes JAX→external-stream producer handoff, but a fused steady-state launch chain still needs an explicit external-stream/event integration rather than test-only host synchronization.
+- Next action: Build machine-readable transport benchmarks for production payload sizes, cooperative scopes, completion batching, and overlap.
