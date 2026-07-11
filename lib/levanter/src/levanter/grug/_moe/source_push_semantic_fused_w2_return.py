@@ -26,8 +26,8 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
-# Leave residency headroom below the 132-SM H100 SXM target. Producer cohorts
-# publish independent adjacent-N groups, so the grid must co-reside.
+# Leave residency headroom below the 132-SM H100 SXM target. Every program
+# participates in the completion barrier, so the grid must co-reside.
 PERSISTENT_W2_PROGRAMS = 128
 PERSISTENT_COMBINE_PROGRAMS = 32
 N_GROUPS_PER_JOB = 2
@@ -93,13 +93,10 @@ class SourcePushSemanticFusedW2ReturnSchedule:
     """Resident CTA work distribution and completion-barrier counts for one rank."""
 
     hidden_tiles: int
-    hidden_tile_jobs: int
     token_blocks: int
     w2_jobs: int
     min_w2_jobs_per_program: int
     max_w2_jobs_per_program: int
-    min_producers_per_hidden_tile_job: int
-    max_producers_per_hidden_tile_job: int
     producer_program_start: int
     producer_programs: int
     combine_program_start: int
@@ -142,23 +139,13 @@ def source_push_semantic_fused_w2_return_schedule(
         for hidden_tile in range(hidden_tiles)
     )
     hidden_tile_jobs = (hidden_tiles + N_GROUPS_PER_JOB - 1) // N_GROUPS_PER_JOB
-    entry_jobs = ep_size * entries_per_dst
-    producer_counts = tuple(
-        (PERSISTENT_W2_PROGRAMS + hidden_tile_jobs - 1 - group) // hidden_tile_jobs
-        for group in range(hidden_tile_jobs)
-    )
-    w2_jobs = entry_jobs * hidden_tile_jobs
+    w2_jobs = ep_size * entries_per_dst * hidden_tile_jobs
     return SourcePushSemanticFusedW2ReturnSchedule(
         hidden_tiles=hidden_tiles,
-        hidden_tile_jobs=hidden_tile_jobs,
         token_blocks=token_blocks,
         w2_jobs=w2_jobs,
-        min_w2_jobs_per_program=min(entry_jobs // producer_count for producer_count in producer_counts),
-        max_w2_jobs_per_program=max(
-            (entry_jobs + producer_count - 1) // producer_count for producer_count in producer_counts
-        ),
-        min_producers_per_hidden_tile_job=min(producer_counts),
-        max_producers_per_hidden_tile_job=max(producer_counts),
+        min_w2_jobs_per_program=w2_jobs // PERSISTENT_W2_PROGRAMS,
+        max_w2_jobs_per_program=(w2_jobs + PERSISTENT_W2_PROGRAMS - 1) // PERSISTENT_W2_PROGRAMS,
         producer_program_start=0,
         producer_programs=PERSISTENT_W2_PROGRAMS,
         combine_program_start=0,
@@ -481,7 +468,7 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         config=config,
     )
     hidden_tiles = schedule.hidden_tiles
-    hidden_tile_jobs = schedule.hidden_tile_jobs
+    hidden_tile_jobs = (hidden_tiles + N_GROUPS_PER_JOB - 1) // N_GROUPS_PER_JOB
     intermediate_tiles = intermediate_dim // config.block_k
     token_blocks = schedule.token_blocks
     combine_programs = schedule.combine_programs
@@ -501,13 +488,13 @@ def _make_source_push_semantic_fused_w2_return_kernel(
         return_y_ref,
         y_ref,
     ) -> None:
-        completion_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, hidden_tile_jobs)))
+        completion_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size,)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
 
-        def _signal_completion(peer, hidden_tile_job) -> None:
+        def _signal_completion(peer) -> None:
             pl.semaphore_signal(
-                completion_sem.at[rank, hidden_tile_job],
+                completion_sem.at[rank],
                 device_id=peer,
                 device_id_type=pl.DeviceIdType.LOGICAL,
             )
@@ -646,33 +633,28 @@ def _make_source_push_semantic_fused_w2_return_kernel(
 
         branches = tuple((lambda ordinal: lambda args: _produce_for_source(ordinal, args))(i) for i in range(ep_size))
 
-        producer_hidden_tile_job = worker % hidden_tile_jobs
-        producer_lane = worker // hidden_tile_jobs
-        producers_for_hidden_tile_job = (
-            schedule.producer_programs + hidden_tile_jobs - 1 - producer_hidden_tile_job
-        ) // hidden_tile_jobs
-
         @pl.loop(0, schedule.max_w2_jobs_per_program)
         def _w2_job_loop(iteration) -> None:
-            entry_job = producer_lane + iteration * producers_for_hidden_tile_job
+            job = worker + iteration * schedule.producer_programs
 
-            @pl.when(entry_job < ep_size * entries_per_dst)
+            @pl.when(job < schedule.w2_jobs)
             def _w2_job() -> None:
-                source_ordinal = entry_job // entries_per_dst
-                entry = entry_job % entries_per_dst
-                lax.switch(source_ordinal, branches, (entry, producer_hidden_tile_job))
+                source_ordinal = job // (entries_per_dst * hidden_tile_jobs)
+                source_job = job % (entries_per_dst * hidden_tile_jobs)
+                entry = source_job // hidden_tile_jobs
+                hidden_tile_job = source_job % hidden_tile_jobs
+                lax.switch(source_ordinal, branches, (entry, hidden_tile_job))
 
         for peer_ordinal in range(ep_size):
             if peer_ordinal == 0:
-                pl.semaphore_signal(completion_sem.at[rank, producer_hidden_tile_job])
+                pl.semaphore_signal(completion_sem.at[rank])
             else:
-                _signal_completion((rank + peer_ordinal) % ep_size, producer_hidden_tile_job)
+                _signal_completion((rank + peer_ordinal) % ep_size)
 
         @pl.when(worker < schedule.combine_programs)
         def _combine() -> None:
             consumer = worker
             hidden_tile = consumer % hidden_tiles
-            hidden_tile_job = hidden_tile // N_GROUPS_PER_JOB
             consumer_lane = consumer // hidden_tiles
             consumers_for_tile = (combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
             hidden_start = hidden_tile * config.block_n
@@ -681,9 +663,8 @@ def _make_source_push_semantic_fused_w2_return_kernel(
             def _active_consumer() -> None:
                 for destination_ordinal in range(ep_size):
                     pl.semaphore_wait(
-                        completion_sem.at[destination_ordinal, hidden_tile_job],
-                        value=(schedule.producer_programs + hidden_tile_jobs - 1 - hidden_tile_job)
-                        // hidden_tile_jobs,
+                        completion_sem.at[destination_ordinal],
+                        value=schedule.producer_programs,
                         decrement=False,
                     )
 

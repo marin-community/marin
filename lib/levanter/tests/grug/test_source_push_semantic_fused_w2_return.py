@@ -36,12 +36,9 @@ def test_fused_w2_return_target_schedule_balances_two_hidden_tiles_per_job():
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.hidden_tile_jobs == 10
     assert schedule.w2_jobs == 23_040
-    assert schedule.min_w2_jobs_per_program == 177
-    assert schedule.max_w2_jobs_per_program == 192
-    assert schedule.min_producers_per_hidden_tile_job == 12
-    assert schedule.max_producers_per_hidden_tile_job == 13
+    assert schedule.min_w2_jobs_per_program == 180
+    assert schedule.max_w2_jobs_per_program == 180
     assert schedule.producer_program_start == 0
     assert schedule.producer_programs == 128
     assert schedule.combine_program_start == 0
@@ -61,12 +58,9 @@ def test_fused_w2_return_schedule_keeps_odd_hidden_tile_tail():
     )
 
     assert schedule.hidden_tiles == 3
-    assert schedule.hidden_tile_jobs == 2
     assert schedule.w2_jobs == 20
     assert schedule.min_w2_jobs_per_program == 0
     assert schedule.max_w2_jobs_per_program == 1
-    assert schedule.min_producers_per_hidden_tile_job == 64
-    assert schedule.max_producers_per_hidden_tile_job == 64
 
 
 def _inputs(*, rows_per_expert: int = ROWS_PER_EXPERT):
