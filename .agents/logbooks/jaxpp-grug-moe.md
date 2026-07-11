@@ -30,6 +30,7 @@ author: dlwh
 - Automatic JaxPP schedules remain blocked. Moving batch reshaping outside the JaxPP trace fixed the earlier after-loop batch placement assertion, and the opt-in const-sharding patch gets reduced `std_1f1b` past JaxPP explicit sharding inference. The current blocker is later input placement: JaxPP attempts to `device_put` a stage-local expert weight with a global `NamedSharding` whose mesh still includes the non-addressable `pipeline` axis. Automatic `eager_1f1b` at the full 61B shape also failed during full-state init before training.
 - The Sonic whole-MLP non-return was reduced below JaxPP to concurrent `jax-tvm-ffi` handler invocation. Plain JAX reproduces the same fsdp=2/3 boundary with a single QuACK grouped GEMM at only three experts, one token per expert, and 8x8 matrices. A per-handler host mutex fixes the minimal case, a full 65,536-assignment FSDP-8 forward/backward control, and the exact four-stage target. Proper whole-MLP Sonic is operational but reaches only `13.9598` mean MFU, `2.2407` points below the `16.2005` ring-EP winner. Workaround/setup snapshot: `89bae1453c`.
 - The exact proper-Sonic profile is `37.31%` compute, `50.47%` communication, and `12.22%` stall. AllGather remains nearly unchanged from old Sonic at `47.508s` aggregated over `48,192` device-track calls, 2.35x the ring profile's call count. Staggered once-per-stage materialization improved the reduced smoke but regressed the exact target from `13.9598` to `13.8155` MFU, confirming that the fine-grained gathers were better overlapped than the hoisted critical-path gather.
+- Explicit Triton token-routing kernels remove the profiled rank-2 floating scatter families from `ring_fused` and pass H100 value/VJP parity, but a pinned 10-step reduced A/B found no throughput gain. After excluding isolated duration outliers, bulk ring averaged `9.1735` MFU and `0.214968s`; `ring_fused` averaged `9.1595` MFU and `0.215344s`. Do not scale this backend to L24 without a new kernel-level signal.
 
 ## Hypothesis Queue
 
@@ -57,6 +58,7 @@ author: dlwh
 - The first true streamed `ring_ppermute` backend passes CPU output/gradient parity and removes global activation/output tensors, but its H100 smoke is numerically unstable after one finite step and over 1,100x slower on that first timed step because EP8 creates many small native XLA ragged GEMMs and collective permutes.
 - Owner-local bulk-ring combine passes CPU output/gradient parity and removes the 640 MiB global output temporary, but seven owner-directed permutations make even the reduced L8 stage-3 backward graph compile for about 28 minutes without completing. It was stopped without a metric.
 - Expert-axis 4 at e64 reaches every stage's first backward compile but then stalls in accumulation compilation for over 24 minutes; it was stopped after 34m37s with no metric. Doubling local expert state remains operationally intractable.
+- Explicit Triton dispatch-backward and combine forward/backward routing kernels pass H100 value/VJP parity and remove rank-2 floating scatters from optimized HLO, but the pinned reduced A/B is neutral: central bulk-ring mean `9.1735` MFU versus `9.1595` for `ring_fused` (`-0.15%`). The apparent two-sample fused win did not replicate over ten steps.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -2037,3 +2039,24 @@ author: dlwh
   - A viable continuation must use an explicit GPU kernel that writes `[tokens, hidden]` directly and explicit VJPs that replace dispatch-backward and combine-forward/backward scatters. Do not pursue more ordinary JAX rearrangements of the same inverse map.
 - Next action:
   - Prototype the token-oriented primitive as a Mosaic GPU or Triton kernel with controlled backward. Require a reduced microbenchmark or L8 gate to beat bulk ring before any exact L24 run.
+
+### 2026-07-11 04:55 PDT - explicit Triton routing is correct but performance-neutral
+- Hypothesis: Reusing the token-grid Triton gather-sum kernel for combine forward and dispatch backward, plus a compact-grid combine-backward kernel, will remove the three profiled rank-2 floating scatter families and materially improve the reduced pipeline gate.
+- Commit Hashes:
+  - `0ecf680100`: explicit Triton routing kernels and custom VJPs.
+  - `d149b66fa9`: corrected one-H100 GPU test binding.
+- Commands:
+  - One-H100 value/VJP and optimized-HLO test under `/dlwh/ring-fused-triton-gpu-test-r3-20260711`.
+  - Bulk control parent `/dlwh/iris-run-job-20260711-114112`: `run_cw_jaxpp_may_d2560.sh --submit --cluster cw-rno2a --implementation explicit_mpmd --schedule std_1f1b --physical-stages 4 --layers 8 --experts 64 --top-k 4 --vocab-size 8192 --batch 32 --microbatches 4 --seq-len 4096 --moe-implementation ring --attention-implementation gpu_fa4_cute --ragged-dot-implementation triton --ragged-dot-block-k 32 --ragged-dot-num-warps 8 --loss-implementation xla --steps 10 --xla-memory-fraction 0.70`.
+  - Fused comparison parent `/dlwh/iris-run-job-20260711-114818`: identical command with `--moe-implementation ring_fused`.
+- Results:
+  - The one-H100 test passed in `18.66s`. It validates output and VJP parity and confirms that the compiled backward HLO contains no rank-2 floating scatter.
+  - A first corrected-vocab two-sample smoke ended at `9.5108` MFU and `0.207340s`, versus the historical bulk sample at `9.4180` and `0.209382s`; this apparent gain was too short to trust.
+  - Both 10-step A/B parents and all child tasks succeeded, W&B finished, and losses matched within about `4e-6` at step 9. Bulk W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-v8192-ab-l8-e64k4-b32-s4096-p4m4-20260711-0442>. Fused W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ringfused-v8192-ab-l8-e64k4-b32-s4096-p4m4-20260711-0442>.
+  - Excluding isolated duration outliers above `0.3s`, bulk ring had 7 central samples at mean/median `9.1735/9.1660` MFU and `0.214968/0.215138s`. `ring_fused` had 6 central samples at `9.1595/9.1559` MFU and `0.215344/0.215377s`.
+  - The fused central mean changed by `-0.0139` MFU points (`-0.15%`) and duration by `+0.17%`. It also had two severe slow steps versus one for bulk ring.
+- Interpretation:
+  - The explicit kernels solve the targeted HLO-shape problem but do not produce a measurable end-to-end throughput gain. Other routing work, kernel launch overhead, or surrounding collective dependencies dominate enough to erase the projected scatter-only ceiling.
+  - Do not run the L24/m256 comparison: a neutral reduced gate cannot plausibly close the `1.7417`-point gap from the `18.2583` MFU headline result to 20.
+- Next action:
+  - Keep `ring_fused` as a correctness-tested experimental backend and return to profile-guided pipeline/collective overlap work. Require a standalone kernel or reduced-pipeline gain comfortably above noise before another exact run.
