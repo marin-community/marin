@@ -2,14 +2,18 @@ diff --git a/src/jax_tvm_ffi.cc b/src/jax_tvm_ffi.cc
 index 9ca5a6f..05c0f4e 100644
 --- a/src/jax_tvm_ffi.cc
 +++ b/src/jax_tvm_ffi.cc
-@@ -14,0 +15 @@
+@@ -12,2 +12,3 @@
+ #include <memory>
 +#include <mutex>
-@@ -728,0 +730,6 @@ class JAXTVMFFIHandler : public xla::ffi::Ffi {
+ #include <optional>
+@@ -730 +731,7 @@ class JAXTVMFFIHandler : public xla::ffi::Ffi {
 +    // A registered TVM function is shared by every device execution thread.
 +    // CuTe-compiled functions mutate launch state while packing an invocation,
 +    // so serialize host-side setup and launch for this handler. GPU work remains
 +    // asynchronous on each device stream after safe_call returns.
 +    std::lock_guard<std::mutex> call_lock(call_mutex_);
 +
-@@ -1023,0 +1032 @@ class JAXTVMFFIHandler : public xla::ffi::Ffi {
+     // now run the invocation
+@@ -1024 +1031,2 @@ class JAXTVMFFIHandler : public xla::ffi::Ffi {
 +  mutable std::mutex call_mutex_;
+ };

@@ -330,6 +330,7 @@ def jaxpp_setup_scripts(*, revision: str = "7091a9b5ce02cd1a6bdc905f6a36e89370a5
     return (
         "\n".join(
             [
+                "set -euxo pipefail",
                 'cd "$IRIS_WORKDIR"',
                 "echo 'installing JaxPP runtime deps'",
                 "uv pip install --link-mode symlink cupy-cuda13x",
