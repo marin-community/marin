@@ -31,6 +31,7 @@ author: dlwh
 - The Sonic whole-MLP non-return was reduced below JaxPP to concurrent `jax-tvm-ffi` handler invocation. Plain JAX reproduces the same fsdp=2/3 boundary with a single QuACK grouped GEMM at only three experts, one token per expert, and 8x8 matrices. A per-handler host mutex fixes the minimal case, a full 65,536-assignment FSDP-8 forward/backward control, and the exact four-stage target. Proper whole-MLP Sonic is operational but reaches only `13.9598` mean MFU, `2.2407` points below the `16.2005` ring-EP winner. Workaround/setup snapshot: `89bae1453c`.
 - The exact proper-Sonic profile is `37.31%` compute, `50.47%` communication, and `12.22%` stall. AllGather remains nearly unchanged from old Sonic at `47.508s` aggregated over `48,192` device-track calls, 2.35x the ring profile's call count. Staggered once-per-stage materialization improved the reduced smoke but regressed the exact target from `13.9598` to `13.8155` MFU, confirming that the fine-grained gathers were better overlapped than the hoisted critical-path gather.
 - Explicit Triton token-routing kernels remove the profiled rank-2 floating scatter families from `ring_fused` and pass H100 value/VJP parity, but a pinned 10-step reduced A/B found no throughput gain. After excluding isolated duration outliers, bulk ring averaged `9.1735` MFU and `0.214968s`; `ring_fused` averaged `9.1595` MFU and `0.215344s`. Do not scale this backend to L24 without a new kernel-level signal.
+- Prioritizing explicit pipeline transfer construction ahead of local QB/loss/gradient accumulation is a clean negative. The pinned reduced run averaged `8.9243` MFU and `0.220987s`, versus `9.1735` and `0.214968s` for default ordering. Construction order is not the missing overlap mechanism; the next credible schedule change must split the combined activation/weight-gradient backward task.
 
 ## Hypothesis Queue
 
@@ -59,6 +60,7 @@ author: dlwh
 - Owner-local bulk-ring combine passes CPU output/gradient parity and removes the 640 MiB global output temporary, but seven owner-directed permutations make even the reduced L8 stage-3 backward graph compile for about 28 minutes without completing. It was stopped without a metric.
 - Expert-axis 4 at e64 reaches every stage's first backward compile but then stalls in accumulation compilation for over 24 minutes; it was stopped after 34m37s with no metric. Doubling local expert state remains operationally intractable.
 - Explicit Triton dispatch-backward and combine forward/backward routing kernels pass H100 value/VJP parity and remove rank-2 floating scatters from optimized HLO, but the pinned reduced A/B is neutral: central bulk-ring mean `9.1735` MFU versus `9.1595` for `ring_fused` (`-0.15%`). The apparent two-sample fused win did not replicate over ten steps.
+- Enqueuing forward and backward pipeline transfers before local accumulation tasks regresses the pinned reduced median MFU by `2.90%` (`8.9006` versus `9.1660`) and increases median duration by `2.98%`. JaxPP task construction order alone does not improve rendezvous overlap.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -2060,3 +2062,18 @@ author: dlwh
   - Do not run the L24/m256 comparison: a neutral reduced gate cannot plausibly close the `1.7417`-point gap from the `18.2583` MFU headline result to 20.
 - Next action:
   - Keep `ring_fused` as a correctness-tested experimental backend and return to profile-guided pipeline/collective overlap work. Require a standalone kernel or reduced-pipeline gain comfortably above noise before another exact run.
+
+### 2026-07-11 05:25 PDT - transfer-priority task ordering regresses
+- Hypothesis: Constructing activation and `d_hidden` transfers immediately after their producers, before local QB/loss/parameter-gradient accumulation tasks, will reduce exposed pipeline rendezvous time without changing numerical dependencies.
+- Commit Hash: `247fa5de02` (`[grug] Prioritize explicit pipeline transfers`).
+- Command: pinned L8/d2560/e64/top-k4/seq4096/b32/m4/vocab8192/XLA-loss bulk-ring run with `--explicit-mpmd-schedule-mode transfer_priority --steps 10` under parent `/dlwh/iris-run-job-20260711-121447`.
+- Results:
+  - Parent and all four child tasks succeeded, W&B finished, and all eight timed rows were finite with no duration outlier above `0.3s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-transferprio-v8192-ab-l8-e64k4-b32-s4096-p4m4-20260711-0515>.
+  - Mean/median MFU was `8.9243/8.9006`; mean/median duration was `0.220987/0.221555s`; mean throughput was `593,180.44` tokens/s.
+  - The matching default-order control reported mean/median `9.1735/9.1660` MFU and `0.214968/0.215138s`. Transfer priority regressed mean MFU by `2.72%`, median MFU by `2.90%`, and median duration by `2.98%`.
+  - Final loss `8.7083950` remains close to control `8.7085800`; this is a performance negative, not a numerical failure.
+- Interpretation:
+  - Calling `mpmd.transfer` earlier does not force useful overlap and likely perturbs the per-rank queue away from the better default order. XLA latency scheduling and JaxPP task construction ordering are both now bounded negatives.
+  - Do not scale this mode to L24. Keep it opt-in as a reproducible schedule-ordering experiment.
+- Next action:
+  - Prototype input-gradient-first backward: produce and transfer `d_hidden` before deferrable parameter-gradient work without recomputing the full stage backward twice. Require CPU value/gradient parity and at least a `5%` reduced H100 duration gain before an exact run.
