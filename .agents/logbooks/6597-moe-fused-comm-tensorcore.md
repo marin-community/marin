@@ -2609,7 +2609,7 @@ timing as performance evidence only; do not promote this schedule until the
 memory fault is isolated and a finite `d_z13`/`d_w2`/route-weight comparison
 succeeds. Per the bounded babysitting request, no kernel edit or retry was made.
 
-## 2026-07-10 FUSED-MOE-088 - Four-helper K512 W2 backward nearly halves stage time
+## 2026-07-10 FUSED-MOE-089 - Four-helper K512 W2 backward nearly halves stage time
 
 Job `/dlwh/bench-semantic-backward-aggregation-20260710-2330` at
 `f84e84957a` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, and
@@ -2627,7 +2627,7 @@ five-helper K512 result of 76.837743 ms and raises useful throughput from
 22.358633 to 43.042682 TFLOP/s/rank. Against the original 118.949477 ms
 baseline, it saves 79.035911 ms or 66.44% and raises useful throughput from
 14.442997 by 198.02%. Its checksum remains `127795200`. The reduced-shape
-comparison in FUSED-MOE-087 nevertheless hit an illegal address, so quarantine
+comparison in FUSED-MOE-088 nevertheless hit an illegal address, so quarantine
 this performance candidate until that fault is isolated and finite numerical
 correctness passes.
 
