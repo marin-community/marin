@@ -15,7 +15,7 @@ author: dlwh
 ## Current TL;DR
 - `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state, contiguous layer splits, explicit GPipe and explicit `std_1f1b` schedules. Milestone implementation commit: `abd979b82a` (`[grug] Add explicit JaxPP pipeline training`).
 - The requested 24-layer, d2560, 256-expert, top-k 4 shape now fits and executes on 4x 8xH100 CoreWeave east02 after optimizer state is initialized from stage-local pipeline weights instead of from the full 61B-param model.
-- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 64 experts, top-k 4, seq 4096, batch 1024, four physical/logical stages, 32 microbatches, ring EP, CuTe FA4 attention, Pallas-Triton ragged dot with eight warps, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260711-064117/grug-train-jaxpp-rno2a-ring-l24-e64k4-b1024-s4096-p4m32-20260710-2341` reported mean MFU `16.6677`, p50 `17.2663`, and latest throughput `390,572.87` tokens/s. Keeping microbatch size 32 while doubling the number of microbatches improves the prior b512/m16 mean by `0.4672` points.
+- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 64 experts, top-k 4, seq 4096, batch 2048, four physical/logical stages, 64 microbatches, ring EP, CuTe FA4 attention, Pallas-Triton ragged dot with eight warps, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260711-065554/grug-train-jaxpp-rno2a-ring-l24-e64k4-b2048-s4096-p4m64-20260710-2355` reported mean MFU `17.4430`, p50 `17.7193`, p90 `18.0223`, and latest throughput `393,396.56` tokens/s. This improves b512/m16 by `1.2425` mean points but remains `2.5570` points below 20.
 - RNO2A is healthy and performance-equivalent to east02 for this workload. The exact batch128/m4 baseline reported mean MFU `7.5946` and `170,329.97` tokens/s, within noise of the east02 `7.5981` result. NCCL debug logs confirmed `NET/IB/.../GDRDMA`, ruling out socket fallback.
 - Profile captured for explicit MPMD GPipe at the stable batch-96 seq4096 point after commit `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`). W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>. Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`.
 - Profile readout: communication-dominated exclusive timeline, with `48.75%` communication, `45.10%` compute, and `6.15%` stall. Largest exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather and reduce-scatter collectives.
@@ -37,7 +37,7 @@ author: dlwh
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
-- `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble. Evidence: b1024/m32 improves mean MFU from `16.2005` to `16.6677` and p50 to `17.2663`. Next test: b2048/m64 is the final occupancy point; bubble removal alone cannot reach 20, so pair the result with a streamed expert ring prototype.
+- `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble. Evidence: b1024/m32 reaches `16.6677` mean MFU and b2048/m64 reaches `17.4430` mean / `17.7193` p50. Next test: occupancy is near its asymptote; only run m128 if the streamed ring gate is negative and the compile cost remains acceptable.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -1923,3 +1923,21 @@ author: dlwh
   - A true `ppermute` ring can remove the 640 MiB global activation/output intermediates and expose per-round communication/GEMM overlap while preserving the working transport semantics. This is materially different from the sort/compact/inverse-sort ragged-all-to-all path that regressed.
 - Next action:
   - Run b2048/m64 as the final fixed-microbatch occupancy point. In parallel, implement a separate streamed `ppermute` backend with output/gradient parity before a reduced H100 performance gate.
+
+### 2026-07-11 00:12 PDT - m64 occupancy result and streamed ring prototype
+- Hypothesis: Doubling fixed-size microbatch count again will recover more bubble overhead, while a true streamed ring can provide the separate communication gain needed to cross 20 MFU.
+- Commit Hashes:
+  - `91071b1e83`: occupancy and ring transport readout.
+  - `251629c83c`: opt-in `ring_ppermute` backend.
+- Commands:
+  - Exact b2048/m64 ring parent `/dlwh/iris-run-job-20260711-065554`.
+  - Four-device CPU output/overflow/gradient parity and abstract-lowering tests for `ring_ppermute`.
+- Results:
+  - The m64 parent and all four ranks succeeded; training completed 8/8 finite steps with final loss `6.6641207`. Mean MFU was `17.4430`, p10/p50/p90 `16.5874/17.7193/18.0223`, latest throughput `393,396.56` tokens/s, and duration `21.323542s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-l24-e64k4-b2048-s4096-p4m64-20260710-2355>.
+  - m64 improves m32 by `0.7753` mean points and `0.4530` p50 points. It remains `2.5570` mean points below 20; further bubble reduction alone cannot close the gap.
+  - `ring_ppermute` rotates one source shard at a time with `lax.ppermute`, computes local-expert contributions, permutes partial outputs directly back to their owner, and avoids global activation/output tensors. Four-device output, dropped-count, activation/combine-weight/W13/W2 gradient parity passed (`5 passed`), and StableHLO contains collective-permute operations without a global `[EP*T,H]` activation tensor.
+- Interpretation:
+  - Occupancy is a validated contributor but has diminishing returns. The remaining target requires changing the expert transport or another similarly large bottleneck.
+  - The streamed backend is correctness-ready for a reduced H100 gate. Its risks are EP8 smaller GEMMs, one assignment selection per round, and native XLA ragged-dot performance.
+- Next action:
+  - Compare L8/b32/m4 `ring_ppermute` against the matching bulk-ring `9.4180` MFU smoke. Scale only if the reduced result is competitive.
