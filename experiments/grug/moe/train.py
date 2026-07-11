@@ -75,6 +75,7 @@ JaxPPSchedule = Literal[
     "kimi_k2",
 ]
 JaxPPImplementation = Literal["auto", "explicit_mpmd"]
+JaxPPExplicitMpmdScheduleMode = Literal["default", "transfer_priority"]
 SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
 
 
@@ -89,9 +90,12 @@ class GrugJaxPPConfig:
     mpmd_dim: int | None = None
     stage_axis_name: str = "pipeline"
     stage_layer_counts: tuple[int, ...] | None = None
+    explicit_mpmd_schedule_mode: JaxPPExplicitMpmdScheduleMode = "default"
     sonic_fsdp_materialization: SonicFsdpMaterialization = "per_task"
 
     def __post_init__(self) -> None:
+        if self.explicit_mpmd_schedule_mode not in ("default", "transfer_priority"):
+            raise ValueError(f"unknown explicit MPMD schedule mode: {self.explicit_mpmd_schedule_mode}")
         if self.sonic_fsdp_materialization not in ("per_task", "staged_per_step"):
             raise ValueError(f"unknown Sonic FSDP materialization mode: {self.sonic_fsdp_materialization}")
         if self.stages <= 0:
@@ -125,6 +129,14 @@ class GrugJaxPPConfig:
                 )
             if self.schedule != "interleaved_gpipe" and mpmd_dim != self.stages:
                 raise ValueError("explicit_mpmd requires PP_MPMD_DIM to match PP_STAGES")
+        if self.explicit_mpmd_schedule_mode == "transfer_priority":
+            if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
+                raise ValueError(
+                    "transfer_priority explicit MPMD schedule mode requires "
+                    "implementation='explicit_mpmd' and schedule='std_1f1b'"
+                )
+            if self.microbatches == 1:
+                raise ValueError("transfer_priority explicit MPMD schedule mode requires microbatches > 1")
         if self.sonic_fsdp_materialization == "staged_per_step":
             if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
                 raise ValueError(
@@ -1575,6 +1587,7 @@ def _make_explicit_mpmd_train_step(
             else {stage_index: stage_params for stage_index, stage_params in enumerate(params)}
         )
         materialization_token_futures = {}
+        prioritize_transfers = pipeline.explicit_mpmd_schedule_mode == "transfer_priority"
 
         def stage_compute_params(stage_index: int):
             if stage_index in compute_params:
@@ -1614,16 +1627,22 @@ def _make_explicit_mpmd_train_step(
                     name=f"grug_1f1b_mb{microbatch_index}_stage0_forward",
                     out_shardings=(activation_shardings[0], qb_shardings[0]),
                 )(stage_params, qb_betas[0], microbatches[0])
+                if prioritize_transfers:
+                    forward_futures[(1, microbatch_index)] = mpmd.transfer(
+                        hidden,
+                        out_shardings=activation_shardings[1],
+                    )
                 qb_betas_next[0] = accumulate_or_set(
                     qb_betas_next[0],
                     stage_qb_betas,
                     name=f"grug_1f1b_mb{microbatch_index}_stage0_accumulate_qb",
                     out_shardings=qb_shardings[0],
                 )
-                forward_futures[(1, microbatch_index)] = mpmd.transfer(
-                    hidden,
-                    out_shardings=activation_shardings[1],
-                )
+                if not prioritize_transfers:
+                    forward_futures[(1, microbatch_index)] = mpmd.transfer(
+                        hidden,
+                        out_shardings=activation_shardings[1],
+                    )
                 forward_done.add(key)
                 return
 
@@ -1639,16 +1658,22 @@ def _make_explicit_mpmd_train_step(
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_forward",
                 out_shardings=(activation_shardings[stage_index], qb_shardings[stage_index]),
             )(stage_params, qb_betas[stage_index], hidden, microbatches[stage_index])
+            if prioritize_transfers:
+                forward_futures[(stage_index + 1, microbatch_index)] = mpmd.transfer(
+                    hidden,
+                    out_shardings=activation_shardings[stage_index + 1],
+                )
             qb_betas_next[stage_index] = accumulate_or_set(
                 qb_betas_next[stage_index],
                 stage_qb_betas,
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
                 out_shardings=qb_shardings[stage_index],
             )
-            forward_futures[(stage_index + 1, microbatch_index)] = mpmd.transfer(
-                hidden,
-                out_shardings=activation_shardings[stage_index + 1],
-            )
+            if not prioritize_transfers:
+                forward_futures[(stage_index + 1, microbatch_index)] = mpmd.transfer(
+                    hidden,
+                    out_shardings=activation_shardings[stage_index + 1],
+                )
             forward_done.add(key)
 
         def ensure_backward(stage_index: int, microbatch_index: int):
@@ -1676,6 +1701,11 @@ def _make_explicit_mpmd_train_step(
                     stage_inputs[key],
                     microbatches[stage_index],
                 )
+                if prioritize_transfers:
+                    d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                        d_hidden,
+                        out_shardings=activation_shardings[stage_index - 1],
+                    )
                 loss_sum = accumulate_or_set(
                     loss_sum,
                     loss,
@@ -1694,10 +1724,11 @@ def _make_explicit_mpmd_train_step(
                     name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
                     out_shardings=param_shardings[stage_index],
                 )
-                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
-                    d_hidden,
-                    out_shardings=activation_shardings[stage_index - 1],
-                )
+                if not prioritize_transfers:
+                    d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                        d_hidden,
+                        out_shardings=activation_shardings[stage_index - 1],
+                    )
                 backward_done.add(key)
                 return
 
@@ -1730,16 +1761,22 @@ def _make_explicit_mpmd_train_step(
                 microbatches[stage_index],
                 d_hidden,
             )
+            if prioritize_transfers:
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                    d_hidden,
+                    out_shardings=activation_shardings[stage_index - 1],
+                )
             grads[stage_index] = accumulate_or_set(
                 grads[stage_index],
                 stage_grads,
                 name=f"grug_1f1b_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
                 out_shardings=param_shardings[stage_index],
             )
-            d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
-                d_hidden,
-                out_shardings=activation_shardings[stage_index - 1],
-            )
+            if not prioritize_transfers:
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                    d_hidden,
+                    out_shardings=activation_shardings[stage_index - 1],
+                )
             backward_done.add(key)
 
         stage_schedules = tuple(std_1f1b_stage_schedule(stage_index) for stage_index in range(num_stages))
@@ -2428,6 +2465,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "JaxPPExplicitMpmdScheduleMode",
     "JaxPPImplementation",
     "initial_state",
     "jaxpp_setup_scripts",

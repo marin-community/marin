@@ -32,6 +32,7 @@ from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import (
     GrugJaxPPConfig,
     GrugTrainerConfig,
+    JaxPPExplicitMpmdScheduleMode,
     JaxPPImplementation,
     JaxPPSchedule,
     SonicFsdpMaterialization,
@@ -238,6 +239,10 @@ def build_pipeline_config() -> GrugJaxPPConfig:
         implementation=implementation,
         mpmd_dim=mpmd_dim,
         stage_layer_counts=env_optional_int_tuple("PP_STAGE_LAYER_COUNTS"),
+        explicit_mpmd_schedule_mode=cast(
+            JaxPPExplicitMpmdScheduleMode,
+            os.environ.get("PP_EXPLICIT_MPMD_SCHEDULE_MODE", "default"),
+        ),
         sonic_fsdp_materialization=cast(
             SonicFsdpMaterialization,
             os.environ.get("PP_SONIC_FSDP_MATERIALIZATION", "per_task"),

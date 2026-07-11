@@ -21,6 +21,7 @@ SUBMIT=false
 RUN_ID=""
 SCHEDULE="std_1f1b"
 IMPLEMENTATION="auto"
+EXPLICIT_MPMD_SCHEDULE_MODE="default"
 SONIC_FSDP_MATERIALIZATION="per_task"
 PIPELINE="true"
 PHYSICAL_STAGES=4
@@ -71,6 +72,8 @@ Options:
   --schedule NAME           gpipe, std_1f1b, eager_1f1b, zero_bubble, interleaved_gpipe,
                             interleaved_1f1b, dualpipe_v, or kimi_k2 (default: std_1f1b).
   --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
+  --explicit-mpmd-schedule-mode NAME
+                            default or transfer_priority (default: default).
   --sonic-fsdp-materialization NAME
                             per_task or staged_per_step (default: per_task).
   --no-pipeline             Run the same model/backend without JaxPP for isolation.
@@ -124,6 +127,7 @@ while [ "$#" -gt 0 ]; do
         --run-id) RUN_ID="$2"; shift 2 ;;
         --schedule) SCHEDULE="$2"; shift 2 ;;
         --implementation) IMPLEMENTATION="$2"; shift 2 ;;
+        --explicit-mpmd-schedule-mode) EXPLICIT_MPMD_SCHEDULE_MODE="$2"; shift 2 ;;
         --sonic-fsdp-materialization) SONIC_FSDP_MATERIALIZATION="$2"; shift 2 ;;
         --no-pipeline) PIPELINE="false"; shift ;;
         --physical-stages) PHYSICAL_STAGES="$2"; shift 2 ;;
@@ -178,6 +182,14 @@ case "$IMPLEMENTATION" in
     auto|explicit_mpmd) ;;
     *)
         echo "ERROR: unsupported implementation: $IMPLEMENTATION" >&2
+        exit 1
+        ;;
+esac
+
+case "$EXPLICIT_MPMD_SCHEDULE_MODE" in
+    default|transfer_priority) ;;
+    *)
+        echo "ERROR: unsupported explicit MPMD schedule mode: $EXPLICIT_MPMD_SCHEDULE_MODE" >&2
         exit 1
         ;;
 esac
@@ -308,6 +320,7 @@ ENV_ARGS=(
     -e MAY_PROFILER_START "$PROFILER_START"
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
     -e PP_IMPLEMENTATION "$IMPLEMENTATION"
+    -e PP_EXPLICIT_MPMD_SCHEDULE_MODE "$EXPLICIT_MPMD_SCHEDULE_MODE"
     -e PP_SONIC_FSDP_MATERIALIZATION "$SONIC_FSDP_MATERIALIZATION"
     -e PP_SCHEDULE "$SCHEDULE"
     -e PP_MPMD_DIM "$PHYSICAL_STAGES"
@@ -402,6 +415,7 @@ nodes: $NODES
 gpus_per_replica: $GPUS_PER_REPLICA
 schedule: $SCHEDULE
 implementation: $IMPLEMENTATION
+explicit_mpmd_schedule_mode: $EXPLICIT_MPMD_SCHEDULE_MODE
 sonic_fsdp_materialization: $SONIC_FSDP_MATERIALIZATION
 pipeline: $PIPELINE
 physical_stages: $PHYSICAL_STAGES
