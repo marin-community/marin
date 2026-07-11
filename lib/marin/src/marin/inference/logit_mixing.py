@@ -165,13 +165,12 @@ class LogitMixingInferenceWorker:
                 "logit mixing request timed out",
                 detail=repr(exc),
             )
-        except Exception as exc:
+        except httpx.HTTPError as exc:
             response = _error_response(
                 request,
                 502,
-                "unexpected logit mixing worker failure",
+                "failed requesting upstream completion",
                 detail=repr(exc),
-                exc_info=True,
             )
         return LeasedInferenceResponse(lease_id=leased_request.lease_id, response=response)
 
@@ -182,15 +181,16 @@ class LogitMixingInferenceWorker:
             return _error_response(request, 400, "logit mixing completions require a string prompt")
         if payload.get("echo", False):
             return _error_response(request, 400, "logit mixing completions do not support echo=true")
-        if int(payload.get("n", 1)) != 1:
+        n = payload.get("n", 1)
+        if not isinstance(n, int) or isinstance(n, bool) or n != 1:
             return _error_response(request, 400, "logit mixing completions require n=1")
         requested_logprobs = payload.get("logprobs")
         if requested_logprobs is not None and (
             not isinstance(requested_logprobs, int) or isinstance(requested_logprobs, bool) or requested_logprobs < 0
         ):
             return _error_response(request, 400, "logprobs must be a non-negative integer or null")
-        max_tokens = int(payload.get("max_tokens", 16))
-        if max_tokens < 0:
+        max_tokens = payload.get("max_tokens", 16)
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 0:
             return _error_response(request, 400, "max_tokens must be non-negative")
 
         completion = self._generate_mixed_completion(client, request, payload, max_tokens=max_tokens)
@@ -401,6 +401,8 @@ def _completion_top_logprobs(payload: Mapping[str, Any]) -> Mapping[str, float]:
         return {}
     top_logprobs = logprobs.get("top_logprobs")
     if not isinstance(top_logprobs, list) or not top_logprobs or not isinstance(top_logprobs[-1], dict):
+        return {}
+    if any(not isinstance(logprob, int | float) or isinstance(logprob, bool) for logprob in top_logprobs[-1].values()):
         return {}
     return {str(token): float(logprob) for token, logprob in top_logprobs[-1].items()}
 
