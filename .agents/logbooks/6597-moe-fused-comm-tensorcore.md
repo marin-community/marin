@@ -2747,3 +2747,45 @@ selected one-output-tile W13-backward pipeline at 66.282220 ms and 51.838545
 useful TFLOP/s/rank. The checksum difference independently means this variant
 would require a finite numerical comparison even if its timing were favorable.
 Per the bounded request, no retry or kernel edit was made.
+
+## 2026-07-10 FUSED-MOE-093 - Fully selected helper4 path reaches 57.1 useful TFLOP/s/rank
+
+Job `/dlwh/bench-semantic-integrated-helper4-selected-20260710-2400` at
+`8c51ec3c93` completed on `cw-rno2a` with Iris state `succeeded`, exit 0, one
+of one task succeeded, and a 3m22.57s task duration. This is the fully selected
+target-shape path: two-buffer K512 semantic W13 forward, cohort-local W2 return
+and source combine, four-helper K512 W2 backward, and the pipelined single-N
+W13 backward.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---|---|---:|---:|---:|
+| Integrated forward | 28.105864, 27.744702, 27.964463 | 27.964463 | 92.199965 | 115.249957 |
+| Integrated fwd+bwd | 135.395309, 135.414665, 135.673697 | 135.414665 | 57.120606 | 71.400757 |
+
+Forward saves 1.371579 ms or 4.68% against the prior K512 selected candidate
+at 29.336042 ms and raises useful throughput from 87.889243 to 92.199965
+TFLOP/s/rank. Against the original complete-forward baseline of 49.051833 ms,
+it saves 21.087370 ms or 42.99% and raises useful throughput by 75.41%.
+
+Fwd+bwd saves 39.420151 ms or 22.55% against the five-helper K512 result of
+174.834816 ms and raises useful throughput from 44.241575 to 57.120606
+TFLOP/s/rank, a 29.11% increase. Against the original 242.802626 ms boundary,
+it saves 107.387961 ms or 44.23%; useful throughput rises from 31.857018 by
+79.30%.
+
+All six repeats reported zero dropped routes, zero routing-policy drops, and
+zero metadata-overflow routes. The integrated schema does not emit separate
+queue-entry, route, or layout-overflow counters. The forward checksum was
+`Infinity` on every repeat and remains non-diagnostic. The fwd+bwd checksum was
+stable at `-9.452085837927071e25`, but differs from both the five-helper K512
+checksum `-1.0907506275226644e26` and the original selected checksum
+`-1.1766203134195027e26`. The four-helper W2-backward kernel passed the split
+finite comparison exactly in FUSED-MOE-091, but this timing run is not a finite
+end-to-end numerical comparison; retain that as the remaining aggregate
+correctness caveat.
+
+The process emitted recoverable 12.5 GiB BFC allocation warnings and
+FABRIC-handle VMM fallbacks, then produced all six repeat rows and both summary
+rows. There was no benchmark error, retry, or kernel edit. Promote this as the
+current performance-selected integrated schedule while keeping finite
+end-to-end comparison as the next correctness gate.
