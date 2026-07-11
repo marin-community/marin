@@ -2028,3 +2028,32 @@ the effective dZ13-then-dW2 phase split and repeated SwiGLU preparation did not
 repay B64-granularity fp32 dW2 atomic accumulation and accumulator resets. Keep
 the atomic-free owned-tile schedule as the selected production candidate; the
 B64 atomic schedule is a negative diagnostic result.
+
+## 2026-07-10 FUSED-MOE-068 - W13 contiguous-row semantic send target
+
+Job `/dlwh/bench-semantic-fused-c4f6-w13f-rowloads-20260710-2050` at
+`c4f6696002` completed three target repeats on `cw-rno2a` with zero drops and
+overflows. Times were `26.063831`, `25.922804`, and `25.743525` ms. Median
+throughput was `66.273189` useful and `82.841487` rounded TFLOP/s/rank; output
+checksum was `1305986465792` in every repeat. The aligned 128-int token metadata
+DMA followed by grouped contiguous 256-element source-row loads is therefore
+the selected supported semantic W13 send path. It is only 0.14% faster than the
+previous `25.9591` ms row-loop baseline and remains far behind the prepacked
+inbox W13/H path.
+
+## 2026-07-10 FUSED-MOE-069 - Integrated selected-kernel target boundary
+
+Job `/dlwh/bench-semantic-fused-c4f6-integrated-20260710-2053` at
+`c4f6696002` ran selected-kernel integrated modes. Forward completed three
+repeats at `48.745531`, `49.051833`, and `49.351792` ms. The median was
+`49.051833` ms with `52.563225` useful and `65.704032` rounded TFLOP/s/rank,
+zero dropped routes, and no structured kernel error. The synthetic target
+inputs overflowed the bf16 output checksum to infinity, so a finite-scale
+correctness comparison remains required.
+
+Forward+backward failed before launching backward kernels. The custom VJP
+returned source-sharded `dx` (`8@expert,32768,2560`) for a replicated primal
+`x` (`8,32768,2560`). This is an API-boundary sharding type mismatch, not a
+kernel failure. The next commit normalizes source tensors and destination
+weights to their production shardings before entering `custom_vjp`, so every
+returned gradient matches the custom rule's primal type.

@@ -299,6 +299,11 @@ def _source_push_moe_mlp_semantic_fused_pallas_mgpu(
         if mesh is None:
             raise ValueError("non-interpreted fused semantic source-push MLP requires an explicit mesh")
         _validate_source_push_semantic_fused_mlp_profile(x, w13, w2, capacity)
+        selected_experts = _constrain_destination_major(selected_experts, mesh)
+        x = _constrain_destination_major(x, mesh)
+        route_weights = _constrain_destination_major(route_weights, mesh)
+        w13 = _constrain_destination_major(w13, mesh)
+        w2 = _constrain_destination_major(w2, mesh)
 
     send_chunks_per_dst, entries_per_dst = _source_push_semantic_fused_queue_geometry(
         rows_per_src_dst=capacity.rows_per_src_dst,
