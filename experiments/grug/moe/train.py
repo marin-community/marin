@@ -8,7 +8,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import jax
@@ -75,7 +75,7 @@ JaxPPSchedule = Literal[
     "kimi_k2",
 ]
 JaxPPImplementation = Literal["auto", "explicit_mpmd"]
-JaxPPExplicitMpmdScheduleMode = Literal["default", "transfer_priority"]
+JaxPPExplicitMpmdScheduleMode = Literal["default", "transfer_priority", "input_gradient_first"]
 SonicFsdpMaterialization = Literal["per_task", "staged_per_step"]
 
 
@@ -94,7 +94,7 @@ class GrugJaxPPConfig:
     sonic_fsdp_materialization: SonicFsdpMaterialization = "per_task"
 
     def __post_init__(self) -> None:
-        if self.explicit_mpmd_schedule_mode not in ("default", "transfer_priority"):
+        if self.explicit_mpmd_schedule_mode not in ("default", "transfer_priority", "input_gradient_first"):
             raise ValueError(f"unknown explicit MPMD schedule mode: {self.explicit_mpmd_schedule_mode}")
         if self.sonic_fsdp_materialization not in ("per_task", "staged_per_step"):
             raise ValueError(f"unknown Sonic FSDP materialization mode: {self.sonic_fsdp_materialization}")
@@ -137,6 +137,19 @@ class GrugJaxPPConfig:
                 )
             if self.microbatches == 1:
                 raise ValueError("transfer_priority explicit MPMD schedule mode requires microbatches > 1")
+        if self.explicit_mpmd_schedule_mode == "input_gradient_first":
+            if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
+                raise ValueError(
+                    "input_gradient_first explicit MPMD schedule mode requires "
+                    "implementation='explicit_mpmd' and schedule='std_1f1b'"
+                )
+            if _pipeline_mpmd_dim(self) != self.stages:
+                raise ValueError("input_gradient_first requires one pipeline stage per MPMD rank")
+            if self.microbatches < self.stages:
+                raise ValueError(
+                    "input_gradient_first requires microbatches >= stages; "
+                    f"got microbatches={self.microbatches}, stages={self.stages}"
+                )
         if self.sonic_fsdp_materialization == "staged_per_step":
             if self.implementation != "explicit_mpmd" or self.schedule != "std_1f1b":
                 raise ValueError(
@@ -892,6 +905,195 @@ def _apply_stage_qb_betas(stage: TransformerPipelineStage, qb_betas: jax.Array) 
     return eqx.tree_at(lambda t: t.blocks, stage, tuple(new_blocks))
 
 
+StageBackwardResiduals = tuple[tuple[jax.Array, ...], tuple[jax.Array, ...]]
+
+
+def _compute_stage(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    mp: jmp.Policy,
+) -> TransformerPipelineStage:
+    return mp.cast_to_compute(_apply_stage_qb_betas(params, qb_betas))
+
+
+def _stack_stage_router_metrics(router_stats: tuple[dict[str, jax.Array], ...]) -> dict[str, jax.Array]:
+    if not router_stats:
+        raise ValueError("pipeline stages must own at least one transformer block")
+    return {
+        "routing_entropy_per_layer": jnp.stack([stats["routing_entropy"] for stats in router_stats], axis=0),
+        "routing_counts_per_layer": jnp.stack([stats["routing_counts"] for stats in router_stats], axis=0),
+        "load_balancing_loss_per_layer": jnp.stack([stats["load_balancing_loss"] for stats in router_stats], axis=0),
+        "router_z_loss_per_layer": jnp.stack([stats["router_z_loss"] for stats in router_stats], axis=0),
+        "qb_beta_per_layer": jnp.stack([stats["qb_beta"] for stats in router_stats], axis=0),
+        "capacity_overflow_per_layer": jnp.stack([stats["capacity_overflow"] for stats in router_stats], axis=0),
+    }
+
+
+def _stage_input_gradient_backward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hidden: jax.Array,
+    batch: GrugLmExample,
+    d_hidden: jax.Array,
+    mp: jmp.Policy,
+) -> tuple[jax.Array, StageBackwardResiduals]:
+    compute_params = _compute_stage(params, qb_betas, mp)
+    block_inputs = []
+    stage_hidden = hidden
+    for local_index in range(len(compute_params.blocks)):
+        block_inputs.append(stage_hidden)
+        stage_hidden, _ = compute_params.run_block(local_index, stage_hidden, batch.attn_mask)
+
+    output_cotangents = [jnp.zeros_like(hidden) for _ in compute_params.blocks]
+    arriving_cotangent = d_hidden
+    for local_index in reversed(range(len(compute_params.blocks))):
+        block_input = block_inputs[local_index]
+        output_cotangents[local_index] = arriving_cotangent
+
+        def activation_projection(
+            stage_input,
+            block_index=local_index,
+            output_cotangent=arriving_cotangent,
+        ):
+            block_output, _ = compute_params.run_block(block_index, stage_input, batch.attn_mask)
+            return jnp.sum(block_output.astype(jnp.float32) * output_cotangent.astype(jnp.float32))
+
+        arriving_cotangent = jax.grad(activation_projection)(block_input)
+
+    return arriving_cotangent, (tuple(block_inputs), tuple(output_cotangents))
+
+
+def _stage_weight_backward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    residuals: StageBackwardResiduals,
+    batch: GrugLmExample,
+    mp: jmp.Policy,
+):
+    block_inputs, output_cotangents = residuals
+
+    def independent_block_projections(stage_params):
+        compute_params = _compute_stage(stage_params, qb_betas, mp)
+        projection = jnp.zeros((), dtype=jnp.float32)
+        for local_index, (block_input, output_cotangent) in enumerate(zip(block_inputs, output_cotangents, strict=True)):
+            block_output, _ = compute_params.run_block(
+                local_index,
+                jax.lax.stop_gradient(block_input),
+                batch.attn_mask,
+            )
+            projection = projection + jnp.sum(
+                block_output.astype(jnp.float32) * jax.lax.stop_gradient(output_cotangent).astype(jnp.float32)
+            )
+        return projection
+
+    return jax.grad(independent_block_projections)(params)
+
+
+def _last_stage_input_gradient_backward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    hidden: jax.Array,
+    batch: GrugLmExample,
+    mp: jmp.Policy,
+    *,
+    logsumexp_weight: float | None,
+) -> tuple[jax.Array, jax.Array, jax.Array, StageBackwardResiduals]:
+    compute_params = _compute_stage(params, qb_betas, mp)
+    block_inputs = []
+    router_stats = []
+    stage_hidden = hidden
+    for local_index in range(len(compute_params.blocks)):
+        block_inputs.append(stage_hidden)
+        stage_hidden, block_router_stats = compute_params.run_block(local_index, stage_hidden, batch.attn_mask)
+        router_stats.append(block_router_stats)
+    router_metrics = _stack_stage_router_metrics(tuple(router_stats))
+    stopped_router_metrics = jax.tree.map(jax.lax.stop_gradient, router_metrics)
+
+    def head_loss(block_output):
+        final_hidden = compute_params.finalize_hidden(block_output)
+        loss, metrics = compute_params.hidden_next_token_loss(
+            final_hidden,
+            batch.tokens,
+            batch.loss_weight,
+            stopped_router_metrics,
+            reduction="mean",
+            logsumexp_weight=logsumexp_weight,
+            return_router_metrics=True,
+        )
+        return loss, metrics["qb_beta_per_layer"]
+
+    (loss, qb_betas_next), arriving_cotangent = jax.value_and_grad(head_loss, has_aux=True)(stage_hidden)
+    output_cotangents = [jnp.zeros_like(hidden) for _ in compute_params.blocks]
+    router_z_loss_scale = compute_params.config.router_z_loss_coef / len(compute_params.blocks)
+    for local_index in reversed(range(len(compute_params.blocks))):
+        block_input = block_inputs[local_index]
+        output_cotangents[local_index] = arriving_cotangent
+
+        def activation_projection(
+            stage_input,
+            block_index=local_index,
+            output_cotangent=arriving_cotangent,
+        ):
+            block_output, block_router_stats = compute_params.run_block(block_index, stage_input, batch.attn_mask)
+            output_projection = jnp.sum(block_output.astype(jnp.float32) * output_cotangent.astype(jnp.float32))
+            return output_projection + router_z_loss_scale * block_router_stats["router_z_loss"]
+
+        arriving_cotangent = jax.grad(activation_projection)(block_input)
+
+    return loss, qb_betas_next, arriving_cotangent, (tuple(block_inputs), tuple(output_cotangents))
+
+
+def _last_stage_weight_backward(
+    params: TransformerPipelineStage,
+    qb_betas: jax.Array,
+    residuals: StageBackwardResiduals,
+    batch: GrugLmExample,
+    mp: jmp.Policy,
+    *,
+    logsumexp_weight: float | None,
+):
+    block_inputs, output_cotangents = residuals
+
+    def independent_projections(stage_params):
+        compute_params = _compute_stage(stage_params, qb_betas, mp)
+        projection = jnp.zeros((), dtype=jnp.float32)
+        block_outputs = []
+        router_stats = []
+        router_z_loss_scale = compute_params.config.router_z_loss_coef / len(compute_params.blocks)
+        for local_index, (block_input, output_cotangent) in enumerate(zip(block_inputs, output_cotangents, strict=True)):
+            block_output, block_router_stats = compute_params.run_block(
+                local_index,
+                jax.lax.stop_gradient(block_input),
+                batch.attn_mask,
+            )
+            block_outputs.append(block_output)
+            router_stats.append(block_router_stats)
+            projection = projection + jnp.sum(
+                block_output.astype(jnp.float32) * jax.lax.stop_gradient(output_cotangent).astype(jnp.float32)
+            )
+            projection = projection + router_z_loss_scale * block_router_stats["router_z_loss"]
+
+        router_metrics = jax.tree.map(
+            jax.lax.stop_gradient,
+            _stack_stage_router_metrics(tuple(router_stats)),
+        )
+        final_hidden = compute_params.finalize_hidden(jax.lax.stop_gradient(block_outputs[-1]))
+        head_loss = cast(
+            jax.Array,
+            compute_params.hidden_next_token_loss(
+                final_hidden,
+                batch.tokens,
+                batch.loss_weight,
+                router_metrics,
+                reduction="mean",
+                logsumexp_weight=logsumexp_weight,
+            ),
+        )
+        return projection + head_loss
+
+    return jax.grad(independent_projections)(params)
+
+
 def _make_explicit_mpmd_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -931,6 +1133,19 @@ def _make_explicit_mpmd_train_step(
     activation_shardings = tuple(
         NamedSharding(mpmd_mesh.unstack[mpmd_index], activation_pspec) for mpmd_index in stage_mpmd_indices
     )
+    backward_residual_shardings = tuple(
+        (
+            tuple(activation_shardings[stage_index] for _ in stage.blocks),
+            tuple(activation_shardings[stage_index] for _ in stage.blocks),
+        )
+        for stage_index, stage in enumerate(sample_state.params)
+    )
+    input_gradient_first_schedules = None
+    if pipeline.explicit_mpmd_schedule_mode == "input_gradient_first":
+        planner_tasks = _require_jaxpp().ZeroBubble(num_stages=num_stages).tasks(pipeline.microbatches)
+        input_gradient_first_schedules = tuple(
+            tuple((task.fwd_or_bwd.name, task.mubatch_idx) for task in stage_tasks) for stage_tasks in planner_tasks
+        )
     qb_shardings = tuple(NamedSharding(mpmd_mesh.unstack[mpmd_index], qb_pspec) for mpmd_index in stage_mpmd_indices)
     stage0_loss_sharding = NamedSharding(mpmd_mesh.unstack[0], P())
     last_loss_sharding = NamedSharding(mpmd_mesh.unstack[stage_mpmd_indices[-1]], P())
@@ -1032,6 +1247,12 @@ def _make_explicit_mpmd_train_step(
 
         return jax.grad(activation_projection, argnums=(0, 1))(params, hidden)
 
+    def stage_input_gradient_backward(params, qb_betas, hidden, batch, d_hidden):
+        return _stage_input_gradient_backward(params, qb_betas, hidden, batch, d_hidden, mp)
+
+    def stage_weight_backward(params, qb_betas, residuals, batch):
+        return _stage_weight_backward(params, qb_betas, residuals, batch, mp)
+
     def last_stage_loss(
         params: TransformerPipelineStage,
         qb_betas: jax.Array,
@@ -1077,6 +1298,26 @@ def _make_explicit_mpmd_train_step(
             return loss
 
         return jax.grad(loss_fn, argnums=(0, 1))(params, hidden)
+
+    def last_stage_input_gradient_backward(params, qb_betas, hidden, batch):
+        return _last_stage_input_gradient_backward(
+            params,
+            qb_betas,
+            hidden,
+            batch,
+            mp,
+            logsumexp_weight=z_loss,
+        )
+
+    def last_stage_weight_backward(params, qb_betas, residuals, batch):
+        return _last_stage_weight_backward(
+            params,
+            qb_betas,
+            residuals,
+            batch,
+            mp,
+            logsumexp_weight=z_loss,
+        )
 
     def update_stage(params: TransformerPipelineStage, opt_state: optax.OptState, grads):
         updates, opt_state = optimizer.update(grads, opt_state, params)
@@ -1581,6 +1822,9 @@ def _make_explicit_mpmd_train_step(
         d_hidden_futures = {}
         forward_done = set()
         backward_done = set()
+        input_backward_done = set()
+        weight_backward_done = set()
+        backward_residuals = {}
         compute_params = (
             {}
             if pipeline.sonic_fsdp_materialization == "staged_per_step"
@@ -1779,14 +2023,158 @@ def _make_explicit_mpmd_train_step(
                 )
             backward_done.add(key)
 
-        stage_schedules = tuple(std_1f1b_stage_schedule(stage_index) for stage_index in range(num_stages))
-        for task_index in range(2 * pipeline.microbatches):
-            for stage_index, stage_schedule in enumerate(stage_schedules):
-                direction, microbatch_index = stage_schedule[task_index]
-                if direction == "fwd":
-                    ensure_forward(stage_index, microbatch_index)
-                else:
-                    ensure_backward(stage_index, microbatch_index)
+        def ensure_input_backward(stage_index: int, microbatch_index: int):
+            nonlocal loss_sum
+            key = (stage_index, microbatch_index)
+            if key in input_backward_done:
+                return
+            microbatches = batches_by_microbatch[microbatch_index]
+            stage_params = stage_compute_params(stage_index)
+
+            if stage_index == num_stages - 1:
+                ensure_forward(stage_index, microbatch_index)
+                loss, stage_qb_betas, d_hidden, residuals = mpmd.task(
+                    last_stage_input_gradient_backward,
+                    name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_input",
+                    out_shardings=(
+                        last_loss_sharding,
+                        qb_shardings[stage_index],
+                        activation_shardings[stage_index],
+                        backward_residual_shardings[stage_index],
+                    ),
+                )(
+                    stage_params,
+                    qb_betas[stage_index],
+                    stage_inputs[key],
+                    microbatches[stage_index],
+                )
+                d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                    d_hidden,
+                    out_shardings=activation_shardings[stage_index - 1],
+                )
+                backward_residuals[key] = residuals
+                loss_sum = accumulate_or_set(
+                    loss_sum,
+                    loss,
+                    name=f"grug_zb_mb{microbatch_index}_accumulate_loss",
+                    out_shardings=last_loss_sharding,
+                )
+                qb_betas_next[stage_index] = accumulate_or_set(
+                    qb_betas_next[stage_index],
+                    stage_qb_betas,
+                    name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_accumulate_qb",
+                    out_shardings=qb_shardings[stage_index],
+                )
+                input_backward_done.add(key)
+                return
+
+            ensure_input_backward(stage_index + 1, microbatch_index)
+            d_hidden = d_hidden_futures[key].done()
+            if stage_index == 0:
+                stage_grads = mpmd.task(
+                    stage0_backward,
+                    name=f"grug_zb_mb{microbatch_index}_stage0_backward",
+                    out_shardings=param_shardings[0],
+                )(stage_params, qb_betas[0], microbatches[0], d_hidden)
+                grads[0] = accumulate_or_set(
+                    grads[0],
+                    stage_grads,
+                    name=f"grug_zb_mb{microbatch_index}_stage0_accumulate_grads",
+                    out_shardings=param_shardings[0],
+                )
+                input_backward_done.add(key)
+                weight_backward_done.add(key)
+                return
+
+            ensure_forward(stage_index, microbatch_index)
+            d_hidden, residuals = mpmd.task(
+                stage_input_gradient_backward,
+                name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_input",
+                out_shardings=(
+                    activation_shardings[stage_index],
+                    backward_residual_shardings[stage_index],
+                ),
+            )(
+                stage_params,
+                qb_betas[stage_index],
+                stage_inputs[key],
+                microbatches[stage_index],
+                d_hidden,
+            )
+            d_hidden_futures[(stage_index - 1, microbatch_index)] = mpmd.transfer(
+                d_hidden,
+                out_shardings=activation_shardings[stage_index - 1],
+            )
+            backward_residuals[key] = residuals
+            input_backward_done.add(key)
+
+        def ensure_weight_backward(stage_index: int, microbatch_index: int):
+            key = (stage_index, microbatch_index)
+            if key in weight_backward_done:
+                return
+            ensure_input_backward(stage_index, microbatch_index)
+            if stage_index == 0:
+                return
+
+            microbatches = batches_by_microbatch[microbatch_index]
+            stage_params = stage_compute_params(stage_index)
+            if stage_index == num_stages - 1:
+                stage_grads = mpmd.task(
+                    last_stage_weight_backward,
+                    name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_weight",
+                    out_shardings=param_shardings[stage_index],
+                )(
+                    stage_params,
+                    qb_betas[stage_index],
+                    backward_residuals[key],
+                    microbatches[stage_index],
+                )
+            else:
+                stage_grads = mpmd.task(
+                    stage_weight_backward,
+                    name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_backward_weight",
+                    out_shardings=param_shardings[stage_index],
+                )(
+                    stage_params,
+                    qb_betas[stage_index],
+                    backward_residuals[key],
+                    microbatches[stage_index],
+                )
+            del backward_residuals[key]
+            grads[stage_index] = accumulate_or_set(
+                grads[stage_index],
+                stage_grads,
+                name=f"grug_zb_mb{microbatch_index}_stage{stage_index}_accumulate_grads",
+                out_shardings=param_shardings[stage_index],
+            )
+            weight_backward_done.add(key)
+
+        if pipeline.explicit_mpmd_schedule_mode == "input_gradient_first":
+            if input_gradient_first_schedules is None:
+                raise ValueError("input-gradient-first planner schedules were not initialized")
+            planner_schedules = input_gradient_first_schedules
+            for task_index in range(max(len(stage_schedule) for stage_schedule in planner_schedules)):
+                for stage_index, stage_schedule in enumerate(planner_schedules):
+                    if task_index >= len(stage_schedule):
+                        continue
+                    task_type, microbatch_index = stage_schedule[task_index]
+                    if task_type == "FWD":
+                        ensure_forward(stage_index, microbatch_index)
+                    elif task_type == "BWD_I":
+                        ensure_input_backward(stage_index, microbatch_index)
+                    elif task_type == "BWD_W":
+                        ensure_weight_backward(stage_index, microbatch_index)
+                    else:
+                        raise ValueError(f"unexpected ZeroBubble planner task type: {task_type}")
+        else:
+            stage_schedules = tuple(std_1f1b_stage_schedule(stage_index) for stage_index in range(num_stages))
+            for task_index in range(2 * pipeline.microbatches):
+                for stage_index, stage_schedule in enumerate(stage_schedules):
+                    direction, microbatch_index = stage_schedule[task_index]
+                    if direction == "fwd":
+                        ensure_forward(stage_index, microbatch_index)
+                    else:
+                        ensure_backward(stage_index, microbatch_index)
 
         if loss_sum is None:
             raise ValueError("explicit 1F1B did not accumulate any microbatch losses")

@@ -833,6 +833,38 @@ class TransformerPipelineStage(eqx.Module):
         return self.embed_gated_norm(self.embed_norm(hidden))
 
     @named_call
+    def run_block(
+        self,
+        local_index: int,
+        hidden: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array | None = None,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        """Run one stage-local block with the same policy as :meth:`block_range`."""
+        if mask is None:
+            mask = AttentionMask.causal()
+        if not 0 <= local_index < len(self.blocks):
+            raise ValueError(f"local block index must be in [0, {len(self.blocks)}), got {local_index}")
+
+        layer_index = self.start_layer + local_index
+        is_last = layer_index == self.config.num_layers - 1
+        is_long = layer_index % 4 == 3 or is_last
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        layer_mask = AttentionMask(
+            is_causal=True,
+            sliding_window=None if is_long else self.config.sliding_window,
+            segment_ids=segment_ids,
+        )
+        return _run_block_with_remat(
+            self.blocks[local_index],
+            hidden,
+            layer_mask,
+            use_pko=is_long and not self.config.disable_pko,
+            disable_rope=is_long and self.config.disable_long_rope,
+            remat_mode=self.config.remat_mode,
+            effectful_moe=self.config.moe_implementation == "deepep",
+        )
+
+    @named_call
     def block_range(
         self,
         hidden: Float[Array, "B S D"],
@@ -845,28 +877,9 @@ class TransformerPipelineStage(eqx.Module):
         if not self.blocks:
             raise ValueError("pipeline stages must own at least one transformer block")
 
-        cfg = self.config
-        num_blocks = self.config.num_layers
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
         moe_router_stats: list[dict[str, jax.Array]] = []
-        for local_index, block in enumerate(self.blocks):
-            layer_index = self.start_layer + local_index
-            is_last = layer_index == num_blocks - 1
-            is_long = layer_index % 4 == 3 or is_last
-            layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long and not cfg.disable_pko
-            disable_rope = is_long and cfg.disable_long_rope
-            hidden, router_stats = _run_block_with_remat(
-                block,
-                hidden,
-                layer_mask,
-                use_pko=use_pko,
-                disable_rope=disable_rope,
-                remat_mode=cfg.remat_mode,
-                effectful_moe=cfg.moe_implementation == "deepep",
-            )
+        for local_index in range(len(self.blocks)):
+            hidden, router_stats = self.run_block(local_index, hidden, mask)
             moe_router_stats.append(router_stats)
 
         if mark_stage_end:

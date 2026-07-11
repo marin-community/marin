@@ -73,7 +73,7 @@ Options:
                             interleaved_1f1b, dualpipe_v, or kimi_k2 (default: std_1f1b).
   --implementation NAME     PP_IMPLEMENTATION: auto or explicit_mpmd (default: auto).
   --explicit-mpmd-schedule-mode NAME
-                            default or transfer_priority (default: default).
+                            default, transfer_priority, or input_gradient_first (default: default).
   --sonic-fsdp-materialization NAME
                             per_task or staged_per_step (default: per_task).
   --no-pipeline             Run the same model/backend without JaxPP for isolation.
@@ -187,12 +187,32 @@ case "$IMPLEMENTATION" in
 esac
 
 case "$EXPLICIT_MPMD_SCHEDULE_MODE" in
-    default|transfer_priority) ;;
+    default|transfer_priority|input_gradient_first) ;;
     *)
         echo "ERROR: unsupported explicit MPMD schedule mode: $EXPLICIT_MPMD_SCHEDULE_MODE" >&2
         exit 1
         ;;
 esac
+
+if [ "$EXPLICIT_MPMD_SCHEDULE_MODE" = input_gradient_first ]; then
+    if [ "$IMPLEMENTATION" != explicit_mpmd ] || [ "$SCHEDULE" != std_1f1b ]; then
+        echo "ERROR: input_gradient_first requires --implementation explicit_mpmd --schedule std_1f1b" >&2
+        exit 1
+    fi
+    if [ -n "$LOGICAL_STAGES" ]; then
+        INPUT_GRADIENT_FIRST_STAGES="$LOGICAL_STAGES"
+    else
+        INPUT_GRADIENT_FIRST_STAGES="$PHYSICAL_STAGES"
+    fi
+    if [ "$INPUT_GRADIENT_FIRST_STAGES" -ne "$PHYSICAL_STAGES" ]; then
+        echo "ERROR: input_gradient_first requires one logical stage per physical rank" >&2
+        exit 1
+    fi
+    if [ "$MICROBATCHES" -lt "$INPUT_GRADIENT_FIRST_STAGES" ]; then
+        echo "ERROR: input_gradient_first requires --microbatches >= pipeline stages" >&2
+        exit 1
+    fi
+fi
 
 case "$MOE_IMPLEMENTATION" in
     ring|ring_fused|ring_local_combine|ring_ppermute|ragged_all_to_all|deepep|scatter|sonic) ;;
