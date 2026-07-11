@@ -15,6 +15,8 @@ from rigging.timing import ExponentialBackoff
 
 from tests.evals.openai_stub import DeterministicOpenAIStub, serve_deterministic_openai_stub
 
+REQUEST_TIMEOUT = 5
+
 
 def test_logit_mixing_worker_returns_mixed_completion() -> None:
     with (
@@ -31,7 +33,7 @@ def test_logit_mixing_worker_returns_mixed_completion() -> None:
         response = httpx.post(
             f"{mixed.endpoint.base_url}/completions",
             json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 1, "logprobs": 2},
-            timeout=5,
+            timeout=REQUEST_TIMEOUT,
         )
 
     assert response.status_code == 200
@@ -57,7 +59,7 @@ def test_logit_mixing_worker_omits_unrequested_logprobs() -> None:
         response = httpx.post(
             f"{mixed.endpoint.base_url}/completions",
             json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 1},
-            timeout=5,
+            timeout=REQUEST_TIMEOUT,
         )
 
     assert response.status_code == 200
@@ -85,7 +87,7 @@ def test_logit_mixing_worker_generates_autoregressive_steps() -> None:
         response = httpx.post(
             f"{mixed.endpoint.base_url}/completions",
             json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 2, "logprobs": 2},
-            timeout=5,
+            timeout=REQUEST_TIMEOUT,
         )
 
     assert response.status_code == 200
@@ -109,7 +111,7 @@ def test_logit_mixing_worker_ignores_inactive_teacher_stop() -> None:
         response = httpx.post(
             f"{mixed.endpoint.base_url}/completions",
             json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 2},
-            timeout=5,
+            timeout=REQUEST_TIMEOUT,
         )
 
     assert response.status_code == 200
@@ -131,14 +133,14 @@ def test_logit_mixing_worker_enforces_end_to_end_timeout() -> None:
             teacher=teacher,
             student=student,
             alpha=0.5,
-            request_timeout_seconds=5,
+            request_timeout_seconds=REQUEST_TIMEOUT,
             clock=lambda: next(times),
         ) as mixed,
     ):
         response = httpx.post(
             f"{mixed.endpoint.base_url}/completions",
             json={"model": mixed.endpoint.model, "prompt": "A", "max_tokens": 2},
-            timeout=5,
+            timeout=REQUEST_TIMEOUT,
         )
 
     assert response.status_code == 504
@@ -150,7 +152,7 @@ def test_logit_mixing_proxy_models_returns_mixed_model() -> None:
         serve_deterministic_openai_stub(model="student", completion_top_logprobs={}) as student,
         _serve_logit_mixing_proxy(teacher=teacher, student=student, alpha=0.5) as mixed,
     ):
-        response = httpx.get(f"{mixed.endpoint.base_url}/models", timeout=5)
+        response = httpx.get(f"{mixed.endpoint.base_url}/models", timeout=REQUEST_TIMEOUT)
 
     assert response.status_code == 200
     assert response.json()["data"][0]["id"] == "mixed"
@@ -162,7 +164,7 @@ def _serve_logit_mixing_proxy(
     teacher: DeterministicOpenAIStub,
     student: DeterministicOpenAIStub,
     alpha: float,
-    request_timeout_seconds: float = 5,
+    request_timeout_seconds: float = REQUEST_TIMEOUT,
     clock: Callable[[], float] = monotonic,
 ) -> Iterator[RunningModel]:
     broker = InferenceBroker(request_lease_timeout_seconds=30)
@@ -182,11 +184,11 @@ def _serve_logit_mixing_proxy(
         serve_inference_proxy(
             broker=broker,
             model="mixed",
-            request_timeout_seconds=5,
-            readiness_timeout_seconds=5,
+            request_timeout_seconds=REQUEST_TIMEOUT,
+            readiness_timeout_seconds=REQUEST_TIMEOUT,
             max_pending_requests=8,
             response_fetch_batch_size=8,
-            server_start_timeout_seconds=5,
+            server_start_timeout_seconds=REQUEST_TIMEOUT,
         ) as running_model,
         run_logit_mixing_worker(
             worker,

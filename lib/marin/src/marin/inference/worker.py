@@ -262,7 +262,7 @@ def inference_error_response(
     detail: str | None = None,
     exc_info: bool = False,
 ) -> InferenceResponse:
-    """Build a bounded JSON error response for a brokered request."""
+    """Build a JSON error response for a brokered request."""
 
     logger.warning(
         "InferenceWorker returning error response request_id=%s method=%s path=%s status_code=%d error=%s detail=%s",
