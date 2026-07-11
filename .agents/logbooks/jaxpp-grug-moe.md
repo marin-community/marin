@@ -34,7 +34,7 @@ author: dlwh
 - Prioritizing explicit pipeline transfer construction ahead of local QB/loss/gradient accumulation is a clean negative. The pinned reduced run averaged `8.9243` MFU and `0.220987s`, versus `9.1735` and `0.214968s` for default ordering. Construction order is not the missing overlap mechanism; the next credible schedule change must split the combined activation/weight-gradient backward task.
 - Splitting backward into input-gradient and weight-gradient tasks is operational and gradient-correct but a hard performance negative. The reduced H100 gate averaged `6.5356` central MFU and `0.301733s`, versus `9.1735` and `0.214968s` for the combined-backward control. Independent block rematerialization costs more than zero-bubble placement can recover.
 - Exact two-chunk bulk ring preserves output/drop/VJP semantics and takes its fast path at the target EP8 microbatch, but direct H100 timing regresses forward by `5.30%` and forward-backward by `13.98%`. XLA latency hiding does not offset doubled collective and Pallas launch counts; do not register this backend for training.
-- EP-local QuACK grouped GEMM is the first direct-kernel result to clear the performance gate: at the exact e64/top-k4/d2560 EP8 microbatch it improves median forward by `16.0%` and forward-backward by `10.8%`. It is not promotable because its BF16 output fails the existing tolerance with relative L2 `0.00613` and mismatch fraction `2.614%`; errors are uniform across ranks and all four gradient groups pass the configured tolerance. Keep it benchmark-only while resolving output parity.
+- EP-local QuACK grouped GEMM is the first direct-kernel result to clear the performance gate: at the exact e64/top-k4/d2560 EP8 microbatch it improves median forward by `16.0%` and forward-backward by `10.8%`. A one-H100 exact-shape repro proves the output difference comes from QuACK's fused SwiGLU fast approximate `exp2`/reciprocal, not the EP adapter or grouped GEMMs: W13 and W2 are bitwise identical with shared inputs, while fused activation numerics reproduce the EP8 error. It remains benchmark-only pending an explicit decision about accepting approximate activation semantics.
 
 ## Hypothesis Queue
 
@@ -47,7 +47,7 @@ author: dlwh
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
 - `GRUG-JAXPP-009`: DeepEP transport as a replacement for ring EP. Blocker: the pinned DeepEP FFI now builds and launches on RNO2A after adding CUDA runtime linkage, attention-only remat, and a 512-thread dispatch kernel, but both 8-expert and 64-expert non-pipelined controls become NaN after one finite update and the explicit pipeline is NaN on its first step. Resume after a DeepEP dispatch/combine VJP or runtime-state correctness fix.
-- `GRUG-JAXPP-013`: Replace EP-local Pallas expert MLPs with QuACK/Sonic grouped GEMMs while retaining the proven single-chunk ring transport. Blocker: the exact EP8 benchmark improves forward-backward by `10.8%`, but BF16 output parity fails with relative L2 `0.00613` and mismatch fraction `2.614%`. Resume after explaining or eliminating the output discrepancy without weakening the configured tolerance.
+- `GRUG-JAXPP-013`: Replace EP-local Pallas expert MLPs with QuACK/Sonic grouped GEMMs while retaining the proven single-chunk ring transport. Blocker: the exact EP8 benchmark improves forward-backward by `10.8%`; the strict output mismatch is fully attributed to QuACK's fused approximate SwiGLU, while W13/W2 grouped GEMMs are bitwise identical with shared inputs. Resume only after an explicit decision to accept approximate activation semantics or after implementing an exact SiLU path that retains the gain.
 
 ### Falsified / Dead End
 - Delaying data-parallel gradient reduction until after microbatch accumulation is performance-neutral at batch128/m4: mean MFU `7.5648` versus `7.5946` baseline.
@@ -2139,3 +2139,23 @@ author: dlwh
   - Do not change tolerances to accept the result. Keep the adapter private and diagnostic-only until the output discrepancy is explained or removed under the existing gate.
 - Next action:
   - Isolate the output discrepancy in the smallest direct QuACK-versus-Pallas grouped-MLP case at the exact dtype/activation shape, checking accumulation precision and activation implementation. Promote to a reduced JaxPP pipeline gate only after strict output parity passes.
+
+### 2026-07-11 08:54 PDT - QuACK discrepancy isolated to approximate SwiGLU
+- Hypothesis: The EP8 output mismatch is caused by either an adapter layout/ownership bug, grouped-GEMM accumulation differences, or QuACK's fused activation math.
+- Commit Hashes:
+  - `1a58bb61e8`: standalone one-H100 grouped-MLP numerical reproducer and metric test.
+  - `b18cdd86a3`: comparison from a common recomputed preactivation.
+  - `daf199f8ff`: decoding of QuACK's interleaved gated-preactivation layout.
+- Command: one-H100 job `/dlwh/quack-grouped-mlp-numerics-r3-20260711-0848`, BF16, 8 experts, 16 rows per expert, hidden dimension 2560, intermediate dimension 1280, comparing Pallas-Triton, XLA, and QuACK W13, SwiGLU, W2, and full MLP outputs. The job succeeded with no task failures and no live resources remain.
+- Results:
+  - QuACK W13 output is bitwise identical to Pallas after decoding QuACK's internal interleaved `[gate_0, up_0, gate_1, up_1, ...]` storage.
+  - QuACK W2 and Pallas W2 outputs are bitwise identical when supplied the same hidden activation. Pallas-Triton and XLA are bitwise identical end to end.
+  - From the exact same preactivation, QuACK fused SwiGLU versus JAX `silu(gate) * up` has relative L2 error `0.00465063` and maximum absolute error `0.0625`. QuACK implements sigmoid with fast approximate FP32 `exp2` and reciprocal before converting the fused activation output to BF16.
+  - The resulting full MLP output has relative L2 error `0.00519745`, maximum absolute error `0.01171875`, and mismatch fraction `2.5528%`. This closely reproduces the EP8 relative L2 `0.00612677` and mismatch fraction `2.614%`.
+  - Focused validation passes: `uv run pytest -q lib/levanter/tests/grug/test_benchmark_ep_ring.py` reports `9 passed`; `./infra/pre-commit.py --changed-files --fix` passes.
+- Interpretation:
+  - The EP adapter, routing, weight layouts, and grouped GEMMs are exonerated. The output difference is deterministic, intrinsic to QuACK's fused approximate activation, and quantitatively reproduced without EP or JaxPP.
+  - This is a semantics decision rather than an unresolved implementation bug. Strict parity correctly rejects the backend because it does not compute the same BF16 function as the current Pallas/JAX path, even though the approximation is bounded and gradients passed the prior gate.
+  - Do not silently relax tolerances. A reduced pipeline training gate requires explicit approval to treat QuACK's approximate SwiGLU as an intentional model-kernel change, or an exact-SiLU QuACK variant that preserves the measured speedup.
+- Next action:
+  - Ask whether approximate SwiGLU is acceptable for this research branch. If approved, add an explicit opt-in semantic mode and run finite-step/loss-trajectory parity before the L24 performance comparison; otherwise investigate an exact activation variant and retain strict parity.
