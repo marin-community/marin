@@ -3561,3 +3561,23 @@ routing-drop, and metadata-overflow counters were zero; timing and numerical
 rows were unavailable. The dX-worker role reuse is therefore reduced-correct
 but target-unsafe and is rejected. Production `FULL` returns to the serialized,
 bit-exact baseline while a separate post-kernel source combine is evaluated.
+
+## 2026-07-11 FUSED-MOE-116 - No-combine target establishes two-kernel floor
+
+Job `/dlwh/w13b-no-combine-target-a0bb` tested the 128-CTA staging+dX+dW
+kernel at commit `a0bba573e8` with source combine compiled out. The target
+geometry and routing matched the other target W13-backward runs. Iris and its
+only task succeeded with exit 0; every repeat produced checksum `13505684480`
+and zero drop, metadata-overflow, queue-overflow, and layout-overflow counters.
+
+| Repeat | Time (ms) | Useful TFLOP/s/rank | Rounded TFLOP/s/rank |
+|---:|---:|---:|---:|
+| 0 | 62.464365 | 55.006944 | 68.758680 |
+| 1 | 62.032635 | 55.389778 | 69.237222 |
+| 2 | 62.170948 | 55.266551 | 69.083188 |
+
+The median was `62.170948 ms`, with min/max `62.032635/62.464365 ms`. This is
+1.307 ms faster than the earlier unvalidated concurrent full timing and 21.208
+ms faster than the correct in-kernel serialized baseline. The production
+replacement now makes this queue explicit and launches a source-local Pallas
+combine kernel after the fused compute/transport kernel completes.

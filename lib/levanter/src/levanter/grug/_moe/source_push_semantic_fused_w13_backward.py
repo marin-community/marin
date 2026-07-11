@@ -526,6 +526,9 @@ def _source_push_semantic_fused_w13_backward_sharded(
     ep_size = x.shape[0]
     if mesh.shape[SOURCE_PUSH_MESH_AXIS] != ep_size:
         raise ValueError(f"mesh size must match EP size {ep_size}, got {mesh.shape[SOURCE_PUSH_MESH_AXIS]}")
+    kernel_diagnostic = diagnostic
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
+        kernel_diagnostic = _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE
     kernel = _make_source_push_semantic_fused_w13_backward_kernel(
         ep_size=ep_size,
         tokens_per_source=x.shape[1],
@@ -536,7 +539,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
         send_chunks_per_dst=metadata.forward.send_chunks_per_dst,
         dtype=x.dtype,
         config=config,
-        diagnostic=diagnostic,
+        diagnostic=kernel_diagnostic,
     )
 
     def local_fn(
@@ -558,7 +561,7 @@ def _source_push_semantic_fused_w13_backward_sharded(
         dz_local,
         w_local,
     ):
-        x_expert_local, _dx_return, dx_local, dw_local = kernel(
+        x_expert_local, dx_return_local, dx_local, dw_local = kernel(
             x_local[0],
             token_ids_local[0],
             send_valid_local[0],
@@ -578,11 +581,10 @@ def _source_push_semantic_fused_w13_backward_sharded(
             w_local[0],
         )
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
-            # x_expert is remote-written scratch used inside the custom call. Keep
-            # its output buffer live across shard_map so XLA cannot recycle it.
+            # x_expert is remote-written scratch used inside the custom call.
             x_guard = lax.optimization_barrier(x_expert_local[0, 0, 0].astype(jnp.float32))
-            dx_local = dx_local.at[0, 0].add(x_guard - x_guard)
-            return dx_local[None, ...], dw_local[None, ...]
+            dw_local = dw_local.at[0, 0, 0].add(x_guard - x_guard)
+            return dx_return_local[None, ...], dw_local[None, ...]
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
             return (x_expert_local[None, ...],)
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE:
@@ -597,7 +599,10 @@ def _source_push_semantic_fused_w13_backward_sharded(
     destination_4d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     source_token_sharding = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
-        out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None), P(SOURCE_PUSH_MESH_AXIS, None, None, None))
+        out_specs = (
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        )
     elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
         out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None, None),)
     elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE:
@@ -660,7 +665,18 @@ def _source_push_semantic_fused_w13_backward_sharded(
         jax.sharding.reshard(w13, destination_4d),
     )
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
-        return outputs
+        dx_return, dw13 = cast(tuple[Array, Array], outputs)
+        dx = _source_push_semantic_dx_combine_sharded(
+            dx_return,
+            metadata.route_dst_ordinal,
+            metadata.route_chunk,
+            metadata.route_block,
+            metadata.route_row,
+            metadata.route_valid,
+            config=config,
+            mesh=mesh,
+        )
+        return dx, dw13
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
         (x_expert,) = cast(tuple[Array], outputs)
         return x_expert, jnp.zeros_like(x, dtype=jnp.float32), jnp.zeros_like(w13, dtype=jnp.float32)
@@ -671,6 +687,124 @@ def _source_push_semantic_fused_w13_backward_sharded(
         return x_expert, dx, jnp.zeros_like(w13, dtype=jnp.float32)
     x_expert, dw13 = cast(tuple[Array, Array], outputs)
     return x_expert, jnp.zeros_like(x, dtype=jnp.float32), dw13
+
+
+def _source_push_semantic_dx_combine_sharded(
+    dx_return: Array,
+    route_dst_ordinal: Array,
+    route_chunk: Array,
+    route_block: Array,
+    route_row: Array,
+    route_valid: Array,
+    *,
+    config: SourcePushSemanticFusedW13BackwardConfig,
+    mesh: Mesh | AbstractMesh,
+) -> Array:
+    tokens_per_source = route_valid.shape[1]
+    hidden_dim = dx_return.shape[-1]
+    kernel = _make_source_push_semantic_dx_combine_kernel(
+        tokens_per_source=tokens_per_source,
+        hidden_dim=hidden_dim,
+        topk=route_valid.shape[-1],
+        dtype=dx_return.dtype,
+        config=config,
+    )
+
+    def local_fn(
+        dx_return_local, route_dst_local, route_chunk_local, route_block_local, route_row_local, route_valid_local
+    ):
+        dx_local = kernel(
+            dx_return_local[0],
+            route_dst_local[0],
+            route_chunk_local[0],
+            route_block_local[0],
+            route_row_local[0],
+            route_valid_local[0],
+        )
+        return dx_local[None, ...]
+
+    source_3d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None))
+    source_5d = NamedSharding(mesh, P(SOURCE_PUSH_MESH_AXIS, None, None, None, None))
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+        ),
+        out_specs=P(SOURCE_PUSH_MESH_AXIS, None, None),
+        check_vma=False,
+    )(
+        jax.sharding.reshard(dx_return, source_5d),
+        jax.sharding.reshard(route_dst_ordinal, source_3d),
+        jax.sharding.reshard(route_chunk, source_3d),
+        jax.sharding.reshard(route_block, source_3d),
+        jax.sharding.reshard(route_row, source_3d),
+        jax.sharding.reshard(route_valid.astype(jnp.int32), source_3d),
+    )
+
+
+def _make_source_push_semantic_dx_combine_kernel(
+    *,
+    tokens_per_source: int,
+    hidden_dim: int,
+    topk: int,
+    dtype: jnp.dtype,
+    config: SourcePushSemanticFusedW13BackwardConfig,
+):
+    if hidden_dim % config.block_hidden:
+        raise ValueError(f"hidden dim {hidden_dim} must be divisible by block_hidden={config.block_hidden}")
+    token_blocks = math.ceil(tokens_per_source / config.combine_token_block)
+    hidden_tiles = hidden_dim // config.block_hidden
+
+    def body(
+        dx_return_ref,
+        route_dst_ref,
+        route_chunk_ref,
+        route_block_ref,
+        route_row_ref,
+        route_valid_ref,
+        dx_ref,
+    ) -> None:
+        token_block = pl.program_id(0)
+        hidden_tile = pl.program_id(1)
+        token_start = token_block * config.combine_token_block
+        hidden_start = hidden_tile * config.block_hidden
+
+        @pl.loop(0, config.combine_token_block)
+        def _token_loop(token_offset) -> None:
+            token = token_start + token_offset
+
+            @pl.when(token < tokens_per_source)
+            def _combine_token() -> None:
+                acc = jnp.zeros((config.block_hidden,), dtype=jnp.float32)
+                for route_slot in range(topk):
+                    destination_ordinal = route_dst_ref[token, route_slot]
+                    chunk = route_chunk_ref[token, route_slot]
+                    block = route_block_ref[token, route_slot]
+                    row = route_row_ref[token, route_slot]
+                    route_value = dx_return_ref[
+                        destination_ordinal,
+                        chunk,
+                        block * config.compute_m + row,
+                        pl.ds(hidden_start, config.block_hidden),
+                    ].astype(jnp.float32)
+                    valid = route_valid_ref[token, route_slot] != 0
+                    acc += jnp.where(valid, route_value, jnp.zeros((), dtype=jnp.float32))
+
+                dx_ref[token, pl.ds(hidden_start, config.block_hidden)] = acc
+
+    return mgpu.kernel(
+        body,
+        out_shape=jax.ShapeDtypeStruct((tokens_per_source, hidden_dim), jnp.float32),
+        grid=(token_blocks, hidden_tiles),
+        grid_names=("token_block", "hidden_tile"),
+        compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane),
+    )
 
 
 def _make_source_push_semantic_fused_w13_backward_kernel(
