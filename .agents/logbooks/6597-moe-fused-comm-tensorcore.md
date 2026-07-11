@@ -1999,3 +1999,32 @@ Failed 12.50 GiB BFC allocator attempts were logged at
 `2026-07-11T01:07:54.405280Z` and `2026-07-11T01:08:04.406734Z`; the structured
 failure arrived about 38 seconds after the first warning, inside the 10-minute
 no-progress cutoff.
+
+## 2026-07-10 FUSED-MOE-066 - Aligned W13 index SMEM lowering failures
+
+Job `/dlwh/bench-semantic-fused-596b-w13f-index-smem-20260710-2037` at
+`596b024ae3` reached terminal Iris state `succeeded` but emitted no repeat row.
+The aligned 128-int GMEM-to-SMEM metadata copy lowered; the subsequent 8-int
+SMEM vector load failed in `plan_tiled_transfer` with `ZeroDivisionError:
+integer modulo by zero`. Job
+`/dlwh/bench-semantic-fused-2856-w13f-index-smem-20260710-2042` at
+`2856b8882f` replaced that load with scalar SMEM loads plus `jnp.stack`; it also
+reached terminal `succeeded` but failed lowering because `stack` is not
+implemented for Lane lowering with warpgroup user semantics. Both jobs had
+zero routing drops and no timing row. The next retry assembles the vector with
+layout-preserving compare/select operations and no `stack` primitive.
+
+## 2026-07-10 FUSED-MOE-067 - B64 atomic W2 backward comparison
+
+Job `/dlwh/bench-semantic-fused-2856-w2b-b64-atomic-20260710-2042` at
+`2856b8882f` completed three target repeats with zero drops and overflows. Times
+were `123.716365`, `123.032341`, and `122.844066` ms; the median was
+`123.032341` ms, with `13.963702` useful and `17.454627` rounded
+TFLOP/s/rank. The output checksum was `127795200` in every repeat.
+
+This is 3.43% slower than the atomic-free compact-owner result
+`118.949477` ms / `14.442997` useful TFLOP/s/rank in FUSED-MOE-061. Removing
+the effective dZ13-then-dW2 phase split and repeated SwiGLU preparation did not
+repay B64-granularity fp32 dW2 atomic accumulation and accumulator resets. Keep
+the atomic-free owned-tile schedule as the selected production candidate; the
+B64 atomic schedule is a negative diagnostic result.

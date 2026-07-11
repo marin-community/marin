@@ -563,10 +563,13 @@ def _make_source_push_semantic_fused_w13_kernel(
                                     RAW_GATHER_ROW_LAYOUT,
                                 )
                                 row_valid = row_start + row_offsets < valid_rows
-                                tokens = mgpu.layout_cast(
-                                    jnp.stack(tuple(token_smem[row_start + row] for row in range(RAW_GATHER_ROWS))),
-                                    RAW_GATHER_ROW_LAYOUT,
-                                )
+                                tokens = jnp.zeros_like(row_offsets)
+                                for row in range(RAW_GATHER_ROWS):
+                                    tokens = jnp.where(
+                                        row_offsets == row,
+                                        token_smem[row_start + row],
+                                        tokens,
+                                    )
                                 safe_tokens = jnp.where(row_valid, tokens, 0)
                                 x_tile = x_ref[safe_tokens[:, None], hidden_offsets[None, :]]
                                 tile_smem[pl.ds(row_start, RAW_GATHER_ROWS), :] = jnp.where(
