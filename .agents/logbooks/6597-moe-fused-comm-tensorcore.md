@@ -2748,6 +2748,100 @@ useful TFLOP/s/rank. The checksum difference independently means this variant
 would require a finite numerical comparison even if its timing were favorable.
 Per the bounded request, no retry or kernel edit was made.
 
+## 2026-07-11 FUSED-MOE-098 - Integrated retry clears route sharding but faults in backward
+
+Job `/dlwh/integrated-compare-d237` tested the reduced integrated forward and
+fwd+bwd comparisons at `d237d620ea` on `cw-rno2a`. Exactly one H100x8 job was
+launched. The shape was EP8, T128/rank, H2560, I1280, E4/rank, top-k 2,
+capacity factor 4.0, random routing seed 0, bf16, JAX plan metadata, zero
+warmups, one step, one repeat, and separately compiled reference and Pallas
+executions.
+
+Command:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name integrated-compare-d237 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_mlp_forward_compare,semantic_fused_mlp_forward_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha d237d620ea --jsonl scratch/integrated-compare-d237.jsonl
+```
+
+Iris reported terminal state `succeeded`, exit 0, one of one task succeeded,
+and a 2m02.81s duration. This is a harness-level false success for the backward
+mode: the forward comparison emitted a repeat and summary row, then the
+backward execution caused `CUDA_ERROR_ILLEGAL_ADDRESS` on all eight devices and
+emitted no result row. The debug-exception wrapper still exited zero.
+
+| Forward host metric | Result |
+|---|---:|
+| `y_max_abs_diff` | 27712.0 |
+| `y_mean_abs_diff` | 122.16789245605469 |
+| `y_expected_abs_sum` | 35432582398.5625 |
+| `y_observed_abs_sum` | 35438733167.515625 |
+| `y_least_squares_scale` | 0.9997958680757424 |
+| `y_cosine_similarity` | 0.9996540069856641 |
+| `expected_y_nonfinite_error_count` | 0.0 |
+| `observed_y_nonfinite_error_count` | 0.0 |
+| `dropped_routes_error_count` | 0.0 |
+| candidate `dropped_routes` | 0 |
+| candidate `routing_dropped_routes` | 0 |
+| candidate `metadata_overflow_routes` | 0 |
+
+The forward diagnostic took 57.963894 ms and reported 0.086878 useful and
+0.347512 rounded TFLOP/s/rank. This reduced-shape comparison timing is not a
+target-shape performance result. Its output checksum was `70871343104.0`.
+
+No backward host metrics were produced:
+
+| Gradient | Absolute difference | Scale / cosine | Nonfinite counts |
+|---|---|---|---|
+| `dx` | unavailable | unavailable | unavailable |
+| `d_route_weights` | unavailable | unavailable | unavailable |
+| `dw13` | unavailable | unavailable | unavailable |
+| `dw2` | unavailable | unavailable | unavailable |
+
+The first actionable backward failure was the device-wide
+`CUDA_ERROR_ILLEGAL_ADDRESS`; subsequent module-unload, stream/event-destroy,
+device-memory-free, and host-memory-unregister errors were cleanup fallout.
+There was no Python traceback or structured backward error row to localize the
+fault further. The absence of the prior custom-VJP sharding error shows that
+`d237d620ea` reached runtime, but the integrated fwd+bwd correctness gate remains
+uncleared. Do not interpret Iris's exit-0 state as kernel success. Per the
+bounded request, no code was edited and no retry, duplicate run, or Iris
+cluster mutation was performed.
+
+## 2026-07-11 FUSED-MOE-096 - W13-backward role48 comparison blocked by reference gather sharding
+
+Job `/dlwh/w13b-role48-compare-d237` at `d237d620ea` completed on
+`cw-rno2a` with Iris state `succeeded`, exit 0, one of one task succeeded, and
+a 43.49s task duration. Exactly one H100x8 job was launched. The reduced
+random-routing comparison shape was T128 per rank, E4/rank, top-k 2, capacity
+factor 4.0, H2560, I1280, bf16, and eight expert-parallel ranks. The command
+was:
+
+```bash
+uv run --project /Users/dlwh/src/marin iris --cluster=cw-rno2a job run --no-wait --job-name w13b-role48-compare-d237 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu --sync-package marin-levanter --timeout 3600 -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_semantic_plan.py --ep-size 8 --tokens-per-rank 128 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 4 --topk 2 --capacity-factor 4.0 --rows-per-src-dst-capacity auto --routing random --routing-seed 0 --dtype bfloat16 --plan-builder jax --modes semantic_fused_w13_backward_compare --warmup 0 --steps 1 --repeat-runs 1 --separate-compile --debug-exceptions --git-sha d237d620ea --jsonl scratch/w13b-role48-compare-d237.jsonl
+```
+
+The comparison produced no `dx` or `dw13` numerical metrics. The separately
+compiled reference failed during lowering at
+`source_push_semantic_fused_w13_backward_reference_jax` before the Pallas
+candidate ran:
+
+```text
+ShardingTypeError: Use `.at[...].get(out_sharding=)` to provide output
+PartitionSpec for the gather indexing as out sharding could not be resolved
+unambiguously (or would require collectives on inputs). Got
+operand=ShapedArray(bfloat16[8@expert,128,2560]),
+indices=ShapedArray(int32[8,8,2,4,64,2])
+```
+
+Consequently `dx`/`dw13` absolute differences, scale, cosine similarity, and
+nonfinite metrics are unavailable, as are candidate queue/layout overflow
+metrics. The pre-run semantic metadata row reported zero dropped routes, zero
+routing-policy drops, and zero metadata-overflow routes. This run neither
+validates nor falsifies the 48-staging/40-dX/40-dW candidate. The next bounded
+comparison must make the reference gather's output sharding explicit while
+keeping reference and candidate compilation separate. Per the request, no code
+edit, retry, duplicate, or Iris cluster mutation was performed.
+
 ## 2026-07-11 FUSED-MOE-096 - Integrated comparison still fails backward VJP sharding
 
 Job `/dlwh/integrated-compare-45d6-20260711-0002` at `45d6402623`
@@ -2931,3 +3025,27 @@ performance candidate pending a finite numerical comparison, not yet a
 correctness promotion. The process emitted recoverable 12.5 GiB BFC allocation
 warnings and FABRIC-handle VMM fallbacks, then produced all requested rows.
 Per the bounded request, no retry or kernel edit was made.
+
+## 2026-07-11 FUSED-MOE-097 - Row-split full-K W13-forward candidate faults
+
+Job `/dlwh/w13f-b32-fullk-d237` tested `semantic_permute_w13_pallas` at
+`d237d620ea` on `cw-rno2a`. The target was EP8, T32768/rank, H2560, I1280,
+E32/rank, top-k 4, capacity factor 1.25, random routing seed 0, bf16, JAX plan
+metadata, one warmup, three timed steps, three repeat runs, and separate
+compilation. Iris reported terminal state `succeeded`, exit 0, one of one task
+succeeded, and a 1m35.71s duration, but this is a harness-level false success:
+the debug-exception path returned zero after the candidate faulted.
+
+The first actionable runtime failure was a device-wide
+`CUDA_ERROR_ILLEGAL_ADDRESS` during the first candidate execution. The process
+then emitted CUDA module-unload, stream-destroy, event-destroy, and allocation
+cleanup errors on all eight ranks. Before the fault it also emitted two
+recoverable 12.5 GiB BFC allocation warnings. No repeat row, summary row,
+checksum, timing, TFLOP/s value, or drop/overflow counter was produced.
+
+Therefore the row-split B32 full-K producer candidate is invalid at the target
+shape and cannot be compared numerically with the selected 23.025404 ms /
+74.612671 useful TFLOP/s/rank schedule. Retain the selected B64 K512/two-K256-
+payload implementation and investigate the B32 remote-write indexing or
+payload publication lifetime before reconsidering this schedule. Exactly one
+H100x8 job was launched; no retry or kernel edit was made.
