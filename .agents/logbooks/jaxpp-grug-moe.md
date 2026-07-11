@@ -1815,3 +1815,16 @@ author: dlwh
   - The workaround serializes only host-side argument/stream setup and launch per compiled handler. `safe_call` returns after enqueueing, so kernels on distinct device streams remain asynchronous; exact performance still needs measurement.
 - Next action:
   - Run the exact 24-layer d2560/e64/top-k4/b512/m16/seq4096 whole-MLP Sonic comparison at `d0aa12393a`. Compare mean MFU against the `16.2004883` ring baseline and profile the exact path if it remains below `20`.
+
+### 2026-07-10 22:15 PDT - exact Sonic packaging failure and fail-fast correction
+- Hypothesis: The pinned setup hook will reconstruct the validated per-handler `jax-tvm-ffi` patch on every pipeline rank before the exact benchmark begins.
+- Commit Hash: `6f44c3d3a1` (`[grug] Fail fast on TVM FFI patch setup`).
+- Command: the exact L24/d2560/e64/top-k4/b512/m16/seq4096 command from the preceding entry, parent `/dlwh/iris-run-job-20260711-050056`.
+- Results:
+  - The zero-context patch artifact applied at syntactically valid but semantically wrong line offsets: `call_lock` landed in the handler constructor and `call_mutex_` outside the class. All four `jax-tvm-ffi` builds failed, but the setup shell continued to its final successful JaxPP install command.
+  - The unpatched child was stopped before it could reproduce the known hang. Parent and all four child tasks are terminal; no live failed job remains. W&B has no metric samples, so this is not a performance result.
+  - The patch now anchors each insertion to neighboring source text and was reapplied to the pinned upstream commit locally; inspection confirms the lock is inside `Call` immediately before stream setup and the mutex is a handler member. Setup begins with `set -euxo pipefail`, so future patch or build errors stop before training.
+- Interpretation:
+  - The failed launch says nothing about Sonic MFU. It identified a reproducibility defect in the patch packaging and a missing failure boundary in worker setup.
+- Next action:
+  - Relaunch the identical exact benchmark from `6f44c3d3a1`; require all ranks to log a successful patched wheel build before treating compilation or runtime behavior as valid.
