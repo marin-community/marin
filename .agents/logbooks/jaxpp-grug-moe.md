@@ -15,7 +15,7 @@ author: dlwh
 ## Current TL;DR
 - `GRUG-JAXPP-001`: Explicit JaxPP MPMD training is implemented behind `GrugTrainerConfig.pipeline.implementation="explicit_mpmd"` with stage-local model/optimizer state, contiguous layer splits, explicit GPipe and explicit `std_1f1b` schedules. Milestone implementation commit: `abd979b82a` (`[grug] Add explicit JaxPP pipeline training`).
 - The requested 24-layer, d2560, 256-expert, top-k 4 shape now fits and executes on 4x 8xH100 CoreWeave east02 after optimizer state is initialized from stage-local pipeline weights instead of from the full 61B-param model.
-- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 64 experts, top-k 4, seq 4096, batch 4096, four physical/logical stages, 128 microbatches, ring EP, CuTe FA4 attention, Pallas-Triton ragged dot with eight warps, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260711-072442/grug-train-jaxpp-rno2a-ring-l24-e64k4-b4096-s4096-p4m128-20260711-0024` reported mean MFU `18.1334`, p50 `18.2729`, p90 `18.3056`, and latest throughput `400,643.27` tokens/s. This remains `1.8666` mean points below 20.
+- Best completed throughput point: explicit MPMD `std_1f1b`, 24 layers, 64 experts, top-k 4, seq 4096, batch 8192, four physical/logical stages, 256 microbatches, ring EP, CuTe FA4 attention, Pallas-Triton ragged dot with eight warps, and `0.70` prealloc on RNO2A. Run `/dlwh/iris-run-job-20260711-080751/grug-train-jaxpp-rno2a-ring-l24-e64k4-b8192-s4096-p4m256-20260711-0107` reported mean MFU `18.2583`, p50 `18.3654`, p90 `18.3830`, and latest throughput `414,059.10` tokens/s. The `0.1248`-point gain over m128 confirms occupancy saturation, `1.7417` points below 20.
 - RNO2A is healthy and performance-equivalent to east02 for this workload. The exact batch128/m4 baseline reported mean MFU `7.5946` and `170,329.97` tokens/s, within noise of the east02 `7.5981` result. NCCL debug logs confirmed `NET/IB/.../GDRDMA`, ruling out socket fallback.
 - Profile captured for explicit MPMD GPipe at the stable batch-96 seq4096 point after commit `a0f8130985` (`[grug] Upload explicit MPMD profile artifacts`). W&B run: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018>. Artifact: `marin-community/marin_moe/jaxpp-explicit-profile-l24-e256-b96-s4096-gpipe-xla070-artifact-20260709-0018-profiler:v0`.
 - Profile readout: communication-dominated exclusive timeline, with `48.75%` communication, `45.10%` compute, and `6.15%` stall. Largest exclusive kernel is `ncclDevKernel_SendRecv` (`104` calls, about `7.35s` total exclusive in the profile window), followed by all-gather and reduce-scatter collectives.
@@ -37,7 +37,7 @@ author: dlwh
 - `GRUG-JAXPP-002`: Router histograms need a dedicated cross-microbatch reducer before full metric parity is safe. Evidence: [2026-07-07 22:45 PDT - initial implementation](#2026-07-07-2245-pdt---initial-implementation). Next test: implement/validate a `SummaryStats` merge or compute summary metrics outside the pipeline loop.
 - `GRUG-JAXPP-006`: Pipeline rendezvous remains exposed after increasing occupancy and reducing expert count. Evidence: the 64-expert batch448/m14 profile reduces communication share from `38.96%` to `33.85%` and average `SendRecv` duration from `59.99ms` to `41.69ms`, but its average pre-op gap remains `628.72ms`. Next test: reduce stage dependency wait or increase overlap at the working m14 boundary.
 - `GRUG-JAXPP-008`: Attention was the largest compute bottleneck, and CuTe FA4 removes most of it, but the full shape still needs another `23.5%` relative gain to reach 20 MFU. Evidence: HLO attribution maps the largest fusions to reference attention; `gpu_fa4_cute` raises the matching batch448/m14 result from `11.6568` to `15.9684`, while batch512/m16 with eight-warp Pallas-Triton ragged dot reaches `16.2005`. XLA ragged dot regresses to `8.1438` and `block_k=64` regresses to `16.0189`. Next test: target the roughly `40%` communication share and `426ms` average SendRecv pre-op gap rather than expanding the tile sweep.
-- `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, and b4096/m128 `18.1334` mean MFU. Next test: b8192/m256 is the final occupancy point; the asymptote remains below 20 without a separate kernel/communication gain.
+- `GRUG-JAXPP-012`: More standard-schedule microbatches at fixed microbatch size 32 reduce the pipeline bubble but saturate below target. Evidence: b1024/m32 reaches `16.6677`, b2048/m64 `17.4430`, b4096/m128 `18.1334`, and b8192/m256 only `18.2583` mean MFU. Decision: stop batch scaling; a separate overlap/kernel gain is required.
 
 ### Blocked
 - `GRUG-JAXPP-005`: Automatic JaxPP schedule sweep over `gpipe`, `std_1f1b`, `eager_1f1b`, `zero_bubble`, and interleaved schedules. Blocker: automatic `std_1f1b` reaches tracing and clears the prior sharding-inference assertion with the const-sharding patch, but JaxPP input placement now tries to `device_put` stage-local arrays with a non-addressable global `pipeline` mesh sharding. Resume when automatic JaxPP can call compiled functions with addressable stage-local input shardings.
@@ -56,6 +56,7 @@ author: dlwh
 - XLA's zero-copy one-shot ragged all-to-all flags are accepted, but RNO2A pods cannot create the required exportable `FABRIC+POSIX_FD` CUDA VMM allocation. `cuMemCreate` returns `CUDA_ERROR_NOT_PERMITTED` and the process exits 139 before compilation completes.
 - The first true streamed `ring_ppermute` backend passes CPU output/gradient parity and removes global activation/output tensors, but its H100 smoke is numerically unstable after one finite step and over 1,100x slower on that first timed step because EP8 creates many small native XLA ragged GEMMs and collective permutes.
 - Owner-local bulk-ring combine passes CPU output/gradient parity and removes the 640 MiB global output temporary, but seven owner-directed permutations make even the reduced L8 stage-3 backward graph compile for about 28 minutes without completing. It was stopped without a metric.
+- Expert-axis 4 at e64 reaches every stage's first backward compile but then stalls in accumulation compilation for over 24 minutes; it was stopped after 34m37s with no metric. Doubling local expert state remains operationally intractable.
 
 ### Promoted
 - `GRUG-JAXPP-001`: Explicit MPMD stage-local weights/optimizer state are the working pipeline implementation. Evidence: milestone commit `abd979b82a`, issue update <https://github.com/marin-community/marin/issues/7024#issuecomment-4919647823>, and the seq4096 perf/profile results.
@@ -1975,3 +1976,19 @@ author: dlwh
   - Owner-local combine preserves aggregate traffic and replaces one optimized reduce-scatter with seven explicit permutations; its differentiated graph is operationally intractable even at L8. Do not scale it.
 - Next action:
   - Run b8192/m256 as the final occupancy point. For further code optimization, retain bulk collectives and target dispatch/scatter fusion within the existing AllGather/ReduceScatter dataflow rather than expanding collective count.
+
+### 2026-07-11 01:48 PDT - occupancy saturation and e64 expert-axis4 compile negative
+- Hypothesis: m256 may recover the last pipeline bubble, while reducing expert-axis size from 8 to 4 at e64 may halve bulk gather span without the e256 state/compile failure.
+- Commit Hash: `d4bffe01b5` (`[docs] Record m128 and local combine results`).
+- Commands:
+  - Exact b8192/m256 EP8 ring parent `/dlwh/iris-run-job-20260711-080751`.
+  - Exact b4096/m128 expert-axis4 ring parent `/dlwh/iris-run-job-20260711-081233`.
+- Results:
+  - m256 and all four ranks succeeded with 6/6 finite steps and final loss `5.5467644`. Mean MFU was `18.2583`, p10/p50/p90 `18.0479/18.3654/18.3830`, throughput `414,059.10` tokens/s, and duration `81.037785s`. W&B: <https://wandb.ai/marin-community/marin_moe/runs/jaxpp-rno2a-ring-l24-e64k4-b8192-s4096-p4m256-20260711-0107>.
+  - m256 improves m128 by only `0.1248` mean and `0.0925` p50 points, remaining `1.7417` mean points below 20. The occupancy curve is saturated.
+  - Expert-axis4 reached stage 0-3 first backward compiles, then made no new progress for over 24 minutes after `mb1_stage0_accumulate_grads`. It was stopped at 34m37s without a metric; all tasks are terminal and no failed live job remains.
+- Interpretation:
+  - Further batch/microbatch scaling is not justified. Standard 1F1B bubble reduction asymptotes around the observed 18.3 MFU.
+  - The e64 state fits initial compilation farther than the prior e256 probe, but doubled local expert state still makes accumulation/update compilation operationally intractable. Retain expert-axis8.
+- Next action:
+  - Run an exact m128 A/B with `--xla_gpu_enable_latency_hiding_scheduler=true`; the existing HLO already uses async collectives but overlaps expert GEMMs with AllGather below 2%.
