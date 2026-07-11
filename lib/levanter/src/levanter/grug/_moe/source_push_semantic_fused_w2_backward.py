@@ -26,6 +26,7 @@ from levanter.grug._moe.source_push_semantic_inbox_pallas import source_push_sem
 
 _WGMMA_SWIZZLE_BYTES = 128
 _WGMMA_TILE_M = 8
+_WGMMA_PIPELINE_STAGES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,72 +850,130 @@ def _make_source_push_semantic_fused_w2_backward_kernel(
                     h_tile = rem % hidden_tiles
 
                     def _acc_scope(acc_ref) -> None:
-                        @pl.loop(0, compact_m_blocks)
-                        def _compact_m_loop(compact_block) -> None:
+                        def _load_dw2_operands(compact_block, gate_smem, up_smem, dy_smem, barrier) -> None:
                             row_start = compact_block * config.compute_m
+                            pl.semaphore_wait(
+                                compact_ready_sem.at[expert, compact_block],
+                                value=send_hidden_tiles,
+                                decrement=False,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                z13_ref.at[
+                                    expert,
+                                    pl.ds(row_start, config.compute_m),
+                                    pl.ds(i_tile * config.intermediate_block, config.intermediate_block),
+                                ],
+                                gate_smem,
+                                barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                z13_ref.at[
+                                    expert,
+                                    pl.ds(row_start, config.compute_m),
+                                    pl.ds(
+                                        intermediate_dim + i_tile * config.intermediate_block,
+                                        config.intermediate_block,
+                                    ),
+                                ],
+                                up_smem,
+                                barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                dy_expert_ref.at[
+                                    expert,
+                                    pl.ds(row_start, config.compute_m),
+                                    pl.ds(h_tile * config.hidden_block, config.hidden_block),
+                                ],
+                                dy_smem,
+                                barrier,
+                            )
 
-                            @pl.when(valid_ref[expert, row_start])
-                            def _accumulate_live_block() -> None:
-                                pl.semaphore_wait(
-                                    compact_ready_sem.at[expert, compact_block],
-                                    value=send_hidden_tiles,
-                                    decrement=False,
-                                )
+                        def _issue_dw2_wgmma(gate_smem, up_smem, h_smem, dy_smem, barrier) -> None:
+                            mgpu.barrier_wait(barrier)
+                            h_smem[:, :] = (
+                                jax.nn.silu(gate_smem[:, :].astype(jnp.float32)) * up_smem[:, :].astype(jnp.float32)
+                            ).astype(dtype)
+                            mgpu.commit_smem()
+                            mgpu.wgmma(acc_ref, mgpu.transpose_ref(h_smem, (1, 0)), dy_smem)
 
-                                def _smem_scope(gate_smem, up_smem, h_smem, dy_smem, barrier) -> None:
-                                    mgpu.copy_gmem_to_smem(
-                                        z13_ref.at[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                i_tile * config.intermediate_block,
-                                                config.intermediate_block,
-                                            ),
-                                        ],
-                                        gate_smem,
-                                        barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        z13_ref.at[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                intermediate_dim + i_tile * config.intermediate_block,
-                                                config.intermediate_block,
-                                            ),
-                                        ],
-                                        up_smem,
-                                        barrier,
-                                    )
-                                    mgpu.copy_gmem_to_smem(
-                                        dy_expert_ref.at[
-                                            expert,
-                                            pl.ds(row_start, config.compute_m),
-                                            pl.ds(
-                                                h_tile * config.hidden_block,
-                                                config.hidden_block,
-                                            ),
-                                        ],
-                                        dy_smem,
-                                        barrier,
-                                    )
-                                    mgpu.barrier_wait(barrier)
-                                    h_smem[:, :] = (
-                                        jax.nn.silu(gate_smem[:, :].astype(jnp.float32))
-                                        * up_smem[:, :].astype(jnp.float32)
-                                    ).astype(dtype)
-                                    mgpu.commit_smem()
-                                    mgpu.wgmma(acc_ref, mgpu.transpose_ref(h_smem, (1, 0)), dy_smem)
+                        def _smem_scope(
+                            gate_smem_0,
+                            up_smem_0,
+                            h_smem_0,
+                            dy_smem_0,
+                            barrier_0,
+                            gate_smem_1,
+                            up_smem_1,
+                            h_smem_1,
+                            dy_smem_1,
+                            barrier_1,
+                        ) -> None:
+                            @pl.when(valid_ref[expert, 0])
+                            def _preload_first_block() -> None:
+                                _load_dw2_operands(0, gate_smem_0, up_smem_0, dy_smem_0, barrier_0)
+
+                            @pl.loop(0, compact_m_blocks)
+                            def _compact_m_loop(compact_block) -> None:
+                                row_start = compact_block * config.compute_m
+                                current_valid = valid_ref[expert, row_start]
+                                current_stage = compact_block % _WGMMA_PIPELINE_STAGES
+
+                                @pl.when(current_valid & (current_stage == 0))
+                                def _issue_stage_0() -> None:
+                                    _issue_dw2_wgmma(gate_smem_0, up_smem_0, h_smem_0, dy_smem_0, barrier_0)
+
+                                @pl.when(current_valid & (current_stage == 1))
+                                def _issue_stage_1() -> None:
+                                    _issue_dw2_wgmma(gate_smem_1, up_smem_1, h_smem_1, dy_smem_1, barrier_1)
+
+                                # Keep the current WGMMA pending while TMA fills the opposite operand slot.
+                                mgpu.wgmma_wait(_WGMMA_PIPELINE_STAGES - 1)
+
+                                @pl.when(~current_valid)
+                                def _drain_before_reusing_skipped_stage() -> None:
                                     mgpu.wgmma_wait(0)
 
-                                pl.run_scoped(
-                                    _smem_scope,
-                                    gate_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    up_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    h_smem=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
-                                    dy_smem=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
-                                    barrier=mgpu.Barrier(num_arrivals=3),
-                                )
+                                next_block = compact_block + 1
+                                safe_next_block = jnp.minimum(next_block, compact_m_blocks - 1)
+                                next_row_start = safe_next_block * config.compute_m
+                                next_valid = (next_block < compact_m_blocks) & valid_ref[expert, next_row_start]
+                                next_stage = next_block % _WGMMA_PIPELINE_STAGES
+
+                                @pl.when(next_valid & (next_stage == 0))
+                                def _load_stage_0() -> None:
+                                    _load_dw2_operands(
+                                        safe_next_block,
+                                        gate_smem_0,
+                                        up_smem_0,
+                                        dy_smem_0,
+                                        barrier_0,
+                                    )
+
+                                @pl.when(next_valid & (next_stage == 1))
+                                def _load_stage_1() -> None:
+                                    _load_dw2_operands(
+                                        safe_next_block,
+                                        gate_smem_1,
+                                        up_smem_1,
+                                        dy_smem_1,
+                                        barrier_1,
+                                    )
+
+                            mgpu.wgmma_wait(0)
+
+                        pl.run_scoped(
+                            _smem_scope,
+                            gate_smem_0=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                            up_smem_0=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                            h_smem_0=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                            dy_smem_0=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
+                            barrier_0=mgpu.Barrier(num_arrivals=3),
+                            gate_smem_1=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                            up_smem_1=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                            h_smem_1=_wgmma_smem((config.compute_m, config.intermediate_block), dtype),
+                            dy_smem_1=_wgmma_smem((config.compute_m, config.hidden_block), dtype),
+                            barrier_1=mgpu.Barrier(num_arrivals=3),
+                        )
 
                         d_w2_ref[
                             expert,
