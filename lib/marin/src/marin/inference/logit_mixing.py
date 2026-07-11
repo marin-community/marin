@@ -4,36 +4,39 @@
 import contextlib
 import math
 import random
+import socket
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from time import monotonic
 
+import anyio
 import httpx
+import uvicorn
 from levanter.inference.openai_protocol import CompletionRequest
 from pydantic import ValidationError
+from rigging.timing import Duration, ExponentialBackoff
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
 
-from marin.inference.broker import InferenceBroker
-from marin.inference.proxy import serve_inference_proxy
-from marin.inference.types import (
-    InferenceRequest,
-    InferenceResponse,
-    OpenAIEndpoint,
-    RunningModel,
-    pack_json_payload,
-    unpack_json_payload,
-)
+from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm import (
-    DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
-    DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT,
     DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT,
     BrokeredVllmSystemConfig,
-    VllmProxyConfig,
-    _wait_for_brokered_vllm_ready,
     start_iris_brokered_vllm,
 )
-from marin.inference.worker import InferenceWorker, run_inference_worker
 
 DEFAULT_LOGIT_MIXING_TOP_LOGPROBS = 20
+DEFAULT_LOGIT_MIXING_SERVER_START_TIMEOUT = 10.0
+
+
+@dataclass(frozen=True)
+class LogitMixingServerConfig:
+    host: str = "127.0.0.1"
+    port: int = 0
+    start_timeout_seconds: float = DEFAULT_LOGIT_MIXING_SERVER_START_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -45,25 +48,19 @@ class LogitMixingBrokeredVllmConfig:
     alpha: float
     tokenizer: str
     model: str = "logit-mix"
-    max_in_flight: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
     request_timeout_seconds: float = DEFAULT_BROKERED_WORKER_REQUEST_TIMEOUT.total_seconds()
     top_logprobs: int = DEFAULT_LOGIT_MIXING_TOP_LOGPROBS
-    request_lease_timeout_seconds: float = DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT.total_seconds()
-    proxy: VllmProxyConfig = field(default_factory=VllmProxyConfig)
+    server: LogitMixingServerConfig = field(default_factory=LogitMixingServerConfig)
 
     def __post_init__(self) -> None:
         if not 0 <= self.alpha <= 1:
             raise ValueError(f"alpha must be in [0, 1]; got {self.alpha}.")
-        if self.max_in_flight < 1:
-            raise ValueError("max_in_flight must be at least 1.")
         if not 1 <= self.top_logprobs <= DEFAULT_LOGIT_MIXING_TOP_LOGPROBS:
             raise ValueError(f"top_logprobs must be in [1, {DEFAULT_LOGIT_MIXING_TOP_LOGPROBS}].")
-        if not 0 < self.request_timeout_seconds < self.request_lease_timeout_seconds:
-            raise ValueError(
-                "Logit mixing timeouts must satisfy 0 < request_timeout_seconds < request_lease_timeout_seconds."
-            )
-        if self.request_lease_timeout_seconds >= self.proxy.request_timeout_seconds:
-            raise ValueError("request_lease_timeout_seconds must be lower than proxy.request_timeout_seconds.")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be positive.")
+        if self.server.start_timeout_seconds <= 0:
+            raise ValueError("server.start_timeout_seconds must be positive.")
         component_tokenizers = {tokenizer for tokenizer in (self.teacher.tokenizer, self.student.tokenizer) if tokenizer}
         if component_tokenizers - {self.tokenizer}:
             raise ValueError("tokenizer must match the teacher and student tokenizer.")
@@ -84,12 +81,13 @@ class _UpstreamStep:
     top_logprobs: Mapping[str, float]
 
 
-class LogitMixingInferenceHandler:
-    """Handle text generation by mixing two model distributions."""
+class LogitMixingService:
+    """Serve text completions mixed from two OpenAI-compatible models."""
 
     def __init__(
         self,
         *,
+        client: httpx.Client,
         teacher: RunningModel,
         student: RunningModel,
         model: str,
@@ -98,6 +96,7 @@ class LogitMixingInferenceHandler:
         top_logprobs: int,
         clock: Callable[[], float] = monotonic,
     ) -> None:
+        self._client = client
         self._teacher = teacher
         self._student = student
         self._model = model
@@ -105,37 +104,39 @@ class LogitMixingInferenceHandler:
         self._request_timeout_seconds = request_timeout_seconds
         self._top_logprobs = top_logprobs
         self._clock = clock
+        self.app = Starlette(
+            routes=[
+                Route("/v1/models", self._models),
+                Route("/v1/completions", self._completions, methods=["POST"]),
+            ]
+        )
 
-    def __call__(self, client: httpx.Client, request: InferenceRequest) -> InferenceResponse:
-        if request.method.upper() == "GET" and request.path == "/v1/models":
-            return _models_response(request, self._model)
-        if request.method.upper() != "POST" or request.path != "/v1/completions":
-            return _error_response(
-                request,
-                405,
-                "logit mixing supports GET /v1/models and POST /v1/completions",
-            )
+    def _models(self, _request: Request) -> Response:
+        return JSONResponse({"object": "list", "data": [{"id": self._model, "object": "model"}]})
 
+    def _completions(self, request: Request) -> Response:
+        raw_payload = anyio.from_thread.run(request.json)
         try:
-            generation = _generation_request(request, self._model)
+            generation = _generation_request(raw_payload, self._model)
         except ValueError as exc:
-            return _error_response(request, 400, str(exc))
-        text, finish_reason = self._generate(client, generation)
-        return _completion_response(request, self._model, text, finish_reason)
+            return JSONResponse({"error": {"message": str(exc)}}, status_code=400)
+        try:
+            text, finish_reason = self._generate(generation)
+        except httpx.TimeoutException:
+            return JSONResponse({"error": {"message": "logit mixing request timed out"}}, status_code=504)
+        except (httpx.HTTPError, ValueError) as exc:
+            return JSONResponse({"error": {"message": str(exc)}}, status_code=502)
+        return JSONResponse(_completion_payload(self._model, text, finish_reason))
 
-    def _generate(self, client: httpx.Client, request: _GenerationRequest) -> tuple[str, str]:
+    def _generate(self, request: _GenerationRequest) -> tuple[str, str]:
         generated_text = ""
         current_text = request.prompt
         deadline = self._clock() + self._request_timeout_seconds
         rng = random.Random(request.seed)
 
         for _ in range(request.max_tokens):
-            teacher = (
-                self._upstream_step(client, self._teacher.endpoint, current_text, deadline) if self._alpha else None
-            )
-            student = (
-                self._upstream_step(client, self._student.endpoint, current_text, deadline) if self._alpha < 1 else None
-            )
+            teacher = self._upstream_step(self._teacher.endpoint, current_text, deadline) if self._alpha else None
+            student = self._upstream_step(self._student.endpoint, current_text, deadline) if self._alpha < 1 else None
             mixed = _mix_top_logprobs(
                 {} if teacher is None else teacher.top_logprobs,
                 {} if student is None else student.top_logprobs,
@@ -154,7 +155,6 @@ class LogitMixingInferenceHandler:
 
     def _upstream_step(
         self,
-        client: httpx.Client,
         endpoint: OpenAIEndpoint,
         prompt: str,
         deadline: float,
@@ -162,7 +162,7 @@ class LogitMixingInferenceHandler:
         remaining = deadline - self._clock()
         if remaining <= 0:
             raise httpx.TimeoutException("logit mixing request deadline exceeded")
-        response = client.post(
+        response = self._client.post(
             endpoint.url("completions"),
             json={
                 "model": endpoint.model,
@@ -181,48 +181,79 @@ class LogitMixingInferenceHandler:
 
 
 @contextlib.contextmanager
+def serve_logit_mixing_model(
+    *,
+    teacher: RunningModel,
+    student: RunningModel,
+    model: str,
+    tokenizer: str | None,
+    alpha: float,
+    request_timeout_seconds: float,
+    top_logprobs: int = DEFAULT_LOGIT_MIXING_TOP_LOGPROBS,
+    server: LogitMixingServerConfig = LogitMixingServerConfig(),
+    clock: Callable[[], float] = monotonic,
+) -> Iterator[RunningModel]:
+    """Serve an OpenAI-compatible logit-mixed completion model."""
+
+    actual_port = _reserve_port(server.host, server.port)
+    with httpx.Client(timeout=request_timeout_seconds) as client:
+        service = LogitMixingService(
+            client=client,
+            teacher=teacher,
+            student=student,
+            model=model,
+            alpha=alpha,
+            request_timeout_seconds=request_timeout_seconds,
+            top_logprobs=top_logprobs,
+            clock=clock,
+        )
+        uvicorn_server = uvicorn.Server(
+            uvicorn.Config(service.app, host=server.host, port=actual_port, log_level="error", log_config=None)
+        )
+        thread = threading.Thread(target=uvicorn_server.run, name="logit-mixing-server")
+        thread.start()
+        started = ExponentialBackoff(initial=0.01, maximum=1, jitter=0).wait_until(
+            lambda: uvicorn_server.started or not thread.is_alive(),
+            timeout=Duration.from_seconds(server.start_timeout_seconds),
+        )
+        if not started or not uvicorn_server.started:
+            uvicorn_server.should_exit = True
+            thread.join()
+            raise RuntimeError("logit mixing server failed to start")
+        try:
+            yield RunningModel(
+                endpoint=OpenAIEndpoint(base_url=f"http://{server.host}:{actual_port}/v1", model=model),
+                tokenizer=tokenizer,
+            )
+        finally:
+            uvicorn_server.should_exit = True
+            thread.join()
+
+
+@contextlib.contextmanager
 def start_iris_logit_mixing_brokered_vllm(config: LogitMixingBrokeredVllmConfig) -> Iterator[RunningModel]:
-    """Start teacher, student, and mixed endpoints inside an Iris job."""
+    """Start brokered teacher and student models with a mixed completion endpoint."""
 
     with (
         start_iris_brokered_vllm(config.teacher) as teacher,
         start_iris_brokered_vllm(config.student) as student,
-    ):
-        broker = InferenceBroker(request_lease_timeout_seconds=config.request_lease_timeout_seconds)
-        handler = LogitMixingInferenceHandler(
+        serve_logit_mixing_model(
             teacher=teacher,
             student=student,
             model=config.model,
+            tokenizer=config.tokenizer,
             alpha=config.alpha,
             request_timeout_seconds=config.request_timeout_seconds,
             top_logprobs=config.top_logprobs,
-        )
-        worker = InferenceWorker(
-            broker=broker,
-            handler=handler,
-            request_timeout_seconds=config.request_timeout_seconds,
-        )
-        with (
-            serve_inference_proxy(
-                broker=broker,
-                model=config.model,
-                host=config.proxy.host,
-                port=config.proxy.port,
-                request_timeout_seconds=config.proxy.request_timeout_seconds,
-                readiness_timeout_seconds=config.proxy.readiness_timeout_seconds,
-                max_pending_requests=config.proxy.max_pending_requests,
-                response_fetch_batch_size=config.proxy.response_fetch_batch_size,
-                server_start_timeout_seconds=config.proxy.server_start_timeout_seconds,
-            ) as proxy_model,
-            run_inference_worker(worker, max_in_flight=config.max_in_flight),
-        ):
-            running_model = RunningModel(endpoint=proxy_model.endpoint, tokenizer=config.tokenizer)
-            _wait_for_brokered_vllm_ready(running_model, timeout_seconds=config.proxy.readiness_timeout_seconds)
-            yield running_model
+            server=config.server,
+        ) as running_model,
+    ):
+        yield running_model
 
 
-def _generation_request(request: InferenceRequest, model: str) -> _GenerationRequest:
-    raw_payload = unpack_json_payload(request.payload)
+def _generation_request(raw_payload: object, model: str) -> _GenerationRequest:
+    if not isinstance(raw_payload, dict):
+        raise ValueError("completion request must be an object")
     try:
         payload = CompletionRequest.model_validate(raw_payload)
     except ValidationError as exc:
@@ -267,8 +298,6 @@ def _generation_request(request: InferenceRequest, model: str) -> _GenerationReq
         raise ValueError("top_p must be in (0, 1]")
     stop = (payload.stop,) if isinstance(payload.stop, str) else tuple(payload.stop or ())
     stop = tuple(item for item in stop if item)
-    if not stop:
-        raise ValueError("logit mixing generation requires a stop sequence")
 
     return _GenerationRequest(
         prompt=payload.prompt,
@@ -298,30 +327,13 @@ def _upstream_step(payload: object) -> _UpstreamStep:
     return _UpstreamStep({str(token): float(value) for token, value in values.items()})
 
 
-def _models_response(request: InferenceRequest, model: str) -> InferenceResponse:
-    return InferenceResponse(
-        request_id=request.request_id,
-        status_code=200,
-        payload=pack_json_payload({"object": "list", "data": [{"id": model, "object": "model"}]}),
-    )
-
-
-def _error_response(request: InferenceRequest, status_code: int, message: str) -> InferenceResponse:
-    return InferenceResponse(
-        request_id=request.request_id,
-        status_code=status_code,
-        payload=pack_json_payload({"error": {"message": message}}),
-    )
-
-
-def _completion_response(request: InferenceRequest, model: str, text: str, finish_reason: str) -> InferenceResponse:
-    payload = {
+def _completion_payload(model: str, text: str, finish_reason: str) -> dict[str, object]:
+    return {
         "id": "cmpl-logit-mix",
         "object": "text_completion",
         "model": model,
         "choices": [{"text": text, "index": 0, "logprobs": None, "finish_reason": finish_reason}],
     }
-    return InferenceResponse(request_id=request.request_id, status_code=200, payload=pack_json_payload(payload))
 
 
 def _mix_top_logprobs(
@@ -388,3 +400,11 @@ def _logsumexp(values: Iterable[float]) -> float:
     values = list(values)
     max_value = max(values)
     return max_value + math.log(sum(math.exp(value - max_value) for value in values))
+
+
+def _reserve_port(host: str, port: int) -> int:
+    if port != 0:
+        return port
+    with socket.socket() as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])

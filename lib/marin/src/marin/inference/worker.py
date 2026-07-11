@@ -7,8 +7,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 from rigging.timing import ExponentialBackoff
@@ -32,17 +31,17 @@ ERROR_BODY_LIMIT_BYTES = 1000
 
 
 class InferenceWorker:
-    """Poll brokered requests and process them with a request handler."""
+    """Poll brokered requests and forward them to an OpenAI-compatible endpoint."""
 
     def __init__(
         self,
         *,
         broker: InferenceRequestProvider,
-        handler: "InferenceRequestHandler",
+        upstream: RunningModel,
         request_timeout_seconds: float,
     ) -> None:
         self._broker = broker
-        self._handler = handler
+        self._upstream = upstream
         self._request_timeout_seconds = request_timeout_seconds
 
     def run_forever(
@@ -58,7 +57,13 @@ class InferenceWorker:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
         in_flight: set[Future[LeasedInferenceResponse]] = set()
-        logger.info("InferenceWorker starting max_in_flight=%d", max_in_flight)
+        logger.info(
+            "InferenceWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
+            self._upstream.endpoint.base_url,
+            self._upstream.endpoint.model,
+            max_in_flight,
+            self._request_timeout_seconds,
+        )
         try:
             with (
                 httpx.Client(timeout=self._request_timeout_seconds) as client,
@@ -67,9 +72,10 @@ class InferenceWorker:
                 while not stop_event.is_set():
                     available_slots = max_in_flight - len(in_flight)
                     if available_slots:
+                        # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
                         leased_requests = self._broker.fetch_requests(max_items=available_slots)
                         for leased_request in leased_requests:
-                            in_flight.add(pool.submit(self._handle_one, client, leased_request))
+                            in_flight.add(pool.submit(self._forward_one, client, leased_request))
                         if leased_requests:
                             logger.info(
                                 "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
@@ -107,39 +113,29 @@ class InferenceWorker:
         finally:
             logger.info("InferenceWorker stopping in_flight=%d", len(in_flight))
 
-    def _handle_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
+    def _forward_one(self, client: httpx.Client, leased_request: LeasedInferenceRequest) -> LeasedInferenceResponse:
         request = leased_request.request
+        # The proxy receives /v1/... paths, while RunningModel.endpoint.url() already points at /v1.
+        upstream_path = request.path.removeprefix("/v1/")
+        url = self._upstream.endpoint.url(upstream_path)
         try:
-            inference_response = self._handler(client, request)
+            response = self._send(client, request, url)
+            inference_response = _response_from_upstream(request, response)
         except Exception as exc:
             inference_response = _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
         return LeasedInferenceResponse(lease_id=leased_request.lease_id, response=inference_response)
 
-
-class InferenceRequestHandler(Protocol):
-    """Process one brokered inference request."""
-
-    def __call__(self, client: httpx.Client, request: InferenceRequest) -> InferenceResponse: ...
-
-
-@dataclass(frozen=True)
-class ForwardingInferenceHandler:
-    """Forward brokered requests to an OpenAI-compatible endpoint."""
-
-    upstream: RunningModel
-
-    def __call__(self, client: httpx.Client, request: InferenceRequest) -> InferenceResponse:
-        upstream_path = request.path.removeprefix("/v1/")
-        url = self.upstream.endpoint.url(upstream_path)
+    def _send(self, client: httpx.Client, request: InferenceRequest, url: str) -> httpx.Response:
         method = request.method.upper()
         if method == "GET":
-            return _response_from_upstream(request, client.get(url))
+            return client.get(url)
         if method == "POST":
-            return _response_from_upstream(
-                request,
-                client.post(url, json=unpack_json_payload(request.payload)),
-            )
-        return _inference_error_response(request, 405, f"unsupported brokered request method {request.method!r}")
+            return client.post(url, json=unpack_json_payload(request.payload))
+        return httpx.Response(
+            status_code=405,
+            json={"error": f"unsupported brokered request method {request.method!r}"},
+            request=httpx.Request(method, url),
+        )
 
 
 @contextmanager

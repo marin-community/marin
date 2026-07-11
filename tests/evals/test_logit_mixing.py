@@ -7,12 +7,8 @@ from types import MappingProxyType
 
 import httpx
 import pytest
-from marin.inference.broker import InferenceBroker
-from marin.inference.logit_mixing import LogitMixingInferenceHandler
-from marin.inference.proxy import serve_inference_proxy
+from marin.inference.logit_mixing import serve_logit_mixing_model
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.worker import InferenceWorker, run_inference_worker
-from rigging.timing import ExponentialBackoff
 
 from tests.evals.openai_stub import serve_deterministic_openai_stub
 
@@ -63,6 +59,7 @@ def test_logit_mixing_alpha_zero_does_not_call_teacher() -> None:
     response = _mixed_completion(
         teacher={},
         student={"A": {" B": -0.1}},
+        payload={**GENERATION_REQUEST, "stop": None},
         alpha=0,
     )
 
@@ -125,32 +122,15 @@ def _mixed_completion(
             completion_top_logprobs=teacher,
         ) as teacher_stub,
         serve_deterministic_openai_stub(model="student", completion_top_logprobs=student) as student_stub,
-    ):
-        broker = InferenceBroker(request_lease_timeout_seconds=30)
-        handler = LogitMixingInferenceHandler(
+        serve_logit_mixing_model(
             teacher=RunningModel(endpoint=OpenAIEndpoint(teacher_stub.base_url, teacher_stub.model)),
             student=RunningModel(endpoint=OpenAIEndpoint(student_stub.base_url, student_stub.model)),
             model=MIXED_MODEL,
+            tokenizer=None,
             alpha=alpha,
             request_timeout_seconds=REQUEST_TIMEOUT,
             top_logprobs=8,
             clock=clock,
-        )
-        worker = InferenceWorker(broker=broker, handler=handler, request_timeout_seconds=REQUEST_TIMEOUT)
-        with (
-            serve_inference_proxy(
-                broker=broker,
-                model=MIXED_MODEL,
-                request_timeout_seconds=REQUEST_TIMEOUT,
-                readiness_timeout_seconds=REQUEST_TIMEOUT,
-                max_pending_requests=8,
-                response_fetch_batch_size=8,
-                server_start_timeout_seconds=REQUEST_TIMEOUT,
-            ) as running_model,
-            run_inference_worker(
-                worker,
-                max_in_flight=2,
-                backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0),
-            ),
-        ):
-            return httpx.post(running_model.endpoint.url("completions"), json=dict(payload), timeout=REQUEST_TIMEOUT)
+        ) as running_model,
+    ):
+        return httpx.post(running_model.endpoint.url("completions"), json=dict(payload), timeout=REQUEST_TIMEOUT)

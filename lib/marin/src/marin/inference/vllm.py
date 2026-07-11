@@ -22,7 +22,6 @@ from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import InferenceRequestProvider, InferenceResponseProvider, OpenAIEndpoint, RunningModel
 from marin.inference.vllm_server import VllmEnvironment
 from marin.inference.worker import (
-    ForwardingInferenceHandler,
     InferenceWorker,
     run_inference_worker,
 )
@@ -121,7 +120,7 @@ def start_local_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runn
     with start_local_vllm_server(config) as upstream:
         worker = InferenceWorker(
             broker=broker,
-            handler=ForwardingInferenceHandler(upstream),
+            upstream=upstream,
             request_timeout_seconds=config.workers.request_timeout_seconds,
         )
         with (
@@ -226,7 +225,7 @@ def _run_iris_inference_worker(config: BrokeredVllmSystemConfig, broker_handle: 
     with start_local_vllm_server(config) as upstream:
         worker = InferenceWorker(
             broker=broker_handle,
-            handler=ForwardingInferenceHandler(upstream),
+            upstream=upstream,
             request_timeout_seconds=config.workers.request_timeout_seconds,
         )
         # Worker jobs poll until the parent job terminates them after the eval client exits.
