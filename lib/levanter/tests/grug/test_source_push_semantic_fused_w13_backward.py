@@ -198,18 +198,45 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
     assert schedule.dx_jobs == 16000
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
-    assert schedule.staging_programs == 64
-    assert schedule.dx_program_start == 64
-    assert schedule.dx_programs == 32
-    assert schedule.dw_program_start == 96
-    assert schedule.dw_programs == 32
-    assert schedule.combine_programs == 64
-    assert schedule.active_combine_programs == 64
+    assert schedule.staging_programs == 48
+    assert schedule.dx_program_start == 48
+    assert schedule.dx_programs == 40
+    assert schedule.dw_program_start == 88
+    assert schedule.dw_programs == 40
+    assert schedule.combine_programs == 48
+    assert schedule.active_combine_programs == 48
     assert schedule.total_programs == 128
     assert schedule.max_stage_readiness_signals == 16000
     assert schedule.compact_readiness_slots == 10240
     assert schedule.dx_readiness_signals == 200
     assert schedule.readiness_waits == 983040
+
+    staging_jobs_per_peer = schedule.staging_jobs // 8
+    dx_jobs_per_source = schedule.dx_jobs // 8
+    dw_tiles = 8 * schedule.hidden_tiles * 20
+    assert staging_jobs_per_peer == 2000
+    assert (staging_jobs_per_peer + schedule.staging_programs - 1) // schedule.staging_programs == 42
+    assert dx_jobs_per_source == 2000
+    assert (dx_jobs_per_source + schedule.dx_programs - 1) // schedule.dx_programs == 50
+    assert dw_tiles == 3200
+    assert (dw_tiles + schedule.dw_programs - 1) // schedule.dw_programs == 80
+
+
+def test_fused_w13_backward_strided_role_ownership_covers_jobs_once_with_tails():
+    role_shapes = (
+        (48, 2000),
+        (40, 2000),
+        (40, 3200),
+        (48, 2001),
+        (40, 2001),
+        (40, 3201),
+    )
+
+    for programs, jobs in role_shapes:
+        iterations = (jobs + programs - 1) // programs
+        owned = [iteration * programs + owner for owner in range(programs) for iteration in range(iterations)]
+        owned = [job for job in owned if job < jobs]
+        assert sorted(owned) == list(range(jobs))
 
 
 def test_fused_w13_backward_interpret_matches_independent_route_reference():
