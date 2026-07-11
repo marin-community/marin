@@ -2293,3 +2293,29 @@ checksum, or drop/overflow counters to compare with the selected K256 baseline
 K512 experiment must keep each physical async-copy dimension at most 256, for
 example by issuing two K256 copies, while preserving the wider logical helper
 work unit.
+
+## 2026-07-10 FUSED-MOE-079 - W13-backward pipeline wins integrated fwd+bwd
+
+Job `/dlwh/bench-semantic-integrated-w13b-pipeline-20260710-2230` at
+`139afe4e28` completed successfully on `cw-rno2a` (`exit=0`, one task,
+3m39s). This commit retains only the measured W13-backward two-stage WGMMA
+pipeline; the neutral W2-forward and slower W2-backward candidates were
+already reverted.
+
+| Mode | Repeat times (ms) | Median ms | Useful TFLOP/s/rank | Rounded TFLOP/s/rank | Baseline | Result |
+|---|---|---:|---:|---:|---|---|
+| Integrated forward | 49.732339, 49.339032, 49.538596 | 49.538596 | 52.046743 | 65.058428 | 49.051833 ms / 52.563225 useful | 0.99% slower; reject as a forward-only change |
+| Integrated fwd+bwd | 236.813932, 236.564280, 236.956558 | 236.813932 | 32.662638 | 40.828297 | 242.802626 ms / 31.857018 useful | keep: 5.988694 ms or 2.47% less time, 2.53% more useful throughput |
+
+Every repeat reported zero dropped routes, zero routing drops, and zero
+metadata-overflow routes. Forward emitted the existing integrated harness
+checksum `Infinity` on all repeats. Forward+backward emitted the stable checksum
+`-1.1766203134195027e+26` on all repeats. The process logged recoverable 12.5
+GiB BFC allocation failures and FABRIC-handle VMM fallback warnings during
+initialization, but both modes produced all three rows and Iris terminated
+successfully.
+
+The isolated W13-backward improvement (`72.465855 -> 66.282220 ms`) survives
+the integrated boundary: fwd+bwd saves 5.99 ms even though forward-only timing
+is about 0.49 ms noisier in this run. Keep the W13-backward pipeline selected;
+the aggregate fwd+bwd objective is the acceptance criterion.
