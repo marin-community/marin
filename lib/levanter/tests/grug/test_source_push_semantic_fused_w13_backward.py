@@ -52,13 +52,13 @@ def _plan(*, rows_per_src_dst_capacity: int = 12, rows_per_expert_capacity: int 
     )
 
 
-def _inputs(plan=None):
+def _inputs(plan=None, *, output_dim: int = 128):
     plan = _plan() if plan is None else plan
     x = ((jnp.arange(2 * 6 * 256, dtype=jnp.float32).reshape(2, 6, 256) % 19 - 9) / 16).astype(jnp.bfloat16)
-    w13 = ((jnp.arange(2 * 2 * 256 * 128, dtype=jnp.float32).reshape(2, 2, 256, 128) % 17 - 8) / 32).astype(
-        jnp.bfloat16
-    )
-    dz13 = ((jnp.arange(2 * 2 * 256 * 128, dtype=jnp.float32).reshape(2, 2, 256, 128) % 23 - 11) / 64).astype(
+    w13_shape = (2, 2, 256, output_dim)
+    w13 = ((jnp.arange(np.prod(w13_shape), dtype=jnp.float32).reshape(w13_shape) % 17 - 8) / 32).astype(jnp.bfloat16)
+    dz13_shape = (2, 2, 256, output_dim)
+    dz13 = ((jnp.arange(np.prod(dz13_shape), dtype=jnp.float32).reshape(dz13_shape) % 23 - 11) / 64).astype(
         jnp.bfloat16
     )
     return x, dz13, w13, plan
@@ -231,6 +231,24 @@ def test_fused_w13_backward_interpret_matches_independent_route_reference():
     np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
     assert int(result.queue_overflow_routes) == 0
     assert int(result.layout_overflow_rows) == 0
+
+
+def test_fused_w13_backward_twenty_output_tiles_match_independent_route_reference():
+    x, dz13, w13, plan = _inputs(output_dim=2560)
+
+    result = source_push_semantic_fused_w13_backward(
+        x,
+        dz13,
+        w13,
+        plan,
+        send_chunks_per_dst=1,
+        rows_per_expert_capacity=256,
+        interpret=True,
+    )
+
+    expected_dx, expected_dw = _independent_backward_reference(x, dz13, w13, plan)
+    np.testing.assert_allclose(np.asarray(result.dx), expected_dx, rtol=2e-4, atol=2e-4)
+    np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
 
 
 def test_fused_w13_backward_reference_masks_padding_and_reports_independent_overflow():

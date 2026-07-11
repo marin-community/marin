@@ -31,6 +31,7 @@ from levanter.grug._moe.source_push_semantic_fused_w13 import (
 
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
+WGMMA_PIPELINE_STAGES = 2
 # A separate persistent dW owner grid would wait for stage-ready signals while
 # the 288-CTA route grid could leave the required producers nonresident. Keep
 # the complete producer -> {dX, dW} partial order in one co-resident grid below
@@ -728,8 +729,7 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                     )
                                     row_valid = (row < valid_rows).astype(jnp.float32)
 
-                                    @pl.loop(0, output_tiles)
-                                    def _output_loop(output_tile) -> None:
+                                    def _copy_output_tile(output_tile, stage) -> None:
                                         output_start = output_tile * config.block_output
                                         mgpu.copy_gmem_to_smem(
                                             dz_ref.at[
@@ -737,8 +737,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                                 pl.ds(row_start, config.compute_m),
                                                 pl.ds(output_start, config.block_output),
                                             ],
-                                            dz_smem,
-                                            barrier,
+                                            dz_smem.at[stage],
+                                            barrier.at[stage],
                                         )
                                         mgpu.copy_gmem_to_smem(
                                             w_ref.at[
@@ -746,20 +746,43 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                                 pl.ds(hidden_start, config.block_hidden),
                                                 pl.ds(output_start, config.block_output),
                                             ],
-                                            w_smem,
-                                            barrier,
+                                            w_smem.at[stage],
+                                            barrier.at[stage],
                                         )
-                                        mgpu.barrier_wait(barrier)
-                                        dz_smem[:, :] = (dz_smem[...].astype(jnp.float32) * row_valid).astype(dtype)
+
+                                    _copy_output_tile(jnp.asarray(0, dtype=jnp.int32), jnp.asarray(0, dtype=jnp.int32))
+
+                                    @pl.loop(0, output_tiles)
+                                    def _output_loop(output_tile) -> None:
+                                        stage = output_tile % WGMMA_PIPELINE_STAGES
+                                        mgpu.barrier_wait(barrier.at[stage])
+                                        dz_stage = dz_smem.at[stage]
+                                        w_stage = w_smem.at[stage]
+                                        dz_stage[:, :] = (dz_stage[...].astype(jnp.float32) * row_valid).astype(dtype)
                                         mgpu.commit_smem()
-                                        mgpu.wgmma(acc_ref, dz_smem, mgpu.transpose_ref(w_smem, (1, 0)))
-                                        mgpu.wgmma_wait(0)
+                                        mgpu.wgmma(acc_ref, dz_stage, mgpu.transpose_ref(w_stage, (1, 0)))
+
+                                        @pl.when(output_tile + 1 < output_tiles)
+                                        def _prefetch_next_output_tile() -> None:
+                                            # The older group owns the stage about to be reused.
+                                            mgpu.wgmma_wait(1)
+                                            next_tile = output_tile + 1
+                                            _copy_output_tile(next_tile, next_tile % WGMMA_PIPELINE_STAGES)
+
+                                    mgpu.wgmma_wait(0)
 
                                 pl.run_scoped(
                                     _smem_scope,
-                                    dz_smem=_wgmma_smem((config.compute_m, config.block_output), dtype),
-                                    w_smem=_wgmma_smem((config.block_hidden, config.block_output), dtype),
-                                    barrier=mgpu.Barrier(num_arrivals=2),
+                                    dz_smem=_wgmma_smem(
+                                        (WGMMA_PIPELINE_STAGES, config.compute_m, config.block_output), dtype
+                                    ),
+                                    w_smem=_wgmma_smem(
+                                        (WGMMA_PIPELINE_STAGES, config.block_hidden, config.block_output), dtype
+                                    ),
+                                    barrier=mgpu.Barrier(
+                                        num_arrivals=2,
+                                        num_barriers=WGMMA_PIPELINE_STAGES,
+                                    ),
                                 )
                                 source_return[
                                     destination_ordinal,
@@ -820,12 +843,11 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
 
                     def _acc_scope(acc_ref) -> None:
                         def _smem_scope(x_smem, dz_smem, barrier) -> None:
-                            @pl.loop(0, schedule.compact_m_blocks)
-                            def _compact_m_loop(compact_block) -> None:
+                            def _copy_compact_block(compact_block, stage) -> None:
                                 valid_rows = compact_valid_rows_ref[expert, compact_block]
 
                                 @pl.when(valid_rows > 0)
-                                def _accumulate_live_block() -> None:
+                                def _copy_live_block() -> None:
                                     row_start = compact_block * config.compute_m
                                     pl.semaphore_wait(
                                         compact_ready_sem.at[expert, compact_block, hidden_tile],
@@ -838,8 +860,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                             pl.ds(row_start, config.compute_m),
                                             pl.ds(hidden_start, config.block_hidden),
                                         ],
-                                        x_smem,
-                                        barrier,
+                                        x_smem.at[stage],
+                                        barrier.at[stage],
                                     )
                                     mgpu.copy_gmem_to_smem(
                                         dz_ref.at[
@@ -847,10 +869,16 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                             pl.ds(row_start, config.compute_m),
                                             pl.ds(output_start, config.block_output),
                                         ],
-                                        dz_smem,
-                                        barrier,
+                                        dz_smem.at[stage],
+                                        barrier.at[stage],
                                     )
-                                    mgpu.barrier_wait(barrier)
+
+                            def _accumulate_compact_block(compact_block, stage) -> None:
+                                valid_rows = compact_valid_rows_ref[expert, compact_block]
+
+                                @pl.when(valid_rows > 0)
+                                def _accumulate_live_block() -> None:
+                                    mgpu.barrier_wait(barrier.at[stage])
                                     row = mgpu.layout_cast(
                                         lax.broadcasted_iota(
                                             jnp.int32,
@@ -860,20 +888,41 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                         mgpu.Layout.WGMMA,
                                     )
                                     row_valid = (row < valid_rows).astype(jnp.float32)
-                                    dz_smem[:, :] = (dz_smem[...].astype(jnp.float32) * row_valid).astype(dtype)
+                                    x_stage = x_smem.at[stage]
+                                    dz_stage = dz_smem.at[stage]
+                                    dz_stage[:, :] = (dz_stage[...].astype(jnp.float32) * row_valid).astype(dtype)
                                     mgpu.commit_smem()
                                     mgpu.wgmma(
                                         acc_ref,
-                                        mgpu.transpose_ref(x_smem, (1, 0)),
-                                        dz_smem,
+                                        mgpu.transpose_ref(x_stage, (1, 0)),
+                                        dz_stage,
                                     )
-                                    mgpu.wgmma_wait(0)
+
+                            @pl.loop(0, math.ceil(schedule.compact_m_blocks / WGMMA_PIPELINE_STAGES))
+                            def _compact_m_pair_loop(pair) -> None:
+                                first_block = pair * WGMMA_PIPELINE_STAGES
+                                _copy_compact_block(first_block, jnp.asarray(0, dtype=jnp.int32))
+                                _accumulate_compact_block(first_block, jnp.asarray(0, dtype=jnp.int32))
+
+                                second_block = first_block + 1
+
+                                @pl.when(second_block < schedule.compact_m_blocks)
+                                def _pipeline_second_block() -> None:
+                                    _copy_compact_block(second_block, jnp.asarray(1, dtype=jnp.int32))
+                                    _accumulate_compact_block(second_block, jnp.asarray(1, dtype=jnp.int32))
+
+                                # Compact ownership can contain holes, so do not carry a
+                                # conditional WGMMA across reuse of either pair stage.
+                                mgpu.wgmma_wait(0)
 
                         pl.run_scoped(
                             _smem_scope,
-                            x_smem=_wgmma_smem((config.compute_m, config.block_hidden), dtype),
-                            dz_smem=_wgmma_smem((config.compute_m, config.block_output), dtype),
-                            barrier=mgpu.Barrier(num_arrivals=2),
+                            x_smem=_wgmma_smem((WGMMA_PIPELINE_STAGES, config.compute_m, config.block_hidden), dtype),
+                            dz_smem=_wgmma_smem((WGMMA_PIPELINE_STAGES, config.compute_m, config.block_output), dtype),
+                            barrier=mgpu.Barrier(
+                                num_arrivals=2,
+                                num_barriers=WGMMA_PIPELINE_STAGES,
+                            ),
                         )
                         dw_ref[
                             expert,
