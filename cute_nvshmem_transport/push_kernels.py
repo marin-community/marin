@@ -3,6 +3,8 @@
 # ruff: noqa: PLC0415
 
 import ctypes
+import statistics
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -14,6 +16,8 @@ class PushOperation(StrEnum):
     PUT_SIGNAL_NBI_QUIET = "put_signal_nbi_quiet"
     PUT_NBI_QUIET_SIGNAL = "put_nbi_quiet_signal"
     PEER_STORE_SIGNAL = "peer_store_signal"
+    PUT_SIGNAL_WARP = "put_signal_warp"
+    PUT_SIGNAL_NBI_WARP_QUIET = "put_signal_nbi_warp_quiet"
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,7 @@ class PushKernelResult:
     validation_errors: int
     first_error_epoch: int
     first_error_payload: tuple[int, int, int, int]
+    elapsed_seconds: float
 
 
 def _copy_scalar_to_host(buffer: object, ctype: type[ctypes._SimpleCData]) -> int:
@@ -55,12 +60,23 @@ def _copy_uint64_array_to_host(buffer: object, length: int) -> tuple[int, ...]:
     return tuple(int(value) for value in values)
 
 
-def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) -> PushKernelResult:
+def run_push_probe(
+    num_epochs: int,
+    num_slots: int,
+    operation: PushOperation,
+    payload_bytes: int = PAYLOAD_WORDS * 4,
+    repetitions: int = 1,
+) -> PushKernelResult:
     """Run a one-slot push ring entirely inside one device kernel."""
     if num_epochs < 1:
         raise ValueError("num_epochs must be positive")
     if num_slots not in (1, 2, 4, 8):
         raise ValueError("num_slots must be one of 1, 2, 4, or 8")
+    if payload_bytes < PAYLOAD_WORDS * 4 or payload_bytes % 4:
+        raise ValueError("payload_bytes must be a multiple of four and at least 16")
+    if repetitions < 1:
+        raise ValueError("repetitions must be positive")
+    payload_words = payload_bytes // 4
 
     import cutlass.cute as cute
     import nvshmem.core as nvshmem
@@ -68,12 +84,12 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
     import nvshmem.core.device.cute.mem as nvshmem_cute_mem
     import nvshmem.core.interop.cute as cute_interop
     from cuda.core import Device
-    from cutlass.cute.arch.nvvm_wrappers import fence_acq_rel_sys, load, store
+    from cutlass.cute.arch.nvvm_wrappers import fence_acq_rel_sys, load, store, sync_warp
     from cutlass.cute.typing import Int32
     from nvshmem.bindings.device.cute import quiet
 
-    source = cute_interop.tensor((PAYLOAD_WORDS * num_slots,), dtype=cute.Int32)
-    inbox = cute_interop.tensor((PAYLOAD_WORDS * num_slots,), dtype=cute.Int32)
+    source = cute_interop.tensor((payload_words * num_slots,), dtype=cute.Int32)
+    inbox = cute_interop.tensor((payload_words * num_slots,), dtype=cute.Int32)
     ready = cute_interop.tensor((num_slots,), dtype=cute.Uint64)
     consumed = cute_interop.tensor((num_slots,), dtype=cute.Uint64)
     validation = cute_interop.tensor((6,), dtype=cute.Int32)
@@ -95,6 +111,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
             ready: cute.Tensor,
             epoch: Int32,
             successor: Int32,
+            words: Int32,
         ):
             nvshmem_cute.put_signal(
                 inbox,
@@ -115,6 +132,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
             ready: cute.Tensor,
             epoch: Int32,
             successor: Int32,
+            words: Int32,
         ):
             nvshmem_cute.put_signal_nbi(
                 inbox,
@@ -136,6 +154,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
             ready: cute.Tensor,
             epoch: Int32,
             successor: Int32,
+            words: Int32,
         ):
             nvshmem_cute.put_nbi(inbox, source, successor)
             quiet()
@@ -151,6 +170,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
             ready: cute.Tensor,
             epoch: Int32,
             successor: Int32,
+            words: Int32,
         ):
             peer_ptr = cute.make_ptr(
                 cute.Int32,
@@ -158,15 +178,61 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
                 cute.AddressSpace.gmem,
                 assumed_align=16,
             )
-            store(peer_ptr.llvm_ptr, source[0], sem="release", scope="sys")
-            store((peer_ptr + 1).llvm_ptr, source[1], sem="release", scope="sys")
-            store((peer_ptr + 2).llvm_ptr, source[2], sem="release", scope="sys")
-            store((peer_ptr + 3).llvm_ptr, source[3], sem="release", scope="sys")
+            for offset in range(words):
+                store((peer_ptr + offset).llvm_ptr, source[offset], sem="release", scope="sys")
             fence_acq_rel_sys()
             nvshmem_cute.signal_op(ready, epoch, nvshmem.SignalOp.SIGNAL_SET, successor)
 
+    elif operation is PushOperation.PUT_SIGNAL_WARP:
+
+        @cute.jit
+        def publish(
+            inbox: cute.Tensor,
+            peer_inbox: cute.Tensor,
+            source: cute.Tensor,
+            ready: cute.Tensor,
+            epoch: Int32,
+            successor: Int32,
+            words: Int32,
+        ):
+            nvshmem_cute.put_signal_warp(
+                inbox,
+                source,
+                ready,
+                epoch,
+                nvshmem.SignalOp.SIGNAL_SET,
+                successor,
+            )
+
+    elif operation is PushOperation.PUT_SIGNAL_NBI_WARP_QUIET:
+
+        @cute.jit
+        def publish(
+            inbox: cute.Tensor,
+            peer_inbox: cute.Tensor,
+            source: cute.Tensor,
+            ready: cute.Tensor,
+            epoch: Int32,
+            successor: Int32,
+            words: Int32,
+        ):
+            nvshmem_cute.put_signal_nbi_warp(
+                inbox,
+                source,
+                ready,
+                epoch,
+                nvshmem.SignalOp.SIGNAL_SET,
+                successor,
+            )
+            quiet()
+
     else:
         raise ValueError(f"unknown push operation {operation}")
+
+    warp_cooperative = operation in (
+        PushOperation.PUT_SIGNAL_WARP,
+        PushOperation.PUT_SIGNAL_NBI_WARP_QUIET,
+    )
 
     @cute.kernel
     def push_ring_kernel(
@@ -177,6 +243,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
         validation: cute.Tensor,
         epochs: Int32,
         slots: Int32,
+        words: Int32,
     ):
         thread_index, _, _ = cute.arch.thread_idx()
         rank = nvshmem.my_pe()
@@ -185,20 +252,48 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
         predecessor = (rank + num_pes - 1) % num_pes
         peer_inbox = nvshmem_cute_mem.get_peer_tensor(inbox, successor)
 
-        if thread_index == 0:
+        if warp_cooperative:
+            if thread_index < 32:
+                for epoch in range(1, epochs + 1):
+                    slot = (epoch - 1) % slots
+                    source_slot = cute.make_tensor(
+                        source.iterator + slot * payload_words,
+                        cute.make_layout(payload_words),
+                    )
+                    inbox_slot = cute.make_tensor(
+                        inbox.iterator + slot * payload_words,
+                        cute.make_layout(payload_words),
+                    )
+                    peer_inbox_slot = cute.make_tensor(
+                        peer_inbox.iterator + slot * payload_words,
+                        cute.make_layout(payload_words),
+                    )
+                    ready_slot = cute.make_tensor(ready.iterator + slot, cute.make_layout(1))
+                    consumed_slot = cute.make_tensor(consumed.iterator + slot, cute.make_layout(1))
+                    if thread_index == 0:
+                        if epoch > slots:
+                            nvshmem_cute.signal_wait(consumed_slot, nvshmem.ComparisonType.CMP_GE, epoch - slots)
+                        source_slot[0] = rank
+                        source_slot[1] = epoch
+                        source_slot[2] = slot
+                        source_slot[3] = rank ^ epoch
+                    sync_warp()
+                    publish(inbox_slot, peer_inbox_slot, source_slot, ready_slot, epoch, successor, words)
+
+        elif thread_index == 0:
             for epoch in range(1, epochs + 1):
                 slot = (epoch - 1) % slots
                 source_slot = cute.make_tensor(
-                    source.iterator + slot * PAYLOAD_WORDS,
-                    cute.make_layout(PAYLOAD_WORDS),
+                    source.iterator + slot * payload_words,
+                    cute.make_layout(payload_words),
                 )
                 inbox_slot = cute.make_tensor(
-                    inbox.iterator + slot * PAYLOAD_WORDS,
-                    cute.make_layout(PAYLOAD_WORDS),
+                    inbox.iterator + slot * payload_words,
+                    cute.make_layout(payload_words),
                 )
                 peer_inbox_slot = cute.make_tensor(
-                    peer_inbox.iterator + slot * PAYLOAD_WORDS,
-                    cute.make_layout(PAYLOAD_WORDS),
+                    peer_inbox.iterator + slot * payload_words,
+                    cute.make_layout(payload_words),
                 )
                 ready_slot = cute.make_tensor(ready.iterator + slot, cute.make_layout(1))
                 consumed_slot = cute.make_tensor(consumed.iterator + slot, cute.make_layout(1))
@@ -208,14 +303,14 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
                 source_slot[1] = epoch
                 source_slot[2] = slot
                 source_slot[3] = rank ^ epoch
-                publish(inbox_slot, peer_inbox_slot, source_slot, ready_slot, epoch, successor)
+                publish(inbox_slot, peer_inbox_slot, source_slot, ready_slot, epoch, successor, words)
 
         if thread_index == 32:
             for epoch in range(1, epochs + 1):
                 slot = (epoch - 1) % slots
                 inbox_slot = cute.make_tensor(
-                    inbox.iterator + slot * PAYLOAD_WORDS,
-                    cute.make_layout(PAYLOAD_WORDS),
+                    inbox.iterator + slot * payload_words,
+                    cute.make_layout(payload_words),
                 )
                 ready_slot = cute.make_tensor(ready.iterator + slot, cute.make_layout(1))
                 consumed_slot = cute.make_tensor(consumed.iterator + slot, cute.make_layout(1))
@@ -255,8 +350,9 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
         validation: cute.Tensor,
         epochs: Int32,
         slots: Int32,
+        words: Int32,
     ):
-        push_ring_kernel(source, inbox, ready, consumed, validation, epochs, slots).launch(
+        push_ring_kernel(source, inbox, ready, consumed, validation, epochs, slots, words).launch(
             grid=[1, 1, 1],
             block=[64, 1, 1],
         )
@@ -271,6 +367,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
         validation,
         1,
         num_slots,
+        payload_words,
         options=f" --link-libraries={bitcode}",
     )
     compiled = compiled.to(Device().device_id)
@@ -278,8 +375,23 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
     kernel_object = nvshmem.NvshmemKernelObject.from_handle(int(cuda_library[0]))
     nvshmem.library_init(kernel_object)
 
-    compiled(source, inbox, ready, consumed, validation, num_epochs, num_slots)
-    Device().sync()
+    elapsed_times = []
+    for _ in range(repetitions):
+        nvshmem.barrier_all(stream)
+        stream.sync()
+        for tensor in (ready, consumed, validation):
+            buffer, _, _ = cute_interop.tensor_get_buffer(tensor)
+            buffer.fill(0, stream=stream)
+        stream.sync()
+        nvshmem.barrier_all(stream)
+        stream.sync()
+        start = time.perf_counter()
+        compiled(source, inbox, ready, consumed, validation, num_epochs, num_slots, payload_words)
+        Device().sync()
+        nvshmem.barrier_all(stream)
+        stream.sync()
+        elapsed_times.append(time.perf_counter() - start)
+    elapsed_seconds = statistics.median(elapsed_times)
 
     ready_buffer, _, _ = cute_interop.tensor_get_buffer(ready)
     consumed_buffer, _, _ = cute_interop.tensor_get_buffer(consumed)
@@ -291,6 +403,7 @@ def run_push_probe(num_epochs: int, num_slots: int, operation: PushOperation) ->
         validation_errors=validation_values[0],
         first_error_epoch=validation_values[1],
         first_error_payload=validation_values[2:6],
+        elapsed_seconds=elapsed_seconds,
     )
 
     nvshmem.library_finalize(kernel_object)
