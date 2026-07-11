@@ -1718,3 +1718,184 @@ N128, and compute M64, with 16 producer programs per peer and 32 combine
 programs. Logs contained two non-fatal failed 12.50 GiB allocator attempts and
 CUDA VMM FABRIC+POSIX_FD handle fallback warnings before all repeat and summary
 rows completed.
+
+## 2026-07-10 FUSED-MOE-058 - W13 forward 8-row gather
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-86c7-w13f-gather8-20260710-1743` on `cw-rno2a`,
+targeting the W13 forward 8-row gather at commit `86c7de325c`. Iris reached
+exact terminal state `succeeded`; its single H100x8 task exited 0 after 1 minute
+and 35.86 seconds, with zero Iris failures and preemptions. No duplicate,
+resubmit, restart, stop, task kick, or cluster bounce was issued.
+
+The benchmark failed before producing a repeat. Its first and only structured
+error row was emitted at `2026-07-11T00:40:28Z` with exact error type
+`RuntimeError` and exact error text `Failed to infer the output layout of the
+iota. Please apply plgpu.layout_cast to its output right after its creation.`
+The traceback identifies
+`lib/levanter/src/levanter/grug/_moe/source_push_semantic_fused_w13.py:529`,
+where `_copy_scope` evaluates
+`hidden_offsets = k_start + jnp.arange(config.send_k, dtype=jnp.int32)`.
+The structured summary reported exact `repeat_rows: 0`, `error_rows: 1`, and
+`error: "all repeats failed"`.
+
+For the error row, `compile_time`, `lower_compile_time`, `first_call_time`,
+`first_run_time`, `steady_state_time`, `useful_tflops_per_rank`,
+`rounded_tflops_per_rank`, and `output_checksum` were all `null`. Exact counters
+were `dropped_routes: 0`, `routing_dropped_routes: 0`, and
+`metadata_overflow_routes: 0`. The mode reported 64 live pairs, 1,048,576
+useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
+0.19999999999999996 masked-row fraction. Block settings were `block_m: 64`,
+`entries_per_rank: 288`, and
+`source_push_profile: "hopper_source_push_inbox_rough_balanced_216"`.
+
+Before the structured failure, failed 12.50 GiB BFC allocator attempts were
+logged at `2026-07-11T00:40:17.025742Z` and
+`2026-07-11T00:40:27.027126Z`. They did not change the Iris task's successful
+exit status.
+
+## 2026-07-10 FUSED-MOE-059 - W2 return with four adjacent N tiles per job
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-86c7-w2f-group4-20260710-1743` on `cw-rno2a`,
+targeting `semantic_fused_w2_return_pallas` with four adjacent N tiles per job
+at commit `86c7de325c`. Iris reached exact terminal state `succeeded`; its
+single H100x8 task succeeded with exit 0 after 1 minute and 53.66 seconds, with
+zero failures and preemptions. No duplicate, resubmit, restart, stop, task
+kick, or cluster bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.06529241466584305` seconds (`65.29241466584305` ms) and
+`13.156098814788852`/`16.445123518486064` useful/rounded TFLOP/s/rank. Repeat
+1 reported `0.06531062566985686` seconds (`65.31062566985686` ms) and
+`13.152430410668314`/`16.44053801333539` useful/rounded TFLOP/s/rank. Repeat 2
+reported `0.06528477397902559` seconds (`65.28477397902559` ms) and
+`13.157638555599101`/`16.447048194498876` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.06529241466584305`/`0.06528477397902559`/`0.06531062566985686` seconds
+(`65.29241466584305`/`65.28477397902559`/`65.31062566985686` ms). Median
+useful/rounded throughput was `13.156098814788852`/`16.445123518486064`
+TFLOP/s/rank. Compile, lower-compile, and first-run times were
+`9.12641014996916`, `6.970872813020833`, and `2.1555373369483277` seconds.
+
+The output checksum was `3915118848.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, and metadata overflow were all
+zero; queue-route overflow and layout-row overflow were both `0.0`. The mode
+reported 64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, and 0.19999999999999996 masked-row fraction. Block sizes were K64,
+N128, and compute M64, with 16 producer programs per peer and 32 combine
+programs.
+
+The first failed 12.50 GiB allocator request was logged at
+`2026-07-11T00:40:18.305880Z`, followed by a second at
+`2026-07-11T00:40:28.307572Z`. Structured repeat and summary rows arrived at
+`2026-07-11T00:40:47Z`, about 28.69 seconds after the first warning and well
+inside the 10-minute no-progress cutoff. CUDA VMM FABRIC+POSIX_FD handle
+fallback warnings appeared on all eight ranks before the successful rows.
+
+## 2026-07-10 FUSED-MOE-060 - W13 forward 8-row gather iota layout-cast fix
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-276e-w13f-gather8fix-20260710-1747` on
+`cw-rno2a`, targeting the W13 forward 8-row gather with immediate iota layout
+casts at commit `276ec40c2b`. Iris reached exact terminal state `succeeded`;
+its single H100x8 task exited 0 after 1 minute and 25.93 seconds, with zero
+Iris failures and preemptions. No duplicate, resubmit, restart, stop, task
+kick, or cluster bounce was issued.
+
+The benchmark failed before producing a repeat. Its first and only structured
+error row was emitted at `2026-07-11T00:47:04Z` with exact error type
+`TypeError` and exact error text `TiledLayout.__init__() missing 4 required
+positional arguments: 'tiling', 'warp_dims', 'lane_dims', and 'vector_dim'`.
+The traceback identifies
+`lib/levanter/src/levanter/grug/_moe/source_push_semantic_fused_w13.py:530`,
+where `_copy_scope` evaluates
+`jnp.arange(config.send_k, dtype=jnp.int32)`. The structured summary reported
+exact `repeat_rows: 0`, `error_rows: 1`, and `error: "all repeats failed"`.
+
+For the error row, `compile_time`, `lower_compile_time`, `first_call_time`,
+`first_run_time`, `steady_state_time`, `useful_tflops_per_rank`,
+`rounded_tflops_per_rank`, and `output_checksum` were all `null`. Exact
+counters were `dropped_routes: 0`, `routing_dropped_routes: 0`, and
+`metadata_overflow_routes: 0`. The mode reported 64 live pairs, 1,048,576
+useful rows, 1,310,720 rounded rows, 0.8 row efficiency, and
+0.19999999999999996 masked-row fraction. Block settings were `block_m: 64`,
+`entries_per_rank: 288`, and
+`source_push_profile: "hopper_source_push_inbox_rough_balanced_216"`.
+
+Before the structured failure, failed 12.50 GiB BFC allocator attempts were
+logged at `2026-07-11T00:46:53.418448Z` and
+`2026-07-11T00:47:03.419983Z`. They did not change the Iris task's successful
+exit status.
+
+## 2026-07-10 FUSED-MOE-061 - Compact expert-major W2 backward with fused dZ13
+
+Observation-only babysitting completed for
+`/dlwh/bench-semantic-fused-3188-w2b-compact-20260710-1751` on `cw-rno2a`,
+targeting compact expert-major dy staging with owned dW2 tiles and fused dZ13
+at commit `3188ab69b0`. Iris reached exact terminal state `succeeded`; its
+single H100x8 task succeeded with exit 0 after 1 minute and 51.12 seconds,
+with zero failures and preemptions. No duplicate, resubmit, restart, stop,
+task kick, or cluster bounce was issued.
+
+The run emitted three structured repeat rows and one structured summary row,
+with zero error rows. Repeat 0 reported exact steady-state time
+`0.11894947732798755` seconds (`118.94947732798755` ms) and
+`14.442996783103778`/`18.05374597887972` useful/rounded TFLOP/s/rank. Repeat
+1 reported `0.11895087400140862` seconds (`118.95087400140862` ms) and
+`14.44282719923231`/`18.05353399904039` useful/rounded TFLOP/s/rank. Repeat 2
+reported `0.1188461153069511` seconds (`118.8461153069511` ms) and
+`14.455558046326129`/`18.06944755790766` useful/rounded TFLOP/s/rank.
+
+The exact summary median/min/max steady-state time was
+`0.11894947732798755`/`0.1188461153069511`/`0.11895087400140862` seconds
+(`118.94947732798755`/`118.8461153069511`/`118.95087400140862` ms). Median
+useful/rounded throughput was `14.442996783103778`/`18.05374597887972`
+TFLOP/s/rank. Compile, lower-compile, first-call, and first-run times were
+`7.368648039060645`, `5.334333621081896`, `7.368648039060645`, and
+`2.0343144179787487` seconds.
+
+The output checksum was `127795200.0` in every repeat, and every repeat had
+`error: null`. Dropped routes, routing drops, and metadata overflow were all
+zero; queue-route overflow and layout-row overflow were both `0.0`. The mode
+reported 64 live pairs, 1,048,576 useful rows, 1,310,720 rounded rows, 0.8 row
+efficiency, and 0.19999999999999996 masked-row fraction. Block settings were
+compute M64, hidden 128, intermediate 128, send-hidden 256, send M256, and 12
+inbox slots.
+
+Failed 12.50 GiB BFC allocator attempts were logged at
+`2026-07-11T00:49:42.973704Z` and `2026-07-11T00:49:52.975131Z`. Structured
+repeat and summary rows were received by the polling terminal at
+`2026-07-11T00:50:34Z`, about 51 seconds after the first warning and well
+inside the 10-minute no-progress cutoff. CUDA VMM FABRIC+POSIX_FD handle
+fallback warnings appeared on all eight ranks before the successful rows.
+
+## 2026-07-10 FUSED-MOE-062 - Separate transport rows from compute rows
+
+Commits `e6b8aad7b9` and `f7c77d78ea` make the semantic queue's row
+granularities explicit in the fused kernels. Transport reserves and reuses an
+aggregate `send_m` slot, while readiness is published independently for each
+`compute_m` block in that slot. The only semantic constraint is
+`send_m % compute_m == 0`; the current Hopper profile remains B256 transport
+feeding four independently ready B64 WGMMA blocks. W13 backward now also has a
+separate `send_hidden_block`, removing the accidental use of the transport row
+count as a hidden-dimension copy width.
+
+The compact W2-backward target result in FUSED-MOE-061 improves the previous
+32-worker result from `128.646303` ms to `118.949477` ms, a 7.54% latency
+reduction, but remains structurally slow. Source inspection shows that each
+consumer finishes its dZ13 stream before entering dW2 ownership, producing an
+effective phase boundary under balanced routing. The owned dW2 tile then scans
+all compact B64 blocks and reloads gate/up plus recomputes SwiGLU once per
+hidden tile. At the target shape this is approximately 409,600 preparations
+instead of about 20,480 unique `(expert, intermediate_tile, B64_block)`
+preparations, roughly 20x amplification.
+
+Next experiment: consume each independently ready B64 block once, form H once
+per intermediate tile, reuse each dy tile for explicit-WGMMA dH and dW2, and
+atomically accumulate the B64 dW2 partial. This intentionally trades back some
+destination-local atomic cost to remove the much larger phase split and
+recomputation tax. Target H100 runs for compact W13 backward and the concrete
+8-row W13 forward gather layouts are active and separately babysat.
