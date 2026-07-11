@@ -170,7 +170,6 @@ from levanter.grug._moe.source_push_semantic_w2_pallas import (
     source_push_semantic_w2_pallas_mgpu,
 )
 
-
 KERNEL_NAME = "source_push_semantic_plan"
 DIRECT_QUEUE_SOURCE_ROW_ALIGNMENT = 8
 SOURCE_PADDED_ROW_BLOCK = 64
@@ -214,6 +213,7 @@ MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS = "semantic_fused_w13_backwar
 MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS = (
     "semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas"
 )
+MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS = "semantic_fused_w13_backward_full_serial_combine_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS = "semantic_fused_mlp_forward_pallas"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE = "semantic_fused_mlp_forward_compare"
 MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS = "semantic_fused_mlp_forward_backward_pallas"
@@ -237,6 +237,7 @@ SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES = (
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS,
 )
 SEMANTIC_FUSED_PALLAS_MODES = SEMANTIC_FUSED_STAGE_MODES + SEMANTIC_FUSED_W13_BACKWARD_DIAGNOSTIC_MODES
 MODE_W13_SOURCE_PADDED_DIRECT_PACK_PALLAS = "w13_source_padded_direct_pack_pallas"
@@ -582,6 +583,7 @@ MODES = (
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS,
     MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS,
+    MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_PALLAS,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_COMPARE,
     MODE_SEMANTIC_FUSED_MLP_FORWARD_BACKWARD_PALLAS,
@@ -1830,6 +1832,7 @@ def _mode_flops_per_rank(
         MODE_SEMANTIC_FUSED_W13_BACKWARD_PALLAS,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS,
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS,
     ):
         useful = useful_rows_total * (2.0 * w13_per_row)
         rounded = rounded_rows_total * (2.0 * w13_per_row)
@@ -4339,6 +4342,12 @@ def _mode_callable(
         return semantic_fused_w13_backward_diagnostic(
             inputs,
             source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE,
+        )
+
+    def semantic_fused_w13_backward_full_serial_combine_pallas(inputs: SemanticFusedW13BackwardBenchInputs):
+        return semantic_fused_w13_backward_diagnostic(
+            inputs,
+            source_push_semantic_fused_w13_backward._SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE,
         )
 
     def semantic_fused_w13_backward_reference(inputs: SemanticFusedW13BackwardBenchInputs):
@@ -8589,6 +8598,9 @@ def _mode_callable(
         MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DW_PALLAS: semantic_fused_w13_backward_staging_dw_pallas,
         MODE_SEMANTIC_FUSED_W13_BACKWARD_STAGING_DX_DW_NO_COMBINE_PALLAS: (
             semantic_fused_w13_backward_staging_dx_dw_no_combine_pallas
+        ),
+        MODE_SEMANTIC_FUSED_W13_BACKWARD_FULL_SERIAL_COMBINE_PALLAS: (
+            semantic_fused_w13_backward_full_serial_combine_pallas
         ),
         MODE_SEMANTIC_FUSED_W13_BACKWARD_COMPARE: SplitComparison(
             reference=semantic_fused_w13_backward_reference,

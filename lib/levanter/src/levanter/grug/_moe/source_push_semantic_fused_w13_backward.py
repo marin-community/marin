@@ -49,18 +49,23 @@ class _SourcePushSemanticFusedW13BackwardDiagnostic(StrEnum):
     STAGING_DX = "staging_dx"
     STAGING_DW = "staging_dw"
     STAGING_DX_DW_NO_COMBINE = "staging_dx_dw_no_combine"
+    FULL_SERIAL_COMBINE = "full_serial_combine"
 
     @property
     def includes_dx(self) -> bool:
-        return self in (self.FULL, self.STAGING_DX, self.STAGING_DX_DW_NO_COMBINE)
+        return self in (self.FULL, self.STAGING_DX, self.STAGING_DX_DW_NO_COMBINE, self.FULL_SERIAL_COMBINE)
 
     @property
     def includes_dw(self) -> bool:
-        return self in (self.FULL, self.STAGING_DW, self.STAGING_DX_DW_NO_COMBINE)
+        return self in (self.FULL, self.STAGING_DW, self.STAGING_DX_DW_NO_COMBINE, self.FULL_SERIAL_COMBINE)
 
     @property
     def includes_combine(self) -> bool:
-        return self in (self.FULL, self.STAGING_DX)
+        return self in (self.FULL, self.STAGING_DX, self.FULL_SERIAL_COMBINE)
+
+    @property
+    def serializes_combine(self) -> bool:
+        return self is self.FULL_SERIAL_COMBINE
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,6 +577,8 @@ def _source_push_semantic_fused_w13_backward_sharded(
             return dx_local[None, ...], dw_local[None, ...]
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
             return (x_expert_local[None, ...],)
+        if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE:
+            return x_expert_local[None, ...], dx_local[None, ...], dw_local[None, ...]
         if diagnostic.includes_combine:
             return x_expert_local[None, ...], dx_local[None, ...]
         return x_expert_local[None, ...], dw_local[None, ...]
@@ -585,6 +592,12 @@ def _source_push_semantic_fused_w13_backward_sharded(
         out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None), P(SOURCE_PUSH_MESH_AXIS, None, None, None))
     elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
         out_specs = (P(SOURCE_PUSH_MESH_AXIS, None, None, None),)
+    elif diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE:
+        out_specs = (
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None),
+            P(SOURCE_PUSH_MESH_AXIS, None, None, None),
+        )
     elif diagnostic.includes_combine:
         out_specs = (
             P(SOURCE_PUSH_MESH_AXIS, None, None, None),
@@ -643,6 +656,8 @@ def _source_push_semantic_fused_w13_backward_sharded(
     if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
         (x_expert,) = cast(tuple[Array], outputs)
         return x_expert, jnp.zeros_like(x, dtype=jnp.float32), jnp.zeros_like(w13, dtype=jnp.float32)
+    if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE:
+        return cast(tuple[Array, Array, Array], outputs)
     if diagnostic.includes_combine:
         x_expert, dx = cast(tuple[Array, Array], outputs)
         return x_expert, dx, jnp.zeros_like(w13, dtype=jnp.float32)
@@ -712,6 +727,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         if diagnostic.includes_dx:
             dx_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, send_chunks_per_dst)))
             ready_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, config.inbox_slots)))
+        if diagnostic.serializes_combine:
+            dw_done_sem = pl.get_global(mgpu.SemaphoreType.REGULAR((1,)))
         rank = lax.axis_index(SOURCE_PUSH_MESH_AXIS)
         worker = pl.program_id(0)
 
@@ -795,6 +812,8 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                 _stage_peer(destination_ordinal)
 
             if diagnostic.includes_combine:
+                if diagnostic.serializes_combine:
+                    pl.semaphore_wait(dw_done_sem.at[0], value=schedule.dw_programs, decrement=False)
                 hidden_tile = producer % hidden_tiles
                 consumer_lane = producer // hidden_tiles
                 consumers_for_tile = (schedule.combine_programs + hidden_tiles - 1 - hidden_tile) // hidden_tiles
@@ -1104,6 +1123,9 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         _acc_scope,
                         acc_ref=mgpu.ACC((config.block_hidden, config.block_output)),
                     )
+
+            if diagnostic.serializes_combine:
+                pl.semaphore_signal(dw_done_sem.at[0])
 
         if diagnostic.includes_dw:
             pl.when(worker >= dw_program_start)(_own_dw_tiles)

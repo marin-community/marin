@@ -3405,3 +3405,25 @@ kernel. Sparse dW blocks alone are not sufficient to reproduce the fault, and
 dX plus source combine also succeeds. The next isolation is a 128-CTA
 staging+dX+dW mode with source combine compiled out; this distinguishes a
 dX/dW coexistence failure from a dW/source-combine interaction.
+
+## 2026-07-11 FUSED-MOE-109 - Full compute cohorts pass without source combine
+
+Job `/dlwh/w13b-dx-dw-no-combine-219c` tested commit `219c72568f` on
+`cw-rno2a` at the same reduced EP8, T128/rank, H2560, I1280, E4/rank,
+top-k 2, capacity-factor 4.0 random-routing geometry. The diagnostic retained
+all 48 staging, 40 dX, and 40 dW CTAs, including dX return writes and normal
+publication semaphore signals, but compiled source-owned dX combine out. Iris
+and its only task succeeded with exit 0 in 76.92s.
+
+The kernel took `4.836912 ms`, reported `1.387432` useful and `5.549728`
+rounded TFLOP/s/rank under the diagnostic accounting, and produced checksum
+`26391238.0`. Dropped routes, routing-policy drops, metadata overflows, queue
+overflows, and layout-overflow rows were all zero.
+
+Thus 128-CTA dX/dW coexistence is valid, as are the complete semaphore set and
+dX publication protocol when no consumer reads the return queue. The reduced
+illegal address requires source combine to execute concurrently with dW. The
+next experiment preserves the full path but gates combine on completion of all
+40 dW owners. A passing serialized-combine variant would identify an overlap
+race; a failure would instead implicate the combine/dW memory footprints even
+without temporal overlap.

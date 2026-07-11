@@ -254,12 +254,16 @@ def test_fused_w13_backward_diagnostic_role_layouts_remove_inactive_roles():
     staging_dx_dw_no_combine = _source_push_semantic_fused_w13_backward_role_layout(
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE
     )
+    full_serial_combine = _source_push_semantic_fused_w13_backward_role_layout(
+        _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE
+    )
     full = _source_push_semantic_fused_w13_backward_role_layout(_SourcePushSemanticFusedW13BackwardDiagnostic.FULL)
 
     assert staging_only.total_programs == 48
     assert staging_dx == (48, 88, 88)
     assert staging_dw == (48, 48, 88)
     assert staging_dx_dw_no_combine == (48, 88, 128)
+    assert full_serial_combine == (48, 88, 128)
     assert full == (48, 88, 128)
 
 
@@ -273,6 +277,7 @@ def test_fused_w13_backward_diagnostics_interpret_isolate_role_outputs():
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX,
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DW,
         _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_DX_DW_NO_COMBINE,
+        _SourcePushSemanticFusedW13BackwardDiagnostic.FULL_SERIAL_COMBINE,
     ):
         result = _source_push_semantic_fused_w13_backward_diagnostic(
             x,
