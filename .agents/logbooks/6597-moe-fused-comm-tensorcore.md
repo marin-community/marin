@@ -3658,3 +3658,27 @@ mode now composes fused W13 forward, fused W2 return/combine, and fused W2
 backward while returning every intermediate. This isolates whether the
 remaining liveness fault occurs before W13 backward or specifically at the
 W2-to-W13 boundary.
+
+## 2026-07-11 FUSED-MOE-121 - Add an all-stages-live composition boundary
+
+The next benchmark-only isolation mode,
+`semantic_fused_mlp_all_stages_live_pallas`, composes fused W13 forward, fused
+W2 return/combine, fused W2 backward, and the selected split W13 backward while
+returning every forward and W2-backward intermediate. This distinguishes a
+W2-to-W13 launch-boundary failure from custom-VJP output liveness: if the
+stop-after-W2 mode passes but this mode faults, the failure is introduced by
+the W13-backward launch; if both pass while the custom VJP faults, the custom
+VJP graph is dropping or reusing a required buffer.
+
+Local validation:
+
+- `python -m py_compile lib/levanter/scripts/bench/bench_source_push_semantic_plan.py`
+- `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_source_push_semantic_plan_bench.py -k 'fused_mlp_modes_use_target_shape_flops or bench_emits_full_fused_mlp_rows'`
+  passed (`2 passed`, 11 warnings).
+- `git diff --check` passed.
+- Scoped `./infra/pre-commit.py` passed.
+
+The reduced stop-after-W2 H100 run is delegated and active on `cw-rno2a`; no
+duplicate job was launched. In parallel, a separate worker is adapting the
+semantic metadata to the old B64 inbox physical protocol so forward W13 can
+recover independent B64 readiness and the proven lightweight lifecycle.
