@@ -4477,10 +4477,12 @@ def _mode_callable(
         forward_zero = forward_done - jax.lax.optimization_barrier(forward_done)
         return inputs.dy + forward_zero[:, None, None].astype(inputs.dy.dtype)
 
-    def semantic_fused_mlp_dz_after_w2_backward(d_z13: Array, d_w2: Array) -> Array:
-        w2_backward_done = jax.lax.optimization_barrier(d_w2[:, 0, 0, 0].astype(jnp.float32))
+    def semantic_fused_mlp_dz_after_w2_backward(d_z13: Array, d_w2: Array, d_route_weight: Array) -> Array:
+        w2_backward_done = jnp.sum(d_w2[:, 0, 0, 0].astype(jnp.float32))
+        w2_backward_done += jnp.sum(d_route_weight[:, 0, 0].astype(jnp.float32))
+        w2_backward_done = jax.lax.optimization_barrier(w2_backward_done)
         w2_backward_zero = w2_backward_done - jax.lax.optimization_barrier(w2_backward_done)
-        return d_z13 + w2_backward_zero[:, None, None, None].astype(d_z13.dtype)
+        return d_z13 + w2_backward_zero.astype(d_z13.dtype)
 
     def semantic_fused_mlp_stop_after_w2_backward_pallas(inputs: SemanticBenchInputs):
         send_chunks_per_dst, entries_per_dst, fused_rows_per_expert = semantic_fused_queue_shape()
@@ -4564,6 +4566,7 @@ def _mode_callable(
             semantic_fused_mlp_dz_after_w2_backward(
                 fused_w2_backward.d_z13,
                 fused_w2_backward.d_w2,
+                fused_w2_backward.d_route_weight,
             ).astype(inputs.w_gate_up.dtype),
             inputs.w_gate_up,
             plan,

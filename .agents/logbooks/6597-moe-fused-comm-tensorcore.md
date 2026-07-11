@@ -3813,3 +3813,10 @@ handoff. The all-stages diagnostic now injects a zero-valued dependency from
 destination-owned `d_w2[:, 0, 0, 0]` into `d_z13` before W13 backward. This
 tests whether the W13 phase was starting before W2-backward owner work and
 remote transport had fully retired.
+
+The per-rank edge did not suffice: target job
+`/dlwh/mlp-all-stages-w2done-target-b50f` still illegal-addressed before a
+repeat. The next diagnostic uses a scalar reduction over one `d_w2` and one
+`d_route_weight` element per rank as an explicit global completion barrier
+before W13 backward. This tests the stronger requirement that every rank must
+retire the W2-backward transport phase before any rank enters W13 backward.
