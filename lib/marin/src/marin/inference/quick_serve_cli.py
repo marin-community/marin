@@ -48,6 +48,28 @@ def _default_job_name(model: str) -> str:
     return f"serve-{slug}-{suffix}" if slug else f"serve-{suffix}"
 
 
+def _resolve_workspace(spec: str | None) -> Path:
+    """Resolve and validate the workspace directory bundled for the Iris job.
+
+    ``marin-serve`` bundles this directory and runs ``uv sync`` against it inside
+    the container, so it must contain a ``pyproject.toml`` at its root. Without
+    one the bundle resolves nothing and the container build fails deep inside
+    ``uv sync`` ("No pyproject.toml found"), surfaced only as a generic
+    "finished before registering an endpoint" error. Validating here turns that
+    into an immediate, actionable client-side failure.
+    """
+    workspace = Path(spec).expanduser() if spec else Path.cwd()
+    if not workspace.is_dir():
+        raise click.ClickException(f"--workspace {str(workspace)!r} is not a directory.")
+    if not (workspace / "pyproject.toml").is_file():
+        raise click.ClickException(
+            f"{str(workspace)!r} has no pyproject.toml, so the Iris job's `uv sync` would fail. "
+            "Run marin-serve from a directory containing a uv-resolvable pyproject.toml "
+            "(e.g. a marin checkout), or pass --workspace <path> pointing at one."
+        )
+    return workspace
+
+
 def _resolve_chat_template(spec: str | None) -> str | None:
     if spec is None:
         return None
@@ -116,6 +138,11 @@ def _mint_and_print_capability_url(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
 )
 @click.option("--tpu", default="v6e-8", help="Single-host TPU slice type (e.g. v6e-8, v5litepod-8).")
+@click.option(
+    "--workspace",
+    default=None,
+    help="Directory bundled as the Iris job workspace (default: cwd). Must contain a pyproject.toml.",
+)
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
@@ -155,6 +182,7 @@ def main(
     cluster: str | None,
     controller: str | None,
     tpu: str,
+    workspace: str | None,
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
@@ -177,6 +205,8 @@ def main(
 ) -> None:
     """Serve MODEL (an HF id or gs:// path) on an Iris TPU slice."""
     logging.basicConfig(level=logging.INFO, format="[marin-serve] %(message)s")
+
+    workspace_dir = _resolve_workspace(workspace)
 
     topology = get_tpu_topology(tpu)
     if topology.vm_count != 1:
@@ -228,7 +258,7 @@ def main(
         controller_url = endpoint_info.url
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
-        with IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=endpoint_info.credentials) as client:
+        with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,

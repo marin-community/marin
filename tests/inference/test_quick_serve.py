@@ -5,16 +5,18 @@
 
 import dataclasses
 import json
+import re
 import socket
 import time
 from unittest.mock import MagicMock
 
+import click
 import pytest
 import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_cli import _mint_and_print_capability_url
+from marin.inference.quick_serve_cli import _mint_and_print_capability_url, _resolve_workspace
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
@@ -60,6 +62,18 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def test_resolve_workspace_rejects_dir_without_pyproject(tmp_path):
+    # A directory that is not a uv-resolvable project would make the container's
+    # `uv sync` fail with "No pyproject.toml found"; catch it client-side instead.
+    with pytest.raises(click.ClickException, match=re.escape("pyproject.toml")):
+        _resolve_workspace(str(tmp_path))
+
+
+def test_resolve_workspace_accepts_dir_with_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    assert _resolve_workspace(str(tmp_path)) == tmp_path
 
 
 def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:
