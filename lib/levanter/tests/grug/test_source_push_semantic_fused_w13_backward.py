@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -12,7 +10,6 @@ import numpy as np
 from levanter.grug._moe.source_push_plan import build_source_push_semantic_plan_jax
 from levanter.grug._moe.source_push_semantic_fused_w13_backward import (
     SourcePushSemanticFusedW13BackwardConfig,
-    _make_source_push_semantic_fused_w13_backward_kernel,
     source_push_semantic_fused_w13_backward,
     source_push_semantic_fused_w13_backward_metadata_jax,
     source_push_semantic_fused_w13_backward_schedule,
@@ -191,19 +188,14 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
         experts_per_rank=8,
         rows_per_expert_capacity=4096,
         hidden_dim=2560,
-        output_dim=2560,
         tokens_per_source=32768,
         send_chunks_per_dst=25,
     )
 
     assert schedule.hidden_tiles == 20
-    assert schedule.output_tiles == 20
-    assert schedule.dw_output_groups == 10
     assert schedule.compact_m_blocks == 64
     assert schedule.staging_jobs == 16000
     assert schedule.dx_jobs == 16000
-    assert schedule.dw_jobs == 1600
-    assert schedule.max_dw_jobs_per_program == 50
     assert schedule.token_blocks == 512
     assert schedule.rounds == 3
     assert schedule.staging_programs == 64
@@ -218,50 +210,6 @@ def test_fused_w13_backward_schedule_keeps_semantic_roles_resident():
     assert schedule.compact_readiness_slots == 10240
     assert schedule.dx_readiness_signals == 200
     assert schedule.readiness_waits == 983040
-
-
-def test_fused_w13_backward_dw_schedule_groups_adjacent_output_tiles_and_handles_odd_tail():
-    target = source_push_semantic_fused_w13_backward_schedule(
-        ep_size=8,
-        experts_per_rank=32,
-        rows_per_expert_capacity=4096,
-        hidden_dim=2560,
-        output_dim=2560,
-        tokens_per_source=32768,
-        send_chunks_per_dst=25,
-    )
-    odd_tail = source_push_semantic_fused_w13_backward_schedule(
-        ep_size=2,
-        experts_per_rank=2,
-        rows_per_expert_capacity=256,
-        hidden_dim=512,
-        output_dim=384,
-        tokens_per_source=6,
-        send_chunks_per_dst=1,
-    )
-
-    assert target.output_tiles == 20
-    assert target.dw_output_groups == 10
-    assert target.dw_jobs == 32 * 20 * 10
-    assert target.max_dw_jobs_per_program == 200
-    assert odd_tail.output_tiles == 3
-    assert odd_tail.dw_output_groups == 2
-    assert odd_tail.dw_jobs == 2 * 4 * 2
-    assert odd_tail.max_dw_jobs_per_program == 1
-
-
-def test_fused_w13_backward_dw_source_shares_x_across_two_output_accumulators():
-    source = inspect.getsource(_make_source_push_semantic_fused_w13_backward_kernel)
-    dw_source = source[source.index("def _own_dw_tiles") :]
-
-    assert "output_tile_n0 = output_group * DW_OUTPUT_TILES_PER_JOB" in dw_source
-    assert "output_tile_n1 = output_tile_n0 + 1" in dw_source
-    assert "x_smem.at[stage]" in dw_source
-    assert "dz_n0_smem.at[stage]" in dw_source
-    assert "dz_n1_smem.at[stage]" in dw_source
-    assert "acc_n0_ref=mgpu.ACC" in dw_source
-    assert "acc_n1_ref=mgpu.ACC" in dw_source
-    assert "@pl.when(has_n1)" in dw_source
 
 
 def test_fused_w13_backward_interpret_matches_independent_route_reference():
@@ -287,24 +235,6 @@ def test_fused_w13_backward_interpret_matches_independent_route_reference():
 
 def test_fused_w13_backward_twenty_output_tiles_match_independent_route_reference():
     x, dz13, w13, plan = _inputs(output_dim=2560)
-
-    result = source_push_semantic_fused_w13_backward(
-        x,
-        dz13,
-        w13,
-        plan,
-        send_chunks_per_dst=1,
-        rows_per_expert_capacity=256,
-        interpret=True,
-    )
-
-    expected_dx, expected_dw = _independent_backward_reference(x, dz13, w13, plan)
-    np.testing.assert_allclose(np.asarray(result.dx), expected_dx, rtol=2e-4, atol=2e-4)
-    np.testing.assert_allclose(np.asarray(result.dw13), expected_dw, rtol=2e-4, atol=2e-4)
-
-
-def test_fused_w13_backward_odd_output_tile_matches_independent_route_reference():
-    x, dz13, w13, plan = _inputs(output_dim=384)
 
     result = source_push_semantic_fused_w13_backward(
         x,

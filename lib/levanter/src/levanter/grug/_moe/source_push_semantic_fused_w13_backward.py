@@ -32,7 +32,6 @@ from levanter.grug._moe.source_push_semantic_fused_w13 import (
 WGMMA_SWIZZLE_BYTES = 128
 WGMMA_TILE_M = 8
 WGMMA_PIPELINE_STAGES = 2
-DW_OUTPUT_TILES_PER_JOB = 2
 # A separate persistent dW owner grid would wait for stage-ready signals while
 # the 288-CTA route grid could leave the required producers nonresident. Keep
 # the complete producer -> {dX, dW} partial order in one co-resident grid below
@@ -107,13 +106,9 @@ class SourcePushSemanticFusedW13BackwardSchedule:
     """Resident CTA partition and fixed semantic work counts for one rank."""
 
     hidden_tiles: int
-    output_tiles: int
-    dw_output_groups: int
     compact_m_blocks: int
     staging_jobs: int
     dx_jobs: int
-    dw_jobs: int
-    max_dw_jobs_per_program: int
     token_blocks: int
     rounds: int
     staging_programs: int
@@ -139,7 +134,6 @@ def source_push_semantic_fused_w13_backward_schedule(
     experts_per_rank: int,
     rows_per_expert_capacity: int,
     hidden_dim: int,
-    output_dim: int,
     tokens_per_source: int,
     send_chunks_per_dst: int,
     config: SourcePushSemanticFusedW13BackwardConfig = SourcePushSemanticFusedW13BackwardConfig(),
@@ -152,14 +146,13 @@ def source_push_semantic_fused_w13_backward_schedule(
         or experts_per_rank <= 0
         or rows_per_expert_capacity <= 0
         or hidden_dim <= 0
-        or output_dim <= 0
         or tokens_per_source <= 0
         or send_chunks_per_dst <= 0
     ):
         raise ValueError(
-            "ep_size, experts_per_rank, rows_per_expert_capacity, hidden_dim, output_dim, tokens_per_source, and "
+            "ep_size, experts_per_rank, rows_per_expert_capacity, hidden_dim, tokens_per_source, and "
             "send_chunks_per_dst must be positive, "
-            f"got {ep_size}, {experts_per_rank}, {rows_per_expert_capacity}, {hidden_dim}, {output_dim}, "
+            f"got {ep_size}, {experts_per_rank}, {rows_per_expert_capacity}, {hidden_dim}, "
             f"{tokens_per_source}, and {send_chunks_per_dst}"
         )
     if hidden_dim % config.block_hidden:
@@ -169,13 +162,8 @@ def source_push_semantic_fused_w13_backward_schedule(
             f"rows_per_expert_capacity must be divisible by compute_m={config.compute_m}, "
             f"got {rows_per_expert_capacity}"
         )
-    if output_dim % config.block_output:
-        raise ValueError(f"output dim {output_dim} must be divisible by block_output={config.block_output}")
 
     hidden_tiles = hidden_dim // config.block_hidden
-    output_tiles = output_dim // config.block_output
-    dw_output_groups = math.ceil(output_tiles / DW_OUTPUT_TILES_PER_JOB)
-    dw_jobs = experts_per_rank * hidden_tiles * dw_output_groups
     compact_m_blocks = rows_per_expert_capacity // config.compute_m
     if hidden_tiles > STAGING_PROGRAMS:
         raise ValueError(f"hidden tiles {hidden_tiles} exceed the resident combine group {STAGING_PROGRAMS}")
@@ -188,13 +176,9 @@ def source_push_semantic_fused_w13_backward_schedule(
     )
     return SourcePushSemanticFusedW13BackwardSchedule(
         hidden_tiles=hidden_tiles,
-        output_tiles=output_tiles,
-        dw_output_groups=dw_output_groups,
         compact_m_blocks=compact_m_blocks,
         staging_jobs=block_jobs * hidden_tiles,
         dx_jobs=block_jobs * hidden_tiles,
-        dw_jobs=dw_jobs,
-        max_dw_jobs_per_program=math.ceil(dw_jobs / DW_PROGRAMS),
         token_blocks=token_blocks,
         rounds=(send_chunks_per_dst + config.inbox_slots - 1) // config.inbox_slots,
         staging_programs=STAGING_PROGRAMS,
@@ -525,13 +509,13 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         experts_per_rank=experts_per_rank,
         rows_per_expert_capacity=rows_per_expert_capacity,
         hidden_dim=hidden_dim,
-        output_dim=output_dim,
         tokens_per_source=tokens_per_source,
         send_chunks_per_dst=send_chunks_per_dst,
         config=config,
     )
     hidden_tiles = schedule.hidden_tiles
-    output_tiles = schedule.output_tiles
+    output_tiles = output_dim // config.block_output
+    dw_tiles = experts_per_rank * hidden_tiles * output_tiles
 
     def body(
         x_ref,
@@ -844,32 +828,21 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
         def _own_dw_tiles() -> None:
             owner = worker - schedule.dw_program_start
 
-            @pl.loop(0, schedule.max_dw_jobs_per_program)
+            @pl.loop(0, math.ceil(dw_tiles / schedule.dw_programs))
             def _tile_loop(iteration) -> None:
-                job = iteration * schedule.dw_programs + owner
+                tile = iteration * schedule.dw_programs + owner
 
-                @pl.when(job < schedule.dw_jobs)
+                @pl.when(tile < dw_tiles)
                 def _own_tile() -> None:
-                    expert = job // (hidden_tiles * schedule.dw_output_groups)
-                    remainder = job % (hidden_tiles * schedule.dw_output_groups)
-                    hidden_tile = remainder // schedule.dw_output_groups
-                    output_group = remainder % schedule.dw_output_groups
-                    output_tile_n0 = output_group * DW_OUTPUT_TILES_PER_JOB
-                    output_tile_n1 = output_tile_n0 + 1
-                    has_n1 = output_tile_n1 < output_tiles
+                    expert = tile // (hidden_tiles * output_tiles)
+                    remainder = tile % (hidden_tiles * output_tiles)
+                    hidden_tile = remainder // output_tiles
+                    output_tile = remainder % output_tiles
                     hidden_start = hidden_tile * config.block_hidden
-                    output_start_n0 = output_tile_n0 * config.block_output
-                    output_start_n1 = output_tile_n1 * config.block_output
+                    output_start = output_tile * config.block_output
 
-                    def _acc_scope(acc_n0_ref, acc_n1_ref) -> None:
-                        def _smem_scope(
-                            x_smem,
-                            dz_n0_smem,
-                            dz_n1_smem,
-                            x_barrier,
-                            dz_n0_barrier,
-                            dz_n1_barrier,
-                        ) -> None:
+                    def _acc_scope(acc_ref) -> None:
+                        def _smem_scope(x_smem, dz_smem, barrier) -> None:
                             def _copy_compact_block(compact_block, stage) -> None:
                                 valid_rows = compact_valid_rows_ref[expert, compact_block]
 
@@ -888,37 +861,24 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                             pl.ds(hidden_start, config.block_hidden),
                                         ],
                                         x_smem.at[stage],
-                                        x_barrier.at[stage],
+                                        barrier.at[stage],
                                     )
                                     mgpu.copy_gmem_to_smem(
                                         dz_ref.at[
                                             expert,
                                             pl.ds(row_start, config.compute_m),
-                                            pl.ds(output_start_n0, config.block_output),
+                                            pl.ds(output_start, config.block_output),
                                         ],
-                                        dz_n0_smem.at[stage],
-                                        dz_n0_barrier.at[stage],
+                                        dz_smem.at[stage],
+                                        barrier.at[stage],
                                     )
-
-                                    @pl.when(has_n1)
-                                    def _copy_n1() -> None:
-                                        mgpu.copy_gmem_to_smem(
-                                            dz_ref.at[
-                                                expert,
-                                                pl.ds(row_start, config.compute_m),
-                                                pl.ds(output_start_n1, config.block_output),
-                                            ],
-                                            dz_n1_smem.at[stage],
-                                            dz_n1_barrier.at[stage],
-                                        )
 
                             def _accumulate_compact_block(compact_block, stage) -> None:
                                 valid_rows = compact_valid_rows_ref[expert, compact_block]
 
                                 @pl.when(valid_rows > 0)
                                 def _accumulate_live_block() -> None:
-                                    mgpu.barrier_wait(x_barrier.at[stage])
-                                    mgpu.barrier_wait(dz_n0_barrier.at[stage])
+                                    mgpu.barrier_wait(barrier.at[stage])
                                     row = mgpu.layout_cast(
                                         lax.broadcasted_iota(
                                             jnp.int32,
@@ -929,30 +889,14 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                                     )
                                     row_valid = (row < valid_rows).astype(jnp.float32)
                                     x_stage = x_smem.at[stage]
-                                    dz_n0_stage = dz_n0_smem.at[stage]
-                                    dz_n0_stage[:, :] = (dz_n0_stage[...].astype(jnp.float32) * row_valid).astype(
-                                        dtype
-                                    )
+                                    dz_stage = dz_smem.at[stage]
+                                    dz_stage[:, :] = (dz_stage[...].astype(jnp.float32) * row_valid).astype(dtype)
                                     mgpu.commit_smem()
                                     mgpu.wgmma(
-                                        acc_n0_ref,
+                                        acc_ref,
                                         mgpu.transpose_ref(x_stage, (1, 0)),
-                                        dz_n0_stage,
+                                        dz_stage,
                                     )
-
-                                    @pl.when(has_n1)
-                                    def _accumulate_n1() -> None:
-                                        mgpu.barrier_wait(dz_n1_barrier.at[stage])
-                                        dz_n1_stage = dz_n1_smem.at[stage]
-                                        dz_n1_stage[:, :] = (dz_n1_stage[...].astype(jnp.float32) * row_valid).astype(
-                                            dtype
-                                        )
-                                        mgpu.commit_smem()
-                                        mgpu.wgmma(
-                                            acc_n1_ref,
-                                            mgpu.transpose_ref(x_stage, (1, 0)),
-                                            dz_n1_stage,
-                                        )
 
                             @pl.loop(0, math.ceil(schedule.compact_m_blocks / WGMMA_PIPELINE_STAGES))
                             def _compact_m_pair_loop(pair) -> None:
@@ -974,34 +918,21 @@ def _make_source_push_semantic_fused_w13_backward_kernel(
                         pl.run_scoped(
                             _smem_scope,
                             x_smem=_wgmma_smem((WGMMA_PIPELINE_STAGES, config.compute_m, config.block_hidden), dtype),
-                            dz_n0_smem=_wgmma_smem(
-                                (WGMMA_PIPELINE_STAGES, config.compute_m, config.block_output), dtype
+                            dz_smem=_wgmma_smem((WGMMA_PIPELINE_STAGES, config.compute_m, config.block_output), dtype),
+                            barrier=mgpu.Barrier(
+                                num_arrivals=2,
+                                num_barriers=WGMMA_PIPELINE_STAGES,
                             ),
-                            dz_n1_smem=_wgmma_smem(
-                                (WGMMA_PIPELINE_STAGES, config.compute_m, config.block_output), dtype
-                            ),
-                            x_barrier=mgpu.Barrier(num_arrivals=1, num_barriers=WGMMA_PIPELINE_STAGES),
-                            dz_n0_barrier=mgpu.Barrier(num_arrivals=1, num_barriers=WGMMA_PIPELINE_STAGES),
-                            dz_n1_barrier=mgpu.Barrier(num_arrivals=1, num_barriers=WGMMA_PIPELINE_STAGES),
                         )
                         dw_ref[
                             expert,
                             pl.ds(hidden_start, config.block_hidden),
-                            pl.ds(output_start_n0, config.block_output),
-                        ] = acc_n0_ref[...]
-
-                        @pl.when(has_n1)
-                        def _store_n1() -> None:
-                            dw_ref[
-                                expert,
-                                pl.ds(hidden_start, config.block_hidden),
-                                pl.ds(output_start_n1, config.block_output),
-                            ] = acc_n1_ref[...]
+                            pl.ds(output_start, config.block_output),
+                        ] = acc_ref[...]
 
                     pl.run_scoped(
                         _acc_scope,
-                        acc_n0_ref=mgpu.ACC((config.block_hidden, config.block_output)),
-                        acc_n1_ref=mgpu.ACC((config.block_hidden, config.block_output)),
+                        acc_ref=mgpu.ACC((config.block_hidden, config.block_output)),
                     )
 
     x_expert_shape = (experts_per_rank, rows_per_expert_capacity, hidden_dim)
