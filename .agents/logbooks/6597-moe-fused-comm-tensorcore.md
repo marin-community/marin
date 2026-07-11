@@ -3534,3 +3534,30 @@ overlap but moves source combine from the 48 staging CTAs to the 40 dX CTAs
 after they publish all return chunks. Staging CTAs then perform only remote
 `x_expert` writes and exit, removing the unsafe staging-write-to-combine role
 transition while dW remains concurrent.
+
+## 2026-07-11 FUSED-MOE-115 - dX-worker combine is bit-exact
+
+Job `/dlwh/w13b-dx-worker-combine-compare-a0bb` tested commit `a0bba573e8`
+on `cw-rno2a` at the reduced finite-comparison geometry. Staging CTAs only
+remote-write `x_expert`; after all dX work and publication, the 40 dX CTAs
+divide the source-combine jobs while the 40 dW owners remain concurrent. Iris
+and its only task succeeded with exit 0 in 54.39s.
+
+The separately compiled reference and candidate matched exactly:
+
+| Output | Max abs diff | Mean abs diff | Scale | Cosine | Nonfinite |
+|---|---:|---:|---:|---:|---:|
+| dX | 0.0 | 0.0 | 1.0 | 1.0 | 0 / 0 |
+| dW13 | 0.0 | 0.0 | 1.0 | 1.0 | 0 / 0 |
+
+Dropped routes, routing-policy drops, metadata overflows, queue overflows, and
+layout-overflow rows were all zero. This validates a safe overlap structure
+without the 20 ms target serialization tax. Target timing is the next gate.
+
+The target follow-up `/dlwh/w13b-dx-worker-combine-target-a0bb` reached Iris
+state `succeeded` with exit 0 in 98.79s, but the benchmark raised
+`CUDA_ERROR_ILLEGAL_ADDRESS` before any repeat. Pre-run dropped-route,
+routing-drop, and metadata-overflow counters were zero; timing and numerical
+rows were unavailable. The dX-worker role reuse is therefore reduced-correct
+but target-unsafe and is rejected. Production `FULL` returns to the serialized,
+bit-exact baseline while a separate post-kernel source combine is evaluated.

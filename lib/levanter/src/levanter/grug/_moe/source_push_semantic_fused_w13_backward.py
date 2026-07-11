@@ -65,11 +65,11 @@ class _SourcePushSemanticFusedW13BackwardDiagnostic(StrEnum):
 
     @property
     def serializes_combine(self) -> bool:
-        return self is self.FULL_SERIAL_COMBINE
+        return self in (self.FULL, self.FULL_SERIAL_COMBINE)
 
     @property
     def combines_on_dx_workers(self) -> bool:
-        return self is self.FULL
+        return False
 
 
 @dataclass(frozen=True, slots=True)
