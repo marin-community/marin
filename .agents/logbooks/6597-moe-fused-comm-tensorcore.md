@@ -3450,3 +3450,21 @@ baseline. The next gates are the existing reduced finite split comparison and
 then target-shape timing. Restoring overlap requires a separate handoff design;
 the previously concurrent path is not safe merely because it happens to finish
 at the target geometry.
+
+## 2026-07-11 FUSED-MOE-111 - Production output contract still faults
+
+Job `/dlwh/w13b-serial-full-compare-e50e` tested the production `FULL` role
+profile at commit `e50e88d828`, with the dW-completion gate enabled, against
+the separately compiled finite JAX reference at the reduced geometry. Iris and
+its only task succeeded at the orchestration level in 43.21s, but the observed
+kernel raised `CUDA_ERROR_ILLEGAL_ADDRESS` during `jax.device_get`. No dX or
+dW comparison metrics were produced. Pre-run dropped-route, routing-drop, and
+metadata-overflow counters were zero.
+
+The successful `FULL_SERIAL_COMBINE` diagnostic and failing production `FULL`
+kernel have the same 128 roles, operations, semaphore set, and ordering. Their
+material difference is the `shard_map` output contract: the diagnostic exports
+`x_expert`, dX, and dW, while production exported only dX and dW. The next
+candidate adds a value-preserving scalar dependency from the remote-written
+`x_expert` scratch output to dX, preventing XLA from treating that custom-call
+output as dead or reusable without materializing a dense checksum.

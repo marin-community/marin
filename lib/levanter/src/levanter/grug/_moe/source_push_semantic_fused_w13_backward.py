@@ -574,6 +574,10 @@ def _source_push_semantic_fused_w13_backward_sharded(
             w_local[0],
         )
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.FULL:
+            # x_expert is remote-written scratch used inside the custom call. Keep
+            # its output buffer live across shard_map so XLA cannot recycle it.
+            x_guard = lax.optimization_barrier(x_expert_local[0, 0, 0].astype(jnp.float32))
+            dx_local = dx_local.at[0, 0].add(x_guard - x_guard)
             return dx_local[None, ...], dw_local[None, ...]
         if diagnostic is _SourcePushSemanticFusedW13BackwardDiagnostic.STAGING_ONLY:
             return (x_expert_local[None, ...],)
