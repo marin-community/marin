@@ -187,7 +187,7 @@ def _write_results_files(selected: dict[str, SweepRun]) -> None:
 
 
 def _write_plot(runs: list[SweepRun], selected: dict[str, SweepRun]) -> None:
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt  # noqa: PLC0415  # optional plotting dependency
 
     plt.style.use("seaborn-v0_8-whitegrid")
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), dpi=180, sharey=True)

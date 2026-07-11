@@ -10,21 +10,20 @@ from functools import partial
 from typing import Literal, NamedTuple
 
 import chex
+import haliax
 import jax
 import jax.numpy as jnp
 import optax
+from levanter.optim.config import OptimizerConfig
+from levanter.utils.jax_utils import leaf_key_paths
 from optax import tree_utils as otu
 
-import haliax
-
-from levanter.optim.config import OptimizerConfig
 from experiments.speedrun.prism_berkeley_qwen3_scaling.optimizer_helpers import (
     flatten_linear_layers,
     label_linear_like_module,
     map_flattened_linear_layers,
     normalize_2d_update_fro_norm,
 )
-from levanter.utils.jax_utils import leaf_key_paths
 
 
 def _weight_decay_hyperparam(

@@ -5,25 +5,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from typing import Any, Literal, TypeVar
 from collections.abc import Callable
+from typing import Any, Literal, TypeVar
 
 import chex
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
+import levanter.tracker
 import optax.tree_utils
+from haliax.tree_util import scan_aware_tree_map
 from jax.sharding import PartitionSpec
 from jaxtyping import PyTree
+from levanter.models.linear import has_linear_like_marker
+from levanter.utils.jax_utils import is_inexact_arrayish
 from optax import GradientTransformation, GradientTransformationExtraArgs
 from optax._src.base import init_empty_state
-
-import haliax as hax
-from haliax.tree_util import scan_aware_tree_map
-
-from levanter.models.linear import has_linear_like_marker
-import levanter.tracker
-from levanter.utils.jax_utils import is_inexact_arrayish
 
 T = TypeVar("T")
 
@@ -130,10 +128,9 @@ def flatten_linear_layers(tree: T) -> T:
 
     :param tree:
     """
-    from haliax.nn import Linear
 
     def _flatten_linear(layer):
-        if not isinstance(layer, Linear):
+        if not isinstance(layer, hax.nn.Linear):
             return layer
 
         weight = layer.weight
@@ -159,7 +156,7 @@ def flatten_linear_layers(tree: T) -> T:
         else:
             return layer
 
-    return jax.tree.map(_flatten_linear, tree, is_leaf=lambda x: isinstance(x, Linear))
+    return jax.tree.map(_flatten_linear, tree, is_leaf=lambda x: isinstance(x, hax.nn.Linear))
 
 
 def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
@@ -173,12 +170,10 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
         the structure of `template`.
     """
 
-    from haliax.nn import Linear
-
     def _unflatten_linear(template, flattened):
-        assert isinstance(template, Linear) == isinstance(flattened, Linear)
+        assert isinstance(template, hax.nn.Linear) == isinstance(flattened, hax.nn.Linear)
 
-        if not isinstance(template, Linear):
+        if not isinstance(template, hax.nn.Linear):
             return flattened
 
         weight = flattened.weight
@@ -196,7 +191,10 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
         return dataclasses.replace(template, weight=weight, bias=bias)  # type: ignore
 
     return jax.tree.map(
-        _unflatten_linear, template, tree_with_flattened_linears, is_leaf=lambda x: isinstance(x, Linear)
+        _unflatten_linear,
+        template,
+        tree_with_flattened_linears,
+        is_leaf=lambda x: isinstance(x, hax.nn.Linear),
     )
 
 

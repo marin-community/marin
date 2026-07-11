@@ -111,6 +111,9 @@ One-off analysis pages published to durable public hosting (see
     - [GitHub Issue #1572](https://github.com/marin-community/marin/issues/1572)
     - [WandB Report](https://wandb.ai/marin-community/marin/reports/Qwen-3-speedruns-QK-Norm-Muon---VmlldzoxNDM1NjY5MA)
     - [Data Browser](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-east5/experiments/muon_sweep-255774.json)
+- [Error-aware Muon on Qwen3 130M](./error-aware-muon-speedrun.md)
+    - [Completed sweep](https://marin.community/data-browser/experiment?path=gs%3A//marin-us-central1/experiments/muon_error_feedback_sweep-d76bb7.json)
+    - Conclusion: Hessian correction with gain 0.1 improved C4-en BPB at four of five paired learning rates in a single-seed sweep.
 
 ## Data Experiments
 

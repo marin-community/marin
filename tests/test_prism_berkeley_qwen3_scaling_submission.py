@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from marin.execution.lazy import materialized_config
+
 import experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support as submission_support
 from experiments.speedrun.prism_berkeley_qwen3_scaling.materialize_submission import SweepRun, select_best_runs
 from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_sweep import build_config
@@ -94,6 +96,9 @@ def test_default_speedrun_accepts_archived_tokenized_dataset(monkeypatch):
 
     monkeypatch.setattr(submission_support.wandb, "Api", _unexpected_api_call)
     _, config = build_config("130m")
-    steps = default_speedrun("prism-berkeley-qwen3-130m-test", config)
-    assert len(steps) == 2
-    assert steps[1].config.wandb_entity is None
+    train_step, result_step = default_speedrun("prism-berkeley-qwen3-130m-test", config, version="2026.07.11")
+    results_config = materialized_config(result_step, "gs://test-prefix")
+
+    assert result_step.deps == (train_step,)
+    assert results_config.wandb_entity is None
+    assert results_config.output_path == f"{train_step.path('gs://test-prefix')}/speedrun_results.json"

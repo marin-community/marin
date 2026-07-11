@@ -12,11 +12,11 @@ import os
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
-from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_optimizer import PrismBerkeleyConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.prism_berkeley_qwen3_scaling.prism_berkeley_optimizer import PrismBerkeleyConfig
 from experiments.speedrun.prism_berkeley_qwen3_scaling.selected_runs import AUTHOR_INFO, SELECTED_RUNS
 from experiments.speedrun.prism_berkeley_qwen3_scaling.submission_support import Author, SpeedrunConfig, default_speedrun
 
@@ -91,13 +91,14 @@ def main() -> None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    steps = []
+    result_steps = []
     for size in SIZES:
         name, cfg = build_config(size)
         cfg.print_run_info()
-        steps.extend(default_speedrun(name, cfg))
+        _, result_step = default_speedrun(name, cfg)
+        result_steps.append(result_step.lower())
 
-    executor_main(steps=steps, description="PRISM-Berkeley Qwen3 speedruns selected from completed LR sweeps.")
+    StepRunner().run(result_steps)
 
 
 if __name__ == "__main__":
