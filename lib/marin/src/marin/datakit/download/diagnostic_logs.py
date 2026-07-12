@@ -1172,15 +1172,13 @@ def stage_ghalogs_archive(
 ) -> None:
     """Stage the ~142 GB GHALogs Zenodo archive under ``output_path`` (idempotent).
 
-    The archive is split into ``num_shards`` contiguous byte ranges downloaded
-    as independent zephyr tasks — each resuming across mid-stream drops (see
-    :func:`_iter_ghalogs_range`) — then assembled server-side into
+    The archive is downloaded as ``num_shards`` byte-range shards (independent
+    zephyr tasks) and assembled server-side into
     ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}``, the path
-    :func:`materialize_ghalogs_to_parquet` reads from. Parts live on the
-    bucket's TTL'd temp prefix, publish through an atomic rename, and re-runs
-    skip existing ones, so a worker/pod death costs at most the shards in
-    flight. Idempotent: a correctly-sized copy is left untouched, and a partial
-    download never becomes the published archive.
+    :func:`materialize_ghalogs_to_parquet` reads from. A worker/pod death costs
+    at most the shards in flight: re-runs reuse completed parts. Idempotent: a
+    correctly-sized copy is left untouched, and a partial download never
+    becomes the published archive.
     """
     # Enforced up front: a shard count the merge cannot handle would otherwise
     # only fail after the full archive has been downloaded.
