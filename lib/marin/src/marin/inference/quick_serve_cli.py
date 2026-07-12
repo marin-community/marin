@@ -20,6 +20,7 @@ import contextlib
 import logging
 import re
 import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -48,24 +49,63 @@ def _default_job_name(model: str) -> str:
     return f"serve-{slug}-{suffix}" if slug else f"serve-{suffix}"
 
 
-def _resolve_workspace(spec: str | None) -> Path:
-    """Resolve and validate the workspace directory bundled for the Iris job.
+def _is_uv_workspace_root(pyproject: Path) -> bool:
+    """Whether ``pyproject`` defines the uv workspace (the ``[tool.uv.workspace]`` table).
 
-    ``marin-serve`` bundles this directory and runs ``uv sync`` against it inside
-    the container, so it must contain a ``pyproject.toml`` at its root. Without
-    one the bundle resolves nothing and the container build fails deep inside
-    ``uv sync`` ("No pyproject.toml found"), surfaced only as a generic
-    "finished before registering an endpoint" error. Validating here turns that
-    into an immediate, actionable client-side failure.
+    That table lives only in the marin monorepo's top-level pyproject.toml, which is
+    the directory the serve job's ``uv sync --all-packages`` must run from.
     """
-    workspace = Path(spec).expanduser() if spec else Path.cwd()
-    if not workspace.is_dir():
-        raise click.ClickException(f"--workspace {str(workspace)!r} is not a directory.")
-    if not (workspace / "pyproject.toml").is_file():
+    try:
+        data = tomllib.loads(pyproject.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return "workspace" in data.get("tool", {}).get("uv", {})
+
+
+def _find_workspace_root(start: Path) -> Path | None:
+    """Walk up from ``start`` for the marin checkout root (its uv workspace pyproject)."""
+    for parent in (start, *start.parents):
+        pyproject = parent / "pyproject.toml"
+        if pyproject.is_file() and _is_uv_workspace_root(pyproject):
+            return parent
+    return None
+
+
+def _resolve_workspace(spec: str | None) -> Path:
+    """Resolve the marin source checkout bundled for the Iris serve job.
+
+    The job runs ``uv sync --all-packages --extra tpu --extra vllm`` against this
+    directory inside the container, so it must be a marin checkout: the ``vllm``/``tpu``
+    extras pull the TPU vLLM runtime from marin's pinned git forks via the root
+    pyproject's ``[tool.uv]`` config, which is not resolvable from PyPI alone.
+
+    Resolution order, so ``marin-serve`` runs from any directory that can reach a
+    checkout:
+
+    1. ``--workspace`` if given (explicit override).
+    2. the checkout containing the current directory.
+    3. the checkout this CLI is installed from (a source/editable install), which
+       covers driving ``marin-serve`` from an unrelated project's shell.
+
+    Raises a :class:`click.ClickException` naming the fix when no checkout is found,
+    instead of letting the container's ``uv sync`` fail with an opaque
+    "finished before registering an endpoint".
+    """
+    if spec is not None:
+        workspace = Path(spec).expanduser()
+        if not workspace.is_dir():
+            raise click.ClickException(f"--workspace {str(workspace)!r} is not a directory.")
+        if not (workspace / "pyproject.toml").is_file():
+            raise click.ClickException(f"--workspace {str(workspace)!r} has no pyproject.toml.")
+        return workspace
+
+    workspace = _find_workspace_root(Path.cwd()) or _find_workspace_root(Path(__file__).resolve())
+    if workspace is None:
         raise click.ClickException(
-            f"{str(workspace)!r} has no pyproject.toml, so the Iris job's `uv sync` would fail. "
-            "Run marin-serve from a directory containing a uv-resolvable pyproject.toml "
-            "(e.g. a marin checkout), or pass --workspace <path> pointing at one."
+            "marin-serve builds its serving container from a marin source checkout, but none was "
+            "found from the current directory or this install. Run marin-serve from inside a marin "
+            "checkout, or pass --workspace <path-to-checkout>. Serving straight from a PyPI-only "
+            "install (no checkout) is not yet supported — see https://github.com/marin-community/marin/issues/7106."
         )
     return workspace
 
@@ -141,7 +181,8 @@ def _mint_and_print_capability_url(
 @click.option(
     "--workspace",
     default=None,
-    help="Directory bundled as the Iris job workspace (default: cwd). Must contain a pyproject.toml.",
+    help="Marin checkout to bundle as the Iris job workspace "
+    "(default: auto-located from the current directory or this install).",
 )
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")

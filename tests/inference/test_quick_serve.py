@@ -8,6 +8,7 @@ import json
 import re
 import socket
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import click
@@ -16,7 +17,11 @@ import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_cli import _mint_and_print_capability_url, _resolve_workspace
+from marin.inference.quick_serve_cli import (
+    _find_workspace_root,
+    _mint_and_print_capability_url,
+    _resolve_workspace,
+)
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
@@ -64,14 +69,39 @@ def test_resolve_model_path_passthrough(model, ttl_days):
     assert resolve_model_path(model, ttl_days) == model
 
 
-def test_resolve_workspace_rejects_dir_without_pyproject(tmp_path):
-    # A directory that is not a uv-resolvable project would make the container's
-    # `uv sync` fail with "No pyproject.toml found"; catch it client-side instead.
+def test_find_workspace_root_locates_uv_workspace(tmp_path):
+    # The serve job's `uv sync --all-packages` must run from the checkout root, which
+    # is identified by the [tool.uv.workspace] table; find it from any nested dir.
+    (tmp_path / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = ['lib/marin']\n")
+    nested = tmp_path / "lib" / "marin" / "src"
+    nested.mkdir(parents=True)
+    assert _find_workspace_root(nested) == tmp_path
+
+
+def test_find_workspace_root_ignores_plain_pyproject(tmp_path):
+    # A pyproject without the uv workspace table is some other project, not a marin checkout.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    assert _find_workspace_root(tmp_path) is None
+
+
+def test_resolve_workspace_auto_locates_checkout_from_cwd(tmp_path, monkeypatch):
+    # Running from a subdirectory of a checkout still bundles the checkout root, so
+    # marin-serve works from anywhere inside a marin tree — not just its top level.
+    (tmp_path / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = ['lib/marin']\n")
+    workdir = tmp_path / "experiments"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    assert _resolve_workspace(None) == Path.cwd().parent
+
+
+def test_resolve_workspace_explicit_rejects_dir_without_pyproject(tmp_path):
+    # An explicit --workspace with no pyproject would make the container's `uv sync`
+    # fail with "No pyproject.toml found"; catch it client-side instead.
     with pytest.raises(click.ClickException, match=re.escape("pyproject.toml")):
         _resolve_workspace(str(tmp_path))
 
 
-def test_resolve_workspace_accepts_dir_with_pyproject(tmp_path):
+def test_resolve_workspace_explicit_accepts_dir_with_pyproject(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     assert _resolve_workspace(str(tmp_path)) == tmp_path
 
