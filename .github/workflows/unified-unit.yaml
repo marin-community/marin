@@ -69,13 +69,21 @@ jobs:
 
       - env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: >-
-          uv run
-          --package ${{ matrix.package }}
-          ${{ matrix.extras }}
-          --group test
-          pytest --durations=5 -n auto --dist=worksteal --tb=short
-          ${{ matrix.test_paths }}
+        # pytest exits 5 when it collects no tests. The diff-based selector can hand a lane
+        # only tests that its default marker filter deselects (integration, slow,
+        # requires_cluster, ...) — e.g. a PR that touches just an integration test file —
+        # which is not a failure. Those tests run in their own dedicated workflow. Treat
+        # exit 5 as success; every other non-zero status still fails the lane.
+        run: |
+          status=0
+          uv run \
+            --package ${{ matrix.package }} \
+            ${{ matrix.extras }} \
+            --group test \
+            pytest --durations=5 -n auto --dist=worksteal --tb=short \
+            ${{ matrix.test_paths }} || status=$?
+          [ "$status" -eq 5 ] && exit 0
+          exit "$status"
 
   levanter_torch:
     name: levanter-torch

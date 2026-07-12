@@ -1,19 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""``marin-serve`` — one-liner to serve an HF model on an Iris TPU slice.
+"""``marin-serve`` — one-liner to serve an HF model on an Iris TPU or GPU slice.
 
-Submits a single Iris job that boots vLLM on a single-host TPU slice and registers
-a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The
-job stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
+Submits a single Iris job that boots vLLM on a single-host TPU or GPU slice and
+registers a browser dashboard + OpenAI-compatible endpoint through the controller
+proxy. The job stops itself after ``--timeout-hours`` so a forgotten server frees
+its slice.
 
 Examples::
 
     marin-serve Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8
     marin-serve gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
+    marin-serve Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a \
+        --task-image <cuda-vllm-image>
 
-The TPU's tensor-parallel size and (for clamped-RoPE models) max sequence length are
-inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``.
+``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``).
+``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the
+job to a named peer. The slice's tensor-parallel size and (for clamped-RoPE models)
+max sequence length are inferred automatically; override with
+``--tensor-parallel-size`` / ``--max-model-len``.
 """
 
 import contextlib
@@ -25,11 +31,21 @@ from pathlib import Path
 
 import click
 import requests
+from click.core import ParameterSource
 from iris.cli.connect import open_controller_endpoint
+from iris.cli.job import parse_gpu_spec
 from iris.client import IrisClient, Job
-from iris.cluster.constraints import region_constraint
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
+from iris.cluster.types import (
+    EndpointAccess,
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    gpu_device,
+    is_job_finished,
+    tpu_device,
+)
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
@@ -39,7 +55,16 @@ logger = logging.getLogger(__name__)
 
 # vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
 _WORKER_EXTRAS = ("tpu", "vllm")
+# The GPU path cannot use the TPU-only vllm/tpu extras (they conflict with `gpu` in the
+# pyproject conflict tables). `gpu` brings CUDA jax + torch but no vLLM yet, so a CUDA
+# vLLM must be supplied via --task-image or an extra dependency group (see --extra).
+_GPU_WORKER_EXTRAS = ("gpu",)
 _ENDPOINT_READY_POLL_SECONDS = 5.0
+
+
+def _extras_provide_vllm(extras: tuple[str, ...]) -> bool:
+    """Whether any operator-supplied extra looks like it provides a CUDA vLLM build."""
+    return any("vllm" in extra.lower() for extra in extras)
 
 
 def _default_job_name(model: str) -> str:
@@ -116,6 +141,16 @@ def _mint_and_print_capability_url(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
 )
 @click.option("--tpu", default="v6e-8", help="Single-host TPU slice type (e.g. v6e-8, v5litepod-8).")
+@click.option(
+    "--gpu",
+    default=None,
+    help="GPU slice (e.g. H100x8); mutually exclusive with --tpu. Selects the GPU serving path.",
+)
+@click.option(
+    "--target-cluster",
+    default=None,
+    help="Federate the job to this peer cluster (e.g. cw-rno2a). --cluster still selects the controller.",
+)
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
@@ -143,6 +178,18 @@ def _mint_and_print_capability_url(
 @click.option("--disk", default="100g")
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
+@click.option(
+    "--extra",
+    "extras",
+    multiple=True,
+    help="Extra dependency-group/extra to add to the worker environment (repeatable). "
+    "On the GPU path, use this to supply a CUDA vLLM extra (the default `gpu` extra has none).",
+)
+@click.option(
+    "--task-image",
+    default=None,
+    help="Override the task container image (e.g. a prebuilt CUDA vLLM image for the GPU path).",
+)
 @click.option("--wait/--no-wait", default=True, help="Hold the tunnel open until the endpoint is ready, then block.")
 @click.option(
     "--wait-timeout",
@@ -155,6 +202,8 @@ def main(
     cluster: str | None,
     controller: str | None,
     tpu: str,
+    gpu: str | None,
+    target_cluster: str | None,
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
@@ -172,18 +221,17 @@ def main(
     disk: str,
     max_retries_preemption: int,
     vllm_args: tuple[str, ...],
+    extras: tuple[str, ...],
+    task_image: str | None,
     wait: bool,
     wait_timeout: float,
 ) -> None:
-    """Serve MODEL (an HF id or gs:// path) on an Iris TPU slice."""
+    """Serve MODEL (an HF id or gs:// path) on an Iris TPU or GPU slice."""
     logging.basicConfig(level=logging.INFO, format="[marin-serve] %(message)s")
 
-    topology = get_tpu_topology(tpu)
-    if topology.vm_count != 1:
-        raise click.ClickException(
-            f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); quick-serve supports "
-            f"single-host slices only (e.g. v6e-8, v5litepod-8)."
-        )
+    tpu_from_cli = click.get_current_context().get_parameter_source("tpu") == ParameterSource.COMMANDLINE
+    if gpu is not None and tpu_from_cli:
+        raise click.ClickException("--gpu and --tpu are mutually exclusive; pass only one.")
 
     job_name = name or _default_job_name(model)
     if "/" in job_name:
@@ -199,10 +247,37 @@ def main(
 
     endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
+    if gpu is not None:
+        try:
+            gpu_variant, gpu_count = parse_gpu_spec(gpu)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        tpu_type: str | None = None
+        device = gpu_device(gpu_variant, gpu_count)
+        worker_extras = (*_GPU_WORKER_EXTRAS, *extras)
+        if task_image is None and not _extras_provide_vllm(extras):
+            logger.warning(
+                "GPU path: the default `gpu` extra has CUDA jax+torch but no vLLM, so the job will not "
+                "boot vLLM. Pass --task-image with a CUDA vLLM image, or --extra <vllm-cuda-group>."
+            )
+    else:
+        topology = get_tpu_topology(tpu)
+        if topology.vm_count != 1:
+            raise click.ClickException(
+                f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); quick-serve supports "
+                f"single-host slices only (e.g. v6e-8, v5litepod-8)."
+            )
+        gpu_variant, gpu_count = None, None
+        tpu_type = tpu
+        device = tpu_device(tpu)
+        worker_extras = (*_WORKER_EXTRAS, *extras)
+
     config = QuickServeConfig(
         model=model,
-        tpu_type=tpu,
         endpoint_name=endpoint,
+        tpu_type=tpu_type,
+        gpu_type=gpu_variant,
+        gpu_count=gpu_count,
         access=endpoint_access,
         dtype=dtype,
         max_model_len=max_model_len,
@@ -217,11 +292,13 @@ def main(
         extra_vllm_args=tuple(vllm_args),
     )
 
-    constraints = None
+    constraints: list[Constraint] = []
     if region:
         regions = [r.strip() for r in region.split(",") if r.strip()]
         if regions:
-            constraints = [region_constraint(regions)]
+            constraints.append(region_constraint(regions))
+    if target_cluster:
+        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
 
     endpoint_cluster = cluster if controller is None else None
     with open_controller_endpoint(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
@@ -232,18 +309,24 @@ def main(
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,
-                resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=tpu_device(tpu)),
-                environment=EnvironmentSpec(extras=_WORKER_EXTRAS),
+                resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=device),
+                environment=EnvironmentSpec(extras=worker_extras),
                 ports=["http"],
-                constraints=constraints,
+                constraints=constraints or None,
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
+                task_image=task_image,
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
             click.echo(f"  job          {job}")
             click.echo(f"  model        {model}")
-            click.echo(f"  tpu          {tpu}")
+            if gpu is not None:
+                click.echo(f"  gpu          {config.accelerator_label}")
+            else:
+                click.echo(f"  tpu          {tpu}")
+            if target_cluster:
+                click.echo(f"  target       {target_cluster}")
             click.echo(f"  endpoint     {endpoint}")
             if dashboard_url:
                 click.echo(f"  share url    {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")

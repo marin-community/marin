@@ -1,29 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit-time routing between local execution and a federation peer.
+"""Submit-time classification: local execution, the federation queue, or reject.
 
 A separate layer from the meta-scheduler's static, startup-built backend index:
 peer capabilities are dynamic (learned live over the heartbeat), so peer
-selection cannot fold into that index. The decision, in order:
+selection cannot fold into that index. Submit no longer *picks* a peer — that is a
+scheduling decision, and all peer scheduling decisions live on the control tick's
+federation pass. Submit only classifies, in order:
 
-1. An explicit ``cluster=<peer>`` pin forces that peer (the caller has already
-   rejected a job that also pins a local ``backend``, and validated the peer
-   exists).
+1. An explicit ``cluster=<peer>`` pin routes the job to the federation **queue**
+   pinned to that peer (the caller validated the peer exists and that no local
+   ``backend`` pin was also set). The tick waits for that peer's availability.
 2. Otherwise **prefer-local**: if any local backend is feasible for the job's
    shape, run it here.
-3. Otherwise match the job's routing constraints against each reachable peer's
-   *live* advertised capability and hand off to the first that can host it.
-4. Otherwise stay local so the caller fails the job as unschedulable — never
-   wedge it. The chosen peer may still reject at handoff (its live capacity moved
-   between the heartbeat snapshot and delivery); the manager tolerates that.
+3. Otherwise, if any reachable peer advertises the job's shape, route it to the
+   federation **queue** (unpinned); the tick assigns it to a peer that has room.
+4. Otherwise reject it as unschedulable now — no local backend and no reachable
+   peer can host the shape, so no queue could help (status quo fast-fail).
 
-Routing decides only *where* a job can run. *Who* may run it there is the peer's own
-``auth.allowed_submitters``, enforced where the job lands and surfaced from the handoff.
+Classification decides only *where* a job can run. *Who* may run it there is the
+peer's own ``auth.allowed_submitters``, enforced where the job lands.
 """
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.constraints import (
     AttributeValue,
@@ -39,7 +41,7 @@ from iris.cluster.federation.peer import FederationPeer
 
 @dataclass(frozen=True)
 class RoutingRequest:
-    """The submit-time context the router decides on."""
+    """The submit-time context the classifier decides on."""
 
     constraints: Sequence[Constraint]
     # Whether at least one local backend can host the job's shape (computed by the
@@ -50,26 +52,23 @@ class RoutingRequest:
     cluster_pin: str = ""
 
 
+class SubmitDisposition(StrEnum):
+    """What a submit-time classification decided for a job."""
+
+    LOCAL = "local"  # run on one of this controller's own backends
+    QUEUE = "queue"  # admit to the federation queue; the tick assigns a peer
+    REJECT = "reject"  # unschedulable now — no local backend, no reachable peer
+
+
 @dataclass(frozen=True)
-class SubmitRouting:
-    """Where a submitted job executes.
+class SubmitPlan:
+    """The classification outcome. ``pinned_peer_id`` is set only for a pinned QUEUE."""
 
-    An empty ``peer_id`` means local execution on one of this controller's
-    backends; a non-empty ``peer_id`` names the federation peer the whole job is
-    handed off to.
-    """
-
-    peer_id: str = ""
-
-    @property
-    def is_local(self) -> bool:
-        return not self.peer_id
+    disposition: SubmitDisposition
+    pinned_peer_id: str = ""
 
 
-_LOCAL = SubmitRouting()
-
-
-def _backend_satisfies(advertised: Mapping[str, list[str]], constraint: Constraint) -> bool:
+def backend_satisfies(advertised: Mapping[str, list[str]], constraint: Constraint) -> bool:
     """Whether a peer backend advertising ``advertised`` satisfies one constraint.
 
     Advertised attributes are multi-valued (a backend may offer several device
@@ -99,30 +98,30 @@ def _peer_can_host(peer: FederationPeer, constraints: Sequence[Constraint]) -> b
         return True
     for backend in heartbeat.backends:
         advertised = {key: list(values.values) for key, values in backend.advertised_attributes.items()}
-        if all(_backend_satisfies(advertised, c) for c in routing):
+        if all(backend_satisfies(advertised, c) for c in routing):
             return True
     return False
 
 
 class PeerRouter:
-    """Chooses local execution or a peer for each submission."""
+    """Classifies each submission as local, federation-queued, or unschedulable."""
 
     def __init__(self, peers: Sequence[FederationPeer]):
         self._peers = {peer.peer_id: peer for peer in peers}
 
-    def decide(self, request: RoutingRequest) -> SubmitRouting:
-        """Select where ``request``'s job executes (see the module docstring).
+    def classify(self, request: RoutingRequest) -> SubmitPlan:
+        """Classify where ``request``'s job can run (see the module docstring).
 
-        Routing answers *where the job can run*, never *who may run it there*: a peer
-        admits or refuses a submitter under its own ``auth.allowed_submitters``, and a
-        refusal surfaces from the handoff itself.
+        Answers *where the job can run*, never *who may run it there*: a peer admits
+        or refuses a submitter under its own ``auth.allowed_submitters``, surfaced
+        from the handoff at delivery.
         """
         if request.cluster_pin:
-            # Validated to exist by the caller; force it even if locally feasible.
-            return SubmitRouting(peer_id=request.cluster_pin)
+            # Validated to exist by the caller; queue pinned to it even if locally
+            # feasible (an explicit pin means "federate this there").
+            return SubmitPlan(SubmitDisposition.QUEUE, pinned_peer_id=request.cluster_pin)
         if request.local_feasible:
-            return _LOCAL
-        for peer_id, peer in sorted(self._peers.items()):
-            if _peer_can_host(peer, request.constraints):
-                return SubmitRouting(peer_id=peer_id)
-        return _LOCAL
+            return SubmitPlan(SubmitDisposition.LOCAL)
+        if any(_peer_can_host(peer, request.constraints) for peer in self._peers.values()):
+            return SubmitPlan(SubmitDisposition.QUEUE)
+        return SubmitPlan(SubmitDisposition.REJECT)

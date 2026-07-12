@@ -243,6 +243,9 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
+# The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
+# those lines hurts readability far more than the length limit helps.
+"experiments/datakit/decontam/viewer/report.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]

@@ -57,6 +57,16 @@ def trust_remote_code_for_hf() -> None:
     initializes without an interactive disclaimer.
     """
     os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+
+    # transformers>=5 removed ``AutoModelForVision2Seq``, but the pinned lm-eval
+    # fork still does ``from transformers import AutoModelForVision2Seq`` at module
+    # load. We only use lm-eval's task loading (not its model classes), so alias a
+    # placeholder so the import resolves — it is imported but never instantiated.
+    import transformers  # noqa: PLC0415
+
+    if not hasattr(transformers, "AutoModelForVision2Seq"):
+        transformers.AutoModelForVision2Seq = transformers.AutoModel  # type: ignore[attr-defined]
+
     original_load = datasets.load_dataset
     original_builder = datasets.load_dataset_builder
 
