@@ -18,7 +18,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
-from typing import IO, NamedTuple
+from typing import NamedTuple
 
 import fsspec
 import requests
@@ -87,7 +87,6 @@ _DOWNLOAD_TIMEOUT = 300
 # GHALogs archive is ~142 GB; stream it in large chunks straight to the object
 # store without buffering the whole file locally.
 _GHALOGS_HTTP_CHUNK_BYTES = 64 * 1024 * 1024
-_GHALOGS_S3_BLOCK_BYTES = 256 * 1024 * 1024  # multipart upload part size (~17 parts per ~4.4 GB shard)
 _GHALOGS_LOG_EVERY_BYTES = 4 * 1024 * 1024 * 1024  # progress line every ~4 GB
 _GHALOGS_DOWNLOAD_TIMEOUT = (30, 600)  # (connect, read) seconds
 # The archive is downloaded as independent byte-range shards (zephyr tasks)
@@ -1013,17 +1012,39 @@ def extract_ghalogs_step(
     )
 
 
-def _stream_range_resumable(session: requests.Session, out: IO[bytes], start: int, stop: int) -> int:
-    """Stream bytes ``[start, stop)`` of ``GHALOGS_DOWNLOAD_URL`` into ``out``.
+class _ShardRange(NamedTuple):
+    """One contiguous byte range ``[start, stop)`` of the archive, downloaded as its own zephyr task."""
+
+    start: int
+    stop: int
+
+
+def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[_ShardRange]:
+    """Split ``[0, total_bytes)`` into up to ``num_shards`` contiguous ranges."""
+    bounds = [total_bytes * i // num_shards for i in range(num_shards + 1)]
+    return [_ShardRange(bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
+
+
+def _ghalogs_part_path(parts_prefix: str, shard: _ShardRange) -> str:
+    # Zero-padded starts keep lexicographic order equal to byte order, and the
+    # explicit range means a part left behind by a different shard layout has a
+    # different name — it can never be mistaken for a completed current part.
+    return prefix_join(parts_prefix, f"part-{shard.start:012d}-{shard.stop:012d}")
+
+
+def _iter_ghalogs_range(shard: _ShardRange) -> Iterator[bytes]:
+    """Yield bytes ``[shard.start, shard.stop)`` of ``GHALOGS_DOWNLOAD_URL``.
 
     Resumes across mid-stream drops via HTTP Range: on any mid-body failure or
     early EOF it re-requests ``Range: bytes={start + written}-{stop - 1}`` and
-    keeps appending to ``out`` rather than restarting the range. Returns the
-    bytes written, which is short of ``stop - start`` only when the server has
-    less data than declared (a ranged request past the last byte returns 416).
-    Raises if the download stalls without progress or a reply ignores Range.
+    keeps yielding from there rather than restarting the range. Raises if the
+    download stalls without progress, if a reply ignores Range, or if the
+    server delivers fewer bytes than the range length (a ranged request past
+    the last byte returns 416).
     """
+    start, stop = shard
     length = stop - start
+    session = build_retrying_session()
     written = 0
     next_log = _GHALOGS_LOG_EVERY_BYTES
     stalls = 0
@@ -1035,9 +1056,8 @@ def _stream_range_resumable(session: requests.Session, out: IO[bytes], start: in
             with session.get(
                 GHALOGS_DOWNLOAD_URL, stream=True, headers=headers, timeout=_GHALOGS_DOWNLOAD_TIMEOUT
             ) as response:
-                # A ranged request past the last byte returns 416: the server has
-                # nothing more to send. Stop and let the caller's size check flag
-                # the shortfall against the declared archive size.
+                # A ranged request past the last byte returns 416: the server
+                # has nothing more to send, so the shortfall check below fires.
                 if response.status_code == http.client.REQUESTED_RANGE_NOT_SATISFIABLE:
                     break
                 response.raise_for_status()
@@ -1052,7 +1072,7 @@ def _stream_range_resumable(session: requests.Session, out: IO[bytes], start: in
                 for chunk in response.iter_content(chunk_size=_GHALOGS_HTTP_CHUNK_BYTES):
                     if not chunk:
                         continue
-                    out.write(chunk)
+                    yield chunk
                     written += len(chunk)
                     if written >= next_log:
                         logger.info("range %d-%d: %.1f / %.1f GB", start, stop - 1, written / 1e9, length / 1e9)
@@ -1060,7 +1080,7 @@ def _stream_range_resumable(session: requests.Session, out: IO[bytes], start: in
         except (requests.exceptions.RequestException, http.client.IncompleteRead) as e:
             error = e
 
-        # Gate on bytes written this attempt, not on whether an exception fired:
+        # Gate on bytes yielded this attempt, not on whether an exception fired:
         # a clean response that yields zero bytes at the current offset (empty
         # body, early close) makes no progress either and must route through the
         # stall budget, or the outer loop would re-request the same offset forever.
@@ -1086,50 +1106,11 @@ def _stream_range_resumable(session: requests.Session, out: IO[bytes], start: in
             error,
         )
         time.sleep(backoff)
-    return written
-
-
-class _ShardRange(NamedTuple):
-    """One contiguous byte range ``[start, stop)`` of the archive, downloaded as its own zephyr task."""
-
-    index: int
-    start: int
-    stop: int
-
-
-def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[_ShardRange]:
-    """Split ``[0, total_bytes)`` into up to ``num_shards`` contiguous ranges."""
-    bounds = [total_bytes * i // num_shards for i in range(num_shards + 1)]
-    return [_ShardRange(i, bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
-
-
-def _ghalogs_part_path(parts_prefix: str, index: int) -> str:
-    return prefix_join(parts_prefix, f"part-{index:05d}")
-
-
-def _download_ghalogs_shard(parts_prefix: str, shard: _ShardRange) -> str:
-    """Download one byte range of the archive to its part object (idempotent).
-
-    A part already present at its exact range length is reused, so a retried
-    shard or a re-run staging job only re-downloads missing or partial parts.
-    """
-    index, start, stop = shard
-    part_path = _ghalogs_part_path(parts_prefix, index)
-    length = stop - start
-    fs, path = url_to_fs(part_path)
-    if fs.exists(path) and fs.size(path) == length:
-        counters.pipeline.update_counter("ghalogs_stage/parts_reused", 1)
-        return part_path
-    session = build_retrying_session()
-    with fs.open(path, "wb", block_size=_GHALOGS_S3_BLOCK_BYTES) as out:
-        written = _stream_range_resumable(session, out, start, stop)
+    # Raising here aborts the surrounding write before it publishes, so a short
+    # range never becomes a completed part.
     if written != length:
-        raise RuntimeError(
-            f"GHALogs shard {index} (bytes {start}-{stop - 1}) size mismatch: got {written}, expected {length}"
-        )
-    counters.pipeline.update_counter("ghalogs_stage/parts_downloaded", 1)
+        raise RuntimeError(f"GHALogs range {start}-{stop - 1} size mismatch: got {written}, expected {length}")
     counters.pipeline.update_counter("ghalogs_stage/bytes_downloaded", written)
-    return part_path
 
 
 def _concat_archive_parts(fs: fsspec.AbstractFileSystem, target: str, parts: list[str]) -> None:
@@ -1161,11 +1142,11 @@ def stage_ghalogs_archive(
 
     The archive is split into ``num_shards`` contiguous byte ranges downloaded
     as independent zephyr tasks — each resuming across mid-stream drops (see
-    :func:`_stream_range_resumable`) — then assembled server-side into
+    :func:`_iter_ghalogs_range`) — then assembled server-side into
     ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}``, the path
-    :func:`materialize_ghalogs_to_parquet` reads from. Completed parts are
-    reused across shard retries and re-runs, so a worker/pod death costs at
-    most the shards in flight. Idempotent: a correctly-sized copy is left
+    :func:`materialize_ghalogs_to_parquet` reads from. Parts publish through an
+    atomic rename and re-runs skip existing ones, so a worker/pod death costs
+    at most the shards in flight. Idempotent: a correctly-sized copy is left
     untouched, and a partial download never becomes the published archive.
     """
     # Enforced up front: a shard count the merge cannot handle would otherwise
@@ -1183,7 +1164,6 @@ def stage_ghalogs_archive(
     # cross buckets). They sit next to the final object and are removed after
     # a successful merge; a failed run leaves them for the next run to reuse.
     parts_prefix = f"{archive_path}.parts"
-    StoragePath(parts_prefix).mkdirs(exist_ok=True)
     shards = _ghalogs_shard_ranges(GHALOGS_ARCHIVE_BYTES, num_shards)
     logger.info(
         "Staging %s -> %s: %d bytes as %d range shards",
@@ -1192,13 +1172,21 @@ def stage_ghalogs_archive(
         GHALOGS_ARCHIVE_BYTES,
         len(shards),
     )
+    # ``from_list`` puts item i in shard i, so each range is its own zephyr
+    # shard and ``shard_idx`` indexes straight back into ``shards``. The write
+    # stage skips a shard — the range request never starts — when its part
+    # already exists, which is sound because parts publish via atomic rename:
+    # existing implies complete, and short ranges raise before publishing.
     pipeline = (
-        Dataset.from_list(shards).reshard(len(shards)).map(lambda shard: _download_ghalogs_shard(parts_prefix, shard))
+        Dataset.from_list(shards)
+        .flat_map(_iter_ghalogs_range)
+        .write_binary(
+            lambda shard_idx, total_shards: _ghalogs_part_path(parts_prefix, shards[shard_idx]),
+            skip_existing=True,
+        )
     )
     resources = worker_resources or ResourceConfig(cpu=1, ram="4g", disk="10g")
     outcome = ZephyrContext(name="stage-ghalogs", resources=resources, max_workers=max_workers).execute(pipeline)
-    # Parts are zero-padded so lexicographic order is range order; every shard
-    # verified its part's exact size before returning it.
     part_paths = sorted(outcome.results)
     _concat_archive_parts(fs, archive_path, part_paths)
     fs.invalidate_cache(os.path.dirname(path))  # exists() above may have cached the target as absent

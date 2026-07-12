@@ -595,11 +595,13 @@ def test_stage_ghalogs_archive_reuses_completed_parts(tmp_path, monkeypatch):
     server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))
 
     # A prior run already downloaded the first shard (bytes 0-427); a re-run
-    # must reuse it instead of re-requesting that range.
+    # must skip it (write_binary skip_existing) instead of re-requesting the range.
     staged = tmp_path / GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH
     parts_dir = staged.with_name(f"{staged.name}.parts")
     parts_dir.mkdir(parents=True)
-    (parts_dir / "part-00000").write_bytes(payload[:428])
+    first = diagnostic_logs._ShardRange(0, 428)
+    part_name = Path(diagnostic_logs._ghalogs_part_path(str(parts_dir), first)).name
+    (parts_dir / part_name).write_bytes(payload[:428])
 
     stage_ghalogs_archive(str(tmp_path), num_shards=3, max_workers=1)
 
@@ -607,36 +609,36 @@ def test_stage_ghalogs_archive_reuses_completed_parts(tmp_path, monkeypatch):
     assert sorted(server.ranges) == [428, 856]
 
 
-def test_download_ghalogs_shard_aborts_if_server_ignores_range(tmp_path, monkeypatch):
+def test_ghalogs_range_aborts_if_server_ignores_range(monkeypatch):
     payload = b"resume-must-not-corrupt" * 16
     # Reply 200 (full body) to the bounded range request — the body would not
-    # match the requested slice, so the shard must refuse rather than corrupt.
+    # match the requested slice, so the range must refuse rather than corrupt.
     server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, ignore_range=True), len(payload))
 
     with pytest.raises(RuntimeError, match="ignored Range"):
-        diagnostic_logs._download_ghalogs_shard(str(tmp_path), diagnostic_logs._ShardRange(0, 0, len(payload)))
+        b"".join(diagnostic_logs._iter_ghalogs_range(diagnostic_logs._ShardRange(0, len(payload))))
 
     assert server.ranges == [0]
 
 
-def test_download_ghalogs_shard_gives_up_after_stalls_without_progress(tmp_path, monkeypatch):
+def test_ghalogs_range_gives_up_after_stalls_without_progress(monkeypatch):
     payload = b"never-fully-delivered" * 8
     # Every ranged resume yields zero bytes then drops: no forward progress, so
-    # the stall budget must be exhausted and the shard must fail (not loop forever).
+    # the stall budget must be exhausted and the range must fail (not loop forever).
     _patch_zenodo(monkeypatch, _FakeZenodoServer(payload, breaks=[50] + [0] * 20), len(payload))
 
     with pytest.raises(RuntimeError, match="stalled"):
-        diagnostic_logs._download_ghalogs_shard(str(tmp_path), diagnostic_logs._ShardRange(0, 0, len(payload)))
+        b"".join(diagnostic_logs._iter_ghalogs_range(diagnostic_logs._ShardRange(0, len(payload))))
 
 
-def test_download_ghalogs_shard_gives_up_on_clean_empty_responses(tmp_path, monkeypatch):
+def test_ghalogs_range_gives_up_on_clean_empty_responses(monkeypatch):
     # A server that keeps returning a successful but empty body makes no forward
     # progress and raises no exception; the loop must still give up via the stall
     # budget instead of re-requesting the same offset forever.
     server = _patch_zenodo(monkeypatch, _EmptyBodyServer(), declared_bytes=64)
 
     with pytest.raises(RuntimeError, match="stalled"):
-        diagnostic_logs._download_ghalogs_shard(str(tmp_path), diagnostic_logs._ShardRange(0, 0, 64))
+        b"".join(diagnostic_logs._iter_ghalogs_range(diagnostic_logs._ShardRange(0, 64)))
 
     # Bounded by the stall budget rather than looping unboundedly.
     assert server.get_calls <= diagnostic_logs._GHALOGS_MAX_RESUME_STALLS + 1
