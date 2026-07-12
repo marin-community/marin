@@ -83,6 +83,16 @@ class Client(Protocol):
         """Create N instances of an actor, returning a group handle."""
         ...
 
+    def get_actor(self, endpoint: str) -> ActorHandle:
+        """Return a handle to an existing actor by its endpoint name.
+
+        The endpoint name is the stable address published by the hosting
+        process (``HostedActor.endpoint``). Resolution to a live connection
+        happens lazily at call time, so this never blocks or validates that
+        the actor is currently reachable.
+        """
+        ...
+
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the client and all managed resources."""
         ...

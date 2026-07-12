@@ -30,6 +30,28 @@ Actor-based, pull-based task distribution. Workers are persistent across stages.
 ZephyrContext → ZephyrCoordinator (fray actor) → ZephyrWorker actors (fray actor_group)
 ```
 
+### Dedicated vs shared
+
+- **Dedicated** (default): each `ctx.execute()` submits a fresh coordinator job
+  (`_run_coordinator_job`) that runs one pipeline and tears everything down.
+- **Shared**: `with ctx as endpoint:` (or `ctx.start()` directly) submits a
+  long-lived coordinator job (`_run_shared_coordinator_job`) with a fixed
+  worker pool and publishes the coordinator's actor endpoint; `__exit__` /
+  `ctx.shutdown()` tears it down. `__enter__` starting the pool is the explicit
+  opt-in to shared mode — plain `ZephyrContext(...).execute()` without a `with`
+  or endpoint stays dedicated. Drivers connect with
+  `ZephyrContext(coordinator_endpoint=...)` — or by setting
+  `ZEPHYR_COORDINATOR_ENDPOINT` in the driver job's env (read as a fallback in
+  `__post_init__`); their `execute()` calls submit pipelines via `run_pipeline`
+  RPC, which the coordinator runs **concurrently**.
+  All per-pipeline coordinator state lives in `_PipelineExecution` (registry
+  `_executions[execution_id]`); the worker pool (`_worker_states`,
+  `_worker_counters`, …) is shared. `pull_task` round-robins active executions
+  and dispatches by `ZephyrTaskResources.can_fit`. A per-run `fatal_error`
+  fails only that pipeline; `abort()`/`_pool_error` fails the whole pool.
+  Finished executions are popped from the registry (shared mode) so late
+  worker reports for them are logged and ignored.
+
 ### Data flow between stages
 
 Stages pass data via **filesystem-backed chunk references** (`PickleDiskChunk`), not in-memory. Each stage reads chunks from storage, processes them, writes results back. Workers stream one chunk at a time to minimize memory.
@@ -38,8 +60,8 @@ Stages pass data via **filesystem-backed chunk references** (`PickleDiskChunk`),
 
 These worker→coordinator RPCs **must** block (`.result()`). Removing them causes race conditions:
 
-1. `coordinator.report_result.remote().result()` — must complete before next `pull_task`, otherwise `_in_flight` tracking breaks (assertion at line ~584)
-2. `coordinator.report_error.remote().result()` — same ordering constraint as `report_result`
+1. `coordinator.report_result.remote(worker_id, execution_id, ...).result()` — must complete before next `pull_task`, otherwise per-execution `in_flight` tracking breaks (assertion in `_assert_in_flight_consistent`). The `execution_id` routes the report to the right `_PipelineExecution`.
+2. `coordinator.report_error.remote(worker_id, execution_id, ...).result()` — same ordering constraint as `report_result`
 3. `coordinator.heartbeat.remote().result()` — prevents congesting the coordinator RPC pipe with fire-and-forget heartbeats
 4. `coordinator.register_worker.remote().result()` — worker must be registered before polling starts
 

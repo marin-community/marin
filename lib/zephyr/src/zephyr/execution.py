@@ -9,6 +9,18 @@ execute shard operations, and report results back. Because actors are children
 of the coordinator job, Iris cascading termination automatically cleans them
 up when the coordinator exits or is killed — preventing stale-coordinator
 bugs where orphaned coordinators and workers consume resources indefinitely.
+
+Two lifecycles share the same coordinator/worker classes:
+
+* **Dedicated** (default): each ``ZephyrContext.execute()`` submits a fresh
+  coordinator job that runs exactly one pipeline and tears everything down.
+* **Shared**: ``ZephyrContext.start()`` submits a long-lived coordinator job
+  with a fixed worker pool and publishes the coordinator's actor endpoint.
+  Other drivers connect with ``ZephyrContext(coordinator_endpoint=...)`` and
+  submit pipelines that run *concurrently*; the coordinator schedules tasks
+  from all active pipelines onto whichever workers have free resources. A
+  failing pipeline only fails its own execution — the coordinator and the
+  worker pool keep serving the others.
 """
 
 import enum
@@ -35,6 +47,7 @@ from fray.client import Client, JobHandle
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig
+from fray.types import JobStatus as FrayJobStatus
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telltale
@@ -92,6 +105,31 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_WORKERS_PER_JOB = 1_024
 
 ZEPHYR_PROGRESS_TIME_METRIC = "zephyr_progress_time_seconds"
+
+# Max pipelines a shared coordinator runs concurrently. Each active
+# run_pipeline occupies one actor dispatch slot for its whole duration, so this
+# bound keeps slots free for the pull_task/report_*/heartbeat calls that feed
+# workers. Excess submissions are rejected rather than queued.
+MAX_CONCURRENT_PIPELINES = 16
+
+# Worker task-retry budget for shared pools — effectively "replenish forever".
+# Preemptions on contended clusters can be misclassified as task failures
+# (marin#7121: dirty k8s preemptions land as FAILED), and a long-lived shared
+# pool must survive them rather than die on a small failure budget.
+SHARED_POOL_MAX_TASK_RETRIES = 1000
+
+# How long ZephyrContext.start() waits for the shared coordinator job to
+# publish its endpoint before giving up.
+SHARED_CONTEXT_START_TIMEOUT = 600.0
+
+# Shared coordinator serve-loop poll cadence (worker-job death / shutdown).
+_SERVE_POLL_INTERVAL = 5.0
+
+# When set, a ZephyrContext with no explicit ``coordinator_endpoint`` connects
+# to this shared coordinator. Lets a pool owner propagate the endpoint to
+# per-step driver jobs via the environment (e.g. Iris ``-e``) instead of
+# threading it through every step's code.
+ZEPHYR_COORDINATOR_ENDPOINT_ENV = "ZEPHYR_COORDINATOR_ENDPOINT"
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -252,80 +290,168 @@ class JobStatus:
     workers: dict[str, dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class CoordinatorInfo:
+    """Coordinator config a connecting driver needs to submit pipelines.
+
+    Returned by ``ZephyrCoordinator.describe()`` so shared-context drivers can
+    upload shared data / clean up under the coordinator's ``chunk_prefix``.
+    """
+
+    chunk_prefix: str
+    worker_resources: ZephyrTaskResources
+    shared: bool
+
+
+@dataclass(frozen=True)
+class ZephyrExecutionResult:
+    """Result of running a Zephyr pipeline.
+
+    This is also the wire format pickled by ``_run_coordinator_job`` into the
+    result file, so callers of ``ZephyrContext.execute`` receive it as-is.
+
+    Attributes:
+        results: Flat list of items produced by the terminal stage of the
+            pipeline (e.g. output file paths for write stages).
+        counters: Aggregated counter values from the run, including built-in
+            zephyr counters (e.g. ``zephyr/records_in``) and any user counters
+            recorded via ``zephyr.counters.pipeline``.
+    """
+
+    results: list
+    counters: dict[str, int | float]
+
+
+@dataclass
+class _PipelineExecution:
+    """Coordinator-side state for one pipeline execution.
+
+    The coordinator can drive multiple executions concurrently (shared
+    context); everything scoped to a single pipeline lives here. Worker
+    membership, heartbeats, and in-flight counter snapshots stay on the
+    coordinator — the worker pool is shared across executions.
+    """
+
+    execution_id: str
+    # Per-task costs for this pipeline, supplied by the submitting driver so
+    # pipelines with different resource needs can share one worker pool.
+    map_cost: ZephyrTaskResources
+    reduce_cost: ZephyrTaskResources
+    task_queue: deque[ShardTask] = field(default_factory=deque)
+    results: dict[int, TaskResult] = field(default_factory=dict)
+    stage_name: str = ""
+    # Index of the currently active stage. For joins and reshards, the parent's index.
+    current_stage_index: int = 0
+    plan_stages: list = field(default_factory=list)
+    total_shards: int = 0
+    completed_shards: int = 0
+    retries: int = 0
+    # Keyed by shard_idx so a single worker can have multiple tasks in flight.
+    in_flight: dict[int, _InFlightEntry] = field(default_factory=dict)
+    # task_attempts: monotonic generation for stale-result rejection (bumps on
+    # every requeue). task_error_attempts: TASK-only counter bounded by
+    # max_shard_failures. task_infra_attempts: INFRA-while-in-flight counter
+    # bounded by max_shard_infra_failures.
+    task_attempts: dict[int, int] = field(default_factory=dict)
+    task_error_attempts: dict[int, int] = field(default_factory=dict)
+    task_infra_attempts: dict[int, int] = field(default_factory=dict)
+    fatal_error: str | None = None
+    shard_errors: dict[int, list[str]] = field(default_factory=dict)
+    # Set when a stage may have completed (result, failure, or abort) so
+    # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
+    stage_done: threading.Event = field(default_factory=threading.Event)
+    # When True, idle workers at a non-last stage boundary get STAGE_COMPLETED.
+    stage_complete: bool = False
+    # When True, idle workers on the last stage receive SHUTDOWN once all
+    # tasks are in-flight, so they exit eagerly instead of polling until
+    # coordinator.shutdown(). Never set on shared coordinators — their
+    # workers are long-lived and idle between pipelines.
+    is_last_stage: bool = False
+    # Completed-task counter snapshots; accumulate across this execution's stages.
+    completed_counters: list[CounterSnapshot] = field(default_factory=list)
+    # Set at each _start_stage so status logs show throughput since stage start.
+    stage_monotonic_start: float | None = None
+    # True once run_pipeline returned or raised for this execution.
+    done: bool = False
+
+
+def _aggregate_counter_snapshots(
+    snapshots: Iterable[CounterSnapshot],
+    stage: str | None,
+) -> dict[str, int | float]:
+    """Merge counter snapshots into totals, honoring per-key aggregation hints.
+
+    Folds with :func:`merge_counter_entries`, the same reducer the worker uses
+    across its concurrent runners, so an AVERAGE counter is weighted by each
+    entry's observation count. Counters whose snapshots disagree on an
+    aggregation are dropped rather than raised on — stats collection never
+    interrupts execution. When ``stage`` is given, only entries recorded under
+    that stage label are included.
+    """
+    merged, conflicted = merge_counter_entries(
+        (k, entry) for snap in snapshots for k, entry in snap.counters.items() if stage is None or entry.stage == stage
+    )
+    return {k: e.value for k, e in merged.items() if k not in conflicted}
+
+
 class ZephyrCoordinator:
     """Central coordinator actor that owns and manages the worker pool.
 
-    The coordinator creates workers via current_client(), runs a background
-    loop for discovery and heartbeat checking, and manages all pipeline
-    execution internally. Workers poll the coordinator for tasks until
-    receiving a SHUTDOWN signal.
+    The coordinator runs a background loop for heartbeat checking and manages
+    pipeline execution internally. Workers poll the coordinator for tasks
+    until receiving a SHUTDOWN signal.
+
+    ``run_pipeline`` is safe to call concurrently: each call gets its own
+    ``_PipelineExecution`` and the shared worker pool serves all active
+    executions, dispatching tasks wherever their cost fits a worker's free
+    resources. A pipeline failure only fails its own execution; the
+    coordinator keeps serving the rest. ``shared=True`` marks a long-lived
+    coordinator whose workers idle between pipelines instead of exiting when
+    a pipeline winds down.
     """
 
     def __init__(
         self,
         chunk_prefix: str,
-        map_cost: ZephyrTaskResources,
-        reduce_cost: ZephyrTaskResources,
+        worker_resources: ZephyrTaskResources,
         no_workers_timeout: float = 60.0,
         heartbeat_timeout: float = 120.0,
         max_shard_failures: int = MAX_SHARD_FAILURES,
         max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
+        shared: bool = False,
     ) -> None:
-        # Task management state
-        self._task_queue: deque[ShardTask] = deque()
-        self._results: dict[int, TaskResult] = {}
+        # Pipeline executions keyed by execution_id, insertion-ordered. All
+        # per-pipeline state lives in the _PipelineExecution values.
+        self._executions: dict[str, _PipelineExecution] = {}
+        # Per-worker resource pool size; run_pipeline validates task costs fit.
+        self._worker_resources = worker_resources
+        self._shared = shared
+        # Set when the coordinator as a whole can no longer make progress
+        # (worker job permanently dead, maintenance loop crash). Fails all
+        # active executions and rejects new ones.
+        self._pool_error: str | None = None
+        # Rotates which execution pull_task scans first, for cross-pipeline fairness.
+        self._pull_offset: int = 0
+
+        # Worker management state (workers self-register via register_worker)
         self._worker_states: dict[str, WorkerState] = {}
         self._last_seen: dict[str, float] = {}
-        self._stage_name: str = ""
-        # The index of the currently active stage. For joins and reshards, the index of the parent.
-        self._current_stage_index: int = 0
-        self._plan_stages: list = []  # PhysicalStage list, set in run_pipeline
-        self._total_shards: int = 0
-        self._completed_shards: int = 0
-        self._retries: int = 0
-        # Keyed by shard_idx so a single worker can have multiple tasks in flight.
-        self._in_flight: dict[int, _InFlightEntry] = {}
-        # _task_attempts: monotonic generation for stale-result rejection (bumps on every
-        # requeue). _task_error_attempts: TASK-only counter, bounded by MAX_SHARD_FAILURES.
-        self._task_attempts: dict[int, int] = {}
-        self._task_error_attempts: dict[int, int] = {}
-        self._fatal_error: str | None = None
-        self._shard_errors: dict[int, list[str]] = {}
         self._chunk_prefix = chunk_prefix
-        self._execution_id: str = ""
         self._no_workers_timeout = no_workers_timeout
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
-        # Per-worker in-flight counter snapshots and completed snapshots.
-        # Each snapshot carries a monotonic generation so the coordinator
-        # can discard stale or out-of-order heartbeats.
+        # Per-worker in-flight counter snapshots. Each snapshot carries a
+        # monotonic generation so the coordinator can discard stale or
+        # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
-        self._completed_counters: list[CounterSnapshot] = []
-
-        # Worker management state (workers self-register via register_worker)
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
-        # Set when a stage may have completed (result, failure, or abort) so
-        # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
-        self._stage_done = threading.Event()
-        # When True, pull_task returns SHUTDOWN to idle workers (stage complete).
-        self._stage_complete: bool = False
-        # When True, idle workers on the last stage receive SHUTDOWN once all
-        # tasks are in-flight, so they exit eagerly instead of polling until
-        # coordinator.shutdown().
-        self._is_last_stage: bool = False
-        self._current_stage: PhysicalStage | None = None
-        # Per-task resource cost computed from worker_resources / workers_per_actor.
-        # Stored by stage type so _run_worker_stage can bake costs into ShardTasks.
-        self._map_cost = map_cost
-        self._reduce_cost = reduce_cost
-        self._pipeline_running: bool = False
-
-        # Set at each _start_stage so _log_status can show average throughput since stage start.
-        self._stage_monotonic_start: float | None = None
+        # Unix time of the newest stage start or shard completion across all
+        # executions, published as ZEPHYR_PROGRESS_TIME_METRIC so a stalled
+        # coordinator is visible. Per-pipeline progress lives on the executions.
         self._progress_time_seconds: float = 0.0
 
         # Lock for accessing coordinator state from background thread
@@ -340,7 +466,7 @@ class ZephyrCoordinator:
 
         self._stats_writer = StatsWriter.connect()
 
-        logger.info("Coordinator initialized")
+        logger.info("Coordinator initialized (shared=%s)", shared)
 
         # Start coordinator background loop (heartbeat checking only)
         self._coordinator_thread = threading.Thread(
@@ -383,10 +509,21 @@ class ZephyrCoordinator:
             self._worker_states.pop(worker_id, None)
             self._last_seen.pop(worker_id, None)
 
-    def _mark_stage_complete(self) -> None:
+    def _mark_stage_complete(self, run: _PipelineExecution) -> None:
         with self._lock:
-            self._stage_complete = True
-            self._current_stage = None
+            run.stage_complete = True
+
+    def _current_execution_locked(self) -> _PipelineExecution | None:
+        """Most recent execution, preferring active ones. Lock must be held.
+
+        Non-shared coordinators run exactly one pipeline; this recovers it
+        for the legacy single-pipeline worker-lifecycle decisions.
+        """
+        runs = list(self._executions.values())
+        for run in reversed(runs):
+            if not run.done:
+                return run
+        return runs[-1] if runs else None
 
     def _coordinator_loop(self) -> None:
         """Background loop for heartbeat checking and worker job monitoring."""
@@ -414,14 +551,18 @@ class ZephyrCoordinator:
             self._shutdown_event.wait(timeout=0.5)
 
     def _check_worker_group(self) -> None:
-        """Abort the pipeline if the worker job has permanently terminated."""
-        if self._worker_group is None or self._fatal_error is not None:
+        """Abort all executions if the worker job has permanently terminated."""
+        if self._worker_group is None or self._pool_error is not None:
             return
-        # After the last stage completes, workers exit cleanly via SHUTDOWN.
-        # The worker job finishing at that point is expected, not a crash.
-        with self._lock:
-            if self._total_shards > 0 and self._completed_shards >= self._total_shards:
-                return
+        if not self._shared:
+            # After the last stage completes, workers exit cleanly via SHUTDOWN.
+            # The worker job finishing at that point is expected, not a crash.
+            # (Shared workers only exit at coordinator shutdown, so a finished
+            # worker job is always fatal there.)
+            with self._lock:
+                run = self._current_execution_locked()
+                if run is not None and run.total_shards > 0 and run.completed_shards >= run.total_shards:
+                    return
         try:
             if self._worker_group.is_done():
                 self.abort(
@@ -432,7 +573,11 @@ class ZephyrCoordinator:
             logger.debug("Failed to check worker group status", exc_info=True)
 
     def _has_active_execution(self) -> bool:
-        return self._execution_id != "" and self._total_shards > 0 and self._completed_shards < self._total_shards
+        with self._lock:
+            return any(
+                not run.done and run.total_shards > 0 and run.completed_shards < run.total_shards
+                for run in self._executions.values()
+            )
 
     def _publish_telltale(self) -> None:
         """Publish pipeline counters as gauges on the coordinator's telltale page.
@@ -455,32 +600,39 @@ class ZephyrCoordinator:
     def _build_status_md(self) -> tuple[str, str]:
         """Render pipeline progress as ``(detail, summary)`` markdown."""
         with self._lock:
-            current_stage_index = self._current_stage_index
-            plan_stages = self._plan_stages
-            completed = self._completed_shards
-            total_shards = self._total_shards
-            in_flight = len(self._in_flight)
-            queued = len(self._task_queue)
+            snapshot = [
+                (
+                    run.execution_id,
+                    list(run.plan_stages),
+                    run.current_stage_index,
+                    run.completed_shards,
+                    run.total_shards,
+                    len(run.in_flight),
+                    len(run.task_queue),
+                )
+                for run in self._executions.values()
+                if not run.done
+            ]
 
-        lines = ["**Stages**\n"]
-        for idx, stage in enumerate(plan_stages):
-            stage_desc = _get_stage_description(stage)
-            bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
-            lines.append(f"{bullet}")
+        detail_lines: list[str] = []
+        summary_lines: list[str] = []
+        for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
+            detail_lines.append(f"**{execution_id}**")
+            for idx, stage in enumerate(plan_stages):
+                stage_desc = _get_stage_description(stage)
+                detail_lines.append(f"- **{stage_desc}**" if idx == stage_index else f"- {stage_desc}")
+            pct = int(100 * completed / total) if total > 0 else 0
+            detail_lines.append(
+                f"**Shards** — {completed}/{total} complete ({pct}%), {in_flight} in-flight, {queued} queued\n"
+            )
+            current_desc = _get_stage_description(plan_stages[stage_index]) if plan_stages else ""
+            summary_lines.append(
+                f"**{current_desc}** ({stage_index + 1}/{len(plan_stages)}) — {completed}/{total} shards ({pct}%)"
+            )
 
-        pct = int(100 * completed / total_shards) if total_shards > 0 else 0
-        lines.append(
-            f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
-        )
-
-        detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
-
-        current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
-        summary_lines = [
-            f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})",
-            f"{completed}/{total_shards} shards ({pct}%)",
-        ]
-        return detail_md, "  \n".join(summary_lines)
+        detail_md = "\n".join(detail_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
+        summary_md = "  \n".join(summary_lines)[:MAX_STATUS_TEXT_LENGTH] or "idle"
+        return detail_md, summary_md
 
     def _report_task_stats(self) -> None:
         """Publish pipeline progress to telltale, and to the Iris coordinator if available."""
@@ -495,56 +647,75 @@ class ZephyrCoordinator:
     def _log_status(self) -> None:
         with self._lock:
             states = list(self._worker_states.values())
-            retried = {idx: att for idx, att in self._task_attempts.items() if att > 0}
+            lines = [
+                (
+                    run.execution_id,
+                    run.stage_name,
+                    run.completed_shards,
+                    run.total_shards,
+                    len(run.in_flight),
+                    len(run.task_queue),
+                    {idx: att for idx, att in run.task_attempts.items() if att > 0},
+                    run.stage_monotonic_start,
+                    list(run.completed_counters) + list(self._worker_counters.values()),
+                )
+                for run in self._executions.values()
+                if not run.done
+            ]
         alive = sum(1 for s in states if s == WorkerState.ACTIVE)
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DONE})
 
-        base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
-        base_args = (
-            self._execution_id,
-            self._stage_name,
-            self._completed_shards,
-            self._total_shards,
-            len(self._in_flight),
-            len(self._task_queue),
-            alive,
-            len(self._worker_handles),
-            dead,
-        )
+        for execution_id, stage_name, completed, total, in_flight, queued, retried, stage_start, snaps in lines:
+            base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
+            base_args = (
+                execution_id,
+                stage_name,
+                completed,
+                total,
+                in_flight,
+                queued,
+                alive,
+                len(self._worker_handles),
+                dead,
+            )
 
-        # Map-only stages don't yield through ``_wrap_stage_stats`` and never
-        # populate these counters. Drop the items/bytes_processed segment for
-        # those stages.
-        elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
-        throughput = _stage_throughput(self.get_counters(stage=self._stage_name), elapsed)
-        if throughput is not None:
-            logger.info(base_msg + "; %s", *base_args, throughput)
-        else:
-            logger.info(base_msg, *base_args)
-        if retried:
-            attempts_histogram = dict(sorted(Counter(retried.values()).items()))
-            logger.warning("[%s] Shards retried (attempts: shard count): %s", self._execution_id, attempts_histogram)
+            # Map-only stages don't yield through ``_wrap_stage_stats`` and never
+            # populate these counters. Drop the items/bytes_processed segment for
+            # those stages. In-flight snapshots are stage-filtered, not
+            # execution-filtered — two concurrent pipelines running an
+            # identically-labelled stage share the live segment (log-only).
+            elapsed = time.monotonic() - (stage_start or time.monotonic())
+            throughput = _stage_throughput(_aggregate_counter_snapshots(snaps, stage_name), elapsed)
+            if throughput is not None:
+                logger.info(base_msg + "; %s", *base_args, throughput)
+            else:
+                logger.info(base_msg, *base_args)
+            if retried:
+                attempts_histogram = dict(sorted(Counter(retried.values()).items()))
+                logger.warning("[%s] Shards retried (attempts: shard count): %s", execution_id, attempts_histogram)
 
-    def _emit_stage_stat(self, *, failed: bool = False) -> None:
+    def _emit_stage_stat(self, run: _PipelineExecution, *, failed: bool = False) -> None:
         """Emit one ZephyrStageStat row to finelog at stage completion or failure."""
         with self._lock:
-            stage_name = self._stage_name
-            execution_id = self._execution_id
-            total = self._total_shards
-            stage_start = self._stage_monotonic_start
+            stage_name = run.stage_name
+            execution_id = run.execution_id
+            total = run.total_shards
+            stage_start = run.stage_monotonic_start
             elapsed = time.monotonic() - stage_start if stage_start else 0.0
+            snaps = list(run.completed_counters)
         status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
-        stage_counters = self.get_counters(stage=stage_name)
+        stage_counters = _aggregate_counter_snapshots(snaps, stage_name)
         self._stats_writer.emit_stage_stat(stage_counters, stage_name, execution_id, elapsed, total, status)
 
     def _record_shard_failure(
         self,
+        run: _PipelineExecution,
         shard_idx: int,
         worker_id: str,
         kind: ShardFailureKind,
         error_info: str | None = None,
     ) -> bool:
-        """Requeue a specific in-flight shard; abort if a per-shard cap is hit.
+        """Requeue a specific in-flight shard; abort its execution if a per-shard cap is hit.
 
         TASK errors are bounded by ``MAX_SHARD_FAILURES``. INFRA failures
         observed while the *same* shard was in flight are bounded by
@@ -552,9 +723,9 @@ class ZephyrCoordinator:
         crashes its worker (native SIGSEGV, OOM) doesn't loop forever now
         that shard execution is in-process.
 
-        Must be called with lock held. Returns True if the pipeline was aborted.
+        Must be called with lock held. Returns True if the execution was aborted.
         """
-        entry = self._in_flight.pop(shard_idx, None)
+        entry = run.in_flight.pop(shard_idx, None)
 
         # Zero counters but keep the generation watermark so late heartbeats
         # from the old task are rejected.
@@ -568,54 +739,57 @@ class ZephyrCoordinator:
         task = entry.task
 
         if error_info is not None:
-            self._shard_errors.setdefault(shard_idx, []).append(error_info)
+            run.shard_errors.setdefault(shard_idx, []).append(error_info)
 
         # Bump generation regardless of kind so report_result rejects stale attempts.
-        self._task_attempts[shard_idx] += 1
+        run.task_attempts[shard_idx] += 1
         # Wake _wait_for_stage on every accounted failure (requeue or abort);
-        # the waiter re-checks _fatal_error / completed counts after waking.
-        self._stage_done.set()
+        # the waiter re-checks fatal_error / completed counts after waking.
+        run.stage_done.set()
 
         if kind is ShardFailureKind.TASK:
-            self._task_error_attempts[shard_idx] += 1
-            error_attempts = self._task_error_attempts[shard_idx]
+            run.task_error_attempts[shard_idx] += 1
+            error_attempts = run.task_error_attempts[shard_idx]
             if error_attempts >= self._max_shard_failures:
-                errors = self._shard_errors.get(shard_idx, [])
+                errors = run.shard_errors.get(shard_idx, [])
                 error_detail = f"\nLast error:\n{errors[-1]}" if errors else ""
                 logger.error(
-                    "Shard %d has failed %d times (max %d), last failure on worker %s, aborting pipeline.",
+                    "[%s] Shard %d has failed %d times (max %d), last failure on worker %s, aborting pipeline.",
+                    run.execution_id,
                     shard_idx,
                     error_attempts,
                     self._max_shard_failures,
                     worker_id,
                 )
-                self._fatal_error = (
+                run.fatal_error = (
                     f"Shard {shard_idx} failed {error_attempts} times "
                     f"(max {self._max_shard_failures}), last failure on worker {worker_id}.{error_detail}"
                 )
                 return True
 
             logger.warning(
-                "Shard %d failed on worker %s (task error %d/%d), re-queuing.",
+                "[%s] Shard %d failed on worker %s (task error %d/%d), re-queuing.",
+                run.execution_id,
                 shard_idx,
                 worker_id,
                 error_attempts,
                 self._max_shard_failures,
             )
         else:
-            self._task_infra_attempts[shard_idx] += 1
-            infra_attempts = self._task_infra_attempts[shard_idx]
+            run.task_infra_attempts[shard_idx] += 1
+            infra_attempts = run.task_infra_attempts[shard_idx]
             if infra_attempts >= self._max_shard_infra_failures:
                 logger.error(
-                    "Shard %d has been in flight during %d infra failures (max %d); "
+                    "[%s] Shard %d has been in flight during %d infra failures (max %d); "
                     "treating as a deterministic crasher (likely native SIGSEGV / OOM in shard "
                     "code) and aborting pipeline. Last failure on worker %s.",
+                    run.execution_id,
                     shard_idx,
                     infra_attempts,
                     self._max_shard_infra_failures,
                     worker_id,
                 )
-                self._fatal_error = (
+                run.fatal_error = (
                     f"Shard {shard_idx} crashed its worker {infra_attempts} times "
                     f"(max {self._max_shard_infra_failures} infra failures while in flight); "
                     f"last failure on worker {worker_id}."
@@ -623,28 +797,30 @@ class ZephyrCoordinator:
                 return True
 
             logger.warning(
-                "Shard %d requeued from worker %s due to infra failure (preemption/heartbeat). "
+                "[%s] Shard %d requeued from worker %s due to infra failure (preemption/heartbeat). "
                 "Total generation: %d, task errors so far: %d/%d, infra-while-in-flight: %d/%d.",
+                run.execution_id,
                 shard_idx,
                 worker_id,
-                self._task_attempts[shard_idx],
-                self._task_error_attempts[shard_idx],
+                run.task_attempts[shard_idx],
+                run.task_error_attempts[shard_idx],
                 self._max_shard_failures,
                 infra_attempts,
                 self._max_shard_infra_failures,
             )
 
-        self._task_queue.append(task)
-        self._retries += 1
+        run.task_queue.append(task)
+        run.retries += 1
         return False
 
     def _maybe_requeue_worker_tasks(self, worker_id: str) -> None:
         """Requeue all in-flight tasks for a worker as INFRA failures (preemption/heartbeat)."""
-        shards_to_requeue = [
-            shard_idx for shard_idx, entry in list(self._in_flight.items()) if entry.worker_id == worker_id
-        ]
-        for shard_idx in shards_to_requeue:
-            self._record_shard_failure(shard_idx, worker_id, ShardFailureKind.INFRA)
+        for run in self._executions.values():
+            shards_to_requeue = [
+                shard_idx for shard_idx, entry in list(run.in_flight.items()) if entry.worker_id == worker_id
+            ]
+            for shard_idx in shards_to_requeue:
+                self._record_shard_failure(run, shard_idx, worker_id, ShardFailureKind.INFRA)
 
     def pull_task(
         self,
@@ -654,7 +830,10 @@ class ZephyrCoordinator:
         """Called by workers to get next task.
 
         Workers provide their current available resources so the coordinator
-        can gate dispatch on worker capacity against the next task's requirements.
+        can gate dispatch on worker capacity against the next task's
+        requirements. Active executions are scanned round-robin so concurrent
+        pipelines share the pool fairly; the first execution whose head task
+        fits the worker wins.
 
         Args:
             worker_id: Unique ID for this worker.
@@ -672,43 +851,51 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.DONE
                 return PullStatus.SHUTDOWN, None
 
-            if self._fatal_error:
+            dispatchable = [r for r in self._executions.values() if not r.done and r.fatal_error is None]
+            for i in range(len(dispatchable)):
+                run = dispatchable[(self._pull_offset + i) % len(dispatchable)]
+                if not run.task_queue or not available.can_fit(run.task_queue[0].cost):
+                    continue
+                self._pull_offset = (self._pull_offset + i + 1) % len(dispatchable)
+                task = run.task_queue.popleft()
+                attempt = run.task_attempts[task.shard_idx]
+                run.in_flight[task.shard_idx] = _InFlightEntry(task=task, attempt=attempt, worker_id=worker_id)
+                config = {
+                    "chunk_prefix": self._chunk_prefix,
+                    "execution_id": run.execution_id,
+                }
+                return PullStatus.RUN_TASK, PullTask(task=task, attempt=attempt, config=config)
+
+            if self._shared:
+                # Shared workers are long-lived: they idle between pipelines
+                # and only exit on coordinator shutdown.
                 return PullStatus.NO_WORK_BACKOFF, None
 
-            if not self._task_queue:
-                if self._is_last_stage:
-                    # Last stage has no more tasks to hand out — pipeline is winding
-                    # down for this worker. Only exit if this worker has no tasks
-                    # in flight that could fail and be requeued. If a peer's shard
-                    # is requeued, Iris restarts that worker to pick it up.
-                    # _check_worker_group() detects permanent worker-job death as a
-                    # failsafe so we never deadlock.
-                    if not any(e.worker_id == worker_id for e in self._in_flight.values()):
-                        self._worker_states[worker_id] = WorkerState.DONE
-                        return PullStatus.SHUTDOWN, None
-                    return PullStatus.NO_WORK_BACKOFF, None
-                if self._stage_complete:
-                    # Non-last stage boundary — worker sleeps briefly and polls again
-                    # for the next stage.
-                    return PullStatus.STAGE_COMPLETED, None
+            run = self._current_execution_locked()
+            if run is None or run.fatal_error is not None or run.task_queue:
+                # Nothing submitted yet, an aborted pipeline (the coordinator
+                # job is about to tear down), or a head task this worker can't
+                # fit — sleep and re-poll.
                 return PullStatus.NO_WORK_BACKOFF, None
-
-            if not available.can_fit(self._task_queue[0].cost):
+            if run.done or run.is_last_stage:
+                # Last stage has no more tasks to hand out — the pipeline is
+                # winding down for this worker. Only exit if this worker has no
+                # tasks in flight that could fail and be requeued. If a peer's
+                # shard is requeued, Iris restarts that worker to pick it up.
+                # _check_worker_group() detects permanent worker-job death as a
+                # failsafe so we never deadlock.
+                if not any(e.worker_id == worker_id for e in run.in_flight.values()):
+                    self._worker_states[worker_id] = WorkerState.DONE
+                    return PullStatus.SHUTDOWN, None
                 return PullStatus.NO_WORK_BACKOFF, None
+            if run.stage_complete:
+                # Non-last stage boundary — worker sleeps briefly and polls
+                # again for the next stage.
+                return PullStatus.STAGE_COMPLETED, None
+            return PullStatus.NO_WORK_BACKOFF, None
 
-            task = self._task_queue.popleft()
-            attempt = self._task_attempts[task.shard_idx]
-            self._in_flight[task.shard_idx] = _InFlightEntry(task=task, attempt=attempt, worker_id=worker_id)
-            self._worker_states[worker_id] = WorkerState.ACTIVE
-
-            config = {
-                "chunk_prefix": self._chunk_prefix,
-                "execution_id": self._execution_id,
-            }
-            return PullStatus.RUN_TASK, PullTask(task=task, attempt=attempt, config=config)
-
-    def _assert_in_flight_consistent(self, worker_id: str, shard_idx: int) -> None:
-        """Assert _in_flight[shard_idx], if present, is owned by the reporting worker.
+    def _assert_in_flight_consistent(self, run: _PipelineExecution, worker_id: str, shard_idx: int) -> None:
+        """Assert in_flight[shard_idx], if present, is owned by the reporting worker.
 
         Call only after verifying the report matches the current task attempt.
         Workers block on report_result/report_error before calling pull_task, so
@@ -716,10 +903,10 @@ class ZephyrCoordinator:
         entry is present. The entry may be absent if a heartbeat timeout already
         re-queued the task and the shard completed or moved on.
         """
-        entry = self._in_flight.get(shard_idx)
+        entry = run.in_flight.get(shard_idx)
         if entry is not None:
             assert entry.worker_id == worker_id, (
-                f"_in_flight mismatch for shard {shard_idx}: reported by {worker_id}, "
+                f"in_flight mismatch for shard {shard_idx}: reported by {worker_id}, "
                 f"but tracked as owned by {entry.worker_id}. "
                 f"This indicates report_result/pull_task reordering — workers must block on report_result."
             )
@@ -727,6 +914,7 @@ class ZephyrCoordinator:
     def report_result(
         self,
         worker_id: str,
+        execution_id: str,
         shard_idx: int,
         attempt: int,
         result: TaskResult,
@@ -735,7 +923,21 @@ class ZephyrCoordinator:
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
 
-            current_attempt = self._task_attempts.get(shard_idx, 0)
+            run = self._executions.get(execution_id)
+            if run is None:
+                logger.warning(
+                    "Ignoring result from worker %s for finished/unknown execution %s (shard %d)",
+                    worker_id,
+                    execution_id,
+                    shard_idx,
+                )
+                # The task's runner is finished; drop its stale in-flight
+                # snapshot so it stops polluting cross-pipeline totals until
+                # the worker's next heartbeat lands.
+                self._clear_worker_inflight_counters(worker_id, counter_snapshot.generation)
+                return
+
+            current_attempt = run.task_attempts.get(shard_idx, 0)
             if attempt != current_attempt:
                 logger.warning(
                     f"Ignoring stale result from worker {worker_id} for shard {shard_idx} "
@@ -743,24 +945,50 @@ class ZephyrCoordinator:
                 )
                 return
 
-            self._assert_in_flight_consistent(worker_id, shard_idx)
+            self._assert_in_flight_consistent(run, worker_id, shard_idx)
 
-            self._results[shard_idx] = result
-            self._completed_shards += 1
+            run.results[shard_idx] = result
+            run.completed_shards += 1
             self._progress_time_seconds = time.time()
-            self._in_flight.pop(shard_idx, None)
-            self._completed_counters.append(counter_snapshot)
+            run.in_flight.pop(shard_idx, None)
+            run.completed_counters.append(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
-            self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
-            self._stage_done.set()
+            self._clear_worker_inflight_counters(worker_id, counter_snapshot.generation)
+            run.stage_done.set()
 
-    def report_error(self, worker_id: str, shard_idx: int, attempt: int, error_info: str) -> None:
+    def _clear_worker_inflight_counters(self, worker_id: str, generation: int) -> None:
+        """Zero a worker's in-flight snapshot, keeping the generation watermark.
+
+        Called when a task's runner is done, so late heartbeats from that task
+        (strictly-lower generation) are rejected and the finished task's live
+        counters stop being folded into cross-pipeline totals. Lock must be held.
+        """
+        existing = self._worker_counters.get(worker_id)
+        watermark = max(generation, existing.generation) if existing is not None else generation
+        self._worker_counters[worker_id] = CounterSnapshot.empty(watermark)
+
+    def report_error(self, worker_id: str, execution_id: str, shard_idx: int, attempt: int, error_info: str) -> None:
         """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
 
-            current_attempt = self._task_attempts.get(shard_idx, 0)
+            run = self._executions.get(execution_id)
+            if run is None:
+                logger.warning(
+                    "Ignoring error from worker %s for finished/unknown execution %s (shard %d)",
+                    worker_id,
+                    execution_id,
+                    shard_idx,
+                )
+                # Drop the finished task's stale in-flight snapshot. No incoming
+                # generation here, so just re-stamp the existing watermark.
+                existing = self._worker_counters.get(worker_id)
+                if existing is not None:
+                    self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+                return
+
+            current_attempt = run.task_attempts.get(shard_idx, 0)
             if attempt != current_attempt:
                 logger.warning(
                     f"Ignoring stale error from worker {worker_id} for shard {shard_idx} "
@@ -768,8 +996,8 @@ class ZephyrCoordinator:
                 )
                 return
 
-            self._assert_in_flight_consistent(worker_id, shard_idx)
-            self._record_shard_failure(shard_idx, worker_id, ShardFailureKind.TASK, error_info)
+            self._assert_in_flight_consistent(run, worker_id, shard_idx)
+            self._record_shard_failure(run, shard_idx, worker_id, ShardFailureKind.TASK, error_info)
 
     def heartbeat(self, worker_id: str, counter_snapshot: CounterSnapshot | None = None) -> None:
         self._last_seen[worker_id] = time.monotonic()
@@ -780,16 +1008,18 @@ class ZephyrCoordinator:
                     self._worker_counters[worker_id] = counter_snapshot
 
     def get_status(self) -> JobStatus:
+        """Aggregate status across all active executions plus worker health."""
         with self._lock:
+            active = [r for r in self._executions.values() if not r.done]
             return JobStatus(
-                stage=self._stage_name,
-                completed=self._completed_shards,
-                total=self._total_shards,
-                retries=self._retries,
-                in_flight=len(self._in_flight),
-                queue_depth=len(self._task_queue),
+                stage="; ".join(r.stage_name for r in active if r.stage_name),
+                completed=sum(r.completed_shards for r in active),
+                total=sum(r.total_shards for r in active),
+                retries=sum(r.retries for r in active),
+                in_flight=sum(len(r.in_flight) for r in active),
+                queue_depth=sum(len(r.task_queue) for r in active),
                 done=self._shutdown_event.is_set(),
-                fatal_error=self._fatal_error,
+                fatal_error=self._fatal_error_locked(),
                 workers={
                     wid: {
                         "state": state.value,
@@ -799,13 +1029,26 @@ class ZephyrCoordinator:
                 },
             )
 
+    def describe(self) -> CoordinatorInfo:
+        """Coordinator config a connecting driver needs to submit pipelines."""
+        return CoordinatorInfo(
+            chunk_prefix=self._chunk_prefix,
+            worker_resources=self._worker_resources,
+            shared=self._shared,
+        )
+
+    def is_shutdown(self) -> bool:
+        """True once shutdown() ran; the shared serve loop polls this to exit."""
+        return self._shutdown_event.is_set()
+
     def get_counters(self, worker_id: str | None = None, *, stage: str | None = None) -> dict[str, int | float]:
         """Return counter values, optionally filtered to a single worker or stage.
 
         Args:
             worker_id: If provided, return the latest snapshot for this worker
-                only. If None, return totals derived from completed and
-                in-flight snapshots, applying per-key aggregation hints.
+                only. If None, return totals derived from all registered
+                executions' completed snapshots plus in-flight snapshots,
+                applying per-key aggregation hints.
             stage: If provided, only include entries with ``entry.stage == stage``.
                 If None (default), include all entries regardless of stage.
 
@@ -819,6 +1062,9 @@ class ZephyrCoordinator:
         user counters that reuse a name with different ``set_aggregation``
         modes), the counter is omitted from the result and a warning is
         logged — stats collection never raises into the execution path.
+
+        On shared coordinators finished executions are dropped, so totals
+        cover only executions still registered.
         """
         with self._lock:
             if worker_id is not None:
@@ -827,69 +1073,75 @@ class ZephyrCoordinator:
                     return {}
                 return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
 
-            all_snaps = list(self._completed_counters) + list(self._worker_counters.values())
+            all_snaps = [snap for run in self._executions.values() for snap in run.completed_counters] + list(
+                self._worker_counters.values()
+            )
 
-        merged, conflicted = merge_counter_entries(
-            (k, entry)
-            for snap in all_snaps
-            for k, entry in snap.counters.items()
-            if stage is None or entry.stage == stage
-        )
-        return {k: e.value for k, e in merged.items() if k not in conflicted}
+        return _aggregate_counter_snapshots(all_snaps, stage)
+
+    def _fatal_error_locked(self) -> str | None:
+        if self._pool_error is not None:
+            return self._pool_error
+        return next((r.fatal_error for r in self._executions.values() if r.fatal_error), None)
 
     def get_fatal_error(self) -> str | None:
+        """Pool-level error if any, else the first execution's fatal error."""
         with self._lock:
-            return self._fatal_error
+            return self._fatal_error_locked()
 
     def abort(self, reason: str) -> None:
-        """Set a fatal error that causes the current stage to fail immediately.
+        """Fail the coordinator pool: every active execution aborts immediately.
 
-        Called by the external worker watchdog when the worker job terminates
-        permanently (e.g. all retries exhausted after OOM).
+        Called when the coordinator as a whole cannot make progress — the
+        worker job terminated permanently (e.g. all retries exhausted after
+        OOM) or the maintenance loop crashed. New run_pipeline calls are
+        rejected afterwards.
         """
         with self._lock:
-            if self._fatal_error is None:
+            if self._pool_error is None:
                 logger.error("Coordinator aborted: %s", reason)
-                self._fatal_error = reason
-                self._stage_done.set()
+                self._pool_error = reason
+            for run in self._executions.values():
+                if run.fatal_error is None:
+                    run.fatal_error = reason
+                run.stage_done.set()
 
     def _start_stage(
         self,
+        run: _PipelineExecution,
         stage_name: str,
         current_stage_index: int,
         tasks: list[ShardTask],
         is_last_stage: bool = False,
     ) -> None:
-        """Load a new stage's tasks into the queue."""
+        """Load a new stage's tasks into the execution's queue."""
         with self._lock:
-            self._task_queue = deque(tasks)
-            self._results = {}
-            self._stage_name = stage_name
-            self._current_stage_index = current_stage_index
-            self._total_shards = len(tasks)
-            self._completed_shards = 0
-            self._retries = 0
-            self._in_flight = {}
-            self._task_attempts = {task.shard_idx: 0 for task in tasks}
-            self._task_error_attempts = {task.shard_idx: 0 for task in tasks}
+            run.task_queue = deque(tasks)
+            run.results = {}
+            run.stage_name = stage_name
+            run.current_stage_index = current_stage_index
+            run.total_shards = len(tasks)
+            run.completed_shards = 0
+            run.retries = 0
+            run.in_flight = {}
+            run.task_attempts = {task.shard_idx: 0 for task in tasks}
+            run.task_error_attempts = {task.shard_idx: 0 for task in tasks}
             # Counts INFRA failures observed while this specific shard was in
             # flight on the dying worker — bounded by MAX_SHARD_INFRA_FAILURES
             # so a shard that deterministically crashes its worker (native
             # SIGSEGV, OOM) eventually aborts instead of retrying forever.
-            self._task_infra_attempts = {task.shard_idx: 0 for task in tasks}
-            self._shard_errors = {}
-            self._fatal_error = None
-            self._is_last_stage = is_last_stage
-            self._stage_complete = False
-            # Only reset in-flight worker snapshots; completed snapshots
-            # accumulate across stages for full pipeline visibility.
-            self._worker_counters = {}
-            self._stage_monotonic_start = time.monotonic()
+            run.task_infra_attempts = {task.shard_idx: 0 for task in tasks}
+            run.shard_errors = {}
+            run.fatal_error = None
+            # Shared workers never exit eagerly — they idle for the next pipeline.
+            run.is_last_stage = is_last_stage and not self._shared
+            run.stage_complete = False
+            run.stage_monotonic_start = time.monotonic()
             self._progress_time_seconds = time.time()
-            self._stage_done.clear()
+            run.stage_done.clear()
 
-    def _wait_for_stage(self) -> None:
-        """Block until current stage completes or error occurs."""
+    def _wait_for_stage(self, run: _PipelineExecution) -> None:
+        """Block until the execution's current stage completes or errors."""
         backoff = ExponentialBackoff(initial=0.1, maximum=1.0)
         last_log_completed = -1
         start_time = time.monotonic()
@@ -898,11 +1150,12 @@ class ZephyrCoordinator:
 
         while True:
             with self._lock:
-                if self._fatal_error:
-                    raise ZephyrWorkerError(self._fatal_error)
+                error = run.fatal_error or self._pool_error
+                if error:
+                    raise ZephyrWorkerError(error)
 
-                completed = self._completed_shards
-                total = self._total_shards
+                completed = run.completed_shards
+                total = run.total_shards
 
                 if completed >= total:
                     return
@@ -932,38 +1185,66 @@ class ZephyrCoordinator:
                     all_dead_since = None
 
             if completed != last_log_completed:
-                logger.info("[%s] %d/%d tasks completed", self._stage_name, completed, total)
+                logger.info("[%s] [%s] %d/%d tasks completed", run.execution_id, run.stage_name, completed, total)
                 last_log_completed = completed
                 backoff.reset()
 
             # Wake promptly on completions / errors / aborts; the timeout still
             # bounds the sleep so the no-alive-workers timer fires regardless.
-            if self._stage_done.wait(timeout=backoff.next_interval()):
-                self._stage_done.clear()
+            if run.stage_done.wait(timeout=backoff.next_interval()):
+                run.stage_done.clear()
 
-    def _collect_results(self) -> dict[int, TaskResult]:
+    def _collect_results(self, run: _PipelineExecution) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
         with self._lock:
-            return dict(self._results)
+            return dict(run.results)
 
     def run_pipeline(
         self,
         plan: PhysicalPlan,
         execution_id: str,
-    ) -> list:
-        """Run complete pipeline, blocking until done. Returns flattened results."""
+        map_cost: ZephyrTaskResources,
+        reduce_cost: ZephyrTaskResources,
+    ) -> ZephyrExecutionResult:
+        """Run one pipeline, blocking until done.
+
+        Safe to call concurrently: each call gets its own execution state and
+        the shared worker pool serves all active executions. ``map_cost`` /
+        ``reduce_cost`` are the per-task resource costs baked into this
+        pipeline's tasks, supplied by the submitting driver.
+        """
+        for kind, cost in (("map", map_cost), ("reduce", reduce_cost)):
+            if not self._worker_resources.can_fit(cost):
+                raise ValueError(
+                    f"{kind} task cost {cost} exceeds per-worker resources {self._worker_resources}; "
+                    "this pipeline could never schedule. Lower the pipeline's "
+                    "`map/reduce_task_resources`."
+                )
+
         with self._lock:
-            if self._pipeline_running:
-                self._fatal_error = "run_pipeline called while another pipeline is already running"
-                raise RuntimeError(self._fatal_error)
-            self._pipeline_running = True
-            self._execution_id = execution_id
-        telltale.set_global_labels(source="zephyr", run=execution_id)
+            if self._pool_error is not None:
+                raise ZephyrWorkerError(f"Coordinator pool failed: {self._pool_error}")
+            if execution_id in self._executions:
+                raise ValueError(f"Execution {execution_id} is already registered")
+            active = sum(1 for r in self._executions.values() if not r.done)
+            if active >= MAX_CONCURRENT_PIPELINES:
+                raise RuntimeError(
+                    f"Coordinator already runs {active} concurrent pipelines (max {MAX_CONCURRENT_PIPELINES})"
+                )
+            run = _PipelineExecution(execution_id=execution_id, map_cost=map_cost, reduce_cost=reduce_cost)
+            self._executions[execution_id] = run
+
+        if not self._shared:
+            # A dedicated coordinator serves exactly one pipeline, so its
+            # metrics can carry that run's identity. A shared coordinator
+            # serves many at once — a global run label would name whichever
+            # pipeline started last.
+            telltale.set_global_labels(source="zephyr", run=execution_id)
 
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:
-                return []
+                return ZephyrExecutionResult(results=[], counters={})
 
             last_worker_stage_idx = max(
                 (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
@@ -971,16 +1252,16 @@ class ZephyrCoordinator:
             )
 
             with self._lock:
-                self._current_stage_index = 0
-                self._plan_stages = list(plan.stages)
+                run.plan_stages = list(plan.stages)
 
             for stage_idx, stage in enumerate(plan.stages):
                 if stage.stage_type == StageType.RESHARD:
                     shards = _reshard_refs(shards, stage.output_shards or len(shards))
                     continue
 
-                aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
+                aux_per_shard = self._compute_join_aux(run, stage.operations, shards, stage_idx)
                 shards = self._run_worker_stage(
+                    run,
                     stage,
                     shards,
                     stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
@@ -1001,13 +1282,24 @@ class ZephyrCoordinator:
             for items in materialized:
                 flat_result.extend(items)
 
-            return flat_result
+            with self._lock:
+                counters = _aggregate_counter_snapshots(list(run.completed_counters), None)
+            return ZephyrExecutionResult(results=flat_result, counters=counters)
         finally:
             with self._lock:
-                self._pipeline_running = False
+                run.done = True
+                run.task_queue.clear()
+                run.in_flight.clear()
+                run.results = {}
+                if self._shared:
+                    # Long-lived coordinator: drop finished executions so state
+                    # doesn't grow without bound. Late reports for this
+                    # execution are logged and ignored.
+                    self._executions.pop(execution_id, None)
 
     def _run_worker_stage(
         self,
+        run: _PipelineExecution,
         stage: PhysicalStage,
         shards: list[Shard],
         *,
@@ -1022,10 +1314,7 @@ class ZephyrCoordinator:
         UI/logging — for join right-sub-stages this is the *parent* stage index
         so progress reports stay attached to the user-visible stage.
         """
-        with self._lock:
-            self._current_stage = stage
-
-        cost = self._map_cost if stage.stage_type == StageType.MAP_WORKER else self._reduce_cost
+        cost = run.map_cost if stage.stage_type == StageType.MAP_WORKER else run.reduce_cost
         tasks = _compute_tasks_from_shards(
             shards,
             stage,
@@ -1034,19 +1323,19 @@ class ZephyrCoordinator:
             cost=cost,
         )
         logger.info(
-            "[%s] Starting stage %s (%s) with %d tasks", self._execution_id, stage_label, stage.stage_type, len(tasks)
+            "[%s] Starting stage %s (%s) with %d tasks", run.execution_id, stage_label, stage.stage_type, len(tasks)
         )
-        self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
+        self._start_stage(run, stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
         try:
-            self._wait_for_stage()
+            self._wait_for_stage(run)
         except Exception:
-            self._emit_stage_stat(failed=True)
+            self._emit_stage_stat(run, failed=True)
             raise
-        self._emit_stage_stat()
+        self._emit_stage_stat(run)
 
-        self._mark_stage_complete()
+        self._mark_stage_complete(run)
 
-        result_refs = self._collect_results()
+        result_refs = self._collect_results(run)
 
         if any(isinstance(op, Scatter) for op in stage.operations):
             return _regroup_scatter_refs(result_refs, len(shards), stage.output_shards)
@@ -1054,6 +1343,7 @@ class ZephyrCoordinator:
 
     def _compute_join_aux(
         self,
+        run: _PipelineExecution,
         operations: list[PhysicalOp],
         shard_refs: list[Shard],
         parent_stage_idx: int,
@@ -1073,6 +1363,7 @@ class ZephyrCoordinator:
                     continue
 
                 right_refs = self._run_worker_stage(
+                    run,
                     right_stage,
                     right_refs,
                     stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
@@ -1104,6 +1395,16 @@ class ZephyrCoordinator:
         counters = self.get_counters()
         if counters:
             logger.info("[coordinator.shutdown] Final counters: %s", counters)
+
+        # Fail any in-flight executions first so their run_pipeline callers
+        # return promptly with a clean error, instead of blocking in
+        # _wait_for_stage until no_workers_timeout once workers stop pulling
+        # (their pull_task returns SHUTDOWN the moment _shutdown_event is set).
+        with self._lock:
+            for run in self._executions.values():
+                if not run.done and run.fatal_error is None:
+                    run.fatal_error = "Coordinator is shutting down"
+                run.stage_done.set()
 
         self._shutdown_event.set()
 
@@ -1153,7 +1454,12 @@ class ZephyrWorker:
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
+        # Monotonic counter-snapshot generation, bumped from concurrent task
+        # threads and the heartbeat thread; guard the read-modify-write so two
+        # snapshots never collide on a generation (the coordinator drops
+        # non-strictly-greater generations).
         self._counter_generation: int = 0
+        self._counter_generation_lock = threading.Lock()
         self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
         # read (snapshotted) by heartbeat thread.
@@ -1307,22 +1613,24 @@ class ZephyrWorker:
     ) -> None:
         """Execute one shard task, report the result, and restore task.cost to the pool."""
         task_start = time.monotonic()
+        execution_id = config["execution_id"]
         try:
             result, task_counters = self._execute_shard(task, config, runner)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
-            # Block until coordinator records result — prevents _in_flight races.
-            self._counter_generation += 1
+            # Block until coordinator records result — prevents in_flight races.
             self._coordinator.report_result.remote(
                 self._worker_id,
+                execution_id,
                 task.shard_idx,
                 attempt,
                 result,
-                CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
+                CounterSnapshot(counters=dict(task_counters), generation=self._next_counter_generation()),
             ).result()
         except Exception:
             logger.error("Worker %s error on shard %d", self._worker_id, task.shard_idx, exc_info=True)
             self._coordinator.report_error.remote(
                 self._worker_id,
+                execution_id,
                 task.shard_idx,
                 attempt,
                 "".join(traceback.format_exc()),
@@ -1348,6 +1656,12 @@ class ZephyrWorker:
 
         _push_iris_task_status(self._iris_status_limiter, build_md)
 
+    def _next_counter_generation(self) -> int:
+        """Atomically bump and return the worker's counter-snapshot generation."""
+        with self._counter_generation_lock:
+            self._counter_generation += 1
+            return self._counter_generation
+
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""
         with self._resources_lock:
@@ -1356,8 +1670,7 @@ class ZephyrWorker:
         if current == self._last_reported_counters:
             return None
         self._last_reported_counters = current
-        self._counter_generation += 1
-        return CounterSnapshot(counters=current, generation=self._counter_generation)
+        return CounterSnapshot(counters=current, generation=self._next_counter_generation())
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1464,23 +1777,27 @@ def _regroup_map_refs(result_refs: dict[int, TaskResult], input_shard_count: int
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ZephyrExecutionResult:
-    """Result of running a Zephyr pipeline.
+def _stop_worker_group(client: Client, worker_group: Any) -> None:
+    """Give workers a brief window to exit on their own, then terminate.
 
-    This is also the wire format pickled by ``_run_coordinator_job`` into the
-    result file, so callers of ``ZephyrContext.execute`` receive it as-is.
-
-    Attributes:
-        results: Flat list of items produced by the terminal stage of the
-            pipeline (e.g. output file paths for write stages).
-        counters: Aggregated counter values from the run, including built-in
-            zephyr counters (e.g. ``zephyr/records_in``) and any user counters
-            recorded via ``zephyr.counters.pipeline``.
+    Workers receive SHUTDOWN from pull_task after coordinator.shutdown() and
+    self-terminate; waiting lets their Iris tasks record SUCCEEDED instead of
+    KILLED (#5484). LocalActorGroup has no Iris task state to wait on — its
+    synthetic job handles are marked succeeded at registration and is_done()
+    is permanently False — so the graceful-exit wait would always exhaust its
+    full budget without observing any change. Skip it for LocalClient.
     """
-
-    results: list
-    counters: dict[str, int | float]
+    with suppress(Exception):
+        if isinstance(client, LocalClient):
+            worker_group.shutdown()
+            return
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if worker_group.is_done():
+                return
+            time.sleep(0.5)
+        logger.warning("Workers did not exit naturally, terminating")
+        worker_group.shutdown()
 
 
 @dataclass(frozen=True)
@@ -1539,8 +1856,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     hosted = client.host_actor(
         ZephyrCoordinator,
         config.chunk_storage_prefix,
-        map_cost,
-        reduce_cost,
+        total,
         config.no_workers_timeout,
         config.heartbeat_timeout,
         config.max_shard_failures,
@@ -1579,9 +1895,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             coordinator.set_worker_group.remote(worker_group).result()
 
         try:
-            results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
-            raw_counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
-            payload = ZephyrExecutionResult(results=results, counters=dict(raw_counters))
+            payload = coordinator.run_pipeline.submit(config.plan, config.execution_id, map_cost, reduce_cost).result()
 
             ensure_parent_dir(result_path)
             StoragePath(result_path).write_bytes(cloudpickle.dumps(payload))
@@ -1603,23 +1917,99 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
-            with suppress(Exception):
-                # LocalActorGroup has no Iris task state to wait on — its
-                # synthetic job handles are marked succeeded at registration
-                # and is_done() is permanently False — so the graceful-exit
-                # wait would always exhaust its full 5s budget without
-                # observing any change. Skip it for LocalClient.
-                if isinstance(client, LocalClient):
-                    worker_group.shutdown()
-                else:
-                    deadline = time.monotonic() + 5
-                    while time.monotonic() < deadline:
-                        if worker_group.is_done():
-                            break
-                        time.sleep(0.5)
-                    else:
-                        logger.warning("Workers did not exit naturally, terminating")
-                        worker_group.shutdown()
+            _stop_worker_group(client, worker_group)
+        with suppress(Exception):
+            hosted.shutdown()
+
+
+@dataclass(frozen=True)
+class _SharedContextConfig:
+    """Serializable config for the shared (long-lived) coordinator job entrypoint."""
+
+    name: str
+    chunk_storage_prefix: str
+    max_workers: int
+    worker_resources: ResourceConfig
+    # Cloudpickled and re-invoked per worker slot, so per-runner mutable
+    # state is per-slot.
+    stage_runner_factory: Callable[[], StageRunner]
+    no_workers_timeout: float
+    heartbeat_timeout: float
+    max_shard_failures: int
+    max_shard_infra_failures: int
+
+
+def _run_shared_coordinator_job(config_path: str, endpoint_path: str) -> None:
+    """Entrypoint for a shared, long-lived coordinator job.
+
+    Hosts the coordinator actor, boots a fixed pool of ``max_workers``
+    workers, publishes the coordinator's endpoint name to ``endpoint_path``,
+    and serves until the creating context shuts it down. Drivers connect via
+    ``ZephyrContext(coordinator_endpoint=...)`` and submit pipelines through
+    ``run_pipeline``; the coordinator runs them concurrently. The job fails
+    (visibly) if the worker pool terminates permanently.
+    """
+    logger.info("Loading shared coordinator config from %s", config_path)
+    config: _SharedContextConfig = cloudpickle.loads(StoragePath(config_path).read_bytes())
+
+    job_info = get_job_info()
+    attempt_id = job_info.attempt_id if job_info else 0
+    logger.info("Shared coordinator job starting: name=%s, attempt=%d", config.name, attempt_id)
+
+    client = current_client()
+    total = ZephyrTaskResources.from_resource_config(config.worker_resources)
+
+    hosted = client.host_actor(
+        ZephyrCoordinator,
+        config.chunk_storage_prefix,
+        total,
+        config.no_workers_timeout,
+        config.heartbeat_timeout,
+        config.max_shard_failures,
+        config.max_shard_infra_failures,
+        shared=True,
+        name=f"zephyr-{config.name}-coord",
+        actor_config=ActorConfig(max_concurrency=100),
+    )
+    coordinator = hosted.handle
+    worker_group = None
+    try:
+        # Worker name includes attempt ID so that if a stale coordinator
+        # process from a previous attempt is still running, its shutdown
+        # targets the old name and cannot kill this attempt's workers.
+        worker_name = f"zephyr-{config.name}-workers-a{attempt_id}"
+        logger.info("Starting %d shared workers", config.max_workers)
+        worker_group = client.create_actor_group(
+            ZephyrWorker,
+            coordinator,
+            config.stage_runner_factory,
+            total,
+            name=worker_name,
+            count=config.max_workers,
+            resources=config.worker_resources,
+            actor_config=ActorConfig(max_task_retries=SHARED_POOL_MAX_TASK_RETRIES),
+        )
+        coordinator.set_worker_group.remote(worker_group).result()
+
+        ensure_parent_dir(endpoint_path)
+        StoragePath(endpoint_path).write_bytes(hosted.endpoint.encode())
+        logger.info("Shared coordinator ready: endpoint=%s", hosted.endpoint)
+
+        while True:
+            if coordinator.is_shutdown.remote().result(timeout=30.0):
+                logger.info("Coordinator shut down; exiting serve loop")
+                return
+            if worker_group.is_done():
+                raise RuntimeError(
+                    "Shared zephyr worker pool terminated permanently (all retries exhausted); "
+                    "shutting the shared context down."
+                )
+            time.sleep(_SERVE_POLL_INTERVAL)
+    finally:
+        with suppress(Exception):
+            coordinator.shutdown.remote().result(timeout=10.0)
+        if worker_group is not None:
+            _stop_worker_group(client, worker_group)
         with suppress(Exception):
             hosted.shutdown()
 
@@ -1693,13 +2083,31 @@ def _compute_min_tasks_per_worker(
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
 
-    Each execute() call submits a coordinator *job* that internally creates
-    coordinator and worker actors as child jobs. The coordinator job owns the
-    full lifecycle: it boots workers, runs the pipeline, writes results to
-    disk, and tears everything down. Iris cascading termination ensures that
-    if the coordinator job dies, its children are cleaned up automatically.
+    By default each execute() call submits a coordinator *job* that internally
+    creates coordinator and worker actors as child jobs. The coordinator job
+    owns the full lifecycle: it boots workers, runs the pipeline, writes
+    results to disk, and tears everything down. Iris cascading termination
+    ensures that if the coordinator job dies, its children are cleaned up
+    automatically.
+
+    Alternatively a context can be *shared*: ``start()`` submits one
+    long-lived coordinator job with a fixed worker pool sized by
+    ``resources`` x ``max_workers`` and returns its coordinator endpoint.
+    Any driver — including in other processes/jobs — connects with
+    ``ZephyrContext(coordinator_endpoint=...)``; its execute() calls then
+    submit pipelines to the shared coordinator, which runs them concurrently
+    and packs tasks onto workers by free capacity. In connect mode
+    ``map/reduce_task_resources`` describe this pipeline's per-task costs
+    exactly as they would for a dedicated context; worker sizing belongs to
+    the context that called start(). The shared pool lives until the creator
+    calls shutdown().
 
     Args:
+        coordinator_endpoint: Endpoint name of a shared coordinator to connect
+            to (as returned by ``start()``). When set, execute() submits
+            pipelines to that coordinator instead of spawning a dedicated
+            coordinator job, and there is no driver-side retry: the shared
+            coordinator is non-preemptible and owns worker recovery.
         client: The fray client to use. If None, auto-detects using current_client().
         max_workers: Upper bound on worker count. The actual count is
             min(max_workers, num_shards), computed at first execute(). If None,
@@ -1752,11 +2160,16 @@ class ZephyrContext:
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+    coordinator_endpoint: str | None = None
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     # Handle to the coordinator job (for termination on retry/shutdown)
     _coordinator_job: JobHandle | None = field(default=None, repr=False)
+    # Handle to the shared coordinator job created by start()
+    _serve_job: JobHandle | None = field(default=None, repr=False)
+    # Cached describe() of the shared coordinator we are connected to
+    _coordinator_info: CoordinatorInfo | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
     _pipeline_id: int = field(default=-1, repr=False)
     min_tasks_per_worker: int = field(init=False, default=1, repr=False)
@@ -1764,6 +2177,12 @@ class ZephyrContext:
     def __post_init__(self):
         if self.client is None:
             self.client = current_client()
+
+        # Fall back to the env var so a pool owner can point per-step driver
+        # jobs at a shared coordinator without threading the endpoint through
+        # code. An explicit `coordinator_endpoint` always wins.
+        if self.coordinator_endpoint is None:
+            self.coordinator_endpoint = os.environ.get(ZEPHYR_COORDINATOR_ENDPOINT_ENV) or None
 
         if env_val := os.environ.get("ZEPHYR_MAX_WORKERS"):
             if self.max_workers is None:
@@ -1830,10 +2249,10 @@ class ZephyrContext:
         """
         self._shared_data[name] = obj
 
-    def _upload_shared_data(self, execution_id: str) -> None:
+    def _upload_shared_data(self, prefix: str, execution_id: str) -> None:
         """Serialize all staged shared data to disk under the execution directory."""
         for name, obj in self._shared_data.items():
-            path = _shared_data_path(self.chunk_storage_prefix, execution_id, name)
+            path = _shared_data_path(prefix, execution_id, name)
             ensure_parent_dir(path)
             t0 = time.monotonic()
             data = cloudpickle.dumps(obj)
@@ -1846,6 +2265,112 @@ class ZephyrContext:
                 len(data),
                 elapsed,
             )
+
+    def start(self, timeout: float = SHARED_CONTEXT_START_TIMEOUT) -> str:
+        """Start a shared, long-lived coordinator + worker pool and connect to it.
+
+        Submits a coordinator job that hosts the coordinator actor and a
+        fixed pool of ``max_workers`` workers, each sized by ``resources``.
+        Blocks until the coordinator publishes its endpoint, then connects
+        this context to it (subsequent execute() calls submit pipelines to
+        the shared coordinator).
+
+        Returns:
+            The coordinator endpoint name. Pass it to other drivers as
+            ``ZephyrContext(coordinator_endpoint=...)`` — or set it in their
+            environment as ``ZEPHYR_COORDINATOR_ENDPOINT`` — so their pipelines
+            run concurrently on this pool. The pool lives until this context
+            calls ``shutdown()``; prefer the ``serve()`` context manager, which
+            guarantees teardown.
+        """
+        if self.coordinator_endpoint is not None:
+            raise RuntimeError(
+                "Context is already connected to a shared coordinator "
+                f"(coordinator_endpoint / {ZEPHYR_COORDINATOR_ENDPOINT_ENV} is set); "
+                "start() creates a new pool and must not be called on a connected context"
+            )
+
+        config = _SharedContextConfig(
+            name=self.name,
+            chunk_storage_prefix=self.chunk_storage_prefix,
+            max_workers=self.max_workers,
+            worker_resources=self.resources,
+            stage_runner_factory=self.stage_runner_factory,
+            no_workers_timeout=self.no_workers_timeout,
+            heartbeat_timeout=self.heartbeat_timeout,
+            max_shard_failures=self.max_shard_failures,
+            max_shard_infra_failures=self.max_shard_infra_failures,
+        )
+        # self.name is uuid-suffixed, so this directory is unique per context.
+        base = f"{self.chunk_storage_prefix}/{self.name}-shared"
+        config_path = f"{base}/config.pkl"
+        endpoint_path = f"{base}/endpoint.txt"
+        ensure_parent_dir(config_path)
+        StoragePath(config_path).write_bytes(cloudpickle.dumps(config))
+
+        # Set the context var so the coordinator job inherits self.client
+        # instead of auto-detecting (which may pick a different backend).
+        with set_current_client(self.client):
+            self._serve_job = self.client.submit(
+                JobRequest(
+                    name=f"zephyr-{self.name}-shared",
+                    entrypoint=Entrypoint.from_callable(
+                        _run_shared_coordinator_job,
+                        args=(config_path, endpoint_path),
+                    ),
+                    resources=self.coordinator_resources,
+                )
+            )
+        logger.info("Shared coordinator job submitted: %s", self._serve_job.job_id)
+
+        # If the job never publishes its endpoint (crash, or slow-scheduling
+        # timeout), terminate it before re-raising so we never leak a running
+        # coordinator + full worker pool — the stale-coordinator failure mode
+        # this feature is meant to avoid.
+        try:
+            endpoint_file = StoragePath(endpoint_path)
+            backoff = ExponentialBackoff(initial=0.2, maximum=5.0)
+            deadline = time.monotonic() + timeout
+            while not endpoint_file.exists():
+                status = self._serve_job.status()
+                if status in (FrayJobStatus.FAILED, FrayJobStatus.STOPPED, FrayJobStatus.SUCCEEDED):
+                    raise RuntimeError(f"Shared coordinator job exited ({status}) before publishing its endpoint")
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"Shared coordinator did not publish an endpoint within {timeout}s")
+                time.sleep(backoff.next_interval())
+        except BaseException:
+            with suppress(Exception):
+                self._serve_job.terminate()
+            self._serve_job = None
+            raise
+
+        self.coordinator_endpoint = endpoint_file.read_bytes().decode()
+        logger.info("Shared zephyr coordinator ready: %s", self.coordinator_endpoint)
+        return self.coordinator_endpoint
+
+    def _execute_shared(self, plan: PhysicalPlan) -> ZephyrExecutionResult:
+        """Run one pipeline on the shared coordinator, blocking until done.
+
+        There is no driver-side retry loop here: the shared coordinator job
+        is non-preemptible and owns worker recovery, so an error surfacing
+        means the pipeline (or the whole pool) genuinely failed.
+        """
+        coordinator = self.client.get_actor(self.coordinator_endpoint)
+        if self._coordinator_info is None:
+            self._coordinator_info = coordinator.describe.remote().result(timeout=60.0)
+        prefix = self._coordinator_info.chunk_prefix
+
+        assert self.map_task_resources is not None and self.reduce_task_resources is not None
+        map_cost = ZephyrTaskResources.from_resource_config(self.map_task_resources)
+        reduce_cost = ZephyrTaskResources.from_resource_config(self.reduce_task_resources)
+
+        execution_id = _generate_execution_id()
+        logger.info("Submitting zephyr pipeline %s to shared coordinator %s", execution_id, self.coordinator_endpoint)
+        try:
+            self._upload_shared_data(prefix, execution_id)
+            return coordinator.run_pipeline.submit(plan, execution_id, map_cost, reduce_cost).result()
+        finally:
+            _cleanup_execution(prefix, execution_id)
 
     def execute(
         self,
@@ -1860,6 +2385,10 @@ class ZephyrContext:
         disk. If the coordinator job dies (e.g., VM preemption), the
         pipeline is retried up to ``max_execution_retries`` times.
         Application errors (``ZephyrWorkerError``) are never retried.
+
+        When connected to a shared coordinator (``coordinator_endpoint``),
+        the pipeline is submitted there instead and runs concurrently with
+        other drivers' pipelines on the shared worker pool.
 
         Returns:
             A ``ZephyrExecutionResult`` containing the flat list of results
@@ -1878,6 +2407,9 @@ class ZephyrContext:
             logger.warning("No shards in plan, returning empty results.")
             return ZephyrExecutionResult(results=[], counters={})
 
+        if self.coordinator_endpoint is not None:
+            return self._execute_shared(plan)
+
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
         last_exception: Exception | None = None
@@ -1894,7 +2426,7 @@ class ZephyrContext:
             result_path = f"{self.chunk_storage_prefix}/{execution_id}/results.pkl"
 
             try:
-                self._upload_shared_data(execution_id)
+                self._upload_shared_data(self.chunk_storage_prefix, execution_id)
 
                 assert self.resources is not None
 
@@ -1992,8 +2524,51 @@ class ZephyrContext:
                 self._coordinator_job.terminate()
             self._coordinator_job = None
 
+    def __enter__(self) -> str:
+        """Start a shared pool for a ``with`` block and yield its endpoint.
+
+        Using the context as a ``with`` block is the explicit opt-in to shared
+        mode: it starts a long-lived coordinator + worker pool and returns the
+        endpoint to hand to connecting drivers (as ``coordinator_endpoint=`` or
+        via the ``ZEPHYR_COORDINATOR_ENDPOINT`` env var). ``__exit__`` tears the
+        pool down.
+
+        A context already pointed at a coordinator (endpoint argument or env
+        var) instead just yields that endpoint and does not tear it down on
+        exit — it does not own that pool.
+
+        Plain dedicated usage is unchanged: constructing ``ZephyrContext(...)``
+        and calling ``execute()`` *without* a ``with`` block (and without an
+        endpoint) still spins up a per-pipeline coordinator and tears it down,
+        exactly as before this feature.
+        """
+        if self.coordinator_endpoint is not None:
+            return self.coordinator_endpoint
+        return self.start()
+
+    def __exit__(self, *exc: object) -> None:
+        self.shutdown()
+
     def shutdown(self) -> None:
-        """Shutdown the coordinator job and all child actors."""
+        """Shut down owned coordinator infrastructure.
+
+        For a shared context created via ``start()``, gracefully stops the
+        coordinator (workers drain and exit) and terminates the serve job.
+        Connect-only contexts (``coordinator_endpoint`` passed in) own
+        nothing and this only clears local state.
+        """
+        if self._serve_job is not None:
+            if self.coordinator_endpoint is not None:
+                with suppress(Exception):
+                    self.client.get_actor(self.coordinator_endpoint).shutdown.remote().result(timeout=30.0)
+            with suppress(Exception):
+                # Give the serve loop a moment to exit cleanly (workers land
+                # SUCCEEDED); terminate() below is the backstop that cascades.
+                self._serve_job.wait(timeout=60.0, raise_on_failure=False)
+            with suppress(Exception):
+                self._serve_job.terminate()
+            self._serve_job = None
+            self.coordinator_endpoint = None
         self._terminate_coordinator_job()
 
 

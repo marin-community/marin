@@ -46,6 +46,52 @@ ctx.execute(pipeline)
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
 - `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
+Each `execute()` submits its own coordinator + worker job and tears it down when
+the pipeline finishes.
+
+**Shared context (one pool, many pipelines):**
+
+Start a single long-lived coordinator + worker pool once, then run multiple
+pipelines against it — concurrently, and from other drivers/steps:
+
+```python
+# Owner: `with` a context to start a shared pool and get its endpoint; the pool
+# is torn down when the block exits (including on exception).
+pool = ZephyrContext(max_workers=200, resources=ResourceConfig(cpu=2, ram="8g"), name="ingest-pool")
+with pool as endpoint:
+    # Any driver (even in another Iris job) connects and submits pipelines.
+    # Tasks are scheduled onto whichever workers have free capacity, so several
+    # pipelines share the pool. A failing pipeline only fails its own execute();
+    # the pool and the other pipelines keep running.
+    driver = ZephyrContext(coordinator_endpoint=endpoint, resources=ResourceConfig(cpu=1, ram="2g"))
+    result = driver.execute(pipeline)   # blocks until this pipeline completes
+# pool is shut down here (workers drained)
+```
+
+Using a `with` block is the explicit opt-in to a shared pool. Plain
+`ZephyrContext(...).execute(pipeline)` with no `with` and no endpoint is
+unchanged — a dedicated coordinator per pipeline, as before. `start()` /
+`shutdown()` are also available directly if you'd rather manage the pool's
+lifetime yourself.
+
+Connecting drivers can pick the endpoint up from the environment instead of a
+constructor argument — set `ZEPHYR_COORDINATOR_ENDPOINT` on a step's job (e.g.
+Iris `-e ZEPHYR_COORDINATOR_ENDPOINT <endpoint>`), and a plain
+`ZephyrContext()` in that step connects to the pool automatically:
+
+```python
+# In a step launched with ZEPHYR_COORDINATOR_ENDPOINT set:
+ctx = ZephyrContext(resources=ResourceConfig(cpu=1, ram="2g"))  # picks up the env endpoint
+ctx.execute(pipeline)
+```
+
+The pool's workers are sized by the owner's `resources` × `max_workers`.
+Each connecting pipeline still declares its own per-task cost via
+`map/reduce_task_resources`,
+so a pipeline needing more memory than a worker can provide is rejected up
+front rather than deadlocking unscheduled. Preempted workers are replenished by
+Iris automatically; the pool lives until the owner calls `shutdown()`.
+
 ## Real Usage
 
 **Wikipedia Processing:**

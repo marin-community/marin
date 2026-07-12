@@ -18,7 +18,7 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from conftest import _TEST_TASK_COST
+from conftest import _TEST_EXECUTION_ID, _TEST_TASK_COST, start_test_stage
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, TaskResult
 from zephyr.worker_context import CounterSnapshot
@@ -38,10 +38,12 @@ def test_check_worker_group_skips_after_completed_stage(coordinator):
         cost=_TEST_TASK_COST,
         stage_name="test",
     )
-    coordinator._start_stage("last-stage", 0, [task])
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    run = start_test_stage(coordinator, [task], stage_name="last-stage")
+    coordinator.report_result(
+        "worker-0", _TEST_EXECUTION_ID, 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+    )
 
-    assert coordinator._completed_shards >= coordinator._total_shards
+    assert run.completed_shards >= run.total_shards
 
     coordinator._check_worker_group()
 
@@ -62,9 +64,11 @@ def test_check_worker_group_still_aborts_mid_stage(coordinator):
         cost=_TEST_TASK_COST,
         stage_name="test",
     )
-    coordinator._start_stage("mid-stage", 0, [task, task])
+    start_test_stage(coordinator, [task, task], stage_name="mid-stage")
     # Only 1 of 2 shards completed
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    coordinator.report_result(
+        "worker-0", _TEST_EXECUTION_ID, 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+    )
 
     coordinator._check_worker_group()
 
@@ -93,8 +97,10 @@ def test_coordinator_loop_no_abort_during_result_collection(coordinator):
         cost=_TEST_TASK_COST,
         stage_name="test",
     )
-    coordinator._start_stage("last-stage", 0, [task])
-    coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    start_test_stage(coordinator, [task], stage_name="last-stage")
+    coordinator.report_result(
+        "worker-0", _TEST_EXECUTION_ID, 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+    )
 
     t = threading.Thread(target=coordinator._coordinator_loop, daemon=True)
     t.start()

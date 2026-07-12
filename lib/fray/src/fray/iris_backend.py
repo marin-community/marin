@@ -683,7 +683,11 @@ class FrayIrisClient:
         logger.info("host_actor: registered %s -> %s", actor_name, address)
         ctx.registry.register(actor_name, address)
 
-        return HostedActor(handle, stop=server.stop)
+        return HostedActor(handle, stop=server.stop, endpoint=actor_name)
+
+    def get_actor(self, endpoint: str) -> IrisActorHandle:
+        """Return a handle to an existing actor by its (absolute) endpoint name."""
+        return IrisActorHandle(endpoint)
 
     def create_actor(
         self,

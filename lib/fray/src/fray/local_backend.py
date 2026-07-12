@@ -165,7 +165,11 @@ class LocalClient:
         finally:
             _reset_current_actor(token)
         _local_actor_registry[endpoint] = instance
-        return HostedActor(handle)
+        return HostedActor(handle, endpoint=endpoint)
+
+    def get_actor(self, endpoint: str) -> "LocalActorHandle":
+        """Return a handle to an in-process actor by its endpoint name."""
+        return LocalActorHandle(endpoint)
 
     def create_actor(
         self,

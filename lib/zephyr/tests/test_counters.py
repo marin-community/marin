@@ -10,8 +10,9 @@ import pytest
 from prometheus_client import REGISTRY, generate_latest
 from zephyr import counters
 from zephyr.counters import ScopedCounters
-from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult
+from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult, _PipelineExecution
 from zephyr.runners import _InProcessWorkerContext
+from zephyr.stage_io import ZephyrTaskResources
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
 
 
@@ -28,10 +29,21 @@ def _make_coordinator(
     completed: list[CounterSnapshot],
     inflight: list[CounterSnapshot] | None = None,
 ) -> ZephyrCoordinator:
-    """Build a minimal ZephyrCoordinator seeded with canned snapshots for testing."""
+    """Build a minimal ZephyrCoordinator seeded with canned snapshots for testing.
+
+    Completed snapshots live on a single registered execution; in-flight
+    snapshots are keyed by worker on the coordinator (both are folded into
+    ``get_counters`` totals).
+    """
     coord = ZephyrCoordinator.__new__(ZephyrCoordinator)
     coord._lock = threading.Lock()
-    coord._completed_counters = list(completed)
+    run = _PipelineExecution(
+        execution_id="test-exec",
+        map_cost=ZephyrTaskResources(cpu=1.0, memory=0),
+        reduce_cost=ZephyrTaskResources(cpu=1.0, memory=0),
+        completed_counters=list(completed),
+    )
+    coord._executions = {run.execution_id: run}
     coord._worker_counters = {str(i): s for i, s in enumerate(inflight or [])}
     coord._progress_time_seconds = 0.0
     return coord
