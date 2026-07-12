@@ -22,7 +22,7 @@ from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
     calibration_knots,
     fit_cutpoints,
 )
-from experiments.datakit.cluster.quality.fast_transformer.score import _source_of, _systematic_take
+from experiments.datakit.cluster.quality.fast_transformer.score import _output_paths, _source_of, _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
 
@@ -138,6 +138,18 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
 
 
 # ---------- score: source recovered from the input file path ----------
+
+
+def test_output_paths_nest_under_source_only_when_sharing_a_prefix():
+    # several sources share one prefix -> nest under <source>/ to keep them apart
+    main, samp = _output_paths("s3://b/scored", "cp/foodista", "part-0.parquet", nest_by_source=True)
+    assert main == "s3://b/scored/cp/foodista/outputs/main/part-0.parquet"
+    assert samp == "s3://b/scored/cp/foodista/outputs/samples/part-0.parquet"
+    # single source: the prefix is already that source's dir (e.g. a per-source step),
+    # so write straight under it -- no redundant <source>/ nesting
+    main1, samp1 = _output_paths("s3://b/scored/cp/foodista", "cp/foodista", "part-0.parquet", nest_by_source=False)
+    assert main1 == "s3://b/scored/cp/foodista/outputs/main/part-0.parquet"
+    assert samp1 == "s3://b/scored/cp/foodista/outputs/samples/part-0.parquet"
 
 
 def test_source_of_recovers_multi_segment_source_from_path():

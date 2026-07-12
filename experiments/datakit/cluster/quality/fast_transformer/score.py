@@ -140,23 +140,33 @@ def _systematic_take(index: int, pct: float) -> bool:
     return int((index + 1) * pct) > int(index * pct)
 
 
-def _output_paths(output_prefix: str, source: str, shard_file: str) -> tuple[str, str]:
-    """(main, samples) output paths for one input file's scored records."""
+def _source_out_base(output_prefix: str, source: str, nest_by_source: bool) -> str:
+    """Output base for ``source``: ``<output_prefix>/<source>`` when several sources share
+    the prefix, else ``<output_prefix>`` itself -- a single-source run's prefix is already
+    that source's directory (e.g. a per-source step), so nesting ``<source>/`` again is
+    redundant."""
     out = output_prefix.rstrip("/")
-    return f"{out}/{source}/outputs/main/{shard_file}", f"{out}/{source}/outputs/samples/{shard_file}"
+    return f"{out}/{source}" if nest_by_source else out
 
 
-def _make_corpus_writer(output_prefix: str, sample_pct: float):
+def _output_paths(output_prefix: str, source: str, shard_file: str, nest_by_source: bool) -> tuple[str, str]:
+    """(main, samples) output paths for one input file's scored records."""
+    base = _source_out_base(output_prefix, source, nest_by_source)
+    return f"{base}/outputs/main/{shard_file}", f"{base}/outputs/samples/{shard_file}"
+
+
+def _make_corpus_writer(output_prefix: str, sample_pct: float, nest_by_source: bool):
     """A ``map_shard`` split-writer. One input file per shard, so all its records share
-    a source + output name: fan them to ``<source>/outputs/main/`` (lean) and a
-    ~``sample_pct`` systematic sample *with text* to ``<source>/outputs/samples/``."""
+    a source + output name: fan them to ``outputs/main/`` (lean) and a ~``sample_pct``
+    systematic sample *with text* to ``outputs/samples/``. When several sources share
+    ``output_prefix`` the paths nest under ``<source>/`` to keep them apart."""
 
     def scored_writer(records: Iterator[dict], shard: ShardInfo) -> Iterator[dict]:
         records = iter(records)
         first = next(records, None)
         if first is None:
             return  # empty shard (e.g. all inputs skipped) -> nothing to write
-        main_path, sample_path = _output_paths(output_prefix, first["source"], first[_SHARD_FILE])
+        main_path, sample_path = _output_paths(output_prefix, first["source"], first[_SHARD_FILE], nest_by_source)
 
         results: dict[str, dict] = {}
 
@@ -181,7 +191,9 @@ def _make_corpus_writer(output_prefix: str, sample_pct: float):
     return scored_writer
 
 
-def _pending_input_files(data_prefix: str, source: str, output_prefix: str, skip_existing: bool) -> list[str]:
+def _pending_input_files(
+    data_prefix: str, source: str, output_prefix: str, skip_existing: bool, nest_by_source: bool
+) -> list[str]:
     """The input parquet files of ``source`` still to score.
 
     The input dir comes from the source's persisted ``NormalizedData`` artifact
@@ -194,7 +206,7 @@ def _pending_input_files(data_prefix: str, source: str, output_prefix: str, skip
     inputs = sorted(str(m) for m in StoragePath(f"{main_dir}/*.parquet").glob())
     if not skip_existing:
         return inputs
-    out_main = f"{output_prefix.rstrip('/')}/{source}/outputs/main"
+    out_main = f"{_source_out_base(output_prefix, source, nest_by_source)}/outputs/main"
     done = {posixpath.basename(str(m)) for m in StoragePath(f"{out_main}/*.parquet").glob()}
     return [f for f in inputs if posixpath.basename(f) not in done]
 
@@ -215,20 +227,27 @@ def run_corpus(
 
     ``max_workers`` sets the concurrent fleet size; with N input files the run uses
     ``min(N, max_workers)`` workers at a time. Writes lean scored records to
-    ``<source>/outputs/main/`` and a ~``sample_pct`` sample (with text) to
-    ``<source>/outputs/samples/`` for the debugging report.
+    ``outputs/main/`` and a ~``sample_pct`` sample (with text) to ``outputs/samples/``
+    for the debugging report. Output nests under ``<source>/`` only when several sources
+    share ``output_prefix``; a single-source run writes straight under ``output_prefix``
+    (its prefix is already that source's dir, e.g. a per-source step).
 
     ``file_list`` is a newline-delimited text file of the exact input paths to score
     (see ``write_file_list``). Use it when the object store answers the driver's
     ``HeadObject`` listing probes with a 400 (a known CW s3fs gotcha): the list is
     built once where listing works, and the driver/workers then do only GET/PUT."""
     dp = data_prefix.rstrip("/")
+    # A single-source run's output_prefix is already that source's dir, so don't re-nest
+    # <source>/; a file_list spans the whole corpus, so keep it nested there.
+    nest_by_source = file_list is not None or len(sources) != 1
     if file_list:
         with open_url(file_list, "r") as fh:
             files = [ln.strip() for ln in fh if ln.strip()]
         logger.info("scoring %d files from --file-list %s with max_workers=%s", len(files), file_list, max_workers)
     else:
-        files = [f for src in sources for f in _pending_input_files(dp, src, output_prefix, skip_existing)]
+        files = [
+            f for src in sources for f in _pending_input_files(dp, src, output_prefix, skip_existing, nest_by_source)
+        ]
         logger.info("scoring %d files across %d sources with max_workers=%s", len(files), len(sources), max_workers)
     if not files:
         logger.info("nothing to score (all outputs exist, or no inputs)")
@@ -238,7 +257,7 @@ def run_corpus(
         .flat_map(functools.partial(load_file, include_file_paths=True))
         .window(BATCH_SIZE)
         .flat_map(get_ft_batch_predict(model_dir=model_dir, data_prefix=dp, calib_file=calib_file))
-        .map_shard(_make_corpus_writer(output_prefix, sample_pct))
+        .map_shard(_make_corpus_writer(output_prefix, sample_pct, nest_by_source))
     )
     # InlineRunner: keep the per-process cached model alive across shards in a worker.
     kwargs: dict = {
@@ -257,9 +276,12 @@ def write_file_list(
     """Write the pending input paths (one per line) to ``out`` for ``--file-list``.
 
     Run this where object-store listing works (e.g. a laptop) so the driver never
-    has to list. Returns the number of files written."""
+    has to list. Returns the number of files written. ``--file-list`` runs span the
+    whole corpus, so the pending check uses the nested (``<source>/``) output layout."""
     dp = data_prefix.rstrip("/")
-    files = [f for src in sources for f in _pending_input_files(dp, src, output_prefix, skip_existing)]
+    files = [
+        f for src in sources for f in _pending_input_files(dp, src, output_prefix, skip_existing, nest_by_source=True)
+    ]
     with StoragePath(out).open("w") as fh:
         fh.write("\n".join(files) + "\n")
     logger.info("wrote %d input paths -> %s", len(files), out)
