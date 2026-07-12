@@ -41,7 +41,7 @@ would make this module ``__main__`` so workers can't resolve them::
         --cpu 8 --memory 24G --enable-extra-resources --priority production \\
         --job-name ft-quality-score -- \\
         python -c "from experiments.datakit.cluster.quality.fast_transformer.score import main; main()" \\
-          --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \\
+          --data-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \\
           --model-dir     s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2 \\
           --output-prefix s3://marin-us-east-02a/marin/user/rav/quality/scored_100b \\
           --max-workers   512 --sources cp/arxiv_abstracts cp/wikiteam starcoder2/ir_python
@@ -98,15 +98,15 @@ def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledS
     return scorer, np.asarray(calib["xk"], dtype=np.float64), np.asarray(calib["yk"], dtype=np.float64)
 
 
-def _source_of(file_path: str, sample_prefix: str) -> str:
+def _source_of(file_path: str, data_prefix: str) -> str:
     """Recover the datakit source (e.g. ``cp/foodista``) from an input file path.
 
-    Input files live at ``<sample_prefix>/<source>/outputs/main/<name>.parquet``."""
-    return file_path.split(sample_prefix.rstrip("/") + "/", 1)[1].split("/outputs/main/", 1)[0]
+    Input files live at ``<data_prefix>/<source>/outputs/main/<name>.parquet``."""
+    return file_path.split(data_prefix.rstrip("/") + "/", 1)[1].split("/outputs/main/", 1)[0]
 
 
 def _predict_batch(
-    records: list[dict], *, model_dir: str, sample_prefix: str, calib_file: str = MODEL_CALIB
+    records: list[dict], *, model_dir: str, data_prefix: str, calib_file: str = MODEL_CALIB
 ) -> Iterator[dict]:
     """Score a batch of records with bme; carry source (from the file path)/id/score/
     quality_bucket + text. ``text`` is dropped for the lean main output and kept for
@@ -117,7 +117,7 @@ def _predict_batch(
     for r, c, b in zip(records, cal, buckets, strict=True):
         path = r[DEFAULT_FILE_PATH_COLUMN]
         yield {
-            "source": _source_of(path, sample_prefix),
+            "source": _source_of(path, data_prefix),
             "id": r["id"],
             "score": float(c),
             "quality_bucket": int(b),
@@ -126,9 +126,9 @@ def _predict_batch(
         }
 
 
-def get_ft_batch_predict(*, model_dir: str, sample_prefix: str, calib_file: str = MODEL_CALIB):
-    """Bind the model dir + sample prefix and return a ``flat_map`` batch-predict callable."""
-    return functools.partial(_predict_batch, model_dir=model_dir, sample_prefix=sample_prefix, calib_file=calib_file)
+def get_ft_batch_predict(*, model_dir: str, data_prefix: str, calib_file: str = MODEL_CALIB):
+    """Bind the model dir + data prefix and return a ``flat_map`` batch-predict callable."""
+    return functools.partial(_predict_batch, model_dir=model_dir, data_prefix=data_prefix, calib_file=calib_file)
 
 
 def _systematic_take(index: int, pct: float) -> bool:
@@ -181,7 +181,7 @@ def _make_corpus_writer(output_prefix: str, sample_pct: float):
     return scored_writer
 
 
-def _pending_input_files(sample_prefix: str, source: str, output_prefix: str, skip_existing: bool) -> list[str]:
+def _pending_input_files(data_prefix: str, source: str, output_prefix: str, skip_existing: bool) -> list[str]:
     """The input parquet files of ``source`` still to score.
 
     The input dir comes from the source's persisted ``NormalizedData`` artifact
@@ -190,7 +190,7 @@ def _pending_input_files(sample_prefix: str, source: str, output_prefix: str, sk
     (no ``**``): a recursive glob makes s3fs ``HeadObject`` the prefix, which the CW
     object store answers with a 400. skip_existing drops files whose lean main output
     (written last per shard, so its presence means fully scored) already exists."""
-    main_dir = read_artifact(f"{sample_prefix}/{source}", NormalizedData).main_output_dir.rstrip("/")
+    main_dir = read_artifact(f"{data_prefix}/{source}", NormalizedData).main_output_dir.rstrip("/")
     inputs = sorted(str(m) for m in StoragePath(f"{main_dir}/*.parquet").glob())
     if not skip_existing:
         return inputs
@@ -201,7 +201,7 @@ def _pending_input_files(sample_prefix: str, source: str, output_prefix: str, sk
 
 def run_corpus(
     *,
-    sample_prefix: str,
+    data_prefix: str,
     sources: list[str],
     output_prefix: str,
     model_dir: str,
@@ -222,13 +222,13 @@ def run_corpus(
     (see ``write_file_list``). Use it when the object store answers the driver's
     ``HeadObject`` listing probes with a 400 (a known CW s3fs gotcha): the list is
     built once where listing works, and the driver/workers then do only GET/PUT."""
-    sp = sample_prefix.rstrip("/")
+    dp = data_prefix.rstrip("/")
     if file_list:
         with open_url(file_list, "r") as fh:
             files = [ln.strip() for ln in fh if ln.strip()]
         logger.info("scoring %d files from --file-list %s with max_workers=%s", len(files), file_list, max_workers)
     else:
-        files = [f for src in sources for f in _pending_input_files(sp, src, output_prefix, skip_existing)]
+        files = [f for src in sources for f in _pending_input_files(dp, src, output_prefix, skip_existing)]
         logger.info("scoring %d files across %d sources with max_workers=%s", len(files), len(sources), max_workers)
     if not files:
         logger.info("nothing to score (all outputs exist, or no inputs)")
@@ -237,7 +237,7 @@ def run_corpus(
         Dataset.from_list(files)
         .flat_map(functools.partial(load_file, include_file_paths=True))
         .window(BATCH_SIZE)
-        .flat_map(get_ft_batch_predict(model_dir=model_dir, sample_prefix=sp, calib_file=calib_file))
+        .flat_map(get_ft_batch_predict(model_dir=model_dir, data_prefix=dp, calib_file=calib_file))
         .map_shard(_make_corpus_writer(output_prefix, sample_pct))
     )
     # InlineRunner: keep the per-process cached model alive across shards in a worker.
@@ -252,14 +252,14 @@ def run_corpus(
 
 
 def write_file_list(
-    *, sample_prefix: str, sources: list[str], output_prefix: str, out: str, skip_existing: bool = True
+    *, data_prefix: str, sources: list[str], output_prefix: str, out: str, skip_existing: bool = True
 ) -> int:
     """Write the pending input paths (one per line) to ``out`` for ``--file-list``.
 
     Run this where object-store listing works (e.g. a laptop) so the driver never
     has to list. Returns the number of files written."""
-    sp = sample_prefix.rstrip("/")
-    files = [f for src in sources for f in _pending_input_files(sp, src, output_prefix, skip_existing)]
+    dp = data_prefix.rstrip("/")
+    files = [f for src in sources for f in _pending_input_files(dp, src, output_prefix, skip_existing)]
     with StoragePath(out).open("w") as fh:
         fh.write("\n".join(files) + "\n")
     logger.info("wrote %d input paths -> %s", len(files), out)
@@ -268,7 +268,11 @@ def write_file_list(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--sample-prefix", required=True, help="e.g. s3://.../datakit/sample_100b_<hash>")
+    p.add_argument(
+        "--data-prefix",
+        required=True,
+        help="normalized-corpus prefix (per-source <source>/outputs/main); a sample corpus or the full corpus",
+    )
     p.add_argument("--model-dir", required=True, help="dir with the scorer artifacts + calibration json")
     p.add_argument("--output-prefix", required=True, help="scored output prefix (per-source subdirs)")
     p.add_argument("--sources", nargs="+", help="sources to score (omit when using --file-list)")
@@ -289,7 +293,7 @@ def main() -> None:
         p.error("one of --sources or --file-list is required")
     configure_logging(logging.INFO)
     outcome = run_corpus(
-        sample_prefix=args.sample_prefix,
+        data_prefix=args.data_prefix,
         sources=args.sources or [],
         output_prefix=args.output_prefix,
         model_dir=args.model_dir,
