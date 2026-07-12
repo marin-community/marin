@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared checkpoint loading for the vendored June 67B model."""
+"""Shared fixtures and checkpoint loading for the vendored June 67B model."""
 
 import json
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import draccus
@@ -22,6 +24,27 @@ RUN_ROOT = (
 )
 EXECUTOR_INFO_PATH = f"{RUN_ROOT}/.executor_info"
 CHECKPOINT_PATH = f"{RUN_ROOT}/checkpoints/step-18000"
+
+
+@dataclass(frozen=True)
+class TokenLogprobReference:
+    logprob: float
+    text: str
+    token_id: int
+
+
+@dataclass(frozen=True)
+class InferenceReference:
+    moe_implementation: str
+    mp: str
+    prompt: str
+    prompt_token_ids: list[int]
+    tokenizer: str
+    top_logprobs: list[TokenLogprobReference]
+
+
+def read_inference_reference(path: Path) -> InferenceReference:
+    return draccus.decode(InferenceReference, json.loads(path.read_text()))
 
 
 def read_executor_info() -> dict[str, Any]:

@@ -6,7 +6,7 @@
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/vllm/e2e/test_june_67b_a2b_checkpoint.py -o addopts= -vv -s
+    uv run pytest tests/vllm/e2e/test_june_67b_a2b_levanter_inference.py -o addopts= -vv -s
 """
 
 import dataclasses
@@ -32,11 +32,13 @@ from levanter.utils.jax_utils import parameter_count
 
 from .iris import run_remote_test_job
 from .june_67b import (
+    InferenceReference,
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
+    read_inference_reference,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,19 +72,17 @@ def top_k_next_token_logprobs(
 
 def assert_checkpoint_inference(
     expected_model_config: dict,
-    expected_inference: dict,
+    expected_inference: InferenceReference,
 ) -> None:
     executor_info = read_executor_info()
     model_config = decode_vendored_config(executor_info)
     assert dataclasses.asdict(model_config) == expected_model_config
-    assert executor_info["config"]["mp"] == expected_inference["mp"]
-    assert executor_info["config"]["data"]["tokenizer"] == expected_inference["tokenizer"]
-    expected_top = expected_inference["top_logprobs"]
+    assert executor_info["config"]["mp"] == expected_inference.mp
+    assert executor_info["config"]["data"]["tokenizer"] == expected_inference.tokenizer
+    expected_top = expected_inference.top_logprobs
     assert len(expected_top) == TOP_K
     # With expert parallelism disabled, the source default falls back to nondeterministic scatter-add on GPU.
-    inference_model_config = dataclasses.replace(
-        model_config, moe_implementation=expected_inference["moe_implementation"]
-    )
+    inference_model_config = dataclasses.replace(model_config, moe_implementation=expected_inference.moe_implementation)
 
     mesh = compact_grug_mesh()
     with set_mesh(mesh):
@@ -92,12 +92,12 @@ def assert_checkpoint_inference(
         gib = 1024**3
         checkpoint_logical_gib = parameter_count(params) * params.token_embed.dtype.itemsize / gib
 
-        tokenizer = load_tokenizer(expected_inference["tokenizer"])
-        prompt_token_ids = tokenizer.encode(expected_inference["prompt"], add_special_tokens=False)
-        assert prompt_token_ids == expected_inference["prompt_token_ids"]
+        tokenizer = load_tokenizer(expected_inference.tokenizer)
+        prompt_token_ids = tokenizer.encode(expected_inference.prompt, add_special_tokens=False)
+        assert prompt_token_ids == expected_inference.prompt_token_ids
         # The batch axis spans all eight GPUs, so inference requires one prompt per device.
         token_ids = jnp.asarray([prompt_token_ids] * jax.device_count(), dtype=jnp.int32)
-        policy = jmp.get_policy(expected_inference["mp"])
+        policy = jmp.get_policy(expected_inference.mp)
 
         inference_started = time.perf_counter()
         top_logprobs, top_token_ids = top_k_next_token_logprobs(params, pending_qb_betas, token_ids, policy)
@@ -107,13 +107,11 @@ def assert_checkpoint_inference(
     top_token_ids = np.asarray(jax.device_get(top_token_ids))
     top_logprobs = np.asarray(jax.device_get(top_logprobs))
 
-    expected_token_ids = np.asarray([entry["token_id"] for entry in expected_top])
-    expected_logprobs = np.asarray([entry["logprob"] for entry in expected_top])
+    expected_token_ids = np.asarray([entry.token_id for entry in expected_top])
+    expected_logprobs = np.asarray([entry.logprob for entry in expected_top])
     np.testing.assert_array_equal(top_token_ids, np.broadcast_to(expected_token_ids, top_token_ids.shape))
     np.testing.assert_allclose(top_logprobs, np.broadcast_to(expected_logprobs, top_logprobs.shape), rtol=0, atol=1e-5)
-    assert [tokenizer.decode([int(token_id)]) for token_id in top_token_ids[0]] == [
-        entry["text"] for entry in expected_top
-    ]
+    assert [tokenizer.decode([int(token_id)]) for token_id in top_token_ids[0]] == [entry.text for entry in expected_top]
     assert tokenizer.decode([int(top_token_ids[0, 0])]).strip() == "America"
 
     logger.info(
@@ -129,7 +127,7 @@ def assert_checkpoint_inference(
 
 def test_h100_node_runs_checkpoint_inference(marin_gpu_client: IrisClient) -> None:
     expected_model_config = json.loads(MODEL_CONFIG_RESOURCE.read_text())
-    expected_inference = json.loads(LOGPROBS_RESOURCE.read_text())
+    expected_inference = read_inference_reference(LOGPROBS_RESOURCE)
     run_remote_test_job(
         marin_gpu_client,
         JobRequest(
@@ -150,6 +148,8 @@ def test_h100_node_runs_checkpoint_inference(marin_gpu_client: IrisClient) -> No
                     "XLA_FLAGS": "--xla_gpu_deterministic_ops=true",
                 },
             ),
+            # These e2es are manually triggered and highly interactive, so they use production priority.
+            # Routine or automated workloads should not copy this priority.
             priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         ),
         pending_timeout=PENDING_TIMEOUT,
