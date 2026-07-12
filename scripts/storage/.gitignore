@@ -1,9 +1,0 @@
-*.duckdb.tmp
-*.duckdb
-*.sqlite3
-*.parquet
-*.wal
-*.csv
-*.csv.sha256
-*.sha256
-purge/backup/

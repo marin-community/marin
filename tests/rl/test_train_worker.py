@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.train_worker import (
     BatchPrepTiming,
@@ -18,7 +20,7 @@ from marin.rl.weight_transfer.base import WeightTransferServerMetrics
 def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled():
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
-    worker.loss_module = RLOOLoss(kl_coef=0.0)
+    worker.loss_module = RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
     worker.initial_model = model
     worker.reference_model = model
 
@@ -28,10 +30,11 @@ def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled
     assert worker.reference_model is None
 
 
-def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled():
+@pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
+def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled(mode: KLMode):
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
-    worker.loss_module = RLOOLoss(kl_coef=0.01)
+    worker.loss_module = RLOOLoss(kl=KLConfig(mode=mode, beta=0.01))
     worker.initial_model = model
     worker.reference_model = model
 
@@ -163,7 +166,7 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model: lambda model, batch, key: 0.0)
     worker.reference_model = object()
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
@@ -241,7 +244,7 @@ def test_train_reuses_recovered_step_on_resume(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model: lambda model, batch, key: 0.0)
     worker.reference_model = object()
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)

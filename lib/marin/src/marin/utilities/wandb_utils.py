@@ -3,7 +3,7 @@
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import wandb
@@ -43,7 +43,7 @@ def init_wandb(
     if not run_name:
         run_name = os.environ.get("WANDB_RUN_NAME")
     if not run_name:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         run_name = f"run-{timestamp}"
 
     return wandb.init(

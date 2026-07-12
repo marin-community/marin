@@ -9,23 +9,24 @@ import logging
 import os
 
 import jmp
-from levanter.utils.mesh import MeshConfig
 import pytest
 from levanter.checkpoint import CheckpointerConfig
-from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
+from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from levanter.tokenizers import load_tokenizer
-from transformers import AutoConfig
-
+from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments import EnvConfig
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from transformers import AutoConfig
+
 from tests.rl.integration.config import (
     RolloutWorkerRunner,
     create_test_rollout_storage_config,
@@ -48,11 +49,13 @@ def get_stop_tokens(tokenizer_name: str):
 def create_simple_math_curriculum(run_id: str) -> CurriculumConfig:
     """Create simplified math curriculum for testing."""
     default_sampling = SamplingParams(
-        temperature=1.0,
         n_prompts=1,
         n_generations_per_prompt=1,
-        max_tokens=MAX_TOKENS,
-        stop_tokens=get_stop_tokens(MODEL_NAME),
+        train_decoding=DecodingConfig(
+            temperature=1.0,
+            max_output_tokens=MAX_TOKENS,
+            stop_token_ids=get_stop_tokens(MODEL_NAME),
+        ),
     )
 
     lessons = {
@@ -107,7 +110,6 @@ def test_llama_math_integration(tmp_path):
             save_interval=datetime.timedelta(seconds=600),
         ),
         mesh=MeshConfig(axes={"model": 2}),
-        ray=RayConfig(auto_start_cluster=False),
     )
 
     # Create optimizer config
@@ -134,7 +136,11 @@ def test_llama_math_integration(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=opt_config,
-            rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            rl_loss=RLOOLoss(
+                kl=KLConfig(mode=KLMode.K3_LOSS, beta=0.01),
+                clip_epsilon_low=0.2,
+                clip_epsilon_high=0.2,
+            ),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,

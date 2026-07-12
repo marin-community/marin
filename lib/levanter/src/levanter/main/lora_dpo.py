@@ -11,13 +11,13 @@ TrainDpoConfig and forwarding into train_dpo.main.
 from dataclasses import dataclass, field
 from typing import Optional
 
-from levanter.adaptation import LoraAdaptationConfig
+from levanter.adaptor import LoraAdaptorConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data.text import PreferenceLmDataConfig
+from levanter.data.text.preference import PreferenceLmDataConfig
 from levanter.dpo import ReferenceEvalCacheConfig
-from levanter.lora import LoraConfig
+from levanter.adaptor.lora import LoraConfig
 from levanter.main.train_dpo import AdapterBaseReferenceConfig, TrainDpoConfig, main as train_dpo_main
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import TrainerConfig
 
 
@@ -54,12 +54,13 @@ def _translate_legacy_lora_dpo_config(config: LoraDpoConfig) -> TrainDpoConfig:
     if config.use_hf_model_config:
         model_config = converter.config_from_hf_config(converter.default_hf_config)
 
-    adapter = LoraAdaptationConfig(
+    adapter = LoraAdaptorConfig(
         target_modules=config.lora.target_modules,
         r=config.lora.r,
         alpha=config.lora.alpha,
         dropout=config.lora.dropout,
         zero_init_b=config.lora.zero_init_b,
+        a_init_mode=config.lora.a_init_mode,
         exclude_modules=config.lora.exclude_modules,
     )
 
@@ -91,5 +92,6 @@ def main(config: LoraDpoConfig):
 
 if __name__ == "__main__":
     import levanter
+    import levanter.config
 
     levanter.config.main(main)()

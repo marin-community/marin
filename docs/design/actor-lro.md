@@ -144,7 +144,7 @@ existing `Call` RPC stays in the proto — no breaking change.
 
 ## Notes
 
-- **Backwards compatible** — existing `Call` RPC stays for synchronous use and other backends (Ray, local)
+- **Backwards compatible** — existing `Call` RPC stays for synchronous use and the local backend
 - **No persistence** — operations are in-memory; server restart loses them. Acceptable since Iris already handles job-level restarts.
 - **Cancellation is cooperative** — `CancelOperation` sets an event; the actor method must check it. For methods that don't check, cancellation just marks the operation as cancelled and discards the result.
 - **Polling overhead** — one short RPC per `poll_interval` seconds. At 1s interval, negligible for hour-long pipelines.

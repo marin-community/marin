@@ -61,9 +61,9 @@ def where(
 
 
 def where(
-    condition: NamedOrNumeric | bool,
-    x: NamedOrNumeric | None = None,
-    y: NamedOrNumeric | None = None,
+    condition: NamedOrNumeric | ArrayLike | bool,
+    x: NamedOrNumeric | ArrayLike | None = None,
+    y: NamedOrNumeric | ArrayLike | None = None,
     fill_value: int | None = None,
     new_axis: Axis | None = None,
 ) -> NamedArray | ArrayLike | tuple[NamedArray, ...]:
@@ -113,7 +113,9 @@ def where(
         raw = jnp.where(condition.array, _array_if_named(x), _array_if_named(y))
         return NamedArray(raw, condition.axes)
 
-    return jnp.where(_array_if_named(condition), _array_if_named(x), _array_if_named(y))
+    # The three-argument form of jnp.where always returns an array; pyrefly cannot pick
+    # the right overload because the single-argument form can also return a tuple.
+    return typing.cast(ArrayLike, jnp.where(_array_if_named(condition), _array_if_named(x), _array_if_named(y)))
 
 
 def nonzero(array: NamedArray, *, size: Axis, fill_value: int = 0) -> tuple[NamedArray, ...]:

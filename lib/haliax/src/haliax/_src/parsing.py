@@ -316,11 +316,6 @@ def parse_einsum(expression: str) -> tuple[Sequence[Expression], Expression]:
 
     rhs, pos = _parse_expression(expression, pos)
 
-    if any(x is None for x in lhses):
-        if len(lhses) > 1:
-            raise_parse_error("If there are multiple lhs expressions, they must all be ordered", expression, pos)
-        lhses = None  # type: ignore
-
     if pos != len(expression):
         raise_parse_error("Unexpected character", expression, pos)
 

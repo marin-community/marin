@@ -1,0 +1,6 @@
+name: "CodeQL — GitHub Actions"
+
+# Security analysis of workflow definitions under .github/workflows. No code
+# quality product runs for Actions (see analysis-kinds in ops-codeql.yaml).
+paths-ignore:
+  - tests/**

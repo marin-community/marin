@@ -4,6 +4,7 @@
 
 import dataclasses
 import functools
+from typing import Any, Callable
 
 import equinox as eqx
 import jax
@@ -11,6 +12,7 @@ import jax.tree_util as jtu
 from jaxtyping import PRNGKeyArray, PyTree
 
 import haliax.nn
+import haliax.random
 
 from .axis import AxisSelector
 from .core import NamedArray
@@ -18,23 +20,21 @@ from .jax_utils import maybe_rng_split
 from .util import is_named_array
 
 
-def tree_map(fn, tree, *rest, is_leaf=None):
+def tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
     """
     Version of [jax.tree_util.tree_map][] that automatically treats NamedArrays as leaves.
     """
-    old_is_leaf = is_leaf
     if is_leaf is None:
         is_leaf = lambda x: isinstance(x, NamedArray)
     else:
+        old_is_leaf = is_leaf
         is_leaf = lambda x: old_is_leaf(x) or is_named_array(x)
 
     return jax.tree.map(fn, tree, *rest, is_leaf=is_leaf)
 
 
 def _is_scan_stack_leaf(x) -> bool:
-    from haliax.nn.array_stacked import ArrayStacked
-
-    return isinstance(x, (haliax.nn.Stacked, ArrayStacked))
+    return isinstance(x, (haliax.nn.Stacked, haliax.nn.ArrayStacked))
 
 
 def _array_stacked_in_axes(tree, num_layers: int):
@@ -44,7 +44,7 @@ def _array_stacked_in_axes(tree, num_layers: int):
     )
 
 
-def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
+def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None = None):
     """
     Version of [haliax.tree_util.tree_map][] that is aware of the scan-layer pattern, specifically as implemented
     in hax.nn.Stacked. This function will (implicitly) apply the transform to each layer in each stack-like module
@@ -52,10 +52,10 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
     [haliax.tree_util.tree_map][].
 
     """
-    old_is_leaf = is_leaf
     if is_leaf is None:
         is_leaf = _is_scan_stack_leaf
     else:
+        old_is_leaf = is_leaf
         is_leaf = lambda x: old_is_leaf(x) or _is_scan_stack_leaf(x)
 
     mapped_fn = functools.partial(scan_aware_tree_map, fn, is_leaf=is_leaf)
@@ -65,9 +65,7 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
             new_inner = haliax.vmap(mapped_fn, x.Block)(x.stacked, *[r.stacked for r in rest])
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
 
-        from haliax.nn.array_stacked import ArrayStacked
-
-        if isinstance(x, ArrayStacked):
+        if isinstance(x, haliax.nn.ArrayStacked):
             num_layers = x.num_layers
             in_axes = (
                 _array_stacked_in_axes(x.stacked, num_layers),
@@ -134,7 +132,6 @@ def resize_axis(tree: PyTree[NamedArray], old_axis: AxisSelector, new_size: int,
     manually.
 
     """
-    import haliax.random
 
     def _resize_one(x, key):
         if not is_named_array(x):

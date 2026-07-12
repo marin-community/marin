@@ -14,7 +14,7 @@ from jaxtyping import PRNGKeyArray
 from haliax.util import StringHolderEnum
 from levanter.utils.jax_utils import local_cpu_mesh
 
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value
@@ -208,7 +208,7 @@ class MixtureDataset(AsyncDataset[T]):
     def _get_stage_for_block(self, block_id: int) -> int:
         block_start = block_id * self.block_size
         stage_starts = np.array([start for start, _ in self.weight_stages])
-        return max(0, np.searchsorted(stage_starts, block_start, side="right") - 1)
+        return int(max(0, np.searchsorted(stage_starts, block_start, side="right") - 1))
 
     @functools.lru_cache(maxsize=32)
     def _get_block(self, index: int) -> np.ndarray:

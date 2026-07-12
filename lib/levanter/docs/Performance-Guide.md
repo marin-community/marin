@@ -14,7 +14,7 @@ See also the [JAX Profiling Guide](https://jax.readthedocs.io/en/latest/profilin
 Levanter uses JAX's built-in profiler. You can enable it by adding the `--trainer.profiler.enabled true` flag
 to the command line. This will generate a trace file in the `./logs` directory, under `./logs/<run_id>/profiler/plugins/profile/<datetime>`.
 (Yeah, it's a mess, but it's what JAX wants to do.)
-It will also upload the information to the relevant tracker (such as Weights & Biases or TensorBoard).
+The trace stays on disk in the run directory, so you can inspect it from whatever durable storage backs `log_dir`.
 
 Install profiling dependencies (TensorBoard) with one of:
 
@@ -32,8 +32,9 @@ Here are the full list of profiling related options:
 
 As usual, these can be specified in the yaml configuration file as well.
 
-In a multi-process setup, each node will save a profile, but only the first node will upload it to the tracker.
-All of them will be available in the `./logs` directory (on each node).
+In a multi-process setup, each node saves its own profile under that node's `log_dir` tree. JAX does not merge or align
+those traces automatically, so compare the per-host `plugins/profile/<datetime>/` directories directly if you need a
+cross-host view.
 
 
 ### Examining a Profile
@@ -46,10 +47,11 @@ JAX offers two main ways to examine a profile: Perfetto and TensorBoard.
 
 [Perfetto](https://ui.perfetto.dev/) is a web-based tool for examining profiles.
 
-We automatically save Perfetto traces and log them to WandB as artifacts. You can download the trace from WandB and use Perfetto to examine it.
-To find the trace, go to the run's page on WandB and click on the "Artifacts" tab. Then click on the `jax_profile` artifact, and navigate to the "Files" tab.
-Click `plugins` then `profile` then a date, then download `perfetto_trace.json.gz`.
-You can then go to https://ui.perfetto.dev/ and upload the file.
+Open the trace from the run directory, then go to https://ui.perfetto.dev/ and upload `perfetto_trace.json.gz`.
+The file lives under `plugins/profile/<datetime>/` inside the profiler output directory.
+
+If you enabled host profiling, the companion `host_profile.pstats` and `host_profile.txt` files are written alongside the
+JAX trace files in that same profiler directory.
 
 Alternatively, you can enable the `--trainer.profiler.perfetto_link` flag.
 This will generate a link that will automatically upload the `perfetto_trace.json.gz` file in the same directory as the TensorBoard profile.
@@ -63,23 +65,15 @@ You want to download the trace files (e.g. `plugins/profile/2024_03_16_07_26_24`
 and run `tensorboard --logdir <dir>` where `<dir>` is the *directory containing plugins* (not the plugins directory itself).
 Then you can navigate to http://localhost:6006/#profile in your browser and see the profile.
 
-#### Fetching traces from Weights & Biases
+#### Fetching traces
 
-When you log profiles to WandB, the easiest way to grab the latest trace and open it locally is the helper script in
-`scripts/wandb_tensorboard_profile.py`. It understands bare run ids, `entity/project/run` paths, or full WandB URLs and
-downloads the most recent `jax_profile` artifact by default.
+If your run directory is on durable remote storage, download or sync the profiler output directory locally and point
+TensorBoard at the directory containing `plugins/`.
 
 ```bash
-# Example: launch TensorBoard for a specific run by URL
-uv run scripts/wandb_tensorboard_profile.py https://wandb.ai/my-entity/my-project/runs/abc123 --port 6007
-
-# Example: run by id with explicit entity/project, but just print the command it would run
-uv run scripts/wandb_tensorboard_profile.py abc123 --entity my-entity --project my-project --dry-run
+# Example: launch TensorBoard from a local copy of a profiler output directory
+tensorboard --logdir /path/to/run/profiler
 ```
-
-The script creates a temporary download directory unless `--download-root` is provided, prints the resolved aliases, and
-launches TensorBoard (or exits once the command is printed when `--dry-run` is passed). Use `Ctrl+C` to stop TensorBoard
-after inspecting the profile.
 
 TensorBoard install tips:
 

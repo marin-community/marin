@@ -152,14 +152,15 @@ class PowerLrSchedule(LrSchedule):
 
 
 @dataclass(frozen=True)
-class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
+class OptimizerConfig(draccus.PluginRegistry, abc.ABC, discover_packages_path="levanter.optim"):
+    # PluginRegistry (not ChoiceRegistry) so the optimizer subclasses spread across this
+    # package register lazily on first parse: levanter/optim/__init__.py is a docstring, so
+    # nothing eagerly imports muon/soap/... — draccus discovers them under the package path.
     learning_rate: float = 6e-4
     weight_decay: float = 0.1
 
     min_lr_ratio: float = 0.1
-    """The lr scheduler operates on 4 stages: [warmup] - {[stable] - [decay]} x haps - [cooldown]."""
-    initial_zero_lr_steps: int = 0
-    """If positive, keep the learning rate at exactly zero for this many initial steps."""
+    """The lr scheduler operates on 4 stages: [warmup] - {[stable] - [decay]} x haps - [cooldown]"""
     warmup: int | float = 0.01
     """fraction of training steps to use as warmup, or steps to use. 0.0 means no warmup"""
     decay: int | float | None = None
@@ -283,20 +284,6 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             return mask_fn
 
     def lr_scheduler(self, num_train_steps, override_lr=None):
-        zero_lr_steps = max(self.initial_zero_lr_steps, 0)
-        if zero_lr_steps >= num_train_steps:
-            return optax.constant_schedule(0.0)
-
-        if zero_lr_steps > 0:
-            main_schedule = self._build_main_lr_scheduler(num_train_steps - zero_lr_steps, override_lr)
-            return optax.join_schedules(
-                [optax.constant_schedule(0.0), main_schedule],
-                [zero_lr_steps],
-            )
-
-        return self._build_main_lr_scheduler(num_train_steps, override_lr)
-
-    def _build_main_lr_scheduler(self, num_train_steps, override_lr=None):
         if self.cooldown is not None:
             warnings.warn("cooldown is deprecated. Just use the normal schedule.", DeprecationWarning)
             cooldown_steps = _convert_frac_or_steps(self.cooldown, num_train_steps)
@@ -311,6 +298,8 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             learning_rate = override_lr
 
         min_lr = learning_rate * self.min_lr_ratio
+
+        lr_schedule = self._resolve_lr_schedule()
 
         schedules = []
         boundaries = []
@@ -343,34 +332,15 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
                 boundaries.append(start + warmup_steps + stable_steps)
 
             if lr_decay_steps > 0:
-                if isinstance(self.lr_schedule, str):
-                    match self.lr_schedule:
-                        case "constant":
-                            schedule = optax.constant_schedule(learning_rate)
-                        case "cosine":
-                            schedule = optax.cosine_decay_schedule(learning_rate, lr_decay_steps, self.min_lr_ratio)
-                        case "linear":
-                            schedule = optax.linear_schedule(learning_rate, min_lr, lr_decay_steps)
-                        case "inv_sqrt":
-                            schedule = _inv_sqrt_decay_schedule(learning_rate, min_lr, warmup_steps, 10000)
-                        case "inv":
-                            schedule = _inv_decay_schedule(learning_rate, min_lr, lr_decay_steps)
-                        case _:
-                            raise ValueError(f"Unknown lr_schedule: {self.lr_schedule}")
-                elif isinstance(self.lr_schedule, LrSchedule):
-                    schedule = self.lr_schedule.build(
-                        LrScheduleContext(
-                            warmup_steps=warmup_steps,
-                            decay_steps=lr_decay_steps,
-                            learning_rate=learning_rate,
-                            min_lr_ratio=self.min_lr_ratio,
-                            min_lr=min_lr,
-                        )
+                schedule = lr_schedule.build(
+                    LrScheduleContext(
+                        warmup_steps=warmup_steps,
+                        decay_steps=lr_decay_steps,
+                        learning_rate=learning_rate,
+                        min_lr_ratio=self.min_lr_ratio,
+                        min_lr=min_lr,
                     )
-                else:
-                    raise ValueError(
-                        f"lr_schedule must be a string or an instance of LrSchedule, got {self.lr_schedule}"
-                    )
+                )
             else:
                 schedule = optax.constant_schedule(learning_rate)
 
@@ -390,6 +360,25 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             schedule = schedules[0]
 
         return schedule
+
+    def _resolve_lr_schedule(self) -> LrSchedule:
+        """Normalize ``lr_schedule`` to an ``LrSchedule`` instance.
+
+        Strings are looked up in the ``LrSchedule`` registry so that the decay phase has a
+        single construction path regardless of whether the schedule was specified by name or
+        as an explicit config object.
+        """
+        if isinstance(self.lr_schedule, LrSchedule):
+            return self.lr_schedule
+        if isinstance(self.lr_schedule, str):
+            try:
+                return LrSchedule.get_choice_class(self.lr_schedule)()
+            except KeyError:
+                raise ValueError(
+                    f"Unknown lr_schedule {self.lr_schedule!r}. "
+                    f"Known schedules: {sorted(LrSchedule.get_known_choices())}"
+                ) from None
+        raise ValueError(f"lr_schedule must be a string or an instance of LrSchedule, got {self.lr_schedule}")
 
     def _get_cycle_minima(self, total_main_steps):
         if self.cycle_length is not None:

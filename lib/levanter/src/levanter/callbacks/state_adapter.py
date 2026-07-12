@@ -53,6 +53,9 @@ class StateCallbackRunner(Generic[S]):
         self._hooks.append(_Hook(callback, every))
 
     def run(self, state: S, *, loss: float | jax.Array, step_duration: float, force: bool = False) -> None:
+        # CallbackStateView is a structural stand-in supplying exactly the attributes StepInfo reads;
+        # it deliberately does not subclass TrainerState, so it cannot satisfy StepInfo's S: TrainerState bound.
+        # pyrefly: ignore[bad-specialization]
         info = StepInfo(
             state=CallbackStateView(
                 step=self._step_getter(state),
@@ -64,5 +67,5 @@ class StateCallbackRunner(Generic[S]):
             step_duration=step_duration,
         )
         for hook in self._hooks:
-            if force or info.step % hook.every == 0:
+            if force or (info.step > 1 and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)

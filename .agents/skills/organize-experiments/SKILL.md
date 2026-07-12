@@ -1,12 +1,12 @@
 ---
 name: organize-experiments
-description: Curate the experiment report index after new experiments are harvested. Use when asked to organize, categorize, or update the experiment reports index.
+description: Curate the experiment report index at docs/reports/index.md.
 ---
 
 # Skill: Organize Experiment Reports
 
 ## Overview
-Use this skill to curate `docs/reports/index.md` after new experiment issues are harvested. The goal is to keep the report index tidy by folding fresh entries into the right sections, refreshing links, and leaving `## Uncategorized` empty.
+Curate `docs/reports/index.md` after new experiment issues are harvested: fold fresh entries into the right sections, refresh links, and leave `## Uncategorized` empty.
 
 ## Prerequisites
 - Local checkout of the marin repository with write access.
@@ -16,7 +16,7 @@ Use this skill to curate `docs/reports/index.md` after new experiment issues are
 ## Guidelines for Humans
 
 ### Standard Workflow
-1. Run `uv run --extra pm scripts/pm/itemize_experiment_issues.py` to append new experiments.
+1. Run `uv run scripts/pm/itemize_experiment_issues.py` to append new experiments.
 2. Open the diff for `docs/reports/index.md` and identify the additions in `## Uncategorized`.
 3. For each experiment:
    - Match it to an existing section (e.g., `Training and Performance`, `Data Experiments`).
@@ -40,7 +40,7 @@ Use this skill to curate `docs/reports/index.md` after new experiment issues are
 
 ## Validation
 - `rg "^- " docs/reports/index.md` to confirm bullets exist only under curated sections, not under `## Uncategorized`.
-- Re-run `uv run --extra pm scripts/pm/itemize_experiment_issues.py` if unsure that all experiments were captured.
+- Re-run `uv run scripts/pm/itemize_experiment_issues.py` if unsure that all experiments were captured.
 - Optional: `markdownlint docs/reports/index.md` to catch formatting drift.
 
 ## See Also

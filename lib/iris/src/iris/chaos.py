@@ -19,8 +19,8 @@ Usage:
 """
 
 import random
-import time
 import threading
+import time
 from dataclasses import dataclass, field
 
 

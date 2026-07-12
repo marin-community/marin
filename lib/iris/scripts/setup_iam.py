@@ -9,8 +9,6 @@ grants their project roles, and wires impersonation / act-as bindings for the
 configured CI and operator principals.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -363,7 +361,7 @@ def init(
     controller_sa_member = f"serviceAccount:{controller_sa}"
     worker_sa_member = f"serviceAccount:{worker_sa}"
 
-    summary = {
+    summary: dict[str, object] = {
         "project": project,
         "dry_run": dry_run,
         "controller_service_account": controller_sa,
@@ -479,7 +477,7 @@ def _check_result(
     help=(
         "Optional gs:// bucket or path used to verify bucket metadata access "
         "with the worker SA, e.g. gs://marin-us-east5 or "
-        "gs://marin-tmp-us-east5/ttl=1d"
+        "gs://marin-us-east5/tmp/ttl=1d"
     ),
 )
 @click.argument("email")

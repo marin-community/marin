@@ -2,16 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import chex
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jax.tree_util
 import numpy as np
+import pytest
 from chex import assert_trees_all_close
 
 import haliax as hax
-from haliax._src.fp8 import compute_scale
+from haliax._src.fp8 import compute_scale, fp8_scaled_dot_general
 from haliax.nn import Linear
 from haliax.quantization import (
     Fp8DotGeneralOp,
@@ -27,9 +31,7 @@ def test_fp8_is_reasonable():
     Out = hax.Axis("Out", 8)
     linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=0.1)
 
-    fp8_linear = Linear.init(
-        In, Out, key=jrandom.PRNGKey(0), dot_general=hax.quantization.Fp8DotGeneralOp.init(), init_scale=0.1
-    )
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init(), init_scale=0.1)
 
     input = hax.random.normal(jrandom.PRNGKey(3), In)
     output = linear(input)
@@ -41,7 +43,278 @@ def test_fp8_is_reasonable():
     assert_trees_all_close(output.array, fp8_output.array, atol=2e-2, rtol=5e-2)
 
 
+def _all_dot_general_eqns(jaxpr):
+    """Recursively collect dot_general equations, descending into nested jaxprs
+    (the forward dot lives inside the custom_vjp call's call_jaxpr)."""
+
+    def _as_jaxprs(param):
+        for c in param if isinstance(param, (list, tuple)) else [param]:
+            inner = getattr(c, "jaxpr", c)  # unwrap ClosedJaxpr -> Jaxpr
+            if hasattr(inner, "eqns"):
+                yield inner
+
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == "dot_general":
+            yield eqn
+        for param in eqn.params.values():
+            for sub in _as_jaxprs(param):
+                yield from _all_dot_general_eqns(sub)
+
+
+def test_fp8_all_dots_contract_fp8_operands():
+    # All three dot_general GEMMs (fwd + dgrad + wgrad) must contract fp8 operands
+    In = hax.Axis("In", 16)
+    Out = hax.Axis("Out", 8)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init())
+    x = hax.random.normal(jrandom.PRNGKey(3), In)
+
+    def loss(model, x):
+        return hax.sum(model(x) ** 2).scalar()
+
+    jaxpr = jax.make_jaxpr(eqx.filter_grad(loss))(fp8_linear, x)
+    dots = [tuple(v.aval.dtype for v in eqn.invars) for eqn in _all_dot_general_eqns(jaxpr.jaxpr)]
+
+    fp8 = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    assert len(dots) == 3, f"expected 3 dot_generals (fwd + dgrad + wgrad); found {len(dots)}: {dots}"
+    assert all(dt in fp8 for operands in dots for dt in operands), f"a dot_general contracts non-fp8 operands: {dots}"
+    # forward contracts e4m3 x e4m3; both grad dots contract the e5m2 output gradient
+    assert (jnp.float8_e4m3fn, jnp.float8_e4m3fn) in dots, f"no e4m3 x e4m3 forward dot: {dots}"
+    assert sum(jnp.float8_e5m2 in operands for operands in dots) == 2, f"expected 2 grad dots with e5m2: {dots}"
+
+
+def test_fp8_quant_dtype_overrides_reach_dot_operands():
+    # The forward-operand and output-gradient quantization dtypes are
+    # configurable (defaulting to E4M3 / E5M2). Swap the two so each override is
+    # observable, then confirm the dtype fed to each dot_general follows: the
+    # forward contracts two E5M2 operands and a backward dot contracts an E4M3
+    # output gradient -- the reverse of the defaults asserted elsewhere.
+    In = hax.Axis("In", 16)
+    Out = hax.Axis("Out", 8)
+    dot_general = Fp8DotGeneralOp.init(fwd_dtype=jnp.float8_e5m2, rev_dtype=jnp.float8_e4m3fn)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=dot_general)
+    x = hax.random.normal(jrandom.PRNGKey(3), In)
+
+    def loss(model, x):
+        return hax.sum(model(x) ** 2).scalar()
+
+    jaxpr = jax.make_jaxpr(eqx.filter_grad(loss))(fp8_linear, x)
+    dot_eqns = list(_all_dot_general_eqns(jaxpr.jaxpr))
+    assert any(
+        all(v.aval.dtype == jnp.float8_e5m2 for v in eqn.invars) for eqn in dot_eqns
+    ), "forward dot_general should contract operands quantized to the configured fwd_dtype (here E5M2)"
+    assert any(
+        any(v.aval.dtype == jnp.float8_e4m3fn for v in eqn.invars) for eqn in dot_eqns
+    ), "a backward dot_general should contract the output gradient quantized to the configured rev_dtype (here E4M3)"
+
+
+def _gpu_is_fp8_capable() -> bool:
+    # FP8 tensor-core GEMMs need CUDA compute capability >= 8.9 (Ada/Hopper/Blackwell).
+    if jax.default_backend() != "gpu":
+        return False
+    # compute_capability is a string like "9.0" on a CUDA device.
+    major, _, minor = jax.devices()[0].compute_capability.partition(".")
+    return (int(major), int(minor or 0)) >= (8, 9)
+
+
+@pytest.mark.skipif(
+    not _gpu_is_fp8_capable(),
+    reason="needs an FP8-capable GPU (CUDA sm89+: Ada/Hopper/Blackwell)",
+)
+def test_fp8_emits_fp8_kernels_on_gpu():
+    # The three GEMMs (forward + dgrad + wgrad) must each run as an fp8 GEMM, not a
+    # bf16 fallback. Pin the GEMM backend (Triton off, cuBLASLt on) so all three lower
+    # to cuBLASLt, whose $f8 kernel name self-identifies fp8; pinning both flags keeps
+    # this immune to ambient XLA_FLAGS (per-compile options override the environment).
+    Batch = hax.Axis("Batch", 512)
+    In = hax.Axis("In", 512)
+    Out = hax.Axis("Out", 512)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), use_bias=False, dot_general=Fp8DotGeneralOp.init())
+    # Run in bf16 (the training compute dtype); FP8 state stays float32.
+    fp8_linear = dataclasses.replace(fp8_linear, weight=fp8_linear.weight.astype(jnp.bfloat16))
+    x = hax.random.normal(jrandom.PRNGKey(1), (Batch, In)).astype(jnp.bfloat16)
+
+    # Partition so jax.jit sees only arrays (the static module part is closed
+    # over); this also yields a real Compiled whose as_text() is the optimized HLO.
+    params, static = eqx.partition(fp8_linear, eqx.is_array)
+
+    def loss(params, x):
+        return hax.sum(eqx.combine(params, static)(x) ** 2).scalar()
+
+    # Differentiate w.r.t. both the weight and the input so both grad GEMMs
+    # (wgrad needs d/d weight, dgrad needs d/d input) stay live; the forward dot
+    # is present too, since its residuals feed the backward.
+    hlo = (
+        jax.jit(jax.grad(loss, argnums=(0, 1)))
+        .lower(params, x)
+        .compile(compiler_options={"xla_gpu_enable_triton_gemm": False, "xla_gpu_enable_cublaslt": True})
+        .as_text()
+    )
+
+    # Forward operands reach the matmul as e4m3, the output gradient as e5m2.
+    assert "f8e4m3" in hlo and "f8e5m2" in hlo, "operands should quantize to e4m3 and the grad to e5m2"
+    # All three GEMMs (fwd + dgrad + wgrad) are fp8 cuBLASLt kernels, and none fell
+    # back to a bf16 __cublas$lt$matmul (which would mean the operands were dequantized).
+    n_cublas = hlo.count("__cublas$lt$matmul")
+    n_cublas_f8 = hlo.count("__cublas$lt$matmul$f8")
+    assert n_cublas_f8 == 3, f"expected 3 fp8 cuBLASLt GEMMs (fwd + dgrad + wgrad); got {n_cublas_f8}"
+    assert n_cublas == n_cublas_f8, "a GEMM fell back to a bf16 __cublas$lt$matmul"
+
+
+def test_fp8_grads_match_reference():
+    Batch = hax.Axis("Batch", 64)
+    In = hax.Axis("In", 32)
+    Out = hax.Axis("Out", 16)
+    ref = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=1.0)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init(), init_scale=1.0)
+    x = hax.random.normal(jrandom.PRNGKey(3), (Batch, In))
+
+    def loss(model, xx):
+        return hax.sum(model(xx) ** 2).scalar()
+
+    def grads(model):
+        g_w = eqx.filter_grad(lambda m: loss(m, x))(model).weight.array
+        g_x = eqx.filter_grad(lambda xx: loss(model, xx))(x).array
+        return np.asarray(g_w), np.asarray(g_x)
+
+    gw_fp8, gx_fp8 = grads(fp8_linear)
+    gw_ref, gx_ref = grads(ref)
+
+    def assert_grad_close(got, want, name):
+        rms = np.sqrt(np.mean(want**2))
+        np.testing.assert_allclose(got, want, rtol=0.2, atol=0.5 * rms, err_msg=f"{name}: elementwise")
+        norm_diff = np.linalg.norm(got - want) / np.linalg.norm(want)
+        assert norm_diff < 0.15, f"{name}: relative difference norm {norm_diff:.3f} too large"
+        mag = np.linalg.norm(got) / np.linalg.norm(want)
+        assert 0.97 < mag < 1.03, f"{name}: magnitude ratio {mag:.3f} (systematic scale bias)"
+
+    assert_grad_close(gw_fp8, gw_ref, "wgrad")
+    assert_grad_close(gx_fp8, gx_ref, "dgrad")
+
+
+def test_fp8_exact_for_representable_inputs():
+    M, K, N = 8, 12, 4
+    dimension_numbers = (((1,), (0,)), ((), ()))
+    rep_op = jnp.array([-3.0, -2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0, 3.0])  # exact in e4m3
+    rep_grad = jnp.array([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0])  # exact in e5m2
+
+    def pick(key, shape, table):
+        return table[jrandom.randint(key, shape, 0, table.shape[0])]
+
+    k_lhs, k_rhs, k_cot = jrandom.split(jrandom.PRNGKey(7), 3)
+    lhs = pick(k_lhs, (M, K), rep_op)
+    rhs = pick(k_rhs, (K, N), rep_op)
+    cot = pick(k_cot, (M, N), rep_grad)
+
+    zero_hist = jnp.zeros(16, jnp.float32)
+
+    def fp8_matmul(a, b):
+        return fp8_scaled_dot_general(
+            a,
+            b,
+            dimension_numbers,
+            preferred_element_type=jnp.float32,
+            lhs_scale=jnp.float32(2.0),
+            rhs_scale=jnp.float32(0.5),
+            grad_scale=jnp.float32(4.0),
+            lhs_amax_history=zero_hist,
+            rhs_amax_history=zero_hist,
+            grad_amax_history=zero_hist,
+            quantize_compute_type=jnp.float32,
+        )
+
+    y, vjp_fn = jax.vjp(fp8_matmul, lhs, rhs)
+    grad_lhs, grad_rhs = vjp_fn(cot)
+
+    np.testing.assert_array_equal(np.asarray(y), np.asarray(lhs @ rhs))
+    np.testing.assert_array_equal(np.asarray(grad_lhs), np.asarray(cot @ rhs.T))
+    np.testing.assert_array_equal(np.asarray(grad_rhs), np.asarray(lhs.T @ cot))
+
+
+def test_fp8_backward_uses_distinct_operand_scales():
+    # quantized_dot_bwd dequantizes grad_lhs with rhs_scale and grad_rhs with
+    # lhs_scale. With the single-step defaults every scale is exactly 1.0, so a
+    # swapped assignment would be invisible. Give the operands very different
+    # magnitudes and pre-seed their amax histories so input and kernel get
+    # distinct, non-unit scales (here ~32x apart), then check both gradients
+    # against an fp32 reference (the gradient of the exact matmul -- an oracle
+    # independent of the FP8 implementation). A swap would be off by ~32x.
+    M, K, N = 8, 16, 4
+    lhs = jrandom.normal(jrandom.PRNGKey(0), (M, K))
+    rhs = jrandom.normal(jrandom.PRNGKey(1), (K, N)) * 32.0
+    cot = jrandom.normal(jrandom.PRNGKey(2), (M, N))
+    dimension_numbers = (((1,), (0,)), ((), ()))
+
+    n = 16
+    one = jnp.ones(1, jnp.float32)
+    lhs_hist = jnp.zeros(n, jnp.float32).at[0].set(jnp.max(jnp.abs(lhs)))
+    rhs_hist = jnp.zeros(n, jnp.float32).at[0].set(jnp.max(jnp.abs(rhs)))
+    grad_hist = jnp.zeros(n, jnp.float32)
+
+    def fp8_matmul(lhs, rhs):
+        return fp8_scaled_dot_general(
+            lhs,
+            rhs,
+            dimension_numbers,
+            preferred_element_type=jnp.float32,
+            lhs_scale=one,
+            rhs_scale=one,
+            grad_scale=one,
+            lhs_amax_history=lhs_hist,
+            rhs_amax_history=rhs_hist,
+            grad_amax_history=grad_hist,
+        )
+
+    _, vjp_fn = jax.vjp(fp8_matmul, lhs, rhs)
+    grad_lhs, grad_rhs = vjp_fn(cot)
+
+    def rel(a, b):
+        return np.linalg.norm(a - b) / np.linalg.norm(b)
+
+    assert rel(grad_lhs, cot @ rhs.T) < 0.2, f"grad_lhs rel err {rel(grad_lhs, cot @ rhs.T)}"
+    assert rel(grad_rhs, lhs.T @ cot) < 0.2, f"grad_rhs rel err {rel(grad_rhs, lhs.T @ cot)}"
+
+
+def test_fp8_forward_matches_reference_under_nonunit_scales():
+    # test_fp8_is_reasonable only covers the unit-scale fresh state. Here the
+    # delayed-scaling state carries non-unit scales: pre-seed the amax histories
+    # from operands with large, distinct magnitudes so input and kernel get
+    # non-unit scales ~32x apart. The out_dq dequantize must undo lhs_scale *
+    # rhs_scale so the forward output tracks the exact fp32 matmul lhs @ rhs (an
+    # oracle independent of the FP8 implementation); a missing/mismatched scale
+    # would be off by orders of magnitude, not just quantization noise.
+    M, K, N = 8, 16, 4
+    lhs = jrandom.normal(jrandom.PRNGKey(0), (M, K)) * 4.0
+    rhs = jrandom.normal(jrandom.PRNGKey(1), (K, N)) * 128.0
+    dimension_numbers = (((1,), (0,)), ((), ()))
+
+    n = 16
+    one = jnp.ones(1, jnp.float32)
+    lhs_hist = jnp.zeros(n, jnp.float32).at[0].set(jnp.max(jnp.abs(lhs)))
+    rhs_hist = jnp.zeros(n, jnp.float32).at[0].set(jnp.max(jnp.abs(rhs)))
+    grad_hist = jnp.zeros(n, jnp.float32)
+
+    y = fp8_scaled_dot_general(
+        lhs,
+        rhs,
+        dimension_numbers,
+        preferred_element_type=jnp.float32,
+        lhs_scale=one,
+        rhs_scale=one,
+        grad_scale=one,
+        lhs_amax_history=lhs_hist,
+        rhs_amax_history=rhs_hist,
+        grad_amax_history=grad_hist,
+    )
+
+    ref = lhs @ rhs
+    rel = np.linalg.norm(np.asarray(y) - ref) / np.linalg.norm(ref)
+    assert rel < 0.1, f"forward rel err {rel} too large"
+
+
 # https://github.com/google/flax/blob/6f2b08e024c2fd2f8cec42a6c82408cb35412319/tests/linen/linen_test.py#L1222
+# Validates the delayed-scaling state update against a manual reference: each
+# step rolls the amax history and recomputes the scale with the TE formula on
+# the input, kernel and output-gradient amax.
 def test_fp_loop():
     key, init_key, random_key = jrandom.split(jrandom.PRNGKey(seed=123), 3)
     Batch = hax.Axis("Batch", 16)

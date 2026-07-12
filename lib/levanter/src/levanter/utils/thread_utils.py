@@ -75,27 +75,3 @@ class AsyncIteratorWrapper(Iterator):
             self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join()
         self.loop.close()
-
-
-class ExceptionTrackingThread(threading.Thread):
-    """A thread that will store exceptions that occur in the target function and
-    re-raise them in the main thread."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._exception = None
-
-    def run(self):
-        try:
-            super().run()
-        except Exception as e:
-            self._exception = e
-
-    def join(self, *args, **kwargs):
-        super().join(*args, **kwargs)
-        if self._exception:
-            raise self._exception
-
-    def check_raise(self):
-        if self._exception:
-            raise self._exception

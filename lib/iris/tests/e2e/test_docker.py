@@ -8,18 +8,17 @@ Workers with a DockerRuntime. They validate behavior that only manifests inside
 real containers (cgroup OOM kills, JAX coordinator env vars).
 """
 
+import os
 import uuid
 from pathlib import Path
 
 import pytest
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.types import AcceleratorType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
-from iris.rpc import config_pb2
 from iris.rpc import job_pb2
-
 from tests.e2e._docker_cluster import E2ECluster
 
-pytestmark = [pytest.mark.e2e, pytest.mark.docker]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.docker]
 
 
 def unique_name(prefix: str) -> str:
@@ -60,7 +59,7 @@ def tpu_sim_cluster(shared_cache):
         )
         metadata = build_worker_metadata(
             hardware=hardware,
-            accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            accelerator_type=AcceleratorType.TPU,
             accelerator_variant="v4-8-sim",
         )
         return FixedEnvironmentProvider(metadata)
@@ -119,8 +118,6 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
     """
 
     def validate_jax_env_format():
-        import os
-
         addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
         proc_id = os.environ.get("JAX_PROCESS_ID", "")
         num_procs = os.environ.get("JAX_NUM_PROCESSES", "")

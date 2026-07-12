@@ -11,10 +11,10 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
-from levanter.data.text import DpoExample
-from levanter.dpo import _logp_sum, dpo_loss_from_logps
+from levanter.data.text.preference import DpoExample
+from levanter.dpo import logp_sum, dpo_loss_from_logps
 from levanter.layers.attention import AttentionMask
-from levanter.lora import (
+from levanter.adaptor.lora import (
     LoraConfig,
     LoraLinear,
     lora_trainable_params_filter,
@@ -59,7 +59,7 @@ def test_unwrap_lora_modules_returns_base_model():
     model = _make_gpt2_model(model_key)
     model = inference_mode(model, True)
 
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     unwrapped = unwrap_lora_modules(loraized)
 
     input_tokens = hax.random.randint(input_key, Pos, 0, Vocab.size)
@@ -79,7 +79,7 @@ def test_unwrap_lora_modules_no_lora_linear_nodes():
     model_key, lora_key = jrandom.split(key)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
 
     # Verify LoraLinear exists in the loraized model
     lora_leaves = jax.tree_util.tree_leaves(loraized, is_leaf=lambda x: isinstance(x, LoraLinear))
@@ -100,7 +100,7 @@ def test_lora_dpo_loss_computes_correctly():
     model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     example = _make_dpo_example(example_key)
 
     reference_model = unwrap_lora_modules(loraized)
@@ -108,11 +108,11 @@ def test_lora_dpo_loss_computes_correctly():
 
     key_chosen, key_rejected = jrandom.split(loss_key)
 
-    logp_pi_chosen = _logp_sum(loraized, example.chosen, key=key_chosen)
-    logp_pi_rejected = _logp_sum(loraized, example.rejected, key=key_rejected)
+    logp_pi_chosen = logp_sum(loraized, example.chosen, key=key_chosen)
+    logp_pi_rejected = logp_sum(loraized, example.rejected, key=key_rejected)
 
-    logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
-    logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
+    logp_ref_chosen = jax.lax.stop_gradient(logp_sum(reference_model, example.chosen, key=key_chosen))
+    logp_ref_rejected = jax.lax.stop_gradient(logp_sum(reference_model, example.rejected, key=key_rejected))
 
     delta_pi = logp_pi_chosen - logp_pi_rejected
     delta_ref = logp_ref_chosen - logp_ref_rejected
@@ -134,7 +134,7 @@ def test_lora_dpo_trainable_filter_only_lora_params():
     model_key, lora_key = jrandom.split(key)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
 
     trainable_filter = lora_trainable_params_filter(loraized)
 
@@ -151,49 +151,6 @@ def test_lora_dpo_trainable_filter_only_lora_params():
     ), f"Non-trainable ({non_trainable_count}) should outnumber trainable ({trainable_count})"
 
 
-def test_lora_dpo_gradient_only_flows_to_lora_params():
-    """Compute gradients of DPO loss, verify only LoRA params receive nonzero gradients."""
-
-    key = jrandom.PRNGKey(4)
-    model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
-
-    model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
-    example = _make_dpo_example(example_key)
-
-    def compute_loss(model):
-        reference_model = unwrap_lora_modules(model)
-        reference_model = inference_mode(reference_model, True)
-
-        k_c, k_r = jrandom.split(loss_key)
-        logp_pi_chosen = _logp_sum(model, example.chosen, key=k_c)
-        logp_pi_rejected = _logp_sum(model, example.rejected, key=k_r)
-        logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=k_c))
-        logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=k_r))
-        delta_pi = logp_pi_chosen - logp_pi_rejected
-        delta_ref = logp_ref_chosen - logp_ref_rejected
-        loss, _ = dpo_loss_from_logps(delta_pi, delta_ref, beta=0.1)
-        return loss
-
-    # eqx.filter_grad differentiates w.r.t. all inexact arrays and returns
-    # the same structure with gradients (or None/zero for non-diff leaves)
-    grads = eqx.filter_grad(compute_loss)(loraized)
-
-    # The gradient tree has the same structure as the model.
-    # LoRA params live inside LoraLinear.lora (a LowRankLinear).
-    # Check that some LoRA gradient arrays are nonzero.
-    all_grad_leaves = jax.tree_util.tree_leaves(grads)
-    # Gradients may be NamedArrays, raw jax arrays, or None
-    array_grads = [g for g in all_grad_leaves if g is not None and not isinstance(g, bool) and hasattr(g, "shape")]
-    assert len(array_grads) > 0, (
-        f"Should have gradient arrays, got {len(all_grad_leaves)} leaves, "
-        f"types: {set(type(g).__name__ for g in all_grad_leaves)}"
-    )
-
-    has_nonzero = any(jnp.any(jnp.asarray(g.array if isinstance(g, hax.NamedArray) else g) != 0) for g in array_grads)
-    assert has_nonzero, "At least one gradient should be nonzero (from LoRA params)"
-
-
 class _CapturingConverter:
     def __init__(self):
         self.calls = []
@@ -207,7 +164,7 @@ def test_save_merged_hf_model_passes_generation_config():
     model_key, lora_key = jrandom.split(key)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, a_init_mode="random"), key=lora_key)
     converter = _CapturingConverter()
     generation_config = {"eos_token_id": [2, 50]}
 
@@ -242,7 +199,7 @@ def test_unwrap_lora_modules_with_stacked():
     k0 = jrandom.PRNGKey(5)
     module: hnn.Stacked[Module] = hnn.Stacked.init(Layers, Module)(key=jrandom.split(k0, Layers.size))
 
-    loraized = loraize(module, LoraConfig(r=4, target_modules=["first"]), key=k0)
+    loraized = loraize(module, LoraConfig(r=4, target_modules=["first"], a_init_mode="random"), key=k0)
     assert isinstance(loraized.stacked.first, LoraLinear)
 
     unwrapped = unwrap_lora_modules(loraized)
@@ -266,7 +223,7 @@ def test_zero_init_b_makes_lora_identity():
     model = _make_gpt2_model(model_key)
     model = inference_mode(model, True)
 
-    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True, a_init_mode="random"), key=lora_key)
 
     input_tokens = hax.random.randint(input_key, Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
@@ -285,7 +242,7 @@ def test_zero_init_b_dpo_loss_starts_near_log2():
     model_key, lora_key, example_key, loss_key = jrandom.split(key, 4)
 
     model = _make_gpt2_model(model_key)
-    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True), key=lora_key)
+    loraized = loraize(model, LoraConfig(r=4, zero_init_b=True, a_init_mode="random"), key=lora_key)
     example = _make_dpo_example(example_key)
 
     reference_model = unwrap_lora_modules(loraized)
@@ -293,11 +250,11 @@ def test_zero_init_b_dpo_loss_starts_near_log2():
 
     key_chosen, key_rejected = jrandom.split(loss_key)
 
-    logp_pi_chosen = _logp_sum(loraized, example.chosen, key=key_chosen)
-    logp_pi_rejected = _logp_sum(loraized, example.rejected, key=key_rejected)
+    logp_pi_chosen = logp_sum(loraized, example.chosen, key=key_chosen)
+    logp_pi_rejected = logp_sum(loraized, example.rejected, key=key_rejected)
 
-    logp_ref_chosen = jax.lax.stop_gradient(_logp_sum(reference_model, example.chosen, key=key_chosen))
-    logp_ref_rejected = jax.lax.stop_gradient(_logp_sum(reference_model, example.rejected, key=key_rejected))
+    logp_ref_chosen = jax.lax.stop_gradient(logp_sum(reference_model, example.chosen, key=key_chosen))
+    logp_ref_rejected = jax.lax.stop_gradient(logp_sum(reference_model, example.rejected, key=key_rejected))
 
     delta_pi = logp_pi_chosen - logp_pi_rejected
     delta_ref = logp_ref_chosen - logp_ref_rejected

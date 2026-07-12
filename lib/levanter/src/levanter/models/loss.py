@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import Literal, Optional, cast, overload
 
 import jax
@@ -13,17 +12,24 @@ from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
+    Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
 )
 
-# DEBUGSTART — debug_accum_tpu_type Class-B BH: env-var override for CE implementation.
-# Default on TPU is "xla" (the blocked XLA kernel). Set MARIN_DEBUG_CE_IMPL=reference
-# to force the pure-JAX reference path (no blocking, no Pallas). Other allowed values:
-# xla, pallas_tpu, pallas_gpu. Unset/empty = default selection.
-_DBG_CE_IMPL = os.environ.get("MARIN_DEBUG_CE_IMPL", "").strip() or None
-# DEBUGEND
-
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
+
+
+def next_token_loss_weight(Pos: hax.Axis, loss_weight: Optional[NamedArray]) -> NamedArray:
+    """Build the per-position loss weight for next-token prediction.
+
+    The final position has no next token to predict, so it is always masked out. A
+    caller-supplied ``loss_weight`` is multiplied by this mask (in its own dtype); when
+    none is given the mask itself is returned as float32.
+    """
+    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
+    if loss_weight is not None:
+        return loss_weight * not_last_mask.astype(loss_weight.dtype)
+    return not_last_mask.astype(jnp.float32)
 
 
 def maybe_fused_next_token_loss(
@@ -63,19 +69,16 @@ def maybe_fused_next_token_loss(
         NamedArray: Computed loss.
     """
     # Resolve axes
-    Pos = pred_embeddings.resolve_axis(Pos.name)
+    Pos = cast(hax.Axis, pred_embeddings.resolve_axis(Pos.name))
     Vocab = pred_lm_head.resolve_axis(Vocab)
 
     # Shift target tokens to predict the next token
     target_y = hax.roll(true_ids, -1, Pos)
 
-    # Create a mask that excludes the last token
-    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
+    # When a loss_weight is supplied, the fused kernel runs the loss in its dtype.
     if loss_weight is not None:
         dtype = loss_weight.dtype
-        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
-    else:
-        loss_weight = not_last_mask.astype(jnp.float32)
+    loss_weight = next_token_loss_weight(Pos, loss_weight)
 
     # Compute the loss with optional block-wise processing
     return fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -126,13 +129,7 @@ def next_token_loss(
     target_y = hax.roll(true_ids, -1, Pos)
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
-    # Create a mask that excludes the last token
-    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-    if loss_weight is not None:
-        dtype = loss_weight.dtype
-        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
-    else:
-        loss_weight = not_last_mask.astype(jnp.float32)
+    loss_weight = next_token_loss_weight(Pos, loss_weight)
 
     return cross_entropy_and_logsumexp_penalty(
         Vocab=Vocab,
@@ -181,6 +178,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | None = None,
     return_argmax: Literal[False] = False,
 ) -> NamedArray: ...
 
@@ -201,6 +199,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | None = None,
     return_argmax: Literal[True] = True,
 ) -> tuple[NamedArray, NamedArray]: ...
 
@@ -220,6 +219,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = None,
+    implementation: Implementation | None = None,
     return_argmax: bool = False,
 ) -> NamedArray | tuple[NamedArray, NamedArray]:
     """
@@ -238,6 +238,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         block_size (int | None): Optional vocabulary block size for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
         precision (Optional[jax.lax.PrecisionLike]): Optional matmul precision override for the fused kernel.
+        implementation (Implementation | None): Backend selector ("xla", "pallas_tpu", etc.).
         return_argmax (bool): Whether to return per-position argmax token ids as well.
 
     Returns:
@@ -260,7 +261,10 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
         flat_labels = hax.flatten_axes(shard_labels, shard_labels.axes, batch_axis)
 
-        _kernel_kwargs = dict(
+        kernel_output = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
+            flat_embeddings.array,
+            flat_labels.array.astype(jnp.int32),
+            shard_lm_head.array,
             reduction=None,
             weight=None,
             logsumexp_weight=logsumexp_weight,
@@ -268,17 +272,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
+            implementation=implementation,
             return_argmax=return_argmax,
-        )
-        # DEBUGSTART — BH: MARIN_DEBUG_CE_IMPL forces kernel implementation
-        if _DBG_CE_IMPL is not None:
-            _kernel_kwargs["implementation"] = _DBG_CE_IMPL
-        # DEBUGEND
-        kernel_output = fused_cross_entropy_loss_and_logsumexp_penalty_kernel(
-            flat_embeddings.array,
-            flat_labels.array.astype(jnp.int32),
-            shard_lm_head.array,
-            **_kernel_kwargs,
         )
         if return_argmax:
             loss_flat, argmax_flat = cast(tuple[jax.Array, jax.Array], kernel_output)

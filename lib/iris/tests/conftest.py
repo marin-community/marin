@@ -7,37 +7,105 @@ import logging
 import os
 import subprocess
 import sys
-from pathlib import Path
 import threading
 import time
 import traceback
 import warnings
+from pathlib import Path
 
 import pytest
-from iris.cluster.config import load_config, make_local_config
-from iris.rpc import config_pb2
+from finelog.client import LogClient
+from finelog.embedded import is_available as finelog_native_available
+from finelog.embedded import require_embedded_server
+from finelog.rpc.logging_connect import LogServiceClientSync
+from iris.client.local_client import make_local_client
+from iris.cluster.config import (
+    IrisClusterConfig,
+    LocalSliceConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    load_config,
+    make_local_config,
+)
+from iris.cluster.types import AcceleratorType, CapacityType
+from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
 
 
-def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
-    """Build a local config with no auto-scaled workers."""
+@pytest.fixture
+def embedded_log_server(tmp_path):
+    """A fresh in-process native finelog server for tests that exercise logs/stats.
+
+    Boots the same engine the ``finelog-server`` binary runs over a per-test
+    on-disk ``log_dir``. (In-memory mode spawns no maintenance task, so its RAM
+    buffer never flushes to a readable segment — written logs would never be
+    queryable; a disk-backed store serves reads.) Function-scoped so every test
+    gets an isolated store. Tests talk to it over the normal RPC contract via
+    ``finelog.client.LogClient`` or the generated ``LogServiceClientSync``
+    against ``embedded_log_server.address``. Skips when the native extension is
+    unavailable (e.g. a pure-Python install).
+    """
+    if not finelog_native_available():
+        pytest.skip("finelog native server extension (finelog_server) not available")
+    server = require_embedded_server()(log_dir=str(tmp_path / "log-server"))
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def log_client(embedded_log_server):
+    """A ``finelog.client.LogClient`` connected to the per-test embedded server."""
+    client = LogClient.connect(embedded_log_server.address)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    """A LogService RPC client against the per-test embedded server.
+
+    ``push_logs`` returns only once the batch is sealed into a segment, which is
+    what a read scans, so push→fetch is synchronously visible within a test
+    without any manual flush. The sync client exposes ``push_logs(request)`` /
+    ``fetch_logs(request)``.
+    """
+    return LogServiceClientSync(address=embedded_log_server.address)
+
+
+def _make_controller_only_config() -> IrisClusterConfig:
+    """Build a null-auth local config with no auto-scaled workers.
+
+    A local cluster boots with no persistent signing key, so it can only run in
+    null-auth mode (an authed provider requires ``auth.signing_key``). Auth tests
+    exercise loopback trust and identity attribution against this permissive
+    controller; the token-verification logic itself is unit-tested directly.
+    """
     config = load_config(DEFAULT_CONFIG)
-    config.scale_groups.clear()
-    sg = config.scale_groups["placeholder"]
-    sg.name = "placeholder"
-    sg.num_vms = 1
-    sg.buffer_slices = 0
-    sg.max_slices = 0
-    sg.resources.cpu_millicores = 1000
-    sg.resources.memory_bytes = 1 * 1024**3
-    sg.resources.disk_bytes = 10 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.slice_template.local.SetInParent()
+    config.scale_groups = {
+        "placeholder": ScaleGroupConfig(
+            name="placeholder",
+            num_vms=1,
+            buffer_slices=0,
+            max_slices=0,
+            resources=ScaleGroupResources(
+                cpu_millicores=1000,
+                memory_bytes=1 * 1024**3,
+                disk_bytes=10 * 1024**3,
+                device_type=AcceleratorType.CPU,
+                capacity_type=CapacityType.ON_DEMAND,
+            ),
+            slice_template=SliceConfig(local=LocalSliceConfig()),
+        )
+    }
     return make_local_config(config)
 
 
@@ -106,19 +174,39 @@ def sentinel(tmp_path) -> SentinelFile:
     return SentinelFile(str(tmp_path / "sentinel"))
 
 
+@pytest.fixture
+def local_iris_client():
+    """Boot an in-process LocalCluster and yield an IrisClient connected to it.
+
+    Cluster is torn down on teardown even if the test raises. For module-scoped
+    reuse, override this fixture in your test file with ``scope="module"`` and
+    the same body — ``make_local_client`` does not depend on per-test state.
+    """
+
+    client = make_local_client()
+    try:
+        yield client
+    finally:
+        client.shutdown()
+
+
 @pytest.fixture(autouse=True)
-def _thread_cleanup():
-    """Ensure no new non-daemon threads leak from each test.
+def _thread_cleanup(request):
+    """Isolate each test's managed threads and warn on leaks.
 
-    Takes a snapshot of threads before the test and checks that no new
-    non-daemon threads remain after teardown. Waits briefly for threads
-    that are in the process of shutting down.
+    Installs a fresh ThreadContainer via thread_container_scope() so every
+    component that calls get_thread_container() registers its threads into a
+    per-test container that is stopped on teardown. This ensures log-server
+    uvicorn threads and other managed threads are joined even when a test
+    constructs a Controller without calling stop().
 
-    This fixture helps catch tests that don't properly clean up their threads,
-    which can cause tests to hang or interfere with each other.
+    As a safety net, takes a snapshot of threads before the test and warns
+    about any non-daemon threads created outside any container that survive
+    teardown.
     """
     before = {t.ident for t in threading.enumerate()}
-    yield
+    with thread_container_scope(name=f"test:{request.node.name}"):
+        yield
 
     def _no_leaked_threads() -> bool:
         return not any(

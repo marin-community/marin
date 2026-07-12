@@ -20,19 +20,19 @@ Cheers,
 
 Ninie
 
-[Twitter](https://twitter.com/intent/tweet?text=Our%20startup%20made%20it%20to%20the%20red%20carpet%3F!&url=https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "") [Facebook](https://www.facebook.com/sharer/sharer.php?u=https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "") [Google+](https://plus.google.com/share?url=https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "") [Email](mailto:?subject=Our%20startup%20made%20it%20to%20the%20red%20carpet%3F!&body=I%20thought%20you%20might%20like%20this%20article%3A%20https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "")      
+[Twitter](https://twitter.com/intent/tweet?text=Our%20startup%20made%20it%20to%20the%20red%20carpet%3F!&url=https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "") [Facebook](https://www.facebook.com/sharer/sharer.php?u=https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "") [Google+](https://plus.google.com/share?url=https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "") [Email](mailto:?subject=Our%20startup%20made%20it%20to%20the%20red%20carpet%3F!&body=I%20thought%20you%20might%20like%20this%20article%3A%20https://insiderbyfavcy.com/our-startup-made-it-to-the-red-carpet "")
 
 Author
 
 [Favcy 1st Cheque](/author/harshitjoshi "")  
 
-A platform for first-time angel investors to learn the science of early-stage startup evaluation. Get exclusive access to pre-vetted deal flow and make your first investment. 
+A platform for first-time angel investors to learn the science of early-stage startup evaluation. Get exclusive access to pre-vetted deal flow and make your first investment.
 
 [Next Post 
 
 ## This startup is changing how students can earn money.🎮
 
-Posted a year ago](/this-startup-is-changing-how-students-can-earn-money "")   [You Might Enjoy 
+Posted a year ago](/this-startup-is-changing-how-students-can-earn-money "")  [You Might Enjoy 
 
 ## Cockroach startups \>\>\> Instant unicorns?! Hear us out....
 

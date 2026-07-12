@@ -3,17 +3,15 @@
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, Mapping, Optional
 
 import jax
+import numpy as np
 
 from levanter.tracker import Tracker
-from levanter.tracker.histogram import Histogram
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils.jax_utils import jnp_to_python
-
-logger = logging.getLogger(__name__)
 
 
 def _to_jsonable(value: Any):
@@ -22,18 +20,16 @@ def _to_jsonable(value: Any):
         return {k: _to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_jsonable(v) for v in value]
-    if isinstance(value, Histogram):
-        return {
-            "min": jnp_to_python(value.min),
-            "max": jnp_to_python(value.max),
-            "num": jnp_to_python(value.num),
-            "sum": jnp_to_python(value.sum),
-            "sum_squares": jnp_to_python(value.sum_squares),
-            "bucket_limits": jnp_to_python(value.bucket_limits),
-            "bucket_counts": jnp_to_python(value.bucket_counts),
-        }
+    if is_dataclass(value):
+        return {field.name: _to_jsonable(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, jax.Array):
         return jnp_to_python(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
 
     if isinstance(value, str | int | float | bool | type(None)):
         return value
@@ -71,10 +67,7 @@ class JsonLoggerTracker(Tracker):
                 "hparams": hparams,
             }
         )
-        try:
-            self.logger.info(json.dumps(record))
-        except TypeError as e:
-            logger.info(f"Oh noes... {e}")
+        self.logger.info(json.dumps(record))
 
     def log(self, metrics: Mapping[str, Any], *, step: Optional[int], commit: Optional[bool] = None):
         del commit

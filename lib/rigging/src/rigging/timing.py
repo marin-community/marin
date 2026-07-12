@@ -8,7 +8,7 @@ import random
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TypeVar
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,10 @@ class Duration:
     """
 
     def __init__(self, milliseconds: int):
-        self._ms = milliseconds
+        # Coerce to int so ``to_ms()`` honours its return type and proto int64
+        # fields accept it: ``from_hours``/``from_minutes`` pass through float
+        # inputs (e.g. ``from_hours(24.0)``) that would otherwise be stored as floats.
+        self._ms = int(milliseconds)
 
     @classmethod
     def from_seconds(cls, seconds: float) -> "Duration":
@@ -252,13 +255,17 @@ class Timestamp:
 
     def as_formatted_date(self) -> str:
         """Format as ISO 8601 string in UTC."""
-        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=timezone.utc)
+        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=UTC)
         return dt.isoformat()
 
     def as_short_time(self) -> str:
         """Format as HH:MM:SS for log lines."""
-        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=timezone.utc)
+        dt = datetime.fromtimestamp(self.epoch_seconds(), tz=UTC)
         return dt.strftime("%H:%M:%S")
+
+    def as_naive_utc(self) -> datetime:
+        """tz-naive UTC ``datetime``, e.g. for finelog ``ts`` columns (TIMESTAMP_MS)."""
+        return datetime.fromtimestamp(self.epoch_seconds(), tz=UTC).replace(tzinfo=None)
 
     def age_ms(self) -> int:
         """Get age of this timestamp in milliseconds."""
@@ -421,7 +428,8 @@ class TokenBucket:
     def __init__(self, capacity: int, refill_period: Duration):
         self._capacity = capacity
         self._tokens = float(capacity)
-        self._refill_rate = capacity / refill_period.to_seconds()  # tokens/sec
+        # tokens/sec; mutable so callers can adjust the cadence at runtime.
+        self.refill_rate = capacity / refill_period.to_seconds()
         self._last_refill = Timestamp.from_ms(0)
         self._lock = threading.Lock()
 
@@ -440,8 +448,21 @@ class TokenBucket:
         if elapsed_ms <= 0:
             return
         elapsed_seconds = elapsed_ms / 1000.0
-        self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self._refill_rate)
+        self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self.refill_rate)
         self._last_refill = now
+
+    def cap_tokens(self, max_tokens: float, now: Timestamp | None = None) -> None:
+        """Refill to ``now`` and then clamp the available token count to ``max_tokens``."""
+        now = now or Timestamp.now()
+        with self._lock:
+            self._refill(now)
+            if self._tokens > max_tokens:
+                self._tokens = max(0.0, max_tokens)
+
+    @property
+    def capacity(self) -> int:
+        """Maximum tokens the bucket can hold."""
+        return self._capacity
 
     @property
     def available(self) -> int:

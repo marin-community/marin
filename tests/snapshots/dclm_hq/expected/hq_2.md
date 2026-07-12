@@ -2,7 +2,11 @@
 
 # Digital Command Control
 
-From Wikipedia, the free encyclopedia   Jump to: navigation, search  For other uses, see DCC (disambiguation). 
+From Wikipedia, the free encyclopedia
+
+Jump to: navigation, search
+
+For other uses, see DCC (disambiguation).
 
 **Digital Command Control** (DCC) is a standard for a system to operate model railways digitally. When equipped with Digital Command Control, locomotives on the same electrical section of track can be independently controlled.
 
@@ -11,9 +15,9 @@ The DCC protocol is defined by the Digital Command Control Working group of the 
 ## Contents
 
 * 1 How DCC works
-    + 1.1 History and Protocols
-    + 1.2 Advantages
-    + 1.3 Railcom
++ 1.1 History and Protocols
++ 1.2 Advantages
++ 1.3 Railcom
 * 2 Principle schematic
 * 3 Competing Systems
 * 4 See also
@@ -22,7 +26,7 @@ The DCC protocol is defined by the Digital Command Control Working group of the 
 
 ## How DCC works\[edit\]
 
-A short, mid packet, example of a DCC signal and its encoded bit stream   
+A short, mid packet, example of a DCC signal and its encoded bit stream
 
 A DCC command station, in combination with its booster, modulates the voltage on the track to encode digital messages while providing electric power.
 
@@ -42,7 +46,7 @@ The DCC protocol defines signal levels and timings on the track. DCC does not sp
 
 ### Advantages\[edit\]
 
-A DCC decoder installed in an N scale steam locomotive   
+A DCC decoder installed in an N scale steam locomotive
 
 The great advantage of digital control is the individual control of locomotives wherever they are on the layout. With analog control, operating more than one locomotive independently requires the track to be wired into separate "blocks" each having switches to select the controller. Using digital control, locomotives may be controlled wherever they are located.
 
@@ -90,15 +94,19 @@ The first UK command control built around digital technology was the Zero 1 syst
 * CVP's EasyDCC System - Manufacturer of DCC related products
 * OpenDCC - An open project for building your own decoders, command stations etc.
 
-Retrieved from "http://en.wikipedia.org/w/index.php?title=Digital\_Command\_Control&oldid=598760284"      
+Retrieved from "http://en.wikipedia.org/w/index.php?title=Digital\_Command\_Control&oldid=598760284"
 
 ## Navigation menu
 
-Digital Command Control - Wikipedia, the free encyclopedia                    
+Digital Command Control - Wikipedia, the free encyclopedia                 
 
 # Digital Command Control
 
-From Wikipedia, the free encyclopedia   Jump to: navigation, search  For other uses, see DCC (disambiguation). 
+From Wikipedia, the free encyclopedia
+
+Jump to: navigation, search
+
+For other uses, see DCC (disambiguation).
 
 **Digital Command Control** (DCC) is a standard for a system to operate model railways digitally. When equipped with Digital Command Control, locomotives on the same electrical section of track can be independently controlled.
 
@@ -107,9 +115,9 @@ The DCC protocol is defined by the Digital Command Control Working group of the 
 ## Contents
 
 * 1 How DCC works
-    + 1.1 History and Protocols
-    + 1.2 Advantages
-    + 1.3 Railcom
++ 1.1 History and Protocols
++ 1.2 Advantages
++ 1.3 Railcom
 * 2 Principle schematic
 * 3 Competing Systems
 * 4 See also
@@ -118,7 +126,7 @@ The DCC protocol is defined by the Digital Command Control Working group of the 
 
 ## How DCC works\[edit\]
 
-A short, mid packet, example of a DCC signal and its encoded bit stream   
+A short, mid packet, example of a DCC signal and its encoded bit stream
 
 A DCC command station, in combination with its booster, modulates the voltage on the track to encode digital messages while providing electric power.
 
@@ -138,7 +146,7 @@ The DCC protocol defines signal levels and timings on the track. DCC does not sp
 
 ### Advantages\[edit\]
 
-A DCC decoder installed in an N scale steam locomotive   
+A DCC decoder installed in an N scale steam locomotive
 
 The great advantage of digital control is the individual control of locomotives wherever they are on the layout. With analog control, operating more than one locomotive independently requires the track to be wired into separate "blocks" each having switches to select the controller. Using digital control, locomotives may be controlled wherever they are located.
 
@@ -186,6 +194,6 @@ The first UK command control built around digital technology was the Zero 1 syst
 * CVP's EasyDCC System - Manufacturer of DCC related products
 * OpenDCC - An open project for building your own decoders, command stations etc.
 
-Retrieved from "http://en.wikipedia.org/w/index.php?title=Digital\_Command\_Control&oldid=598760284"      
+Retrieved from "http://en.wikipedia.org/w/index.php?title=Digital\_Command\_Control&oldid=598760284"
 
 ## Navigation menu

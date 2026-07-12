@@ -1,4 +1,4 @@
-FROM python:3.11 AS build
+FROM python:3.12 AS build
 RUN apt-get update && apt-get install -y clang
 RUN pip install virtualenv
 
@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
     uv sync --frozen --no-install-workspace --package marin-levanter --extra serve --extra tpu
 
-FROM python:3.11
+FROM python:3.12
 
 # reinstall uv
 RUN pip install uv

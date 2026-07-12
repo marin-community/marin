@@ -23,14 +23,19 @@ import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import CoschedulingConfig
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration
 
 from .helpers import TestJobs
 
-pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
+
+# Worker-death detection is time-based: LocalCluster sets
+# worker_unreachable_grace=10s, so a worker continuously unreachable for ~10s is
+# torn down. With the default 1s reconcile cadence that is roughly this many
+# failed passes; the chaos cases size their max_failures relative to it.
+RECONCILE_FAILURE_THRESHOLD = 10
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +48,7 @@ def test_bundle_download_intermittent(cluster):
     enable_chaos(
         "worker.bundle_download", failure_rate=0.5, max_failures=2, error=RuntimeError("chaos: download failed")
     )
-    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3)
+    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3, max_task_failures=3)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -72,7 +77,7 @@ def test_coscheduled_sibling_failure(cluster):
 def test_retry_budget_exact(cluster):
     """Task fails exactly N-1 times, succeeds on last attempt."""
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=2, error=RuntimeError("chaos: transient"))
-    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2, max_task_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -118,8 +123,8 @@ def test_scheduling_timeout(cluster):
 
 
 def test_dispatch_delayed(cluster):
-    """Dispatch delayed by chaos (via heartbeat), but eventually goes through."""
-    enable_chaos("controller.heartbeat", delay_seconds=1.0, failure_rate=1.0, max_failures=2)
+    """Dispatch delayed by chaos on Reconcile, but eventually goes through."""
+    enable_chaos("controller.reconcile", delay_seconds=1.0, failure_rate=1.0, max_failures=2)
     job = cluster.submit(TestJobs.quick, "delayed-dispatch")
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
@@ -154,7 +159,7 @@ def test_task_fails_once_then_succeeds(cluster):
         max_failures=1,
         error=RuntimeError("chaos: transient container failure"),
     )
-    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2, max_task_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -182,124 +187,94 @@ def test_all_workers_fail(cluster):
 
 
 def test_dispatch_intermittent_failure(cluster):
-    """Intermittent heartbeat failure during dispatch (30%)."""
+    """Intermittent Reconcile failure during dispatch (30%)."""
     cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("controller.heartbeat", failure_rate=0.3)
+    enable_chaos("controller.reconcile", failure_rate=0.3)
     job = cluster.submit(TestJobs.quick, "intermittent-dispatch")
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_dispatch_permanent_failure(cluster):
-    """Permanent heartbeat failure leads to worker failure."""
+    """Permanent Reconcile failure leaves the job unable to dispatch."""
     cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("controller.heartbeat", failure_rate=1.0)
+    enable_chaos("controller.reconcile", failure_rate=1.0)
     job = cluster.submit(TestJobs.quick, "permanent-dispatch", scheduling_timeout=Duration.from_seconds(2))
     status = cluster.wait(job, timeout=10)
     assert status.state in (job_pb2.JOB_STATE_FAILED, job_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
-def test_heartbeat_temporary_failure(cluster):
-    """Heartbeat fails 3 times, stays under threshold."""
-    cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("worker.heartbeat", failure_rate=1.0, max_failures=2)
-    job = cluster.submit(TestJobs.quick, "temp-hb-fail")
-    status = cluster.wait(job, timeout=30)
-    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_heartbeat_permanent_failure(cluster):
-    """Heartbeat permanently fails -> worker marked failed."""
-    cluster.wait_for_workers(1, timeout=15)
-    enable_chaos("worker.heartbeat", failure_rate=1.0)
-    job = cluster.submit(TestJobs.sleep, "perm-hb-fail", 120, scheduling_timeout=Duration.from_seconds(2))
-    status = cluster.wait(job, timeout=10)
-    assert status.state in (
-        job_pb2.JOB_STATE_FAILED,
-        job_pb2.JOB_STATE_WORKER_FAILED,
-        job_pb2.JOB_STATE_UNSCHEDULABLE,
-    )
-
-
 # ---------------------------------------------------------------------------
-# Heartbeat threshold (from test_heartbeat.py)
+# Reconcile-RPC threshold: a worker whose Reconcile RPCs keep failing accrues
+# UNREACHABLE health events and is torn down once it has been continuously
+# unreachable for the grace (~RECONCILE_FAILURE_THRESHOLD failed passes at the
+# 1s local cadence). The reconcile RPC outcome is the only liveness signal (no
+# ping loop), so worker-failure detection is chaos-tested via "controller.reconcile".
 # ---------------------------------------------------------------------------
 
-# Local config sets heartbeat_failure_threshold = 3 via make_local_config().
-LOCAL_HEARTBEAT_FAILURE_THRESHOLD = 3
 
-
-def test_heartbeat_survives_transient_delay(cluster):
-    """Brief heartbeat delays don't trigger reset."""
-    job = cluster.submit(TestJobs.quick, "transient-delay")
-    enable_chaos("worker.heartbeat", delay_seconds=0.3, max_failures=2)
+def test_reconcile_below_threshold_recovers(cluster):
+    """Reconcile-RPC failures below threshold don't kill the worker."""
+    enable_chaos(
+        "controller.reconcile",
+        failure_rate=1.0,
+        max_failures=RECONCILE_FAILURE_THRESHOLD - 2,
+        delay_seconds=0.01,
+    )
+    job = cluster.submit(TestJobs.quick, "transient-reconcile-fail")
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_heartbeat_below_threshold_recovers(cluster):
-    """Heartbeat failures below threshold don't kill the worker."""
-    failures_to_inject = LOCAL_HEARTBEAT_FAILURE_THRESHOLD - 2
+def test_reconcile_at_threshold_kills_worker(cluster):
+    """Consecutive Reconcile-RPC failures at threshold mark worker failed, task retried."""
     enable_chaos(
-        "controller.heartbeat",
+        "controller.reconcile",
         failure_rate=1.0,
-        max_failures=failures_to_inject,
+        max_failures=RECONCILE_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
-    job = cluster.submit(TestJobs.quick, "transient-hb-fail")
-    status = cluster.wait(job, timeout=30)
-    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_heartbeat_at_threshold_kills_worker(cluster):
-    """Consecutive failures at threshold mark worker failed, task retried."""
-    enable_chaos(
-        "controller.heartbeat",
-        failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
-        delay_seconds=0.01,
-    )
-    job = cluster.submit(TestJobs.sleep, "threshold-hb-fail", 2, max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    job = cluster.submit(TestJobs.sleep, "threshold-reconcile-fail", 2, max_retries_preemption=10)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_dispatch_cleared_on_worker_failure(cluster):
-    """Dispatch queue cleared when worker hits failure threshold."""
+    """Dispatch queue cleared when worker hits the reconcile-failure threshold."""
     enable_chaos(
-        "controller.heartbeat",
+        "controller.reconcile",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD + 2,
+        max_failures=RECONCILE_FAILURE_THRESHOLD + 2,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.sleep, "dispatch-clear-test", 3, max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_multiple_workers_one_fails(cluster):
     """One worker fails while others remain healthy; task rescheduled."""
     enable_chaos(
-        "controller.heartbeat",
+        "controller.reconcile",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=RECONCILE_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.quick, "multi-worker-fail", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
-def test_heartbeat_failure_with_pending_kills(cluster):
-    """Kill requests not orphaned when worker fails."""
+def test_reconcile_failure_with_pending_kills(cluster):
+    """Kill requests not orphaned when worker fails via the reconcile-failure threshold."""
     enable_chaos(
-        "controller.heartbeat",
+        "controller.reconcile",
         failure_rate=1.0,
-        max_failures=LOCAL_HEARTBEAT_FAILURE_THRESHOLD,
+        max_failures=RECONCILE_FAILURE_THRESHOLD,
         delay_seconds=0.01,
     )
     job = cluster.submit(TestJobs.quick, "kill-clear-test", max_retries_preemption=10)
-    status = cluster.wait(job, timeout=30)
+    status = cluster.wait(job, timeout=60)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
@@ -319,14 +294,14 @@ def test_checkpoint_returns_metadata(cluster):
 
 
 def test_checkpoint_with_worker_death(cluster):
-    """Worker dies after checkpoint; task retried via heartbeat failure."""
+    """Worker dies after checkpoint; task retried via reconcile-RPC failure."""
     job = cluster.submit(TestJobs.sleep, "worker-death-retry", 5, max_retries_preemption=10)
     cluster.wait_for_state(job, job_pb2.JOB_STATE_RUNNING, timeout=15)
 
     ckpt_resp = cluster.controller_client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest())
     assert ckpt_resp.job_count >= 1
 
-    enable_chaos("controller.heartbeat", failure_rate=1.0, max_failures=4, delay_seconds=0.01)
+    enable_chaos("controller.reconcile", failure_rate=1.0, max_failures=4, delay_seconds=0.01)
     status = cluster.wait(job, timeout=45)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -338,8 +313,8 @@ def test_checkpoint_with_worker_death(cluster):
 
 @pytest.mark.slow
 def test_128_tasks_concurrent_scheduling(multi_worker_cluster, sentinel):
-    """128 simultaneous tasks expose heartbeat iteration race conditions."""
-    enable_chaos("controller.heartbeat.iteration", delay_seconds=0.01)
+    """128 simultaneous tasks expose Reconcile iteration race conditions."""
+    enable_chaos("controller.reconcile", delay_seconds=0.01)
 
     try:
         job = multi_worker_cluster.submit(

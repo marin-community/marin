@@ -34,7 +34,7 @@ class EvaluationConfig:
 
     resource_config: ResourceConfig
     """
-    Additional keyword arguments to pass to the Ray resources.
+    Resources to allocate for the eval step (passed to @remote).
     """
 
     model_name: str | None
@@ -71,11 +71,6 @@ class EvaluationConfig:
     Whether to discover the latest HF checkpoint in the model path.
     """
 
-    launch_with_ray: bool = True
-    """
-    Whether to launch the evaluation run with Ray.
-    """
-
     max_eval_instances: int | None = None
     """
     Maximum number of evaluation instances to run.
@@ -107,12 +102,18 @@ class EvaluationConfig:
 
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects."""
+    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
+
+    ``task_kwargs`` is spread into the TaskConfig so callers can pass inline task-spec fields
+    (``dataset_path``, ``output_type``, ``metric_list``, …) for tasks whose registered YAML has
+    bugs or when defining a fully-inline task under a fresh name.
+    """
     return [
         TaskConfig(
             task=task.name,
             num_fewshot=task.num_fewshot,
             task_alias=task.task_alias,
+            **(task.task_kwargs or {}),
         )
         for task in tasks
     ]

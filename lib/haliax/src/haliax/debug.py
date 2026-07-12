@@ -10,9 +10,9 @@ import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 
-
-from haliax.core import NamedArray
+import haliax.tree_util as htu
 from haliax.axis import Axis
+from haliax.core import NamedArray
 from haliax.util import is_jax_or_hax_array_like
 
 from ._src.util import IdentityMap
@@ -166,8 +166,6 @@ def visualize_shardings(tree) -> None:
     will show the mapping from logical axis names to physical axes. Plain arrays
     will fall back to :func:`jax.debug.visualize_sharding`.
     """
-
-    import haliax.tree_util as htu
 
     def _show(x):
         if isinstance(x, NamedArray):

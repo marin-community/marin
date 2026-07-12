@@ -3,12 +3,12 @@
 
 """Shared fixtures for worker tests (both mock and Docker-based)."""
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from unittest.mock import Mock
 
 import pytest
-
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
@@ -76,6 +76,7 @@ class FakeContainerHandle:
         self.stop_hook: object = None  # Callable[[bool], None] | None — set by tests for slow_stop etc.
         self.stop_calls: list[dict[str, object]] = []
         self._cleaned_up = False
+        self._killed = False
 
     @property
     def container_id(self) -> str | None:
@@ -94,8 +95,15 @@ class FakeContainerHandle:
         self.stop_calls.append({"force": force})
         if self.stop_hook is not None:
             self.stop_hook(force)  # type: ignore[operator]
+        if force:
+            # Model real runtimes: once SIGKILL has been delivered the container
+            # reports STOPPED on the next inspect. Tests that need to simulate a
+            # wedged container should override _killed back to False.
+            self._killed = True
 
     def status(self) -> ContainerStatus:
+        if self._killed:
+            return ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=137)
         idx = min(self._status_cursor, len(self._status_sequence) - 1)
         self._status_cursor += 1
         return self._status_sequence[idx]
@@ -168,7 +176,15 @@ def create_run_task_request(
     ports: list[str] | None = None,
     attempt_id: int = 0,
     task_image: str = "",
+    attempt_uid: str | None = None,
 ):
+    # Worker.submit_task requires a non-empty attempt_uid. Default to a value
+    # derived from the task identity so tests that don't care about UID still
+    # get a unique-per-attempt one.
+    if attempt_uid is None:
+        digest = hashlib.sha1(f"{task_id}#{attempt_id}".encode()).hexdigest()
+        attempt_uid = digest[:16]
+
     def test_fn():
         print("Hello from test")
 
@@ -179,8 +195,7 @@ def create_run_task_request(
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
-        extras=["dev"],
-        dockerfile="FROM python:3.11-slim\nRUN echo test",
+        setup_scripts=["uv sync\n"],
     )
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)
@@ -189,6 +204,7 @@ def create_run_task_request(
         task_id=task_id,
         num_tasks=num_tasks,
         attempt_id=attempt_id,
+        attempt_uid=attempt_uid,
         entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

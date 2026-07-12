@@ -26,25 +26,30 @@ when ``healthy=False``, it returns failure. A short health_check_timeout
 ensures unhealthy tests complete quickly without real polling delays.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 
 import pytest
-
-from iris.cluster.controller.vm_lifecycle import (
-    _build_controller_vm_config,
-    start_controller,
-    stop_controller,
+from iris.cluster.config import (
+    ControllerVmConfig,
+    GcpControllerConfig,
+    IrisClusterConfig,
+    ManualControllerConfig,
+    PlatformConfig,
+    SliceConfig,
+    VmConfig,
 )
-from iris.cluster.providers.types import (
+from iris.cluster.platforms.types import (
     CloudWorkerState,
     CommandResult,
     SliceHandle,
     WorkerStatus,
 )
-from iris.rpc import config_pb2
+from iris.cluster.platforms.vm_lifecycle import (
+    _build_controller_vm_config,
+    start_controller,
+    stop_controller,
+)
 from rigging.timing import Duration
 
 # Short timeout so unhealthy health checks fail fast in tests
@@ -90,8 +95,10 @@ class FakeWorkerHandle:
         return self._internal_address
 
     @property
-    def external_address(self) -> str | None:
-        return None
+    def worker_url(self) -> str:
+        if not self._internal_address:
+            return ""
+        return f"http://{self._internal_address}:10001"
 
     @property
     def bootstrap_log(self) -> str:
@@ -124,9 +131,6 @@ class FakeWorkerHandle:
     def bootstrap(self, script: str) -> None:
         self.bootstrap_calls.append(script)
 
-    def reboot(self) -> None:
-        pass
-
     def terminate(self, *, wait: bool = False) -> None:
         self.terminated = True
 
@@ -152,11 +156,11 @@ class FakePlatform:
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
 
-    def create_vm(self, config: config_pb2.VmConfig) -> FakeWorkerHandle:
+    def create_vm(self, config: VmConfig) -> FakeWorkerHandle:
         self.created_vms.append(self._vm_to_create)
         return self._vm_to_create
 
-    def create_slice(self, config: config_pb2.SliceConfig) -> SliceHandle:
+    def create_slice(self, config: SliceConfig) -> SliceHandle:
         raise NotImplementedError
 
     def list_slices(
@@ -196,18 +200,20 @@ def _make_config(
     label_prefix: str = "test",
     host: str = "10.0.0.1",
     port: int = 10000,
-) -> config_pb2.IrisClusterConfig:
-    config = config_pb2.IrisClusterConfig()
-    config.controller.manual.host = host
-    config.controller.manual.port = port
-    config.controller.image = "ghcr.io/test/iris:latest"
-    config.platform.label_prefix = label_prefix
+) -> IrisClusterConfig:
+    config = IrisClusterConfig(
+        platform=PlatformConfig(label_prefix=label_prefix),
+        controller=ControllerVmConfig(
+            image="ghcr.io/test/iris:latest",
+            manual=ManualControllerConfig(host=host, port=port),
+        ),
+    )
     config.defaults.ssh.user = "root"
     return config
 
 
 @pytest.fixture
-def config() -> config_pb2.IrisClusterConfig:
+def config() -> IrisClusterConfig:
     return _make_config()
 
 
@@ -354,12 +360,13 @@ def test_stop_controller_duplicate_vms_raises(config):
         stop_controller(platform, config)
 
 
-def test_gcp_controller_vm_config_defaults_to_100gb_disk():
-    """GCP controller VM defaults to 100GB disk."""
-    config = config_pb2.IrisClusterConfig()
-    config.platform.label_prefix = "test"
-    config.controller.gcp.zone = "us-central1-a"
+def test_gcp_controller_vm_config_defaults_to_500gb_disk():
+    """GCP controller VM defaults to 500GB disk (sized for log-store retention)."""
+    config = IrisClusterConfig(
+        platform=PlatformConfig(label_prefix="test"),
+        controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
+    )
 
     vm_config = _build_controller_vm_config(config)
 
-    assert vm_config.gcp.boot_disk_size_gb == 100
+    assert vm_config.gcp.boot_disk_size_gb == 500

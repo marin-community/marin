@@ -3,26 +3,12 @@
 
 from dataclasses import dataclass, field
 
-import jmp
 from fray.cluster import ResourceConfig
-from levanter.adaptation import AdaptationConfig, NoAdaptationConfig
+from levanter.adaptor import AdaptorConfig, NoAdaptorConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.trainer import MeshConfig
 from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.main.train_dpo import DpoReferenceConfig, SeparateReferenceConfig
 from levanter.schedule import IntSchedule
-
-# DPO runs two models (policy + reference) but eval doesn't need gradients/optimizer,
-# so we can fit more examples per device during eval than training.
-# Keyed by TPU variant string from ResourceConfig.
-DPO_EVAL_PARALLELISM: dict[str, int] = {
-    "v5p-8": 16,
-    "v5p-16": 16,
-    "v5p-32": 32,
-    "v5p-64": 32,
-    "v5p-128": 32,
-    "v5p-256": 64,
-}
 
 
 @dataclass(frozen=True)
@@ -44,7 +30,7 @@ class SimpleDPOConfig:
     model_name_or_path: str | None = None
     initialize_from_checkpoint_path: str | None = None
 
-    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
     reference: DpoReferenceConfig = field(default_factory=SeparateReferenceConfig)
     reference_model_path: str | None = None
     reference_is_hf: bool = True
@@ -62,7 +48,6 @@ class SimpleDPOConfig:
     cooldown: float | None = None
     lr_schedule: str = "linear"
     min_lr_ratio: float = 0.0
-    initial_zero_lr_steps: int = 0
     max_grad_norm: float | None = 1
 
     steps_per_eval: int | None = None
@@ -75,11 +60,8 @@ class SimpleDPOConfig:
     hf_generation_eos_token_ids: list[int] | None = None
     """EOS token IDs to write to generation_config.json. None means no generation config.
     For chat models, include the turn-boundary token (e.g. [128001, 128009])."""
-    mp: jmp.Policy = field(default_factory=lambda: jmp.get_policy("p=f32,c=bfloat16"))
 
-    per_device_parallelism: int = -1
     per_device_eval_parallelism: int = -1
-    mesh: MeshConfig | None = None
 
     seed: int = 0
     initialize_from_hf: bool | None = None
@@ -88,13 +70,6 @@ class SimpleDPOConfig:
 
     allow_partial_checkpoint: bool = False
     int8: bool = False
-
-    # DEBUGSTART — debug_accum_tpu_type: disable eval for 1-step traces
-    max_eval_batches: int | None = None
-    """If set, cap eval at this many batches. Set to 0 to effectively skip eval."""
-    env_vars: dict | None = None
-    """Env vars to inject into the child TPU training job (e.g., debug flags)."""
-    # DEBUGEND
 
     def __post_init__(self):
         if self.num_train_steps is not None and self.num_train_steps <= 0:

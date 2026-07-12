@@ -5,21 +5,19 @@ import os
 import tempfile
 
 import jax
-import pytest
 
 import haliax
 
 import levanter.main.eval_lm as eval_lm
 import tiny_test_corpus
 from levanter.checkpoint import save_checkpoint
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import NoopConfig
 from levanter.trainer_state import TrainerState
 from test_utils import skip_if_no_torch
 
 
-@pytest.mark.entry
 def test_eval_lm():
     # just testing if eval_lm has a pulse
     # save a checkpoint
@@ -51,7 +49,6 @@ def test_eval_lm():
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
                 checkpoint_path=f"{f}/ckpt",
             )
@@ -63,9 +60,8 @@ def test_eval_lm():
                 pass
 
 
-@pytest.mark.entry
 @skip_if_no_torch
-def test_eval_lm_from_hf():
+def test_eval_lm_from_hf(local_gpt2_tokenizer_path):
     # just testing if eval_lm has a pulse
     # save a checkpoint
     model_config = LlamaConfig(
@@ -78,7 +74,9 @@ def test_eval_lm_from_hf():
 
     with tempfile.TemporaryDirectory() as f:
         try:
-            data_config, _ = tiny_test_corpus.construct_small_data_cache(f)
+            # Local tokenizer keeps the data config off the Hub (the cache holds
+            # random ids, so the tokenizer is only used for vocab sizing).
+            data_config, _ = tiny_test_corpus.construct_small_data_cache(f, tokenizer=local_gpt2_tokenizer_path)
             tok = data_config.the_tokenizer
             Vocab = haliax.Axis("vocab", len(tok))
             model = LlamaLMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))
@@ -96,7 +94,6 @@ def test_eval_lm_from_hf():
                     tracker=NoopConfig(),
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
-                    ray=RayConfig(auto_start_cluster=False),
                 ),
                 checkpoint_path=f"{f}/ckpt",
             )

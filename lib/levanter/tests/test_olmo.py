@@ -5,17 +5,18 @@ import tempfile
 
 import chex
 import equinox as eqx
+import haliax as hax
+import haliax.nn as hnn
 import numpy as np
 import pytest
 from jax import random
-
-import haliax as hax
-import haliax.nn as hnn
+from test_utils import skip_if_no_torch, use_test_mesh
+from transformers import AutoModelForCausalLM, Olmo2ForCausalLM
 
 from levanter.layers.attention import AttentionMask
+from levanter.models.llama import LlamaMlp
 from levanter.models.olmo import Olmo2Attention, Olmo2Config, Olmo2DecoderLayer, Olmo2LMHeadModel
 from levanter.utils.jax_utils import parameter_count
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def _get_olmo2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Olmo2Config:
@@ -78,8 +79,10 @@ def test_olmo2_config():
 
 @skip_if_no_torch
 def test_olmo2_rms_norm():
-    import torch
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2RMSNorm as HFOlmo2RMSNorm
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2RMSNorm as HFOlmo2RMSNorm,
+    )
 
     config = _get_olmo2_config()
     ln = hnn.RmsNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_weight=config.use_layer_norm_weight)
@@ -101,10 +104,7 @@ def test_olmo2_mlp(num_kv_heads):
     config = _get_olmo2_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
 
-    # Direct reference to Olmo2MLP instead of going through model_type
-    from levanter.models.olmo import Olmo2MLP
-
-    mlp = Olmo2MLP.init(config.Embed, config.Mlp, config.activation_function, key=key, use_bias=config.use_bias)
+    mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=key, use_bias=config.use_bias)
 
     x, _ = _get_random_inputs(config)
     out = mlp(x)
@@ -118,9 +118,13 @@ def test_olmo2_mlp(num_kv_heads):
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2Attention as HFOlmo2Attention
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2Attention as HFOlmo2Attention,
+    )
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding,
+    )
 
     config = _get_olmo2_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -154,9 +158,13 @@ def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_olmo2_decoder_layer_vs_hf(num_kv_heads):
-    import torch
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2DecoderLayer as HFOlmo2DecoderLayer
-    from transformers.models.olmo2.modeling_olmo2 import Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2DecoderLayer as HFOlmo2DecoderLayer,
+    )
+    from transformers.models.olmo2.modeling_olmo2 import (  # noqa: PLC0415  # optional dep: torch
+        Olmo2RotaryEmbedding as HFOlmo2RotaryEmbedding,
+    )
 
     olmo2_config = _get_olmo2_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
@@ -265,11 +273,12 @@ def test_olmo2_lm_head_model_bwd(use_flash, num_kv_heads):
 @skip_if_no_torch
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
-def test_olmo2_roundtrip(scan_layers, num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, Olmo2ForCausalLM
+def test_olmo2_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
 
-    converter = Olmo2Config().hf_checkpoint_converter()
+    # Local tokenizer + no remote reference keeps the roundtrip off the Hub; the
+    # tokenizer is incidental (random inputs, logit-equivalence only).
+    converter = Olmo2Config(reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path).hf_checkpoint_converter()
 
     config = Olmo2Config(
         max_seq_len=128,
@@ -331,7 +340,7 @@ def test_olmo2_roundtrip(scan_layers, num_kv_heads):
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
         # Save our model
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
 
         # Load saved model into HF
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
@@ -353,8 +362,6 @@ def test_olmo2_param_counts_dont_change_with_seqlen():
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo2_state_dict_consistency(num_kv_heads):
-    from transformers import Olmo2ForCausalLM
-
     config = Olmo2Config(
         max_seq_len=128,
         hidden_dim=16,

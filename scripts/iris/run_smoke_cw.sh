@@ -55,7 +55,7 @@ if [ -n "${R2_ACCESS_KEY_ID:-}" ] && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]; then
     export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
     export AWS_ENDPOINT_URL="https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
     export FSSPEC_S3="{\"endpoint_url\": \"${AWS_ENDPOINT_URL}\"}"
-    export MARIN_CI_S3_PREFIX="s3://marin-na/temp/ci"
+    export MARIN_CI_S3_PREFIX="s3://marin-na/tmp/ttl=3d/ci"
 fi
 
 export WANDB_MODE=disabled

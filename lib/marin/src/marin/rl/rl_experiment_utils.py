@@ -9,36 +9,41 @@ import uuid
 from urllib.parse import urlparse
 
 import jmp
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
-from levanter.distributed import RayConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.artifact import PathMetadata
-from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
-
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
+from marin.experiment.namespacing import user_namespaced_name
 from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
-from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
+from marin.rl.decoding import DecodingConfig
+from marin.rl.environments.inference_ctx import (
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContextConfig,
+)
+from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
 
 
-ModelArtifact = ExecutorStep | InputName | str
+ModelArtifact = ArtifactStep[LevanterCheckpoint] | str
 
 
 @dataclasses.dataclass
@@ -56,13 +61,14 @@ class ModelConfig:
 
 @dataclasses.dataclass
 class RLStepConfig:
-    """Runtime config for an RL executor step."""
+    """Runtime config for an RL launcher step."""
 
     name: str
     experiment_config: "RLExperimentConfig"
     curriculum: CurriculumConfig
     model_path: str
     output_path: str
+    resources: ResourceConfig
 
 
 @dataclasses.dataclass
@@ -79,7 +85,7 @@ class RLExperimentConfig:
     num_train_steps: int = 500
     steps_per_eval: int = 100
     checkpointer_save_interval: int = 600
-    delete_previous_temporary_checkpoint_after_save: bool = True
+    keep_last_temporary_checkpoints: int = 5
     checkpoint_debug: CheckpointDebugConfig = dataclasses.field(default_factory=CheckpointDebugConfig)
 
     # wandb
@@ -93,11 +99,12 @@ class RLExperimentConfig:
     warmup: int = 0
     lr_schedule: str = "constant"
 
-    # sampling / tokens
+    # builder-side rollout defaults for curriculum construction
     max_input_tokens: int = 4096
     max_output_tokens: int = 512
     n_prompts: int = 64
     n_generations_per_prompt: int = 16
+    train_decoding_top_k: int | None = 4096  # Workaround for vllm-project/tpu-inference#1386
 
     # replay buffer
     replay_buffer_capacity: int = 4096
@@ -113,11 +120,9 @@ class RLExperimentConfig:
     weight_transfer_sync_interval_steps: int = 1
     max_weight_transfer_wait_time: int = 0
 
-    # inference context
+    # inference backend runtime config
     inference_tensor_parallel_size: int = 4
     inference_gpu_memory_utilization: float = 0.90
-    inference_top_k: int = 4096  # Workaround for vllm-project/tpu-inference#1386
-    inference_n: int = 8
 
     # run config (TPU slice info)
     train_tpu_type: str = "v5p-8"
@@ -142,12 +147,6 @@ def executor_step_resources_for_rl_experiment(config: RLExperimentConfig) -> Res
     )
 
 
-def executor_main_config_for_rl_experiment(config: RLExperimentConfig) -> ExecutorMainConfig:
-    """Return executor config with a region-local Marin prefix."""
-    region = launcher_region_for_rl_experiment(config)
-    return ExecutorMainConfig(prefix=marin_prefix_for_region(region))
-
-
 def get_stop_tokens(model_type: str) -> list[str]:
     """Get model-specific stop tokens."""
     if model_type == "llama":
@@ -158,10 +157,11 @@ def get_stop_tokens(model_type: str) -> list[str]:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
-def _resolve_model_artifact_path(artifact: ModelArtifact) -> InputName | str:
-    if isinstance(artifact, ExecutorStep):
-        return output_path_of(artifact)
-
+def _resolve_model_artifact_path(ctx: StepContext, artifact: ModelArtifact) -> str:
+    """Resolve a model artifact to a concrete path: an ``ArtifactStep[LevanterCheckpoint]`` handle
+    to its region-local output path, a string passes through unchanged."""
+    if isinstance(artifact, ArtifactStep):
+        return ctx.artifact_path(artifact)
     return artifact
 
 
@@ -194,6 +194,36 @@ def _resolve_config_class(config_class_path: str) -> type[HFCompatConfig]:
     return obj
 
 
+def _build_vllm_engine_config(config: RLExperimentConfig, model_path: str) -> VLLMEngineConfig:
+    """Return engine/runtime settings for the vLLM backend."""
+    return VLLMEngineConfig(
+        model_name=model_path,
+        canonical_model_name=config.model_config.name,
+        max_model_len=config.max_input_tokens + config.max_output_tokens,
+        tensor_parallel_size=config.inference_tensor_parallel_size,
+        gpu_memory_utilization=config.inference_gpu_memory_utilization,
+        load_format=_vllm_load_format_for_model_path(model_path),
+    )
+
+
+def _build_vllm_fallback_sampling_config(config: RLExperimentConfig) -> VLLMFallbackSamplingConfig:
+    """Return backend fallback sampling defaults for non-RL/manual vLLM calls."""
+    return VLLMFallbackSamplingConfig(
+        stop_strings=get_stop_tokens(config.model_config.type),
+        include_stop_str_in_output=True,
+    )
+
+
+def default_train_decoding_for_experiment(config: RLExperimentConfig) -> DecodingConfig:
+    """Return builder-side rollout decoding defaults to bake into curriculum lessons."""
+    return DecodingConfig(
+        temperature=1.0,
+        max_output_tokens=config.max_output_tokens,
+        top_k=config.train_decoding_top_k,
+        stop_strings=get_stop_tokens(config.model_config.type),
+    )
+
+
 def _build_rl_job_config(
     name: str,
     config: RLExperimentConfig,
@@ -211,16 +241,18 @@ def _build_rl_job_config(
     )
     model_config_cls = model_config_class.from_hf_config(converter.default_hf_config)
 
+    # tokenizer/attn_backend live on concrete model configs (e.g. LlamaConfig), not the
+    # HFCompatConfig base that from_hf_config is statically typed to return.
     model_config = dataclasses.replace(
         model_config_cls,
         max_seq_len=config.max_input_tokens + config.max_output_tokens,
-        tokenizer=model_path,
-        attn_backend=AttentionBackend.SPLASH,
+        tokenizer=model_path,  # pyrefly: ignore[unexpected-keyword]
+        attn_backend=AttentionBackend.SPLASH,  # pyrefly: ignore[unexpected-keyword]
     )
 
     tags = [*config.tags, config.model_config.name.split("/")[-1]]
-    checkpoints_path = join_path(output_path, "checkpoints")
-    rollout_storage_path = join_path(output_path, "rollouts")
+    checkpoints_path = str(StoragePath(output_path) / "checkpoints")
+    rollout_storage_path = str(StoragePath(output_path) / "rollouts")
 
     trainer_config = TrainerConfig(
         tracker=WandbConfig(
@@ -238,14 +270,13 @@ def _build_rl_job_config(
         checkpointer=CheckpointerConfig(
             base_path=checkpoints_path,
             save_interval=datetime.timedelta(seconds=config.checkpointer_save_interval),
-            delete_previous_temporary_checkpoint_after_save=config.delete_previous_temporary_checkpoint_after_save,
+            keep_last_temporary_checkpoints=config.keep_last_temporary_checkpoints,
             debug=config.checkpoint_debug,
         ),
         mesh=MeshConfig(
             axes={"context": 1, "model": 1},
             shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
         ),
-        ray=RayConfig(auto_start_cluster=False),
     )
 
     opt_config = AdamConfig(
@@ -290,21 +321,8 @@ def _build_rl_job_config(
         tokenizer=model_path,
         inference_type="vllm",
         inference_config=vLLMInferenceContextConfig(
-            model_name=model_path,
-            canonical_model_name=config.model_config.name,
-            max_model_len=config.max_input_tokens + config.max_output_tokens,
-            tensor_parallel_size=config.inference_tensor_parallel_size,
-            gpu_memory_utilization=config.inference_gpu_memory_utilization,
-            sampling_params=VLLMSamplingConfig(
-                temperature=1.0,
-                n=config.inference_n,
-                max_tokens=config.max_output_tokens,
-                stop=get_stop_tokens(config.model_config.type),
-                include_stop_str_in_output=True,
-                logprobs=1,
-                top_k=config.inference_top_k,
-            ),
-            load_format=_vllm_load_format_for_model_path(model_path),
+            engine=_build_vllm_engine_config(config, model_path),
+            fallback_sampling=_build_vllm_fallback_sampling_config(config),
         ),
         initial_checkpoint=model_path,
         rollout_storage=rollout_storage,
@@ -336,7 +354,12 @@ def _build_rl_job_config(
     return job_config
 
 
-def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
+def _run_rl_experiment_step(config: RLStepConfig) -> Artifact:
+    """Build the RL job config and run it, returning a path ref to the output.
+
+    Runs inline on whatever host executes it; ``RLJob.run`` submits the coordinator
+    (and its trainer/rollout workers) as its own Fray jobs.
+    """
     instance_id = f"{config.name}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     job_config = _build_rl_job_config(
         name=config.name,
@@ -346,25 +369,54 @@ def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
         output_path=config.output_path,
         instance_id=instance_id,
     )
-    logger.info("Launching RL executor step run %s with instance_id=%s", config.name, instance_id)
+    logger.info("Launching RL run %s with instance_id=%s", config.name, instance_id)
     RLJob(job_config).run(config.name)
-    return PathMetadata(path=config.output_path)
+    return Artifact(path=config.output_path)
 
 
-def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
-    model_path = _resolve_model_artifact_path(config.model_config.artifact)
-    runtime_model_config = dataclasses.replace(config.model_config, artifact=model_path)
-    runtime_config = dataclasses.replace(config, model_config=runtime_model_config)
+def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
+    """Dispatch the RL launcher as its own Fray job in the launch region.
 
-    return ExecutorStep(
-        name=f"rl_testing/{name}",
-        description=f"Async RL training: {name}",
-        fn=remote(resources=executor_step_resources_for_rl_experiment(config))(_run_rl_experiment_step),
-        config=RLStepConfig(
+    The launcher itself is cheap (it builds the job config and submits the RL
+    coordinator), so it rides a small CPU box pinned to the launch region via
+    ``config.resources``. Compute rides with the function, never on the step node,
+    so the resources stay out of the artifact fingerprint.
+    """
+    remote(_run_rl_experiment_step, resources=config.resources)(config)
+
+
+def make_rl_step(
+    name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, *, version: str
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble an async RL training run as an ``ArtifactStep[LevanterCheckpoint]``.
+
+    The model artifact resolves at run time: an ``ArtifactStep[LevanterCheckpoint]`` handle becomes
+    a dependency and resolves to its region-local path, a string passes through. The
+    launch-region resources are a runtime arg, so re-running on a different launch box never
+    re-fingerprints.
+    """
+    artifact = config.model_config.artifact
+    deps = (artifact,) if isinstance(artifact, ArtifactStep) else ()
+
+    def build_config(ctx: StepContext) -> RLStepConfig:
+        model_path = _resolve_model_artifact_path(ctx, artifact)
+        runtime_model_config = dataclasses.replace(config.model_config, artifact=model_path)
+        runtime_config = dataclasses.replace(config, model_config=runtime_model_config)
+        return RLStepConfig(
             name=name,
             experiment_config=runtime_config,
             curriculum=curriculum,
             model_path=model_path,
-            output_path=this_output_path(),
-        ),
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg("resources"),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(f"rl_testing/{name}", version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=_dispatch_rl_experiment_step,
+        build_config=build_config,
+        deps=deps,
+        runtime_args={"resources": executor_step_resources_for_rl_experiment(config)},
     )

@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Dict, Optional, Type, Union
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -14,10 +14,11 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers import RmsNormConfig
 from levanter.layers.attention import (
     Attention,
@@ -27,7 +28,8 @@ from levanter.layers.attention import (
     dot_product_attention,
 )
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.llama import LlamaMlp
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -114,8 +116,8 @@ class Olmo2Config(HFCompatConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = getattr(hf_config, "rope_theta", 500000)
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        rope_theta, rope_scaling = hf_rope_config(hf_config, default_theta=500000.0)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return Olmo2Config(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -147,7 +149,8 @@ class Olmo2Config(HFCompatConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfOlmo2Config(
+        return hf_config_from_kwargs(
+            HfOlmo2Config,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -168,8 +171,9 @@ class Olmo2Config(HFCompatConfig):
             **config_overrides,
         )
 
+    # config narrows the base's model_type to its own concrete head class (LSP narrowing; mypy flags the same)
     @property
-    def model_type(self) -> Type["Olmo2LMHeadModel"]:
+    def model_type(self) -> Type["Olmo2LMHeadModel"]:  # pyrefly: ignore[bad-override]
         return Olmo2LMHeadModel
 
     def mk_LayerNorm(self, axis: AxisSpec) -> hnn.RmsNorm:
@@ -212,13 +216,9 @@ class Olmo2Config(HFCompatConfig):
         # All transformer layers plus final layer norm
         transformer = self.num_layers * transformer_layer + self.hidden_dim  # plus final rmsnorm
 
-        # Input embedding norm if used
-        if hasattr(self, "input_embedding_norm") and self.input_embedding_norm:
-            transformer += self.hidden_dim
-
         # Total parameters (transformer + embeddings + LM head)
         # LM head shares weights with token embeddings if tie_word_embeddings is True
-        lm_head = 0 if (hasattr(self, "tie_word_embeddings") and self.tie_word_embeddings) else token_embedding
+        lm_head = 0 if self.tie_word_embeddings else token_embedding
 
         return transformer + token_embedding + lm_head
 
@@ -256,38 +256,6 @@ class Olmo2Config(HFCompatConfig):
             use_weight=self.use_layer_norm_weight,
             use_bias=self.use_bias,
         )
-
-
-class Olmo2MLP(eqx.Module):
-    """Multi-layer Perceptron for Olmo2
-    Similar to LlamaMlp, adds an up-proj that multiplies with activated gate_proj before down-proj.
-    """
-
-    gate_proj: hnn.Linear  # projection from Embed to Mlp
-    up_proj: hnn.Linear  # projection from Embed to Mlp
-    down_proj: hnn.Linear  # projection from Mlp to Embed
-    act: Callable = eqx.field(static=True)
-
-    @staticmethod
-    def init(
-        Embed: Axis, Mlp: Axis, activation_fn: Union[ActivationFunctionEnum, Callable], *, key, use_bias: bool = False
-    ) -> "Olmo2MLP":
-        k_fc, k_up_proj, k_down_proj = jrandom.split(key, 3)
-        gate_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=True)
-        up_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_up_proj, use_bias=use_bias, out_first=True)
-        down_proj = hnn.Linear.init(Out=Embed, In=Mlp, key=k_down_proj, use_bias=use_bias, out_first=True)
-        if isinstance(activation_fn, ActivationFunctionEnum):
-            activation_fn = activation_fn.to_fn()
-        return Olmo2MLP(gate_proj, up_proj, down_proj, activation_fn)
-
-    @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
-        k_gate, k_up, k_down = maybe_rng_split(key, 3)
-        hidden_states = self.gate_proj(x, key=k_gate)
-        hidden_states = self.act(hidden_states)
-        hidden_states = hidden_states * self.up_proj(x, key=k_up)
-        outputs = self.down_proj(hidden_states, key=k_down)
-        return outputs
 
 
 class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
@@ -393,7 +361,7 @@ class Olmo2Attention(ModuleWithStateDictSerialization, Attention):
 class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
     config: Olmo2Config = eqx.field(static=True)
     self_attn: Olmo2Attention
-    mlp: Olmo2MLP
+    mlp: LlamaMlp
     post_attention_layernorm: hnn.RmsNorm
     post_feedforward_layernorm: hnn.RmsNorm
 
@@ -402,7 +370,7 @@ class Olmo2DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
         k_attn, k_mlp = jrandom.split(key, 2)
 
         attn = Olmo2Attention.init(config, key=k_attn)
-        mlp = Olmo2MLP.init(
+        mlp = LlamaMlp.init(
             config.Embed,
             config.Mlp,
             config.activation_function,
@@ -443,8 +411,6 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
     def init(config: Olmo2Config, *, key) -> "Olmo2Transformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, Olmo2DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
@@ -592,12 +558,7 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
             return self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[Olmo2Config]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
-        else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)

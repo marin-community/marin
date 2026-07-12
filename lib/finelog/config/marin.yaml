@@ -1,0 +1,31 @@
+name: finelog-marin
+port: 10001
+image: ghcr.io/marin-community/finelog:latest
+remote_log_dir: gs://marin-us-central2/finelog/marin
+client_url: iap+https://iris.oa.dev/proxy/system.log-server
+deployment:
+  gcp:
+    project: hai-gcp-models
+    zone: us-central1-a
+    machine_type: n2-highmem-4
+    boot_disk_size_gb: 200
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+# marin is the federation hub. cidr admits marin's own network and loopback; jwt
+# admits each per-cluster finelog forwarding rows here, by its Ed25519 public key.
+auth:
+  - type: cidr
+    cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  - type: jwt
+    keys:
+      - cluster: cw-rno2a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAy1h0qFGWhuXow28GRDSLdXmb7jTZPo4L+RS/G5zlmhs=
+              -----END PUBLIC KEY-----
+      - cluster: cw-us-east-02a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAJYrTAboQmQmVnSRcsxusCfosRTUl7t2L3q2yRzW5Kwk=
+              -----END PUBLIC KEY-----

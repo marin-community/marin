@@ -10,7 +10,7 @@ from jax.random import PRNGKey
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import haliax as hax
-from haliax import Axis, NamedArray, updated_slice
+from haliax import Axis, NamedArray, ds, updated_slice
 
 
 def _make_explicit_data_mesh() -> Mesh:
@@ -683,7 +683,6 @@ def test_slice_nd_dslice():
     H, W, D = hax.make_axes(H=10, W=20, D=30)
 
     named1 = hax.random.uniform(PRNGKey(0), (H, W, D))
-    from haliax import ds
 
     ref = jnp.take(named1.array, jnp.arange(0, 5), axis=0, mode="fill", fill_value=0)
     ref = jnp.take(ref, jnp.arange(3, 10), axis=2, mode="fill", fill_value=0)
@@ -704,7 +703,6 @@ def test_slice_nd_dslice():
 
 def test_dslice_oob_read_and_write():
     Seq = hax.Axis("seq", 5)
-    from haliax import ds
 
     arr = hax.arange((Seq,), dtype=int)
     out = arr[{"seq": ds(3, 4)}]

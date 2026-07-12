@@ -8,13 +8,12 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, cast
 
-import braceexpand
 import datasets
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 import jax
 import numpy as np
 from draccus import field
@@ -24,12 +23,12 @@ from typing_extensions import TypedDict
 
 
 from levanter.compat.hf_checkpoints import load_processor
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset, StopStrategy
-from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, WrappedHFDataSource
-from levanter.data.text import BatchTokenizer
+from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, datasource_from_hf_or_none
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 
 # intercept the logging nonsense here
@@ -103,6 +102,7 @@ class BatchAudioProcessor(BatchProcessor[Tuple[np.ndarray, int, str], AudioTextD
         audio_batch, sampling_rates, text_batch = list(zip(*batch))
         uniq_sampling_rates: set[int] = set(sampling_rates)
         assert len(uniq_sampling_rates) == 1, "Sampling rates should be standardized"
+        # pyrefly: ignore[not-callable]  # SequenceFeatureExtractor defines __call__ at runtime but the HF stub omits it
         audio_features: BatchFeature = self.feature_extractor(audio_batch, sampling_rate=uniq_sampling_rates.pop())
         audio_features["input_features"] = np.array(audio_features["input_features"])
         text_features: list[dict] = self.bt([{"text": text} for text in text_batch])
@@ -165,17 +165,8 @@ class AudioDatasetSourceConfig:
 
     def get_shard_source(self, split) -> Optional[ShardedDataSource[Tuple[np.ndarray, int, str]]]:
         if self.id is not None:
-            try:
-                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
-            except ValueError as e:
-                # if the message starts with Bad split, then just return None
-                if str(e).startswith("Bad split"):
-                    logger.warning(f"Splits {split} not found for {self.id} {self.name}")
-                    return None
-                else:
-                    raise
-
-            if len(ds.shard_names) == 0:
+            ds = datasource_from_hf_or_none(self.id, split=split, name=self.name, streaming=self.stream)
+            if ds is None:
                 return None
 
             def decode(x):
@@ -195,6 +186,7 @@ class AudioDatasetSourceConfig:
         if self.id is not None:
             data = datasets.load_dataset(self.id, split=split, name=self.name, streaming=self.stream)
             for doc in data:
+                doc = cast(dict, doc)
                 yield (doc[self.audio_key]["array"], doc[self.audio_key]["sampling_rate"], doc[self.text_key])
         else:
             urls = self.urls_for_split(split)
@@ -209,15 +201,7 @@ class AudioDatasetSourceConfig:
         else:
             raise ValueError(f"Unknown split {split}")
 
-        def fsspec_expand_glob(url):
-            if "*" in url:
-                fs = url_to_fs(url)[0]
-                return fs.glob(url)
-            else:
-                return [url]
-
-        urls = [globbed for pat in urls for url in braceexpand.braceexpand(pat) for globbed in fsspec_expand_glob(url)]
-        return urls
+        return [str(m) for pat in urls for m in StoragePath(pat).expand_glob()]
 
 
 @dataclass
@@ -258,7 +242,7 @@ class AudioTaskConfig(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> "Mapping[str, ProcessedAudioCache]":
         pass
 
 
@@ -448,9 +432,8 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
     """ configuration of each dataset source (urls, hf dataset id, etc.) """
     train_weights: Dict[str, float] = field(default_factory=dict)
     """ weights for each dataset source. They will be normalized to sum to 1. """
-    shuffle: bool | int = False
-    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
-    If you want to shuffle in eras, set this to the era length"""
+    shuffle: bool = False
+    """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle."""
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     mixture_block_size: int = 2048
     """ block size for the mixture dataset."""
@@ -483,8 +466,6 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         def shuffle_ds(ds, key):
             if self.shuffle is True:
                 ds = ds.shuffle(key)
-            elif isinstance(self.shuffle, int):
-                ds = ds.era_shuffle(self.shuffle, key=key)
 
             return ds
 
@@ -509,7 +490,7 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
         doc_caches = self.build_caches("train")
         return doc_caches
 
-    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> Mapping[str, ProcessedAudioCache]:
         doc_caches = self.build_caches("validation")
         return doc_caches
 

@@ -11,6 +11,7 @@ yielding the packed examples when they are full.
 This achieves about a 90% "real token" rate, compared to like 10% without packing.
 """
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Literal, Sequence, TypeVar
 
@@ -21,7 +22,7 @@ import numpy as np
 import tensorstore as ts
 from jaxtyping import PyTree
 
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
@@ -32,19 +33,6 @@ from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadc
 # todo should we use something like this: https://arxiv.org/pdf/2107.02027?
 
 T = TypeVar("T", bound=PyTree)
-L = TypeVar("L")
-
-
-# Python 3.10 can't handle this
-# @dataclass(frozen=True)
-# class LeafType:
-#     leaf_type: type
-#
-#     def __class_getitem__(cls, item):
-#         return cls(item)
-#
-#
-# WithLeaf: TypeAlias = Annotated[T, LeafType[L]]
 
 
 class SequencePacker:
@@ -174,29 +162,14 @@ def per_segment_loss(
     This code is designed to run in a jit-compiled function, meaning we have to careful of shapes
     """
 
-    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
-
-    segment_ids = packed_example.attn_mask.segment_ids
-    if isinstance(segment_ids, tuple):
-        segment_ids = segment_ids[0]
-
-    assert (
-        segment_ids.ndim == 1
-    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
     masked_losses = losses * packed_example.loss_weight
 
-    # sum the losses for each segment
-    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
+    unique_segment_ids, segment_mask = _segment_membership(packed_example, max_Segments)
 
-    # Create a mask matrix where each row corresponds to a unique segment
-    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
-
-    segment_mask = segment_mask.astype(masked_losses.dtype)
-
-    segment_losses = hax.dot(segment_mask, masked_losses, axis=Pos)
+    segment_losses = hax.dot(segment_mask.astype(masked_losses.dtype), masked_losses, axis=Pos)
 
     return unique_segment_ids, segment_losses
 
@@ -207,6 +180,27 @@ def _unique_segment_ids(max_Segments, segment_ids):
     unique_segment_ids = jnp.unique(segment_ids.array, size=max_Segments.size, fill_value=-1)
     unique_segment_ids = hax.named(unique_segment_ids, max_Segments)
     return unique_segment_ids
+
+
+def _segment_membership(packed_example: LmExample, max_Segments: hax.Axis) -> tuple[hax.NamedArray, hax.NamedArray]:
+    """Return the unique segment ids and a boolean ``(max_Segments, Pos)`` membership mask.
+
+    ``segment_mask[s, p]`` is True iff position ``p`` belongs to the ``s``-th unique segment id.
+    Expects ``segment_ids`` to be 1-D; wrap callers in ``hax.vmap`` for batched examples.
+    """
+    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
+
+    segment_ids = packed_example.attn_mask.segment_ids
+    if isinstance(segment_ids, tuple):
+        segment_ids = segment_ids[0]
+
+    assert (
+        segment_ids.ndim == 1
+    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
+
+    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
+    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
+    return unique_segment_ids, segment_mask
 
 
 def per_segment_correct(
@@ -223,30 +217,13 @@ def per_segment_correct(
     correct is a boolean array of the same shape as the losses array indicating whether the token was correct
     """
 
-    assert packed_example.attn_mask.segment_ids is not None, "segment_ids must be set in the AttentionMask"
-
-    segment_ids = packed_example.attn_mask.segment_ids
-    if isinstance(segment_ids, tuple):
-        segment_ids = segment_ids[0]
-
-    assert (
-        segment_ids.ndim == 1
-    ), f"Expected segment_ids to be 1D, got {segment_ids.ndim}. Use vmap if you have multiple examples"
-
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
     valid_positions = packed_example.loss_weight > 0
     masked_correct = hax.logical_or(correct, hax.logical_not(valid_positions))
 
-    # sum the losses for each segment
-    # Extract unique segment IDs with padding
-    unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
-
-    # Create a mask matrix where each row corresponds to a unique segment
-    segment_mask = unique_segment_ids == segment_ids.broadcast_axis(max_Segments)
-
-    segment_mask = segment_mask.astype(masked_correct.dtype)
+    unique_segment_ids, segment_mask = _segment_membership(packed_example, max_Segments)
 
     segment_correct = hax.all(hax.where(segment_mask, masked_correct, True), axis=Pos)
 
@@ -613,10 +590,6 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
 
 if __name__ == "__main__":
     # demo the GreedyPrepackedDataset
-    import time
-
-    import numpy as np
-
     path = "gs://marin-us-central2/tokenized/tulu_sft_v3_llama3_tokenizer-f88fdb/input_ids/"
 
     store = JaggedArrayStore.open(path, mode="r", dtype=np.uint32, cache_metadata=True)

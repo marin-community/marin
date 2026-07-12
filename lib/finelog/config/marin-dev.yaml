@@ -1,0 +1,16 @@
+name: finelog-marin-dev
+port: 10001
+image: ghcr.io/marin-community/finelog:latest
+remote_log_dir: gs://marin-us-central2/finelog/marin-dev
+deployment:
+  gcp:
+    project: hai-gcp-models
+    zone: us-central1-a
+    machine_type: n2-standard-4
+    boot_disk_size_gb: 200
+    service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+# marin-dev is not a forwarding hub: cidr admits its own network and loopback;
+# no jwt layer.
+auth:
+  - type: cidr
+    cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]

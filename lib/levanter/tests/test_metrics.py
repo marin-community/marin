@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+from unittest.mock import MagicMock
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -9,7 +12,9 @@ import jmp
 import optax
 import pytest
 
+import levanter.tracker as tracker_mod
 from levanter.callbacks import eval_loss_loop
+from levanter.callbacks._metrics import compute_instant_throughput, log_step_info
 from levanter.metrics import (
     Metric,
     ReductionType,
@@ -17,6 +22,7 @@ from levanter.metrics import (
     fold,
     unwrap_metrics,
 )
+from levanter.schedule import BatchSchedule, ScheduleStep
 from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
 
@@ -155,6 +161,39 @@ def test_unwrap_metrics():
     assert result["plain_value"] == 42.0
 
 
+def test_compute_instant_throughput_rates_and_mfu():
+    """Rates, model FLOPs/sec, and MFU all derive from one step's duration."""
+    t = compute_instant_throughput(
+        batch_size=256,
+        step_duration=0.5,
+        tokens_per_example=4096,
+        flops_per_example=1e12,
+        theoretical_flops=1e15,
+    )
+    assert t.examples_per_second == 512.0  # 256 / 0.5
+    assert t.tokens_per_second == 4096 * 512.0
+    assert t.model_flops_per_second == 1e12 / 0.5 * 256
+    # mfu = model_flops_per_second / theoretical_flops * 100
+    assert jnp.allclose(t.mfu, (1e12 / 0.5 * 256) / 1e15 * 100.0)
+
+
+def test_compute_instant_throughput_without_flops_has_no_mfu():
+    t = compute_instant_throughput(batch_size=128, step_duration=2.0, tokens_per_example=1024)
+    assert t.examples_per_second == 64.0
+    assert t.tokens_per_second == 1024 * 64.0
+    assert t.model_flops_per_second is None
+    assert t.mfu is None
+
+
+def test_compute_instant_throughput_zero_duration_is_empty():
+    """A zero-duration step yields no rates instead of dividing by zero."""
+    t = compute_instant_throughput(batch_size=128, step_duration=0.0, tokens_per_example=1024, flops_per_example=1e12)
+    assert t.examples_per_second is None
+    assert t.tokens_per_second is None
+    assert t.model_flops_per_second is None
+    assert t.mfu is None
+
+
 class SimpleModel(eqx.Module):
     weight: hax.NamedArray
 
@@ -235,12 +274,17 @@ def test_eval_loss_loop(has_metrics, max_batches):
     expected_loss = sum(range(1, n_batches + 1)) / n_batches
 
     assert jnp.allclose(avg_loss, expected_loss, atol=1e-5)
+    assert avg_metrics["eval/timing/load_time"] >= 0.0
+    assert avg_metrics["eval/timing/loss_time"] >= 0.0
+    assert avg_metrics["eval/timing/num_batches"] == float(n_batches)
+
+    metric_keys = {key for key in avg_metrics if not key.startswith("eval/timing/")}
 
     if has_metrics:
         assert jnp.allclose(avg_metrics["metric_a"], expected_loss * 2, atol=1e-5)
         assert jnp.allclose(avg_metrics["metric_b"], expected_loss + 10, atol=1e-5)
     else:
-        assert len(avg_metrics) == 0
+        assert metric_keys == set()
 
 
 @pytest.mark.parametrize(
@@ -318,3 +362,76 @@ def test_microbatching_metric_aggregation():
         assert jnp.allclose(logged_metrics["train/accuracy"], 0.95)
         assert jnp.allclose(logged_metrics["train/num_tokens"], 256.0)
         assert jnp.allclose(logged_metrics["train/max_logit"], 5.0)
+
+
+def _make_step_info(step_number: int, loss: float = 1.0) -> MagicMock:
+    """Create a minimal StepInfo mock for testing log_step_info."""
+    info = MagicMock()
+    info.step = step_number
+    info.loss = loss
+    info.opt_state = {}
+    return info
+
+
+def _patch_tracker(logged: dict):
+    """Context manager that redirects tracker.log into ``logged``."""
+
+    @contextlib.contextmanager
+    def _ctx():
+        orig_log = tracker_mod.log
+        orig_log_optim = tracker_mod.log_optimizer_hyperparams
+        tracker_mod.log = lambda m, step=None, commit=None: logged.update(m)
+        tracker_mod.log_optimizer_hyperparams = lambda *a, **kw: None
+        try:
+            yield
+        finally:
+            tracker_mod.log = orig_log
+            tracker_mod.log_optimizer_hyperparams = orig_log_optim
+
+    return _ctx()
+
+
+def test_log_step_info_token_progress_uniform_batch():
+    """With a uniform batch schedule, progress equals completed_steps / total_steps."""
+    schedule = BatchSchedule(32)
+    total_steps = 100
+    logged: dict = {}
+
+    cb = log_step_info(total_steps, schedule)
+    with _patch_tracker(logged):
+        cb(_make_step_info(49))  # step 49 done → 50 steps completed
+
+    # token-based: global_data_offset(50) / global_data_offset(100) = 50*32 / 100*32 = 0.5
+    assert abs(logged["run_progress"] - 0.5) < 1e-9
+
+
+def test_log_step_info_token_progress_variable_batch():
+    """Token-based progress is batch-size independent when the schedule changes mid-run."""
+    # Steps 0–49: batch 32  → 50 * 32 = 1600 examples
+    # Steps 50–99: batch 64 → 50 * 64 = 3200 examples
+    # Total: 4800 examples
+    schedule = BatchSchedule([ScheduleStep(0, 32), ScheduleStep(50, 64)])
+    total_steps = 100
+    logged: dict = {}
+
+    cb = log_step_info(total_steps, schedule)
+    with _patch_tracker(logged):
+        # After step 74 (0-indexed): examples = 1600 + 25*64 = 3200; total = 4800
+        cb(_make_step_info(74))
+
+    expected = 3200 / 4800
+    assert abs(logged["run_progress"] - expected) < 1e-9
+    # Also confirm it differs from naive step ratio
+    assert abs(logged["run_progress"] - 74 / 100) > 0.01
+
+
+def test_log_step_info_falls_back_to_step_progress_without_schedule():
+    """Without a batch schedule, run_progress falls back to step ratio."""
+    total_steps = 100
+    logged: dict = {}
+
+    cb = log_step_info(total_steps)
+    with _patch_tracker(logged):
+        cb(_make_step_info(25))
+
+    assert abs(logged["run_progress"] - 0.25) < 1e-9

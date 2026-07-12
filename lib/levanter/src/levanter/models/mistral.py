@@ -14,10 +14,11 @@ from haliax.jax_utils import maybe_rng_split
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaTransformer
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -68,6 +69,8 @@ class MistralConfig(LlamaConfig):
     use_bias: bool = False
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
+    reference_checkpoint: str = "mistralai/Mistral-7B-v0.1"
+
     # Axis
     @property
     def Embed(self) -> Axis:
@@ -79,22 +82,21 @@ class MistralConfig(LlamaConfig):
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
-    def hf_checkpoint_converter(
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["MistralConfig"]:  # type: ignore
-        hf_model_path = "mistralai/Mistral-7B-v0.1" if ref_checkpoint is None else ref_checkpoint
-
         return HFCheckpointConverter(
             self,
-            reference_checkpoint=hf_model_path,
+            reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=True,
-            tokenizer=hf_model_path,
+            tokenizer=ref_checkpoint if self.tokenizer is None else self.tokenizer,
             HfConfigClass=HfMistralConfig,
         )
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = hf_config.rope_theta
+        rope_theta, _ = hf_rope_config(hf_config)
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, None)
         return MistralConfig(
             max_seq_len=hf_config.max_position_embeddings,  # this might be too big...
@@ -110,7 +112,9 @@ class MistralConfig(LlamaConfig):
             rope=rope_config,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfMistralConfig:
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfMistralConfig:
         """Convert to HuggingFace's MistralConfig
 
         Args:
@@ -125,7 +129,8 @@ class MistralConfig(LlamaConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfMistralConfig(
+        return hf_config_from_kwargs(
+            HfMistralConfig,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -144,7 +149,7 @@ class MistralConfig(LlamaConfig):
         )
 
     @property
-    def model_type(cls) -> Type["MistralLMHeadModel"]:
+    def model_type(cls) -> Type["MistralLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return MistralLMHeadModel
 
     def flops_per_token(self, vocab_size: int, context_length: int) -> float:
@@ -179,7 +184,7 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
     lm_head: hnn.Linear
 
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore[bad-override]  # config-reuse: reuses LlamaTransformer
         return self.transformer.config
 
     @property
@@ -224,12 +229,9 @@ class MistralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MistralCo
         return x
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[MistralConfig]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-        new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
         return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:

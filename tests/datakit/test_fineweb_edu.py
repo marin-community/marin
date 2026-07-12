@@ -17,12 +17,12 @@ def test_normalize_subset_distinct_cache_keys():
     data_step = normalize_step(
         name="normalized/fineweb_edu",
         download=dl,
-        input_path=f"{dl.output_path}/data",
+        relative_input_path="data",
     )
     sample_step = normalize_step(
         name="normalized/fineweb_edu",
         download=dl,
-        input_path=f"{dl.output_path}/sample/10BT",
+        relative_input_path="sample/10BT",
     )
     assert data_step.name == sample_step.name
     assert data_step.output_path != sample_step.output_path

@@ -13,7 +13,9 @@ import json
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, ZephyrContext, load_zip_members
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_zip_members
 
 
 @dataclass

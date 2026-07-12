@@ -1,14 +1,10 @@
-# Zephyr Migration Patterns
+# Archived Zephyr Migration Patterns
 
-**Last Updated**: 2025-01-07
+**Last Updated**: 2026-04-27
 
-## Status Summary
+This document is archived historical guidance for recognizing old Ray-style data-processing loops and replacing them with Zephyr patterns. Ray is no longer a supported Marin execution backend, and this document predates the current `ZephyrContext` API. For current Zephyr usage, read `lib/zephyr/README.md` and `lib/zephyr/AGENTS.md`.
 
-**Completed**: 19 files migrated ✅
-**Remaining**: 33 files to migrate
-**Not Suitable**: ~39 files (TPU orchestration, RL training, stateful orchestration, infrastructure, etc.)
-
-This document describes concrete patterns for migrating Ray boilerplate to zephyr. Each section shows a real codebase example with before/after code.
+The examples below intentionally preserve Ray-shaped "before" snippets because they document what the migration removed.
 
 ## Backend Configuration: `flow_backend()` vs `create_backend()`
 

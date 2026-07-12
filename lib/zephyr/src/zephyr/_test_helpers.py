@@ -1,9 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Helpers shared by tests to avoid pickling import issues on Ray workers."""
-
-from __future__ import annotations
+"""Helpers shared by tests to avoid pickling import issues on distributed workers."""
 
 from dataclasses import dataclass
 

@@ -3,8 +3,9 @@
 
 """Tests for iris.cluster.types — Entrypoint, EnvironmentSpec, and constraint helpers."""
 
-import pytest
+import hashlib
 
+import pytest
 from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
@@ -17,18 +18,52 @@ from iris.cluster.constraints import (
     region_constraint,
 )
 from iris.cluster.types import (
+    LOCAL_CLUSTER,
     Entrypoint,
+    EnvironmentSpec,
     JobName,
     TaskAttempt,
     adjust_tpu_replicas,
     gpu_device,
+    is_federated,
     tpu_device,
 )
 from iris.rpc import job_pb2
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, _capture_once
 
 
 def _add(a, b):
     return a + b
+
+
+@pytest.fixture
+def fresh_launch_provenance():
+    """Reset the per-process capture cache around a test that manipulates MARIN_PROVENANCE."""
+    _capture_once.cache_clear()
+    yield
+    _capture_once.cache_clear()
+
+
+def test_environment_to_proto_stamps_launch_provenance(monkeypatch, fresh_launch_provenance):
+    """Every submission's env carries the launch provenance so a git-less task can stamp
+    records with the submitter's identity. Re-submitting from inside a task forwards the
+    inherited value verbatim; an explicit caller value wins over the default."""
+    submitted = Provenance(tree_hash="feed", base_commit="beef", dirty=False, branch="rav/pipeline", built_by="rav")
+    monkeypatch.setenv(LAUNCH_PROVENANCE_ENV, submitted.to_json())
+
+    stamped = EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV]
+    assert Provenance.from_json(stamped) == submitted
+
+    explicit = EnvironmentSpec(env_vars={LAUNCH_PROVENANCE_ENV: "caller-value"}).to_proto()
+    assert explicit.env_vars[LAUNCH_PROVENANCE_ENV] == "caller-value"
+
+
+def test_environment_to_proto_captures_local_checkout(monkeypatch, fresh_launch_provenance):
+    """A local submission (no env var) stamps provenance captured from the checkout."""
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+
+    stamped = Provenance.from_json(EnvironmentSpec().to_proto().env_vars[LAUNCH_PROVENANCE_ENV])
+    assert stamped.created_at  # launch context always captured; git fields best-effort
 
 
 def test_entrypoint_from_callable_resolve_roundtrip():
@@ -48,6 +83,19 @@ def test_entrypoint_proto_roundtrip_preserves_bytes():
     assert ep2.workdir_files == original_files
     fn, args, kwargs = ep2.resolve()
     assert fn(*args, **kwargs) == 3
+
+
+def test_entrypoint_proto_roundtrip_preserves_workdir_file_refs():
+    """workdir_file_refs survive to_proto -> from_proto."""
+    refs = {"_callable.pkl": "abc123", "model.bin": "def456"}
+    ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
+
+    proto = ep.to_proto()
+    ep2 = Entrypoint.from_proto(proto)
+
+    assert ep2.workdir_file_refs == refs
+    assert ep2.workdir_files == {"small.txt": b"hi"}
+    assert ep2.command == ["python", "run.py"]
 
 
 def test_entrypoint_command():
@@ -79,11 +127,28 @@ def test_job_name_roundtrip_and_hierarchy():
 
     parsed = JobName.from_string("/test-user/root/child/0")
     assert parsed == task
-    assert parsed.namespace == "test-user/root"
+    assert parsed.namespace == "/test-user/root"
     assert parsed.is_task
     assert parsed.task_index == 0
     assert JobName.root("test-user", "root").is_ancestor_of(parsed)
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
+
+
+def test_cluster_coordinate_helpers():
+    # Job ids are cluster-invariant; a job/task's cluster is either the reserved
+    # local sentinel (owned here) or a peer id (handed off), never both.
+    assert LOCAL_CLUSTER == "local"
+    assert not is_federated(LOCAL_CLUSTER)
+    assert is_federated("cw-us-east")
+
+
+@pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
+def test_job_name_dashboard_url(base: str):
+    job = JobName.from_string("/rav/datakit-ref-smoke-20260604-135004")
+    assert job.dashboard_url(base) == "https://iris.oa.dev/#/job/%2Frav%2Fdatakit-ref-smoke-20260604-135004"
+    # Nested task names percent-encode every slash.
+    task = JobName.from_string("/rav/root/child/0")
+    assert task.dashboard_url("https://iris.oa.dev") == "https://iris.oa.dev/#/job/%2Frav%2Froot%2Fchild%2F0"
 
 
 @pytest.mark.parametrize(
@@ -101,8 +166,6 @@ def test_job_name_require_task_errors_on_non_task():
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
-    import hashlib
-
     job = JobName.from_string("/test-user/a/b/c/d/e/0")
     expected_hash = hashlib.sha256(str(job).encode()).hexdigest()
     assert job.to_safe_token() == f"test-user-{expected_hash}"
@@ -199,13 +262,9 @@ def test_task_name_attempt_zero():
 # ---------------------------------------------------------------------------
 
 
-def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> job_pb2.Constraint:
-    """Build a proto Constraint with a string value."""
-    return job_pb2.Constraint(
-        key=key,
-        op=op,
-        value=job_pb2.AttributeValue(string_value=string_value),
-    )
+def _proto_constraint(key: str, string_value: str, op: int = job_pb2.CONSTRAINT_OP_EQ) -> Constraint:
+    """Build a native Constraint with a string value (normalized at construction)."""
+    return Constraint.create(key=key, op=ConstraintOp(op), value=string_value)
 
 
 # ---------------------------------------------------------------------------
@@ -217,15 +276,14 @@ def test_region_constraint_single_region_produces_eq():
     c = region_constraint(["us-west4"])
     assert c.key == WellKnownAttribute.REGION
     assert c.op == ConstraintOp.EQ
-    assert c.value == "us-west4"
+    assert c.values[0].value == "us-west4"
 
 
 def test_region_constraint_multiple_regions_produces_in():
     c = region_constraint(["us-central1", "us-central2"])
     assert c.key == WellKnownAttribute.REGION
     assert c.op == ConstraintOp.IN
-    assert c.values == ("us-central1", "us-central2")
-    assert c.value is None
+    assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
 
 
 def test_region_constraint_empty_list_raises():
@@ -370,7 +428,7 @@ def test_merge_child_overrides_region():
     result = merge_constraints(parent, child)
     regions = [c for c in result if c.key == WellKnownAttribute.REGION]
     assert len(regions) == 1
-    assert regions[0].value == "eu-west4"
+    assert regions[0].values[0].value == "eu-west4"
 
 
 def test_merge_child_overrides_preemptible():
@@ -379,32 +437,32 @@ def test_merge_child_overrides_preemptible():
     result = merge_constraints(parent, child)
     preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
     assert len(preemptibles) == 1
-    assert preemptibles[0].value == "false"
+    assert preemptibles[0].values[0].value == "false"
 
 
 def test_merge_child_overrides_zone():
     """Child zone constraint replaces parent's (zone is canonical)."""
-    parent = [Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="a")]
-    child = [Constraint(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="b")]
+    parent = [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="a")]
+    child = [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.EQ, value="b")]
     result = merge_constraints(parent, child)
     zone_constraints = [c for c in result if c.key == WellKnownAttribute.ZONE]
     assert len(zone_constraints) == 1
-    assert zone_constraints[0].value == "b"
+    assert zone_constraints[0].values[0].value == "b"
 
 
 def test_merge_non_canonical_key_both_present():
     """Non-canonical keys from parent and child are both kept."""
-    parent = [Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")]
-    child = [Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="b")]
+    parent = [Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")]
+    child = [Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="b")]
     result = merge_constraints(parent, child)
     tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
     assert len(tpu_constraints) == 2
-    assert {c.value for c in tpu_constraints} == {"a", "b"}
+    assert {c.values[0].value for c in tpu_constraints} == {"a", "b"}
 
 
 def test_merge_non_canonical_key_dedup():
     """Duplicate non-canonical constraints are deduplicated."""
-    shared = Constraint(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")
+    shared = Constraint.create(key=WellKnownAttribute.TPU_NAME, op=ConstraintOp.EQ, value="a")
     result = merge_constraints([shared], [shared])
     tpu_constraints = [c for c in result if c.key == WellKnownAttribute.TPU_NAME]
     assert len(tpu_constraints) == 1
@@ -418,11 +476,11 @@ def test_merge_multiple_canonical_keys_partial_override():
 
     regions = [c for c in result if c.key == WellKnownAttribute.REGION]
     assert len(regions) == 1
-    assert regions[0].value == "eu-west4"
+    assert regions[0].values[0].value == "eu-west4"
 
     preemptibles = [c for c in result if c.key == WellKnownAttribute.PREEMPTIBLE]
     assert len(preemptibles) == 1
-    assert preemptibles[0].value == "true"
+    assert preemptibles[0].values[0].value == "true"
 
 
 def test_region_constraint_empty_string_in_multi_raises():
@@ -437,7 +495,7 @@ def test_region_constraint_empty_string_in_multi_raises():
 
 def test_constraint_in_proto_roundtrip():
     """IN constraint survives a proto round-trip."""
-    original = Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=("us-central1", "eu-west4"))
+    original = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=["us-central1", "eu-west4"])
     proto = original.to_proto()
     assert proto.op == job_pb2.CONSTRAINT_OP_IN
     assert len(proto.values) == 2
@@ -450,12 +508,9 @@ def test_constraint_in_proto_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def _proto_in_constraint(key: str, string_values: list[str]) -> job_pb2.Constraint:
-    """Build a proto Constraint with IN op and multiple string values."""
-    c = job_pb2.Constraint(key=key, op=job_pb2.CONSTRAINT_OP_IN)
-    for sv in string_values:
-        c.values.append(job_pb2.AttributeValue(string_value=sv))
-    return c
+def _proto_in_constraint(key: str, string_values: list[str]) -> Constraint:
+    """Build a native IN Constraint with multiple string values."""
+    return Constraint.create(key=key, op=ConstraintOp.IN, values=list(string_values))
 
 
 def test_required_regions_in_multiple():
@@ -471,10 +526,9 @@ def test_required_regions_in_single():
 
 
 def test_required_regions_in_empty_values_raises():
-    """IN constraint with no values is invalid."""
-    c = job_pb2.Constraint(key=WellKnownAttribute.REGION, op=job_pb2.CONSTRAINT_OP_IN)
-    with pytest.raises(ValueError, match="at least one value"):
-        extract_placement_requirements([c])
+    """IN constraint with no values is invalid — rejected at construction."""
+    with pytest.raises(ValueError, match="IN requires"):
+        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.IN, values=())
 
 
 def test_extract_placement_requirements_with_in_region():
@@ -504,9 +558,9 @@ def test_constraints_from_resources_tpu():
     assert WellKnownAttribute.DEVICE_TYPE in keys
     assert WellKnownAttribute.DEVICE_VARIANT in keys
     type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert type_c.value == "tpu"
+    assert type_c.values[0].value == "tpu"
     variant_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert variant_c.value == "v5litepod-16"
+    assert variant_c.values[0].value == "v5litepod-16"
 
 
 def test_constraints_from_resources_gpu():
@@ -514,9 +568,9 @@ def test_constraints_from_resources_gpu():
     resources.device.CopyFrom(gpu_device("H100", count=8))
     result = constraints_from_resources(resources)
     type_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE)
-    assert type_c.value == "gpu"
+    assert type_c.values[0].value == "gpu"
     variant_c = next(c for c in result if c.key == WellKnownAttribute.DEVICE_VARIANT)
-    assert variant_c.value == "h100"
+    assert variant_c.values[0].value == "h100"
 
 
 def test_constraints_from_resources_cpu_produces_nothing():
@@ -550,12 +604,12 @@ def test_constraints_from_resources_auto_variant_skipped():
 
 def test_merge_child_overrides_device_type():
     """Child device-type constraint replaces parent's."""
-    parent = [Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="tpu")]
-    child = [Constraint(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu")]
+    parent = [Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="tpu")]
+    child = [Constraint.create(key=WellKnownAttribute.DEVICE_TYPE, op=ConstraintOp.EQ, value="gpu")]
     result = merge_constraints(parent, child)
     dt = [c for c in result if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt) == 1
-    assert dt[0].value == "gpu"
+    assert dt[0].values[0].value == "gpu"
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +640,15 @@ def test_adjust_tpu_replicas_single_host_and_edge_cases():
     assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
 
 
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_gpu_device_rejects_non_positive_count(bad_count):
+    # Regression: zero is coerced to 1 by get_gpu_count (`count or 1`) and a
+    # negative count flows through as a negative req_gpu_count that inflates
+    # advertised scheduler capacity. Reject both at the construction boundary.
+    with pytest.raises(ValueError, match="positive integer"):
+        gpu_device("H100", count=bad_count)
+
+
 def test_merge_auto_constraints_with_user_variant_override():
     """User multi-variant IN constraint replaces auto-generated single-variant EQ."""
     auto = constraints_from_resources(
@@ -600,10 +663,10 @@ def test_merge_auto_constraints_with_user_variant_override():
     # device-type from auto should be kept
     dt = [c for c in merged if c.key == WellKnownAttribute.DEVICE_TYPE]
     assert len(dt) == 1
-    assert dt[0].value == "tpu"
+    assert dt[0].values[0].value == "tpu"
 
     # device-variant should be the user's IN constraint, not auto's EQ
     dv = [c for c in merged if c.key == WellKnownAttribute.DEVICE_VARIANT]
     assert len(dv) == 1
     assert dv[0].op == ConstraintOp.IN
-    assert dv[0].values == ("v5litepod-16", "v6e-16")
+    assert tuple(v.value for v in dv[0].values) == ("v5litepod-16", "v6e-16")

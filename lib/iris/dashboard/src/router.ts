@@ -11,32 +11,28 @@ const routes = [
     component: () => import('./components/controller/JobsTab.vue'),
   },
   {
+    path: '/backends',
+    component: () => import('./components/controller/BackendsTab.vue'),
+  },
+  {
     path: '/fleet',
     component: () => import('./components/controller/FleetTab.vue'),
   },
   {
-    path: '/autoscaler',
-    component: () => import('./components/controller/AutoscalerTab.vue'),
-  },
-  {
-    path: '/cluster',
-    component: () => import('./components/controller/KubernetesClusterTab.vue'),
+    path: '/capacity',
+    component: () => import('./components/controller/CapacityTab.vue'),
   },
   {
     path: '/endpoints',
     component: () => import('./components/controller/EndpointsTab.vue'),
   },
   {
+    path: '/logs',
+    component: () => import('./components/controller/LogsTab.vue'),
+  },
+  {
     path: '/status',
     component: () => import('./components/controller/StatusTab.vue'),
-  },
-  {
-    path: '/transactions',
-    component: () => import('./components/controller/TransactionsTab.vue'),
-  },
-  {
-    path: '/scheduler',
-    component: () => import('./components/controller/SchedulerTab.vue'),
   },
   {
     path: '/account',

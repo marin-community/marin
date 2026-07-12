@@ -4,8 +4,8 @@
 """Tests for environment loading from EnvConfig."""
 
 from marin.rl.environments import EnvConfig, load_environment_from_spec
-from marin.rl.environments.mock_env import MockEnv
 from marin.rl.environments.math_env import MathEnv
+from marin.rl.environments.mock_env import MockEnv
 
 
 def test_load_mock_environment():

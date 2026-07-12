@@ -1,11 +1,10 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, cast
 
 import haliax as hax
 import jax
@@ -145,8 +144,11 @@ def scale_by_soap(
     Returns:
         optax.GradientTransformationExtraArgs: The SOAP optimizer.
     """
-    mu_dtype = canonicalize_dtype(mu_dtype) if mu_dtype is not None else None
-    precond_dtype = canonicalize_dtype(precond_dtype) if precond_dtype is not None else None
+    # optax.canonicalize_dtype is stubbed with a broad return; it normalizes to a concrete dtype here.
+    mu_dtype = cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(mu_dtype)) if mu_dtype is not None else None
+    precond_dtype = (
+        cast(Optional[Union[str, jnp.dtype]], canonicalize_dtype(precond_dtype)) if precond_dtype is not None else None
+    )
     shampoo_beta = shampoo_beta if shampoo_beta >= 0 else b2
 
     def init_fn(params: Updates) -> dict:
@@ -801,8 +803,9 @@ def get_orthogonal_matrix_QR(
         power_iter = jnp.matmul(m, o, precision=precision)
         Q_new, _ = jnp.linalg.qr(power_iter)
         final_Q.append(Q_new)
-    final_Q = otu.tree_cast(final_Q, precond_dtype)
-    exp_avg_sq = otu.tree_cast(exp_avg_sq, mu_dtype)
+    # tree_cast only rewrites leaf dtypes; the pytree structure (and thus the declared types) is preserved.
+    final_Q = cast(List[Union[Array, None]], otu.tree_cast(final_Q, precond_dtype))
+    exp_avg_sq = cast(Array, otu.tree_cast(exp_avg_sq, mu_dtype))
     return final_Q, exp_avg_sq
 
 
@@ -983,48 +986,6 @@ def _unstack_and_unpad_matrices(stacked_array, shapes):
             arr = arr[slices]
         unpadded.append(arr)
     return tuple(unpadded)
-
-
-# unused fns (can be used for stacking partitions without padding):
-def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
-    indexed_list = list(enumerate(matrix_shapes))
-    sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
-    sorted_shapes = [shape for _, shape in sorted_indexed]
-    change_indices = [original_index for original_index, _ in sorted_indexed]
-    revert_indices = [0] * len(matrix_shapes)
-    for new_pos, (original_index, _) in enumerate(sorted_indexed):
-        revert_indices[original_index] = new_pos
-    shape_groups = defaultdict(list)
-    for i, shape in enumerate(sorted_shapes):
-        shape_groups[shape].append(i)
-    unique_sorted_shapes = list(shape_groups.keys())
-    return unique_sorted_shapes, dict(shape_groups), change_indices, revert_indices
-
-
-def _stack_matrices(array_list):
-    in_tuple = isinstance(array_list, tuple)
-    shapes = [arr.shape for arr in array_list]
-    unique_shapes, shape_groups, change_indices, _ = _sort_and_group_matrices(shapes)
-    sorted_arrays = [array_list[i] for i in change_indices]
-    stacked_arrays = []
-    for shape in unique_shapes:
-        indices = shape_groups[shape]
-        stacked = jnp.stack([sorted_arrays[i] for i in indices])
-        stacked_arrays.append(stacked)
-    if in_tuple:
-        return tuple(stacked_arrays)
-    return stacked_arrays
-
-
-def _unstack_matrices(stacked_arrays, revert_indices):
-    in_tuple = isinstance(stacked_arrays, tuple)
-    unstacked = []
-    for arr in stacked_arrays:
-        unstacked.extend(jnp.split(arr, arr.shape[0]))
-    array_list = [jnp.squeeze(unstacked[i], axis=0) for i in revert_indices]
-    if in_tuple:
-        return tuple(array_list)
-    return array_list
 
 
 def _merge_small_dims(

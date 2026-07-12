@@ -2,10 +2,11 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
+import EndpointLink from '@/components/shared/EndpointLink.vue'
 
 const SHOW_ALL_THRESHOLD = 100
 
@@ -27,7 +28,7 @@ const endpoints = computed(() => listResponse.value?.endpoints ?? [])
 watch(listResponse, () => { showAll.value = false })
 
 onMounted(fetchEndpoints)
-useAutoRefresh(fetchEndpoints, 30_000)
+useAutoRefresh(fetchEndpoints, DEFAULT_REFRESH_MS)
 
 function handleFilterSubmit() {
   prefix.value = localPrefix.value
@@ -143,7 +144,9 @@ function jobIdFromTaskId(taskId?: string): string | null {
           :key="ep.endpointId ?? ep.name"
           class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
         >
-          <td class="px-3 py-2 text-[13px] font-mono">{{ ep.name }}</td>
+          <td class="px-3 py-2 text-[13px] font-mono">
+            <EndpointLink :name="ep.name" />
+          </td>
           <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
             <span v-if="ep.address" class="group/addr inline-flex items-center gap-1">
               {{ ep.address }}

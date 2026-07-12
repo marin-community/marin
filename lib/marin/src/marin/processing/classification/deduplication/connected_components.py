@@ -6,9 +6,36 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, ShardInfo
+from rigging.filesystem import StoragePath
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
+from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
+
+
+def _find_last_complete_iteration(
+    output_dir: str, max_iterations: int, expected_parquets: int
+) -> tuple[int, list[str]] | None:
+    """Return (last_iteration, parquet_paths) from prior run outputs, or None if nothing reusable.
+
+    A CC iteration ``it_N/`` is considered complete iff its parquet file count equals
+    ``expected_parquets`` (= ``ctx.max_workers`` at write time). Iteration 0 uses the
+    ``part-{shard:05d}.parquet`` naming; iterations 1+ use ``part-{shard:05d}-of-{total:05d}.parquet``.
+    Both are detected by globbing ``it_N/*.parquet``.
+    """
+    last_complete = -1
+    last_paths: list[str] = []
+    for i in range(max_iterations + 1):
+        paths = [str(m) for m in StoragePath(f"{output_dir}/it_{i}/*.parquet").glob()]
+        if len(paths) != expected_parquets:
+            break
+        last_complete = i
+        last_paths = paths
+    if last_complete < 0:
+        return None
+    return last_complete, last_paths
 
 
 # TODO (rav): can we have just a single id that's expected to be clean on the inputs?
@@ -37,7 +64,7 @@ def _internal_orderable_id(record_id: Any) -> str:
     """
     We need an id that has a total ordering for connected components. If the id is an int,
     we can use it as is. If it's a string, we hash it and convert it to string. We convert
-    to string to make internal zephyr/ray/pyarrow serde happy.
+    to string to make internal zephyr/pyarrow serde happy.
     """
     if isinstance(record_id, int):
         id_norm = str(record_id)
@@ -55,6 +82,7 @@ def connected_components(
     output_dir: str,
     max_iterations: int = 10,
     preserve_singletons: bool = True,
+    resume: bool = False,
 ) -> tuple[bool, Sequence[str]]:
     """
     Connected Components implementation using Zephyr Dataset API and Hash-to-Min algorithm (https://arxiv.org/abs/1203.5387)
@@ -65,6 +93,9 @@ def connected_components(
         output_dir: Directory to write intermediate and final output files
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
+        resume: If True, skip iterations whose ``it_N/`` already contains a complete set of
+            parquet files (count == ``ctx.max_workers``). Starts from the first incomplete
+            iteration. If no complete prior state exists, runs from scratch.
     """
 
     def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
@@ -94,18 +125,18 @@ def connected_components(
             elif norm < hub["id_norm"]:
                 yield _make_link(record, hub)
                 yield _make_link(hub, record)
-                counters.increment("cc/links", 2)
+                counters.pipeline.update_counter("cc/links", 2)
                 hub = record
             else:
                 yield _make_link(hub, record)
                 yield _make_link(record, hub)
-                counters.increment("cc/links", 2)
+                counters.pipeline.update_counter("cc/links", 2)
 
         if hub is None:
             return
 
-        counters.increment("cc/buckets")
-        counters.increment("cc/bucket_nodes", num_unique)
+        counters.pipeline.update_counter("cc/buckets", 1)
+        counters.pipeline.update_counter("cc/bucket_nodes", num_unique)
 
         if preserve_singletons and num_unique == 1:
             yield _make_link(hub, hub)
@@ -124,25 +155,34 @@ def connected_components(
     # I/O amplification.
     num_reduce_shards = ctx.max_workers
 
-    curr_it = ctx.execute(
-        ds
-        # Group nodes in buckets, deduplicate, and emit pairwise links
-        .group_by(
-            lambda x: x["bucket"],
-            reducer=_reduce_bucket_to_links,
-            combiner=_dedup_combiner,
-            num_output_shards=num_reduce_shards,
-        )
-        # Construct Node state, init with:
-        #  * each node is its own component
-        #  * adjacency list from links
-        .group_by(
-            lambda x: x["source_id_norm"],
-            reducer=_build_adjacency,
-            num_output_shards=num_reduce_shards,
-        ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
-        verbose=True,
-    ).results
+    start_iteration = 1
+    curr_it: Sequence[str]
+    resumed = _find_last_complete_iteration(output_dir, max_iterations, num_reduce_shards) if resume else None
+    if resumed is not None:
+        last_it, last_paths = resumed
+        logger.info("CC resume: skipping through it_%d (%d parquets present)", last_it, len(last_paths))
+        curr_it = last_paths
+        start_iteration = last_it + 1
+    else:
+        curr_it = ctx.execute(
+            ds
+            # Group nodes in buckets, deduplicate, and emit pairwise links
+            .group_by(
+                lambda x: x["bucket"],
+                reducer=_reduce_bucket_to_links,
+                combiner=_dedup_combiner,
+                num_output_shards=num_reduce_shards,
+            )
+            # Construct Node state, init with:
+            #  * each node is its own component
+            #  * adjacency list from links
+            .group_by(
+                lambda x: x["source_id_norm"],
+                reducer=_build_adjacency,
+                num_output_shards=num_reduce_shards,
+            ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
+            verbose=True,
+        ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
         # NOTE: this function exists to make the iteration number closure capture explicit
@@ -152,10 +192,10 @@ def connected_components(
             def counting_iter():
                 nonlocal num_changes
                 for node in nodes:
-                    counters.increment("cc/iteration_nodes")
+                    counters.pipeline.update_counter("cc/iteration_nodes", 1)
                     if node["changed"]:
                         num_changes += 1
-                        counters.increment("cc/changes")
+                        counters.pipeline.update_counter("cc/changes", 1)
                     yield node
 
             path = (
@@ -167,7 +207,7 @@ def connected_components(
         return _write_shard_and_count
 
     converged = False
-    for i in range(1, max_iterations + 1):  # type: ignore[bad-assignment]
+    for i in range(start_iteration, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
 
         shard_results = ctx.execute(
@@ -207,7 +247,7 @@ def _build_adjacency(node_id: str, links: Iterator[dict]) -> CCNode:
     adj: set[str] = {first["dest_id_norm"]}
     for link in links:
         adj.add(link["dest_id_norm"])
-    counters.increment("cc/nodes")
+    counters.pipeline.update_counter("cc/nodes", 1)
     return CCNode(
         record_id=first["source_record_id"],
         id_norm=first["source_id_norm"],

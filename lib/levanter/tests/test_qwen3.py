@@ -1,23 +1,22 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import tempfile
 
+import haliax as hax
 import numpy as np
 from jax import random
-
-import haliax as hax
+from test_utils import skip_if_no_torch, use_test_mesh
+from transformers.models.qwen3 import Qwen3Config as HFQwen3Config
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
-from test_utils import skip_if_no_torch, use_test_mesh
 
 
-def _hf_qwen_config(vocab_size=1000):
+def _hf_qwen_config(vocab_size=151936):
     """Return a tiny transformers Qwen2Config tweaked for tests but with qk-norm on."""
-    from transformers.models.qwen3 import Qwen3Config
-
     cfg_dict = {
         "architectures": ["Qwen3LMHeadModel"],
         "hidden_size": 16,
@@ -32,21 +31,26 @@ def _hf_qwen_config(vocab_size=1000):
         "rope_scaling": None,
         "no_bias": True,
     }
-    return Qwen3Config(**cfg_dict)  # type: ignore
+    return HFQwen3Config(**cfg_dict)  # type: ignore
 
 
 @skip_if_no_torch
-def test_qwen3_roundtrip():
-    import torch
-    from transformers.models.qwen3 import Qwen3ForCausalLM
+def test_qwen3_roundtrip(local_gpt2_tokenizer_path):
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.qwen3 import Qwen3ForCausalLM  # noqa: PLC0415  # optional dep: torch
 
-    Vocab = hax.Axis("vocab", 1000)
+    Vocab = hax.Axis("vocab", 151936)
     hf_config = _hf_qwen_config(Vocab.size)
 
     # Levanter config from HF
     config = Qwen3Config.from_hf_config(hf_config)  # type: ignore
 
-    converter = Qwen3Config().hf_checkpoint_converter()  # type: ignore
+    # Build the converter against a local tokenizer with no remote reference so the
+    # roundtrip never touches the Hub. The tokenizer is incidental here: inputs are
+    # random ids and we only assert logit equivalence across the conversion.
+    converter = dataclasses.replace(
+        config, reference_checkpoint=None, tokenizer=local_gpt2_tokenizer_path
+    ).hf_checkpoint_converter()  # type: ignore
 
     # Inputs
     input_ids = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
@@ -77,7 +81,7 @@ def test_qwen3_roundtrip():
 
         # now save the levanter model and load it as hf
         with tempfile.TemporaryDirectory() as save_dir:
-            converter.save_pretrained(model, save_dir)
+            converter.save_pretrained(model, save_dir, save_tokenizer=False)
             with open(f"{save_dir}/config.json", "r") as f:
                 saved_config = json.load(f)
             assert saved_config["vocab_size"] == Vocab.size

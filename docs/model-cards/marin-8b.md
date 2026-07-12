@@ -124,7 +124,7 @@ work out-of-the-box with the [Hugging Face Transformers](https://huggingface.co/
 and any other library that supports the Llama architecture.
 
 
-We use a variant of the Llama 3 tokenizer: [stanford-crfm/marin-tokenizer](https://huggingface.co/stanford-crfm/marin-tokenizer/).
+We use a variant of the Llama 3 tokenizer: [marin-community/marin-tokenizer](https://huggingface.co/marin-community/marin-tokenizer/).
 
 ## Inference
 
@@ -200,7 +200,7 @@ Please see [our technical retrospective](https://marin.readthedocs.io/en/latest/
 
 ### Tokenizer Details
 
-Marin 8B uses a variant of the Llama 3 tokenizer: [stanford-crfm/marin-tokenizer](https://huggingface.co/stanford-crfm/marin-tokenizer/). It has the same vocabulary but bundles a chat template into the base tokenizer for convenience.
+Marin 8B uses a variant of the Llama 3 tokenizer: [marin-community/marin-tokenizer](https://huggingface.co/marin-community/marin-tokenizer/). It has the same vocabulary but bundles a chat template into the base tokenizer for convenience.
 
 ### Training Phases
 

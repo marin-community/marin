@@ -8,8 +8,8 @@ const route = useRoute()
 const router = useRouter()
 
 // Derive the RPC target from route params/path.
-// Backend target conventions:
-//   /system/process              — the controller process itself
+// Backend target conventions (controller-facing):
+//   /system/controller           — the controller process itself
 //   /system/worker/<worker_id>   — a worker process (NOT a task on the worker)
 //   /<user>/<job>/<task_index>   — a user's task attempt
 const taskId = computed(() => (route.params.taskId as string) ?? '')
@@ -17,7 +17,7 @@ const jobId = computed(() => (route.params.jobId as string) ?? '')
 const workerId = computed(() => (route.params.workerId as string) ?? '')
 
 const target = computed(() => {
-  if (route.path.startsWith('/system/controller')) return '/system/process'
+  if (route.path.startsWith('/system/controller')) return '/system/controller'
   if (workerId.value) return `/system/worker/${workerId.value}`
   return taskId.value
 })

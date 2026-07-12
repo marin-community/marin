@@ -4,6 +4,7 @@
 import abc
 import io
 import json
+import logging
 import os
 import warnings
 from functools import cached_property
@@ -11,21 +12,18 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 
 import datasets
 import numpy as np
-from rigging.filesystem import open_url
 import pyarrow.parquet as pq
+from rigging.filesystem import StoragePath, open_url
 
-from levanter.utils import fsspec_utils
-
-from ..data import AsyncDataset
-from ..utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
-    _construct_composite_batch_processor,
-    _DatasetTransform,
     _MapTransform,
+    _TransformedDataset,
 )
 from .utils import batched
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -65,35 +63,6 @@ class ShardedDataSource(Generic[T_co]):
             for doc in self.open_shard(shard_name):
                 yield doc
 
-    def build_or_load_cache(
-        self,
-        path: str,
-    ) -> AsyncDataset[T]:
-        """
-        Constructs a shard cache version of this dataset using Ray.
-
-        Levanter's preprocessing pipeline offers the following features/guarantees:
-        * distributed, sharded preprocessing using Ray
-        * deterministic ordering of data
-        * interruptible and resumable
-        * streaming results (no need to wait for everything to finish)
-
-        Note that this is an experimental API and is subject to change.
-
-        Returns:
-            A new AsyncDataset that is backed by the cache.
-        """
-
-        source, processor = _construct_composite_batch_processor(self)
-        from ..store.cache import build_or_load_cache
-
-        cache = build_or_load_cache(
-            path,
-            source,
-            processor,
-        )
-        return cache
-
     def map(self, fn: Callable[[T_co], U]) -> "ShardedDataSource[U]":
         return _MappedShardedDataSource(self, fn)
 
@@ -116,9 +85,9 @@ class ShardedDataSource(Generic[T_co]):
         Args:
             fn:  A function that takes a list of data and returns an iterable of results
             batch_size: The batch size to use
-            num_cpus: passed to ray
-            num_gpus: passed to ray
-            **resources: Resources to pass to Ray
+            num_cpus: CPU resources to request for each batch-map worker
+            num_gpus: GPU resources to request for each batch-map worker
+            **resources: Extra resource hints forwarded to the preprocessing executor
 
         Returns:
             A new ShardedDataset.
@@ -126,6 +95,36 @@ class ShardedDataSource(Generic[T_co]):
         return _BatchMappedShardedDataSource(
             self, fn, batch_size, num_cpus=num_cpus, num_gpus=num_gpus, output_exemplar=output_exemplar, **resources
         )
+
+
+class FirstRowsShardedDataSource(ShardedDataSource[T]):
+    """A single-shard view over the first rows of another sharded source."""
+
+    def __init__(self, source: ShardedDataSource[T], max_rows: int):
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive")
+        self.source = source
+        self.max_rows = max_rows
+
+    @property
+    def shard_names(self) -> Sequence[str]:
+        return ["data"]
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
+        if shard_name != "data":
+            raise ValueError(f"Unknown shard {shard_name!r}")
+        if row >= self.max_rows:
+            return
+
+        emitted = 0
+        for item in self.source:
+            if emitted >= row:
+                emitted += 1
+                yield item
+                if emitted >= self.max_rows:
+                    return
+            else:
+                emitted += 1
 
 
 class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
@@ -155,6 +154,26 @@ def datasource_from_hf(id: str, *, split, **kwargs) -> ShardedDataSource[dict]:
     Create a ShardedDataset from a HuggingFace dataset. Arguments are passed to load_dataset.
     """
     return WrappedHFDataSource(id, split=split, **kwargs)
+
+
+def datasource_from_hf_or_none(id: str, *, split, **kwargs) -> ShardedDataSource[dict] | None:
+    """
+    Like `datasource_from_hf`, but returns None when the requested split is missing or empty.
+
+    HuggingFace raises a ``ValueError`` whose message starts with "Bad split" when the split does
+    not exist; we treat that (and a source with no shards) as an absent dataset rather than an error.
+    """
+    try:
+        source = datasource_from_hf(id, split=split, **kwargs)
+    except ValueError as e:
+        if str(e).startswith("Bad split"):
+            logger.warning("Split %s not found for HF dataset %s %s", split, id, kwargs.get("name"))
+            return None
+        raise
+
+    if len(source.shard_names) == 0:
+        return None
+    return source
 
 
 def datasource_from_jsonl(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
@@ -213,8 +232,8 @@ class WrappedHFDataSource(ShardedDataSource[dict]):
             idx += 1
 
     def _load_dataset(self):
-        # obnoxiously, the dataset loading stuff doesn't work with ray because of multiprocessing
-        # so we have to do this hacky thing where we load the dataset in the worker
+        # HF dataset loading has historically not been multiprocessing-safe, so we load
+        # lazily in the worker rather than sharing a dataset handle across processes.
         return datasets.load_dataset(self.id, split=self.split, streaming=self.streaming, **self.kwargs)
 
 
@@ -263,7 +282,6 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         compression = "infer"
         if url.endswith(".zstd"):  # hacky way to detect zstd
             compression = "zstd"
@@ -272,16 +290,11 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
         match format:
             case ".jsonl":
                 with open_url(url, "r", compression=compression) as f:
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            obj = json.loads(line)
-                            if self.columns:
-                                yield {col: obj[col] for col in self.columns}
-                            else:
-                                yield obj
-                        i += 1
+                    for obj in _iter_jsonl_from_row(f, row):
+                        if self.columns:
+                            yield {col: obj[col] for col in self.columns}
+                        else:
+                            yield obj
             case ".json":
                 with open_url(url, "r", compression=compression) as f:
                     data = json.load(f)
@@ -339,20 +352,14 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         with open_url(url, "r", compression="infer") as f:
             format = _sniff_format_for_dataset(url)
             match format:
                 case ".jsonl":
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            mat_json = json.loads(line)
-                            audio_pointer = mat_json[self.audio_key]
-                            audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
-                            yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
-                        i += 1
+                    for mat_json in _iter_jsonl_from_row(f, row):
+                        audio_pointer = mat_json[self.audio_key]
+                        audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
+                        yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
                 case ".json":
                     data = json.load(f)
                     for doc in data[row:]:
@@ -411,6 +418,17 @@ def _sniff_format_for_dataset(url):
     return format_from_url
 
 
+def _iter_jsonl_from_row(f: Iterable[str], row: int) -> Iterator[Any]:
+    """Yield parsed JSON objects from a JSONL stream, skipping the first ``row`` lines.
+
+    TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
+    which is not nothing, but not ideal.
+    """
+    for i, line in enumerate(f):
+        if i >= row:
+            yield json.loads(line)
+
+
 def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None) -> Iterator[dict]:
     """Iterate over rows in a ParquetFile starting from a given row offset.
 
@@ -449,14 +467,8 @@ class JsonlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         with open_url(url, "r", compression="infer") as f:
-            # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-            # which is not nothing, but not ideal.
-            for line in f:
-                if i >= row:
-                    yield json.loads(line)
-                i += 1
+            yield from _iter_jsonl_from_row(f, row)
 
 
 class JsonDataSource(UrlBackedShardedDataSource[dict]):
@@ -486,7 +498,9 @@ def _mk_shard_name_mapping(urls):
     missing_urls: List[str] = []
 
     def _expand_or_placeholder(url):
-        expanded = list(expand_glob(url))
+        # expand_glob keeps a named-but-absent literal (so it warns/fails below rather
+        # than vanishing); the fallback keeps an all-glob spec that matched nothing.
+        expanded = [str(m) for m in StoragePath(url).expand_glob()]
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
@@ -500,7 +514,7 @@ def _mk_shard_name_mapping(urls):
         common_prefix = os.path.commonprefix(urls)
 
     for url in urls:
-        exists = fsspec_utils.exists(url)
+        exists = StoragePath(url).exists()
         # escape the url for the shard name
         shard_name = url
         if common_prefix:
@@ -523,15 +537,10 @@ def _mk_shard_name_mapping(urls):
     return _shard_name_to_url_mapping
 
 
-class _TransformedDataset:
-    source: ShardedDataSource
-    _transform: _DatasetTransform
-
-
 class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     def __init__(self, source: ShardedDataSource[T_co], fn: Callable[[T_co], T]):
         self.source = source
-        self.fn = fn
+        self.fn: Callable[..., T] = fn
         self._transform = _MapTransform(fn)
 
     @property

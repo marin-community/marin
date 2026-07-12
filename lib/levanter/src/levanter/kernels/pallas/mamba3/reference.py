@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float
 
-from ..ssd.reference import (
+from levanter.kernels.pallas.ssd.reference import (
     intra_chunk_log_alpha_cumsum,
     local_log_alpha,
     ssd_chunk_state_reference_batched,

@@ -9,16 +9,33 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
+from levanter.models.lm_model import LmHeadModel
+from marin.rl.decoding import DecodingConfig
+from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
-from marin.rl.types import Rollout
-
-from levanter.models.lm_model import LmHeadModel
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_input_ids(tokenizer_output: Any) -> list[int]:
+    """Return token IDs from HF/Levanter tokenizer outputs."""
+    if isinstance(tokenizer_output, Mapping):
+        tokenizer_output = tokenizer_output["input_ids"]
+
+    if hasattr(tokenizer_output, "tolist"):
+        tokenizer_output = tokenizer_output.tolist()
+
+    if tokenizer_output and isinstance(tokenizer_output[0], list):
+        if len(tokenizer_output) != 1:
+            raise ValueError(f"Expected one tokenized prompt, got {len(tokenizer_output)}")
+        tokenizer_output = tokenizer_output[0]
+
+    return list(tokenizer_output)
 
 
 class BaseInferenceContext:
@@ -34,14 +51,15 @@ class BaseInferenceContext:
         """Return implementation-specific metrics for tracker logging."""
         return {}
 
+    def resolve_decoding(self, decoding: DecodingConfig) -> DecodingConfig:
+        """Return the concrete decoding config this backend will apply."""
+        return decoding
+
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
-        temperature: float,
         n: int,
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
+        decoding: DecodingConfig,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
@@ -59,7 +77,7 @@ class BaseInferenceContext:
             if not tokens:
                 raise ValueError(f"Failed to tokenize: {prompt[:100]}...") from None
 
-        return np.array(tokens, dtype=np.int32)
+        return np.array(_extract_input_ids(tokens), dtype=np.int32)
 
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""
@@ -98,12 +116,12 @@ class BaseInferenceContext:
         env_name: str,
         env_example_id: str,
         reward: float,
-        temperature: float,
-        top_k: int | None = None,
+        decoding: DecodingConfig,
         system_prompt: str | None = None,
         correctness_reward: float | None = None,
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
+        decoding = self.resolve_decoding(decoding)
 
         prompt_tokens = self.tokenize_prompt(prompt, choice, system_prompt)
         response_tokens = self.response_tokens_from_choice(choice)
@@ -129,7 +147,6 @@ class BaseInferenceContext:
             token_rewards=token_rewards,
             episode_reward=float(reward),
             correctness_reward=correctness_reward,
-            temperature=temperature,
-            top_k=top_k,
+            decoding=decoding.as_trace(),
             is_truncated=is_truncated,
         )

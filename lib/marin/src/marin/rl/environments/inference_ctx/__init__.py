@@ -1,16 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from .async_vllm import AsyncvLLMInferenceContext
 from .base import BaseInferenceContext
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import (
-    vLLMInferenceContext,
-    vLLMInferenceContextConfig,
-    VLLMSamplingConfig,
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
+    VLLMEngineConfig,
+    VLLMFallbackSamplingConfig,
+    vLLMInferenceContext,
+    vLLMInferenceContextConfig,
 )
-from .async_vllm import AsyncvLLMInferenceContext
 
 __all__ = [
     "MODEL_MAPPINGS",
@@ -19,7 +20,8 @@ __all__ = [
     "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
-    "VLLMSamplingConfig",
+    "VLLMEngineConfig",
+    "VLLMFallbackSamplingConfig",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",
 ]

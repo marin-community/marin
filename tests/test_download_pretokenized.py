@@ -8,16 +8,15 @@ import numpy as np
 import pytest
 import requests  # For requests.exceptions.RequestException
 from huggingface_hub.utils import HfHubHTTPError
-from levanter.store import TreeCache
+from levanter.store.cache import TreeCache
 from levanter.tokenizers import load_tokenizer
-
 from marin.processing.tokenize.download_pretokenized import (
     PretokenizedCacheDownloadConfig,
-    _actually_download_pretokenized_cache,
+    fetch_pretokenized_cache,
 )
 
 HF_REPO_ID = "marin-community/fineweb-edu-pretokenized-10K"
-TOKENIZER_NAME = "stanford-crfm/marin-tokenizer"
+TOKENIZER_NAME = "marin-community/marin-tokenizer"
 
 
 def test_download_and_load_cache():
@@ -45,7 +44,7 @@ def test_download_and_load_cache():
         )
 
         try:
-            returned_config = _actually_download_pretokenized_cache(config)
+            returned_config = fetch_pretokenized_cache(config)
             assert returned_config.cache_path == tmpdir
         except (ValueError, HfHubHTTPError, requests.exceptions.RequestException) as e:
             # ValueError can be raised by hf_download_logic if no files are found or path is unwritable.

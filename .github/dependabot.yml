@@ -1,11 +1,39 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
+# Dependabot configuration.
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Proactive version updates are disabled (open-pull-requests-limit: 0). We only
+# want Dependabot to open PRs for security advisories. Security-update PRs are
+# grouped into a single PR per ecosystem per directory to cut review noise.
+# (Security updates are enabled in repo settings and are unaffected by the
+# open-pull-requests-limit: 0 setting.)
 
 version: 2
 updates:
-  - package-ecosystem: "pip" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  - package-ecosystem: "uv"
+    directories:
+      - "/"
+      - "/lib/dupekit"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      uv-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/infra/status-page"
+      - "/lib/iris"
+      - "/lib/iris/dashboard"
+      - "/lib/finelog"
+      - "/lib/finelog/dashboard"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"

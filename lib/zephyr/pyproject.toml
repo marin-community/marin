@@ -4,15 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "marin-zephyr"
-version = "0.99"
+version = "0.2.0"
 description = "Lightweight dataset library for distributed data processing"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-iris",
     "marin-rigging",
-    "marin-fray[ray]",
-    "typing-extensions>=4.0",
+    "marin-fray",
     "click>=8.0",
     "cloudpickle>=3.0",
     "humanfriendly>=10.0",
@@ -21,8 +20,9 @@ dependencies = [
     "fsspec>=2023.1.0",
     "braceexpand>=0.1.0",
     "zstandard>=0.18.0",
-    "tqdm-loggable>=0.2",
     "vortex-data>=0.61.0",
+    "xxhash>=3.4",
+    "psutil>=5.9.0",
 ]
 
 [dependency-groups]
@@ -30,7 +30,6 @@ test = [
     "pytest>=8.3.2",
     "pytest-timeout",
     "pytest-xdist",
-    "psutil>=5.9.0",
 ]
 
 dev = [
@@ -44,9 +43,14 @@ packages = ["src/zephyr"]
 packages = ["src/zephyr"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+addopts = "-m 'not slow and not tpu_ci' --import-mode=importlib"

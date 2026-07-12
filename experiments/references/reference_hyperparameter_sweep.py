@@ -1,7 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""AdamH hyperparameter sweep for a ~130M Grug model on Nemotron mix."""
+"""AdamH hyperparameter sweep for a ~130M Grug model on Nemotron mix.
+
+Demonstrates how to integrate a third-party BO framework (Google Vizier) with
+the Marin ``ArtifactStep`` execution model. The sweep runs ``SWEEP.num_loops``
+Bayesian optimization rounds; each round:
+
+  1. **Suggest** — queries Vizier for ``SWEEP.suggestions_per_loop`` trial HP sets
+     (or creates the study on the first loop).
+  2. **Train** — trains one Grug 130M run per suggestion on the Nemotron mix.
+  3. **Update** — reports the eval metric for each trial back to Vizier, carrying
+     the study DB forward.
+
+After all loops an **Optimal** step reads the best trial from Vizier and writes
+a summary JSON. Each step is an :class:`~marin.execution.lazy.ArtifactStep` and
+the chain is wired via ``deps``; the :class:`~marin.execution.step_runner.StepRunner`
+materializes them in dependency order.
+
+Run:
+    uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \\
+      -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -- python -m experiments.references.reference_hyperparameter_sweep
+"""
 
 import json
 import logging
@@ -16,17 +37,25 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import fsspec
-from levanter.optim import AdamHConfig
-from levanter.tracker.wandb import WandbConfig
-
-from experiments.defaults import default_validation_sets
-from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
-from experiments.grug.base.train import GrugEvalConfig, GrugTrainerConfig
-from experiments.pretraining_datasets.nemotron import nemotron_mix
 from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from levanter.optim.adamh import AdamHConfig
+from levanter.tracker.wandb import WandbConfig
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem import prefix_join
+
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -102,14 +131,54 @@ SWEEP = SweepSettings(
 
 SUGGESTIONS_FILENAME = "vizier_suggestions.json"
 UPDATE_FILENAME = "vizier_update.json"
-RESOURCE_FILENAME = "vizier_resource.json"
 OPTIMAL_FILENAME = "vizier_optimal.json"
 VIZIER_DB_FILENAME = "vizier.db"
 
-NEMOTRON_MIX_WITH_EVAL = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
-)
+
+class VizierSuggestArtifact(Artifact):
+    """Output of a suggest step: a Vizier DB snapshot and a suggestions JSON."""
+
+    @property
+    def db_path(self) -> str:
+        return prefix_join(self.path, VIZIER_DB_FILENAME)
+
+    @property
+    def suggestions_path(self) -> str:
+        return prefix_join(self.path, SUGGESTIONS_FILENAME)
+
+
+class VizierUpdateArtifact(Artifact):
+    """Output of an update step: a Vizier DB snapshot with completed trial measurements."""
+
+    @property
+    def db_path(self) -> str:
+        return prefix_join(self.path, VIZIER_DB_FILENAME)
+
+
+# --- Data handles (shared across all training steps) ---
+_NEMOTRON_WEIGHTS = {
+    "hq_actual": 0.91351,
+    "hq_synth": 2.72,
+    "medium_high": 0.82471,
+    "medium": 3.38,
+    "medium_low": 1.54,
+    "low_actual": 0.70123,
+    "low_synth": 0.62771,
+}
+_STARCODER_WEIGHT = 0.25
+_PROOFPILE_WEIGHT = 0.055
+
+_nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+_NEMOTRON_TRAIN: dict[ArtifactStep[TokenizedCache], float] = {
+    _nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()
+}
+_NEMOTRON_TRAIN[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+_NEMOTRON_TRAIN[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+_VALIDATION: list[ArtifactStep[TokenizedCache]] = [
+    *paloma_datasets().values(),
+    *uncheatable_datasets().values(),
+]
+_ALL_DATA_DEPS: tuple[ArtifactStep[TokenizedCache], ...] = (*_NEMOTRON_TRAIN, *_VALIDATION)
 
 
 @dataclass(frozen=True)
@@ -174,7 +243,7 @@ def _local_vizier_db_path(study_id: str) -> str:
 
 
 def _configure_vizier_local_db(local_path: str) -> None:
-    from vizier.service import clients
+    from vizier.service import clients  # noqa: PLC0415  # optional dep: vizier
 
     clients.environment_variables.servicer_kwargs["database_url"] = f"sqlite:///{local_path}"
 
@@ -233,7 +302,6 @@ def _load_suggestions(path: str) -> dict:
 def _serialize_parameters(parameters: Mapping[str, object]) -> dict[str, float | int]:
     serialized: dict[str, float | int] = {}
     for key, value in parameters.items():
-        # Vizier returns ParameterValue objects from trial.parameters.
         raw_value = value.value if hasattr(value, "value") else value
         if isinstance(raw_value, bool):
             serialized[key] = int(raw_value)
@@ -250,7 +318,7 @@ def _serialize_parameters(parameters: Mapping[str, object]) -> dict[str, float |
 
 
 def _metric_goal(mode: str) -> Any:
-    from vizier.service import pyvizier as vz
+    from vizier.service import pyvizier as vz  # noqa: PLC0415  # optional dep: vizier
 
     if mode == "min":
         return vz.ObjectiveMetricGoal.MINIMIZE
@@ -291,53 +359,10 @@ def _build_adamh_config(
     )
 
 
-def _build_base_launch_config() -> GrugBaseLaunchConfig:
-    placeholder_lr = SWEEP.search_space["lr"][0]
-    placeholder_beta1 = SWEEP.search_space["beta1"][0]
-    placeholder_adam_lr = SWEEP.search_space["adam_lr"][0]
-    placeholder_beta2 = SWEEP.search_space["beta2"][0]
-    placeholder_epsilon = SWEEP.search_space["epsilon"][0]
-    placeholder_max_grad_norm = SWEEP.search_space["max_grad_norm"][0]
-    placeholder_batch_size = SWEEP.fixed_batch_size
-    placeholder_steps = SWEEP.target_tokens // (placeholder_batch_size * SWEEP.seq_len)
-
-    return GrugBaseLaunchConfig(
-        model=GRUG_130M_MODEL,
-        data=NEMOTRON_MIX_WITH_EVAL,
-        output_path=this_output_path(),
-        run_id=f"{SWEEP.experiment_name}-base",
-        resources=ResourceConfig.with_tpu("v4-8"),
-        steps=placeholder_steps,
-        batch_size=placeholder_batch_size,
-        seed=0,
-        mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=WandbConfig(
-            project="marin",
-            tags=list(SWEEP.base_train_tags),
-            group=SWEEP.experiment_name,
-            name=None,
-        ),
-        optimizer=_build_adamh_config(
-            learning_rate=placeholder_lr,
-            beta1=placeholder_beta1,
-            adam_learning_rate=placeholder_adam_lr,
-            beta2=placeholder_beta2,
-            epsilon=placeholder_epsilon,
-            max_grad_norm=placeholder_max_grad_norm,
-        ),
-        grug_trainer=GrugTrainerConfig(
-            z_loss_weight=5e-6,
-        ),
-        eval=GrugEvalConfig(
-            steps_per_eval=500,
-        ),
-    )
-
-
 def run_vizier_suggest(config: VizierSuggestConfig) -> None:
     """Create or load a Vizier study, suggest trials, and persist the study DB."""
-    from vizier.service import clients
-    from vizier.service import pyvizier as vz
+    from vizier.service import clients  # noqa: PLC0415  # optional dep: vizier
+    from vizier.service import pyvizier as vz  # noqa: PLC0415  # optional dep: vizier
 
     local_db_path = _local_vizier_db_path(config.study_id)
     output_db_path = os.path.join(config.output_path, VIZIER_DB_FILENAME)
@@ -408,7 +433,6 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
     )
 
     tracker = replace(base.tracker, tags=new_tags, name=f"trial-{trial_id}-loop-{config.loop_index}")
-    grug_trainer = replace(base.grug_trainer, z_loss_weight=hparams["z_loss_weight"])
 
     launch_config = replace(
         base,
@@ -424,16 +448,15 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
             epsilon=hparams["epsilon"],
             max_grad_norm=hparams["max_grad_norm"],
         ),
-        grug_trainer=grug_trainer,
+        z_loss_weight=hparams["z_loss_weight"],
     )
-
     run_grug_base_trial(launch_config)
 
 
 def run_vizier_update(config: VizierUpdateConfig) -> None:
     """Load trial results, update Vizier, and write summary output."""
-    from vizier.service import clients
-    from vizier.service import pyvizier as vz
+    from vizier.service import clients  # noqa: PLC0415  # optional dep: vizier
+    from vizier.service import pyvizier as vz  # noqa: PLC0415  # optional dep: vizier
 
     local_db_path = _local_vizier_db_path(config.study_id)
     if not config.input_db_path:
@@ -467,7 +490,6 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
         trial_id = int(suggestion["trial_id"])
         trial = study.get_trial(trial_id)
 
-        # Note: pyvizier maps protobuf SUCCEEDED/INFEASIBLE → TrialStatus.COMPLETED
         if trial.materialize().status == vz.TrialStatus.COMPLETED:
             logger.info(f"Trial {trial_id}: already completed, skipping")
         elif math.isnan(float(value)) or math.isinf(float(value)):
@@ -493,7 +515,6 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
     if best is None:
         raise RuntimeError(f"All {len(results)} trials were infeasible (NaN/Inf loss)")
 
-    # Infeasible results (metric=None) sort last regardless of mode
     def _sort_key(r: dict) -> tuple[bool, float]:
         m = r["metric"] or 0.0
         return (not r["feasible"], m if config.mode == "min" else -m)
@@ -511,15 +532,13 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
 
     with fs.open(os.path.join(config.output_path, UPDATE_FILENAME), "w") as f:
         json.dump(output, f, indent=2)
-    with fs.open(os.path.join(config.output_path, RESOURCE_FILENAME), "w") as f:
-        json.dump({"study_resource_name": config.study_resource_name}, f, indent=2)
 
     _sync_vizier_db_to_gcs(local_db_path, output_db_path)
 
 
 def run_vizier_optimal(config: VizierOptimalConfig) -> None:
     """Load the final Vizier study and report optimal trials."""
-    from vizier.service import clients
+    from vizier.service import clients  # noqa: PLC0415  # optional dep: vizier
 
     local_db_path = _local_vizier_db_path(config.study_id)
     if not _sync_vizier_db_from_gcs(config.input_db_path, local_db_path):
@@ -545,20 +564,20 @@ def run_vizier_optimal(config: VizierOptimalConfig) -> None:
         json.dump({"optimal_trials": optimal_trials}, f, indent=2)
 
 
-def _build_suggest_step(
+def _suggest_step(
     *,
     loop_index: int,
-    input_db_path: str | None,
-) -> ExecutorStep:
+    prev_update: ArtifactStep[VizierUpdateArtifact] | None,
+    version: str,
+) -> ArtifactStep[VizierSuggestArtifact]:
     client_id = f"{SWEEP.client_id_prefix}-loop-{loop_index}"
-    return ExecutorStep(
-        name=f"{SWEEP.experiment_name}-suggest-loop{loop_index}",
-        fn=remote(run_vizier_suggest, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
-        config=VizierSuggestConfig(
+
+    def build_config(ctx: StepContext) -> VizierSuggestConfig:
+        return VizierSuggestConfig(
             study_owner=SWEEP.study_owner,
             study_id=SWEEP.study_id,
-            input_db_path=input_db_path,
-            output_path=this_output_path(),
+            input_db_path=(ctx.resolved(prev_update).db_path if prev_update is not None else None),
+            output_path=ctx.output_path,
             num_suggestions=SWEEP.suggestions_per_loop,
             client_id=client_id,
             metric_key=SWEEP.metric_key,
@@ -566,113 +585,155 @@ def _build_suggest_step(
             algorithm=SWEEP.vizier_algorithm,
             search_space=SWEEP.search_space,
             loop_index=loop_index,
-        ),
+        )
+
+    deps = (prev_update,) if prev_update is not None else ()
+    return ArtifactStep(
+        name=user_namespaced_name(f"{SWEEP.experiment_name}/suggest/loop-{loop_index}", version),
+        version=version,
+        artifact_type=VizierSuggestArtifact,
+        run=remote(run_vizier_suggest, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
+        build_config=build_config,
+        deps=deps,
     )
 
 
-def _build_train_step(
+def _train_step(
     *,
     loop_index: int,
-    suggestion_index: int,
-    suggestions_path: str,
-    base_launch_config: GrugBaseLaunchConfig,
-) -> ExecutorStep:
-    return ExecutorStep(
-        name=os.path.join(
-            "checkpoints",
-            f"{SWEEP.client_id_prefix}-loop{loop_index}-trial{suggestion_index}",
-        ),
-        fn=remote(run_vizier_train, resources=ResourceConfig.with_cpu()),
-        config=VizierTrainConfig(
-            suggestions_path=suggestions_path,
-            suggestion_index=suggestion_index,
-            base_launch_config=base_launch_config,
+    trial_index: int,
+    suggest: ArtifactStep[VizierSuggestArtifact],
+    version: str,
+) -> ArtifactStep[Artifact]:
+    def build_config(ctx: StepContext) -> VizierTrainConfig:
+        steps = SWEEP.target_tokens // (SWEEP.fixed_batch_size * SWEEP.seq_len)
+        data = mixture(ctx, _NEMOTRON_TRAIN, validation=_VALIDATION)
+        base = GrugBaseLaunchConfig(
+            model=GRUG_130M_MODEL,
+            data=data,
+            output_path=ctx.output_path,
+            run_id=f"{SWEEP.experiment_name}-loop{loop_index}-trial{trial_index}",
+            resources=ResourceConfig.with_tpu("v4-8"),
+            steps=steps,
+            batch_size=SWEEP.fixed_batch_size,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=WandbConfig(
+                project="marin",
+                tags=list(SWEEP.base_train_tags),
+                group=SWEEP.experiment_name,
+                name=None,
+                replicate_path=ctx.output_path,
+            ),
+            optimizer=_build_adamh_config(
+                learning_rate=SWEEP.search_space["lr"][0],
+                beta1=SWEEP.search_space["beta1"][0],
+                adam_learning_rate=SWEEP.search_space["adam_lr"][0],
+                beta2=SWEEP.search_space["beta2"][0],
+                epsilon=SWEEP.search_space["epsilon"][0],
+                max_grad_norm=SWEEP.search_space["max_grad_norm"][0],
+            ),
+            z_loss_weight=5e-6,
+            steps_per_eval=500,
+        )
+        return VizierTrainConfig(
+            suggestions_path=ctx.resolved(suggest).suggestions_path,
+            suggestion_index=trial_index,
+            base_launch_config=base,
             target_tokens=SWEEP.target_tokens,
             seq_len=SWEEP.seq_len,
             fixed_batch_size=SWEEP.fixed_batch_size,
             loop_index=loop_index,
-        ),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(f"{SWEEP.experiment_name}/trial/loop-{loop_index}-trial-{trial_index}", version),
+        version=version,
+        artifact_type=Artifact,
+        run=remote(run_vizier_train, resources=ResourceConfig.with_cpu()),
+        build_config=build_config,
+        deps=(suggest, *_ALL_DATA_DEPS),
     )
 
 
-def _build_update_step(
+def _update_step(
     *,
     loop_index: int,
-    study_resource_name: str,
-    input_db_path: str | None,
-    suggestions_path: str,
-    training_steps: list[ExecutorStep],
-) -> ExecutorStep:
-    return ExecutorStep(
-        name=f"{SWEEP.experiment_name}-update-loop{loop_index}",
-        fn=remote(run_vizier_update, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
-        config=VizierUpdateConfig(
+    suggest: ArtifactStep[VizierSuggestArtifact],
+    training_steps: list[ArtifactStep[Artifact]],
+    version: str,
+) -> ArtifactStep[VizierUpdateArtifact]:
+    def build_config(ctx: StepContext) -> VizierUpdateConfig:
+        suggest_artifact = ctx.resolved(suggest)
+        return VizierUpdateConfig(
             study_id=SWEEP.study_id,
-            study_resource_name=study_resource_name,
-            input_db_path=input_db_path,
-            suggestions_path=suggestions_path,
-            run_paths=[step.as_input_name() for step in training_steps],
+            study_resource_name=SWEEP.study_resource_name,
+            input_db_path=suggest_artifact.db_path,
+            suggestions_path=suggest_artifact.suggestions_path,
+            run_paths=[ctx.artifact_path(t) for t in training_steps],
             metric_file=SWEEP.metric_file,
             metric_key=SWEEP.metric_key,
             mode=SWEEP.metric_mode,
-            output_path=this_output_path(),
+            output_path=ctx.output_path,
             loop_index=loop_index,
-        ),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(f"{SWEEP.experiment_name}/update/loop-{loop_index}", version),
+        version=version,
+        artifact_type=VizierUpdateArtifact,
+        run=remote(run_vizier_update, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
+        build_config=build_config,
+        deps=(suggest, *training_steps),
     )
 
 
-def _build_optimal_step(
+def _optimal_step(
     *,
-    input_db_path: str,
-    study_resource_name: str,
-) -> ExecutorStep:
-    return ExecutorStep(
-        name=f"{SWEEP.experiment_name}-optimal",
-        fn=remote(run_vizier_optimal, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
-        config=VizierOptimalConfig(
+    final_update: ArtifactStep[VizierUpdateArtifact],
+    version: str,
+) -> ArtifactStep[Artifact]:
+    def build_config(ctx: StepContext) -> VizierOptimalConfig:
+        return VizierOptimalConfig(
             study_id=SWEEP.study_id,
-            study_resource_name=study_resource_name,
-            input_db_path=input_db_path,
-            output_path=this_output_path(),
-        ),
+            study_resource_name=SWEEP.study_resource_name,
+            input_db_path=ctx.resolved(final_update).db_path,
+            output_path=ctx.output_path,
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(f"{SWEEP.experiment_name}/optimal", version),
+        version=version,
+        artifact_type=Artifact,
+        run=remote(run_vizier_optimal, resources=ResourceConfig.with_cpu(), pip_dependency_groups=["vizier"]),
+        build_config=build_config,
+        deps=(final_update,),
     )
+
+
+def build(*, num_loops: int | None = None, version: str = "dev") -> ArtifactStep[Artifact]:
+    """Build the full Vizier sweep DAG and return the terminal optimal step.
+
+    ``StepRunner().run([build().lower()])`` materializes the entire chain.
+    ``num_loops`` overrides ``SWEEP.num_loops`` (useful for CI smoke tests).
+    """
+    loops = num_loops if num_loops is not None else SWEEP.num_loops
+    prev_update: ArtifactStep[VizierUpdateArtifact] | None = None
+
+    for loop_index in range(loops):
+        suggest = _suggest_step(loop_index=loop_index, prev_update=prev_update, version=version)
+        trials = [
+            _train_step(loop_index=loop_index, trial_index=i, suggest=suggest, version=version)
+            for i in range(SWEEP.suggestions_per_loop)
+        ]
+        prev_update = _update_step(loop_index=loop_index, suggest=suggest, training_steps=trials, version=version)
+
+    assert prev_update is not None, "num_loops must be > 0"
+    return _optimal_step(final_update=prev_update, version=version)
 
 
 if __name__ == "__main__":
-    num_loops = SWEEP.num_loops
-    if os.getenv("CI", None) is not None:
-        num_loops = 1
-    suggestions_per_loop = SWEEP.suggestions_per_loop
+    import os as _os
 
-    previous_update_step: ExecutorStep | None = None
-    base_launch_config = _build_base_launch_config()
-
-    for loop_index in range(num_loops):
-        input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
-        suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
-
-        suggestions_path = suggest_step / SUGGESTIONS_FILENAME
-        training_steps = [
-            _build_train_step(
-                loop_index=loop_index,
-                suggestion_index=suggestion_index,
-                suggestions_path=suggestions_path,
-                base_launch_config=base_launch_config,
-            )
-            for suggestion_index in range(suggestions_per_loop)
-        ]
-
-        update_step = _build_update_step(
-            loop_index=loop_index,
-            study_resource_name=SWEEP.study_resource_name,
-            input_db_path=suggest_step / VIZIER_DB_FILENAME,
-            suggestions_path=suggestions_path,
-            training_steps=training_steps,
-        )
-        previous_update_step = update_step
-
-    optimal_step = _build_optimal_step(
-        input_db_path=previous_update_step / VIZIER_DB_FILENAME,
-        study_resource_name=SWEEP.study_resource_name,
-    )
-    executor_main(steps=[optimal_step])
+    _num_loops = 1 if _os.getenv("CI") else None
+    StepRunner().run([build(num_loops=_num_loops).lower()])

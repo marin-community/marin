@@ -12,9 +12,14 @@ before the shared function was introduced.
 import json
 
 import pytest
-
-from iris.cluster.providers.k8s.tasks import PodConfig, _build_pod_manifest
-from iris.cluster.runtime.env import build_common_iris_env
+from google.protobuf import json_format as jf
+from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
+from iris.cluster.runtime.env import (
+    IRIS_SLICE_COUNT,
+    IRIS_TASKS_PER_SLICE,
+    build_common_iris_env,
+    with_slice_topology_env,
+)
 from iris.rpc import job_pb2
 
 
@@ -23,10 +28,11 @@ def _make_req(
     attempt_id: int = 0,
     num_tasks: int = 1,
     bundle_id: str = "bundle-abc",
-    extras: list[str] | None = None,
-    pip_packages: list[str] | None = None,
+    setup_scripts: list[str] | None = None,
     user_env: dict[str, str] | None = None,
     tpu: bool = False,
+    tpu_variant: str = "v4",
+    tpu_count: int = 4,
     gpu_count: int = 0,
     ports: list[str] | None = None,
 ) -> job_pb2.RunTaskRequest:
@@ -38,15 +44,13 @@ def _make_req(
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.resources.cpu_millicores = 1000
     req.resources.memory_bytes = 4 * 1024**3
-    if extras:
-        req.environment.extras.extend(extras)
-    if pip_packages:
-        req.environment.pip_packages.extend(pip_packages)
+    if setup_scripts:
+        req.environment.setup_scripts.extend(setup_scripts)
     if user_env:
         for k, v in user_env.items():
             req.environment.env_vars[k] = v
     if tpu:
-        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant=tpu_variant, count=tpu_count))
     if gpu_count:
         req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpu_count))
     if ports:
@@ -85,8 +89,9 @@ _PARITY_CASES = [
     "basic",
     "retry",
     "tpu",
+    "tpu_multislice",
     "gpu",
-    "extras",
+    "setup_scripts",
     "user_env",
     "ports",
     "controller",
@@ -104,10 +109,12 @@ def parity_req_and_ctrl(request):
         req = _make_req(attempt_id=3)
     elif case == "tpu":
         req = _make_req(tpu=True)
+    elif case == "tpu_multislice":
+        req = _make_req(tpu=True, tpu_variant="v6e-8", tpu_count=8, num_tasks=2)
     elif case == "gpu":
         req = _make_req(gpu_count=8)
-    elif case == "extras":
-        req = _make_req(extras=["tpu", "eval"], pip_packages=["torch", "jax"])
+    elif case == "setup_scripts":
+        req = _make_req(setup_scripts=["uv sync\n", "echo done\n"])
     elif case == "user_env":
         req = _make_req(user_env={"WANDB_API_KEY": "secret", "MY_FLAG": "1"})
     elif case == "ports":
@@ -143,9 +150,9 @@ def test_k8s_env_values_match_common_env(parity_req_and_ctrl):
 # ---------------------------------------------------------------------------
 
 
-def test_attempt_id_zero_no_suffix():
+def test_attempt_id_zero_includes_suffix():
     env = _common_env(_make_req(attempt_id=0))
-    assert env["IRIS_TASK_ID"] == "/my-job/task-0"
+    assert env["IRIS_TASK_ID"] == "/my-job/task-0:0"
 
 
 def test_attempt_id_nonzero_gets_suffix():
@@ -172,6 +179,59 @@ def test_tpu_device_vars():
     assert env["JAX_FORCE_TPU_INIT"] == "1"
 
 
+def test_tpu_single_slice_omits_slice_topology():
+    env = _common_env(_make_req(tpu=True, tpu_variant="v6e-4", num_tasks=1))
+
+    assert IRIS_SLICE_COUNT not in env
+    assert IRIS_TASKS_PER_SLICE not in env
+
+
+def test_tpu_multislice_sets_slice_topology_for_single_vm_slices():
+    env = _common_env(_make_req(tpu=True, tpu_variant="v6e-8", tpu_count=8, num_tasks=2))
+
+    assert env[IRIS_SLICE_COUNT] == "2"
+    assert env[IRIS_TASKS_PER_SLICE] == "1"
+
+
+def test_tpu_multislice_sets_slice_topology_for_multi_vm_slices():
+    env = _common_env(_make_req(tpu=True, tpu_variant="v6e-16", tpu_count=4, num_tasks=8))
+
+    assert env[IRIS_SLICE_COUNT] == "2"
+    assert env[IRIS_TASKS_PER_SLICE] == "4"
+
+
+def test_with_slice_topology_env_publishes_tpu_slice_topology():
+    req = _make_req(tpu=True, tpu_variant="v6e-8", tpu_count=8, num_tasks=2)
+
+    environment = with_slice_topology_env(req.environment, req.resources, req.num_tasks)
+
+    assert environment.env_vars[IRIS_SLICE_COUNT] == "2"
+    assert environment.env_vars[IRIS_TASKS_PER_SLICE] == "1"
+
+
+def test_with_slice_topology_env_overwrites_stale_topology():
+    req = _make_req(tpu=True, tpu_variant="v6e-8", tpu_count=8, num_tasks=2)
+    req.environment.env_vars[IRIS_SLICE_COUNT] = "99"
+    req.environment.env_vars[IRIS_TASKS_PER_SLICE] = "99"
+
+    environment = with_slice_topology_env(req.environment, req.resources, req.num_tasks)
+
+    assert environment.env_vars[IRIS_SLICE_COUNT] == "2"
+    assert environment.env_vars[IRIS_TASKS_PER_SLICE] == "1"
+
+
+def test_tpu_multi_vm_single_slice_omits_slice_topology():
+    env = _common_env(_make_req(tpu=True, tpu_variant="v6e-16", tpu_count=4, num_tasks=4))
+
+    assert IRIS_SLICE_COUNT not in env
+    assert IRIS_TASKS_PER_SLICE not in env
+
+
+def test_tpu_multislice_rejects_task_count_not_divisible_by_vm_count():
+    with pytest.raises(ValueError, match="must be divisible by TPU VM count"):
+        _common_env(_make_req(tpu=True, tpu_variant="v6e-16", tpu_count=4, num_tasks=5))
+
+
 def test_gpu_no_jax_platforms():
     env = _common_env(_make_req(gpu_count=4))
     assert "JAX_PLATFORMS" not in env
@@ -183,14 +243,9 @@ def test_no_device_no_jax_platforms():
     assert "JAX_PLATFORMS" not in env
 
 
-def test_extras_serialized():
-    env = _common_env(_make_req(extras=["tpu", "eval"]))
-    assert json.loads(env["IRIS_JOB_EXTRAS"]) == ["tpu", "eval"]
-
-
-def test_pip_packages_serialized():
-    env = _common_env(_make_req(pip_packages=["torch"]))
-    assert json.loads(env["IRIS_JOB_PIP_PACKAGES"]) == ["torch"]
+def test_setup_scripts_serialized():
+    env = _common_env(_make_req(setup_scripts=["uv sync\n"]))
+    assert json.loads(env["IRIS_JOB_SETUP_SCRIPTS"]) == ["uv sync\n"]
 
 
 def test_user_env_serialized_as_iris_job_env():
@@ -198,9 +253,11 @@ def test_user_env_serialized_as_iris_job_env():
     assert json.loads(env["IRIS_JOB_ENV"]) == {"FOO": "bar"}
 
 
-def test_empty_extras_omitted():
+def test_setup_scripts_serialized_when_empty():
+    # Always set (even empty) so a child can tell a no-setup parent from a
+    # top-level submission with no parent at all.
     env = _common_env(_make_req())
-    assert "IRIS_JOB_EXTRAS" not in env
+    assert json.loads(env["IRIS_JOB_SETUP_SCRIPTS"]) == []
 
 
 def test_empty_user_env_omitted():
@@ -230,7 +287,6 @@ def test_standard_paths_always_present():
 
 def test_task_resources_uses_proto_json():
     """IRIS_TASK_RESOURCES should be valid proto-JSON for ResourceSpecProto."""
-    from google.protobuf import json_format as jf
 
     env = _common_env(_make_req())
     raw = env["IRIS_TASK_RESOURCES"]
@@ -241,8 +297,6 @@ def test_task_resources_uses_proto_json():
 
 
 def test_task_resources_includes_gpu_device():
-    from google.protobuf import json_format as jf
-
     env = _common_env(_make_req(gpu_count=8))
     proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)
@@ -251,8 +305,6 @@ def test_task_resources_includes_gpu_device():
 
 
 def test_task_resources_includes_tpu_device():
-    from google.protobuf import json_format as jf
-
     env = _common_env(_make_req(tpu=True))
     proto = job_pb2.ResourceSpecProto()
     jf.Parse(env["IRIS_TASK_RESOURCES"], proto)

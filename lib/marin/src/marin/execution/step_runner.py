@@ -3,50 +3,57 @@
 
 """Step runner for StepSpec.
 
-This module provides the execution layer for ``StepSpec`` objects. The main
-entry point is ``StepRunner``, a thin DAG scheduler that launches steps as
-they are yielded from an iterable, as soon as their dependencies are satisfied.
-
-Caching, distributed locking, heartbeats, and status writes are handled
-explicitly in :func:`run_step` rather than composed as decorators.  This
-makes the control flow easy to follow and debug.
-
-``ExecutorStep`` objects can be converted to ``StepSpec`` via
-``resolve_executor_step`` in ``marin.execution.executor``.
+``StepRunner`` is a thin DAG scheduler that launches steps as they are yielded
+from an iterable, as soon as their dependencies are satisfied. Caching,
+distributed locking, heartbeats, and status writes are handled explicitly in
+:func:`run_step` rather than composed as decorators, so the control flow is
+easy to follow and debug.
 """
 
-from __future__ import annotations
-
 import contextvars
-import dataclasses
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from typing import Any
 
-import levanter.utils.fsspec_utils as fsspec_utils
-from rigging.filesystem import open_url, url_to_fs
+from fray.client import JobHandle, JobStatus
+from fray.current_client import _current_client_var, current_client, set_current_client
+from fray.local_backend import LocalJobHandle
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem import StoragePath, url_to_fs
+from rigging.log_setup import configure_logging
 
-from fray.v2.client import JobHandle, JobStatus
-from fray.v2.local_backend import LocalJobHandle
-from marin.execution.artifact import Artifact
-from marin.execution.executor_step_status import (
+from marin.execution.artifact import (
+    FINGERPRINT_KEY,
+    STEP_RUNNER_EXECUTOR_VERSION,
+    VERSION_KEY,
+    StepRecordIdentity,
+    check_drift,
+    is_mutable_version,
+    write_step_record,
+)
+from marin.execution.remote import RemoteCallable, _sanitize_job_name
+from marin.execution.step_spec import StepSpec
+
+# Re-export for backward compatibility
+from marin.execution.step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
-    StepAlreadyDone,
+    PreviousTaskFailedError,
     StatusFile,
+    StepAlreadyDone,
     step_lock,
+    worker_id,
 )
-from marin.execution.remote import RemoteCallable
-from marin.execution.step_spec import StepSpec
+from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
 from marin.utilities.json_encoder import CustomJsonEncoder
-
-# Re-export for backward compatibility
-from marin.execution.executor_step_status import PreviousTaskFailedError, worker_id
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +63,46 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _write_executor_info(step: StepSpec) -> None:
-    """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema.
+def _warn_if_secondary_task() -> None:
+    """Warn when StepRunner starts on a non-primary task of a multi-task Iris job.
 
-    Skips writing if the file already exists (e.g. Executor.write_infos() wrote
-    a richer version before StepRunner launched the step).
+    The per-step distributed lock is won by exactly one task; the others lose the
+    race and spin without ever entering the step body. If every task was launched
+    to run the same step (an SPMD run), those tasks never join the step's
+    collective and the job deadlocks. Flags that launch mode without blocking the
+    run (#7080).
+    """
+    info = get_job_info()
+    if info is None or info.task_index == 0:
+        return
+    logger.warning(
+        "StepRunner is starting on Iris task %d of %d. The per-step distributed lock lets only one "
+        "task run each step, so this task will lose the lock race and spin without ever entering the "
+        "step body. If every task was launched to run the same step, the tasks that never enter it "
+        "cannot join its collective and the job will DEADLOCK (marin-community/marin#7080); run the "
+        "executor on a single task instead.",
+        info.task_index,
+        info.num_tasks,
+    )
+
+
+def _write_executor_info(step: StepSpec) -> None:
+    """Write a ``.executor_info`` JSON file in the ExecutorStepInfo schema.
+
+    Skips writing if the file already exists (e.g. ``Executor.write_infos()``
+    wrote a richer version before this step launched).
+
+    This runs at schedule time, before the step produces its ``.artifact.json``, and its
+    ``config`` is the identity ``hash_attrs`` — not the materialized config. It is tagged
+    ``STEP_RUNNER_EXECUTOR_VERSION`` so ``read_record`` ignores it as a record source and never
+    mistakes the stub for a completed cache (#6836).
     """
     info_path = os.path.join(step.output_path, ".executor_info")
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
     if fs.exists(info_path):
         return
     info = {
-        "executor_version": "step_runner",
+        "executor_version": STEP_RUNNER_EXECUTOR_VERSION,
         "name": step.name,
         "fn_name": str(step.fn) if step.fn is not None else "None",
         "config": step.hash_attrs,
@@ -77,14 +112,69 @@ def _write_executor_info(step: StepSpec) -> None:
         "dependencies": list(step.dep_paths),
         "output_path": step.output_path,
     }
-    fsspec_utils.mkdirs(step.output_path)
-    with open_url(info_path, "w") as f:
-        f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
+    StoragePath(step.output_path).mkdirs()
+    StoragePath(info_path).write_text(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 
 # ---------------------------------------------------------------------------
 # Step runner
 # ---------------------------------------------------------------------------
+
+
+def _is_built(step: StepSpec) -> bool:
+    """True when the runner will serve ``step`` from cache rather than rebuild it.
+
+    A non-mutable step whose output already has a ``SUCCESS`` status. This is the
+    same condition the launcher uses to skip a step, evaluated here at scheduling
+    time so an already-built node's dependencies are pruned from the schedule
+    instead of rebuilt; the launcher re-checks authoritatively before serving the
+    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    """
+    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
+        return False
+    return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
+
+
+def _expand_unseen(
+    step: StepSpec,
+    seen: set[str],
+    is_built: Callable[[StepSpec], bool] = lambda _s: False,
+    pruned: set[str] | None = None,
+) -> list[StepSpec]:
+    """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
+
+    ``seen`` is mutated in place to include every returned step, so subsequent
+    calls skip nodes already scheduled by an earlier terminal. Cycles within
+    this expansion raise ``ValueError`` — by DAG construction they shouldn't
+    exist, but the check guards against silent hangs.
+
+    When ``is_built(node)`` holds, ``node``'s output is already cached: the walk
+    records its ``output_path`` in ``pruned`` and does not descend into its deps,
+    so they are neither scheduled nor rebuilt. ``node`` itself is still returned (as
+    a cache-only leaf the caller confirms). The default ``is_built`` prunes nothing.
+    """
+    recorded = pruned if pruned is not None else set()
+    in_stack: set[str] = set()
+    ordered: list[StepSpec] = []
+
+    def visit(s: StepSpec) -> None:
+        path = s.output_path
+        if path in seen:
+            return
+        if path in in_stack:
+            raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
+        in_stack.add(path)
+        if is_built(s):
+            recorded.add(path)
+        else:
+            for dep in s.deps:
+                visit(dep)
+        in_stack.remove(path)
+        seen.add(path)
+        ordered.append(s)
+
+    visit(step)
+    return ordered
 
 
 class StepRunner:
@@ -105,20 +195,31 @@ class StepRunner:
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
-        Concurrency is bounded by the thread pool (``max_concurrent`` workers,
-        default 8). If a step's dependencies haven't been seen yet, it is
-        buffered until they complete. Raises if the iterable is exhausted and
-        buffered steps still have unsatisfied dependencies.
+        Steps are pulled from the iterable one at a time, so unbounded
+        generators are supported: the runner never consumes more than it
+        needs to make progress. For each pulled step, its unseen transitive
+        deps are scheduled in post-order before the step itself (deduped by
+        ``output_path`` across the whole run). Already-succeeded deps
+        (``STATUS_SUCCESS`` on disk) resolve via the cache check.
+        Concurrency is bounded by the thread pool (``max_concurrent``
+        workers, default 8).
         """
+        # Make step progress visible by default. Idempotent and non-clobbering:
+        # skipped when the driver (or a wrapping app) already installed handlers.
+        if not logging.getLogger().handlers:
+            configure_logging(level=logging.INFO)
+
+        # A non-primary Iris task loses the per-step lock race and never enters the
+        # step; warn before doing any work in case an SPMD launch was intended (#7080).
+        _warn_if_secondary_task()
+
         max_workers = max_concurrent or 8
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
         # Capture the fray client on the calling thread so worker threads can
-        # inherit it explicitly.  This is more robust than contextvars.copy_context()
-        # alone because it survives process/thread-pool boundary edge cases.
-        from fray.v2.client import _current_client_var
-
+        # inherit it explicitly. More robust than contextvars.copy_context()
+        # alone, which can lose state across thread-pool reuse patterns.
         caller_fray_client = _current_client_var.get()
         if caller_fray_client is not None:
             logger.info("StepRunner: captured fray client %s for worker threads", type(caller_fray_client).__name__)
@@ -133,6 +234,11 @@ class StepRunner:
         failures: list[Exception] = []
         # output_path → name_with_hash, for human-readable logging
         path_to_name: dict[str, str] = {}
+        # Outputs already cached: their deps are pruned from the schedule and they are
+        # confirmed from cache rather than run. Disabled under dry_run, which stays
+        # I/O-free and lists the full static graph.
+        pruned: set[str] = set()
+        is_built = (lambda _s: False) if dry_run else _is_built
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)
@@ -195,38 +301,48 @@ class StepRunner:
             else:
                 completed.add(path)
 
-        for step in steps:
-            path_to_name[step.output_path] = step.name_with_hash
+        def _confirm_pruned(step: StepSpec) -> None:
+            """Mark a pruned cache-only leaf complete without running it.
 
-            _harvest()
-            _flush_waiting()
-
+            Its dependencies were dropped from the schedule, so the step must not run.
+            If its cached output is no longer a clean success, record a failure (which
+            cascades to dependents) so a rerun rebuilds it and its now-unpruned inputs.
+            """
             path = step.output_path
-            if any(d in failed for d in step.dep_paths):
-                failed.add(path)
-            elif all(d in completed for d in step.dep_paths):
-                _do_launch(step)
+            mutable = check_drift(step)
+            status = StatusFile(path, worker_id="check").status
+            if status == STATUS_SUCCESS and not mutable:
+                logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
+                completed.add(path)
             else:
-                waiting.append(step)
+                failed.add(path)
+                failures.append(
+                    RuntimeError(
+                        f"Step {step.name_with_hash}: cached output disappeared after its inputs were "
+                        f"pruned (status={status}); rerun to rebuild it and its inputs."
+                    )
+                )
+
+        scheduled: set[str] = set()
+        for raw_step in steps:
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
+                path_to_name[step.output_path] = step.name_with_hash
+
+                _harvest()
+                _flush_waiting()
+
+                path = step.output_path
+                if path in pruned:
+                    _confirm_pruned(step)
+                elif any(d in failed for d in step.dep_paths):
+                    failed.add(path)
+                elif all(d in completed for d in step.dep_paths):
+                    _do_launch(step)
+                else:
+                    waiting.append(step)
 
         # Drain remaining running and waiting steps
         while running or waiting:
-            if not running and waiting:
-                _flush_waiting()
-                if not running and waiting:
-                    missing = []
-                    for s in waiting:
-                        unmet = [
-                            _display_name(d)
-                            for d in s.deps
-                            if d.output_path not in completed and d.output_path not in failed
-                        ]
-                        missing.append(f"  {s.name_with_hash}: needs {unmet}")
-                    raise RuntimeError(
-                        f"Iterable exhausted with {len(waiting)} step(s) with unsatisfied dependencies:\n"
-                        + "\n".join(missing)
-                    )
-
             _harvest(block=True)
             _flush_waiting()
 
@@ -247,34 +363,32 @@ class StepRunner:
         step_name = step.name_with_hash
         logger.info(f"Step = {step_name}\tParams = {step.hash_attrs}\tOutput_path = {output_path}")
 
+        # Short-circuit before any I/O so dry-run never touches remote status.
+        if dry_run:
+            logger.info(f"[DRY RUN] Would run {step_name}")
+            return None
+
+        # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
+        mutable = check_drift(step)
+
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
-        if status == STATUS_SUCCESS:
+        if status == STATUS_SUCCESS and not mutable:
             logger.info(f"Skip {step_name}: already succeeded")
             return None
 
         if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
             raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
 
-        if dry_run:
-            logger.info(f"[DRY RUN] Would run {step_name} (status: {status})")
-            return None
-
         _write_executor_info(step)
 
         if step.fn is None:
             raise ValueError(f"Step {step_name} has no callable fn")
 
-        # Explicitly propagate the fray client into worker threads.
-        # We use set_current_client() inside the worker rather than relying
-        # solely on contextvars.copy_context(), because the latter can
-        # silently lose state across certain thread-pool reuse patterns.
         captured_client = fray_client
 
         def worker_fn():
             if captured_client is not None:
-                from fray.v2.client import set_current_client
-
                 with set_current_client(captured_client):
                     run_step(step)
             else:
@@ -303,34 +417,57 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
+def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
+    """The step's record identity, safe to serialize -- never the ``StepSpec``, which carries ``fn``."""
+    return StepRecordIdentity(
+        name=step.name,
+        deps=step.dep_names,
+        dep_paths=step.dep_paths,
+        config=step.hash_attrs,
+        fingerprint_payload=step.fingerprint_payload,
+    )
+
+
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
-    For local steps the result is saved via ``Artifact.save``.  For remote
-    steps (``@remote``) the raw function + artifact save are submitted as a
-    Fray job; the executor node only manages the lock and status file.
+    An inline step that does not write its own record (``writes_record=False``) has its
+    return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
+    payload). For ``RemoteCallable`` steps (or any step with explicit ``resources``), the raw
+    function + artifact save are submitted as a Fray job; the runner process only manages the
+    lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
 
+    # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
+    mutable = check_drift(step)
+
     # 1. Cache check
-    if check_cache(output_path):
+    if not mutable and check_cache(output_path):
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
     try:
-        with step_lock(output_path, step_label) as status_file:
+        with step_lock(output_path, step_label, force_rerun=mutable) as status_file:
             # 3. Run the function
             try:
-                if isinstance(step.fn, RemoteCallable):
+                t0 = time.monotonic()
+                if step.resources is not None:
+                    _run_iris_job(step, output_path)
+                elif isinstance(step.fn, RemoteCallable):
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    Artifact.save(result, output_path)
+                    # A lazy step writes its own full record; a plain step's return is saved
+                    # with its identity + lineage (name, deps, config) so the output is traceable.
+                    if not step.writes_record:
+                        write_step_record(_step_record_identity(step), output_path=output_path, result=result)
+                elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
                 status_file.write_status(STATUS_SUCCESS)
-                logger.info(f"Step {step_label} succeeded")
+                logger.info(f"Step {step_label} succeeded in {elapsed}")
             except Exception:
                 status_file.write_status(STATUS_FAILED)
                 raise
@@ -338,20 +475,67 @@ def run_step(step: StepSpec) -> None:
         logger.info(f"Step {step_label} completed by another worker")
 
 
-def _run_remote_step(step: StepSpec, output_path: str) -> None:
-    """Submit the step's raw function to Fray with artifact saving inside the job.
+def _submit_iris_job(
+    step: StepSpec,
+    output_path: str,
+    raw_fn: Callable[[str], Any],
+    resources: ResourceConfig,
+    *,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
+) -> None:
+    """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
-    Fray jobs can't return values back to the executor, so the artifact
-    is saved inside the remote job itself.
+    ``raw_fn`` is wrapped to also persist its return value via
+    :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
+    jobs cannot return values back to the caller.
+    """
+    identity = _step_record_identity(step)
+
+    def _fn_with_artifact_save() -> None:
+        result = raw_fn(output_path)
+        write_step_record(identity, output_path=output_path, result=result)
+
+    job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
+    dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)
+    request = JobRequest(
+        name=job_name,
+        entrypoint=Entrypoint.from_callable(_fn_with_artifact_save),
+        resources=resources,
+        environment=create_environment(
+            extras=dependency_groups,
+            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
+        ),
+    )
+    handle = current_client().submit(request)
+    handle.wait(raise_on_failure=True)
+
+
+def _run_iris_job(step: StepSpec, output_path: str) -> None:
+    """Dispatch a step with explicit ``resources`` as a Fray job.
+
+    When ``step.fn`` is a :class:`RemoteCallable`, its inner callable is
+    unwrapped — ``step.resources`` takes precedence over any resources
+    carried by the wrapper.
+    """
+    assert step.resources is not None
+    raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+    assert raw_fn is not None, f"Step {step.name} has no callable"
+    _submit_iris_job(step, output_path, raw_fn, step.resources)
+
+
+def _run_remote_step(step: StepSpec, output_path: str) -> None:
+    """Submit the step's ``RemoteCallable`` to Fray.
+
+    Carries the wrapper's ``env_vars`` and ``pip_dependency_groups`` through
+    to the submitted job's environment.
     """
     assert isinstance(step.fn, RemoteCallable)
-    raw_fn = step.fn.fn
-
-    def _fn_with_artifact_save(out_path: str):
-        result = raw_fn(out_path)  # pyrefly: ignore[not-callable]
-        Artifact.save(result, out_path)
-
-    job_name = f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}"
-    remote_callable = step.fn.named(job_name)
-    job = dataclasses.replace(remote_callable, fn=_fn_with_artifact_save)
-    job(output_path)
+    _submit_iris_job(
+        step,
+        output_path,
+        step.fn.fn,
+        step.fn.resources,
+        env_vars=step.fn.env_vars,
+        pip_dependency_groups=step.fn.pip_dependency_groups,
+    )

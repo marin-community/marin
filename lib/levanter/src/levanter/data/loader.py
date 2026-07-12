@@ -15,7 +15,7 @@ from typing import Generic, TypeVar
 
 import haliax.partitioning
 import jax
-import numpy
+import numpy as np
 from jax import Array
 from jax import numpy as jnp
 from jax import tree_util as jtu
@@ -39,7 +39,6 @@ from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
-
 
 Ex = TypeVar("Ex")
 
@@ -171,12 +170,6 @@ class DataLoader(Iterable[Ex]):
         local_indices = self.compute_local_device_indices_for_bs(batch_size)
 
         return local_indices
-
-    def global_data_indices_by_device_for_step(self, step: int) -> dict[jax.Device, range]:
-        local_indices = self.local_data_indices_by_device_for_step(step)
-        offset = self.scheduler.global_data_offset_by_step(step)
-
-        return {device: range(offset + r.start, offset + r.stop, r.step) for device, r in local_indices.items()}
 
     def rounded_batch_size_at_step(self, step: int) -> int:
         return self._round_batch_size(self.scheduler.batch_size_at_step(step))
@@ -356,7 +349,7 @@ class DataLoaderIterator(Iterator[Ex]):
         Stacks the individual examples (pytrees) into a single example (pytree) with the batch axis added
         and creates a global array for each leaf of the example.
         """
-        cache: dict[tuple[int, int], list[Array | hax.NamedArray]] = {}
+        cache: dict[tuple[int, int], list[Array | hax.NamedArray | np.ndarray]] = {}
         padded_batch_size = self.dl.rounded_batch_size_at_step(batch.index)
         Batch = hax.Axis(self.dl.batch_axis_name, padded_batch_size)
 
@@ -374,14 +367,14 @@ class DataLoaderIterator(Iterator[Ex]):
 
             # TODO: if we ever do "big data" (i.e. huge examples) we might want to be able to load part of an example
             # which will require support from the datastore (i.e. tensorstore)
-            device_batch = stack_tree(self.dl.batch_axis_name, local_data)
-            batch_leaves = hax.tree_util.tree_leaves(device_batch)
+            host_batch = _stack_tree_on_host(self.dl.batch_axis_name, local_data)
+            batch_leaves = hax.tree_util.tree_leaves(host_batch)
 
             cache[(begin, end)] = batch_leaves
 
             return batch_leaves
 
-        def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array:
+        def get_local_data_for_leaf(indices: _TensorSliceIndex, leaf_index: int) -> Array | np.ndarray:
             batch_slice = indices[0]
             begin, end, stride = batch_slice.indices(padded_batch_size)
             if stride != 1:
@@ -449,30 +442,6 @@ class DataLoaderIterator(Iterator[Ex]):
 
             global_indices_for_this_batch = [global_offset + i for i in distinct_local_indices_this_batch]
             global_indices_for_each_batch.append(global_indices_for_this_batch)
-
-            # DEBUGSTART — debug_accum_tpu_type experiment J: log first N batches' indices
-            try:
-                import hashlib as _dbg_hashlib
-                import os as _dbg_os
-
-                if int(_dbg_os.environ.get("MARIN_DEBUG_LOG_BATCH_INDICES", "0")):
-                    _dbg_step = batch.index
-                    if _dbg_step < 5:  # only first 5 batches
-                        _dbg_sorted = sorted(global_indices_for_this_batch)
-                        _dbg_sha = _dbg_hashlib.sha256(",".join(str(i) for i in _dbg_sorted).encode()).hexdigest()[:16]
-                        _dbg_head = _dbg_sorted[:8]
-                        _dbg_tail = _dbg_sorted[-4:]
-                        import sys as _dbg_sys
-
-                        print(
-                            f"DEBUGJ BATCH step={_dbg_step} n={len(_dbg_sorted)} "
-                            f"head={_dbg_head} tail={_dbg_tail} sha256={_dbg_sha}",
-                            file=_dbg_sys.stderr,
-                            flush=True,
-                        )
-            except Exception:
-                pass
-            # DEBUGEND
 
         # flattened view so we can load all the data at once
         indices_for_this_batch_of_batches: list[int] = [
@@ -596,6 +565,19 @@ def stack_tree(batch_name, individual_datums):
     return jax.tree.map(_stack_leaves_unchecked, *individual_datums, is_leaf=is_named_array)
 
 
+def _stack_tree_on_host(batch_name, individual_datums):
+    def _stack_leaves_on_host(*leaves):
+        if is_named_array(leaves[0]):
+            batch_axis = hax.Axis(batch_name, len(leaves)) if isinstance(batch_name, str) else batch_name
+            return hax.NamedArray(
+                np.stack([np.asarray(leaf.array) for leaf in leaves]), (batch_axis,) + leaves[0].axes
+            )
+        else:
+            return np.stack([np.asarray(leaf) for leaf in leaves])
+
+    return jax.tree.map(_stack_leaves_on_host, *individual_datums, is_leaf=is_named_array)
+
+
 def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different: bool = False):
     """Checks the following consistency conditions on an array:
     - all replicas have the same data
@@ -640,7 +622,7 @@ def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different
             replica_0_array = replica_0_arrays[_to_tuple(shard.index)]
             assert shard.data is not None
 
-            if not numpy.array_equal(shard.data, replica_0_array, equal_nan=True):
+            if not np.array_equal(shard.data, replica_0_array, equal_nan=True):
                 raise ValueError("Shard data does not match replica 0 data", shard, replica_0_array)
 
             if check_disjoint_indices_are_different:

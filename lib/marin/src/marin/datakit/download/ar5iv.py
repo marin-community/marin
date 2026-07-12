@@ -13,11 +13,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import draccus
-from rigging.filesystem import open_url
-from marin.execution.step_spec import StepSpec
-from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
+from rigging.filesystem import atomic_rename, open_url
 from rigging.log_setup import configure_logging
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 

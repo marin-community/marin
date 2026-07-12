@@ -11,11 +11,13 @@ import jax.random as jrandom
 import haliax.random
 
 import levanter
+import levanter.config
+import levanter.tracker
 import levanter.eval
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.data.text import LmDataConfig
-from levanter.lora import (
+from levanter.data.text.datasets import LmDataConfig
+from levanter.adaptor.lora import (
     LoraConfig,
     lora_trainable_params_filter,
     loraize,
@@ -23,7 +25,7 @@ from levanter.lora import (
     save_peft_checkpoint_callback,
 )
 from levanter.models.lm_model import LmExample, LmHeadModel
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
@@ -51,12 +53,11 @@ class LoraLmConfig:
 
 
 def main(config: LoraLmConfig):
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
     converter = HFCheckpointConverter.from_hf(config.initialize_from_hf, trust_remote_code=config.trust_remote_code)
-    if tokenizer.vocab != converter.tokenizer.vocab:
-        logger.warning("The tokenizers appear to be different. You may want to check this.")
+    converter.warn_if_tokenizer_mismatch(tokenizer)
 
     converter = converter.replaced(tokenizer=tokenizer)
 
@@ -149,6 +150,10 @@ def main(config: LoraLmConfig):
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
         trainer.add_hook(callbacks.log_performance_stats(Pos.size, trainer.config.train_batch_size), every=1)
+        trainer.add_hook(
+            callbacks.iris_status_reporter(Pos.size, trainer.config.train_batch_size, trainer.config.num_train_steps),
+            every=10,
+        )
         if config.peft_save_path is not None:
             full_save_path = os.path.join(config.peft_save_path, trainer.run_id)
             trainer.add_hook(

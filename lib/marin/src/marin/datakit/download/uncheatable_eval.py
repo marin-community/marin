@@ -3,8 +3,6 @@
 
 """Download and normalize the latest Uncheatable Eval data dumps."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -15,14 +13,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from rigging.filesystem import open_url
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
+from rigging.filesystem import StoragePath, atomic_rename, open_url
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+
+from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_mkdirs
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
-from zephyr import Dataset, ZephyrContext
-from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +85,11 @@ class UncheatableEvalDataset:
 class UncheatableEvalDownloadConfig:
     """Configuration for downloading and normalizing Uncheatable Eval dumps."""
 
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
-    repo_owner: str | VersionedValue[str] = "Jellyfish042"
-    repo_name: str | VersionedValue[str] = "uncheatable_eval"
-    data_path: str | VersionedValue[str] = "data"
-    branch: str | VersionedValue[str] = "master"
+    output_path: str = ""
+    repo_owner: str = "Jellyfish042"
+    repo_name: str = "uncheatable_eval"
+    data_path: str = "data"
+    branch: str = "master"
     max_concurrent_downloads: int = 8
     request_timeout: int = 120
     github_token: str | None = None
@@ -234,13 +230,9 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
 
 
 def _download_and_convert_single(
-    task: DownloadTask,
+    task: "DownloadTask",
 ) -> dict[str, Any]:
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
+    session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
 
     logger.info("Downloading %s from %s", task.dataset.name, task.download_url)
     response = session.get(task.download_url, timeout=task.cfg.request_timeout, headers=_http_headers(task.cfg))
@@ -254,7 +246,7 @@ def _download_and_convert_single(
     if not isinstance(payload, list):
         raise ValueError(f"Expected list in dataset {task.dataset.name}, found {type(payload).__name__}")
 
-    fsspec_mkdirs(os.path.dirname(task.output_file_path), exist_ok=True)
+    StoragePath(os.path.dirname(task.output_file_path)).mkdirs(exist_ok=True)
 
     record_count = 0
     with atomic_rename(task.output_file_path) as temp_path:
@@ -294,8 +286,7 @@ def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, 
     if not records:
         return
     metadata_path = posixpath.join(str(cfg.output_path), cfg.metadata_filename)
-    with open_url(metadata_path, "w", encoding="utf-8") as meta_file:
-        json.dump(records, meta_file, indent=2, ensure_ascii=False)
+    StoragePath(metadata_path).write_text(json.dumps(records, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Wrote metadata to %s", metadata_path)
 
 
@@ -311,7 +302,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
         return {"success": False, "reason": "no_datasets"}
 
     output_path = str(cfg.output_path)
-    fsspec_mkdirs(output_path, exist_ok=True)
+    StoragePath(output_path).mkdirs(exist_ok=True)
 
     tasks, filtered_datasets = _generate_tasks(latest_datasets, cfg)
 
@@ -330,8 +321,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_paths = ctx.execute(pipeline).results
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
-        with open_url(metadata_file, "r", encoding="utf-8") as meta_file:
-            result = json.load(meta_file)
+        result = json.loads(StoragePath(metadata_file).read_text(encoding="utf-8"))
 
         try:
             metadata_records.append(
@@ -398,32 +388,3 @@ def uncheatable_eval_step(
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )
-
-
-def make_uncheatable_eval_step(
-    *,
-    name: str = "raw/uncheatable-eval/latest",
-    repo_owner: str = "ziqing-huang",
-    repo_name: str = "uncheatable_eval",
-    data_path: str = "data",
-    branch: str = "master",
-    max_concurrent_downloads: int = 8,
-    request_timeout: int = 120,
-    github_token: str | None = None,
-    skip_existing: bool = True,
-) -> ExecutorStep:
-    """Create an ExecutorStep that downloads the latest Uncheatable Eval dumps.
-
-    Backward-compat wrapper around uncheatable_eval_step().
-    """
-    return uncheatable_eval_step(
-        name=name,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        data_path=data_path,
-        branch=branch,
-        max_concurrent_downloads=max_concurrent_downloads,
-        request_timeout=request_timeout,
-        github_token=github_token,
-        skip_existing=skip_existing,
-    ).as_executor_step()

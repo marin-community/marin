@@ -12,6 +12,7 @@ from typing import Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
+import humanfriendly as hly
 from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax
@@ -30,6 +31,7 @@ from levanter.inference.jit_scheduler import (
 )
 from levanter.inference.page_table import PageTable
 from levanter.inference.utils import INVALID, is_valid
+from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import PageCache
 from levanter.layers.sampler import Sampler
 from levanter.models.lm_model import LmHeadModel
@@ -224,8 +226,6 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
     per_page = bytes_at_max if max_pages == 1 else bytes_at_max - cache_bytes(max_pages - 1)
     base_bytes = max(bytes_at_max - per_page * max_pages, 0)
 
-    import humanfriendly as hly
-
     logger.info(
         "Auto-computed KV cache budget: base=%s, per_page=%s, budget=%s, used=%s, next=%s -> max_pages=%d",
         hly.format_size(base_bytes),
@@ -280,7 +280,10 @@ class GenState(eqx.Module):
         )
 
     def clone_sequence(
-        self, parent_local_id: int, child_local_id: int | None = None, seq_params: SeqDecodingParams | None = None
+        self,
+        parent_local_id: int | jax.Array,
+        child_local_id: int | jax.Array | None = None,
+        seq_params: SeqDecodingParams | None = None,
     ) -> tuple["GenState", int]:
         """Clone a sequence into a new local slot, sharing full pages and using a fresh page for the last partial page.
 
@@ -440,8 +443,9 @@ def _prefill_kernel(
     # )
 
     temps = decode_state.temperature["seq", new_slot_ids]
+    top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
+    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -606,9 +610,10 @@ def _handle_clones(
 
     # Sample clones from the same boundary logits as their sources
     temps = gen_state.decode_state.temperature["seq", tgt_ids]
+    top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, key=prng_keys)
+    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -706,8 +711,9 @@ def _run_generation_loop(
         prng_keys = decode_state.prng_keys_for(new_slot_ids, new_pos_ids)
 
         temps = decode_state.temperature["seq", new_slot_ids]
+        top_ps = decode_state.top_p["seq", new_slot_ids]
 
-        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, key=prng_keys)
+        new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
         decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -742,6 +748,62 @@ class GenerationResult:
     tokens: list[list[int]]
     logprobs: list[list[float]] | None
     total_generated: int
+
+
+FIRST_TOKEN_LOGPROB = 0.0
+
+
+@dataclass(frozen=True)
+class TokenSequenceLogprobs:
+    """Causal logprobs aligned with an input token sequence.
+
+    The first token has no preceding context, so its logprob is the synthetic
+    ``FIRST_TOKEN_LOGPROB`` sentinel and its top-token map contains only itself.
+    """
+
+    token_logprobs: list[float]
+    top_token_logprobs: list[dict[int, float]]
+
+
+def score_token_sequence_logprobs(
+    model: LmHeadModel,
+    token_ids: Sequence[int],
+    top_k: int,
+) -> TokenSequenceLogprobs:
+    """Score a token sequence with a causal full forward pass."""
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1")
+
+    token_id_list = [int(token_id) for token_id in token_ids]
+    if not token_id_list:
+        return TokenSequenceLogprobs(token_logprobs=[], top_token_logprobs=[])
+
+    token_logprobs = [FIRST_TOKEN_LOGPROB]
+    top_token_logprobs = [{token_id_list[0]: FIRST_TOKEN_LOGPROB}]
+    if len(token_id_list) == 1:
+        return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
+
+    Pos = hax.Axis("position", len(token_id_list))
+    input_ids = hax.named(jnp.array(token_id_list, dtype=jnp.int32), Pos)
+    pos_ids = hax.named(jnp.arange(len(token_id_list), dtype=jnp.int32), Pos)
+    logits = model(input_ids=input_ids, attn_mask=AttentionMask.causal(), pos_ids=pos_ids, key=None)
+
+    logits_array = logits.astype(jnp.float32).rearrange((Pos, model.Vocab)).array
+    next_token_logprobs = jax.nn.log_softmax(logits_array[:-1], axis=-1)
+    target_ids = jnp.array(token_id_list[1:], dtype=jnp.int32)
+    scored_logprobs = next_token_logprobs[jnp.arange(len(target_ids)), target_ids]
+    token_logprobs.extend(float(logprob) for logprob in jax.device_get(scored_logprobs))
+
+    vocab_top_k = min(top_k, next_token_logprobs.shape[-1])
+    top_values, top_indices = jax.lax.top_k(next_token_logprobs, vocab_top_k)
+    top_values = np.asarray(jax.device_get(top_values))
+    top_indices = np.asarray(jax.device_get(top_indices))
+    for values, indices in zip(top_values, top_indices, strict=True):
+        top_token_logprobs.append(
+            {int(token_id): float(logprob) for token_id, logprob in zip(indices, values, strict=True)}
+        )
+
+    return TokenSequenceLogprobs(token_logprobs=token_logprobs, top_token_logprobs=top_token_logprobs)
 
 
 class InferenceEngine:
@@ -845,6 +907,10 @@ class InferenceEngine:
         self.sequences.clear()
         self.results = {}
 
+    def score_token_logprobs(self, token_ids: Sequence[int], top_k: int) -> TokenSequenceLogprobs:
+        """Score a token sequence under this engine's model."""
+        return score_token_sequence_logprobs(self.model, token_ids, top_k)
+
     def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
@@ -886,6 +952,7 @@ class InferenceEngine:
         stop_tokens_template = decode_state.stop_tokens
         max_num_tokens = np.zeros((max_slots,), dtype=np.int32)
         temperatures = np.zeros((max_slots,), dtype=np.float32)
+        top_ps = np.ones((max_slots,), dtype=np.float32)
         prng_keys = np.zeros((max_slots, 2), dtype=np.uint32)
         if stop_tokens_template is not None:
             stop_tokens = np.full(
@@ -939,6 +1006,7 @@ class InferenceEngine:
 
             max_num_tokens[prefill_idx] = np.asarray(seq_params.max_num_tokens, dtype=np.int32).item()
             temperatures[prefill_idx] = np.asarray(seq_params.temperature, dtype=np.float32).item()
+            top_ps[prefill_idx] = np.asarray(seq_params.top_p, dtype=np.float32).item()
             prng_keys[prefill_idx] = np.asarray(seq_params.key, dtype=np.uint32)
             if stop_tokens is not None:
                 if seq_params.stop_tokens is None:
@@ -978,6 +1046,7 @@ class InferenceEngine:
                     # Clones reuse prompt tokens from their parent; no need to copy here.
                     max_num_tokens[clone_idx] = np.asarray(child_params.max_num_tokens, dtype=np.int32).item()
                     temperatures[clone_idx] = np.asarray(child_params.temperature, dtype=np.float32).item()
+                    top_ps[clone_idx] = np.asarray(child_params.top_p, dtype=np.float32).item()
                     prng_keys[clone_idx] = np.asarray(child_params.key, dtype=np.uint32)
                     if stop_tokens is not None:
                         stop_tokens[clone_idx] = stop_tokens[prefill_idx]
@@ -1012,6 +1081,7 @@ class InferenceEngine:
                     else hax.named(jnp.asarray(stop_tokens, dtype=jnp.int32), axis=("seq", "stop_seq", "position"))
                 ),
                 temperature=jnp.asarray(temperatures, dtype=jnp.float32),
+                top_p=jnp.asarray(top_ps, dtype=jnp.float32),
                 key=jnp.asarray(prng_keys, dtype=jnp.uint32),
             ),
         )
@@ -1223,6 +1293,7 @@ class InferenceEngine:
                     max_num_tokens=jnp.zeros(max_slots, dtype=jnp.int32),
                     stop_tokens=None,
                     temperature=jnp.zeros(max_slots, dtype=jnp.float32),
+                    top_p=jnp.ones(max_slots, dtype=jnp.float32),
                     key=jnp.zeros((max_slots, 2), dtype=jnp.uint32),
                 ),
             )

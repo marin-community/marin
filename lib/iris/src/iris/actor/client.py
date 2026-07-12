@@ -22,20 +22,24 @@ Custom backoff behavior:
 """
 
 import logging
+import threading
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import cloudpickle
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.timing import ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 def unwrap_actor_response(resp: actor_pb2.ActorResponse) -> Any:
@@ -81,6 +85,7 @@ class ActorClient:
 
         self._rpc_client: ActorServiceClientSync | None = None
         self._rpc_headers: dict[str, str] = {}
+        self._rpc_client_lock = threading.Lock()
 
     def rpc_client(self) -> ActorServiceClientSync:
         """Resolve actor name to an RPC client (single attempt).
@@ -98,33 +103,51 @@ class ActorClient:
         if self._rpc_client:
             return self._rpc_client
 
-        logger.info("Resolving name %s via %s", self._name, self._resolver)
-        result = self._resolver.resolve(self._name)
+        with self._rpc_client_lock:
+            if self._rpc_client:
+                return self._rpc_client
 
-        if result.is_empty:
-            raise ConnectError(
-                Code.UNAVAILABLE,
-                f"No endpoints found for actor '{self._name}'",
+            logger.info("Resolving name %s via %s", self._name, self._resolver)
+            result = self._resolver.resolve(self._name)
+
+            if result.is_empty:
+                raise ConnectError(
+                    Code.UNAVAILABLE,
+                    f"No endpoints found for actor '{self._name}'",
+                )
+
+            logger.info(
+                "Resolved actor '%s' to %d endpoint(s)",
+                self._name,
+                len(result.endpoints),
             )
-
-        logger.info(
-            "Resolved actor '%s' to %d endpoint(s)",
-            self._name,
-            len(result.endpoints),
-        )
-        endpoint = result.first()
-        logger.info("First endpoint: url=%s, actor_id=%s", endpoint.url, endpoint.actor_id)
-        self._rpc_headers = dict(endpoint.metadata)
-        self._rpc_client = ActorServiceClientSync(
-            address=endpoint.url,
-            timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
-            accept_compression=[],
-        )
-        return self._rpc_client
+            endpoint = result.first()
+            logger.info("First endpoint: url=%s, actor_id=%s", endpoint.url, endpoint.actor_id)
+            self._rpc_headers = dict(endpoint.metadata)
+            self._rpc_client = ActorServiceClientSync(
+                address=endpoint.url,
+                timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
+                accept_compression=[],
+            )
+            return self._rpc_client
 
     def _clear_connection(self, _exc: Exception) -> None:
         self._rpc_client = None
         self._rpc_headers = {}
+
+    def _call_with_retry(self, operation: str, do_call: Callable[[], T]) -> T:
+        """Run ``do_call`` under this client's retry policy.
+
+        Retries clear the cached connection so the next attempt re-resolves the
+        actor endpoint.
+        """
+        return call_with_retry(
+            operation,
+            do_call,
+            on_retry=self._clear_connection,
+            max_attempts=self._max_call_attempts,
+            backoff=self._backoff,
+        )
 
     def start_operation(self, method_name: str, *args: Any, **kwargs: Any) -> str:
         """Start a long-running operation. Returns the operation ID."""
@@ -139,13 +162,7 @@ class ActorClient:
             client = self.rpc_client()
             return client.start_operation(call, headers=self._rpc_headers)
 
-        op = call_with_retry(
-            f"{self._name}.start_operation({method_name})",
-            do_call,
-            on_retry=self._clear_connection,
-            max_attempts=self._max_call_attempts,
-            backoff=self._backoff,
-        )
+        op = self._call_with_retry(f"{self._name}.start_operation({method_name})", do_call)
         return op.operation_id
 
     def poll_operation_status(self, operation_id: str) -> actor_pb2.Operation:
@@ -155,13 +172,7 @@ class ActorClient:
         def do_call():
             return self.rpc_client().get_operation(req, headers=self._rpc_headers)
 
-        return call_with_retry(
-            f"{self._name}.poll_operation_status({operation_id[:8]})",
-            do_call,
-            on_retry=self._clear_connection,
-            max_attempts=self._max_call_attempts,
-            backoff=self._backoff,
-        )
+        return self._call_with_retry(f"{self._name}.poll_operation_status({operation_id[:8]})", do_call)
 
     def get_operation(
         self,
@@ -184,13 +195,7 @@ class ActorClient:
         def do_call():
             return self.rpc_client().cancel_operation(req, headers=self._rpc_headers)
 
-        return call_with_retry(
-            f"{self._name}.cancel_operation({operation_id[:8]})",
-            do_call,
-            on_retry=self._clear_connection,
-            max_attempts=self._max_call_attempts,
-            backoff=self._backoff,
-        )
+        return self._call_with_retry(f"{self._name}.cancel_operation({operation_id[:8]})", do_call)
 
     def __getattr__(self, method_name: str) -> "_RpcMethod":
         return _RpcMethod(self, method_name)
@@ -214,10 +219,4 @@ class _RpcMethod:
             resp = client.call(call, headers=self._client._rpc_headers)
             return unwrap_actor_response(resp)
 
-        return call_with_retry(
-            f"{self._client._name}.{self._method_name}",
-            do_call,
-            on_retry=self._client._clear_connection,
-            max_attempts=self._client._max_call_attempts,
-            backoff=self._client._backoff,
-        )
+        return self._client._call_with_retry(f"{self._client._name}.{self._method_name}", do_call)

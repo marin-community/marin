@@ -21,20 +21,25 @@ import subprocess
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+from rigging.timing import Timestamp
+
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import write_workdir_files
+from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
-    build_memray_attach_cmd,
-    build_memray_transform_cmd,
-    build_pyspy_cmd,
-    build_pyspy_dump_cmd,
-    resolve_cpu_spec,
-    resolve_memory_spec,
+    PROFILER_WATCHDOG_GRACE_SECONDS,
+    ExecResult,
+    capture_cpu,
+    capture_memory_attach,
+    capture_threads,
+    sigcont_sweep_argv,
+    wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.types import (
     ContainerConfig,
@@ -45,13 +50,13 @@ from iris.cluster.runtime.types import (
     ContainerStatus,
     DiscoveredContainer,
     ExecutionStage,
-    ImageInfo,
     MountKind,
     MountSpec,
 )
+from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
-from rigging.timing import Timestamp
+from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +83,92 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
+@dataclass(frozen=True)
+class _DockerProfileDispatch:
+    """``ProfileDispatch`` backed by ``docker exec`` into a task container.
+
+    Profilers run in the container's isolated PID namespace, so ``exec_profiler``
+    applies the kill-watchdog and SIGCONT recovery (see ``runtime.profile``);
+    ``exec`` runs non-attaching transform/read commands directly.
+    """
+
+    container_id: str
+    pyspy_bin: str = f"{VENV_PATH}/bin/py-spy"
+    memray_bin: str = f"{VENV_PATH}/bin/memray"
+
+    @contextmanager
+    def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
+        paths = tuple(f"/tmp/iris-profile-{uuid.uuid4().hex[:8]}.{suffix}" for suffix in suffixes)
+        try:
+            yield paths
+        finally:
+            subprocess.run(["docker", "exec", self.container_id, "rm", "-f", *paths], capture_output=True, timeout=10)
+
+    def exec_profiler(self, cmd: list[str], *, sample_timeout: int) -> ExecResult:
+        watchdog_cmd = wrap_with_kill_watchdog(cmd, sample_timeout)
+        try:
+            return self.exec(watchdog_cmd, timeout=sample_timeout + PROFILER_WATCHDOG_GRACE_SECONDS)
+        finally:
+            self._sigcont_sweep()
+
+    def exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
+        result = subprocess.run(
+            ["docker", "exec", self.container_id, *cmd], capture_output=True, text=True, timeout=timeout
+        )
+        return ExecResult(result.returncode, (result.stdout or "").encode("utf-8"), result.stderr or "")
+
+    def read_file(self, path: str) -> bytes:
+        result = subprocess.run(["docker", "exec", self.container_id, "cat", path], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to read {path}: {result.stderr.decode('utf-8', 'replace')}")
+        return result.stdout
+
+    def _sigcont_sweep(self) -> None:
+        try:
+            subprocess.run(
+                ["docker", "exec", self.container_id, *sigcont_sweep_argv()],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.SubprocessError, OSError) as e:
+            logger.warning("SIGCONT sweep failed for container %s: %s", self.container_id, e)
+
+
+def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> str:
+    """Prefer the venv-installed profiler, falling back to PATH for BYO images.
+
+    iris installs py-spy/memray into ``$IRIS_VENV``, but a bring-your-own image
+    with no venv may carry them on PATH instead.
+    """
+    probe = subprocess.run(["docker", "exec", container_id, "test", "-x", venv_bin], capture_output=True, timeout=5)
+    return venv_bin if probe.returncode == 0 else fallback
+
+
+# Widened ephemeral port range for high-connection workloads: the controller and
+# workers fan out to thousands of peers and would otherwise exhaust the default
+# ~28k-port pool. The floor is deliberately above every fixed port the cluster's
+# own services bind — the TPU/JAX runtime (8081, 8431, 8470-8482) and iris'
+# controller/worker RPC (10000/10001). An earlier floor of 1024 pulled those into
+# the kernel's random ephemeral pool, so a co-tenant's outbound connection could
+# be handed e.g. 8431 and block the TPU trainer from binding it, crash-looping
+# with "[::]:8431 ... Address already in use". 11000-65535 still leaves ~54k
+# ephemeral ports.
+EPHEMERAL_PORT_RANGE = "11000 65535"
+
+# Belt-and-suspenders for the fixed TPU/JAX ports that sit just below the floor:
+# reserve them so they stay out of automatic ephemeral assignment even if the
+# floor is ever lowered again. An explicit bind() by the TPU runtime is
+# unaffected. libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
+# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's default
+# 8476); 8081 is levanter megascale.
+RESERVED_HOST_PORTS = "8081,8431,8470-8482"
+
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
 _NETWORK_SYSCTLS: dict[str, str] = {
-    "net.ipv4.ip_local_port_range": "1024 65535",
+    "net.ipv4.ip_local_port_range": EPHEMERAL_PORT_RANGE,
+    "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
     "net.ipv4.tcp_tw_reuse": "1",
 }
 
@@ -104,40 +191,13 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
     return has_device and config.resources.device.HasField("tpu")
 
 
-def _discover_tpu_device_mappings() -> list[str]:
-    """Return host TPU device mappings for Docker --device flags.
-
-    TPU hosts expose device nodes differently by generation:
-    - v4 commonly exposes /dev/accel*
-    - v5+/v6e commonly use /dev/vfio/<N> under /dev/vfio
-
-    We pass through whichever device paths exist on the current worker host.
-    """
-    mappings: list[str] = []
-
-    vfio_path = Path("/dev/vfio")
-    if vfio_path.exists():
-        for entry in sorted(vfio_path.iterdir()):
-            if entry.is_char_device():
-                mappings.append(f"{entry}:{entry}")
-
-    accel_devices: list[Path] = []
-    for device_path in Path("/dev").glob("accel[0-9]*"):
-        if device_path.is_char_device():
-            accel_devices.append(device_path)
-
-    accel_devices.sort(key=lambda path: int(path.name.removeprefix("accel")))
-    for device_path in accel_devices:
-        mappings.append(f"{device_path}:{device_path}")
-
-    return mappings
-
-
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
-    Detects TPU resources and returns appropriate Docker flags for TPU passthrough.
-    Returns empty list if no special device configuration is needed.
+    Detects TPU resources and returns the Docker flags for TPU passthrough: large
+    shared memory, the locked-memory ulimit, and the SYS_RESOURCE capability for
+    memlock. Privilege (``--privileged``) is handled by the security-profile flags,
+    not here. Returns an empty list when no special device configuration is needed.
     """
     flags: list[str] = []
 
@@ -152,7 +212,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     if has_tpu:
         flags.extend(
             [
-                "--privileged",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
@@ -160,6 +219,33 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
             ]
         )
         logger.info("TPU device flags: %s", flags)
+
+    return flags
+
+
+def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
+    """Docker security flags (privilege, capabilities, docker-socket mount).
+
+    A TPU run requires ``--privileged`` for device access regardless of profile,
+    so on TPU even RESTRICTED/DEFAULT run privileged.
+    """
+    resolved = resolve_container_profile(profile)
+    privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
+
+    flags: list[str] = []
+    if privileged:
+        flags.append("--privileged")
+    else:
+        flags.extend(["--security-opt", "no-new-privileges", "--cap-drop", "ALL"])
+
+    # SYS_PTRACE lets py-spy attach via `docker exec`. RESTRICTED deliberately
+    # omits it; every other profile adds it back (a privileged container nominally
+    # has it, but exec'd processes don't reliably inherit it).
+    if resolved != job_pb2.CONTAINER_PROFILE_RESTRICTED:
+        flags.extend(["--cap-add", "SYS_PTRACE"])
+
+    if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
+        flags.extend(["-v", "/var/run/docker.sock:/var/run/docker.sock"])
 
     return flags
 
@@ -197,7 +283,7 @@ def _parse_docker_log_line(line: str) -> tuple[datetime, str]:
                 return ts, line[z_idx + 2 :]
             except ValueError:
                 pass
-    return datetime.now(timezone.utc), line
+    return datetime.now(UTC), line
 
 
 def _parse_memory_size(size_str: str) -> int:
@@ -243,11 +329,11 @@ def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogL
     for line in result.stdout.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
-            logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
+            logs.append(LogLine(timestamp=timestamp, source=STDOUT_SOURCE, data=data))
     for line in result.stderr.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
-            logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
+            logs.append(LogLine(timestamp=timestamp, source=STDERR_SOURCE, data=data))
     return logs
 
 
@@ -404,9 +490,9 @@ class DockerContainerHandle:
             self._docker_remove(build_container_id)
 
     def _generate_setup_script(self) -> str:
-        """Generate a bash script that runs setup commands."""
+        """Generate a bash script that runs each setup command as its own step."""
         lines = ["#!/bin/bash", "set -e"]
-        lines.extend(self.config.entrypoint.setup_commands)
+        lines.extend(render_setup_steps(self.config.entrypoint.setup_commands))
         return "\n".join(lines) + "\n"
 
     def _write_setup_script(self, script: str) -> None:
@@ -423,22 +509,19 @@ class DockerContainerHandle:
         Non-blocking - returns immediately after starting the container.
         Use status() to monitor execution progress.
         """
-        # Build the run command: activate venv then exec user command
         quoted_cmd = " ".join(shlex.quote(arg) for arg in self.config.entrypoint.run_command.argv)
 
-        # If we had setup_commands, the venv exists and we should activate it
-        if self.config.entrypoint.setup_commands:
-            run_script = f"""#!/bin/bash
+        # Run from the workdir (matching the k8s task script) and activate the venv
+        # only when a setup script left one, so a bring-your-own-env command runs in
+        # the image as-is instead of failing on a missing .venv.
+        run_script = f"""#!/bin/bash
 set -e
-cd /app
-source .venv/bin/activate
+cd "$IRIS_WORKDIR"
+[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"
 exec {quoted_cmd}
 """
-            self._write_run_script(run_script)
-            command = ["bash", "/app/_run.sh"]
-        else:
-            # No setup, run command directly
-            command = list(self.config.entrypoint.run_command.argv)
+        self._write_run_script(run_script)
+        command = ["bash", "/app/_run.sh"]
 
         self._run_container_id = self._docker_create(
             command=command,
@@ -497,100 +580,19 @@ exec {quoted_cmd}
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
-        profile_id = uuid.uuid4().hex[:8]
-
+        dispatch = _DockerProfileDispatch(
+            container_id,
+            pyspy_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
+            memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
+        )
         if profile_type.HasField("threads"):
-            return self._profile_threads(container_id, include_locals=profile_type.threads.locals)
+            return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
-            return self._profile_cpu(container_id, duration_seconds, profile_type.cpu, profile_id)
+            return capture_cpu(dispatch, profile_type.cpu, duration_seconds, pid="1")
         elif profile_type.HasField("memory"):
-            return self._profile_memory(container_id, duration_seconds, profile_type.memory, profile_id)
+            return capture_memory_attach(dispatch, profile_type.memory, duration_seconds, pid="1")
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
-
-    def _profile_threads(self, container_id: str, *, include_locals: bool = False) -> bytes:
-        """Collect thread stacks from the container using py-spy dump."""
-        cmd = build_pyspy_dump_cmd(pid="1", py_spy_bin="/app/.venv/bin/py-spy", include_locals=include_locals)
-        result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
-        return result.stdout.encode("utf-8")
-
-    def _docker_exec(self, container_id: str, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-        return subprocess.run(["docker", "exec", container_id, *cmd], **kwargs)
-
-    def _docker_read_file(self, container_id: str, path: str) -> bytes:
-        result = self._docker_exec(container_id, ["cat", path], capture_output=True, timeout=5)
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to read {path}: {result.stderr}")
-        return result.stdout
-
-    def _docker_rm_files(self, container_id: str, paths: list[str]) -> None:
-        self._docker_exec(container_id, ["rm", "-f", *paths], capture_output=True, timeout=10)
-
-    def _profile_cpu(
-        self, container_id: str, duration_seconds: int, cpu_config: "job_pb2.CpuProfile", profile_id: str
-    ) -> bytes:
-        """Profile CPU using py-spy."""
-        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid="1")
-        output_path = f"/tmp/profile-cpu-{profile_id}.{spec.ext}"
-        cmd = build_pyspy_cmd(spec, py_spy_bin="/app/.venv/bin/py-spy", output_path=output_path)
-
-        logger.info(
-            "CPU profiling container %s for %ds (format=%s, rate=%dHz)",
-            container_id,
-            duration_seconds,
-            spec.py_spy_format,
-            spec.rate_hz,
-        )
-        try:
-            # py-spy needs extra headroom beyond the sample duration for writing output
-            result = self._docker_exec(container_id, cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
-            if result.returncode != 0:
-                raise RuntimeError(f"py-spy failed: {result.stderr}")
-            return self._docker_read_file(container_id, output_path)
-        finally:
-            self._docker_rm_files(container_id, [output_path])
-
-    def _profile_memory(
-        self, container_id: str, duration_seconds: int, memory_config: "job_pb2.MemoryProfile", profile_id: str
-    ) -> bytes:
-        """Profile memory using memray."""
-        spec = resolve_memory_spec(memory_config, duration_seconds, pid="1")
-        memray_bin = "/app/.venv/bin/memray"
-        trace_path = f"/tmp/memray-trace-{profile_id}.bin"
-        output_path = f"/tmp/memray-output-{profile_id}.{spec.ext}"
-
-        attach_cmd = build_memray_attach_cmd(spec, memray_bin, trace_path)
-
-        logger.info(
-            "Memory profiling container %s for %ds (format=%s, leaks=%s)",
-            container_id,
-            duration_seconds,
-            spec.reporter,
-            spec.leaks,
-        )
-        try:
-            result = self._docker_exec(
-                container_id, attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"memray attach failed: {result.stderr}")
-
-            if spec.is_raw:
-                return self._docker_read_file(container_id, trace_path)
-
-            transform_cmd = build_memray_transform_cmd(spec, memray_bin, trace_path, output_path)
-            result = self._docker_exec(container_id, transform_cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
-
-            if spec.output_is_file:
-                return self._docker_read_file(container_id, output_path)
-            else:
-                return result.stdout.encode("utf-8")
-        finally:
-            self._docker_rm_files(container_id, [trace_path, output_path])
 
     def cleanup(self) -> None:
         """Remove the run container and clean up resources."""
@@ -639,8 +641,13 @@ exec {quoted_cmd}
         ]
         is_tpu_run = include_devices and _has_tpu_device(config)
 
-        if not is_tpu_run:
-            cmd.extend(["--security-opt", "no-new-privileges"])
+        cmd.extend(_security_flags(config.container_profile, is_tpu_run))
+        logger.info(
+            "Container security profile %s (tpu_run=%s) for task %s",
+            job_pb2.ContainerProfile.Name(resolve_container_profile(config.container_profile)),
+            is_tpu_run,
+            config.task_id,
+        )
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(self._resolved_mounts)
@@ -658,12 +665,6 @@ exec {quoted_cmd}
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
 
-        if not is_tpu_run:
-            cmd.extend(["--cap-drop", "ALL"])
-        # Always add SYS_PTRACE so py-spy can attach via docker exec regardless of TPU/CPU.
-        # TPU containers use --privileged but docker exec processes don't reliably inherit it.
-        cmd.extend(["--cap-add", "SYS_PTRACE"])
-
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:
             cmd.extend(_build_device_flags(config))
@@ -676,18 +677,30 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
         if config.attempt_id is not None:
             cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
+        if config.attempt_uid:
+            cmd.extend(["--label", f"iris.attempt_uid={config.attempt_uid}"])
         if config.worker_id:
             cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
         # Phase label: used during adoption to distinguish adoptable run
         # containers from transient build containers that should be cleaned up.
         phase = ExecutionStage.BUILD if label_suffix == "_build" else ExecutionStage.RUN
         cmd.extend(["--label", f"iris.phase={phase}"])
+        # Host-port reservations, so a restarted worker can re-mark them as
+        # taken when it adopts this container (otherwise the ports are dropped
+        # and can be double-allocated to a new task).
+        if config.ports:
+            cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
         if cpu_millicores:
-            cpus = cpu_millicores / 1000
-            cmd.extend(["--cpus", str(cpus)])
+            if self.runtime.capacity_type == CapacityType.ON_DEMAND:
+                # Soft weight: on-demand workers let containers burst onto idle
+                # host CPU; the scheduler still places by cpu_millicores.
+                shares = max(2, int(cpu_millicores * 1024 / 1000))
+                cmd.extend(["--cpu-shares", str(shares)])
+            else:
+                cmd.extend(["--cpus", str(cpu_millicores / 1000)])
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
@@ -864,8 +877,13 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, cache_dir: Path, capacity_type: CapacityType | None = None) -> None:
         self._cache_dir = cache_dir
+        # Drives whether per-container CPU is a hard cap (`--cpus`) or a soft
+        # weight (`--cpu-shares`). On-demand workers use soft weights so small
+        # entrypoint/coordinator containers can burst onto otherwise-idle host
+        # CPU; preemptible/reserved keep the hard cap for predictability.
+        self.capacity_type = capacity_type
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         # Serializes `docker pull` per image tag so that concurrent task threads
@@ -975,10 +993,6 @@ class DockerRuntime:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 
-    def list_containers(self) -> list[DockerContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
-
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all containers with iris.managed=true label."""
         cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
@@ -1034,6 +1048,7 @@ class DockerRuntime:
                     container_id=info["Id"],
                     task_id=task_id,
                     attempt_id=int(attempt_id_str),
+                    attempt_uid=labels.get("iris.attempt_uid", ""),
                     job_id=labels.get("iris.job_id", ""),
                     worker_id=labels.get("iris.worker_id", ""),
                     phase=ExecutionStage(labels.get("iris.phase", "run")),
@@ -1041,6 +1056,7 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
+                    ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )
 
@@ -1146,26 +1162,3 @@ class DockerImageBuilder:
             capture_output=True,
             check=False,
         )
-
-    def list_images(self, pattern: str) -> list[ImageInfo]:
-        result = subprocess.run(
-            [
-                "docker",
-                "images",
-                "--format",
-                "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
-                "--filter",
-                f"reference={pattern}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        images = []
-        for line in result.stdout.strip().split("\n"):
-            if line and "\t" in line:
-                tag, created = line.split("\t", 1)
-                images.append(ImageInfo(tag=tag, created_at=created))
-
-        return images

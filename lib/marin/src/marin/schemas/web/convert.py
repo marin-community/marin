@@ -18,7 +18,7 @@ class ExtractionConfig(ChoiceRegistry):
 
 @dataclass(frozen=True)
 @ExtractionConfig.register_subclass("markdownify")
-class HtmlToMarkdownConfig:
+class HtmlToMarkdownConfig(ExtractionConfig):
     include_images: bool = True
     include_links: bool = True
 
@@ -48,7 +48,7 @@ class HtmlToMarkdownConfig:
 
 @dataclass(frozen=True)
 @ExtractionConfig.register_subclass("resiliparse")
-class ResiliparseConfig:
+class ResiliparseConfig(ExtractionConfig):
     links: bool = False
     prepend_title: bool = True
 

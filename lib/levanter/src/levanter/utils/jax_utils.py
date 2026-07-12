@@ -5,7 +5,6 @@ import contextlib
 import functools
 import json
 import warnings
-import zlib
 from dataclasses import fields
 from typing import Any, Callable, Optional, TypeVar
 
@@ -13,6 +12,7 @@ import equinox as eqx
 import haliax as hax
 import haliax.partitioning
 import jax
+import jax._src.distributed as jax_distributed
 import numpy as np
 from haliax import is_named_array
 from haliax._src.util import index_where
@@ -20,7 +20,6 @@ from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
-from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
@@ -70,22 +69,6 @@ def local_cpu_mesh():
 def is_inside_jit():
     """Returns True if we're currently inside a jit"""
     return isinstance(jnp.zeros(()), jax.core.Tracer)
-
-
-def shape_dtype_struct_tree(tree: T) -> T:
-    """Convert array-like leaves in a pytree to ShapeDtypeStruct leaves."""
-
-    def _to_shape_dtype_struct(x):
-        if isinstance(x, jax.ShapeDtypeStruct):
-            return x
-        if is_jax_array_like(x):
-            sharding = getattr(x, "sharding", None)
-            if sharding is not None:
-                return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=sharding)
-            return jax.ShapeDtypeStruct(x.shape, x.dtype)
-        return x
-
-    return jax.tree.map(_to_shape_dtype_struct, tree)
 
 
 def _flatten_axis_resource(axis_resource: Any) -> tuple[str, ...]:
@@ -156,9 +139,7 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     if jax.process_count() == 1:
         return obj
 
-    import jax._src.distributed as distributed
-
-    client = distributed.global_state.client
+    client = jax_distributed.global_state.client
 
     if client is None:
         raise RuntimeError("multihost_broadcast_sync requires jax distributed client to be initialized")
@@ -185,16 +166,15 @@ def barrier_sync(timeout: float = 200):
     global _sync_counter
     if jax.process_count() == 1:
         return
-    import jax._src.distributed as distributed
 
     try:
-        from jaxlib.xla_extension import DistributedRuntimeClient
+        from jaxlib.xla_extension import DistributedRuntimeClient  # noqa: PLC0415  # guarded: jaxlib version fallback
     except ModuleNotFoundError:  # jaxlib>=0.6.2
-        from jax._src.lib import _jax as _jax_lib
+        from jax._src.lib import _jax as _jax_lib  # noqa: PLC0415  # guarded: jaxlib version fallback
 
         DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
-    client: Optional[DistributedRuntimeClient] = distributed.global_state.client
+    client: Optional[DistributedRuntimeClient] = jax_distributed.global_state.client
 
     if client is None:
         raise RuntimeError("barrier_sync requires jax distributed client to be initialized")
@@ -246,14 +226,12 @@ def leaf_key_paths(
     elif isinstance(pytree, tuple):
         out = tuple(rec(v, str(i)) for i, v in enumerate(pytree))
     elif isinstance(pytree, eqx.Module):
-        names = []
         rec_values = []
         for field in fields(pytree):
             if field.metadata.get("static", False):
                 continue
             field_name = field.name
             field_value = getattr(pytree, field_name)
-            names.append(field_name)
 
             if use_state_dict_keys and hasattr(pytree, "_state_dict_key_map"):
                 field_name = pytree._state_dict_key_map().get(field_name, field_name)
@@ -281,7 +259,6 @@ def leaf_key_paths(
                     out_leaves.append(join_key(prefix, ""))
                 else:
                     key_str = key_path_to_str([key])
-                    # out_leaves.append(join_key(prefix, key_str))
                     rec_pref = join_key(prefix, key_str)
                     out_leaves.append(
                         leaf_key_paths(leaf, rec_pref, is_leaf=is_leaf, use_state_dict_keys=use_state_dict_keys)
@@ -316,24 +293,6 @@ def is_inexact_arrayish(x):
         return jnp.issubdtype(x.dtype, jnp.inexact)
     else:
         return False
-
-
-def tree_filter_like(template: X, tree: X) -> X:
-    """
-    Filters a tree to only include the leaves that are not None in the template.
-
-    This is useful for filtering out nontrainable parameters from a tree.
-    """
-
-    def match_like(templ_leaf, tree_leaf):
-        if templ_leaf is None:
-            return None
-        else:
-            if tree_leaf is None:
-                warnings.warn(f"Template has a non-None value where tree is None. Template value: {templ_leaf}")
-            return tree_leaf
-
-    return jax.tree_util.tree_map(match_like, template, tree, is_leaf=lambda x: x is None)
 
 
 def best_effort_sharding(shape, *, devices=None, mesh=None):
@@ -457,7 +416,8 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-    current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
+    current_mesh = hax.partitioning._get_mesh()
+    assert current_mesh is not None, "broadcast_shard requires an active mesh"
 
     axis_names = current_mesh.axis_names
 
@@ -471,12 +431,12 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
 
     def pre_jit(x):
         if jax.process_index() == source:
-            inp = np.array(x)
+            inp = np.asarray(jax.device_get(x))
         else:
-            inp = jnp.zeros(x.shape, dtype=x.dtype)
+            inp = np.zeros(x.shape, dtype=x.dtype)
 
         shape = (len(jax.devices()),) + inp.shape
-        inp = jnp.expand_dims(inp, axis=0)
+        inp = np.expand_dims(inp, axis=0)
         out = jax.make_array_from_callback(shape, sharding, lambda _: inp)
 
         return out
@@ -511,68 +471,6 @@ def tree_broadcast_to(prefix: PyTree[L], t: T, *, is_leaf: Optional[Callable[[An
         t,
         is_leaf=is_leaf,
     )
-
-
-# Non-busted version of broadcast_one_to_all from jax.multihost_utils. (The issue is that  if you use a non-contiguous
-# mesh, their utility blows up because it makes a contiguous mesh.)
-
-
-def _psum(xs: Any) -> Any:
-    return jax.tree.map(lambda x: jnp.sum(x, dtype=x.dtype, axis=0), xs)
-
-
-def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
-    """Broadcast data from a source host (host 0 by default) to all other hosts.
-
-    Args:
-      in_tree: pytree of arrays - each array *must* have the same shape across the
-        hosts.
-      is_source: optional bool denoting whether the caller is the source. Only
-        'source host' will contribute the data for the broadcast. If None, then
-        host 0 is used.
-
-    Returns:
-      A pytree matching in_tree where the leaves now all contain the data from the
-      first host.
-    """
-    if jax.process_count() == 1:
-        return jax.tree.map(np.asarray, in_tree)
-
-    if is_source is None:
-        is_source = jax.process_index() == 0
-
-    devices: np.ndarray = np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count())
-    global_mesh = jax.sharding.Mesh(devices, ("processes", "local_devices"))
-    pspec = PartitionSpec("processes")
-
-    def pre_jit(x):
-        if is_source:
-            inp = x
-        else:
-            inp = np.zeros_like(x)
-        inp = np.expand_dims(inp, axis=0)
-        return host_local_array_to_global_array(inp, global_mesh, pspec)
-
-    def post_jit(x):
-        return jax.device_get(x.addressable_data(0))
-
-    with haliax.partitioning.set_mesh(global_mesh):
-        in_tree = jax.tree.map(pre_jit, in_tree)
-        out_tree = jax.jit(_psum, out_shardings=jax.sharding.NamedSharding(global_mesh, PartitionSpec()))(in_tree)
-        return jax.tree.map(post_jit, out_tree)
-
-
-def assert_equal(in_tree, fail_message: str = ""):
-    """Verifies that all the hosts have the same tree of values."""
-    expected = broadcast_one_to_all(in_tree)
-    if not jax.tree_util.tree_all(jax.tree_util.tree_map(lambda *x: np.all(np.equal(*x)), in_tree, expected)):
-        raise AssertionError(f"{fail_message} Expected: {expected}; got: {in_tree}.")
-
-
-def sync_global_devices(name: str):
-    """Creates a barrier across all hosts/devices."""
-    h = np.uint32(zlib.crc32(name.encode()))
-    assert_equal(h, f"sync_global_devices name mismatch ('{name}')")
 
 
 def sharded_tree_size(

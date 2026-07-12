@@ -8,9 +8,8 @@ Undetermined coefficients is not as general a method as variation of parameters,
 
 Consider a linear non-homogeneous ordinary differential equation of the form 
 
-$$\sum \_{i=0}^{n}c\_{i}y^{(i)}+y^{(n+1)}=g(x)$$  
-
-where $y^{(i)}$ denotes the i-th derivative of $y$, and $c\_{i}$ denotes a function of $x$. 
+:   $$\sum \_{i=0}^{n}c\_{i}y^{(i)}+y^{(n+1)}=g(x)$$
+:   where $y^{(i)}$ denotes the i-th derivative of $y$, and $c\_{i}$ denotes a function of $x$.
 
 The method of undetermined coefficients provides a straightforward method of obtaining the solution to this ODE when two criteria are met: 
 
@@ -19,15 +18,15 @@ The method of undetermined coefficients provides a straightforward method of obt
 
 The method consists of finding the general homogeneous solution $y\_{c}$ for the complementary linear homogeneous differential equation 
 
-$$\sum \_{i=0}^{n}c\_{i}y^{(i)}+y^{(n+1)}=0,$$  
+:   $$\sum \_{i=0}^{n}c\_{i}y^{(i)}+y^{(n+1)}=0,$$
 
 and a particular integral $y\_{p}$ of the linear non-homogeneous ordinary differential equation based on $g(x)$. Then the general solution $y$ to the linear non-homogeneous ordinary differential equation would be 
 
-$y=y\_{c}+y\_{p}.$ 
+:   $y=y\_{c}+y\_{p}.$
 
 If $g(x)$ consists of the sum of two functions $h(x)+w(x)$ and we say that $y\_{1}$ is the solution based on $h(x)$ and $y\_{2}$ the solution based on $w(x)$. Then, using a superposition principle, we can say that the particular integral $y\_{p}$ is 
 
-$$y\_{p}=y\_{1}}+y\_{2}}.$$  
+:   $$y\_{p}=y\_{1}}+y\_{2}}.$$
 
 ## Typical forms of the particular integral
 
@@ -50,95 +49,91 @@ If a term in the above particular integral for *y* appears in the homogeneous so
 
 Find a particular integral of the equation 
 
-$$y''+y=t\cos t.$$  
+:   $$y''+y=t\cos t.$$
 
 The right side *t* cos *t* has the form 
 
-$$P\_{n}e^{\alpha t}\cos {\beta t}$$  
+:   $$P\_{n}e^{\alpha t}\cos {\beta t}$$
 
 with *n* = 2, *α* = 0, and *β* = 1. 
 
 Since *α* \+  = *i* is *a simple root* of the characteristic equation 
 
-$$\lambda ^{2}+1=0$$  
+:   $$\lambda ^{2}+1=0$$
 
 we should try a particular integral of the form 
 
-$$\begin{aligned}y\_{p}&=t\left\[F\_{1}(t)e^{\alpha t}\cos {\beta t}+G\_{1}(t)e^{\alpha t}\sin {\beta t}\right\]\\\&=t\left\[F\_{1}(t)\cos t+G\_{1}(t)\sin t\right\]\\\&=t\left\[\left(A\_{0}t+A\_{1}\right)\cos t+\left(B\_{0}t+B\_{1}\right)\sin t\right\]\\\&=\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t.\end{aligned}$$  
+:   $$\begin{aligned}y\_{p}&=t\left\[F\_{1}(t)e^{\alpha t}\cos {\beta t}+G\_{1}(t)e^{\alpha t}\sin {\beta t}\right\]\\\&=t\left\[F\_{1}(t)\cos t+G\_{1}(t)\sin t\right\]\\\&=t\left\[\left(A\_{0}t+A\_{1}\right)\cos t+\left(B\_{0}t+B\_{1}\right)\sin t\right\]\\\&=\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t.\end{aligned}$$
 
 Substituting *y*<sub>*p*</sub> into the differential equation, we have the identity 
 
-$$\begin{aligned}t\cos t&=y\_{p}''+y\_{p}\\\&=\left\[\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t\right\]''+\left\[\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t\right\]\\\&=\left\[2A\_{0}\cos t+2\left(2A\_{0}t+A\_{1}\right)(-\sin t)+\left(A\_{0}t^{2}+A\_{1}t\right)(-\cos t)+2B\_{0}\sin t+2\left(2B\_{0}t+B\_{1}\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)(-\sin t)\right\]\\\&\qquad +\left\[\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t\right\]\\\&=\[4B\_{0}t+(2A\_{0}+2B\_{1})\]\cos t+\[-4A\_{0}t+(-2A\_{1}+2B\_{0})\]\sin t.\end{aligned}$$  
+:   $$\begin{aligned}t\cos t&=y\_{p}''+y\_{p}\\\&=\left\[\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t\right\]''+\left\[\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t\right\]\\\&=\left\[2A\_{0}\cos t+2\left(2A\_{0}t+A\_{1}\right)(-\sin t)+\left(A\_{0}t^{2}+A\_{1}t\right)(-\cos t)+2B\_{0}\sin t+2\left(2B\_{0}t+B\_{1}\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)(-\sin t)\right\]\\\&\qquad +\left\[\left(A\_{0}t^{2}+A\_{1}t\right)\cos t+\left(B\_{0}t^{2}+B\_{1}t\right)\sin t\right\]\\\&=\[4B\_{0}t+(2A\_{0}+2B\_{1})\]\cos t+\[-4A\_{0}t+(-2A\_{1}+2B\_{0})\]\sin t.\end{aligned}$$
 
 Comparing both sides, we have 
 
-$$\begin{cases}1=4B\_{0}\\0=2A\_{0}+2B\_{1}\\0=-4A\_{0}\\0=-2A\_{1}+2B\_{0}\end{cases}$$  
+:   $$\begin{cases}1=4B\_{0}\\0=2A\_{0}+2B\_{1}\\0=-4A\_{0}\\0=-2A\_{1}+2B\_{0}\end{cases}$$
 
 which has the solution 
 
-$$A\_{0}=0,\quad A\_{1}=B\_{0}={\frac {1}{4}},\quad B\_{1}=0.$$  
+:   $$A\_{0}=0,\quad A\_{1}=B\_{0}={\frac {1}{4}},\quad B\_{1}=0.$$
 
 We then have a particular integral 
 
-$$y\_{p}={\frac {1}{4}}t\cos t+{\frac {1}{4}}t^{2}\sin t.$$  
+:   $$y\_{p}={\frac {1}{4}}t\cos t+{\frac {1}{4}}t^{2}\sin t.$$
 
 ### Example 2
 
 Consider the following linear nonhomogeneous differential equation: 
 
-$$\frac {dy}{dx}}=y+e^{x}.$$  
+:   $$\frac {dy}{dx}}=y+e^{x}.$$
 
 This is like the first example above, except that the nonhomogeneous part ( $e^{x}$) is *not* linearly independent to the general solution of the homogeneous part ( $c\_{1}e^{x}$); as a result, we have to multiply our guess by a sufficiently large power of *x* to make it linearly independent. 
 
 Here our guess becomes: 
 
-$$y\_{p}=Axe^{x}.$$  
+:   $$y\_{p}=Axe^{x}.$$
 
 By substituting this function and its derivative into the differential equation, one can solve for *A*: 
 
-$$\frac {d}{dx}}\left(Axe^{x}\right)=Axe^{x}+e^{x$$  
-
-$$Axe^{x}+Ae^{x}=Axe^{x}+e^{x}$$  
-
-$$A=1.$$  
+:   $$\frac {d}{dx}}\left(Axe^{x}\right)=Axe^{x}+e^{x$$
+:   $$Axe^{x}+Ae^{x}=Axe^{x}+e^{x}$$
+:   $$A=1.$$
 
 So, the general solution to this differential equation is: 
 
-$$y=c\_{1}e^{x}+xe^{x}.$$  
+:   $$y=c\_{1}e^{x}+xe^{x}.$$
 
 ### Example 3
 
 Find the general solution of the equation: 
 
-$$\frac {dy}{dt}}=t^{2}-y$$  
+:   $$\frac {dy}{dt}}=t^{2}-y$$
 
 $t^{2}$ is a polynomial of degree 2, so we look for a solution using the same form, 
 
-$$y\_{p}=At^{2}+Bt+C,$$  
+:   $$y\_{p}=At^{2}+Bt+C,$$
 
 Plugging this particular function into the original equation yields, 
 
-$$2At+B=t^{2}-(At^{2}+Bt+C),$$  
-
-$$2At+B=(1-A)t^{2}-Bt-C,$$  
-
-$$(A-1)t^{2}+(2A+B)t+(B+C)=0.$$  
+:   $$2At+B=t^{2}-(At^{2}+Bt+C),$$
+:   $$2At+B=(1-A)t^{2}-Bt-C,$$
+:   $$(A-1)t^{2}+(2A+B)t+(B+C)=0.$$
 
 which gives: 
 
-$$A-1=0,\quad 2A+B=0,\quad B+C=0.$$  
+:   $$A-1=0,\quad 2A+B=0,\quad B+C=0.$$
 
 Solving for constants we get: 
 
-$$y\_{p}=t^{2}-2t+2$$  
+:   $$y\_{p}=t^{2}-2t+2$$
 
 To solve for the general solution, 
 
-$$y=y\_{p}+y\_{c}$$  
+:   $$y=y\_{p}+y\_{c}$$
 
 where $y\_{c}$ is the homogeneous solution $y\_{c}=c\_{1}e^{-t}$, therefore, the general solution is: 
 
-$$y=t^{2}-2t+2+c\_{1}e^{-t}$$  
+:   $$y=t^{2}-2t+2+c\_{1}e^{-t}$$
 
 * Boyce, W. E.; DiPrima, R. C. (1986). *Elementary Differential Equations and Boundary Value Problems* (4th ed.). John Wiley & Sons. ISBN 0-471-83824-1.
 * Riley, K. F.; Bence, S. J. (2010). *Mathematical Methods for Physics and Engineering*. Cambridge University Press. ISBN 978-0-521-86153-3.

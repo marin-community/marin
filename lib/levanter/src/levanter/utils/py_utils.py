@@ -9,10 +9,11 @@ import enum
 import json
 import os
 import pathlib
-import sys
-import time
+import random
 import uuid
 from dataclasses import asdict, dataclass, is_dataclass
+
+import numpy as np
 
 
 def logical_cpu_core_count() -> int:
@@ -25,12 +26,6 @@ def logical_cpu_core_count() -> int:
         return os.cpu_count() or 1
     except NotImplementedError:
         return 1
-
-
-def non_caching_cycle(iterable):
-    """Like itertools.cycle, but doesn't cache the iterable."""
-    while True:
-        yield from iterable
 
 
 # https://stackoverflow.com/a/58336722/1736826 CC-BY-SA 4.0
@@ -62,76 +57,16 @@ def dataclass_with_default_init(_cls=None, *args, **kwargs):
         return wrap(_cls)
 
 
-def actual_sizeof(obj):
-    """similar to sys.getsizeof, but recurses into dicts and lists and other objects"""
-    seen = set()
-    size = 0
-    objects = [obj]
-    while objects:
-        need_to_see = []
-        for obj in objects:
-            if id(obj) in seen:
-                continue
-            seen.add(id(obj))
-            size += sys.getsizeof(obj)
-            if isinstance(obj, dict):
-                need_to_see.extend(obj.values())
-            elif hasattr(obj, "__dict__"):
-                need_to_see.extend(obj.__dict__.values())
-            elif isinstance(obj, (list, tuple, set, frozenset)):
-                need_to_see.extend(obj)
-        objects = need_to_see
-    return size
-
-
-class Stopwatch:
-    """Resumable stop watch for tracking time per call"""
-
-    def __init__(self):
-        self._start_time = time.time()
-        self._elapsed = 0.0
-        self._n = 0
-
-    def start(self):
-        self._start_time = time.time()
-        self._n += 1
-
-    def stop(self):
-        self._elapsed += time.time() - self._start_time
-
-    def reset(self):
-        self._elapsed = 0.0
-
-    def elapsed(self):
-        return self._elapsed
-
-    def average(self):
-        if self._n == 0:
-            return 0.0
-        return self._elapsed / self._n
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop()
-
-
 @contextlib.contextmanager
 def set_global_rng_seeds(seed):
-    import numpy as np
-
     current_np_seed = np.random.get_state()
     np.random.seed(seed)
-
-    import random
 
     current_random_seed = random.getstate()
     random.seed(seed)
 
     try:
-        import torch
+        import torch  # noqa: PLC0415  # optional dep: torch
 
         current_torch_seed = torch.random.get_rng_state()
         torch.manual_seed(seed)
@@ -167,57 +102,57 @@ class FailSafeJSONEncoder(json.JSONEncoder):
         super().__init__(*args, **kwargs)
         self.bytes_strategy = bytes_strategy
 
-    def default(self, obj):
+    def default(self, o):
         # Known clean conversions
-        if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+        if isinstance(o, (datetime.datetime, datetime.date, datetime.time)):
             # ISO 8601; preserves tzinfo if present
-            return obj.isoformat()
+            return o.isoformat()
 
-        if isinstance(obj, decimal.Decimal):
+        if isinstance(o, decimal.Decimal):
             # Prefer float; fallback to string if NaN/Inf
-            f = float(obj)
+            f = float(o)
             if f == float("inf") or f == float("-inf") or f != f:  # NaN check
-                return str(obj)
+                return str(o)
             return f
 
-        if isinstance(obj, uuid.UUID):
-            return str(obj)
+        if isinstance(o, uuid.UUID):
+            return str(o)
 
-        if isinstance(obj, (set, frozenset)):
-            return list(obj)
+        if isinstance(o, (set, frozenset)):
+            return list(o)
 
-        if isinstance(obj, pathlib.Path):
-            return str(obj)
+        if isinstance(o, pathlib.Path):
+            return str(o)
 
-        if isinstance(obj, complex):
+        if isinstance(o, complex):
             # JSON has no complex; encode as 2-tuple
-            return {"__type__": "complex", "real": obj.real, "imag": obj.imag}
+            return {"__type__": "complex", "real": o.real, "imag": o.imag}
 
-        if isinstance(obj, bytes):
+        if isinstance(o, bytes):
             if self.bytes_strategy == "base64":
-                return {"__type__": "bytes", "base64": base64.b64encode(obj).decode("ascii")}
+                return {"__type__": "bytes", "base64": base64.b64encode(o).decode("ascii")}
             if self.bytes_strategy == "hex":
-                return {"__type__": "bytes", "hex": obj.hex()}
-            return repr(obj)
+                return {"__type__": "bytes", "hex": o.hex()}
+            return repr(o)
 
-        if isinstance(obj, bytearray):
-            return self.default(bytes(obj))
+        if isinstance(o, bytearray):
+            return self.default(bytes(o))
 
-        if isinstance(obj, enum.Enum):
+        if isinstance(o, enum.Enum):
             # Serialize as its value when simple; else name
-            val = obj.value
+            val = o.value
             # Make sure the value itself is JSON-serializable
             json.dumps(val)  # quick probe
             return val
 
-        if is_dataclass(obj):
+        if is_dataclass(o):
             # Convert dataclasses to dicts (lets the base encoder recurse)
-            return asdict(obj)
+            return asdict(o)
 
         # Functions / callables -> a safe label
-        if callable(obj):
-            name = getattr(obj, "__name__", None)
+        if callable(o):
+            name = getattr(o, "__name__", None)
             return f"<function {name}>" if name else "<callable>"
 
         # Everything else: use repr()
-        return repr(obj)
+        return repr(o)

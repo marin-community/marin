@@ -1,20 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.evals.evals import default_key_evals
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
+from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.step_runner import StepRunner
+from marin.training.training import LevanterCheckpoint
 
-# Insert your model path here
-# model_path = "gs://marin-us-central2/checkpoints/llama-8b-control-00f31b/hf/step-210388"
+from experiments.evals.evals import default_key_evals
 
-model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
+# A pre-existing checkpoint produced outside this graph: adopt it as a typed handle. Adoption
+# resolves consumers to the source and writes only a provenance record — no copy, no recompute.
+llama_200m = ArtifactStep.adopt(
+    "perplexity-models/llama-200m",
+    "2026.06.30",
+    "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+    kind=LevanterCheckpoint,
+)
 key_evals = default_key_evals(
-    step=model_path,
+    step=llama_200m,
     resource_config=ResourceConfig.with_tpu("v6e-8"),
-    # model_name="llama-8b-control-00f31b",
     model_name="small_model",
 )
 
 if __name__ == "__main__":
-    executor_main(steps=key_evals)
+    StepRunner().run([lower(x) for x in key_evals])

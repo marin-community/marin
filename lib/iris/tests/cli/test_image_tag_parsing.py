@@ -4,7 +4,6 @@
 """Tests for image tag parsing in cluster.py."""
 
 import pytest
-
 from iris.cli.cluster import _parse_ghcr_tag
 
 

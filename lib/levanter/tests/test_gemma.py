@@ -5,27 +5,12 @@ import copy
 import tempfile
 
 import chex
+import haliax as hax
 import jax
 import numpy as np
 import pytest
 import transformers
 from jax import random
-from transformers import Gemma2Config as HFGemma2Config
-from transformers import Gemma3TextConfig as HFGemma3Config
-
-import haliax as hax
-
-from levanter.layers.attention import Attention, AttentionMask
-from levanter.models.gemma import (
-    Gemma2Config,
-    Gemma3Config,
-    GemmaConfig,
-    GemmaDecoderLayer,
-    GemmaLMHeadModel,
-    GemmaRMSNorm,
-)
-from levanter.models.llama import LlamaMlp
-from levanter.utils.jax_utils import parameter_count
 from test_utils import (
     check_load_config,
     check_model_works_with_seqlen,
@@ -34,7 +19,23 @@ from test_utils import (
     skip_if_no_torch,
     use_test_mesh,
 )
+from transformers import AutoModelForCausalLM, Gemma2ForCausalLM, Gemma3ForCausalLM
+from transformers import Gemma2Config as HFGemma2Config
+from transformers import Gemma3TextConfig as HFGemma3Config
 
+from levanter.layers.attention import Attention, AttentionMask
+from levanter.main.train_lm import TrainLmConfig
+from levanter.models.gemma import (
+    Gemma2Config,
+    Gemma3Config,
+    GemmaConfig,
+    GemmaDecoderLayer,
+    GemmaLMHeadModel,
+    GemmaRMSNorm,
+)
+from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # local to avoid circular import at top
+from levanter.models.llama import LlamaMlp
+from levanter.utils.jax_utils import parameter_count
 
 # N.B. Gemma uses LLamaAttention directly so we skip tests for attention and rotary embeddings.
 
@@ -87,14 +88,18 @@ def test_gemma_param_counts_dont_change_with_seqlen():
 @skip_if_no_torch
 @pytest.mark.parametrize("gemma_version", [1, 2])
 def test_gemma_rms_norm(gemma_version):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if gemma_version == 1:
-        from transformers.models.gemma.modeling_gemma import GemmaRMSNorm as HFGemmaRMSNorm
+        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
+            GemmaRMSNorm as HFGemmaRMSNorm,
+        )
 
         config = _get_gemma_config()
     else:
-        from transformers.models.gemma2.modeling_gemma2 import Gemma2RMSNorm as HFGemmaRMSNorm
+        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
+            Gemma2RMSNorm as HFGemmaRMSNorm,
+        )
 
         config = _get_gemma2_config()
 
@@ -116,9 +121,13 @@ def test_gemma_rms_norm(gemma_version):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma1_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-1 decoder layer against HF reference."""
-    import torch
-    from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer as HFGemmaDecoderLayer
-    from transformers.models.gemma.modeling_gemma import GemmaRotaryEmbedding as HFGemmaRotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
+        GemmaDecoderLayer as HFGemmaDecoderLayer,
+    )
+    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
+        GemmaRotaryEmbedding as HFGemmaRotaryEmbedding,
+    )
 
     gemma_config = _get_gemma_config(num_kv_heads=num_kv_heads)
     LevDecoderLayer = GemmaDecoderLayer
@@ -168,11 +177,13 @@ def test_gemma1_decoder_layer(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma2_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-2 decoder layer against HF reference."""
-    import torch
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2DecoderLayer as HFGemmaDecoderLayer
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding
-
-    from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # local to avoid circular import at top
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma2DecoderLayer as HFGemmaDecoderLayer,
+    )
+    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding,
+    )
 
     gemma_config = _get_gemma2_config(num_kv_heads=num_kv_heads)
 
@@ -206,7 +217,8 @@ def test_gemma2_decoder_layer(num_kv_heads):
         cache_position=torch.zeros((batch,), dtype=torch.int32),  # HF expects a cache position
     )
 
-    chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
+    hf_array = hf_out if isinstance(hf_out, torch.Tensor) else hf_out[0]
+    chex.assert_trees_all_close(hf_array.detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.parametrize("num_kv_heads", [1, 2])
@@ -228,16 +240,24 @@ def test_pass_different_length_seq(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 @pytest.mark.parametrize("gemma_version", [1, 2])
 def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     if gemma_version == 1:
-        from transformers.models.gemma.modeling_gemma import GemmaAttention as HFGemmaAttention
-        from transformers.models.gemma.modeling_gemma import GemmaRotaryEmbedding as HFGemmaRotaryEmbedding
+        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
+            GemmaAttention as HFGemmaAttention,
+        )
+        from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
+            GemmaRotaryEmbedding as HFGemmaRotaryEmbedding,
+        )
 
         config = _get_gemma_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
     else:
-        from transformers.models.gemma2.modeling_gemma2 import Gemma2Attention as HFGemmaAttention
-        from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding
+        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
+            Gemma2Attention as HFGemmaAttention,
+        )
+        from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
+            Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding,
+        )
 
         config = _get_gemma2_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -272,8 +292,10 @@ def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
 
 @skip_if_no_torch
 def test_gemma_mlp():
-    import torch
-    from transformers.models.gemma.modeling_gemma import GemmaMLP as HFGemmaMLP
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.gemma.modeling_gemma import (  # noqa: PLC0415  # optional dep: torch
+        GemmaMLP as HFGemmaMLP,
+    )
 
     config = _get_gemma_config()
     mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=random.PRNGKey(0))
@@ -294,8 +316,10 @@ def test_gemma_mlp():
 
 @skip_if_no_torch
 def test_gemma2_mlp():
-    import torch
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2MLP as HFGemmaMLP
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.gemma2.modeling_gemma2 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma2MLP as HFGemmaMLP,
+    )
 
     config = _get_gemma2_config()
     mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=random.PRNGKey(0))
@@ -317,8 +341,7 @@ def test_gemma2_mlp():
 @skip_if_hf_model_not_accessible("google/gemma-2-2b")
 @skip_if_no_torch
 def test_gemma2_roundtrip():
-    import torch
-    from transformers import AutoModelForCausalLM, Gemma2ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     config = Gemma2Config(
         max_seq_len=128,
@@ -393,8 +416,6 @@ def _get_gemma_config(use_flash=False, num_kv_heads=4, seq_len=128) -> GemmaConf
 
 
 def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Config:
-    from levanter.models.gemma import Gemma2Config
-
     return Gemma2Config(
         max_seq_len=seq_len,
         hidden_dim=16,
@@ -414,8 +435,6 @@ def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Co
 
 
 def _get_gemma3_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma3Config:
-    from levanter.models.gemma import Gemma3Config
-
     return Gemma3Config(
         max_seq_len=seq_len,
         hidden_dim=16,
@@ -441,10 +460,28 @@ def _get_random_inputs(config: GemmaConfig):
     return x, mask
 
 
+def _gemma3_hf_position_embeddings(rot, hf_config, x_torch, position_ids):
+    if hasattr(rot, "full_attention_inv_freq"):
+        cos, sin = rot(x_torch, position_ids, layer_type="full_attention")
+        if hasattr(rot, "sliding_attention_inv_freq"):
+            local_cos, local_sin = rot(x_torch, position_ids, layer_type="sliding_attention")
+        else:
+            local_cos, local_sin = cos, sin
+        return (cos, sin), (local_cos, local_sin)
+
+    # Older Transformers versions expose a single Gemma3 RoPE module. Rebuild it
+    # with the local RoPE theta for the sliding-attention comparison.
+    local_hf_config = copy.deepcopy(hf_config)
+    local_hf_config.rope_theta = local_hf_config.rope_local_base_freq
+    local_hf_config.rope_scaling = {"rope_type": "default"}
+    local_rot = type(rot)(config=local_hf_config)
+    cos, sin = rot(x_torch, position_ids)
+    local_cos, local_sin = local_rot(x_torch, position_ids)
+    return (cos, sin), (local_cos, local_sin)
+
+
 @parameterize_with_configs("gemma*.yaml")
 def test_gemma_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
-
     config_class = TrainLmConfig
 
     check_load_config(config_class, config_file)
@@ -459,11 +496,13 @@ def test_gemma_configs(config_file):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma3_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-3 decoder layer against HF reference."""
-    import torch
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3DecoderLayer as HFGemmaDecoderLayer
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding
-
-    from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # Gemma3 reuses implementation
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma3DecoderLayer as HFGemmaDecoderLayer,
+    )
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding,
+    )
 
     gemma_config = _get_gemma3_config(num_kv_heads=num_kv_heads)
 
@@ -486,33 +525,82 @@ def test_gemma3_decoder_layer(num_kv_heads):
 
     position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)
     rot = HFGemmaRotaryEmbedding(config=hf_config)
-    cos, sin = rot(x_t, position_ids)
-
-    # HF does this hacky crap so we copy it
-    local_hf_config = copy.deepcopy(hf_config)
-    local_hf_config.rope_theta = local_hf_config.rope_local_base_freq
-    local_hf_config.rope_scaling = {"rope_type": "default"}
-    local_rot = HFGemmaRotaryEmbedding(config=local_hf_config)
-    local_cos, local_sin = local_rot(x_t, position_ids)
+    (cos, sin), (local_cos, local_sin) = _gemma3_hf_position_embeddings(rot, hf_config, x_t, position_ids)
 
     lev_out = decoder_layer(x, mask)
-    hf_out = hf_decoder(
-        x_t,
-        attention_mask=bias,
-        position_ids=position_ids,
-        position_embeddings_global=(cos, sin),
-        position_embeddings_local=(local_cos, local_sin),
-        cache_position=torch.zeros((batch,), dtype=torch.int32),
+    layer_type = getattr(hf_decoder.self_attn, "layer_type", None)
+    if layer_type is not None:
+        position_embeddings = (local_cos, local_sin) if layer_type == "sliding_attention" else (cos, sin)
+        hf_out = hf_decoder(
+            x_t,
+            attention_mask=bias,
+            position_ids=position_ids,
+            position_embeddings=position_embeddings,
+            cache_position=torch.zeros((batch,), dtype=torch.int32),
+        )
+    else:
+        hf_out = hf_decoder(
+            x_t,
+            attention_mask=bias,
+            position_ids=position_ids,
+            position_embeddings_global=(cos, sin),
+            position_embeddings_local=(local_cos, local_sin),
+            cache_position=torch.zeros((batch,), dtype=torch.int32),
+        )
+
+    hf_array = hf_out if isinstance(hf_out, torch.Tensor) else hf_out[0]
+    chex.assert_trees_all_close(hf_array.detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
+
+
+def test_gemma3_config_from_hf_config_roundtrip():
+    """Regression: ``Gemma3Config.from_hf_config`` must be callable on the
+    class. Previously the override was missing ``@classmethod``, so calling
+    ``Gemma3Config.from_hf_config(hf_config)`` bound ``hf_config`` to ``cls``
+    and raised ``TypeError: from_hf_config() missing 1 required positional
+    argument: 'hf_config'``. The parent ``Gemma2Config.from_hf_config`` and
+    ``GemmaConfig.from_hf_config`` are already classmethods.
+    """
+    cfg = Gemma3Config(
+        max_seq_len=128,
+        hidden_dim=16,
+        num_heads=4,
+        num_kv_heads=4,
+        gradient_checkpointing=False,
+        head_dim=4,
+        query_pre_attn_scalar=4,
+        num_layers=2,
+    )
+    hf_config = cfg.to_hf_config(1000)
+    roundtripped = Gemma3Config.from_hf_config(hf_config)
+
+    assert isinstance(roundtripped, Gemma3Config)
+    assert roundtripped.hidden_dim == cfg.hidden_dim
+    assert roundtripped.num_layers == cfg.num_layers
+    assert roundtripped.num_heads == cfg.num_heads
+    assert roundtripped.num_kv_heads == cfg.num_kv_heads
+
+
+def test_gemma3_rejects_unsupported_alternating_attention_export():
+    cfg = Gemma3Config(
+        max_seq_len=128,
+        hidden_dim=16,
+        num_heads=4,
+        num_kv_heads=4,
+        gradient_checkpointing=False,
+        head_dim=4,
+        query_pre_attn_scalar=4,
+        num_layers=4,
+        sliding_window_pattern=2,
     )
 
-    chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
+    with pytest.raises(ValueError, match="alternating local/global attention"):
+        cfg.to_hf_config(1000)
 
 
 @skip_if_hf_model_not_accessible("google/gemma-3-1b-pt")
 @skip_if_no_torch
 def test_gemma3_roundtrip():
-    import torch
-    from transformers import AutoModelForCausalLM, Gemma3ForCausalLM
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     config = Gemma3Config(
         max_seq_len=128,
@@ -576,9 +664,13 @@ def test_gemma3_roundtrip():
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma3_attention(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3Attention as HFGemmaAttention
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma3Attention as HFGemmaAttention,
+    )
+    from transformers.models.gemma3.modeling_gemma3 import (  # noqa: PLC0415  # optional dep: torch
+        Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding,
+    )
 
     gemma_config = _get_gemma3_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -604,7 +696,7 @@ def test_gemma3_attention(use_flash, num_kv_heads):
 
     out = attention(x, mask)
     position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)  # [1, seq_len]
-    cos, sin = hf_rotary_emb(x_torch, position_ids)
+    (cos, sin), _ = _gemma3_hf_position_embeddings(hf_rotary_emb, hf_config, x_torch, position_ids)
     hf_out = hf_attention(
         x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)
     )

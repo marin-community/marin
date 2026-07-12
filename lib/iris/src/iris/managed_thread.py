@@ -110,7 +110,14 @@ class ManagedThread:
                 raise
             finally:
                 if watcher:
-                    watcher.join(timeout=1.0)
+                    # Wake the watcher regardless of how the target exited so
+                    # on_stop runs on the natural-completion path too. Otherwise
+                    # cleanup (e.g. docker kill+rm for task containers) is
+                    # silently skipped whenever the target returns without an
+                    # explicit stop() — leaving wedged containers that keep
+                    # holding TPU vfio/iommu groups and break subsequent tasks.
+                    self._stop_event.set()
+                    watcher.join(timeout=5.0)
                     if watcher.is_alive():
                         logger.warning("on_stop callback for %s did not complete", name)
 
@@ -139,10 +146,6 @@ class ManagedThread:
 
     def join(self, timeout: Duration | None = None) -> None:
         self._thread.join(timeout=timeout.to_seconds() if timeout is not None else None)
-
-    @property
-    def stop_event(self) -> threading.Event:
-        return self._stop_event
 
     @property
     def is_alive(self) -> bool:
@@ -244,25 +247,6 @@ class ThreadContainer:
             except ValueError:
                 # Already removed, that's fine
                 pass
-
-    @property
-    def is_alive(self) -> bool:
-        """True if any thread in this container or its children is still running."""
-        with self._lock:
-            threads = list(self._threads)
-            children = list(self._children)
-        return any(t.is_alive for t in threads) or any(c.is_alive for c in children)
-
-    def alive_threads(self) -> list[ManagedThread]:
-        """Return threads that are still alive, including those in child containers."""
-        with self._lock:
-            threads = list(self._threads)
-            children = list(self._children)
-
-        alive = [t for t in threads if t.is_alive]
-        for child in children:
-            alive.extend(child.alive_threads())
-        return alive
 
     def wait(self) -> None:
         """Block until all threads have exited.

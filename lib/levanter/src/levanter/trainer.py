@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -47,20 +47,21 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation
 
+import levanter.callbacks
 import levanter.callbacks._metrics
 import levanter.checkpoint
 import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
-from levanter.callbacks.lora_debug import LoraDebugConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
-from levanter.data import AsyncDataset, DataLoader
+from levanter.data.dataset import AsyncDataset
+from levanter.data.loader import DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
-from levanter.distributed import DistributedConfig, RayConfig
+from levanter.distributed import DistributedConfig
 from levanter.grad_accum import microbatched
 from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
@@ -68,7 +69,8 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
-from levanter.utils import cloud_utils, fsspec_utils
+from levanter.utils import cloud_utils
+from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
@@ -126,12 +128,12 @@ class TrainerHooks:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
-            if force or info.step % hook.every == 0:
+            if force or (info.step > 1 and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if force or (info.step % s_hook.every == 0):
+            if force or (info.step > 1 and info.step % s_hook.every == 0):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -139,8 +141,9 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
+            fires = (state.step > 1) & (state.step % hook.every == 0)
             new_s = jax.lax.cond(
-                force or (state.step % hook.every == 0),
+                force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
                 lambda: zeros_like_tree(hook_shape),
             )
@@ -176,9 +179,8 @@ def _unify_model_and_model_init(model: Optional[M], model_init: Optional[Callabl
         if model_init is not None:
             raise ValueError("only one of model and model_init should be specified")
 
-        if model is not None:
-            # we can't just use `lambda: model` because JAX jit can't see captures, but it can see jax partials
-            model_init = jax.tree_util.Partial(lambda m: m, model)
+        # we can't just use `lambda: model` because JAX jit can't see captures, but it can see jax partials
+        model_init = jax.tree_util.Partial(lambda m: m, model)
     elif model_init is None:
         raise ValueError("one of model and model_init must be specified")
 
@@ -290,8 +292,6 @@ class Trainer:
             else:
                 self.tracker = config.tracker.init(self.run_id)
 
-        self._cmanagers = []
-
         if add_default_hooks:
             self._add_default_hooks()
 
@@ -343,23 +343,6 @@ class Trainer:
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
 
-    def _lora_debug_enabled(self) -> bool:
-        """True if ``TrainerConfig.lora_debug.enabled``, ``WandbConfig.lora_debug``,
-        or the ``MARIN_DEBUG_LORA_DEBUG=1`` env var is set.
-
-        The env var and ``WandbConfig.lora_debug`` are user-convenience knobs so
-        debug runs can be toggled without editing draccus configs.
-        """
-        if self.config.lora_debug.resolve_enabled():
-            return True
-        tracker_configs = self.config.tracker
-        if isinstance(tracker_configs, TrackerConfig):
-            tracker_configs = (tracker_configs,)
-        for tc in tracker_configs:
-            if isinstance(tc, WandbConfig) and getattr(tc, "lora_debug", False):
-                return True
-        return False
-
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
         return self.config.parameter_axis_mapping
@@ -385,7 +368,7 @@ class Trainer:
             raise RuntimeError("Trainer is already entered")
 
         self._cmanagers = [
-            levanter.current_tracker(self.tracker),
+            levanter.tracker.current_tracker(self.tracker),
             haliax.partitioning.set_mesh(self.device_mesh),
             hax.axis_mapping(self.parameter_axis_mapping),
         ]
@@ -437,20 +420,21 @@ class Trainer:
         assert model_init is not None
 
         # first try to load a full trainer state checkpoint
-        checkpoint_path = self.checkpoint_path
+        checkpoint_search_paths = self.checkpoint_search_paths
 
         load_checkpoint = self.config.load_checkpoint
         # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not fsspec_utils.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint {checkpoint_path} does not exist")
+        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
+            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
         elif load_checkpoint is None:
-            load_checkpoint = levanter.checkpoint.is_checkpoint_path(checkpoint_path)
+            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
 
         if load_checkpoint is False and self.config.initialize_from is not None:
             # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
             logger.info(f"Initializing from {self.config.initialize_from}")
             load_checkpoint = True
             checkpoint_path = self.config.initialize_from
+            checkpoint_search_paths = [checkpoint_path]
             if not is_checkpoint_path(checkpoint_path):
                 raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
 
@@ -473,7 +457,7 @@ class Trainer:
 
         state = load_checkpoint_or_initialize(
             init_state_and_model,
-            checkpoint_path,
+            checkpoint_search_paths,
             axis_mapping=self.parameter_axis_mapping,
             mesh=self.device_mesh,
             is_checkpointed=saveable_train_state,
@@ -484,11 +468,12 @@ class Trainer:
         return state
 
     @property
+    def checkpoint_search_paths(self) -> list[str]:
+        return self.config.checkpoint_search_paths(self.run_id)
+
+    @property
     def checkpoint_path(self) -> str:
-        checkpoint_path = self.config.load_checkpoint_path
-        if checkpoint_path is None:
-            checkpoint_path = self.config.checkpointer.expanded_path(self.run_id)
-        return checkpoint_path
+        return self.checkpoint_search_paths[0]
 
     def train_step(self, state: S, *batch: X, **batch_kwargs) -> StepInfo[S]:
         """
@@ -592,10 +577,10 @@ class Trainer:
         return info
 
     def _add_default_hooks(self):
-        from levanter import callbacks
-
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
-        self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
+        self.add_hook(
+            levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
+        )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
 
@@ -608,26 +593,21 @@ class Trainer:
         if self.config.watch.is_enabled:
             self.add_hook(self.config.watch.build(), every=self.config.watch.interval)
 
-        # Add LoRA-debug callback if configured (config, WandbConfig convenience, or env override).
-        if self._lora_debug_enabled():
-            self.add_hook(self.config.lora_debug.build(), every=self.config.lora_debug.interval)
-
         profiler = self.config.profiler
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
         if profiler.is_enabled and total_prof_steps > 0:
             self.add_hook(
-                callbacks.profile(
+                levanter.callbacks.profile(
                     str(self.config.log_dir / self.run_id / "profiler"),
                     profiler.start_step,
                     total_prof_steps,
                     profiler.perfetto_link,
+                    profiler_options=profiler.build_jax_profile_options(),
                 ),
                 every=1,
             )
 
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
-        from levanter import callbacks
-
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
 
         if eval_loader and (self.config.max_eval_batches is None or self.config.max_eval_batches > 0):
@@ -638,7 +618,7 @@ class Trainer:
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
-                callbacks.compute_validation_loss(
+                levanter.callbacks.compute_validation_loss(
                     eval_loss,
                     eval_loader,
                     max_batches=self.config.max_eval_batches,
@@ -706,85 +686,6 @@ class Trainer:
             self.loss_fn, model, *batch, **batch_kwargs, key=key
         )
 
-        # DEBUGSTART — debug_accum_tpu_type Class-B B0.2: LoRA grad perturbation + cast.
-        # Env-gated knobs applied to the final (post-accumulation) gradient tree,
-        # before state.take_step consumes it:
-        #   MARIN_DEBUG_LORA_GRAD_NOISE_STD   — stddev of Gaussian noise
-        #   MARIN_DEBUG_LORA_GRAD_NOISE_STEP  — which step to inject at (int)
-        #   MARIN_DEBUG_LORA_GRAD_NOISE_TARGET ∈ {A, B, both}
-        #   MARIN_DEBUG_LORA_GRAD_CAST ∈ {none, bf16, f32} — cast grad dtype before optimizer
-        # Read at trace time; becomes a compile-time constant in the jit cache.
-        import os as _dbg_os
-
-        _dbg_noise_std = float(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_STD", "0") or "0")
-        _dbg_noise_step = int(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_STEP", "1") or "1")
-        _dbg_noise_target = _dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_TARGET", "B").strip() or "B"
-        _dbg_grad_cast = _dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_CAST", "none").strip() or "none"
-        # Class-C C8: continuous per-step noise. When set, noise applies at every step ≥ 0.
-        _dbg_noise_continuous = int(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_CONTINUOUS", "0") or "0")
-        # Class-C C8 variant: relative noise scaled to grad L2 per-leaf (mimics bf16 fractional rounding).
-        _dbg_noise_rel = float(_dbg_os.environ.get("MARIN_DEBUG_LORA_GRAD_NOISE_RELATIVE", "0") or "0")
-
-        if _dbg_noise_std > 0.0 or _dbg_grad_cast != "none" or _dbg_noise_rel > 0.0:
-            from jax.tree_util import keystr, tree_flatten_with_path, tree_unflatten
-
-            noise_target_keys = {
-                "A": ("lora_A",),
-                "B": ("lora_B",),
-                "both": ("lora_A", "lora_B"),
-            }.get(_dbg_noise_target, ("lora_B",))
-
-            cast_dtype = {"none": None, "bf16": jnp.bfloat16, "f32": jnp.float32}.get(_dbg_grad_cast)
-
-            def _dbg_is_lora_leaf(path_str: str, match_patterns: Tuple[str, ...]) -> bool:
-                return any(p in path_str for p in match_patterns)
-
-            leaves_with_paths, treedef = tree_flatten_with_path(grads, is_leaf=lambda x: isinstance(x, hax.NamedArray))
-            new_leaves = []
-            noise_key = jax.random.fold_in(key, 0xB0B02)
-            for i, (path, leaf) in enumerate(leaves_with_paths):
-                path_str = keystr(path)
-                is_named = isinstance(leaf, hax.NamedArray)
-                arr = leaf.array if is_named else leaf
-                if not (hasattr(arr, "shape") and hasattr(arr, "dtype")):
-                    new_leaves.append(leaf)
-                    continue
-
-                new_arr = arr
-                if _dbg_noise_std > 0.0 and _dbg_is_lora_leaf(path_str, noise_target_keys):
-                    step_folded_key = jax.random.fold_in(noise_key, i)
-                    # Per-step randomness: fold step into key to avoid reusing same noise each step.
-                    step_folded_key = jax.random.fold_in(step_folded_key, state.step)
-                    noise = jax.random.normal(step_folded_key, new_arr.shape, dtype=jnp.float32) * _dbg_noise_std
-                    noise = noise.astype(new_arr.dtype)
-                    if _dbg_noise_continuous:
-                        # All steps ≥ 0.
-                        new_arr = new_arr + noise
-                    else:
-                        at_step = jnp.equal(state.step, _dbg_noise_step)
-                        new_arr = jnp.where(at_step, new_arr + noise, new_arr)
-
-                if _dbg_noise_rel > 0.0 and _dbg_is_lora_leaf(path_str, noise_target_keys):
-                    # Relative noise: scale by per-leaf L2 norm so noise is a fraction of grad magnitude.
-                    step_folded_key = jax.random.fold_in(noise_key, 0x1E1 + i)
-                    step_folded_key = jax.random.fold_in(step_folded_key, state.step)
-                    rel_noise = jax.random.normal(step_folded_key, new_arr.shape, dtype=jnp.float32)
-                    leaf_l2 = jnp.sqrt(jnp.sum(jnp.square(new_arr.astype(jnp.float32))) + 1e-12)
-                    rel_scale = _dbg_noise_rel * leaf_l2 / jnp.sqrt(jnp.asarray(new_arr.size, dtype=jnp.float32))
-                    rel_noise = (rel_noise * rel_scale).astype(new_arr.dtype)
-                    new_arr = new_arr + rel_noise
-
-                if cast_dtype is not None and _dbg_is_lora_leaf(path_str, ("lora_A", "lora_B")):
-                    new_arr = new_arr.astype(cast_dtype)
-
-                if is_named:
-                    new_leaves.append(hax.named(new_arr, leaf.axes))
-                else:
-                    new_leaves.append(new_arr)
-
-            grads = tree_unflatten(treedef, new_leaves)
-        # DEBUGEND
-
         # Some optimizers need to be able to access the loss function
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
@@ -797,145 +698,6 @@ class Trainer:
 
         new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
-
-        # DEBUGSTART — debug_accum_tpu_type experiment J: trace grads/updates/params
-        import os as _dbg_os
-
-        if int(_dbg_os.environ.get("MARIN_DEBUG_LOG_STEP_TRACE", "0")):
-            from levanter.trainer_state import trainables_only as _dbg_trainables_only
-
-            def _dbg_collect_arrays(tree):
-                """Flatten to list of (path_str, jax.Array) for all array leaves."""
-                from jax.tree_util import tree_flatten_with_path, keystr
-
-                leaves_with_paths = tree_flatten_with_path(tree)[0]
-                out = []
-                for path, leaf in leaves_with_paths:
-                    arr = leaf.array if isinstance(leaf, hax.NamedArray) else leaf
-                    if hasattr(arr, "shape") and hasattr(arr, "dtype"):
-                        out.append((keystr(path), arr))
-                return out
-
-            def _dbg_reduce(arrays):
-                if not arrays:
-                    return jnp.float32(0.0), jnp.float32(0.0)
-                l2_sq = sum(jnp.sum(jnp.square(a.astype(jnp.float32))) for _, a in arrays)
-                csum = sum(jnp.sum(a.astype(jnp.float32)) for _, a in arrays)
-                return jnp.sqrt(l2_sq), csum
-
-            _dbg_train_grads = _dbg_trainables_only(grads, state.is_trainable)
-            _dbg_train_updates = _dbg_trainables_only(updates, state.is_trainable)
-            _dbg_train_params = _dbg_trainables_only(new_state.model, state.is_trainable)
-
-            _dbg_g_arrs = _dbg_collect_arrays(_dbg_train_grads)
-            _dbg_u_arrs = _dbg_collect_arrays(_dbg_train_updates)
-            _dbg_p_arrs = _dbg_collect_arrays(_dbg_train_params)
-
-            _dbg_g_l2, _dbg_g_sum = _dbg_reduce(_dbg_g_arrs)
-            _dbg_u_l2, _dbg_u_sum = _dbg_reduce(_dbg_u_arrs)
-            _dbg_p_l2, _dbg_p_sum = _dbg_reduce(_dbg_p_arrs)
-
-            _dbg_ga = [(p, a) for p, a in _dbg_g_arrs if "lora_A" in p]
-            _dbg_gb = [(p, a) for p, a in _dbg_g_arrs if "lora_B" in p]
-            _dbg_pa = [(p, a) for p, a in _dbg_p_arrs if "lora_A" in p]
-            _dbg_pb = [(p, a) for p, a in _dbg_p_arrs if "lora_B" in p]
-
-            _dbg_ga_l2, _dbg_ga_sum = _dbg_reduce(_dbg_ga)
-            _dbg_gb_l2, _dbg_gb_sum = _dbg_reduce(_dbg_gb)
-            _dbg_pa_l2, _dbg_pa_sum = _dbg_reduce(_dbg_pa)
-            _dbg_pb_l2, _dbg_pb_sum = _dbg_reduce(_dbg_pb)
-
-            # sentinel paths (first match each)
-            _dbg_sentinel_patterns = [
-                ("q_proj.lora.lora_A", "q_proj.lora.lora_B"),
-                ("gate_proj.lora.lora_A", "gate_proj.lora.lora_B"),
-                ("o_proj.lora.lora_A", "o_proj.lora.lora_B"),
-            ]
-            _dbg_sentinel_vals = {}
-            for pat_a, pat_b in _dbg_sentinel_patterns:
-                for tag, pat in [("grad_A", pat_a), ("grad_B", pat_b)]:
-                    for p, a in _dbg_g_arrs:
-                        if pat in p:
-                            _dbg_sentinel_vals[f"{tag}@{pat}:l2"] = jnp.sqrt(
-                                jnp.sum(jnp.square(a.astype(jnp.float32)))
-                            )
-                            _dbg_sentinel_vals[f"{tag}@{pat}:sum"] = jnp.sum(a.astype(jnp.float32))
-                            break
-                for tag, pat in [("param_A", pat_a), ("param_B", pat_b)]:
-                    for p, a in _dbg_p_arrs:
-                        if pat in p:
-                            _dbg_sentinel_vals[f"{tag}@{pat}:l2"] = jnp.sqrt(
-                                jnp.sum(jnp.square(a.astype(jnp.float32)))
-                            )
-                            _dbg_sentinel_vals[f"{tag}@{pat}:sum"] = jnp.sum(a.astype(jnp.float32))
-                            break
-
-            jax.debug.print(
-                "DEBUGJ TRACE step={s} loss={l} "
-                "grad_l2={gl} grad_sum={gs} "
-                "upd_l2={ul} upd_sum={us} "
-                "param_l2={pl} param_sum={ps} "
-                "gA_l2={gal} gA_sum={gas} gB_l2={gbl} gB_sum={gbs} "
-                "pA_l2={pal} pA_sum={pas} pB_l2={pbl} pB_sum={pbs}",
-                s=state.step,
-                l=loss,
-                gl=_dbg_g_l2,
-                gs=_dbg_g_sum,
-                ul=_dbg_u_l2,
-                us=_dbg_u_sum,
-                pl=_dbg_p_l2,
-                ps=_dbg_p_sum,
-                gal=_dbg_ga_l2,
-                gas=_dbg_ga_sum,
-                gbl=_dbg_gb_l2,
-                gbs=_dbg_gb_sum,
-                pal=_dbg_pa_l2,
-                pas=_dbg_pa_sum,
-                pbl=_dbg_pb_l2,
-                pbs=_dbg_pb_sum,
-            )
-            for _dbg_k, _dbg_v in _dbg_sentinel_vals.items():
-                jax.debug.print("DEBUGJ SENTINEL step={s} key={k} val={v}", s=state.step, k=_dbg_k, v=_dbg_v)
-
-            # DEBUGSTART — debug_accum_tpu_type Exp Z1: per-element grad slice dump
-            # Goal: compare post-all-reduce gradient values at specific indices
-            # between v5p-8 (data=4) and v6e-8 (data=8) to localize where the
-            # collective-width divergence lives. Prints 5 fixed-index elements
-            # per target LoRA module. Gated by MARIN_DEBUG_DUMP_GRAD_VALUES=1.
-            if int(_dbg_os.environ.get("MARIN_DEBUG_DUMP_GRAD_VALUES", "0")):
-                _dbg_z1_patterns = [
-                    "q_proj.lora.lora_B",  # fully replicated
-                    "k_proj.lora.lora_B",  # fully replicated
-                    "v_proj.lora.lora_B",  # fully replicated
-                    "o_proj.lora.lora_B",  # sharded on data (embed)
-                    "gate_proj.lora.lora_B",  # replicated via model=1
-                    "up_proj.lora.lora_B",  # replicated via model=1
-                    "down_proj.lora.lora_B",  # sharded on data (embed)
-                ]
-                for _dbg_z1_pat in _dbg_z1_patterns:
-                    for _dbg_z1_p, _dbg_z1_a in _dbg_g_arrs:
-                        if _dbg_z1_pat in _dbg_z1_p:
-                            _dbg_z1_flat = _dbg_z1_a.reshape(-1).astype(jnp.float32)
-                            _dbg_z1_n = int(_dbg_z1_flat.shape[0])
-                            _dbg_z1_idxs = [
-                                0,
-                                _dbg_z1_n // 4,
-                                _dbg_z1_n // 2,
-                                3 * _dbg_z1_n // 4,
-                                _dbg_z1_n - 1,
-                            ]
-                            for _dbg_z1_i in _dbg_z1_idxs:
-                                jax.debug.print(
-                                    "DEBUGJ GRAD_VAL step={s} path={p} n={n} idx={i} val={v}",
-                                    s=state.step,
-                                    p=_dbg_z1_pat,
-                                    n=_dbg_z1_n,
-                                    i=_dbg_z1_i,
-                                    v=_dbg_z1_flat[_dbg_z1_i],
-                                )
-                            break
-            # DEBUGEND Z1
-        # DEBUGEND
 
         hook_infos = None
         if not _no_hooks:
@@ -990,11 +752,9 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            with open_url(str(artifact_path), "w", compression="infer") as f:
-                f.write(artifact)
+            StoragePath(str(artifact_path)).write_text(artifact, compression="infer")
         else:
-            with open_url(str(artifact_path), "wb", compression="infer") as f:
-                f.write(artifact)
+            StoragePath(str(artifact_path)).write_bytes(artifact, compression="infer")
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 
@@ -1045,11 +805,6 @@ class TrainerConfig:
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
-    lora_debug: LoraDebugConfig = field(default_factory=LoraDebugConfig)
-    """LoRA-debug instrumentation. When enabled, publishes per-LoRA-module
-    gradient/parameter/update/delta_W/Adam/sentinel stats to W&B every step
-    (see ``levanter.callbacks.lora_debug``). Intended for the Bug-1 DPO LoRA
-    topology investigation. Off by default."""
     profiler: ProfilerConfig = ProfilerConfig()
 
     log_jaxprs: bool = True
@@ -1099,6 +854,17 @@ class TrainerConfig:
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
     load_checkpoint_path: Optional[str] = None
     """can be a parent (to find latest) or a specific checkpoint. if None, will set to checkpointer.base_path."""
+
+    def checkpoint_search_paths(self, run_id: str) -> list[str]:
+        if self.load_checkpoint_path is not None:
+            return [self.load_checkpoint_path]
+
+        paths = [self.checkpointer.expanded_path(run_id)]
+        temp_path = self.checkpointer.expanded_temporary_path(run_id)
+        if temp_path is not None:
+            paths.append(temp_path)
+        return paths
+
     initialize_from: Optional[str] = None  # Levanter trainer checkpoint to initialize from
     """Load and continue training from a checkpoint. If None, will initialize from model_init."""
     allow_partial_checkpoint: bool = False
@@ -1111,7 +877,6 @@ class TrainerConfig:
     jax_compilation_cache_dir: Optional[str] = None
 
     distributed: DistributedConfig = DistributedConfig()
-    ray: RayConfig = field(default_factory=RayConfig)
 
     # whether or not to require an accelerator (e.g. TPU or GPU).
     # default depends on the platform: on macos False, else True
@@ -1163,8 +928,7 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
-
-        self.ray.initialize()
+        levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")
@@ -1186,22 +950,7 @@ class TrainerConfig:
         if self.use_explicit_mesh_axes:
             axis_names = list(ici.keys()) + [k for k in dcn.keys() if k not in ici]
             axis_types = tuple(AxisType.Explicit for _ in axis_names)
-        devices = None
-        if self.mesh.device_permutation is not None:
-            permutation = tuple(self.mesh.device_permutation)
-            devices = list(jax.devices())
-            if sorted(permutation) != list(range(len(devices))):
-                raise ValueError(
-                    f"device_permutation must be a permutation of 0..{len(devices) - 1}, got {permutation}"
-                )
-            devices = [devices[i] for i in permutation]
-        return create_mesh_from_axis_specs(
-            ici_axes=ici,
-            dcn_axes=dcn,
-            devices=devices,
-            axis_types=axis_types,
-            preserve_device_order=self.mesh.preserve_device_order,
-        )
+        return create_mesh_from_axis_specs(ici_axes=ici, dcn_axes=dcn, axis_types=axis_types)
 
     def use_device_mesh(self) -> ContextManager[None]:
         """

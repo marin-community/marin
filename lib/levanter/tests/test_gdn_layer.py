@@ -1,12 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
+import haliax as hax
 import jax
 import jax.numpy as jnp
-import haliax as hax
-from haliax import Axis
+import numpy as np
 import pytest
+from haliax import Axis
 
 from levanter.layers.gated_deltanet import (
     GatedDeltaNet,
@@ -14,7 +14,7 @@ from levanter.layers.gated_deltanet import (
     _causal_depthwise_conv1d_full,
     _causal_depthwise_conv1d_update,
 )
-from tests.test_utils import skip_if_no_torch
+from test_utils import skip_if_no_torch
 
 jax.config.update("jax_default_matmul_precision", "float32")
 
@@ -26,8 +26,8 @@ def _np(x):
 def _init_small_hf_layer(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4):
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
-    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextGatedDeltaNet
+    from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig  # noqa: PLC0415
+    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextGatedDeltaNet  # noqa: PLC0415
 
     cfg = Qwen3NextConfig(
         hidden_size=hidden_size,
@@ -47,8 +47,8 @@ def _init_small_hf_layer(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4):
 def _init_small_hf_layer_with_linear_only(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4):
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
-    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextGatedDeltaNet
+    from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig  # noqa: PLC0415
+    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextGatedDeltaNet  # noqa: PLC0415
 
     cfg = Qwen3NextConfig(
         hidden_size=hidden_size,
@@ -230,7 +230,7 @@ def test_layer_gradients_exist():
 
 @skip_if_no_torch
 def test_gdn_layer_matches_hf_prefill():
-    import torch  # local import for environments without torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     def _to_torch(x):
         return torch.from_numpy(np.array(x))
@@ -292,8 +292,8 @@ def test_gdn_layer_decode_matches_hf_one_step():
     Prefill to build state, then decode one token using the recurrent path in both Levanter and HF.
     Ensures conv-state length K and S-state handoff are correct and parity holds.
     """
-    import torch
-    from transformers.models.qwen3_next.modular_qwen3_next import Qwen3NextDynamicCache
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.qwen3_next.modular_qwen3_next import DynamicCache  # noqa: PLC0415
 
     hidden_size, nk, nv, dk, dv, ksz = 128, 4, 8, 8, 8, 4
     hf_cfg, hf_layer = _init_small_hf_layer_with_linear_only(hidden_size, nk, nv, dk, dv, ksz)
@@ -330,11 +330,11 @@ def test_gdn_layer_decode_matches_hf_one_step():
     assert new_state2 is not None, "expected state tuple for decode step"
 
     # ---------- HF prefill with cache ----------
-    cache = Qwen3NextDynamicCache(hf_cfg)
+    cache = DynamicCache(config=hf_cfg)
     with torch.no_grad():
         x_t = torch.from_numpy(np.array(x_full))
         _ = hf_layer(hidden_states=x_t, cache_params=cache, cache_position=torch.arange(L))
-        assert cache.conv_states[0] is not None and cache.recurrent_states[0] is not None
+        assert cache.layers[0].conv_states is not None and cache.layers[0].recurrent_states is not None
 
     # ---------- HF decode one token ----------
     with torch.no_grad():
@@ -381,7 +381,7 @@ def test_ratio_equal_one_and_greater_than_one():
     Exercise both ratio paths: nv == nk and nv > nk (repeat-interleave of Q/K).
     Run prefill parity vs HF in both cases.
     """
-    import torch
+    import torch  # noqa: PLC0415  # optional dep: torch
 
     for nk, nv in [(4, 4), (4, 8)]:
         hidden_size, dk, dv, ksz = 96, 8, 8, 4

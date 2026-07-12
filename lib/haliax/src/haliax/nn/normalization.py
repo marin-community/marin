@@ -13,11 +13,11 @@ from jax import numpy as jnp
 import haliax
 import haliax as hax
 
-from .._src.state_dict import Mod, ModuleWithStateDictSerialization
-from ..axis import AxisSelection, AxisSpec
-from ..core import NamedArray
-from ..types import Scalar
-from ..wrap import unwrap_namedarrays, wrap_axiswise_call, wrap_reduction_call
+from haliax._src.state_dict import Mod, ModuleWithStateDictSerialization
+from haliax.axis import AxisSelection, AxisSpec
+from haliax.core import NamedArray
+from haliax.types import Scalar
+from haliax.wrap import unwrap_namedarrays, wrap_axiswise_call, wrap_reduction_call
 
 A = TypeVar("A", Scalar, NamedArray, jnp.ndarray)
 
@@ -127,14 +127,6 @@ class RmsNorm(LayerNormBase):
     def __call__(self, x: NamedArray) -> NamedArray:
         in_dtype = x.dtype
         x = x.astype(self.dtype)
-        # DEBUGSTART — CD probe: force RmsNorm internal to bf16 under c=f32.
-        # Simulates c=bf16's per-op rounding inside RmsNorm's mean/square/rsqrt.
-        import os as _dbg_os
-        import jax.numpy as _dbg_jnp
-
-        if _dbg_os.environ.get("MARIN_DEBUG_NORM_INTERNAL_BF16", "0") == "1":
-            x = x.astype(_dbg_jnp.bfloat16)
-        # DEBUGEND
         var = hax.mean(hax.square(x), axis=self.axis)
         inv = hax.rsqrt(var + self.eps)
         out = x * inv
@@ -144,14 +136,6 @@ class RmsNorm(LayerNormBase):
             out = self.weight.astype(out.dtype) * out
         if self.bias is not None:
             out = out + self.bias.astype(out.dtype)
-        # DEBUGSTART — debug_accum_tpu_type C4 probe: round RmsNorm outputs to bf16.
-        # Complements the Linear-output rounding in linear.py. Gated by env var.
-        import os as _dbg_os
-
-        if _dbg_os.environ.get("MARIN_DEBUG_ROUND_NORM_OUT", "0") == "1":
-            orig_dtype = out.dtype
-            out = out.astype(jnp.bfloat16).astype(orig_dtype)
-        # DEBUGEND
         return out
 
 
@@ -182,8 +166,10 @@ def standardize(
 ) -> NamedArray:
     """Analogous to [jax.nn.standardize][], but with support for NamedArrays."""
     x, mean, variance, where = haliax.broadcast_arrays(x, mean, variance, where)  # type: ignore
-    raw_x, mean, variance, where = unwrap_namedarrays(x, mean, variance, where)
+    raw_x, raw_mean, raw_variance, raw_where = unwrap_namedarrays(x, mean, variance, where)
     axis_indices = x.axis_indices(axis)
 
-    plain = jnn.standardize(raw_x, axis_indices, mean=mean, variance=variance, epsilon=epsilon, where=where)
+    plain = jnn.standardize(
+        raw_x, axis_indices, mean=raw_mean, variance=raw_variance, epsilon=epsilon, where=raw_where
+    )
     return NamedArray(plain, x.axes)

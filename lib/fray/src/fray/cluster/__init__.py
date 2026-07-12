@@ -1,13 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""fray.cluster now re-exports v2 types.
+"""fray.cluster re-exports resource/job types for back-compat."""
 
-For v1 cluster APIs (Cluster, current_cluster, create_cluster, etc.),
-use ``fray.v1.cluster`` instead.
-"""
-
-from fray.v2.types import (
+from fray.types import (
+    ANY_REGION,
     CpuConfig,
     DeviceConfig,
     DeviceKind,
@@ -26,6 +23,7 @@ from fray.v2.types import (
 )
 
 __all__ = [
+    "ANY_REGION",
     "CpuConfig",
     "DeviceConfig",
     "DeviceKind",

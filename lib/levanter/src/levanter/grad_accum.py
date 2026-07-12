@@ -1,12 +1,12 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import enum
 import functools
-from typing import Callable, Optional, ParamSpec, TypeVar
+from typing import Any, Callable, Optional, ParamSpec, TypeVar, cast
 
 import equinox as eqx
 import haliax as hax
+import haliax.quantization as hq
 import jax
 import jax.numpy as jnp
 from haliax import Axis
@@ -23,12 +23,6 @@ Args = ParamSpec("Args")
 R = TypeVar("R")
 
 
-class ReductionType(enum.Enum):
-    SUM = enum.auto()
-    MEAN = enum.auto()
-    # TODO: add MAX?
-
-
 # TODO: should we use a custom_jvp on microbatched?
 
 
@@ -40,29 +34,24 @@ def microbatched(
     accum_axis_mapping,
     compute_axis_mapping,
     patch_in_rng_key: Optional[str] = "key",
-    reduce: ReductionType = ReductionType.MEAN,
     accum_dtype: Optional[jnp.dtype] = None,
 ) -> Callable[Args, R]:
     """
-    Wraps a function that takes a batch and changes it to instead take microbatches and accumulate the results
-    This function has to reduce the batch axis, so it can't be used for functions that need to keep the batch axis.
+    Wraps a gradient-and-loss function so it runs over microbatches and accumulates the results.
 
-    Can be used as a decorator with functools.partial, e.g.:
-
-    >>> @functools.partial(microbatched, Batch=Batch, per_device_parallelism=4)
-    >>> def my_fn(x):
-    >>>     return hax.mean(x + 1)
-
+    ``fn`` must return ``((loss, metrics), grads)`` (i.e. the output of
+    ``eqx.filter_value_and_grad(loss_fn, has_aux=True)`` where ``loss_fn`` returns
+    ``(loss, metrics)``). The batch axis is split into microbatches; the loss and grads are summed
+    then averaged over the microbatches, while ``metrics`` are folded with their own reductions.
 
     Args:
-        fn: a function to wrap
-        Batch: the batch axis
-        per_device_parallelism: how many examples to process at once on each device
+        fn: the value-and-grad function to wrap.
+        Batch: the batch axis.
+        microbatch_size: how many examples to process at once (must divide the batch size).
         accum_axis_mapping:  the axis mapping for the accumulator (typically this is the same as the params)
         compute_axis_mapping:  the axis mapping for the computation (typically this is the same as the inputs)
         patch_in_rng_key: if provided, this kwarg will be split, 1 for each accum step. It won't work if the
             PRNGKey is passed in as a positional argument.
-        reduce: whether to sum or average the results
         accum_dtype: the dtype of floating point values in the accumulator. If None, this will be inferred from the return type of `fn`.
 
     Returns:
@@ -97,9 +86,6 @@ def microbatched(
             f"Got batch size {batch_size} and microbatch_size {microbatch_size}."
         )
 
-    if reduce not in ReductionType:
-        raise ValueError(f"accum_type must be one of {ReductionType}")
-
     @functools.wraps(fn)
     def wrapped_fn(*args, **kwargs):
 
@@ -124,7 +110,7 @@ def microbatched(
                 microbatch_kwargs = microbatch_kwargs.copy()
                 if key is not None:
                     microbatch_kwargs[patch_in_rng_key] = key
-                this_r = fn(*microbatch, **microbatch_kwargs)
+                this_r = cast(tuple[tuple[Any, Any], Any], fn(*microbatch, **microbatch_kwargs))
 
             with jax.named_scope("accum"):
                 # Unpack structure: ((loss, metrics_dict), grads)
@@ -142,8 +128,6 @@ def microbatched(
                 )
 
                 # Accumulate gradients with quantization
-                import haliax.quantization as hq
-
                 # TODO: this uses the latest value for the scale for fp8, which seems not ideal but probably ok?
                 overwrites, updates = hq.partition_for_grad_overwrite(this_grads)
                 new_grads = hq.apply_updates(acc_grads, updates, overwrites)
@@ -157,15 +141,13 @@ def microbatched(
         with jax.named_scope("microbatched"):
             acc = hax.fold(loop, AccumStep)(acc, (args, kwargs, key))
 
-            if reduce == ReductionType.MEAN:
-                # Unpack, divide loss and grads, repack
-                # Metrics handle their own reduction internally
-                (loss, metrics), grads = acc
-                loss = loss / num_micro_steps
-                grads = jax.tree_util.tree_map(lambda x: x / num_micro_steps, grads)
-                acc = ((loss, metrics), grads)
+            # Average loss and grads over microbatches. Metrics handle their own reduction internally.
+            (loss, metrics), grads = acc
+            loss = loss / num_micro_steps
+            grads = jax.tree_util.tree_map(lambda x: x / num_micro_steps, grads)
+            acc = ((loss, metrics), grads)
 
-        return acc
+        return cast(R, acc)
 
     return wrapped_fn
 

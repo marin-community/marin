@@ -3,13 +3,12 @@
 
 """Scale-up planning helpers built on top of routed demand."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
+
+from rigging.timing import Timestamp
 
 from iris.cluster.controller.autoscaler.models import RoutingDecision, ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
-from rigging.timing import Timestamp
 
 
 @dataclass(frozen=True)
@@ -20,10 +19,9 @@ class GroupSliceCounts:
     requesting: int
     pending: int
     total: int
-    capacity_slices: int
 
     @classmethod
-    def from_group(cls, group: ScalingGroup) -> GroupSliceCounts:
+    def from_group(cls, group: ScalingGroup) -> "GroupSliceCounts":
         counts = group.slice_state_counts()
         requesting = counts[SliceLifecycleState.REQUESTING]
         pending = counts[SliceLifecycleState.BOOTING] + counts[SliceLifecycleState.INITIALIZING] + requesting
@@ -34,7 +32,6 @@ class GroupSliceCounts:
             requesting=requesting,
             pending=pending,
             total=total,
-            capacity_slices=ready + pending,
         )
 
 
@@ -92,7 +89,11 @@ class ScalePlan:
 
 
 def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timestamp) -> GroupScalePlan:
-    """Build the actionable scale-up plan for a group."""
+    """Build a scale-up plan for one group.
+
+    ``slices_to_add`` is the desired launch count for this tick before any
+    rate-limiting. Token-bucket throttling is applied at execution time.
+    """
 
     counts = GroupSliceCounts.from_group(group)
     target_slices = min(required_slices + group.buffer_slices, group.max_slices)
@@ -104,7 +105,8 @@ def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timest
     if slices_needed > 0 and counts.total < group.max_slices:
         blocked = not group.can_scale_up(ts)
         if not blocked:
-            slices_to_add = min(slices_needed, group.max_slices - counts.total)
+            headroom = group.max_slices - counts.total
+            slices_to_add = min(slices_needed, headroom)
 
     return GroupScalePlan(
         group=group.name,

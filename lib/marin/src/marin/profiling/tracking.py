@@ -3,16 +3,14 @@
 
 """Regression tracking utilities for profile-summary before/after loops."""
 
-from __future__ import annotations
-
 import json
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from marin.profiling.query import compare_profile_summaries
+from marin.profiling.query import compare_profile_summaries, pct_delta
 from marin.profiling.schema import ProfileSummary
 
 
@@ -53,8 +51,8 @@ def assess_profile_regression(
     p90_before = _as_float(step_time.get("steady_state_p90_before"))
     p90_after = _as_float(step_time.get("steady_state_p90_after"))
 
-    median_regression_pct = _pct_delta(median_before, median_after)
-    p90_regression_pct = _pct_delta(p90_before, p90_after)
+    median_regression_pct = pct_delta(median_before, median_after)
+    p90_regression_pct = pct_delta(p90_before, p90_after)
 
     time_breakdown_delta = comparison["time_breakdown_share_delta"]
     comm_share_delta = _as_float(time_breakdown_delta.get("communication"))
@@ -117,7 +115,7 @@ def make_regression_record(
 ) -> dict[str, Any]:
     """Create a JSON-serializable regression record for history tracking."""
     return {
-        "recorded_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "recorded_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "label": label,
         "before": {
             "source_path": before.source_path,
@@ -205,11 +203,3 @@ def _as_float(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
-
-
-def _pct_delta(before: float | None, after: float | None) -> float | None:
-    if before is None or after is None:
-        return None
-    if before <= 0:
-        return None
-    return ((after - before) / before) * 100.0

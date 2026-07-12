@@ -14,22 +14,14 @@ The race (before fix):
 Fix: _check_worker_group skips when all shards are completed.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from unittest.mock import MagicMock
 
-import pytest
-from zephyr.execution import CounterSnapshot, ListShard, ShardTask, TaskResult, ZephyrCoordinator
-
-
-@pytest.fixture
-def coordinator(actor_context, tmp_path):
-    coord = ZephyrCoordinator()
-    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    yield coord
-    coord.shutdown()
+from conftest import _TEST_TASK_COST
+from zephyr.shuffle import ListShard
+from zephyr.stage_io import ShardTask, TaskResult
+from zephyr.worker_context import CounterSnapshot
 
 
 def test_check_worker_group_skips_after_completed_stage(coordinator):
@@ -38,8 +30,15 @@ def test_check_worker_group_skips_after_completed_stage(coordinator):
     mock_group.is_done.return_value = True
     coordinator.set_worker_group(mock_group)
 
-    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
-    coordinator.start_stage("last-stage", [task], is_last_stage=True)
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
+    coordinator._start_stage("last-stage", 0, [task])
     coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     assert coordinator._completed_shards >= coordinator._total_shards
@@ -55,8 +54,15 @@ def test_check_worker_group_still_aborts_mid_stage(coordinator):
     mock_group.is_done.return_value = True
     coordinator.set_worker_group(mock_group)
 
-    task = ShardTask(shard_idx=0, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
-    coordinator.start_stage("mid-stage", [task, task], is_last_stage=False)
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=2,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
+    coordinator._start_stage("mid-stage", 0, [task, task])
     # Only 1 of 2 shards completed
     coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
@@ -79,8 +85,15 @@ def test_coordinator_loop_no_abort_during_result_collection(coordinator):
     mock_group.is_done.side_effect = is_done_with_delay
     coordinator.set_worker_group(mock_group)
 
-    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
-    coordinator.start_stage("last-stage", [task], is_last_stage=True)
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
+    coordinator._start_stage("last-stage", 0, [task])
     coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     t = threading.Thread(target=coordinator._coordinator_loop, daemon=True)

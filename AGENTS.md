@@ -36,19 +36,33 @@ favor of ad-hoc commands.
 # Type checking (also done by pre-commit.py)
 uv run pyrefly
 - Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+
+# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
+./infra/pre-commit.py --review
+- Always run this before opening a PR, and always fix or respond to every
+  finding it reports (see the `commit` skill).
 ```
 
-- Python >=3.11. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce a Ray or Iris cluster unless the user gives express permission.
+- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits
 
 - NEVER SAY "You're absolutely right!"
-- NEVER credit yourself in commits.
+- NEVER credit yourself, in commit messages or in PR/issue bodies. No
+  `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
+  even if a tool default suggests one.
 - When an agent creates a PR or issue, add the `agent-generated` label.
-- Agent comments on PRs/issues must begin with `🤖` unless the exact text was explicitly approved by the user.
+- Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
+  explicitly approved by the user. This applies to comments only — never put a
+  `🤖` marker in a commit message or a PR/issue body.
+- A PR description is the squash-merge commit message: lead with what the change
+  does, no template scaffold (no `Problem`/`Fix`/`Summary`/`Changes` headings),
+  no "Testing"/"Verification" section. Use markdown only when it makes the change
+  clearer for a human, never as boilerplate. Follow the `commit` skill
+  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
@@ -143,12 +157,12 @@ Dependency direction: {`iris`, `haliax`} → {`levanter`, `zephyr`} → `marin`.
 
 ## Testing
 
-- Always fix tests you broke. Do not relax tolerances or hack around failures.
-- Prefer integration-style tests that validate externally-observable behavior.
-- Do not write tautological tests: tests must fail if behavior is wrong, not just if implementation changes.
-- Use pytest fixtures and parameterization to avoid duplication.
-- Prefer top-level `def test_*` with fixtures over test classes.
-- Search for existing test files before creating new ones. Extend existing files first.
-- No mocks unless testing I/O boundaries (network, filesystem). Test against real behavior.
-- No `time.sleep()` in tests — inject `now=time.time()` or mock time instead.
-- Mock at boundaries (e.g., wandb), not internal logger output.
+Read `TESTING.md` before writing or reviewing tests. It is the root testing
+policy for behavior-focused tests, slop-test rejection, mocks/fakes, timing,
+numerical tolerances, and pytest style.
+
+Before touching tests under `lib/*`, also read the nearest module `AGENTS.md`
+and any module `TESTING.md` it references. Module docs define local commands,
+markers, fakes, mocks, optional dependencies, and integration-test boundaries.
+
+Always fix tests you broke. Do not relax tolerances or hack around failures.

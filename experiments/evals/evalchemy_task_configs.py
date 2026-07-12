@@ -39,6 +39,7 @@ __all__ = [
     "MATH500",
     "MBPP_PLUS",
     "OLYMPIADBENCH",
+    "OLYMPIADBENCH_PHYSICS",
 ]
 
 # =============================================================================
@@ -82,6 +83,9 @@ CODEELO = EvalTaskConfig(name="CodeElo", num_fewshot=0, task_alias="CodeElo", ta
 # =============================================================================
 GPQA_DIAMOND = EvalTaskConfig(name="GPQADiamond", num_fewshot=0, task_alias="GPQADiamond", task_kwargs={"n_repeat": 1})
 JEEBENCH = EvalTaskConfig(name="JEEBench", num_fewshot=0, task_alias="JEEBench", task_kwargs={"n_repeat": 1})
+OLYMPIADBENCH_PHYSICS = EvalTaskConfig(
+    name="OlympiadBench_Physics", num_fewshot=0, task_alias="OlympiadBench_Physics", task_kwargs={"n_repeat": 1}
+)
 
 # =============================================================================
 # Reasoning tasks

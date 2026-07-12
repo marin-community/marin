@@ -10,7 +10,10 @@ DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
 ROOT_DIR = DOCS_DIR.parent
 
 LINK_RE = re.compile(r"\]\(([^)]+)\)")
-GITHUB_RE = re.compile(r"https://github\.com/marin-community/marin/(blob|tree)/[^/]+/(?P<path>.+)")
+GITHUB_RE = re.compile(r"https://github\.com/marin-community/marin/(blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)")
+# A commit-pinned ref (full or abbreviated SHA) names an immutable snapshot, so its
+# target may legitimately no longer exist at HEAD; only branch/tag links must resolve.
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def _normalize_url(url: str) -> str:
@@ -35,6 +38,9 @@ def _check_docs() -> list[str]:
             url = _normalize_url(match.group(1))
             gh_match = GITHUB_RE.match(url)
             if not gh_match:
+                continue
+
+            if SHA_RE.match(gh_match.group("ref")):
                 continue
 
             rel_path = gh_match.group("path")

@@ -62,6 +62,11 @@ class Gpt2Config(HFCompatConfig):
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
 
+    # Tokenizer for the HF checkpoint converter. When set (e.g. to a local directory), the converter
+    # loads it instead of fetching the reference tokenizer from HF Hub — mirrors the other model
+    # configs and lets from-scratch training/export run without Hub access.
+    tokenizer: Optional[str] = None
+
     # Axes
     @property
     def Embed(self) -> Axis:
@@ -77,8 +82,17 @@ class Gpt2Config(HFCompatConfig):
         return Gpt2LMHeadModel
 
     def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["Gpt2Config"]:  # type: ignore
-        # We trust this code because it's in our hub repo
-        return HFCheckpointConverter(self.__class__, reference_checkpoint="gpt2", ignore_prefix="transformer")
+        # Pass HfConfigClass explicitly: GPT2 maps to a built-in transformers config, so there is no
+        # need to infer it by fetching the reference checkpoint from HF Hub. Honor a configured
+        # tokenizer (e.g. a local directory) like the other configs so from-scratch training/export
+        # never requires Hub access.
+        return HFCheckpointConverter(
+            self.__class__,
+            reference_checkpoint=ref_checkpoint or "gpt2",
+            HfConfigClass=HfGpt2Config,
+            tokenizer=ref_checkpoint if self.tokenizer is None else self.tokenizer,
+            ignore_prefix="transformer",
+        )
 
     def to_hf_config(self, vocab_size, config_overrides=None) -> HfGpt2Config:
         if config_overrides is None:

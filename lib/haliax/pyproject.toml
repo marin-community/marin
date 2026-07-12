@@ -11,7 +11,7 @@ authors = [
 ]
 description = "Named Tensors for Legible Deep Learning in JAX"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
@@ -21,7 +21,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-     "jax >= 0.8.0",
+    "jax >= 0.9.2",
     "equinox>=0.10.6",
     "jaxtyping>=0.2.20",
     "jmp>=0.0.4",
@@ -32,8 +32,14 @@ dynamic =[ "version" ]
 
 
 [dependency-groups]
-dev = [
+test = [
     "pytest >= 7.4.0",
+    "pytest-xdist",
+    "chex>=0.1.86",
+    "safetensors>=0.4.3",
+]
+dev = [
+    { include-group = "test" },
     "mypy >= 0.910",
     "mkdocs >= 1.4.3",
     "mkdocs-material >= 7.3.3",
@@ -44,11 +50,14 @@ dev = [
     "mkdocs-include-markdown-plugin",
     "pymdown-extensions",
     "pygments",
-    "chex>=0.1.86",
-    "safetensors>=0.4.3",
     "pre-commit",
 ]
 
+
+[tool.pytest.ini_options]
+addopts = "-n auto --import-mode=importlib"
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
 
 [tool.hatch.version]
 path = "src/haliax/__about__.py"
@@ -66,7 +75,7 @@ haliax = ["src/haliax/*"]
 
 [tool.black]
 line-length = 119
-target-version = ["py311"]
+target-version = ["py312"]
 preview = true
 
 [tool.isort]
@@ -86,7 +95,17 @@ src_paths = ["src", "tests"]
 "Documentation" = "https://haliax.readthedocs.io/en/latest/"
 
 [tool.ruff.lint]
+# Mirror the root config's extra rules on top of ruff's default E/F set so they
+# apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
+# local-import hygiene pair TID252 (absolute over parent-relative imports) and
+# ICN001 (conventional import aliases, e.g. `import numpy as np`).
+extend-select = ["PLC0415", "TID252", "ICN001"]
 ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook cells legitimately interleave imports with computation as they are
+# executed top-to-bottom; PLC0415's top-of-file rule does not apply to cells.
+"*.ipynb" = ["PLC0415"]
 
 [tool.setuptools.package-data]
 "haliax" = ["*.pyi"]

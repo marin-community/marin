@@ -1,7 +1,10 @@
 data:
   tokenizer: NousResearch/Llama-2-7b-hf
   cache_dir: gs://levanter-data/new-tokenized/pile_mix/
-  shuffle: 10000
+  shuffle:
+    io_block_size: 256
+    window_blocks: 512
+    perm_type: feistel
   train_weights:
     pile_cc: 0.1811
     pubmed_central: 0.144

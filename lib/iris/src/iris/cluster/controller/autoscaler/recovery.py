@@ -3,10 +3,11 @@
 
 """Autoscaler checkpoint restore helpers."""
 
-from __future__ import annotations
-
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
+
+from sqlalchemy import select
 
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
@@ -16,9 +17,11 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import _decode_json_list, decode_timestamp_ms
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import SliceHandle
+from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
+from iris.cluster.platforms.protocols import WorkerInfraProvider
+from iris.cluster.platforms.types import CloudSliceState, SliceHandle
+
+_LIVE_CLOUD_STATES = frozenset({CloudSliceState.CREATING, CloudSliceState.READY, CloudSliceState.REPAIRING})
 
 logger = logging.getLogger(__name__)
 
@@ -32,34 +35,42 @@ class AutoscalerCheckpoint:
 
 
 def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
-    """Load autoscaler state from the controller DB."""
+    """Load autoscaler state from the controller DB.
 
-    with db.read_snapshot() as snapshot:
-        scaling_rows = snapshot.raw(
-            "SELECT name, consecutive_failures, backoff_until_ms, last_scale_up_ms, "
-            "last_scale_down_ms, quota_exceeded_until_ms, quota_reason "
-            "FROM scaling_groups",
-            decoders={
-                "consecutive_failures": int,
-                "backoff_until_ms": decode_timestamp_ms,
-                "last_scale_up_ms": decode_timestamp_ms,
-                "last_scale_down_ms": decode_timestamp_ms,
-                "quota_exceeded_until_ms": decode_timestamp_ms,
-            },
-        )
-        slice_rows = snapshot.raw(
-            "SELECT slice_id, scale_group, lifecycle, worker_ids, "
-            "created_at_ms, last_active_ms, error_message "
-            "FROM slices",
-            decoders={
-                "worker_ids": _decode_json_list,
-                "created_at_ms": decode_timestamp_ms,
-                "last_active_ms": decode_timestamp_ms,
-            },
-        )
-        tracked_rows = snapshot.raw(
-            "SELECT worker_id, slice_id, scale_group, address FROM workers WHERE slice_id != '' AND active = 1",
-        )
+    Backoff/churn state is no longer persisted (it lives in the in-memory
+    :class:`BackoffDetector`), so we only restore slice membership and
+    informational scale timestamps from the DB.
+    """
+    with db.read_snapshot() as tx:
+        scaling_rows = tx.execute(
+            select(
+                scaling_groups_table.c.name,
+                scaling_groups_table.c.last_scale_up_ms,
+                scaling_groups_table.c.last_scale_down_ms,
+            )
+        ).all()
+
+        slice_rows = tx.execute(
+            select(
+                slices_table.c.slice_id,
+                slices_table.c.scale_group,
+                slices_table.c.lifecycle,
+                slices_table.c.worker_ids,
+                slices_table.c.created_at_ms,
+                slices_table.c.error_message,
+            )
+        ).all()
+
+        # Failed workers have their DB row deleted (writes.workers.remove_worker), so
+        # surviving rows with a slice are by definition the live tracked set.
+        tracked_rows = tx.execute(
+            select(
+                workers_table.c.worker_id,
+                workers_table.c.slice_id,
+                workers_table.c.scale_group,
+                workers_table.c.address,
+            ).where(workers_table.c.slice_id != "")
+        ).all()
 
     slices_by_group: dict[str, list[SliceSnapshot]] = {}
     for row in slice_rows:
@@ -69,8 +80,7 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
                 scale_group=row.scale_group,
                 lifecycle=row.lifecycle,
                 worker_ids=row.worker_ids,
-                created_at_ms=row.created_at_ms.epoch_ms(),
-                last_active_ms=row.last_active_ms.epoch_ms(),
+                created_at_ms=int(row.created_at_ms),
                 error_message=row.error_message,
             )
         )
@@ -80,20 +90,16 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
         group_snapshots[row.name] = GroupSnapshot(
             name=row.name,
             slices=slices_by_group.get(row.name, []),
-            consecutive_failures=row.consecutive_failures,
-            backoff_until_ms=row.backoff_until_ms.epoch_ms(),
-            last_scale_up_ms=row.last_scale_up_ms.epoch_ms(),
-            last_scale_down_ms=row.last_scale_down_ms.epoch_ms(),
-            quota_exceeded_until_ms=row.quota_exceeded_until_ms.epoch_ms(),
-            quota_reason=row.quota_reason,
+            last_scale_up_ms=int(row.last_scale_up_ms),
+            last_scale_down_ms=int(row.last_scale_down_ms),
         )
 
     tracked_worker_rows = [
         TrackedWorkerRow(
-            worker_id=row.worker_id,
+            worker_id=str(row.worker_id),
             slice_id=row.slice_id,
             scale_group=row.scale_group,
-            address=row.address,
+            address=str(row.address),
         )
         for row in tracked_rows
     ]
@@ -104,35 +110,79 @@ def restore_autoscaler_state(
     groups: dict[str, ScalingGroup],
     checkpoint: AutoscalerCheckpoint,
     platform: WorkerInfraProvider,
+    make_draining_group: Callable[[str], ScalingGroup] | None = None,
 ) -> dict[str, TrackedWorker]:
-    """Restore scaling groups and tracked workers from a checkpoint."""
+    """Restore scaling groups and tracked workers from a checkpoint.
 
-    all_cloud_slices = platform.list_all_slices()
+    Live cloud slices are the source of truth. Each is restored into its scale
+    group:
+
+    - **Configured group** (still in ``marin.yaml``): restored normally and the
+      autoscaler keeps scaling it up and down.
+    - **Retired group with live VMs** (renamed/removed from config): adopted as a
+      *draining* group via ``make_draining_group`` — a scale-to-zero group that
+      never creates new slices but lets the normal idle scaledown reclaim its
+      slices once their workers go idle. Running tasks are never killed; once a
+      slice is reclaimed its row is deleted like any other.
+    - **Retired group with no live VMs**: nothing to adopt; its leftover slice
+      rows are orphan bookkeeping reaped by the pruner's orphan-slice sweep
+      (``pruner.find_prunable_slice``).
+    """
+
     cloud_by_group: dict[str, list[SliceHandle]] = {}
-    for handle in all_cloud_slices:
-        cloud_by_group.setdefault(handle.scale_group, []).append(handle)
+    for listed in platform.list_all_slices():
+        if listed.state not in _LIVE_CLOUD_STATES:
+            _reclaim_dead_slice(listed.handle, listed.state)
+            continue
+        cloud_by_group.setdefault(listed.handle.scale_group, []).append(listed.handle)
 
+    # Configured groups: restore from checkpoint reconciled against live cloud.
+    # Retired groups (group is None) fall through to the drain pass below.
     for group_snapshot in checkpoint.group_snapshots.values():
         group = groups.get(group_snapshot.name)
-        if group is None:
+        if group is not None:
+            _restore_group(group, group_snapshot, cloud_by_group.get(group_snapshot.name, []))
+
+    # Drain pass: adopt retired groups that still have live cloud VMs as
+    # scale-to-zero groups so their idle slices get reclaimed like normal.
+    if make_draining_group is not None:
+        for name, cloud_handles in cloud_by_group.items():
+            if name in groups:
+                continue  # configured group, already restored above
             logger.warning(
-                "Checkpoint references scaling group %s which does not exist in config, skipping",
-                group_snapshot.name,
+                "Adopting retired scale group %s (%d live cloud slices) in drain mode: "
+                "no new slices, idle slices reclaimed normally",
+                name,
+                len(cloud_handles),
             )
-            continue
-        restore_result = restore_scaling_group(
-            group_snapshot=group_snapshot,
-            cloud_handles=cloud_by_group.get(group_snapshot.name, []),
-            label_prefix=group.label_prefix,
-        )
-        group.restore_from_snapshot(
-            slices=restore_result.slices,
-            consecutive_failures=restore_result.consecutive_failures,
-            last_scale_up=restore_result.last_scale_up,
-            last_scale_down=restore_result.last_scale_down,
-            backoff_until=restore_result.backoff_until,
-            quota_exceeded_until=restore_result.quota_exceeded_until,
-            quota_reason=restore_result.quota_reason,
-        )
+            drain_group = make_draining_group(name)
+            groups[name] = drain_group
+            snapshot = checkpoint.group_snapshots.get(name, GroupSnapshot(name=name))
+            _restore_group(drain_group, snapshot, cloud_handles)
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
+
+
+def _restore_group(group: ScalingGroup, group_snapshot: GroupSnapshot, cloud_handles: list[SliceHandle]) -> None:
+    """Reconcile one group's checkpoint snapshot against live cloud handles and load it into the group."""
+    restore_result = restore_scaling_group(group_snapshot=group_snapshot, cloud_handles=cloud_handles)
+    group.restore_from_snapshot(
+        slices=restore_result.slices,
+        last_scale_up=restore_result.last_scale_up,
+        last_scale_down=restore_result.last_scale_down,
+    )
+
+
+def _reclaim_dead_slice(handle: SliceHandle, state: CloudSliceState) -> None:
+    """Best-effort terminate of a dead slice during boot recovery.
+
+    ``terminate()`` is a bounded cloud request (an async delete that returns
+    immediately), issued in line here. Boot recovery must not fail because of a
+    stale cloud resource, so transient API errors are logged and swallowed; on
+    the next restart the slice will surface again.
+    """
+    logger.info("Reclaiming dead slice %s (state=%s, zone=%s)", handle.slice_id, state, handle.zone)
+    try:
+        handle.terminate()
+    except Exception as e:
+        logger.warning("Failed to terminate dead slice %s: %s", handle.slice_id, e)

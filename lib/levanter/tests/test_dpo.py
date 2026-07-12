@@ -20,30 +20,31 @@ from haliax.partitioning import ResourceAxis, set_mesh
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
+from safetensors import safe_open
 
 from levanter.data.loader import DataLoader
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import (
-    DatasetComponent,
+from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.preference import (
     DpoExample,
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PreferenceLmDataConfig,
     PreferencePairDataset,
-    TextLmDatasetFormat,
 )
-from levanter.adaptation import LoraAdaptationConfig, NoAdaptationConfig
+from levanter.adaptor import AdaptorExportConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.dpo import (
     CachedDpoExample,
     DpoModel,
     ReferenceEvalCacheConfig,
     ValidationDatasetSpec,
-    _logp_sum,
     build_or_load_reference_eval_cache,
     dpo_loss,
     dpo_loss_from_logps,
     load_reference_eval_cache,
+    logp_sum,
     reference_eval_cache_metadata,
     reference_eval_cache_path,
 )
@@ -54,6 +55,7 @@ from levanter.main.train_dpo import (
     TrainDpoConfig,
     _build_dpo_dataset,
     _derive_training_keys,
+    _install_separate_reference_export_hooks,
     _periodic_eval_callback,
     _restore_policy_model_from_partial_checkpoint,
     _scheduled_eval_callback,
@@ -62,7 +64,7 @@ from levanter.main.train_dpo import (
 from levanter.metrics import Metric
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.optim.model_averaging import ModelAveraging
 from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
@@ -71,7 +73,7 @@ from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.tree_utils import inference_mode
 
 
-MODEL_NAME = "stanford-crfm/marin-tokenizer"
+MODEL_NAME = "marin-community/marin-tokenizer"
 
 
 @pytest.fixture(scope="module")
@@ -150,21 +152,46 @@ def test_adapter_base_reference_requires_non_none_adapter():
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=NoAdaptationConfig(),
+        adapter=NoAdaptorConfig(),
     )
 
     with pytest.raises(ValueError, match="requires a non-none adapter"):
         _validate_dpo_config(config)
 
 
-def test_lora_adapter_base_reference_requires_zero_init_b():
+def test_lora_adapter_base_reference_requires_zero_initial_delta():
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=False),
+        adapter=LoraAdaptorConfig(zero_init_b=False, a_init_mode="random"),
     )
 
-    with pytest.raises(ValueError, match="requires zero_init_b=true"):
+    with pytest.raises(ValueError, match="requires zero adapter delta at init"):
+        _validate_dpo_config(config)
+
+
+@pytest.mark.parametrize(
+    "zero_init_b,a_init_mode",
+    [(True, "random"), (False, "zero")],
+)
+def test_lora_adapter_base_reference_accepts_one_zero_factor(zero_init_b, a_init_mode):
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=LoraAdaptorConfig(zero_init_b=zero_init_b, a_init_mode=a_init_mode),
+    )
+
+    _validate_dpo_config(config)
+
+
+def test_lora_adapter_base_reference_rejects_both_factors_zero():
+    config = TrainDpoConfig(
+        model=_tiny_gpt2_config(),
+        reference=AdapterBaseReferenceConfig(),
+        adapter=LoraAdaptorConfig(zero_init_b=True, a_init_mode="zero"),
+    )
+
+    with pytest.raises(ValueError, match="exactly one zero LoRA factor"):
         _validate_dpo_config(config)
 
 
@@ -230,7 +257,7 @@ def test_canonical_dpo_config_parses_from_yaml(tmp_path: Path):
 
     config = draccus.parse(TrainDpoConfig, str(config_path), args=[])
 
-    assert isinstance(config.adapter, NoAdaptationConfig)
+    assert isinstance(config.adapter, NoAdaptorConfig)
     assert isinstance(config.reference, SeparateReferenceConfig)
     assert config.reference_eval_cache == ReferenceEvalCacheConfig(
         mode="build_or_load",
@@ -249,7 +276,6 @@ def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
                 "  type: lora",
                 "  r: 8",
                 "  alpha: 8.0",
-                "  zero_init_b: true",
                 "reference:",
                 "  type: adapter_base",
             ]
@@ -258,31 +284,38 @@ def test_canonical_lora_dpo_config_parses_from_yaml(tmp_path: Path):
 
     config = draccus.parse(TrainDpoConfig, str(config_path), args=[])
 
-    assert isinstance(config.adapter, LoraAdaptationConfig)
+    assert isinstance(config.adapter, LoraAdaptorConfig)
     assert isinstance(config.reference, AdapterBaseReferenceConfig)
 
 
-def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path):
+def test_legacy_lora_dpo_config_translates_to_canonical(tmp_path: Path, monkeypatch):
     config_path = tmp_path / "legacy_lora_dpo.yaml"
     config_path.write_text(
         "\n".join(
             [
-                "initialize_from_hf: meta-llama/Llama-3.1-8B-Instruct",
+                "initialize_from_hf: test-model",
                 "lora:",
                 "  r: 8",
                 "  alpha: 8.0",
-                "  zero_init_b: true",
+                "  zero_init_b: false",
+                "  a_init_mode: zero",
                 "hf_save_steps: 100",
             ]
         )
     )
 
     legacy_config = draccus.parse(LoraDpoConfig, str(config_path), args=[])
+    monkeypatch.setattr(
+        "levanter.main.lora_dpo.HFCheckpointConverter.from_hf",
+        lambda *args, **kwargs: SimpleNamespace(default_config=Gpt2Config()),
+    )
 
     translated = _translate_legacy_lora_dpo_config(legacy_config)
 
-    assert isinstance(translated.adapter, LoraAdaptationConfig)
+    assert isinstance(translated.adapter, LoraAdaptorConfig)
     assert isinstance(translated.reference, AdapterBaseReferenceConfig)
+    assert translated.adapter.zero_init_b is False
+    assert translated.adapter.a_init_mode == "zero"
 
 
 def test_preference_chat_processor_skips_invalid_rows(tokenizer_path: Path):
@@ -391,8 +424,8 @@ def test_dpo_loss_matches_cached_reference_values():
 
     example = _make_dpo_example(key=jrandom.PRNGKey(2))
 
-    logp_ref_chosen = _logp_sum(reference_model, example.chosen, key=None)
-    logp_ref_rejected = _logp_sum(reference_model, example.rejected, key=None)
+    logp_ref_chosen = logp_sum(reference_model, example.chosen, key=None)
+    logp_ref_rejected = logp_sum(reference_model, example.rejected, key=None)
     cached_example = CachedDpoExample(
         chosen=example.chosen,
         rejected=example.rejected,
@@ -502,10 +535,10 @@ def test_build_or_load_reference_eval_cache_matches_direct_logps(tmp_path: Path)
         )
 
     expected_chosen = np.asarray(
-        [float(np.asarray(_logp_sum(reference_model, ex.chosen, key=None).array)) for ex in examples], dtype=np.float32
+        [float(np.asarray(logp_sum(reference_model, ex.chosen, key=None).array)) for ex in examples], dtype=np.float32
     )
     expected_rejected = np.asarray(
-        [float(np.asarray(_logp_sum(reference_model, ex.rejected, key=None).array)) for ex in examples],
+        [float(np.asarray(logp_sum(reference_model, ex.rejected, key=None).array)) for ex in examples],
         dtype=np.float32,
     )
 
@@ -527,7 +560,7 @@ def test_logp_sum_passes_key_for_dropout():
     tokens = hax.named(jnp.arange(Pos.size, dtype=jnp.int32) % Vocab.size, Pos)
     example = LmExample.causal(tokens)
 
-    out = _logp_sum(model, example, key=jrandom.PRNGKey(1))
+    out = logp_sum(model, example, key=jrandom.PRNGKey(1))
     assert isinstance(out, hax.NamedArray)
 
 
@@ -650,7 +683,7 @@ def test_restore_policy_model_from_partial_checkpoint_recovers_base_model():
     Vocab = Axis("vocab", 32)
     base_key, wrong_base_key, adapter_key, wrong_adapter_key, example_key = jrandom.split(jrandom.PRNGKey(0), 5)
 
-    adapter = LoraAdaptationConfig(r=4, zero_init_b=False)
+    adapter = LoraAdaptorConfig(r=4, zero_init_b=False, a_init_mode="random")
     trained_policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
     wrong_resume_skeleton = adapter.apply(config.build(Vocab, key=wrong_base_key), key=wrong_adapter_key)
     correct_source_skeleton = adapter.apply(config.build(Vocab, key=base_key), key=wrong_adapter_key)
@@ -665,12 +698,118 @@ def test_restore_policy_model_from_partial_checkpoint_recovers_base_model():
     )
 
     example = _make_dpo_example(seq_len=8, vocab_size=Vocab.size, key=example_key)
-    trained_logp = _logp_sum(inference_mode(trained_policy, True), example.chosen).scalar()
-    wrong_logp = _logp_sum(inference_mode(wrong_resumed_policy, True), example.chosen).scalar()
-    restored_logp = _logp_sum(inference_mode(restored_policy, True), example.chosen).scalar()
+    trained_logp = logp_sum(inference_mode(trained_policy, True), example.chosen).scalar()
+    wrong_logp = logp_sum(inference_mode(wrong_resumed_policy, True), example.chosen).scalar()
+    restored_logp = logp_sum(inference_mode(restored_policy, True), example.chosen).scalar()
 
     assert wrong_logp != pytest.approx(trained_logp)
     assert restored_logp == pytest.approx(trained_logp)
+
+
+class _CapturingConverter:
+    reference_checkpoint = "base-model"
+
+    def __init__(self):
+        self.calls = []
+
+    def save_pretrained(self, model, path, **kwargs):
+        self.calls.append((model, path, kwargs))
+
+
+class _CapturingTrainer:
+    run_id = "test-run"
+    config = SimpleNamespace(checkpointer=None)
+
+    def __init__(self):
+        self.hooks = []
+
+    def add_hook(self, hook, *, every: int):
+        self.hooks.append((hook, every))
+
+
+def test_separate_reference_lora_merged_export_saves_policy_model():
+    config = _tiny_gpt2_config()
+    Vocab = Axis("vocab", 32)
+    base_key, reference_key, adapter_key = jrandom.split(jrandom.PRNGKey(0), 3)
+
+    adapter = LoraAdaptorConfig(r=4)
+    policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
+    reference = config.build(Vocab, key=reference_key)
+    trainer = _CapturingTrainer()
+    converter = _CapturingConverter()
+
+    adapter.install_export_hooks(
+        trainer=trainer,
+        converter=converter,
+        tokenizer=None,
+        export=AdaptorExportConfig(
+            hf_save_steps=1,
+            merged_hf_save_path="/tmp/export",
+        ),
+    )
+
+    hook, _ = trainer.hooks[0]
+    hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
+
+    assert len(converter.calls) == 1
+    saved_model, _, _ = converter.calls[0]
+    assert isinstance(saved_model, Gpt2LMHeadModel)
+
+
+def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
+    config = _tiny_gpt2_config()
+    Vocab = Axis("vocab", 32)
+    base_key, reference_key, adapter_key = jrandom.split(jrandom.PRNGKey(0), 3)
+
+    adapter = LoraAdaptorConfig(r=4)
+    policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
+    reference = config.build(Vocab, key=reference_key)
+    trainer = _CapturingTrainer()
+
+    adapter.install_export_hooks(
+        trainer=trainer,
+        converter=_CapturingConverter(),
+        tokenizer=None,
+        export=AdaptorExportConfig(
+            hf_save_steps=1,
+            peft_save_path=str(tmp_path),
+        ),
+    )
+
+    hook, _ = trainer.hooks[0]
+    hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
+
+    with safe_open(tmp_path / "step-1" / "adapter_model.safetensors", framework="numpy") as tensors:
+        keys = list(tensors.keys())
+
+    assert keys
+    assert all(".policy." not in key for key in keys)
+    assert all(".reference." not in key for key in keys)
+
+
+def test_separate_reference_hf_export_passes_generation_config():
+    trainer = _CapturingTrainer()
+    converter = _CapturingConverter()
+    generation_config = {"eos_token_id": [2, 50]}
+
+    _install_separate_reference_export_hooks(
+        trainer=trainer,
+        converter=converter,
+        export=AdaptorExportConfig(
+            hf_save_path="/tmp/export",
+            hf_save_steps=1,
+            generation_config=generation_config,
+        ),
+    )
+
+    hook, _ = trainer.hooks[0]
+    model = object()
+    hook(SimpleNamespace(step=1, eval_model=model))
+
+    assert len(converter.calls) == 1
+    saved_model, _, saved_kwargs = converter.calls[0]
+    assert saved_model is model
+    assert saved_kwargs["generation_config"] == generation_config
 
 
 def test_vmapped_init_with_sharding_handles_layer_axis():

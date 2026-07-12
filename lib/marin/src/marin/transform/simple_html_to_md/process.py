@@ -11,7 +11,10 @@ import logging
 from dataclasses import dataclass, field
 
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from marin.web.convert import convert_page
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +30,6 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
     Returns:
         Transformed record with markdown content
     """
-    from marin.web.convert import convert_page
-
     data_id = data["id"]
     html = data["text"]
     source = data["source"]
@@ -42,7 +43,7 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
         logger.debug(f"Converting {data_id} {url}")
         md = convert_page(html, url, extract_method, config)["content"]
         error = None
-    except (ModuleNotFoundError, ImportError):
+    except ImportError:
         # Configuration errors should fail the job, not be caught
         raise
     except Exception as e:

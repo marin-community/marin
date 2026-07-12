@@ -1,0 +1,96 @@
+{
+  "note": [
+    "Shared, language-neutral conformance vectors for the declarative request-auth stack (spec section 1.4).",
+    "This SAME file is the single source of truth consumed by BOTH the Python (rigging) evaluator",
+    "(lib/rigging/tests/test_auth_vectors.py) and finelog's Rust conformance test, so the two engines cannot",
+    "drift: it replaces 'two parsers that happen to agree' with 'one contract both must pass'.",
+    "",
+    "Encoding rules so the file stays runnable by both engines:",
+    " - Only the layer types finelog also has appear: 'cidr' and 'jwt'. Loopback trust is expressed as an",
+    "   explicit 'cidr' of 127.0.0.0/8 and ::1/128 (no separate 'loopback'/'anonymous' layer here).",
+    " - Semantics are first-match: the first layer that authenticates admits, the first that rejects denies,",
+    "   and an all-absent walk falls to the default-deny terminal (matched = null).",
+    " - The 'jwt' layer's verifier is MOCKED per language (Python injects a TokenVerifier; the Rust engine",
+    "   verifies natively): request.token is 'valid' (the mock accepts), 'invalid' (present but rejected), or",
+    "   null (absent). A present-but-invalid token REJECTS (stops the walk with a deny); an absent token is",
+    "   ABSENT (falls through).",
+    " - request.peer is 'host:port'; expect.matched is the layer 'type' that admitted, or null for a deny."
+  ],
+  "vectors": [
+    {
+      "name": "default_deny_terminal",
+      "description": "Nothing matches: an out-of-cidr tokenless peer falls to the default-deny terminal.",
+      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}],
+      "request": {"peer": "203.0.113.9:44100", "headers": {}, "token": null},
+      "expect": {"verdict": "deny", "matched": null}
+    },
+    {
+      "name": "cidr_admits_in_network_peer",
+      "description": "A direct transport peer inside the trusted cidr is admitted without a token.",
+      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}],
+      "request": {"peer": "10.1.2.3:44100", "headers": {}, "token": null},
+      "expect": {"verdict": "allow", "matched": "cidr"}
+    },
+    {
+      "name": "cidr_before_jwt_admits_trusted_peer_over_unverifiable_token",
+      "description": "Order is load-bearing: a trusted-network peer is admitted by cidr BEFORE the jwt layer would reject a token it cannot verify.",
+      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}, {"type": "jwt"}],
+      "request": {"peer": "10.1.2.3:44100", "headers": {}, "token": "invalid"},
+      "expect": {"verdict": "allow", "matched": "cidr"}
+    },
+    {
+      "name": "valid_jwt_admits_out_of_cidr_peer",
+      "description": "An out-of-network peer presenting a valid jwt is admitted by the jwt layer.",
+      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}, {"type": "jwt"}],
+      "request": {"peer": "203.0.113.9:44100", "headers": {}, "token": "valid"},
+      "expect": {"verdict": "allow", "matched": "jwt"}
+    },
+    {
+      "name": "invalid_jwt_out_of_cidr_rejects",
+      "description": "A present-but-invalid token is REJECTED (never downgraded to ambient trust): the walk stops with a deny.",
+      "stack": [{"type": "cidr", "cidrs": ["10.0.0.0/8"]}, {"type": "jwt"}],
+      "request": {"peer": "203.0.113.9:44100", "headers": {}, "token": "invalid"},
+      "expect": {"verdict": "deny", "matched": null}
+    },
+    {
+      "name": "jwt_only_absent_token_denies",
+      "description": "A jwt-only stack: an absent token is ABSENT and falls to the default-deny terminal.",
+      "stack": [{"type": "jwt"}],
+      "request": {"peer": "203.0.113.9:44100", "headers": {}, "token": null},
+      "expect": {"verdict": "deny", "matched": null}
+    },
+    {
+      "name": "jwt_only_valid_token_admits",
+      "description": "A jwt-only stack admits a valid token.",
+      "stack": [{"type": "jwt"}],
+      "request": {"peer": "203.0.113.9:44100", "headers": {}, "token": "valid"},
+      "expect": {"verdict": "allow", "matched": "jwt"}
+    },
+    {
+      "name": "allow_localhost_admits_loopback",
+      "description": "Loopback trust expressed as an explicit cidr: a genuine loopback peer is admitted.",
+      "stack": [{"type": "cidr", "cidrs": ["127.0.0.0/8", "::1/128"]}],
+      "request": {"peer": "127.0.0.1:5555", "headers": {}, "token": null},
+      "expect": {"verdict": "allow", "matched": "cidr"}
+    },
+    {
+      "name": "allow_localhost_denies_lan_peer",
+      "description": "The loopback-only cidr denies a non-loopback LAN peer.",
+      "stack": [{"type": "cidr", "cidrs": ["127.0.0.0/8", "::1/128"]}],
+      "request": {"peer": "10.9.9.9:5555", "headers": {}, "token": null},
+      "expect": {"verdict": "deny", "matched": null}
+    }
+  ],
+  "parse_error_stacks": [
+    {
+      "name": "empty_list_lockout",
+      "description": "An empty stack is a total lockout and MUST raise at parse time (do not rely on omission).",
+      "stack": []
+    },
+    {
+      "name": "unknown_layer_type",
+      "description": "A 'static' layer is a login-exchange verifier, not a request-chain layer; an unknown type MUST raise at parse time.",
+      "stack": [{"type": "static"}]
+    }
+  ]
+}

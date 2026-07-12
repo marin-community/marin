@@ -9,7 +9,6 @@ import re
 import shutil
 import socket
 import subprocess
-import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -17,12 +16,15 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
+from rigging.timing import Timestamp
+
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
-from iris.cluster.types import get_tpu_topology
-from iris.rpc import config_pb2
+from iris.cluster.platforms.types import probe_outbound_ip
+from iris.cluster.provenance import provenance_from_env, provenance_to_proto
+from iris.cluster.tpu_topology import get_tpu_topology
+from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -213,10 +215,8 @@ def _get_cpu_count() -> int:
 
 def _get_ip_address() -> str:
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
+        return probe_outbound_ip()
+    except OSError:
         return "127.0.0.1"
 
 
@@ -231,9 +231,9 @@ def _get_disk_bytes() -> int:
 
 def _build_worker_attributes(
     *,
-    accelerator_type: int,
+    accelerator_type: AcceleratorType | None,
     accelerator_variant: str,
-    capacity_type: int,
+    capacity_type: CapacityType | None,
     tpu_name: str,
     tpu_worker_id: str,
     device: job_pb2.DeviceConfig,
@@ -262,7 +262,7 @@ def _build_worker_attributes(
     if accelerator_variant:
         attributes[WellKnownAttribute.DEVICE_VARIANT] = job_pb2.AttributeValue(string_value=accelerator_variant.lower())
 
-    is_preemptible = capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    is_preemptible = capacity_type == CapacityType.PREEMPTIBLE
     attributes[WellKnownAttribute.PREEMPTIBLE] = job_pb2.AttributeValue(string_value=str(is_preemptible).lower())
 
     # TPU multi-host identity from GCP metadata probes
@@ -273,7 +273,7 @@ def _build_worker_attributes(
         )
 
     # TPU topology attributes derived from variant
-    if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU and accelerator_variant:
+    if accelerator_type == AcceleratorType.TPU and accelerator_variant:
         attributes[WellKnownAttribute.TPU_TOPOLOGY] = job_pb2.AttributeValue(string_value=accelerator_variant)
         try:
             topo = get_tpu_topology(accelerator_variant)
@@ -376,11 +376,12 @@ def probe_hardware() -> HardwareProbe:
 
 def build_worker_metadata(
     hardware: HardwareProbe,
-    accelerator_type: int = 0,
+    accelerator_type: AcceleratorType | None = None,
     accelerator_variant: str = "",
     gpu_count_override: int = 0,
-    capacity_type: int = 0,
+    capacity_type: CapacityType | None = None,
     worker_attributes: dict[str, str] | None = None,
+    cpu_millicores: int = 0,
 ) -> job_pb2.WorkerMetadata:
     """Combine hardware probe results with platform-provided config.
 
@@ -391,12 +392,17 @@ def build_worker_metadata(
 
     The DeviceConfig oneof on WorkerMetadata is still built from config + probe
     data for capacity accounting (device count).
+
+    ``cpu_millicores`` is the scale-group declared CPU capacity. When > 0 it is
+    the advertised ``cpu_count`` (the canonical scheduling capacity, which may
+    over-commit the physical host); 0 falls back to the probed host count.
     """
+    advertised_cpu_count = max(1, cpu_millicores // 1000) if cpu_millicores > 0 else hardware.cpu_count
     extra_attributes = worker_attributes or {}
 
     device = job_pb2.DeviceConfig()
 
-    if accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU or hardware.tpu_type:
+    if accelerator_type == AcceleratorType.TPU or hardware.tpu_type:
         tpu_type = hardware.tpu_type
         tpu_chip_count = 0
         if tpu_type:
@@ -410,12 +416,12 @@ def build_worker_metadata(
         gpu_count = 0
         gpu_name = ""
         gpu_memory_mb = 0
-    elif accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU or hardware.gpu_count > 0:
+    elif accelerator_type == AcceleratorType.GPU or hardware.gpu_count > 0:
         gpu_count = gpu_count_override or hardware.gpu_count
         gpu_name = accelerator_variant or hardware.gpu_name or "auto"
         gpu_memory_mb = hardware.gpu_memory_mb
         device.gpu.CopyFrom(job_pb2.GpuDevice(variant=gpu_name, count=gpu_count))
-    elif accelerator_type == config_pb2.ACCELERATOR_TYPE_CPU:
+    elif accelerator_type == AcceleratorType.CPU:
         device.cpu.CopyFrom(job_pb2.CpuDevice(variant=accelerator_variant or "cpu"))
         gpu_count = 0
         gpu_name = ""
@@ -436,10 +442,11 @@ def build_worker_metadata(
         extra_attributes=extra_attributes,
     )
 
+    provenance = provenance_from_env()
     return job_pb2.WorkerMetadata(
         hostname=hardware.hostname,
         ip_address=hardware.ip_address,
-        cpu_count=hardware.cpu_count,
+        cpu_count=advertised_cpu_count,
         memory_bytes=hardware.memory_bytes,
         disk_bytes=hardware.disk_bytes,
         tpu_name=hardware.tpu_name,
@@ -452,7 +459,7 @@ def build_worker_metadata(
         device=device,
         attributes=attributes,
         gce_instance_name=hardware.gce_instance_name,
-        git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
+        provenance=provenance_to_proto(provenance),
     )
 
 
@@ -505,7 +512,7 @@ def _read_net_dev_bytes() -> tuple[int, int]:
 
 
 MIN_DISK_FREE_FRACTION = 0.05
-"""Worker is unhealthy if the work volume has less than 5% free space."""
+MIN_DISK_FREE_BYTES = 10 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -516,50 +523,54 @@ class HealthCheckResult:
     error: str = ""
 
 
+def probe_disk_writable(disk_path: str) -> None:
+    """Verify the work directory accepts writes by creating and removing a probe file.
+
+    Called once at worker startup. Raises OSError on failure so the worker
+    aborts and the controller reaps the machine; heartbeat-time health checks
+    deliberately do not repeat this probe because per-heartbeat file churn can
+    itself trigger EMFILE under load (see #4732).
+    """
+    dp = Path(disk_path)
+    if not dp.is_dir():
+        return
+    probe_path = dp / ".iris_health_probe"
+    probe_path.write_text("ok")
+    probe_path.unlink()
+
+
 def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
-    """Run basic health probes and return a combined result.
+    """Run heartbeat-time health probes and return a combined result.
 
     Checks performed:
-    - Can write and remove a tempfile in the work directory
     - Root/work volume has >= 5% free space
 
     Docker probing is implicit: if the worker is processing heartbeats
     and fetching task status, Docker is operational.
 
     If disk_path is not an existing directory (e.g. during teardown, or on
-    platforms where the path does not exist), the probe is skipped and the
-    worker is considered healthy.
+    platforms where the path does not exist), the disk-free check is skipped.
     """
     dp = Path(disk_path)
     if not dp.is_dir():
         return HealthCheckResult(healthy=True)
 
-    errors: list[str] = []
-
-    # Check tempfile write
-    try:
-        probe_path = dp / ".iris_health_probe"
-        probe_path.write_text("ok")
-        probe_path.unlink()
-    except FileNotFoundError:
-        # TOCTOU: directory vanished between is_dir() check and write
-        pass
-    except OSError as e:
-        errors.append(f"tempfile write failed: {e}")
-
-    # Check disk free space
     try:
         usage = shutil.disk_usage(disk_path)
-        if usage.total > 0:
-            free_fraction = (usage.total - usage.used) / usage.total
-            if free_fraction < MIN_DISK_FREE_FRACTION:
-                pct = free_fraction * 100
-                errors.append(f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%")
     except OSError as e:
-        errors.append(f"disk usage check failed: {e}")
+        return HealthCheckResult(healthy=False, error=f"disk usage check failed: {e}")
 
-    if errors:
-        return HealthCheckResult(healthy=False, error="; ".join(errors))
+    if usage.total > 0:
+        free = usage.total - usage.used
+        free_fraction = free / usage.total
+        if free_fraction < MIN_DISK_FREE_FRACTION and free < MIN_DISK_FREE_BYTES:
+            return HealthCheckResult(
+                healthy=False,
+                error=(
+                    f"disk free {free / 1024**3:.1f} GiB ({free_fraction * 100:.1f}%) below threshold "
+                    f"({MIN_DISK_FREE_FRACTION * 100:.0f}% AND {MIN_DISK_FREE_BYTES // 1024**3} GiB)"
+                ),
+            )
     return HealthCheckResult(healthy=True)
 
 
@@ -576,9 +587,6 @@ class HostMetricsCollector:
         self._disk_path = disk_path
         self._prev_cpu_total = 0
         self._prev_cpu_idle = 0
-        self._prev_net_recv = 0
-        self._prev_net_sent = 0
-        self._prev_net_time: float = 0.0
 
     def collect(self) -> job_pb2.WorkerResourceSnapshot:
         snapshot = job_pb2.WorkerResourceSnapshot()
@@ -637,23 +645,15 @@ class HostMetricsCollector:
             pass
 
     def _collect_network(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
-        """Compute network bandwidth as bytes/sec delta from /proc/net/dev.
+        """Read cumulative byte counters from /proc/net/dev.
 
         Sums all non-loopback interfaces. Works inside Docker/K8s containers
         since /proc/net/dev reflects the container's network namespace.
-        The first call establishes a baseline and reports 0 B/s.
+        Consumers compute rates from successive samples.
         """
         try:
             recv, sent = _read_net_dev_bytes()
-            now = time.monotonic()
-
-            dt = now - self._prev_net_time
-            if self._prev_net_time > 0 and dt > 0:
-                snapshot.net_recv_bps = max(0, int((recv - self._prev_net_recv) / dt))
-                snapshot.net_sent_bps = max(0, int((sent - self._prev_net_sent) / dt))
-
-            self._prev_net_recv = recv
-            self._prev_net_sent = sent
-            self._prev_net_time = now
+            snapshot.net_recv_bytes = recv
+            snapshot.net_sent_bytes = sent
         except (OSError, ValueError, IndexError):
             pass

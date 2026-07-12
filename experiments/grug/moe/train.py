@@ -1,46 +1,47 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import functools
 import logging
 import time
 from dataclasses import dataclass, field
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.callbacks as callbacks
+import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from haliax.partitioning import set_mesh
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
-
-import levanter.callbacks as callbacks
-import levanter.tracker
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.data import AsyncDataset, DataLoader
+from levanter.data.dataset import AsyncDataset
+from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
-from levanter.data.text import GrugLmExample, LmDataConfig
-from levanter.data.text.examples import grug_lm_example_from_named
+from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-import equinox as eqx
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -54,11 +55,21 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    train_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     data_seed: int | None = None
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
-    z_loss_weight: float = 0.0  # Weight on logsumexp (z-loss) stabilization term.
+    z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+
+    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Defaults reproduce the historical layout: no expert parallelism and full replication
+    # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
+    # replicated per slice and sharded only over the intra-slice `data` axis. For a model
+    # too large to replicate within one slice, set replica_axis_size=1 (FSDP across every
+    # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
+    sharding_dump_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +77,6 @@ class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
 
     eval_batch_size: int = 512
-    eval_batch_pspec: P = field(default_factory=lambda: P(("data", "expert")))
     steps_per_eval: int | None = 1000
     max_eval_batches: int | None = None
     prefix: str = "eval"
@@ -85,6 +95,9 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
+    # via the iris.runtime.multigpu supervisor instead of one process per node.
+    processes_per_task: int = 1
 
 
 def build_train_dataset(
@@ -111,20 +124,23 @@ def build_train_dataset(
     )
 
 
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
 def build_train_loader(
     dataset: AsyncDataset[GrugLmExample],
     *,
     batch_schedule: BatchSchedule,
     mesh: Mesh,
-    batch_pspec: P = P(("data", "expert")),
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    axis_resource = batch_pspec[0]
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": axis_resource},
+        axis_resources={"__BATCH__": _BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -148,10 +164,11 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    batch_axis_resource = eval_cfg.eval_batch_pspec[0]
-    eval_axis_mapping = {"batch": batch_axis_resource}
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # are kept so we can name "expert" unconditionally.
+    eval_axis_mapping = {"batch": _BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(batch_axis_resource, None))
+    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
@@ -379,9 +396,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if config.trainer.data_seed is not None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
-    # Build data/model state under the trainer mesh so all arrays are sharded consistently.
-    with trainer.use_device_mesh():
-        mesh = trainer.device_mesh
+    # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
+    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+    # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
+    # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
+    mesh = compact_grug_mesh(
+        expert_axis_size=config.trainer.expert_axis_size,
+        replica_axis_size=config.trainer.replica_axis_size,
+    )
+    with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -394,7 +417,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             train_dataset,
             batch_schedule=batch_schedule,
             mesh=mesh,
-            batch_pspec=config.trainer.train_batch_pspec,
         )
 
         @jax.jit
@@ -410,15 +432,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        checkpoint_path = trainer.load_checkpoint_path
-        if checkpoint_path is None and checkpointer is not None:
-            checkpoint_path = trainer.checkpointer.expanded_path(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
-            checkpoint_path=checkpoint_path,
+            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
+        )
+        dump_grug_state_sharding_run_artifact(
+            state,
+            log_dir=trainer.log_dir,
+            run_id=run_id,
+            path_override=config.trainer.sharding_dump_path,
         )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
@@ -555,6 +580,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        processes_per_task=config.processes_per_task,
     )
 
 

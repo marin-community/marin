@@ -8,6 +8,22 @@
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
 
+# ── Stage: dashboard ─────────────────────────────────────────────────
+# Build the Vue SPA. Output is consumed by the deps stage at
+# /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
+# (see lib/iris/src/iris/cluster/dashboard_common.py).
+FROM node:22-slim AS dashboard
+
+WORKDIR /build/dashboard
+
+# Copy manifests first so dependency install is cached across source edits.
+COPY lib/iris/dashboard/package.json lib/iris/dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY lib/iris/dashboard/ ./
+RUN npm run build
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 # System dependencies shared by controller and worker.
 FROM python:3.12-slim AS base
@@ -35,8 +51,9 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# kubectl
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+# kubectl — TARGETARCH is auto-set by buildx (amd64 on x86 nodes, arm64 on Grace).
+ARG TARGETARCH
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
         -o /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
     && kubectl version --client
@@ -52,32 +69,59 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI with a compatible API.
-# Copy only metadata first so source changes don't bust the dep cache.
+# Build against the committed root `uv.lock` (`--frozen`) so the image ships the
+# same pinned, tested dependency set as local dev and the rest of CI — no fresh
+# PyPI resolve that can float a transitive (e.g. protobuf) to an untested major.
+# marin-iris's closure is two workspace members built from source — marin-rigging
+# and marin-finelog (the pure-Python finelog client) — plus external/registry
+# deps (the native marin-finelog-server ships as a published wheel). It never
+# pulls the Rust-built members (marin-core, levanter, …), so `--package
+# marin-iris` never asks the toolchain-free slim base to build them.
+# uv must still discover every workspace member to map the lock, so copy each
+# member's pyproject.toml (metadata only) — but only iris+rigging+finelog install.
+# The first sync uses `--no-install-workspace` to install just the external deps
+# (cached across source edits); the second builds iris+rigging+finelog from source.
+# Metadata alone suffices even for marin-haliax's `dynamic = ["version"]`
+# (sourced from src/haliax/__about__.py): under --frozen, uv takes the version
+# from the lock and never invokes a non-installed member's build backend.
+COPY uv.lock pyproject.toml ./
+COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
 COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
-COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+COPY lib/fray/pyproject.toml ./lib/fray/pyproject.toml
+COPY lib/haliax/pyproject.toml ./lib/haliax/pyproject.toml
+COPY lib/levanter/pyproject.toml ./lib/levanter/pyproject.toml
+COPY lib/marin/pyproject.toml ./lib/marin/pyproject.toml
+COPY lib/zephyr/pyproject.toml ./lib/zephyr/pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package marin-iris --no-install-project
+    uv sync --frozen --package marin-iris --no-install-workspace
 
-# Now copy full source for both rigging and iris, then install.
+# Now copy full source for rigging, finelog, and iris, then install. rigging's
+# wheel force-includes the repo-root config/ cluster YAMLs (-> rigging/clusters)
+# and finelog's force-includes lib/finelog/config/, so copy both: the editable
+# builds read them.
 COPY lib/rigging/src/ ./lib/rigging/src/
+COPY config/ ./config/
+COPY lib/finelog/src/ ./lib/finelog/src/
+COPY lib/finelog/config/ ./lib/finelog/config/
 COPY lib/iris/src/ ./lib/iris/src/
-COPY lib/iris/examples/ ./lib/iris/examples/
+COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package marin-iris
+    uv sync --frozen --package marin-iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install py-spy memray
 
-# Dashboard assets (pre-built by `iris build dashboard` before docker build)
-COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
+# Dashboard assets — built by the `dashboard` stage above.
+COPY --from=dashboard /build/dashboard/dist ./lib/iris/dashboard/dist
 
 RUN mkdir -p /var/cache/iris
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
 
 # ── Stage: docker-cli ────────────────────────────────────────────────
@@ -100,8 +144,9 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # ── Stage: controller ────────────────────────────────────────────────
 FROM deps AS controller
 
-# Controller-only deps: duckdb, pyarrow, zstandard.
-RUN uv sync --extra controller --inexact
+# Controller-only deps: kubernetes (marin-iris's `controller` extra).
+# --inexact keeps the py-spy/memray installed above from being pruned.
+RUN uv sync --frozen --package marin-iris --extra controller --inexact
 
 LABEL org.opencontainers.image.description="Iris controller image"
 
@@ -165,5 +210,7 @@ ARG PYTHONDONTWRITEBYTECODE=1
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
 WORKDIR /app

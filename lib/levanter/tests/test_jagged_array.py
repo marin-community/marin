@@ -396,5 +396,40 @@ async def test_get_batch_empty():
     assert batch == []
 
 
+def test_extend_with_python_lists():
+    """Extending a JaggedArrayStore with Python lists should use the fast path
+    (PreparedBatch.from_sequences) and produce identical results to numpy arrays."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        builder = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
+
+        lists = [[1, 2, 3], [4, 5], [6, 7, 8, 9]]
+        builder.extend(lists)
+
+        assert len(builder) == 3
+        np.testing.assert_array_equal(builder[0], np.array([1, 2, 3]))
+        np.testing.assert_array_equal(builder[1], np.array([4, 5]))
+        np.testing.assert_array_equal(builder[2], np.array([6, 7, 8, 9]))
+
+        # Extend again to verify offsets accumulate correctly
+        builder.extend([[10, 11]])
+        assert len(builder) == 4
+        np.testing.assert_array_equal(builder[3], np.array([10, 11]))
+
+
+def test_from_batch_with_python_lists_matches_numpy():
+    """PreparedBatch.from_batch with Python lists should produce the same result as with numpy arrays."""
+    lists = [[1, 2, 3], [4, 5], [6, 7, 8, 9]]
+    arrays = [np.array(lst, dtype=np.int64) for lst in lists]
+
+    from_lists = PreparedBatch.from_batch(lists)
+    from_arrays = PreparedBatch.from_batch(arrays)
+
+    # dtype may differ (int64 inferred vs int32 explicit) but values must match
+    np.testing.assert_array_equal(from_lists.data, from_arrays.data)
+    np.testing.assert_array_equal(from_lists.offsets, from_arrays.offsets)
+    assert from_lists.shapes is None
+    assert from_arrays.shapes is None
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -5,8 +5,8 @@
 Compile and aggregate results from multiple Evalchemy evaluation runs.
 
 This module provides the compile step function for aggregating results across
-seeds and logging averaged metrics to wandb. It is used as the `fn` argument
-to an `ExecutorStep` created by `compile_evalchemy_results` in `evals.py`.
+seeds and logging averaged metrics to wandb. It is used as the step function
+for `compile_evalchemy_results` in `evals.py`.
 """
 
 import json
@@ -17,12 +17,45 @@ import traceback
 
 import fsspec
 import pandas as pd
-from rigging.filesystem import filesystem as marin_filesystem
-from rigging.filesystem import open_url
-
+import wandb
 from marin.evaluation.evaluation_config import WANDB_PROJECT
+from marin.execution.artifact import Artifact
+from rigging.filesystem import filesystem as marin_filesystem
+from rigging.filesystem import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
+
+_COMPILED_FILE = "compiled_results.json"
+_AVERAGED_FILE = "averaged_results.json"
+
+
+def _read_json_records(path: str) -> list[dict]:
+    if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
+        raise FileNotFoundError(path)
+    with open_url(path, "r") as f:
+        return json.load(f)
+
+
+class CompiledEvalResult(Artifact):
+    """The aggregated output of :func:`compile_evalchemy_results_fn`: per-example correctness and,
+    when seeds group cleanly, per-(model, task) averages across seeds.
+
+    Both files use a marin-owned schema this module writes, so the accessors are exact reads.
+    ``averaged_results.json`` is only written when the runs share grouping columns, so
+    :meth:`averaged` raises :class:`FileNotFoundError` when no averages were produced.
+    """
+
+    def compiled(self) -> list[dict]:
+        """Per-example records ``{id, correct, dataset_name, model_name}`` across every seed run."""
+        return _read_json_records(f"{self.path}/{_COMPILED_FILE}")
+
+    def averaged(self) -> list[dict]:
+        """Per-(model, task) records with ``<col>_mean`` / ``<col>_std`` / ``<col>_per_seed`` columns.
+
+        Raises :class:`FileNotFoundError` if the compile step produced no averages (the runs had no
+        common grouping columns).
+        """
+        return _read_json_records(f"{self.path}/{_AVERAGED_FILE}")
 
 
 def _extract_base_model_and_seed(model_name: str) -> tuple[str, int | None]:
@@ -109,6 +142,11 @@ def _load_results_from_input_paths(
                     expected = str(example.get("answer", example.get("expected_answer", ""))).strip()
                     model_answers = example.get("model_answers", [])
                     model_answer = str(model_answers[0]).strip() if model_answers else ""
+                    # TODO: This string match only works for evals with simple answers
+                    # (integers, letters) like AIME, AMC, GPQA, HLE. It produces wrong
+                    # results for benchmarks with complex answers needing math symbol
+                    # comparison (HMMT), numerical tolerance (OlympiadBench_Physics),
+                    # or execution-based grading (LiveCodeBench, JEEBench).
                     correct = 1 if (model_answer == expected and expected) else 0
 
                     record = {
@@ -175,7 +213,6 @@ def _log_averaged_results_to_wandb(
     config_task_name: str | None,
 ) -> None:
     """Log averaged results to wandb, one run per base model."""
-    import wandb
 
     num_seeds = len(seeds_config) if seeds_config else avg_df["num_seeds"].max()
     wandb_entity = os.environ.get("WANDB_ENTITY", "marin-community")
@@ -237,7 +274,7 @@ def _log_averaged_results_to_wandb(
 
 
 def compile_evalchemy_results_fn(config: dict) -> None:
-    """Top-level function executed by the ExecutorStep to compile evalchemy results.
+    """Top-level step function to compile evalchemy results.
 
     Reads individual per-seed evaluation results, aggregates them into compiled
     and averaged DataFrames, saves outputs to GCS, and logs to wandb.
@@ -279,6 +316,21 @@ def compile_evalchemy_results_fn(config: dict) -> None:
         df.to_csv(f, index=False)
 
     logger.info(f"Compiled results saved to: {results_file}")
+
+    # Validate that all expected seeds are present before averaging.
+    # This prevents stale compiles where the compile step runs before all
+    # seed tasks have finished writing results.
+    if seeds_config:
+        actual_seeds = sorted(df["seed"].dropna().unique().tolist())
+        expected_seeds = sorted(seeds_config)
+        if actual_seeds != expected_seeds:
+            missing = set(expected_seeds) - set(actual_seeds)
+            raise ValueError(
+                f"Compile found seeds {actual_seeds} but expected {expected_seeds}. "
+                f"Missing seeds: {missing}. "
+                f"This likely means some seed tasks haven't finished yet."
+            )
+        logger.info(f"All {len(expected_seeds)} expected seeds present: {actual_seeds}")
 
     # Compute averaged results across seeds
     averaged = _compute_averaged_results(df)

@@ -11,10 +11,12 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 import jax.numpy as jnp
-from rigging.filesystem import url_to_fs
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
+from rigging.filesystem import StoragePath
+
 import levanter
+import levanter.config
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.models.llama import LlamaConfig
@@ -93,11 +95,8 @@ def main(config: ImportHfConfig):
             resize_vocab_to_match_tokenizer=config.resize_vocab_to_match_tokenizer,
         )
 
-    # use fsspec to make dir
-    fs, _ = url_to_fs(config.output_path)
-    if not fs.exists(config.output_path):
-        fs.makedirs(config.output_path)
-        logger.info(f"Created output directory: {config.output_path}")
+    StoragePath(config.output_path).mkdirs()
+    logger.info(f"Output directory ready: {config.output_path}")
 
     logger.info(f"Saving checkpoint to Tensorstore format: {config.output_path}")
 

@@ -5,15 +5,15 @@
 * Ars Technica
 * Ars Technica UK
 
-Register Log in    
+Register Log in
 
-# Scientific Method  /  Science & Exploration
+# Scientific Method / Science & Exploration
 
 # Trends suggest industrialized world may be hitting peak travel
 
 ## Analysis of recent trends in transportation suggest that the population of …
 
-by \- Jan 4, 2011 8:45 pm UTC 
+by \- Jan 4, 2011 8:45 pm UTC
 
 Transit, primarily in the form of automobile use, continues to be one of the biggest factors in the world's energy use. Although many vehicles have become dramatically more energy efficient over the last few decades, competing trends such as increases in the total miles traveled, have kept the total energy use rising. A study released recently, however, suggests that several industrialized countries have reached the point where their total transit use appears to be flattening out, an event the authors refer to as "peak travel." 
 
@@ -37,13 +37,13 @@ The big caveat there is that these trends are occurring in the most developed ec
 
 Nevertheless, even if these nations experience a fraction of the transit growth that the US has, their impact on global carbon emissions could be enormous. The authors cite a study that calculated what would have to change in the US transit system in order to achieve a reduction proportionate to its global impact that's appropriate for reaching the goal of stabilizing the atmosphere at 450 parts-per-million of CO<sub>2</sub>. The list included several completely unrealistic options: fuel economy rising to 136mpg, biofuels reaching an 83 percent market share, or vehicle travel dropping by half. Hopefully, a combination of all of these will require less drastic efforts. 
 
-*Transport Reviews*, 2010. DOI: 10.1080/01441647.2010.518291 (About DOIs). 
+*Transport Reviews*, 2010. DOI: 10.1080/01441647.2010.518291 (About DOIs).
 
 Expand full story
 
 John Timmer / John became Ars Technica's science editor in 2007 after spending 15 years doing biology research at places like Berkeley and Cornell. 
 
-@j\_timmer on Twitter  
+@j\_timmer on Twitter
 
 |  |  |
 | --- | --- |
@@ -56,10 +56,10 @@ Your very own personal assistant, a better browser... and something called the S
 * ## Stay in the know with
 
 + 
-    + 
-    + 
-    + 
-    +
++ 
++ 
++ 
++
 
 ## Latest News
 
@@ -73,24 +73,24 @@ Your very own personal assistant, a better browser... and something called the S
 6. # Warner lawyers: 1922 songbook with “Happy Birthday” lyrics wasn’t “authorized”
 
 * 
-* 
+*
 
-Trends suggest industrialized world may be hitting peak travel | Ars Technica                                         
+Trends suggest industrialized world may be hitting peak travel | Ars Technica                                       
 
 # *Ars*Technica
 
 * Ars Technica
 * Ars Technica UK
 
-Register Log in    
+Register Log in
 
-# Scientific Method  /  Science & Exploration
+# Scientific Method / Science & Exploration
 
 # Trends suggest industrialized world may be hitting peak travel
 
 ## Analysis of recent trends in transportation suggest that the population of …
 
-by \- Jan 4, 2011 8:45 pm UTC 
+by \- Jan 4, 2011 8:45 pm UTC
 
 Transit, primarily in the form of automobile use, continues to be one of the biggest factors in the world's energy use. Although many vehicles have become dramatically more energy efficient over the last few decades, competing trends such as increases in the total miles traveled, have kept the total energy use rising. A study released recently, however, suggests that several industrialized countries have reached the point where their total transit use appears to be flattening out, an event the authors refer to as "peak travel." 
 
@@ -114,13 +114,13 @@ The big caveat there is that these trends are occurring in the most developed ec
 
 Nevertheless, even if these nations experience a fraction of the transit growth that the US has, their impact on global carbon emissions could be enormous. The authors cite a study that calculated what would have to change in the US transit system in order to achieve a reduction proportionate to its global impact that's appropriate for reaching the goal of stabilizing the atmosphere at 450 parts-per-million of CO<sub>2</sub>. The list included several completely unrealistic options: fuel economy rising to 136mpg, biofuels reaching an 83 percent market share, or vehicle travel dropping by half. Hopefully, a combination of all of these will require less drastic efforts. 
 
-*Transport Reviews*, 2010. DOI: 10.1080/01441647.2010.518291 (About DOIs). 
+*Transport Reviews*, 2010. DOI: 10.1080/01441647.2010.518291 (About DOIs).
 
 Expand full story
 
 John Timmer / John became Ars Technica's science editor in 2007 after spending 15 years doing biology research at places like Berkeley and Cornell. 
 
-@j\_timmer on Twitter  
+@j\_timmer on Twitter
 
 |  |  |
 | --- | --- |
@@ -133,10 +133,10 @@ Your very own personal assistant, a better browser... and something called the S
 * ## Stay in the know with
 
 + 
-    + 
-    + 
-    + 
-    +
++ 
++ 
++ 
++
 
 ## Latest News
 

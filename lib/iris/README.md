@@ -1,10 +1,10 @@
 # Iris
 
-Distributed job orchestration replacing Ray with simpler primitives.
+Distributed job orchestration for Marin.
 
 ## Quick Start
 
-### Production: GCP Cluster
+### Cluster Basics
 
 ```bash
 # Start controller VM (runs autoscaler internally)
@@ -43,7 +43,9 @@ job.wait()
 ```
 
 For accelerator jobs, request the accelerator on the task itself with `--tpu ...` or `--gpu ...`.
-`--reserve ...` only holds capacity for scheduling and does not attach accelerator devices to the task container.
+`--reserve <accel>` is a hard constraint that confines the job to a zone where `<accel>` has actually
+been obtained (a live, non-erroring slice in the region), and the job waits otherwise; it does not
+attach accelerator devices (use `--tpu`/`--gpu` for that) and does not hold capacity.
 
 ## Architecture
 
@@ -59,6 +61,13 @@ Worker Process (on each VM):
 ├── Task executor (runs jobs in containers)
 └── Heartbeat reporter (health monitoring)
 ```
+
+The controller drives task execution through a single `TaskBackend` contract with
+two placements: `Placement.IRIS` (Iris schedules task→worker and fans reconcile
+RPCs to worker daemons — the diagram above) and `Placement.BACKEND` (the backend,
+e.g. Kubernetes via Kueue, places tasks itself). See
+[`docs/architecture.md`](docs/architecture.md#the-taskbackend-contract) for the
+contract and how the controller dispatches by placement.
 
 ## Actor System
 
@@ -123,34 +132,66 @@ Workers communicate with the controller using internal VPC IPs. External clients
 
 ## Worker Lifecycle
 
-### Registration and Heartbeat
+### Registration and Reconcile
 
 Workers register with the controller once at startup via the `Register` RPC.
-After registration, the worker enters a serve loop and waits for controller-
-initiated heartbeats.
+After registration, the worker serves the `WorkerService` gRPC and waits for
+controller-initiated `Reconcile` calls.
 
-The controller sends `Heartbeat` RPCs to all registered workers on each
-scheduler tick (~5s). The heartbeat request carries:
-- `tasks_to_run`: new task assignments for this worker
-- `tasks_to_kill`: task IDs to terminate
+The controller issues one `Reconcile` RPC per worker on each scheduler tick
+(~5s). The request carries the controller's complete **desired attempt set**
+for that worker: each `DesiredAttempt` is keyed by `attempt_uid` and contains
+either an `AttemptSpec.run` intent (with the `RunTaskRequest` payload on the
+dispatch tick) or a `StopReason` intent.
 
-The worker responds with:
-- `running_tasks`: tasks currently executing (task_id + attempt_id)
-- `completed_tasks`: tasks that finished since the last heartbeat
+The worker responds with the complete **observed set** plus a `WorkerHealth`
+block:
+- `AttemptObservation` per attempt the controller asked about (`attempt_uid`,
+  current `TaskState`, `exit_code`, `error`, `finished_at`, `container_id`,
+  `resource_usage`).
+- `WorkerHealth` carries `healthy`/`health_error` and a
+  `WorkerResourceSnapshot`.
 
 The controller reconciles the response:
 
 1. **Worker missing expected tasks** (e.g., worker restarted mid-task):
-   - Controller marks missing tasks as `WORKER_FAILED`
-   - Tasks are retried on another worker
+   - The worker emits `TASK_STATE_MISSING` observations for run intents that
+     resolved to nothing locally.
+   - Controller marks those tasks as `WORKER_FAILED` and retries them on
+     another worker.
 
-2. **Worker reports unknown tasks** (e.g., controller restarted):
-   - Controller sends kill requests for unknown tasks on next heartbeat
-   - Worker terminates orphaned containers
+2. **Worker has unknown tasks** (e.g., controller restarted):
+   - The worker kills any local attempt not in the desired set ("zombie") and
+     returns an observation for the kill on this tick.
 
-## Job State Transitions
+See [`docs/reconcile_rpc.md`](docs/reconcile_rpc.md) for the protocol details.
 
-Jobs progress through the following states:
+## Jobs, Tasks, Replicas, and Sub-jobs
+
+A **job** is the user-facing workload submitted to Iris. A **task** is the
+independently scheduled unit of execution created for that job. Job state is
+derived from the states of its tasks.
+
+By default a job creates a single task, but setting `replicas=N` creates N sibling
+tasks under the same job, with task IDs like `/user/job/0`, `/user/job/1`, and so on.
+Use replicas when one logical workload needs multiple peer containers, such as
+multi-host training ranks or gang-scheduled TPU/GPU jobs.
+
+Scheduling and failure happen at task granularity: the scheduler places
+each task on eligible capacity; failures retry a given task.
+See [`docs/task-states.md`](docs/task-states.md) for the task state machine,
+retry rules, and job-state rollup.
+
+A **sub-job** is a separate job submitted by code already running inside an Iris
+job, usually via `iris_ctx().client.submit(...)`. Sub-jobs get hierarchical IDs
+like `/user/parent/child`, can have their own entrypoint and resources, and may
+themselves create multiple replicas. Use sub-jobs when a launcher or
+orchestrator job needs to admit independent follow-on work over time.
+
+### Job State Transitions
+
+Jobs progress through the following states. For task states, retry budgets, and
+job-state rollup rules, see [`docs/task-states.md`](docs/task-states.md).
 
 | State | Description |
 |-------|-------------|
@@ -222,18 +263,17 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ### Multi-Region Bundle Storage
 
-**Design Decision:** Bundles are stored in a single centralized GCS bucket and fetched by workers in all regions as needed, rather than implementing regional caching or replication.
-
-**Rationale:**
-- Bundles are small (~4MB each)
-- Cross-region transfer costs are negligible at expected scale:
-  - 10,000 tasks/day × 4MB = 40GB/day ≈ $4/day in cross-region transfer fees
-- The complexity of regional bundle caching is not justified by these costs
-- Centralized storage simplifies operations and reduces infrastructure complexity
+Bundles are stored in one centralized GCS bucket and fetched by workers in all
+regions. Bundles are small enough that cross-region transfer is cheaper than
+operating regional caches, and centralized storage keeps worker bootstrap
+simple.
 
 ## CLI Reference
 
-**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
+**Cluster selection:** Prefer `--cluster=<name>` for known clusters; it resolves named configs such as
+`marin` from the configured search paths. Use `--config=<path>` when you need to pin an exact YAML file,
+such as a custom config or local experiment. Both flags are global and must appear before the subcommand:
+`iris --cluster=marin cluster start`.
 
 ### Cluster Commands
 
@@ -250,8 +290,8 @@ iris --cluster=marin cluster status
 
 ```bash
 # Controller-specific operations
-iris --config=... cluster controller start          # Boot controller GCE VM
-iris --config=... cluster controller status          # Controller status
+iris --cluster=marin cluster controller start       # Boot controller GCE VM
+iris --cluster=marin cluster controller status      # Controller status
 ```
 
 ### VM Operations (via controller RPC)
@@ -274,8 +314,8 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 
 ```bash
 # Remote clusters: opens SSH tunnel to controller dashboard
-iris --config=... cluster dashboard
-iris --config=... cluster dashboard --port 8080
+iris --cluster=marin cluster dashboard
+iris --cluster=marin cluster dashboard --port 8080
 
 # Local clusters: dashboard is at the URL printed by `cluster start --local`
 ```
@@ -287,13 +327,13 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+# Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
-# Stream logs for a job (batch-fetches from all tasks in one RPC)
+# Stream logs for a job and child jobs (batch-fetches matching tasks in one RPC)
 iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
-iris --config cluster.yaml job logs /my-job --include-children
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
@@ -307,17 +347,17 @@ dashboard rendering, log levels, profiling, and constraint routing.
 
 ```bash
 # Local mode (in-process cluster, default)
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
-# iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
+# iris --cluster=ci-gcp-smoke cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Screenshots saved to custom directory
-IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="
 ```
 
 ## Configuration
@@ -391,34 +431,10 @@ scale_groups:
         ssh_key_file: ~/.ssh/manual_key
 ```
 
-## Directory Structure
-
-```
-src/iris/
-├── actor/                    # Actor RPC system
-│   ├── client.py            # Actor method invocation
-│   ├── pool.py              # Multi-endpoint management
-│   ├── resolver.py          # Endpoint discovery
-│   └── server.py            # Actor hosting
-├── client/                   # High-level client layer
-│   ├── client.py            # IrisClient and IrisContext
-│   ├── resolver.py          # ClusterResolver
-│   └── worker_pool.py       # Task dispatch
-├── cluster/                  # Cluster orchestration
-│   ├── manager.py           # connect_cluster() + stop_all(dry_run) free functions
-│   ├── controller/          # Controller service + autoscaler
-│   ├── worker/              # Worker service
-│   └── platform/            # Platform abstractions (GCP, Manual, Local, CoreWeave)
-├── rpc/                      # Protocol definitions + generated code
-└── cli/                      # CLI package
-    ├── main.py               # Top-level iris group
-    ├── cluster.py            # Cluster lifecycle, controller, VM ops, dashboard
-    ├── build.py              # Image build commands
-    ├── run.py                # Job submission (command passthrough)
-    └── rpc.py                # Dynamic RPC CLI
-```
-
 ## References
 
+- [Architecture](docs/architecture.md) - source layout, import layers, and the `TaskBackend` contract
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
-- [Constraints](docs/constraints.md) - Constraint system design
+- [Priority Bands](docs/priority-bands.md) - production, interactive, and batch scheduling priority
+- [CoreWeave](docs/coreweave.md) - CoreWeave GPU cluster quickstart and operator guide
+- [Federation](docs/federation.md) - how a job is routed to a peer cluster, and what travels with it

@@ -11,6 +11,7 @@ from equinox import filter_grad
 from jax.sharding import AxisType, Mesh
 
 import haliax as hax
+import haliax.nn.scan as hnn_scan
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.scan import BlockSeq, ScanCheckpointPolicy, Stacked
 from haliax.partitioning import axis_mapping, pspec_for_axis, set_mesh
@@ -596,8 +597,6 @@ def test_scan_via_with_bool_unroll(monkeypatch):
     default_carry_via, default_outs_via = m.scan_via(Module.with_output)(x)
     default_carry_direct, default_outs_direct = m.scan(x)
 
-    import haliax.nn.scan as hnn_scan
-
     scan_calls: list[int | None] = []
     original_scan = hnn_scan.haliax.scan
 
@@ -824,8 +823,6 @@ def test_fold_with_bool_unroll(monkeypatch):
 
     default_fold = m.fold(x)
     default_fold_via = m.fold_via(Module.intermediate)(x)
-
-    import haliax.nn.scan as hnn_scan
 
     fold_calls: list[int | None] = []
     original_fold = hnn_scan.haliax.fold

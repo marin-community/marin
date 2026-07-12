@@ -14,6 +14,7 @@ from types import EllipsisType
 from typing import Any, Callable, Mapping, Sequence, TypeAlias, overload
 
 import jax
+import jax._src.pretty_printer as pp
 import jax.numpy as jnp
 import numpy as np
 
@@ -29,13 +30,13 @@ from .axis import (
     AxisSpec,
     PartialShapeDict,
     ShapeDict,
+    _check_size_consistency,
     axis_name,
     axis_spec_to_shape_dict,
     axis_spec_to_tuple,
     dslice,
     eliminate_axes,
     selects_axis,
-    _check_size_consistency,
 )
 from .types import GatherScatterModeStr, IntScalar, PrecisionLike, Scalar
 
@@ -373,13 +374,13 @@ class NamedArray(metaclass=NamedArrayMeta):
             return tuple(result)
 
     @overload
-    def resolve_axis(self, axis: AxisSelector) -> Axis: ...
+    def resolve_axis(self, axes: AxisSelector) -> Axis: ...
 
     @overload
-    def resolve_axis(self, axis: tuple[AxisSelector, ...]) -> tuple[Axis, ...]: ...
+    def resolve_axis(self, axes: tuple[AxisSelector, ...]) -> tuple[Axis, ...]: ...
 
     @overload
-    def resolve_axis(self, axis: PartialShapeDict) -> ShapeDict: ...
+    def resolve_axis(self, axes: PartialShapeDict) -> ShapeDict: ...
 
     @overload
     def resolve_axis(self, axes: AxisSelection) -> AxisSpec: ...
@@ -429,8 +430,6 @@ class NamedArray(metaclass=NamedArrayMeta):
 
     def __tree_pp__(self, **kwargs):
         # For Equinox's tree pretty printer
-        import jax._src.pretty_printer as pp
-
         if kwargs.get("short_arrays", True) and is_jax_array_like(self.array):
             return pp.text(f"Named({self.dtype}{self.shape})")
         else:
@@ -776,7 +775,8 @@ class NamedArray(metaclass=NamedArrayMeta):
     def __le__(self, other) -> "NamedArray":  # pragma: no cover
         return haliax.less_equal(self, other)
 
-    def __eq__(self, other):  # pragma: no cover
+    # numpy elementwise comparison semantics: returns a NamedArray, not bool
+    def __eq__(self, other):  # pragma: no cover  # pyrefly: ignore[bad-override]
         # special case because Jax sometimes call == on
         # types when they're in PyTrees
         if self.array is None:  # pragma: no cover
@@ -787,7 +787,8 @@ class NamedArray(metaclass=NamedArrayMeta):
 
         return haliax.equal(self, other)
 
-    def __ne__(self, other):  # pragma: no cover
+    # numpy elementwise comparison semantics: returns a NamedArray, not bool
+    def __ne__(self, other):  # pragma: no cover  # pyrefly: ignore[bad-override]
         return haliax.not_equal(self, other)
 
     def __gt__(self, other) -> "NamedArray":  # pragma: no cover
@@ -954,11 +955,8 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
             return out
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
-            # Local import to avoid a circular import between core <-> partitioning.
-            from haliax.partitioning import get_pspec_for_manual_mesh
-
-            out_sharding = get_pspec_for_manual_mesh(new_axes)
-            indexer = [py_slice(None)] * array.array.ndim
+            out_sharding = haliax.partitioning.get_pspec_for_manual_mesh(new_axes)
+            indexer: list[Any] = [py_slice(None)] * array.array.ndim
             indexer[axis_index] = index.array
             new_array = array.array.at[tuple(indexer)].get(out_sharding=out_sharding)
 
@@ -1065,7 +1063,7 @@ def _slice_new(
     start: Mapping[AxisSelector, int | jnp.ndarray],
     length: Mapping[AxisSelector, int | Axis],
 ) -> NamedArray:
-    array_slice_indices = [0] * len(array.axes)
+    array_slice_indices: list[Any] = [0] * len(array.axes)
     new_axes = list(array.axes)
     new_lengths = [axis.size for axis in array.axes]
 
@@ -1134,7 +1132,7 @@ def updated_slice(
             f = haliax.vmap(f, axis=axis_name)
         return f(array, start, update)
 
-    array_slice_indices = [0] * len(array.axes)
+    array_slice_indices: list[Any] = [0] * len(array.axes)
     for axis, s in start.items():
         axis_index = array.axis_indices(haliax.axis_name(axis))
         if axis_index is None:
@@ -1213,7 +1211,7 @@ def index(array: NamedArray, slices: Mapping[AxisSelector, NamedIndex]) -> Named
 
 def _compute_new_axes_and_slices_for_index(
     array, slices
-) -> tuple[AxisSpec, list[py_slice | dslice | jnp.ndarray | int | list[int]]]:
+) -> tuple[tuple[str, ...], list[py_slice | dslice | jnp.ndarray | int | list[int]]]:
     def _is_integer_like_scalar_index(value: Any) -> bool:
         if isinstance(value, (int, np.integer)):
             return True

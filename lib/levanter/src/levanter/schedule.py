@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import typing
-import warnings
 from dataclasses import dataclass
 from typing import Sequence, TypeVar
 
@@ -20,16 +19,24 @@ IntSchedule = list[ScheduleStep[int]]
 BIG_INT = 2**63 - 1
 
 
+def _is_scalar(schedule_or_t: Sequence[ScheduleStep[T]] | T) -> bool:
+    """True if the argument is a bare value rather than a list of ``ScheduleStep``s."""
+    return not isinstance(schedule_or_t, Sequence) or (
+        bool(schedule_or_t) and not isinstance(schedule_or_t[0], ScheduleStep)
+    )
+
+
 def value_at_step(schedule_or_t: Sequence[ScheduleStep[T]] | T, step: int) -> T:
     """
     Given a schedule or a single value, return the value at the given step.
 
     """
-    if not isinstance(schedule_or_t, Sequence) or (schedule_or_t and not isinstance(schedule_or_t[0], ScheduleStep)):
+    if _is_scalar(schedule_or_t):
         return schedule_or_t  # type: ignore
 
-    for i, step_ in enumerate(schedule_or_t):
-        # we use start now
+    # Iterate in reverse to find the last segment whose start is <= step.
+    # A forward loop would always stop at the first segment (typically start=0).
+    for step_ in reversed(schedule_or_t):
         if step >= step_.start:
             return step_.value
 
@@ -37,9 +44,9 @@ def value_at_step(schedule_or_t: Sequence[ScheduleStep[T]] | T, step: int) -> T:
 
 
 def distinct_values(schedule: Sequence[ScheduleStep[T]] | T) -> set[T]:
-    if not isinstance(schedule, Sequence) or (schedule and not isinstance(schedule[0], ScheduleStep)):
+    if _is_scalar(schedule):
         return {schedule}  # type: ignore
-    return set(step.value for step in schedule)
+    return set(step.value for step in typing.cast("Sequence[ScheduleStep[T]]", schedule))
 
 
 @dataclass
@@ -82,28 +89,30 @@ class BatchSchedule:
                     # (until - start) steps each process 'value' data points.
                     total_offset += (until - start) * step.value
 
+    def _segment_for_step(self, step: int) -> BatchSegment:
+        """Return the segment whose ``[start, until)`` range contains ``step``.
+
+        The final segment is always open-ended (``until == BIG_INT``), so any step at or
+        beyond the final segment's start falls back to that last segment.
+        """
+        for seg in self.segments:
+            if seg.start <= step < seg.until:
+                return seg
+        return self.segments[-1]
+
     def batch_size_at_step(self, step: int) -> int:
         """
         Return the batch size (number of samples) at the given training step.
         """
-        for seg in self.segments:
-            if seg.start <= step < seg.until:
-                return seg.value
-        warnings.warn(f"Step {step} is beyond the last defined segment. Using the last segment's batch size.")
-        return self.segments[-1].value
+        return self._segment_for_step(step).value
 
     def global_data_offset_by_step(self, step: int) -> int:
         """
         Return the number of data points that have been processed up to the given training step.
         (That is, the starting index of the data for the current batch.)
         """
-        for seg in self.segments:
-            if seg.start <= step < seg.until:
-                # Within the current segment, add the number of steps passed times the batch size.
-                return seg.offset + (step - seg.start) * seg.value
-        # If step is beyond all segments, assume it continues in the last segment.
-        last = self.segments[-1]
-        return last.offset + (step - last.start) * last.value
+        seg = self._segment_for_step(step)
+        return seg.offset + (step - seg.start) * seg.value
 
     def find_step_containing_offset(self, offset: int) -> int:
         """
@@ -118,15 +127,9 @@ class BatchSchedule:
         """
         Return the indices for the batch at the given training step.
         """
-        for seg in self.segments:
-            if seg.start <= bn < seg.until:
-                base = seg.offset + (bn - seg.start) * seg.value
-                return range(base, base + seg.value)
-
-        # If step is beyond all segments, assume it continues in the last segment.
-        last = self.segments[-1]
-        base = last.offset + (bn - last.start) * last.value
-        return range(base, base + last.value)
+        seg = self._segment_for_step(bn)
+        base = seg.offset + (bn - seg.start) * seg.value
+        return range(base, base + seg.value)
 
     def unique_batch_sizes(self):
         return set(seg.value for seg in self.segments)

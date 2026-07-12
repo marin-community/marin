@@ -7,12 +7,16 @@ Metric abstraction for correct aggregation across microbatches.
 See docs/metrics.md for design rationale.
 """
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol
 
 import jax
 import jax.numpy as jnp
+
+
+logger = logging.getLogger(__name__)
 
 
 class ReductionType(Enum):
@@ -51,22 +55,12 @@ class Metric:
 
     def value(self):
         """Extract the scalar value by applying reduction."""
-        # Extract underlying array from NamedArray if needed
         value = self._value.array if hasattr(self._value, "array") else self._value
-        count = self._count.array if hasattr(self._count, "array") else self._count
-
-        match self.reduction:
-            case ReductionType.MEAN:
-                # Use jnp.where for JIT compatibility
-                return jnp.where(count > 0, value / count, 0.0)
-            case ReductionType.SUM:
-                return value
-            case ReductionType.MAX:
-                return value
-            case ReductionType.MIN:
-                return value
-            case ReductionType.LAST:
-                return value
+        if self.reduction is ReductionType.MEAN:
+            count = self._count.array if hasattr(self._count, "array") else self._count
+            # jnp.where keeps this JIT-safe and avoids divide-by-zero on empty folds.
+            return jnp.where(count > 0, value / count, 0.0)
+        return value
 
     def __float__(self) -> float:
         """Coerce Metric to float outside of a JIT context."""
@@ -75,18 +69,9 @@ class Metric:
     @classmethod
     def from_value(cls, value: float | jax.Array, reduction: ReductionType) -> "Metric":
         """Create metric from single observation."""
-        # Use float literals (not int) for consistent dtype across scan iterations
-        match reduction:
-            case ReductionType.MEAN:
-                return cls(_value=value, _count=1.0, reduction=reduction)
-            case ReductionType.SUM:
-                return cls(_value=value, _count=0.0, reduction=reduction)
-            case ReductionType.MAX:
-                return cls(_value=value, _count=0.0, reduction=reduction)
-            case ReductionType.MIN:
-                return cls(_value=value, _count=0.0, reduction=reduction)
-            case ReductionType.LAST:
-                return cls(_value=value, _count=0.0, reduction=reduction)
+        # Float literals (not int) keep dtype consistent across scan iterations.
+        count = 1.0 if reduction is ReductionType.MEAN else 0.0
+        return cls(_value=value, _count=count, reduction=reduction)
 
 
 def _metric_flatten(m: Metric):
@@ -109,27 +94,21 @@ def fold(m1: Metric, m2: Metric) -> Metric:
 
     match reduction:
         case ReductionType.MEAN:
-            # Combine sum and count
-            new_value = m1._value + m2._value
-            new_count = m1._count + m2._count
+            return Metric(
+                _value=m1._value + m2._value,
+                _count=m1._count + m2._count,
+                reduction=reduction,
+            )
         case ReductionType.SUM:
-            # Sum the values
             new_value = m1._value + m2._value
-            new_count = 0.0
         case ReductionType.MAX:
-            # Take maximum
             new_value = jnp.maximum(m1._value, m2._value)
-            new_count = 0.0
         case ReductionType.MIN:
-            # Take minimum
             new_value = jnp.minimum(m1._value, m2._value)
-            new_count = 0.0
         case ReductionType.LAST:
-            # Keep most recent (second argument)
             new_value = m2._value
-            new_count = 0.0
 
-    return Metric(_value=new_value, _count=new_count, reduction=reduction)
+    return Metric(_value=new_value, _count=0.0, reduction=reduction)
 
 
 def auto_metric_from_name(name: str, value: float | jax.Array) -> Metric:
@@ -170,8 +149,11 @@ def auto_metric_from_name(name: str, value: float | jax.Array) -> Metric:
     elif any(ind in name_lower for ind in mean_indicators):
         reduction = ReductionType.MEAN
     else:
-        jax.debug.print(
-            f"Ambiguous metric name: {name}, defaulting to MEAN. Return an explicit Metric to avoid this message."
+        # `name` is a Python string decided at trace time, so a plain logger.warning
+        # fires once per trace rather than once per step (as `jax.debug.print` would).
+        logger.warning(
+            "Ambiguous metric name: %s, defaulting to MEAN. Return an explicit Metric to avoid this message.",
+            name,
         )
         reduction = ReductionType.MEAN
 

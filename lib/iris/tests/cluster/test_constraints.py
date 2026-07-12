@@ -4,27 +4,28 @@
 """Tests for the ConstraintDescriptor registry and constraint evaluation."""
 
 import pytest
-
 from iris.cluster.constraints import (
+    INHERITED_CONSTRAINT_KEYS,
     AttributeValue,
     Constraint,
+    ConstraintIndex,
     ConstraintOp,
     DeviceType,
-    INHERITED_CONSTRAINT_KEYS,
     PlacementRequirements,
     WellKnownAttribute,
+    any_region_constraint,
     evaluate_constraint,
+    extract_placement_requirements,
     infer_preemptible_constraint,
     is_cpu_device_type_constraint,
     looks_like_executor,
     merge_constraints,
-    extract_placement_requirements,
     preemptible_constraint,
+    region_constraint,
     routing_constraints,
     soft_constraint_score,
     split_hard_soft,
 )
-
 from iris.rpc import job_pb2
 
 from .conftest import eq_constraint, in_constraint
@@ -120,18 +121,32 @@ def test_extract_placement_requirements_parameterized(constraints, expected):
 
 
 def test_merge_canonical_key_child_overrides_parent():
-    parent = [Constraint(key="device-type", op=ConstraintOp.EQ, value="gpu")]
-    child = [Constraint(key="device-type", op=ConstraintOp.EQ, value="tpu")]
+    parent = [Constraint.create(key="device-type", op=ConstraintOp.EQ, value="gpu")]
+    child = [Constraint.create(key="device-type", op=ConstraintOp.EQ, value="tpu")]
     merged = merge_constraints(parent, child)
     assert len(merged) == 1
-    assert merged[0].value == "tpu"
+    assert merged[0].values[0].value == "tpu"
 
 
 def test_merge_non_canonical_key_appends():
-    parent = [Constraint(key="tpu-name", op=ConstraintOp.EQ, value="pod-a")]
-    child = [Constraint(key="tpu-name", op=ConstraintOp.EQ, value="pod-b")]
+    parent = [Constraint.create(key="tpu-name", op=ConstraintOp.EQ, value="pod-a")]
+    child = [Constraint.create(key="tpu-name", op=ConstraintOp.EQ, value="pod-b")]
     merged = merge_constraints(parent, child)
     assert len(merged) == 2
+
+
+# --- ANY-region marker (region EXISTS) ---
+
+
+def test_merge_child_any_region_clears_parent_pin():
+    """Merging a child's ANY marker over a parent's pinned region yields a single
+    region-EXISTS constraint (canonical-key override)."""
+    parent = [region_constraint(["us-central1"])]
+    child = [any_region_constraint()]
+    merged = merge_constraints(parent, child)
+    region = [c for c in merged if c.key == WellKnownAttribute.REGION]
+    assert len(region) == 1
+    assert region[0].op == ConstraintOp.EXISTS
 
 
 # --- INHERITED_CONSTRAINT_KEYS ---
@@ -213,7 +228,7 @@ def test_infer_preemptible_constraint_adds_non_preemptible():
     result = infer_preemptible_constraint(resources, replicas=1, existing_constraints=[])
     assert result is not None
     assert result.key == WellKnownAttribute.PREEMPTIBLE
-    assert result.value == "false"
+    assert result.values[0].value == "false"
 
 
 def test_infer_preemptible_constraint_noop_when_explicit():
@@ -236,11 +251,11 @@ def test_preemptible_constraint_soft_default_logic():
     """preemptible=True defaults to soft, preemptible=False defaults to hard."""
     c_true = preemptible_constraint(True)
     assert c_true.mode == job_pb2.CONSTRAINT_MODE_PREFERRED
-    assert c_true.value == "true"
+    assert c_true.values[0].value == "true"
 
     c_false = preemptible_constraint(False)
     assert c_false.mode == job_pb2.CONSTRAINT_MODE_REQUIRED
-    assert c_false.value == "false"
+    assert c_false.values[0].value == "false"
 
 
 def test_preemptible_constraint_soft_override():
@@ -254,12 +269,12 @@ def test_preemptible_constraint_soft_override():
 
 def test_split_hard_soft():
     hard = eq_constraint("region", "us-central1")
-    soft = job_pb2.Constraint(
+    soft = Constraint.create(
         key="preemptible",
-        op=job_pb2.CONSTRAINT_OP_EQ,
+        op=ConstraintOp.EQ,
+        value="true",
         mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
     )
-    soft.value.string_value = "true"
     hard_list, soft_list = split_hard_soft([hard, soft])
     assert len(hard_list) == 1
     assert hard_list[0].key == "region"
@@ -275,25 +290,66 @@ def test_split_hard_soft_all_required():
     assert len(soft_list) == 0
 
 
+def _soft_eq(key: str, value: str) -> Constraint:
+    return Constraint.create(key=key, op=ConstraintOp.EQ, value=value, mode=job_pb2.CONSTRAINT_MODE_PREFERRED)
+
+
 def test_soft_constraint_score_counts_matches():
     attrs = {
         "preemptible": AttributeValue("true"),
         "region": AttributeValue("us-central1"),
     }
-    soft1 = eq_constraint("preemptible", "true")
-    soft1.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
-    soft2 = eq_constraint("region", "eu-west1")
-    soft2.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    soft1 = _soft_eq("preemptible", "true")
+    soft2 = _soft_eq("region", "eu-west1")
     # Only preemptible matches
     assert soft_constraint_score(attrs, [soft1, soft2]) == 1
     # Both match
-    soft2_match = eq_constraint("region", "us-central1")
-    soft2_match.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    soft2_match = _soft_eq("region", "us-central1")
     assert soft_constraint_score(attrs, [soft1, soft2_match]) == 2
 
 
 def test_soft_constraint_score_zero_when_no_match():
     attrs = {"preemptible": AttributeValue("false")}
-    soft = eq_constraint("preemptible", "true")
-    soft.mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    soft = _soft_eq("preemptible", "true")
     assert soft_constraint_score(attrs, [soft]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Regression: case-insensitive matching for custom user attributes.
+# Worker attributes and constraint literals share AttributeValue, which
+# normalizes strings at construction — so "NLP" on either side matches "nlp".
+# ---------------------------------------------------------------------------
+
+
+def test_custom_attribute_case_insensitive_match_evaluator():
+    attrs = {"team": AttributeValue("NLP")}
+    proto = job_pb2.Constraint(key="team", op=job_pb2.CONSTRAINT_OP_EQ)
+    proto.value.string_value = "NLP"
+    c = Constraint.from_proto(proto)
+    assert evaluate_constraint(attrs["team"], c)
+
+
+def test_custom_attribute_case_insensitive_match_index():
+    entities = {"w1": {"team": AttributeValue("NLP")}}
+    index = ConstraintIndex.build(entities)
+    proto = job_pb2.Constraint(key="team", op=job_pb2.CONSTRAINT_OP_EQ)
+    proto.value.string_value = "NLP"
+    c = Constraint.from_proto(proto)
+    assert index.matching_entities([c]) == {"w1"}
+
+
+def test_attribute_value_normalizes_at_construction():
+    av = AttributeValue("  My-Region  ")
+    assert av.value == "my-region"
+    # Integers and floats pass through untouched.
+    assert AttributeValue(64).value == 64
+    assert AttributeValue(1.5).value == 1.5
+
+
+def test_constraint_rejects_invalid_arity():
+    with pytest.raises(ValueError, match="EQ requires"):
+        Constraint(key="region", op=ConstraintOp.EQ, values=())
+    with pytest.raises(ValueError, match="IN requires"):
+        Constraint(key="region", op=ConstraintOp.IN, values=())
+    with pytest.raises(ValueError, match="EXISTS"):
+        Constraint.create(key="gpu", op=ConstraintOp.EXISTS, value="x")

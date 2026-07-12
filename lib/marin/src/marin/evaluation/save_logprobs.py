@@ -17,37 +17,28 @@ import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
-import equinox as eqx
-import fsspec
-import jax
-
-import jmp
-import numpy as np
-from jax.experimental import multihost_utils
-
 import haliax as hax
+import jax
+import jmp
+import levanter
+import levanter.tracker
+import numpy as np
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-
-import levanter
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-from levanter.data import DataLoader
-from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
-from levanter.distributed import RayConfig
+from jax.experimental import multihost_utils
+from levanter.data.loader import DataLoader
+from levanter.data.text.datasets import LmDataConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
-from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
+from rigging.filesystem import open_url
 
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
-
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.evaluation.model_loading import load_eval_model
+from marin.processing.tokenize.data_configs import with_pack
 
 logger = logging.getLogger(__name__)
 
@@ -75,20 +66,16 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    packed_components = {
-        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
-        for name, component in data.components.items()
-    }
-    packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
-    return packed_data
+    return replace(with_pack(data, True), block_cross_document_attention=True)
 
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:
     """Compute and save per-token logprobs."""
-    levanter.initialize(config)
+    levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
-    hf_checkpoint = RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None
+    if config.checkpoint_path is None:
+        raise ValueError("save_logprobs requires checkpoint_path")
 
     EvalBatch = config.trainer.EvalBatch
     Pos = config.model.max_Pos.resize(config.max_eval_length)
@@ -134,21 +121,16 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             TopK = top_k_values.resolve_axis("top_k")
             return top_k_values.rearrange((EvalBatch, Pos, TopK)), top_k_indices.rearrange((EvalBatch, Pos, TopK))
 
-        # Load model
-        if config.checkpoint_path is not None and not config.checkpoint_is_hf:
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-            model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
-        elif hf_checkpoint is not None:
-            model_config = config.model
-            if not hasattr(model_config, "hf_checkpoint_converter"):
-                raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype)
-        else:
-            raise AssertionError("Should not get here")
+        model = load_eval_model(
+            config.model,
+            config.checkpoint_path,
+            checkpoint_is_hf=config.checkpoint_is_hf,
+            Vocab=Vocab,
+            axis_mapping=parameter_axis_mapping,
+            tokenizer=tokenizer,
+            mp=mp,
+            key=key,
+        )
 
         for name, dataset in validation_sets.items():
             loader = DataLoader(
@@ -159,7 +141,7 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             )
 
             output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
-            cm = fsspec.open(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
+            cm = open_url(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
             with cm as f:
                 for batch in loader:
                     with hax.axis_mapping(compute_axis_mapping):
@@ -172,9 +154,10 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                                 (b_topk_vals, b_topk_ids), tiled=True
                             )
 
-                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[
-                            0
-                        ].rearrange((EvalBatch, Pos))
+                        b_tokens, b_seg_ids = (
+                            batch.tokens.rearrange((EvalBatch, Pos)),
+                            batch.attn_mask.segment_ids[0].rearrange((EvalBatch, Pos)),
+                        )
                         b_loss, b_tokens, b_seg_ids = multihost_utils.process_allgather(
                             (b_loss, b_tokens, b_seg_ids), tiled=True
                         )
@@ -228,40 +211,3 @@ def run_save_logprobs_on_pod(config: SaveLogprobsOnPodConfig) -> None:
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
-
-
-def default_save_logprobs(
-    checkpoint: str | InputName,
-    model: LmConfig,
-    data: LMMixtureDatasetConfig,
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 4,
-    top_k: int | None = None,
-    name: str | None = None,
-) -> ExecutorStep:
-    """Creates an ExecutorStep that saves per-token logprobs to disk."""
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-
-    return ExecutorStep(
-        name=f"analysis/logprobs/{name}",
-        fn=run_save_logprobs_on_pod,
-        config=SaveLogprobsOnPodConfig(
-            save_logprobs_config=SaveLogprobsConfig(
-                checkpoint_path=checkpoint,  # type: ignore
-                checkpoint_is_hf=checkpoint_is_hf,
-                model=model,
-                data=data,
-                trainer=TrainerConfig(
-                    tracker=NoopConfig(),
-                    ray=RayConfig(auto_start_cluster=False),
-                    per_device_eval_parallelism=per_device_batch_size,
-                    mp=jmp.get_policy("c=bf16"),
-                ),
-                output_path=this_output_path(),
-                top_k=top_k,
-            ),
-            resources=resource_config,
-        ),
-    )

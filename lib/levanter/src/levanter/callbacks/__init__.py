@@ -1,13 +1,18 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import cProfile
 import os
+import pstats
 import threading
 import time
 from contextlib import contextmanager
 from typing import Optional
 
+import wandb
+
 import jax
+from rigging.filesystem import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
@@ -19,15 +24,10 @@ from levanter.callbacks._metrics import (
     logger,
     pbar_logger,
 )
-from levanter.callbacks.lora_debug import (
-    LoraDebugCallback,
-    LoraDebugConfig,
-    collect_topology_summary,
-    log_topology_summary,
-)
+from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import _flush_while_waiting, profile
-from levanter.data import DataLoader
+from levanter.data.loader import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
@@ -42,13 +42,10 @@ def eval_loss_loop(
     total_loss = 0.0
     total_load_time = 0.0
     total_loss_time = 0.0
-    accumulated_metrics = {}
+    accumulated_metrics: dict = {}
     n = 0
 
-    if name is not None:
-        desc = f"eval {name}"
-    else:
-        desc = "eval"
+    desc = f"eval {name}" if name is not None else "eval"
 
     _tqdm_logging_one_time_setup()
     pbar = tqdm(dataset, desc=desc, position=1, leave=False, total=max_batches)
@@ -86,11 +83,10 @@ def eval_loss_loop(
     if n > 0:
         total_loss /= n
 
-    # Unwrap metrics before returning
     plain_metrics = unwrap_metrics(accumulated_metrics)
-    plain_metrics["timing/load_time"] = total_load_time
-    plain_metrics["timing/loss_time"] = total_loss_time
-    plain_metrics["timing/num_batches"] = float(n)
+    plain_metrics["eval/timing/load_time"] = total_load_time
+    plain_metrics["eval/timing/loss_time"] = total_loss_time
+    plain_metrics["eval/timing/num_batches"] = float(n)
     return total_loss, plain_metrics
 
 
@@ -107,9 +103,11 @@ def compute_validation_loss(
         if name:
             prefix += "/" + name
 
-        # Log loss and metrics
+        # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
+        # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
+        # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
         to_log = {f"{prefix}/loss": loss}
-        to_log.update({f"{prefix}/{k}": v for k, v in metrics.items()})
+        to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
         levanter.tracker.log(to_log, step=info.step)
 
         if name:
@@ -123,8 +121,6 @@ def compute_validation_loss(
 
 
 def wandb_xla_logger(config: WandbConfig):
-    import wandb
-
     last_mtime = wandb.run and wandb.run.start_time or time.time()
 
     def log_xla_to_wandb(step: StepInfo):
@@ -148,6 +144,7 @@ def profile_ctx(
     host_profile: bool = False,
     host_profile_basename: str = "host_profile",
     host_profile_topn: int = 0,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ):
     """Context manager for JAX profiling traces.
 
@@ -165,20 +162,24 @@ def profile_ctx(
 
     Notes:
         - Only process 0 creates the Perfetto link when ``create_perfetto_link`` is True.
-        - After stopping the trace, logs the artifact to the current tracker as type
-          "jax_profile" and performs a cross-process barrier.
+        - After exiting the context, the profile remains in ``path`` and the context
+          manager performs a cross-process barrier.
+        - When ``host_profile`` is enabled, the cProfile outputs are written into the
+          same directory as the JAX trace files.
     """
     _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
     logger.info("Starting profiler.")
 
-    # Ensure destination exists
-    try:
-        os.makedirs(path, exist_ok=True)
-    except Exception:
-        pass
+    # Ensure destination exists (handles both local and remote filesystems)
+    StoragePath(path).mkdirs()
 
     if device_profile:
-        jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+        jax.profiler.start_trace(
+            path,
+            create_perfetto_link=_create_perfetto_link,
+            create_perfetto_trace=True,
+            profiler_options=profiler_options,
+        )
 
     event = None
     pr = None
@@ -186,8 +187,6 @@ def profile_ctx(
     txt_summary_path = None
     if host_profile:
         try:
-            import cProfile  # type: ignore
-
             pr = cProfile.Profile()
             pr.enable()
             # Primary .pstats file and a human-readable txt summary
@@ -195,25 +194,24 @@ def profile_ctx(
             txt_summary_path = os.path.join(path, f"{host_profile_basename}.txt")
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
+
     try:
         yield
     finally:
-        # Stop host profiler and write artifacts
+        # Stop host profiler and write the profile outputs into the run directory.
         # Do this first because jax.profiler can be very slow to finish
         if pr is not None and stats_path is not None:
             try:
                 pr.disable()
                 pr.dump_stats(stats_path)
                 if host_profile_topn and txt_summary_path is not None:
-                    import pstats  # type: ignore
-
                     s = pstats.Stats(stats_path)
                     s.strip_dirs().sort_stats("cumtime")
                     with open(txt_summary_path, "w") as f:
                         s.stream = f  # type: ignore
                         s.print_stats(host_profile_topn)
             except Exception:  # pragma: no cover - optional/diagnostic path
-                logger.warn("Failed to log host profile stats", exc_info=True)
+                logger.warning("Failed to log host profile stats", exc_info=True)
 
         # Start periodic flushing before stop_trace since it may block when perfetto is enabled
         if create_perfetto_link and jax.process_index() == 0:
@@ -231,18 +229,6 @@ def profile_ctx(
         if event is not None:
             event.set()
 
-        levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-        # Log host stats if available
-        if stats_path is not None and os.path.exists(stats_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(stats_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile stats", exc_info=True)
-        if txt_summary_path is not None and os.path.exists(txt_summary_path):
-            try:
-                levanter.tracker.current_tracker().log_artifact(txt_summary_path, type="host_profile")
-            except Exception:
-                logger.warn("Failed to log host profile summary", exc_info=True)
         barrier_sync()
 
 
@@ -256,13 +242,10 @@ __all__ = [
     "CBInfo",
     "JitCallback",
     "LambdaCallback",
-    "LoraDebugCallback",
-    "LoraDebugConfig",
     "StepInfo",
-    "collect_topology_summary",
-    "log_step_info",
     "log_performance_stats",
-    "log_topology_summary",
+    "iris_status_reporter",
+    "log_step_info",
     "pbar_logger",
     "CallbackStateView",
     "StateCallbackRunner",

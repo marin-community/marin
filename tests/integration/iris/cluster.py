@@ -3,23 +3,15 @@
 
 """Extracted cluster helper for Iris integration tests."""
 
-import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from finelog.rpc import logging_pb2
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import Constraint
-from iris.cluster.types import (
-    CoschedulingConfig,
-    Entrypoint,
-    EnvironmentSpec,
-    ReservationEntry,
-    ResourceSpec,
-)
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.cluster.types import CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration
 
 
@@ -59,7 +51,6 @@ class IrisIntegrationCluster:
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
-        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job."""
         return self.client.submit(
@@ -75,7 +66,6 @@ class IrisIntegrationCluster:
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,
-            reservation=reservation,
         )
 
     def status(self, job: Job) -> job_pb2.JobStatus:
@@ -156,5 +146,5 @@ class IrisIntegrationCluster:
 
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         task_id = job.job_id.task(task_index).to_wire()
-        response = self._cluster.fetch_logs(re.escape(task_id) + ":.*")
+        response = self._cluster.fetch_logs(f"{task_id}:", match_scope=logging_pb2.MATCH_SCOPE_PREFIX)
         return [f"{e.source}: {e.data}" for e in response.entries]

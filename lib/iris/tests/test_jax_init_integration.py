@@ -15,8 +15,6 @@ No real GPUs or Iris cluster needed — uses a thread-safe in-memory endpoint
 store and mocks jax.distributed.initialize.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +25,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from iris.actor.resolver import ResolveResult, ResolvedEndpoint
+from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax

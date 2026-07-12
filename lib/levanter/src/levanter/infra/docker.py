@@ -5,10 +5,8 @@ import json
 import os
 import pty
 import shlex
-import shutil
 import subprocess
 import sys
-from pathlib import Path
 
 GCP_CLEANUP_POLICY = [
     {
@@ -27,16 +25,6 @@ GCP_CLEANUP_POLICY = [
         },
     },
 ]
-
-
-def _rm(path):
-    path = Path(path)
-    if path.is_dir():
-        shutil.rmtree(path, ignore_errors=True)
-    elif path.is_file():
-        os.remove(path)
-    elif path.exists():
-        raise RuntimeError(f"Remove failed. Path ({path}) is neither a directory nor a file.")
 
 
 def _run(argv):
@@ -231,7 +219,7 @@ def make_docker_run_command(image_id, command, *, foreground, env, name="levante
         "/tmp:/tmp",
     ]
 
-    # optionally add multislice env vars (if set by ray runtime env vars)
+    # optionally forward multislice env vars (set by the orchestrator, e.g. Iris/Fray)
     for v in ["MEGASCALE_COORDINATOR_ADDRESS", "MEGASCALE_NUM_SLICES", "MEGASCALE_PORT", "MEGASCALE_SLICE_ID"]:
         v = shlex.quote(str(v))
         docker_command.extend(["-e", v])

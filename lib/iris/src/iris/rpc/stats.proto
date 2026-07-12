@@ -1,0 +1,70 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+// Process-local introspection: per-method RPC call counts, latency
+// histograms, and sampled recent calls (slow tail + periodic discovery).
+// Intentionally decoupled from any particular service so it can be
+// implemented by controller, worker, or log server processes.
+package iris.stats;
+
+import "time.proto";
+
+message GetRpcStatsRequest {}
+
+// Aggregate stats for a single RPC method.
+message RpcMethodStats {
+  string method = 1;
+  int64 count = 2;
+  int64 error_count = 3;
+  double total_duration_ms = 4;
+  double max_duration_ms = 5;
+  double p50_ms = 6;
+  double p95_ms = 7;
+  double p99_ms = 8;
+
+  // Histogram shape. bucket_upper_bounds_ms[-1] is always +inf (sentinel 0).
+  // bucket_counts has the same length; entry i = calls with duration in
+  // (bucket_upper_bounds_ms[i-1], bucket_upper_bounds_ms[i]].
+  repeated int64 bucket_upper_bounds_ms = 9;
+  repeated int64 bucket_counts = 10;
+
+  iris.time.Timestamp last_call = 11;
+}
+
+// A single sampled RPC invocation. Used for both slow-tail and periodic
+// discovery samples. Fields may be empty when not available.
+message RpcCallSample {
+  string method = 1;
+  iris.time.Timestamp timestamp = 2;
+  double duration_ms = 3;
+  string peer = 4;              // Remote address, best-effort
+  string user_agent = 5;
+  string caller = 6;            // Verified identity subject, empty if anon
+  string error_code = 7;        // Connect code name, empty on success
+  string error_message = 8;
+  string request_preview = 9;   // Truncated JSON-rendered request proto
+}
+
+message GetRpcStatsResponse {
+  repeated RpcMethodStats methods = 1;
+  repeated RpcCallSample slow_samples = 2;
+  repeated RpcCallSample discovery_samples = 3;
+  iris.time.Timestamp collector_started_at = 4;
+}
+
+service StatsService {
+  rpc GetRpcStats(GetRpcStatsRequest) returns (GetRpcStatsResponse);
+}

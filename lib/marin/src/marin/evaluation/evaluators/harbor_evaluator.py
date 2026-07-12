@@ -24,14 +24,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fray.v1.cluster import ResourceConfig
-from rigging.filesystem import open_url
+import pandas as pd
+import wandb
+from huggingface_hub import snapshot_download
+from rigging.filesystem import StoragePath, is_remote_path, open_url, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.evaluation.utils import download_from_gcs, is_remote_path, upload_to_gcs
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
-from marin.utils import fsspec_exists, fsspec_glob
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.utils import download_from_gcs, upload_to_gcs
+from marin.inference.vllm_server import VllmEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,23 @@ _DEFAULT_HOSTED_VLLM_MODEL_INFO: dict[str, Any] = {
     "input_cost_per_token": 0.0,
     "output_cost_per_token": 0.0,
 }
+
+HARBOR_EVAL_ENV_KEYS = (
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "WANDB_PROJECT",
+    "HF_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DAYTONA_API_KEY",
+    "E2B_API_KEY",
+    "MODAL_API_KEY",
+    "TPU_CI",
+    "MARIN_PREFIX",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_TPU_SKIP_PRECOMPILE",
+)
 
 
 def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
@@ -68,7 +86,7 @@ def _sanitize_hosted_vllm_canonical_name(name: str) -> str:
     return candidate
 
 
-def _env_vars_from_keys(keys: list[str]) -> dict[str, str]:
+def env_vars_from_keys(keys: list[str] | tuple[str, ...]) -> dict[str, str]:
     env_vars: dict[str, str] = {}
     for key in keys:
         value = os.environ.get(key)
@@ -100,6 +118,19 @@ def _get_stable_local_workdir(job_name: str) -> Path:
     return workdir
 
 
+def _fix_docker_permissions(path: Path) -> None:
+    """Best-effort chmod so the current user can read Docker-created files."""
+    try:
+        subprocess.run(
+            ["sudo", "chmod", "-R", "755", str(path)],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as e:
+        # sudo not on PATH or can't be spawned (e.g. non-Linux dev environment).
+        logger.debug("chmod via sudo failed for %s: %s", path, e)
+
+
 def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
     """Restore completed trials from GCS to enable Harbor resume.
 
@@ -108,12 +139,12 @@ def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
 
     Returns the number of trials restored.
     """
-    trials_gcs_path = os.path.join(gcs_output_path, "harbor_trials")
-    if not fsspec_exists(trials_gcs_path):
+    trials_gcs_path = prefix_join(gcs_output_path, "harbor_trials")
+    if not StoragePath(trials_gcs_path).exists():
         return 0
 
     # Find completed trials (those with result.json)
-    result_files = fsspec_glob(os.path.join(trials_gcs_path, "*/result.json"))
+    result_files = [str(m) for m in StoragePath(prefix_join(trials_gcs_path, "*/result.json")).glob()]
 
     restored = 0
     for result_file in result_files:
@@ -152,18 +183,10 @@ def _create_trial_upload_hook(gcs_output_path: str, local_job_dir: Path):
             logger.warning(f"Trial directory not found for upload: {local_trial_dir}")
             return
 
-        # Fix Docker file permissions so we can read them
-        try:
-            subprocess.run(
-                ["sudo", "chmod", "-R", "755", str(local_trial_dir)],
-                check=False,
-                capture_output=True,
-            )
-        except Exception:
-            pass
+        _fix_docker_permissions(local_trial_dir)
 
         # Upload to GCS: {output_path}/harbor_trials/{trial_name}/
-        trial_gcs_path = os.path.join(gcs_output_path, "harbor_trials", trial_name)
+        trial_gcs_path = prefix_join(gcs_output_path, f"harbor_trials/{trial_name}")
         try:
             upload_to_gcs(str(local_trial_dir), trial_gcs_path)
             logger.info(f"Uploaded trial {trial_name} to GCS")
@@ -261,73 +284,6 @@ class HarborEvaluator(Evaluator):
                 version=version,
             )
 
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        """Launch Harbor evaluation with Fray.
-
-        For local models (`model.path` is set), this runs on the provided TPU/GPU
-        resources so vLLM can serve the model. For API models it runs in-process.
-        """
-
-        if model.path is None:
-            self.evaluate(
-                model=model,
-                evals=evals,
-                output_path=output_path,
-                max_eval_instances=max_eval_instances,
-                wandb_tags=wandb_tags,
-            )
-            return
-
-        mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
-
-        env_vars = _env_vars_from_keys(
-            [
-                "WANDB_API_KEY",
-                "WANDB_ENTITY",
-                "WANDB_PROJECT",
-                "HF_TOKEN",
-                "ANTHROPIC_API_KEY",
-                "OPENAI_API_KEY",
-                "DAYTONA_API_KEY",
-                "E2B_API_KEY",
-                "MODAL_API_KEY",
-                "TPU_CI",
-                "MARIN_PREFIX",
-                "MARIN_VLLM_MODE",
-                "VLLM_ALLOW_LONG_MAX_MODEL_LEN",
-                "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
-                "VLLM_TPU_SKIP_PRECOMPILE",
-            ]
-        )
-        env_vars.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
-        env_vars.setdefault("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1")
-        env_vars.setdefault("VLLM_TPU_SKIP_PRECOMPILE", "1")
-
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="harbor-vllm-eval",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("harbor", "tpu", "vllm"),
-            pip_packages=pip_packages,
-            env_vars=env_vars,
-            max_retries_failure=0,
-            max_retries_preemption=10,
-        )
-
     def _run_eval_inner(
         self,
         model_name: str,
@@ -388,12 +344,16 @@ class HarborEvaluator(Evaluator):
         - Restores completed trials from GCS on resume
         - Leverages Harbor's native resume capability
         """
-        from harbor.job import Job
-        from harbor.models.environment_type import EnvironmentType
-        from harbor.models.job.config import JobConfig, LocalDatasetConfig, RegistryDatasetConfig
-        from harbor.models.orchestrator_type import OrchestratorType
-        from harbor.models.registry import RemoteRegistryInfo
-        from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+        from harbor.job import Job  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.environment_type import EnvironmentType  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.job.config import (  # noqa: PLC0415  # optional dep: harbor
+            JobConfig,
+            LocalDatasetConfig,
+            RegistryDatasetConfig,
+        )
+        from harbor.models.orchestrator_type import OrchestratorType  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.registry import RemoteRegistryInfo  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.trial.config import AgentConfig, EnvironmentConfig  # noqa: PLC0415  # optional dep: harbor
 
         # Generate deterministic job name for resume capability
         job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)
@@ -434,8 +394,6 @@ class HarborEvaluator(Evaluator):
                 hf_repo_id = dataset[len("hf:") :]
             else:
                 hf_repo_id = dataset
-
-            from huggingface_hub import snapshot_download
 
             # Use stable cache directories inside workdir
             hf_cache_dir = workdir / "hf_cache"
@@ -509,15 +467,7 @@ class HarborEvaluator(Evaluator):
 
         logger.info("Harbor execution completed")
 
-        # Fix permissions on Docker-created files so we can read them
-        try:
-            subprocess.run(
-                ["sudo", "chmod", "-R", "755", str(job.job_dir)],
-                check=False,
-                capture_output=True,
-            )
-        except Exception:
-            pass  # Continue even if chmod fails
+        _fix_docker_permissions(job.job_dir)
 
         # Read trial results from Harbor's result.json files
         results = {"trials": {}}
@@ -657,8 +607,7 @@ class HarborEvaluator(Evaluator):
                     ext = ".json" if trajectory_content.strip().startswith("{") else ".jsonl"
                     trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}{ext}")
 
-                    with open_url(trajectory_path, "w") as dst:
-                        dst.write(trajectory_content)
+                    StoragePath(trajectory_path).write_text(trajectory_content)
 
                     results["trials"][trial_id]["trajectory_path"] = trajectory_path
                     logger.info(
@@ -694,16 +643,13 @@ class HarborEvaluator(Evaluator):
             "aggregate": results["aggregate"],
             "samples_path": samples_path,
         }
-        with open_url(results_path, "w") as f:
-            json.dump(aggregated_results, f, indent=2, ensure_ascii=False)
+        StoragePath(results_path).write_text(json.dumps(aggregated_results, indent=2, ensure_ascii=False))
 
         logger.info(f"Wrote samples to {samples_path}")
         logger.info(f"Wrote aggregated results to {results_path}")
 
         # Log to W&B
         try:
-            import wandb
-
             wandb.init(
                 project=os.environ.get("WANDB_PROJECT") or "harbor",
                 name=f"{model_name}-{dataset}",
@@ -720,8 +666,6 @@ class HarborEvaluator(Evaluator):
             wandb.log(results["aggregate"])
 
             # Log table of per-trial results
-            import pandas as pd
-
             trials_df = pd.DataFrame.from_dict(trials_for_output, orient="index")
             wandb.log({"trials": wandb.Table(dataframe=trials_df)})
 

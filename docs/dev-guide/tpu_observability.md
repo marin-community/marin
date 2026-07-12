@@ -15,9 +15,9 @@ This document serves as the central reference for operational observability rega
 The CLI commands below provide the most accurate view of TPU state. For exact current counts, prefer zonal `tpu-vm list`; use Cloud Asset Inventory for cross-zone aggregation (slight lag). Dashboard metrics may lag or underreport.
 
 ### Quick Fleet Summary
-Get a quick summary of READY TPUs across all zones:
+Get a quick summary of READY TPU nodes across all zones:
 
-*Note: This uses Cloud Asset Inventory for cross-zone aggregation. It may lag slightly; cores are inferred from the `ray-user-node-type` label (estimate). Use `tpu-vm list` for ground truth within a specific zone.*
+*Note: This uses Cloud Asset Inventory for cross-zone aggregation. It may lag slightly. Use `tpu-vm list` for ground-truth core counts within a specific zone.*
 ```shell
 gcloud asset search-all-resources \
   --scope=projects/hai-gcp-models \
@@ -29,23 +29,16 @@ gcloud asset search-all-resources \
       .[]
       | select(.state=="READY")
       | {
-          zone: .location,
-          cores: (
-            try (
-              .labels["ray-user-node-type"]
-              | capture("_(?<n>[0-9]+)$").n
-              | tonumber
-            ) catch 0
-          )
+          zone: .location
         }
     ]
     | sort_by(.zone)
     | group_by(.zone)
-    | map({zone: .[0].zone, nodes: length, cores: (map(.cores) | add)})
-    | sort_by(.cores)
+    | map({zone: .[0].zone, nodes: length})
+    | sort_by(.nodes)
     | reverse
     | .[]
-    | "\(.zone): \(.nodes) READY nodes, \(.cores) READY cores"
+    | "\(.zone): \(.nodes) READY nodes"
   '
 ```
 
@@ -179,7 +172,7 @@ gcloud logging read \
 
 ### Check Specific TPU Node Status
 ```shell
-NODE_NAME="ray-marin-us-central2-worker-xxxxx-tpu"
+NODE_NAME="<tpu-node-name>"
 ZONE="us-central2-b"
 
 gcloud compute tpus tpu-vm describe "$NODE_NAME" \
@@ -194,7 +187,7 @@ gcloud asset search-all-resources \
   --scope=projects/hai-gcp-models \
   --asset-types=tpu.googleapis.com/Node \
   --limit=5000 \
-  --format="table(displayName, location, labels.ray-user-node-type, state)"
+  --format="table(displayName, location, labels.iris-marin-scale-group, labels.iris-marin-managed, state)"
 ```
 
 # Dashboard
@@ -247,7 +240,7 @@ Fleet size over time = periodic count of READY TPU nodes; not `duty_cycle` serie
 
 ### Detecting Stockout Periods
 Look at **TPU Acquisition Success Rate**:
-- **Normal operation**: 20-30% success rate (Ray retries are expected)
+- **Normal operation**: 20-30% success rate (autoscaler retries are expected)
 - **Stockout**: <10% success rate sustained for >1 hour
 - **Easy period**: >40% success rate
 

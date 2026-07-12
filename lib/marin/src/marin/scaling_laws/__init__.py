@@ -17,23 +17,27 @@ from marin.scaling_laws.isoflop_analysis import (
     predict_optimal_config,
     round_flops_to_bucket,
 )
-from marin.scaling_laws.tpu_utils import (
-    pick_v4_type,
-    pick_v5p_type,
-)
 from marin.scaling_laws.scaling_plots import (
     create_isoflop_plot,
     create_scaling_plot,
     save_plots,
     upload_plots_to_wandb,
 )
+from marin.scaling_laws.tpu_utils import (
+    V4_SPEC,
+    V5P_SPEC,
+    TpuSpec,
+    pick_tpu_type,
+    pick_v4_type,
+    pick_v5p_type,
+)
 
 __all__ = [
-    # Constants
     "DEFAULT_BUDGETS",
     "DEFAULT_EVAL_METRIC_KEY",
     "DEFAULT_SEQ_LEN",
-    # Data classes and Protocols
+    "V4_SPEC",
+    "V5P_SPEC",
     "CandidateConfig",
     "FitScalingLawsResult",
     "IsoFlopRecord",
@@ -42,10 +46,11 @@ __all__ = [
     "QuadraticFitCoeffs",
     "ScalingFit",
     "ScalingHeuristic",
-    # Functions
+    "TpuSpec",
     "create_isoflop_plot",
     "create_scaling_plot",
     "fit_scaling_laws",
+    "pick_tpu_type",
     "pick_v4_type",
     "pick_v5p_type",
     "predict_optimal_config",

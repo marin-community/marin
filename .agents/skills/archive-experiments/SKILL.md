@@ -1,12 +1,12 @@
 ---
 name: archive-experiments
-description: Retire legacy experiment scripts behind an archive tag and leave breadcrumbs on GitHub issues. Use when asked to archive, clean up, or retire old experiments.
+description: Retire legacy experiment scripts behind a dated archive tag.
 ---
 
 # Skill: Archive Legacy Experiments
 
 ## Overview
-Use this skill when old experiment scripts need to be retired without losing their history. The goal is to put the code behind a dated archive tag and leave a canonical comment on the originating GitHub issues so future readers know where to find the last snapshot.
+Retire old experiment scripts without losing their history: put the code behind a dated archive tag and leave a canonical comment on the originating GitHub issues so future readers can find the last snapshot.
 
 ## Prerequisites
 - Local checkout of `marin` with push access to `origin`.
@@ -46,8 +46,8 @@ Use this skill when old experiment scripts need to be retired without losing the
 5. Confirm the comment renders correctly (PR reference should auto-link and the URL should jump straight to the file in the archive tag).
 
 ### 3. Track progress
-- Maintain a checklist of issue numbers while you work (even a scratch buffer is fine) to avoid double-posting or skipping an experiment.
-- When the batch is complete, drop a short note in your agent handoff or PR description listing the affected issues.
+- Keep a checklist of issue numbers while you work to avoid double-posting or skipping an experiment.
+- When the batch is complete, list the affected issues in your agent handoff or PR description.
 
 ## Rules for Agents
 - Do not delete experiment files; archival work only tags commits and leaves issue breadcrumbs.

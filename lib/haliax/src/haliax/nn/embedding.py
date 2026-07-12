@@ -11,10 +11,10 @@ from jaxtyping import PRNGKeyArray
 import haliax as hax
 
 from .mup import AbstractEmbeddingReparam, ReparamEnabled, EmbeddingStandardParam
-from ..axis import Axis, AxisSpec, concat_axes
-from ..core import NamedArray
-from ..jax_utils import named_call
-from ..tree_util import resize_axis
+from haliax.axis import Axis, AxisSpec, concat_axes
+from haliax.core import NamedArray
+from haliax.jax_utils import named_call
+from haliax.tree_util import resize_axis
 
 
 class Embedding(eqx.Module, ReparamEnabled):

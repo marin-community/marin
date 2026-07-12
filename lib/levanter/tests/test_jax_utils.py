@@ -1,18 +1,20 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import jax
+import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
 from haliax.partitioning import ResourceAxis
+
 from levanter.utils.jax_utils import (
     axis_resource_is_explicit,
     best_effort_sharding,
     move_tree_to_memory_kind,
     sharded_tree_size,
+    tree_broadcast_to,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
@@ -145,7 +147,6 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
 
 
 def test_tree_broadcast_to_simple():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with simple nested dicts
     prefix = {"a": 1, "b": 2}
@@ -170,7 +171,6 @@ def test_tree_broadcast_to_simple():
 
 
 def test_tree_broadcast_to_mixed_types():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with mixed types
     prefix = {"a": 1, "b": 2}
@@ -181,11 +181,6 @@ def test_tree_broadcast_to_mixed_types():
 
 
 def test_tree_broadcast_to_with_equinox():
-    import equinox as eqx
-    import jax.numpy as jnp
-
-    from levanter.utils.jax_utils import tree_broadcast_to
-
     class SimpleModule(eqx.Module):
         weight: jnp.ndarray
         bias: jnp.ndarray
@@ -219,7 +214,6 @@ def test_tree_broadcast_to_with_equinox():
 
 
 def test_tree_broadcast_to_edge_cases():
-    from levanter.utils.jax_utils import tree_broadcast_to
 
     # Test with empty trees
     prefix = None

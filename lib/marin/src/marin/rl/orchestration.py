@@ -11,27 +11,20 @@ proper job hierarchy, cascading cleanup, and region inheritance.
 import dataclasses
 import logging
 
-from fray.v2 import (
-    Client,
-    Entrypoint,
-    JobHandle,
-    JobRequest,
-    JobStatus,
-    ResourceConfig,
-    create_environment,
-    current_client,
-    wait_all,
-)
-from fray.v2.actor import HostedActor
+from fray.actor import HostedActor
+from fray.client import Client, JobHandle, wait_all
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, JobStatus, ResourceConfig, create_environment
 from marin.rl.curriculum import Curriculum
+from marin.rl.job_config import RLJobConfig, build_worker_configs
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
-from marin.rl.rl_job import RLJob, RLJobConfig
+from marin.rl.rollout_worker import RolloutWorker
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
+from marin.rl.train_worker import TrainWorker
 from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
-from marin.training.run_environment import add_run_env_variables
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.training.run_environment import add_run_env_variables, env_vars_for_dependency_groups
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -117,8 +110,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     logger.info("RL coordinator starting for run %s", config.run_id)
 
     client = current_client()
-    rl_job = RLJob(config)
-    train_config, rollout_config = rl_job.to_worker_configs()
+    train_config, rollout_config = build_worker_configs(config)
     run_config = config.run_config
     hosted_runtime: _HostedRuntime | None = None
 
@@ -128,7 +120,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         runtime = hosted_runtime.runtime
         logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
 
-        # Create worker environments.
+        # Create worker dependency groups.
         train_extras = _train_worker_extras(config)
         rollout_extras = _rollout_worker_extras(config)
 
@@ -147,15 +139,6 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
             env["JAX_TRACEBACK_FILTERING"] = "off"
             env["TF_CPP_MIN_LOG_LEVEL"] = "0"
         env = add_run_env_variables(env)
-        train_worker_env = create_environment(
-            env_vars=env,
-            extras=train_extras,
-        )
-        rollout_worker_env = create_environment(
-            env_vars=env,
-            extras=rollout_extras,
-        )
-
         # Resource configs
         inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
         # All Iris compute is preemptible — never set preemptible=False.
@@ -186,6 +169,14 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
             inference_tpu_type,
             **rollout_resource_kwargs,
         )
+        train_worker_env = create_environment(
+            env_vars=env_vars_for_dependency_groups(train_resources, train_extras, env),
+            extras=train_extras,
+        )
+        rollout_worker_env = create_environment(
+            env_vars=env_vars_for_dependency_groups(rollout_resources, rollout_extras, env),
+            extras=rollout_extras,
+        )
 
         train_job = client.submit(
             JobRequest(
@@ -195,6 +186,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                 environment=train_worker_env,
                 max_retries_failure=run_config.max_retries_failure,
                 max_retries_preemption=run_config.max_retries_preemption,
+                max_task_failures=run_config.max_retries_failure,
             )
         )
         rollout_jobs: list[JobHandle] = []
@@ -221,6 +213,7 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
                         environment=rollout_worker_env,
                         max_retries_failure=run_config.max_retries_failure,
                         max_retries_preemption=run_config.max_retries_preemption,
+                        max_task_failures=run_config.max_retries_failure,
                     )
                 )
             )
@@ -309,33 +302,27 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRunti
 def _train_worker_entry(train_config, runtime: RLRuntimeHandles) -> None:
     """Entrypoint for the training worker child job."""
     configure_logging(level=logging.INFO)
-    with remove_tpu_lockfile_on_exit():
-        try:
-            from marin.rl.train_worker import TrainWorker
-
-            worker = TrainWorker(config=train_config, runtime=runtime)
-            worker.train()
-            runtime.run_state.mark_completed.remote().result()
-        except Exception:
-            logger.exception("TRAIN WORKER CRASHED (orchestration entrypoint)")
-            # Do not mark the shared run state failed here. This function runs
-            # inside a single trainer task attempt, and Iris may retry the same
-            # child job under the still-running coordinator. If we flip the
-            # shared run_state to FAILED on an attempt-local crash, rollout
-            # workers interpret that as whole-run terminal failure and exit
-            # cleanly, leaving the retried trainer without rollout jobs.
-            raise
+    try:
+        worker = TrainWorker(config=train_config, runtime=runtime)
+        worker.train()
+        runtime.run_state.mark_completed.remote().result()
+    except Exception:
+        logger.exception("TRAIN WORKER CRASHED (orchestration entrypoint)")
+        # Do not mark the shared run state failed here. This function runs
+        # inside a single trainer task attempt, and Iris may retry the same
+        # child job under the still-running coordinator. If we flip the
+        # shared run_state to FAILED on an attempt-local crash, rollout
+        # workers interpret that as whole-run terminal failure and exit
+        # cleanly, leaving the retried trainer without rollout jobs.
+        raise
 
 
 def _rollout_worker_entry(rollout_config, runtime: RLRuntimeHandles) -> None:
     """Entrypoint for a rollout worker child job."""
     configure_logging(level=logging.INFO)
-    with remove_tpu_lockfile_on_exit():
-        try:
-            from marin.rl.rollout_worker import RolloutWorker
-
-            worker = RolloutWorker(config=rollout_config, runtime=runtime)
-            worker.run()
-        except Exception:
-            logger.exception("ROLLOUT WORKER CRASHED (orchestration entrypoint)")
-            raise
+    try:
+        worker = RolloutWorker(config=rollout_config, runtime=runtime)
+        worker.run()
+    except Exception:
+        logger.exception("ROLLOUT WORKER CRASHED (orchestration entrypoint)")
+        raise

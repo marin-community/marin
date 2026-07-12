@@ -172,9 +172,15 @@ def skip_if_checkpoint_not_accessible(path: str):
 
 
 def skip_if_hf_model_not_accessible(model_id: str):
+    """Skip if the HF model is not present in the local cache.
+
+    Uses ``local_files_only=True`` so the probe (which runs at decoration
+    time) never issues network requests.
+    """
+
     def try_load_hf(model_id):
         try:
-            AutoConfig.from_pretrained(model_id)
+            AutoConfig.from_pretrained(model_id, local_files_only=True)
         except Exception:
             return False
         else:

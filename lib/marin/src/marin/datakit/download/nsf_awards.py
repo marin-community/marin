@@ -10,14 +10,18 @@ single Parquet file per year.
 
 import json
 import logging
-import os
 import zipfile
 from io import BytesIO
 
 import requests
-from marin.execution.step_spec import StepSpec
-from zephyr import Dataset, ZephyrContext, counters
+from rigging.filesystem import prefix_join
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.writers import write_parquet_file
+
+from marin.datakit.normalize import normalize_step
+from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -87,22 +91,22 @@ def download_and_convert_year(year: int, download_url: str, output_path: str) ->
                 continue
             with z.open(name) as f:
                 award = json.load(f)
-            counters.increment("awards_total")
+            counters.pipeline.update_counter("awards_total", 1)
             record = _award_to_record(award)
             if record is None:
-                counters.increment("awards_missing_abstract")
+                counters.pipeline.update_counter("awards_missing_abstract", 1)
                 continue
             for k in KEEP_FIELDS:
                 if not award.get(k):
-                    counters.increment(f"awards_missing_field.{k}")
+                    counters.pipeline.update_counter(f"awards_missing_field.{k}", 1)
             records.append(record)
-    counters.increment("awards_kept", len(records))
+    counters.pipeline.update_counter("awards_kept", len(records))
 
     if not records:
         logger.warning(f"No awards with abstracts for {year}, skipping.")
         return {"year": year, "num_awards": 0}
 
-    output_file = os.path.join(output_path, f"{year}.parquet")
+    output_file = prefix_join(output_path, f"{year}.parquet")
     result = write_parquet_file(records, output_file)
 
     logger.info(f"Wrote {len(records)} awards for {year} to {output_file}")
@@ -128,7 +132,7 @@ def download_nsf_awards(min_year: int, max_year: int, output_path: str) -> None:
     pipeline = (
         Dataset.from_list(tasks)
         .map(lambda task: download_and_convert_year(task["year"], task["url"], task["output_path"]))
-        .write_jsonl(f"{output_path}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True)
+        .write_jsonl(prefix_join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
     ctx = ZephyrContext(name="download-nsf-awards")
     ctx.execute(pipeline)
@@ -151,3 +155,24 @@ def download_nsf_awards_step(
         fn=_run,
         hash_attrs={"min_year": min_year, "max_year": max_year},
     )
+
+
+def normalize_nsf_awards_step(download: StepSpec) -> StepSpec:
+    """Normalize NSF awards: generate content-hash IDs, preserve awd_id as source_id."""
+    return normalize_step(
+        name="normalized/nsf-awards",
+        download=download,
+        text_field="text",
+        id_field="awd_id",
+        file_extensions=(".parquet",),
+    )
+
+
+def nsf_awards_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the ``(download, normalize)`` chain for NSF awards.
+
+    Unlike the HF-backed families, the download here pulls from the NSF API
+    directly (no HF repo); the chain shape is otherwise identical.
+    """
+    download = download_nsf_awards_step()
+    return (download, normalize_nsf_awards_step(download))

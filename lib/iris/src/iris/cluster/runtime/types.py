@@ -16,10 +16,10 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from collections.abc import Callable
 from typing import Protocol
 
 from iris.cluster.bundle import BundleStore
@@ -86,15 +86,18 @@ class ContainerConfig:
     env: dict[str, str]
     workdir: str = "/app"
     resources: job_pb2.ResourceSpecProto | None = None
+    container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
     workdir_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
+    attempt_uid: str | None = None
     job_id: str | None = None
     worker_id: str | None = None
     worker_metadata: job_pb2.WorkerMetadata | None = None
+    ports: dict[str, int] = field(default_factory=dict)
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:
@@ -105,11 +108,6 @@ class ContainerConfig:
         if not self.resources or not self.resources.memory_bytes:
             return None
         return self.resources.memory_bytes // (1024 * 1024)
-
-    def get_disk_bytes(self) -> int | None:
-        if not self.resources or not self.resources.disk_bytes:
-            return None
-        return self.resources.disk_bytes
 
 
 @dataclass
@@ -140,12 +138,6 @@ class ContainerStatus:
     error: str | None = None
     error_kind: ContainerErrorKind = ContainerErrorKind.NONE
     oom_killed: bool = False
-
-
-@dataclass
-class ImageInfo:
-    tag: str
-    created_at: str
 
 
 class RuntimeLogReader(Protocol):
@@ -281,6 +273,7 @@ class DiscoveredContainer:
     container_id: str
     task_id: str
     attempt_id: int
+    attempt_uid: str
     job_id: str
     worker_id: str
     phase: ExecutionStage
@@ -288,6 +281,7 @@ class DiscoveredContainer:
     exit_code: int | None
     started_at: str  # ISO 8601 timestamp from Docker
     workdir_host_path: str  # host path of the /app mount
+    ports: dict[str, int] = field(default_factory=dict)  # allocated host ports, name -> port
 
 
 class ContainerRuntime(Protocol):
@@ -327,10 +321,6 @@ class ContainerRuntime(Protocol):
         stage the bundle into ``workdir`` directly. Kubernetes runtime may no-op
         and materialize inside the task Pod instead.
         """
-        ...
-
-    def list_containers(self) -> list[ContainerHandle]:
-        """List all managed containers."""
         ...
 
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
@@ -381,5 +371,3 @@ class ImageBuilder(Protocol):
     def exists(self, tag: str) -> bool: ...
 
     def remove(self, tag: str) -> None: ...
-
-    def list_images(self, pattern: str) -> list[ImageInfo]: ...

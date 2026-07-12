@@ -6,7 +6,7 @@ In this tutorial, you will install Marin on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.12 or higher
 - uv (Python package manager)
 - Git
 - Rust toolchain via [rustup](https://rustup.rs) (only needed for source builds of Rust crates; see Rust Crates section below)
@@ -21,7 +21,7 @@ In addition, you might find it useful to have the following accounts:
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
-If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
+Running on shared TPU/GPU capacity is handled by [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md); Marin's live TPU pool is reachable via `uv run iris --cluster=marin job run ...`.
 
 ## Installation
 
@@ -33,7 +33,7 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 2. Create and activate a virtual environment (~0s):
    ```bash
-   uv venv --python 3.11
+   uv venv --python 3.12
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
@@ -148,7 +148,7 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-uv run experiments/tutorials/train_tiny_model_cpu.py
+uv run python experiments/tutorials/train_tiny_model.py --device cpu --dataset tinystories
 ```
 
 This will:
@@ -165,4 +165,4 @@ language models.
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment.
 2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models.
-3. Read the [Executor 101](executor-101.md) tutorial to learn how Marin's execution model works.
+3. Read [Lazy artifacts](../explanations/lazy-artifacts.md) to understand Marin's execution model.

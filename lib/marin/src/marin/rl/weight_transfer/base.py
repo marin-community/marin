@@ -10,6 +10,7 @@ weight transfer implementations.
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -20,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 class WeightTransferMode(Enum):
     GCS_CHECKPOINT = "gcs_checkpoint"
-    JAX_TRANSFER_SERVER = "jax_transfer_server"
     ARROW_FLIGHT = "arrow_flight"
 
 
@@ -115,10 +115,10 @@ class WeightTransferServer(ABC):
         pass
 
     @abstractmethod
-    def get_metrics(self) -> dict:
+    def get_metrics(self) -> WeightTransferServerMetrics:
         pass
 
-    def get_debug_snapshot(self) -> dict[str, object]:
+    def get_debug_snapshot(self) -> Mapping[str, object]:
         """Return lightweight server-local debug state for checkpoint diagnostics."""
         return {}
 

@@ -8,13 +8,14 @@ from functools import partial
 from typing import Any, List, Optional
 
 import jax
-from rigging.filesystem import open_url
+import wandb
+from rigging.filesystem import StoragePath
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils
 
 from levanter.callbacks import StepInfo
-from levanter.data import DataLoader
+from levanter.data.loader import DataLoader
 from levanter.tokenizers import MarinTokenizer
 
 
@@ -67,8 +68,7 @@ def visualize_log_probs(
         "</body></html>"
     )
 
-    with open_url(output_path, "w") as f:
-        f.write(html)
+    StoragePath(output_path).write_text(html)
 
 
 def _escape(s: str) -> str:
@@ -78,6 +78,13 @@ def _escape(s: str) -> str:
     out = out.replace("\n", "⏎").replace("\t", "⇥")
     out = re.sub(r"  +", lambda m: " " + "␣" * (len(m.group(0)) - 1), out)
     return out
+
+
+def _split_logprobs_argmaxes(out):
+    """Normalize log_prob_fn output to (log_probs, argmaxes-or-None)."""
+    if isinstance(out, tuple):
+        return out[0], out[1]
+    return out, None
 
 
 def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, test_data, max_docs=128):
@@ -96,16 +103,12 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
     """
     log_probs = []
     targets = []
-    argmaxes: list = []
+    argmaxes = []
     for batch in test_data:
-        out = log_prob_fn(model, batch)
-        if len(out) == 2:
-            b_logprobs, b_argmaxes = out
-            log_probs.append(b_logprobs)
+        b_logprobs, b_argmaxes = _split_logprobs_argmaxes(log_prob_fn(model, batch))
+        log_probs.append(b_logprobs)
+        if b_argmaxes is not None:
             argmaxes.append(b_argmaxes)
-        else:
-            b_logprobs = out
-            log_probs.append(b_logprobs)
 
         targets.append(batch)
 
@@ -114,10 +117,7 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
             break
     log_probs = _concatenate(log_probs)
     targets = _concatenate([t.tokens.array for t in targets])
-    if argmaxes:
-        argmaxes_array = _concatenate(argmaxes)
-    else:
-        argmaxes_array = None
+    argmaxes_array = _concatenate(argmaxes) if argmaxes else None
     # gather the log probs and targets
     # TODO: is this still necessary?
     (targets, log_probs, argmaxes_array) = multihost_utils.process_allgather(
@@ -244,8 +244,7 @@ def visualize_log_prob_diff(
         "</body></html>"
     )
 
-    with open_url(output_path, "w") as f:
-        f.write(html_str)
+    StoragePath(output_path).write_text(html_str)
 
 
 def compute_and_diff_log_probs(path: str, model, comparison_model, tokenizer, log_prob_fn, test_data, max_docs=128):
@@ -268,23 +267,13 @@ def compute_and_diff_log_probs(path: str, model, comparison_model, tokenizer, lo
     for batch in test_data:
         targets.append(batch)
 
-        out = log_prob_fn(model, batch)
-        if len(out) == 2:
-            b_logprobs, b_argmaxes = out
-            log_probs_a.append(b_logprobs)
-        else:
-            b_logprobs = out
-            log_probs_a.append(b_logprobs)
+        b_logprobs_a, _ = _split_logprobs_argmaxes(log_prob_fn(model, batch))
+        log_probs_a.append(b_logprobs_a)
 
-        compare_out = log_prob_fn(comparison_model, batch)
-        if len(compare_out) == 2:
-            b_logprobs, b_argmaxes = compare_out
-            log_probs_b.append(b_logprobs)
-        else:
-            b_logprobs = compare_out
-            log_probs_b.append(b_logprobs)
+        b_logprobs_b, _ = _split_logprobs_argmaxes(log_prob_fn(comparison_model, batch))
+        log_probs_b.append(b_logprobs_b)
 
-        if len(targets) * b_logprobs.shape[0] >= max_docs:
+        if len(targets) * b_logprobs_b.shape[0] >= max_docs:
             break
 
     log_probs_a = _concatenate(log_probs_a)
@@ -332,8 +321,6 @@ def cb_compute_and_visualize_log_probs(
 
         compute_and_visualize_log_probs(path, model, tokenizer, log_prob_fn, test_data, max_docs=max_docs)
         # TODO: convert to generic logging
-        import wandb
-
         wandb.log({"log_probs": wandb.Html(path)}, step=step.step)
 
     return compute_and_viz_log_probs

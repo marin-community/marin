@@ -3,22 +3,20 @@
 
 """Run a function once, cache the result, and return it on subsequent calls."""
 
-from __future__ import annotations
-
 import functools
 import hashlib
 import logging
 from collections.abc import Callable
-from typing import Generic, TypeVar, ParamSpec
+from typing import Generic, ParamSpec, TypeVar
 
 import cloudpickle
-from rigging.filesystem import marin_temp_bucket, open_url
+from rigging.filesystem import StoragePath, marin_temp_bucket
 
-from marin.execution.executor_step_status import (
-    StepAlreadyDone,
+from marin.execution.step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,
+    StepAlreadyDone,
     worker_id,
 )
 
@@ -104,8 +102,7 @@ class disk_cache(Generic[P, T]):
             assert output_path is not None
             if self._load_fn is not None:
                 return self._load_fn(output_path)
-            with open_url(output_path + "/data.pkl", "rb") as f:
-                return cloudpickle.loads(f.read())
+            return cloudpickle.loads(StoragePath(output_path + "/data.pkl").read_bytes())
 
         status_file = StatusFile(output_path, worker_id())
         if status_file.status == STATUS_SUCCESS:
@@ -126,8 +123,7 @@ class disk_cache(Generic[P, T]):
         if self._save_fn is not None:
             self._save_fn(result, output_path)
         else:
-            with open_url(output_path + "/data.pkl", "wb") as f:
-                f.write(cloudpickle.dumps(result))
+            StoragePath(output_path + "/data.pkl").write_bytes(cloudpickle.dumps(result))
 
         StatusFile(output_path, worker_id()).write_status(STATUS_SUCCESS)
         logger.info(f"disk_cache: computed and cached {output_path}")

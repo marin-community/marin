@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Literal, Optional, cast
 
 import draccus
 import equinox as eqx
@@ -14,24 +14,26 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
+from jaxtyping import PRNGKeyArray
 
 import levanter
+import levanter.config
+import levanter.tracker
 import levanter.callbacks
 import levanter.eval
 from levanter import callbacks
-from levanter.callbacks.lora_debug import log_topology_summary
-from levanter.adaptation import (
-    AdaptationConfig,
-    AdaptationExportConfig,
-    LoraAdaptationConfig,
-    NoAdaptationConfig,
+from levanter.adaptor import (
+    AdaptorConfig,
+    AdaptorExportConfig,
+    LoraAdaptorConfig,
+    NoAdaptorConfig,
 )
 from levanter.compat.hf_checkpoints import build_generation_config
 from levanter.data.dataset import AsyncDataset
 from levanter.data.mixture import MixtureDataset
-from levanter.data.text import (
+from levanter.data.text.datasets import BlockShuffleConfig, LmDataConfig
+from levanter.data.text.preference import (
     DpoExample,
-    LmDataConfig,
     PreferenceChatLmDatasetFormat,
     PreferenceLmDataConfig,
     dataset_for_preference_format,
@@ -50,7 +52,7 @@ from levanter.dpo import (
 from levanter.main.model_init import load_model_from_source, prepare_model_init_context
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.utils.jax_utils import parameter_count
@@ -142,11 +144,30 @@ def _get_training_components(config: PreferenceLmDataConfig) -> dict[str, Any]:
     return {name: comp for name, comp in config.components.items() if name in has_weight}
 
 
+def _shuffle_dpo_dataset(
+    dataset: AsyncDataset[DpoExample],
+    shuffle: bool | BlockShuffleConfig,
+    *,
+    key: PRNGKeyArray,
+    perm_type: Literal["feistel", "linear"],
+) -> AsyncDataset[DpoExample]:
+    if isinstance(shuffle, BlockShuffleConfig):
+        return dataset.block_shuffle(
+            io_block_size=shuffle.io_block_size,
+            window_blocks=shuffle.window_blocks,
+            key=key,
+            perm_type=shuffle.perm_type,
+        )
+    if shuffle is True:
+        return dataset.shuffle(key, perm_type=perm_type)
+    return dataset
+
+
 def _build_dpo_dataset(
     config: PreferenceLmDataConfig,
     Pos: Axis,
     *,
-    key: jrandom.PRNGKey,
+    key: PRNGKeyArray,
 ) -> AsyncDataset[DpoExample]:
     """Build a DPO training dataset from a single component config."""
     training_components = _get_training_components(config)
@@ -167,14 +188,8 @@ def _build_dpo_dataset(
     perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    elif perm_type is None:
-        perm_type = "feistel"
 
-    train_dataset = base_dataset
-    if config.shuffle is True:
-        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    train_dataset = _shuffle_dpo_dataset(base_dataset, config.shuffle, key=key, perm_type=perm_type)
 
     mix_key, _ = jrandom.split(key)
     mixture = MixtureDataset(
@@ -192,7 +207,7 @@ def _build_validation_split(
     config: PreferenceLmDataConfig,
     Pos: Axis,
     *,
-    key: jrandom.PRNGKey,
+    key: PRNGKeyArray,
     fraction: float,
 ) -> tuple[AsyncDataset[DpoExample], dict[str, ValidationDatasetSpec]]:
     """Build train/validation split from a single component config."""
@@ -223,14 +238,8 @@ def _build_validation_split(
     perm_type = config.permutation_type
     if perm_type == "linear":
         logger.warning("Using linear shuffling, not recommended. Please use Feistel permutation instead.")
-    elif perm_type is None:
-        perm_type = "feistel"
 
-    train_dataset = train_base
-    if config.shuffle is True:
-        train_dataset = train_dataset.shuffle(key, perm_type=perm_type)
-    elif isinstance(config.shuffle, int) and config.shuffle > 0:
-        train_dataset = train_dataset.era_shuffle(config.shuffle, key=key, perm_type=perm_type)
+    train_dataset = _shuffle_dpo_dataset(train_base, config.shuffle, key=key, perm_type=perm_type)
 
     mix_key, _ = jrandom.split(key)
     mixture = MixtureDataset(
@@ -276,7 +285,7 @@ class AdapterBaseReferenceConfig(DpoReferenceConfig):
 
 @dataclass(frozen=True)
 class AdapterBaseReferenceModelProvider:
-    adapter: AdaptationConfig
+    adapter: AdaptorConfig
 
     def model_for(self, policy_model: LmHeadModel) -> LmHeadModel:
         reference_model = self.adapter.base_model_view(policy_model)
@@ -294,7 +303,7 @@ class TrainDpoConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
     reference: DpoReferenceConfig = field(default_factory=SeparateReferenceConfig)
-    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
 
     beta: float = 0.1
 
@@ -368,29 +377,19 @@ def _validate_dpo_config(config: TrainDpoConfig) -> None:
         return
 
     if isinstance(config.reference, AdapterBaseReferenceConfig):
-        if isinstance(config.adapter, NoAdaptationConfig):
+        if isinstance(config.adapter, NoAdaptorConfig):
             raise ValueError("reference.type=adapter_base requires a non-none adapter.")
-        if isinstance(config.adapter, LoraAdaptationConfig):
-            # DEBUGSTART — debug_accum_tpu_type Class-B probes.
-            # The invariant AdapterBase relies on is "adapter_out = B @ A @ x = 0 at init",
-            # which holds iff A=0 OR B=0 at init. Canonical path: zero_init_b=True with
-            # no b_init_scale override. BC path: a_init_mode='zero' (A=0, B can be random).
-            a_is_zero = config.adapter.a_init_mode == "zero"
-            b_is_zero = config.adapter.zero_init_b and (
-                config.adapter.b_init_scale is None or config.adapter.b_init_scale == 0.0
-            )
-            adapter_output_zero_at_init = a_is_zero or b_is_zero
-            if not adapter_output_zero_at_init:
-                # debug_accum_tpu_type Exp AD probe + Class-B BA/BB probes:
-                # allow AdapterBase + LoRA with nonzero adapter output at init
-                # (breaks policy=reference at init) under env flag.
-                # REVERT this gate after the investigation closes.
-                if os.environ.get("MARIN_DEBUG_ALLOW_LORA_ADAPTERBASE_NONZERO_B", "0") != "1":
-                    raise ValueError(
-                        "adapter.type=lora with reference.type=adapter_base requires adapter_out=0 at init "
-                        "(set zero_init_b=True with b_init_scale None/0, or set a_init_mode='zero')."
-                    )
-            # DEBUGEND
+        if isinstance(config.adapter, LoraAdaptorConfig):
+            # Require B @ A = 0 so policy == reference at step 0: implicit reward is 0 and DPO loss is log 2.
+            # Exactly one factor must be zero so gradients can still flow.
+            has_zero_b = config.adapter.zero_init_b
+            has_zero_a = config.adapter.a_init_mode == "zero"
+            if has_zero_b == has_zero_a:
+                raise ValueError(
+                    "adapter.type=lora with reference.type=adapter_base requires zero adapter delta at init "
+                    "with exactly one zero LoRA factor: set either zero_init_b=true or a_init_mode='zero', "
+                    "but not both."
+                )
         return
 
     raise TypeError(f"Unsupported reference configuration: {type(config.reference).__name__}")
@@ -458,34 +457,6 @@ def _reference_eval_cache_identity(config: TrainDpoConfig) -> dict[str, Any]:
     raise TypeError(f"Unsupported reference configuration: {type(config.reference).__name__}")
 
 
-def _resolved_lora_hparams(adapter: LoraAdaptationConfig) -> dict[str, Any]:
-    if adapter.target_modules is None:
-        target_modules_mode = "all_linear"
-    elif isinstance(adapter.target_modules, str):
-        target_modules_mode = "regex"
-    else:
-        target_modules_mode = "suffix_list"
-
-    exclude_modules_resolved = adapter.exclude_modules if adapter.exclude_modules is not None else ["lm_head"]
-
-    return {
-        "type": "lora",
-        "r": adapter.r,
-        "alpha": adapter.alpha,
-        "alpha_over_r": adapter.alpha / adapter.r,
-        "dropout": adapter.dropout,
-        "zero_init_b": adapter.zero_init_b,
-        # DEBUGSTART — Class-B probes: surface init overrides in W&B metadata
-        "b_init_scale": adapter.b_init_scale,
-        "a_init_mode": adapter.a_init_mode,
-        # DEBUGEND
-        "target_modules": adapter.target_modules,
-        "target_modules_mode": target_modules_mode,
-        "exclude_modules_raw": adapter.exclude_modules,
-        "exclude_modules_resolved": exclude_modules_resolved,
-    }
-
-
 def _build_validation_specs(config: PreferenceLmDataConfig, Pos: Axis) -> dict[str, ValidationDatasetSpec]:
     validation_specs: dict[str, ValidationDatasetSpec] = {}
     val_caches = config.build_caches("validation")
@@ -550,7 +521,7 @@ def _install_separate_reference_export_hooks(
     *,
     trainer,
     converter,
-    export: AdaptationExportConfig,
+    export: AdaptorExportConfig,
 ) -> None:
     if export.peft_save_path is not None or export.merged_hf_save_path is not None:
         raise ValueError("peft_save_path and merged_hf_save_path require adapter.type: lora.")
@@ -586,6 +557,7 @@ def _install_separate_reference_export_hooks(
             os.path.join(full_save_path, f"step-{step.step}"),
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
+            generation_config=export.generation_config,
             **hf_upload_kwargs,
         )
 
@@ -593,73 +565,6 @@ def _install_separate_reference_export_hooks(
 
 
 def main(config: TrainDpoConfig):
-    # DEBUGSTART — debug_accum_tpu_type: verify debug env vars reached this worker
-    import os as _dbg_os
-    import sys as _dbg_sys
-
-    _dbg_keys = [
-        "MARIN_DEBUG_LORA_FACTOR_TRACE",
-        "MARIN_DEBUG_LOG_BATCH_INDICES",
-        "MARIN_DEBUG_LOG_STEP_TRACE",
-        "MARIN_DEBUG_DUMP_SHARDING",
-        "MARIN_DEBUG_DUMP_GRAD_VALUES",
-        "MARIN_DEBUG_HLO_UPLOAD_DIR",
-        "XLA_FLAGS",
-    ]
-
-    # DEBUGSTART — debug_accum_tpu_type Exp Z4: HLO upload hook
-    # When MARIN_DEBUG_HLO_UPLOAD_DIR=<gcs-path> is set, register an atexit
-    # handler that uploads /tmp/xla_hlo/ (produced by XLA_FLAGS=--xla_dump_to=/tmp/xla_hlo)
-    # to the provided GCS path before the worker exits. Assumes gsutil is on PATH,
-    # which it is on all Marin TPU worker images.
-    if _dbg_os.environ.get("MARIN_DEBUG_HLO_UPLOAD_DIR"):
-
-        def _dbg_upload_hlo():
-            upload_dir = _dbg_os.environ.get("MARIN_DEBUG_HLO_UPLOAD_DIR", "")
-            if not upload_dir:
-                return
-            try:
-                _dbg_os.makedirs("/tmp/xla_hlo", exist_ok=True)
-                import fsspec as _dbg_fsspec
-
-                fs, dest_path = _dbg_fsspec.core.url_to_fs(upload_dir)
-                _dbg_count = 0
-                _dbg_total_bytes = 0
-                for fname in _dbg_os.listdir("/tmp/xla_hlo"):
-                    local_path = _dbg_os.path.join("/tmp/xla_hlo", fname)
-                    if not _dbg_os.path.isfile(local_path):
-                        continue
-                    dest = dest_path.rstrip("/") + "/" + fname
-                    with open(local_path, "rb") as src:
-                        with fs.open(dest, "wb") as dst:
-                            data = src.read()
-                            dst.write(data)
-                            _dbg_total_bytes += len(data)
-                    _dbg_count += 1
-                print(
-                    f"DEBUGJ HLO_UPLOAD uploaded={_dbg_count} bytes={_dbg_total_bytes} dest={upload_dir}",
-                    file=_dbg_sys.stderr,
-                    flush=True,
-                )
-            except Exception as _dbg_e:
-                print(
-                    f"DEBUGJ HLO_UPLOAD_ERROR {type(_dbg_e).__name__}: {_dbg_e}",
-                    file=_dbg_sys.stderr,
-                    flush=True,
-                )
-
-        # Intentionally NOT using atexit — gcsfs async pool is torn down before
-        # atexit fires on TPU workers, causing "cannot schedule new futures after
-        # shutdown". Instead, the global `_dbg_upload_hlo` is exposed and called
-        # explicitly just after trainer.train() completes below.
-        globals()["_dbg_upload_hlo"] = _dbg_upload_hlo
-    # DEBUGEND Z4
-    print(
-        "DEBUGJ WORKER_ENV " + " ".join(f"{k}={_dbg_os.environ.get(k, '<unset>')}" for k in _dbg_keys),
-        file=_dbg_sys.stderr,
-        flush=True,
-    )
-    # DEBUGEND
     _validate_dpo_config(config)
 
     tokenizer = config.data.the_tokenizer
@@ -673,9 +578,7 @@ def main(config: TrainDpoConfig):
     if model_context.model is not config.model:
         config = dataclasses.replace(config, model=model_context.model)
 
-    levanter.initialize(config)
-    if isinstance(config.adapter, LoraAdaptationConfig):
-        levanter.tracker.log_hyperparameters({"lora": _resolved_lora_hparams(config.adapter)})
+    levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
     reference_provider: AdapterBaseReferenceModelProvider | None = None
 
@@ -764,60 +667,6 @@ def main(config: TrainDpoConfig):
 
         state = trainer.initial_state(training_key, model=initial_model, is_trainable=trainable_filter)
 
-        # DEBUGSTART — debug_accum_tpu_type Exp Y: dump sharding specs for LoRA params
-        # at init (once per worker, before training). Runs outside jit so sharding
-        # and mesh objects are concrete. Captures the partition layout of every LoRA
-        # A/B matrix and its corresponding opt state, so we can diff v5p-8 vs v6e-8.
-        if int(_dbg_os.environ.get("MARIN_DEBUG_DUMP_SHARDING", "0")):
-            try:
-                from jax.tree_util import keystr as _dbg_keystr
-                from jax.tree_util import tree_flatten_with_path as _dbg_tree_flatten_with_path
-                import haliax as _dbg_hax
-
-                _dbg_mesh = getattr(trainer, "_mesh", None) or getattr(trainer, "mesh", None)
-                _dbg_mesh_shape = dict(_dbg_mesh.shape) if _dbg_mesh is not None else {}
-                _dbg_mesh_devices = _dbg_mesh.devices.size if _dbg_mesh is not None else None
-                _dbg_param_mapping = dict(getattr(trainer, "parameter_axis_mapping", {}) or {})
-                _dbg_compute_mapping = dict(getattr(trainer, "compute_axis_mapping", {}) or {})
-                print(
-                    f"DEBUGJ SHARDING_MESH mesh_shape={_dbg_mesh_shape} devices={_dbg_mesh_devices} "
-                    f"param_mapping={_dbg_param_mapping} compute_mapping={_dbg_compute_mapping}",
-                    file=_dbg_sys.stderr,
-                    flush=True,
-                )
-
-                def _dbg_dump_tree(label, tree):
-                    for path, leaf in _dbg_tree_flatten_with_path(tree)[0]:
-                        path_str = _dbg_keystr(path)
-                        if "lora_A" not in path_str and "lora_B" not in path_str:
-                            continue
-                        arr = leaf.array if isinstance(leaf, _dbg_hax.NamedArray) else leaf
-                        if not hasattr(arr, "shape"):
-                            continue
-                        sharding = getattr(arr, "sharding", None)
-                        spec = getattr(sharding, "spec", None)
-                        s_mesh = getattr(sharding, "mesh", None)
-                        s_mesh_shape = dict(s_mesh.shape) if s_mesh is not None else {}
-                        named_axes = None
-                        if isinstance(leaf, _dbg_hax.NamedArray):
-                            named_axes = [(ax.name, ax.size) for ax in leaf.axes]
-                        print(
-                            f"DEBUGJ SHARDING {label} path={path_str} "
-                            f"shape={tuple(arr.shape)} dtype={arr.dtype} "
-                            f"named_axes={named_axes} pspec={spec} "
-                            f"sharding_mesh={s_mesh_shape}",
-                            file=_dbg_sys.stderr,
-                            flush=True,
-                        )
-
-                _dbg_dump_tree("PARAM", state.model)
-                if hasattr(state, "opt_state"):
-                    _dbg_dump_tree("OPT_STATE", state.opt_state)
-                print("DEBUGJ SHARDING_DONE", file=_dbg_sys.stderr, flush=True)
-            except Exception as _dbg_e:
-                print(f"DEBUGJ SHARDING_ERROR {type(_dbg_e).__name__}: {_dbg_e}", file=_dbg_sys.stderr, flush=True)
-        # DEBUGEND
-
         if int(state.step) == 0:
             if config.initialize_from_hf:
                 logger.info(
@@ -848,7 +697,7 @@ def main(config: TrainDpoConfig):
         else:
             logger.info(f"Resuming from step {state.step}, using checkpoint policy weights.")
             policy_model = state.model.policy if isinstance(state.model, DpoModel) else state.model
-            if not isinstance(config.adapter, NoAdaptationConfig):
+            if not isinstance(config.adapter, NoAdaptorConfig):
                 logger.info(
                     "Adapter checkpoints only store trainable weights. Reconstructing the base policy model from the "
                     "configured source before overlaying resumed adapter parameters."
@@ -909,14 +758,6 @@ def main(config: TrainDpoConfig):
             }
         )
 
-        # Emit the one-time LoRA debug topology summary when the flag is on.
-        # Puts mesh shape, physical device list, axis mappings, XLA_FLAGS, and
-        # every MARIN_DEBUG_* env var into the W&B run config so cross-run
-        # diffs (canonical vs reverse permutations, etc.) can be reconstructed
-        # from the run config alone. Guarded so we don't pollute normal runs.
-        if trainer._lora_debug_enabled():
-            log_topology_summary(trainer, state.model)
-
         max_eval_examples_per_ds = config.trainer.max_eval_batches
         if max_eval_examples_per_ds is not None:
             max_eval_examples_per_ds *= config.trainer.eval_batch_size
@@ -926,6 +767,12 @@ def main(config: TrainDpoConfig):
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example),
             every=1,
+        )
+        trainer.add_hook(
+            callbacks.iris_status_reporter(
+                Pos.size, trainer.config.batch_schedule, trainer.config.num_train_steps, flops_per_example
+            ),
+            every=10,
         )
 
         if isinstance(train_dataset, MixtureDataset):
@@ -1017,7 +864,7 @@ def main(config: TrainDpoConfig):
         else:
             logger.warning("No validation datasets provided.")
 
-        export_config = AdaptationExportConfig(
+        export_config = AdaptorExportConfig(
             hf_save_path=config.hf_save_path,
             hf_upload=config.hf_upload,
             hf_save_steps=config.hf_save_steps,
@@ -1028,7 +875,7 @@ def main(config: TrainDpoConfig):
             merged_hf_save_path=config.merged_hf_save_path,
             merged_hf_upload=config.merged_hf_upload,
         )
-        if isinstance(config.reference, SeparateReferenceConfig) and isinstance(config.adapter, NoAdaptationConfig):
+        if isinstance(config.reference, SeparateReferenceConfig) and isinstance(config.adapter, NoAdaptorConfig):
             _install_separate_reference_export_hooks(
                 trainer=trainer,
                 converter=model_context.converter,
@@ -1057,20 +904,6 @@ def main(config: TrainDpoConfig):
                 callback(initial_eval_info, force=True)
 
         trainer.train(state, train_loader)
-
-        # DEBUGSTART — debug_accum_tpu_type Exp Z4: upload HLO dump to GCS
-        # right after training completes, while gcsfs async pool is still alive
-        # (atexit fires too late).
-        if _dbg_os.environ.get("MARIN_DEBUG_HLO_UPLOAD_DIR") and "_dbg_upload_hlo" in globals():
-            try:
-                globals()["_dbg_upload_hlo"]()
-            except Exception as _dbg_e:
-                print(
-                    f"DEBUGJ HLO_UPLOAD_POST_TRAIN_ERROR {type(_dbg_e).__name__}: {_dbg_e}",
-                    file=_dbg_sys.stderr,
-                    flush=True,
-                )
-        # DEBUGEND Z4
 
         if trainer.config.checkpointer is not None:
             checkpointer = trainer.config.checkpointer.create(trainer.run_id)

@@ -5,24 +5,19 @@
 This file uses Levanter to compute validation losses and entropies.
 """
 
-import dataclasses
 import os
 from dataclasses import dataclass
 
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.compat.hf_checkpoints import RepoRef
-from levanter.data.text import LMMixtureDatasetConfig
-from levanter.distributed import RayConfig
+from levanter.data.text.datasets import LMMixtureDatasetConfig
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-
-from marin.execution.executor import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 
 @dataclass
@@ -37,7 +32,7 @@ class EvalLmConfig:
     datasets: LMMixtureDatasetConfig
     resource_config: ResourceConfig
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    output_path: str = ""
     checkpoint_is_hf: bool = False
     """Whether the checkpoint is in HF format."""
 
@@ -48,47 +43,6 @@ class EvalLmConfig:
 
     wandb_tags: list[str] | None = None
     """Tags to add to the wandb run."""
-
-
-def default_lm_log_probs(
-    checkpoint: str | InputName,
-    model: LmConfig,
-    data: LMMixtureDatasetConfig,
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 4,
-    max_samples_per_dataset: int | None = None,
-    name: str | None = None,
-    wandb_tags: list[str] | None = None,
-) -> ExecutorStep:
-    """
-    Creates a step to evaluate log probabilities of a language model.
-    Args:
-        checkpoint:  The checkpoint to evaluate.
-        model:  The model configuration.
-        data: The data to evaluate on.
-        resource_config: The resource configuration.
-        checkpoint_is_hf:  Whether the checkpoint is in HF format.
-    """
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-    executor_name = f"analysis/log_probs/{name}"
-    return ExecutorStep(
-        name=executor_name,
-        fn=evaluate_lm_log_probs,
-        config=EvalLmConfig(
-            name=name,
-            checkpoint_path=checkpoint,  # type: ignore
-            model=model,
-            datasets=data,
-            log_entropy=True,
-            resource_config=resource_config,
-            checkpoint_is_hf=checkpoint_is_hf,
-            per_device_batch_size=per_device_batch_size,
-            max_samples_per_dataset=max_samples_per_dataset,
-            wandb_tags=wandb_tags,
-        ),
-    )
 
 
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
@@ -133,7 +87,6 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
                 WandbConfig(project="marin", tags=wandb_tags, name=name),
                 JsonFileTrackerConfig(output_path=config.output_path),
             ),
-            ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
         ),

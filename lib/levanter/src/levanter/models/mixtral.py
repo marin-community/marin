@@ -5,7 +5,7 @@ import dataclasses
 import inspect
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax
@@ -19,20 +19,20 @@ import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 import levanter.tracker
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.models.mistral import MistralConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 
 silence_transformer_nag()
@@ -121,7 +121,8 @@ class MixtralConfig(MistralConfig):
             self.num_experts_per_tok <= self.n_routed_experts
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
 
-    def hf_checkpoint_converter(
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
@@ -134,7 +135,7 @@ class MixtralConfig(MistralConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = hf_config.rope_theta
+        rope_theta, _ = hf_rope_config(hf_config)
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, None)
         return MixtralConfig(
             max_seq_len=hf_config.max_position_embeddings,
@@ -153,7 +154,9 @@ class MixtralConfig(MistralConfig):
             lbl_coef=hf_config.router_aux_loss_coef,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfMixtralConfig:
+    def to_hf_config(  # pyrefly: ignore[bad-override]
+        self, vocab_size: int, config_overrides: Optional[Dict] = None
+    ) -> HfMixtralConfig:
         """Convert to HuggingFace's MistralConfig
 
         Args:
@@ -168,7 +171,8 @@ class MixtralConfig(MistralConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfMixtralConfig(
+        return hf_config_from_kwargs(
+            HfMixtralConfig,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -189,7 +193,7 @@ class MixtralConfig(MistralConfig):
         )
 
     @property
-    def model_type(cls) -> Type["MixtralLMHeadModel"]:
+    def model_type(cls) -> Type["MixtralLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return MixtralLMHeadModel
 
     def mk_LayerNorm(self, axis: AxisSpec) -> LayerNormBase:
@@ -283,20 +287,28 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
         return outputs
 
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
-        w = [self.w1.weight, self.w2.weight, self.w3.weight]
-        out = {}
-
-        num_experts = self.w1.Experts.size
-        for i in range(num_experts):
-            for j in range(3):
-                key = f"{prefix}.{i}.w{j + 1}.weight"
-                val = w[j]["experts", i].array
-                # out[key] = val
-                out[key] = jnp.swapaxes(val, -1, -2)
-
-        return out
+        gate_proj = jnp.swapaxes(self.w1.weight.array, -1, -2)
+        up_proj = jnp.swapaxes(self.w3.weight.array, -1, -2)
+        down_proj = jnp.swapaxes(self.w2.weight.array, -1, -2)
+        return {
+            f"{prefix}.gate_up_proj": jnp.concatenate([gate_proj, up_proj], axis=-2),
+            f"{prefix}.down_proj": down_proj,
+        }
 
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "MixtralMoEMlp":
+        gate_up_key = f"{prefix}.gate_up_proj"
+        down_key = f"{prefix}.down_proj"
+        if gate_up_key in state_dict and down_key in state_dict:
+            gate_up_proj = state_dict[gate_up_key]
+            gate_proj, up_proj = jnp.split(gate_up_proj, 2, axis=-2)
+            down_proj = state_dict[down_key]
+            values = [
+                jnp.swapaxes(gate_proj, -1, -2),
+                jnp.swapaxes(down_proj, -1, -2),
+                jnp.swapaxes(up_proj, -1, -2),
+            ]
+            return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, values)
+
         w: List[List[Array]] = [[], [], []]
         num_experts = self.w1.Experts.size
         for i in range(num_experts):
@@ -306,10 +318,9 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
                 # val = state_dict[key][..., None, :, :]
                 w[j].append(val)
 
-        for j in range(3):
-            w[j] = jnp.concat(w[j], axis=1)
+        stacked: List[Array] = [jnp.concat(w[j], axis=1) for j in range(3)]
 
-        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, w)
+        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, stacked)
 
 
 class MixtralSparseMoeBlock(eqx.Module):
@@ -335,6 +346,28 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         return MixtralSparseMoeBlock(config, gate, experts)
 
+    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+        return {"gate": "gate", "experts": "experts"}
+
+    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+        gate_prefix = "gate" if prefix is None else f"{prefix}.gate"
+        experts_prefix = "experts" if prefix is None else f"{prefix}.experts"
+        state_dict = self.gate.to_state_dict(gate_prefix)
+        state_dict.update(self.experts.to_state_dict(experts_prefix))
+        return state_dict
+
+    def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "MixtralSparseMoeBlock":
+        gate_prefix = "gate" if prefix is None else f"{prefix}.gate"
+        experts_prefix = "experts" if prefix is None else f"{prefix}.experts"
+        if f"{gate_prefix}.weight" not in state_dict and prefix is not None and prefix.endswith(".mlp"):
+            legacy_prefix = f"{prefix.removesuffix('.mlp')}.block_sparse_moe"
+            gate_prefix = f"{legacy_prefix}.gate"
+            experts_prefix = f"{legacy_prefix}.experts"
+
+        gate = self.gate.from_state_dict(state_dict, gate_prefix)
+        experts = self.experts.from_state_dict(state_dict, experts_prefix)
+        return dataclasses.replace(self, gate=gate, experts=experts)
+
     def _route(self, router_probs: NamedArray, Token: Axis, TopExperts: Axis):
         @partial(
             shard_map,
@@ -351,6 +384,10 @@ class MixtralSparseMoeBlock(eqx.Module):
             selected_weights_ = selected_weights_ / selected_weights_.sum(-1, keepdims=True)
 
             return selected_weights_, selected_experts_
+
+        # jax.shard_map erases the wrapped callable's signature, so pyrefly mis-binds its
+        # decorator TypeVar to the Array argument; cast back to a plain callable.
+        sharded_route = cast(Callable[..., Any], sharded_route)
 
         with jax.named_scope("route"):
             selected_weights_, selected_experts_ = sharded_route(router_probs.array)
@@ -383,6 +420,9 @@ class MixtralSparseMoeBlock(eqx.Module):
             group_sizes_ = jnp.bincount(topk_idx_flat_, length=self.config.n_routed_experts)
 
             return x_repeat_sort_, group_sizes_, sort_idx_
+
+        # See sharded_route above: cast around jax.shard_map's signature erasure.
+        permute_sharded = cast(Callable[..., Any], permute_sharded)
 
         with jax.named_scope("permute"):
             x_repeat_sort_, group_sizes_, sort_idx_ = permute_sharded(x_flat.array, topk_idx_flat.array)
@@ -419,6 +459,9 @@ class MixtralSparseMoeBlock(eqx.Module):
             )
 
             return out_repeat_unflat_
+
+        # See sharded_route above: cast around jax.shard_map's signature erasure.
+        unpermute_sharded = cast(Callable[..., Any], unpermute_sharded)
 
         with jax.named_scope("unpermute"):
             out_repeat_unflat_ = unpermute_sharded(out_repeat_sort.array, sort_idx.array)
@@ -521,6 +564,9 @@ class MixtralDecoderLayer(eqx.Module):
         output = residual + mlp_output + moe_output
         return output, extras
 
+    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+        return {"block_sparse_moe": "mlp"}
+
 
 class MixtralTransformer(eqx.Module):
     config: MistralConfig = eqx.field(static=True)
@@ -531,8 +577,6 @@ class MixtralTransformer(eqx.Module):
     def init(config: MistralConfig, *, key) -> "MixtralTransformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, MixtralDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
@@ -548,7 +592,7 @@ class MixtralTransformer(eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
     ) -> tuple[NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
+        x, extras = cast(tuple[NamedArray, dict], self.layers.scan(x, mask=attn_mask, key=keys))
         x = self.norm(x)
 
         # moe logging
@@ -579,7 +623,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
     lm_head: Optional[hnn.Linear]
 
     @property
-    def config(self):
+    def config(self):  # pyrefly: ignore[bad-override]  # config-reuse: narrows config to MixtralConfig
         return self.transformer.config
 
     @property
@@ -663,15 +707,10 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
             return self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[MixtralConfig]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
-        else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": "model", "embeddings": None}

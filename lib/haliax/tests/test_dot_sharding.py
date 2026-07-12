@@ -78,7 +78,6 @@ def test_einsum_accepts_out_sharding():
 def test_out_sharding_on_nontrivial_mesh():
     devices = jax.devices()
     if len(devices) % 2 != 0:
-        import pytest
 
         pytest.skip("Need an even number of devices to form (n,2) mesh")
 

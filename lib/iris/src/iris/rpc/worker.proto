@@ -15,8 +15,8 @@
 edition = "2023";
 
 // Worker-specific request/response messages and the WorkerService RPC.
-// Shared types (including RunTaskRequest and the heartbeat protocol) live in
-// job.proto; controller-specific types live in controller.proto.
+// Shared types (including RunTaskRequest) live in job.proto; controller-
+// specific types live in controller.proto.
 //
 // Package deliberately kept as iris.cluster to preserve the wire-protocol URL
 // /iris.cluster.WorkerService/... for all existing workers and the controller.
@@ -65,6 +65,69 @@ message Worker {
     string stderr = 3;
     string error = 4;               // Non-empty if exec setup failed
   }
+
+  // ============================================================
+  // RECONCILE RPC (controller -> worker, unary)
+  // ============================================================
+
+  message ReconcileRequest {
+    string worker_id = 1;
+    repeated DesiredAttempt desired = 2;        // complete expected set
+  }
+
+  message ReconcileResponse {
+    string worker_id = 1;
+    repeated AttemptObservation observed = 2;   // complete observed set
+    WorkerHealth health = 3;
+  }
+
+  message DesiredAttempt {
+    // Routing key. 16 hex chars (128-bit random).
+    string attempt_uid = 1;
+
+    oneof intent {
+      AttemptSpec run = 10;
+      StopReason stop = 11;
+    }
+
+    reserved 100, 101;  // legacy composite key (task_id, attempt_id)
+  }
+
+  message AttemptSpec {
+    // Populated only when the DB attempt state is ASSIGNED (the one
+    // dispatch tick that hands the worker the spec). Omitted on every
+    // subsequent tick — the worker is expected to have it cached.
+    iris.job.RunTaskRequest request = 1;
+  }
+
+  message AttemptObservation {
+    string attempt_uid = 1;
+
+    iris.job.TaskState state = 2;
+    int32 exit_code = 3;
+    string error = 4;
+    string container_id = 5;
+    iris.time.Timestamp finished_at = 6;
+    iris.job.ResourceUsage resource_usage = 7;
+
+    reserved 100, 101;  // legacy composite key (task_id, attempt_id)
+  }
+
+  enum StopReason {
+    STOP_REASON_UNSPECIFIED = 0;
+    STOP_REASON_CANCELLED = 1;
+    STOP_REASON_PREEMPTED = 2;
+    STOP_REASON_SUPERSEDED = 3;
+    STOP_REASON_JOB_TERMINATED = 4;
+    STOP_REASON_TASK_TIMEOUT = 5;
+    STOP_REASON_WORKER_DRAIN = 6;
+  }
+
+  message WorkerHealth {
+    bool healthy = 1;
+    string health_error = 2;
+    iris.job.WorkerResourceSnapshot resources = 3;
+  }
 }
 
 // ============================================================================
@@ -75,7 +138,6 @@ service WorkerService {
   rpc GetTaskStatus(Worker.GetTaskStatusRequest) returns (iris.job.TaskStatus);
   rpc ListTasks(Worker.ListTasksRequest) returns (Worker.ListTasksResponse);
   rpc HealthCheck(iris.job.Empty) returns (Worker.HealthResponse);
-  rpc Heartbeat(iris.job.HeartbeatRequest) returns (iris.job.HeartbeatResponse);
   rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);
 
   // Process status (local process info + recent logs)
@@ -83,4 +145,11 @@ service WorkerService {
 
   // Exec in container
   rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
+
+  // --- Worker lifecycle / task RPCs (controller -> worker) ---
+  // Reconcile RPC: controller -> worker, unary. The sole controller->worker
+  // channel and the worker's keep-alive. One request carries the controller's
+  // complete desired attempt set for this worker; one response carries the
+  // complete observed set plus a WorkerHealth block (the worker's self-health).
+  rpc Reconcile(Worker.ReconcileRequest) returns (Worker.ReconcileResponse);
 }

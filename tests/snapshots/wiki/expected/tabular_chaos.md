@@ -4,7 +4,8 @@ The **2019 Tour of Romania** was a five-day cycling stage race that took place i
 
 ## Route
 
-Stages of the 2019 Tour of Romania 
+Stages of the 2019 Tour of Romania
+
 | Stage | Date | Route | Distance | Type | | Winner |
 | --- | --- | --- | --- | --- | --- | --- |
 |  | 11 September | Cluj-Napoca to Sighișoara | 168 km (104.4 mi) |  | Plain stage | Ivar Slik |
@@ -18,7 +19,7 @@ Stages of the 2019 Tour of Romania
 
 Twenty teams were invited to start the race. These included fourteen UCI Continental teams and six national teams. 
 
-**UCI Continental teams** 
+**UCI Continental teams**
 
 * Team Novak
 * Voster ATS Team
@@ -35,7 +36,7 @@ Twenty teams were invited to start the race. These included fourteen UCI Contine
 * Kyiv Capital Racing
 * Lokosphinx
 
-**National teams** 
+**National teams**
 
 * Romania
 * Slovakia
@@ -48,42 +49,43 @@ Twenty teams were invited to start the race. These included fourteen UCI Contine
 
 ### Stage 1
 
-11 September 2019 — Cluj-Napoca to Sighișoara, 168 km (104 mi) 
+11 September 2019 — Cluj-Napoca to Sighișoara, 168 km (104 mi)
 
 | Result of Stage 1  Rank  Rider  Team  Time   1   Ivar Slik (NED) Monkey Town–à Bloc 4h 12' 44"  2   Alex Molenaar (NED) Monkey Town–à Bloc s.t.  3   Eduard Grosu (ROU) Romania (*national team*) \+ 46"  4   Richard Banusch (GER) LKT Team Brandenburg s.t.  5   Dominik Neuman (CZE) Elkov–Author s.t. | General classification after Stage 1  Rank  Rider  Team  Time   1   Ivar Slik (NED)  Monkey Town–à Bloc 4h 12' 34"  2   Alex Molenaar (NED)  Monkey Town–à Bloc \+ 4"  3   Jonathan Milan (ITA)  Cycling Team Friuli \+ 50"  4   Eduard Grosu (ROU)  Romania (*national team*) \+ 52"  5   Adriaan Janssen (NED)  Monkey Town–à Bloc \+ 53" |
 | --- | --- |
 
 ### Stage 2
 
-12 September 2019 — Brașov to Focșani, 176.3 km (110 mi) 
+12 September 2019 — Brașov to Focșani, 176.3 km (110 mi)
 
 | Result of Stage 2  Rank  Rider  Team  Time   1   Stanislaw Aniolkowski (POL) CCC Development Team 4h 6' 14"  2   Mihkel Räim (EST) Estonia (*national team*) s.t.  3   Eduard Grosu (ROU) Romania (*national team*) s.t.  4   Jonathan Milan (ITA) Cycling Team Friuli s.t.  5   Richard Banusch (GER) LKT Team Brandenburg s.t. | General classification after Stage 2  Rank  Rider  Team  Time   1   Ivar Slik (NED)  Monkey Town–à Bloc 8h 18' 48"  2   Alex Molenaar (NED)  Monkey Town–à Bloc \+ 4"  3   Stanislaw Aniolkowski (POL) CCC Development Team \+ 46"  4   Eduard Grosu (ROU)  Romania (*national team*) \+ 48"  5   Mihkel Räim (EST) Estonia (*national team*) \+ 50" |
 | --- | --- |
 
 ### Stage 3
 
-13 September 2019 — Buzău to Târgoviște, 121.6 km (76 mi) 
+13 September 2019 — Buzău to Târgoviște, 121.6 km (76 mi)
 
 | Result of Stage 3  Rank  Rider  Team  Time   1   Mihkel Räim (EST) Estonia (*national team*) 2h 37' 09"  2   Jonathan Milan (ITA) Cycling Team Friuli s.t.  3   Norman Vahtra (EST) Estonia (*national team*) s.t.  4   Siim Kiskonen (EST) Estonia (*national team*) s.t.  5   Stanislaw Aniolkowski (POL) CCC Development Team s.t. | General classification after Stage 3  Rank  Rider  Team  Time   1   Ivar Slik (NED)  Monkey Town–à Bloc 10h 55' 57"  2   Alex Molenaar (NED)  Monkey Town–à Bloc \+ 4"  3   Mihkel Räim (EST) Estonia (*national team*) \+ 40"  4   Jonathan Milan (ITA) Cycling Team Friuli \+ 44"  3   Stanislaw Aniolkowski (POL) CCC Development Team \+ 46" |
 | --- | --- |
 
 ### Stage 4
 
-14 September 2019 — Ploiești to Piatra Arsă, 126 km (78 mi) 
+14 September 2019 — Ploiești to Piatra Arsă, 126 km (78 mi)
 
 | Result of Stage 4  Rank  Rider  Team  Time   1   Savva Novikov (RUS) Lokosphinx 3h 16' 06"  2   Karel Hník (CZE) Elkov–Author \+ 27"  3   Serghei Țvetcov (ROU) Romania (*national team*) s.t.  4   Attila Valter (HUN) CCC Development Team s.t.  5   Jan Bárta (CZE) Elkov–Author s.t. | General classification after Stage 4  Rank  Rider  Team  Time   1   Alex Molenaar (NED)  Monkey Town–à Bloc 14h 12' 34"  2   Savva Novikov (RUS) Lokosphinx \+ 15"  3   Karel Hník (CZE) Elkov–Author \+ 46"  4   Serghei Țvetcov (ROU)  Romania (*national team*) \+ 48"  5   Jan Bárta (CZE) Elkov–Author \+ 49" |
 | --- | --- |
 
 ### Stage 5
 
-15 September 2019 — Bucharest to Bucharest, 100.3 km (62 mi) 
+15 September 2019 — Bucharest to Bucharest, 100.3 km (62 mi)
 
 | Result of Stage 5  Rank  Rider  Team  Time   1   Stanislaw Aniolkowski (POL) CCC Development Team 2h 13' 38"  2   Eduard Grosu (ROU) Romania (*national team*) s.t.  3   Riccardo Robbo (ITA) Team Novak s.t.  4   Alexandr Smirnov (RUS) Lokosphinx s.t.  5   Patryk Stosz (CZE) CCC Development Team s.t. | General classification after Stage 5  Rank  Rider  Team  Time   1   Alex Molenaar (NED)  Monkey Town–à Bloc 16h 26' 12"  2   Savva Novikov (RUS) Lokosphinx \+ 15"  3   Karel Hník (CZE) Elkov–Author \+ 46"  4   Serghei Țvetcov (ROU)  Romania (*national team*) \+ 48"  5   Jan Bárta (CZE) Elkov–Author \+ 49" |
 | --- | --- |
 
 ## Classification leadership table
 
-Classification leadership by stage 
+Classification leadership by stage
+
 | Stage | Winner | General classification<br> | Points classification<br> | Mountains classification<br> | Young rider classification<br> | Best Romanian rider<br> | Team classification<br> |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 |  | Ivar Slik | Ivar Slik | Jonathan Milan | Adriaan Janssen | Alex Molenaar | Eduard Grosu | Monkey Town Continental Team |
@@ -95,7 +97,8 @@ Classification leadership by stage
 
 ## Standings
 
-Legend 
+Legend
+
 |  | Denotes the leader of the general classification |  | Denotes the leader of the points classification |
 | --- | --- | --- | --- |
 |  | Denotes the leader of the mountains classification |  | Denotes the leader of the young rider classification |
@@ -103,7 +106,8 @@ Legend
 
 ### General classification
 
-General classification (1–10) 
+General classification (1–10)
+
 | Rank | Rider | Team | Time |
 | --- | --- | --- | --- |
 | 1 | Alex Molenaar (NED) | Monkey Town–à Bloc | 16h 26' 12" |
@@ -119,7 +123,8 @@ General classification (1–10)
 
 ### Points classification
 
-Points classification (1–5) 
+Points classification (1–5)
+
 | Rank | Rider | Team | Points |
 | --- | --- | --- | --- |
 | 1 | Karl Patrick Lauk (EST) | Groupama–FDJ Continental Team | 11 |
@@ -130,7 +135,8 @@ Points classification (1–5)
 
 ### Mountains classification
 
-Mountains classification (1–5) 
+Mountains classification (1–5)
+
 | Rank | Rider | Team | Points |
 | --- | --- | --- | --- |
 | 1 | Serghei Țvetcov (ROU) | Cycling Team Friuli | 33 |
@@ -141,7 +147,8 @@ Mountains classification (1–5)
 
 ### Young rider classification
 
-Young rider classification (1–5) 
+Young rider classification (1–5)
+
 | Rank | Rider | Team | Time |
 | --- | --- | --- | --- |
 | 1 | Alex Molenaar (NED) | Monkey Town–à Bloc | 16h 26' 12" |
@@ -152,7 +159,8 @@ Young rider classification (1–5)
 
 ### Best Romanian rider classification
 
-Best Romanian rider classification (1–10) 
+Best Romanian rider classification (1–10)
+
 | Rank | Rider | Team | Time |
 | --- | --- | --- | --- |
 | 1 | Serghei Țvetcov | Cycling Team Friuli | 16h 27' 00" |
@@ -163,7 +171,8 @@ Best Romanian rider classification (1–10)
 
 ### Team classification
 
-Team classification (1–5) 
+Team classification (1–5)
+
 | Rank | Team | Time |
 | --- | --- | --- |
 | 1 | Lokosphinx | 49h 21' 30" |
@@ -181,6 +190,7 @@ Team classification (1–5)
 ## InfoBox
 
 2019 Tour of Romania
+
 | 2019 UCI Europe Tour | |
 | --- | --- |
 | Riders at the start line of Stage 5 | |

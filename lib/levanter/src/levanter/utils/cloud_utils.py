@@ -15,8 +15,7 @@ import fsspec
 import jax
 import requests  # type: ignore
 from fsspec import AbstractFileSystem
-
-from levanter.utils.jax_utils import sync_global_devices
+from haliax.jax_utils import sync_global_devices
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ def _checked_request(url):
         response.raise_for_status()
         return response.text
     except requests.exceptions.RequestException:
-        logger.exception(f"Could not get {url} from metadata server. Is this a TPU VM?", exc_info=True)
+        logger.exception(f"Could not get {url} from metadata server. Is this a TPU VM?")
         raise
 
 
@@ -45,7 +44,7 @@ def _checked_delete(url):
         response.raise_for_status()
         return response.text
     except requests.exceptions.RequestException:
-        logger.exception(f"Could not delete {url} from metadata server. Is this a TPU VM?", exc_info=True)
+        logger.exception(f"Could not delete {url} from metadata server. Is this a TPU VM?")
         raise
 
 

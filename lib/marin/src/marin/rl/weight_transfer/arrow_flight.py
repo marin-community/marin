@@ -22,6 +22,7 @@ import os
 import socket
 import threading
 import time
+import urllib.request
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -81,8 +82,6 @@ def _resolve_advertise_host() -> str:
     """
     # Try GCP metadata server first (works on TPU VMs)
     try:
-        import urllib.request
-
         req = urllib.request.Request(
             "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
             headers={"Metadata-Flavor": "Google"},
@@ -95,8 +94,8 @@ def _resolve_advertise_host() -> str:
         pass
 
     hostname = socket.gethostname()
-    # gRPC's c-ares DNS resolver can't handle .local (mDNS) hostnames
-    if hostname.endswith(".local"):
+    # gRPC's c-ares DNS resolver can't handle .local (mDNS) or .localdomain hostnames
+    if hostname.endswith(".local") or hostname.endswith(".localdomain"):
         return "localhost"
     return hostname
 
@@ -131,7 +130,7 @@ def state_dict_to_batches(
         Dict mapping param_name -> (schema, batches) for per-parameter flights
     """
 
-    result = {}
+    result: dict[str, tuple[pa.Schema, Sequence[pa.RecordBatch]]] = {}
     sz = 0
 
     schema = pa.schema(
@@ -195,7 +194,7 @@ def _mib_per_second(num_bytes: int, seconds: float) -> float:
     return num_bytes / _BYTES_PER_MIB / seconds
 
 
-def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -> jax.Array:
+def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -> np.ndarray | jax.Array:
     """Convert Arrow RecordBatch back to a single parameter array.
 
     Args:
@@ -241,7 +240,7 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
 
 
 class ArrowFlightCoordinator:
-    """Ray actor for coordinating Arrow Flight weight transfers."""
+    """Actor for coordinating Arrow Flight weight transfers."""
 
     _server_info: ServerInfo | None
 
@@ -264,9 +263,8 @@ class ArrowFlightCoordinator:
             param_names=param_names,
         )
         logger.info(f"Updated server: weight_id={weight_id}, params={len(param_names)}, servers={len(server_locations)}")
-        return 123
 
-    def fetch_server(self) -> ServerInfo:
+    def fetch_server(self) -> ServerInfo | None:
         return self._server_info
 
 
@@ -307,6 +305,7 @@ class MarinFlightServer(flight.FlightServerBase):
                     logger.debug(f"Requested weight_id {weight_id} stale, returning {self._latest_weight_id}")
                     weight_id = self._latest_weight_id
 
+                assert weight_id is not None, "No weights have been published yet"
                 (schema, batches) = self._weights_store[weight_id][param_name]
 
             return flight.RecordBatchStream(pa.RecordBatchReader.from_batches(schema, batches))
@@ -635,7 +634,7 @@ class ArrowFlightClient(WeightTransferClient):
             logger.warning("Failed to connect to Arrow Flight servers.", exc_info=True)
             return False
 
-    def _fetch_param(self, weight_id: int, param_name: str) -> tuple[str, jax.Array]:
+    def _fetch_param(self, weight_id: int, param_name: str) -> tuple[str, np.ndarray | jax.Array]:
         """Fetch a single parameter from any available server."""
         ticket_str = f"{weight_id}/{param_name}"
         ticket = flight.Ticket(ticket_str.encode("utf-8"))

@@ -9,7 +9,7 @@ German has the nice *Durchreiche*, which approximately translates to *hand-throu
 It is also called a **serving hatch**.
 
 > An opening in a wall at window height for the purpose of serving food or other items.
-> 
+>
 > *The cook passed the dishes through the serving hatch.*
 
 from Wiktionary

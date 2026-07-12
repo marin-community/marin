@@ -13,15 +13,6 @@ M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", contravariant=True)  # Model
 X = TypeVar("X", contravariant=True)  # Input
 
-try:
-    from haliax.nn.scan import BlockFoldable
-except ImportError:
-
-    class BlockFoldable(Protocol[M]):  # type: ignore
-        def fold(self, *args, **kwargs): ...
-
-        def scan(self, *args, **kwargs): ...
-
 
 class ValAndGradFn(Protocol[M, X]):
     def __call__(self, model: M, *inputs: X, **input_kwargs) -> Tuple[Scalar, M]: ...

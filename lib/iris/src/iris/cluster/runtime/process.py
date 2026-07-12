@@ -14,11 +14,7 @@ Lifecycle management includes:
 - Process group termination on Unix platforms
 """
 
-from __future__ import annotations
-
 import atexit
-import ctypes
-import ctypes.util
 import logging
 import os
 import select
@@ -32,19 +28,17 @@ import uuid
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
-    build_memray_attach_cmd,
-    build_memray_transform_cmd,
-    build_pyspy_cmd,
-    resolve_cpu_spec,
-    resolve_memory_spec,
+    LocalProfileDispatch,
+    capture_cpu,
+    capture_memory_attach,
+    capture_threads,
 )
-from iris.cluster.runtime.profile import run_pyspy_dump
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerPhase,
@@ -55,7 +49,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_container
+from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -70,7 +64,7 @@ logger = logging.getLogger(__name__)
 # Python interpreter shuts down (normal exit, sys.exit, unhandled exceptions).
 # This does NOT cover SIGKILL of the parent.
 
-_active_runtimes: weakref.WeakSet[ProcessRuntime] = weakref.WeakSet()
+_active_runtimes: "weakref.WeakSet[ProcessRuntime]" = weakref.WeakSet()
 
 
 def _cleanup_all_runtimes() -> None:
@@ -86,22 +80,16 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
-def set_pdeathsig_preexec():
-    """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
-
-    This is a Linux-specific feature that ensures container processes are
-    automatically killed if the worker process dies unexpectedly. On other
-    platforms, this is a no-op.
-    """
-    if sys.platform == "linux":
-        PR_SET_PDEATHSIG = 1
-        try:
-            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-            if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
-                errno = ctypes.get_errno()
-                logger.warning(f"Failed to set parent death signal: errno {errno}")
-        except Exception as e:
-            logger.debug(f"Could not set parent death signal: {e}")
+# Set PR_SET_PDEATHSIG in a tiny launcher then exec the real command.
+# ``preexec_fn`` would force CPython onto fork()+exec, which trips Linux's
+# overcommit heuristic on workers with large VMS; this path keeps
+# vfork()/posix_spawn. PDEATHSIG survives execve.
+_PDEATHSIG_LAUNCHER_CODE = (
+    "import ctypes,ctypes.util,os,signal,sys;"
+    "ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)"
+    ".prctl(1,signal.SIGKILL,0,0,0);"
+    "os.execvp(sys.argv[1],sys.argv[1:])"
+)
 
 
 # =============================================================================
@@ -121,7 +109,6 @@ class ProcessContainer:
     config: ContainerConfig
     command: list[str]  # Pre-computed command with remapped paths
     _process: subprocess.Popen | None = field(default=None, repr=False)
-    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -150,8 +137,6 @@ class ProcessContainer:
             prefix = os.pathsep.join(p for p in extra_paths if p not in existing.split(os.pathsep))
             env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
 
-            # Use process groups on Unix for clean termination
-            # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
             popen_kwargs: dict[str, object] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
@@ -161,16 +146,21 @@ class ProcessContainer:
             }
 
             if sys.platform != "win32":
-                # Create new process group for clean termination
+                # New session/process group for clean termination.
                 popen_kwargs["start_new_session"] = True
-                # Set up automatic termination if parent dies (Linux only)
-                popen_kwargs["preexec_fn"] = set_pdeathsig_preexec
+
+            # On Linux, wrap the command in a tiny Python launcher that sets
+            # PR_SET_PDEATHSIG before exec'ing the user command. We avoid
+            # preexec_fn because that forces fork()+exec, which fails with
+            # ENOMEM on workers with large VMS under default overcommit.
+            if sys.platform == "linux":
+                cmd = [sys.executable, "-c", _PDEATHSIG_LAUNCHER_CODE, *cmd]
 
             self._process = subprocess.Popen(cmd, **popen_kwargs)
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_container().spawn(
+            get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )
@@ -189,47 +179,30 @@ class ProcessContainer:
         if not self._process:
             return
 
+        assert self._process.stdout is not None
+        assert self._process.stderr is not None
+        stdout, stderr = self._process.stdout, self._process.stderr
+
+        def emit(source: str, line: str) -> None:
+            self._logs.append(LogLine.now(source, line.rstrip()))
+
         try:
             while self._process.poll() is None:
                 if stop_event.is_set():
                     break
 
                 # Non-blocking read with timeout
-                assert self._process.stdout is not None
-                assert self._process.stderr is not None
-                ready, _, _ = select.select([self._process.stdout, self._process.stderr], [], [], 0.1)
-
+                ready, _, _ = select.select([stdout, stderr], [], [], 0.1)
                 for stream in ready:
                     line = stream.readline()
                     if line:
-                        source = "stdout" if stream == self._process.stdout else "stderr"
-                        self._logs.append(
-                            LogLine(
-                                timestamp=datetime.now(timezone.utc),
-                                source=source,
-                                data=line.rstrip(),
-                            )
-                        )
+                        emit(STDOUT_SOURCE if stream is stdout else STDERR_SOURCE, line)
 
             # Process exited - drain remaining output
-            if self._process.stdout:
-                for line in self._process.stdout:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stdout",
-                            data=line.rstrip(),
-                        )
-                    )
-            if self._process.stderr:
-                for line in self._process.stderr:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stderr",
-                            data=line.rstrip(),
-                        )
-                    )
+            for line in stdout:
+                emit(STDOUT_SOURCE, line)
+            for line in stderr:
+                emit(STDERR_SOURCE, line)
 
             self._exit_code = self._process.returncode
             self._running = False
@@ -415,7 +388,7 @@ class ProcessContainerHandle:
     """
 
     config: ContainerConfig
-    runtime: ProcessRuntime
+    runtime: "ProcessRuntime"
     _container: ProcessContainer | None = field(default=None, repr=False)
     _container_id: str | None = field(default=None, repr=False)
     _prev_cpu_total: float = field(default=0.0, repr=False)
@@ -532,97 +505,48 @@ class ProcessContainerHandle:
         return 0
 
     def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
-        """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
+        """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
+        Runs profilers as host subprocesses sharing this worker's PID namespace.
+        Python's own subprocess timeout reaps a hung profiler, and the profiled
+        child's process group is SIGCONT'd afterward to clear a py-spy group-stop
+        (see ``LocalProfileDispatch``). CPU/memory fall back to a stub when the
+        profiler tool is missing; thread dumps propagate errors.
+        """
         if not self._container or not self._container._process:
             raise RuntimeError("Cannot profile: no running process")
 
+        pid = self._container._process.pid
+        dispatch = LocalProfileDispatch(resume_pid=pid)
+
         if profile_type.HasField("threads"):
-            pid = str(self._container._process.pid)
-            return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
+            return capture_threads(dispatch, pid=str(pid), include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
-            return self._profile_cpu(duration_seconds, profile_type.cpu)
+            return self._profile_cpu(dispatch, pid, duration_seconds, profile_type.cpu)
         elif profile_type.HasField("memory"):
-            return self._profile_memory(duration_seconds, profile_type.memory)
+            return self._profile_memory(dispatch, pid, duration_seconds, profile_type.memory)
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_cpu(self, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
-        """Profile CPU using py-spy, with fallback stub."""
-        pid = self._container._process.pid
-        spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=str(pid))
-
-        output_path = None
+    def _profile_cpu(
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, cpu_config: job_pb2.CpuProfile
+    ) -> bytes:
+        """Profile CPU using py-spy, falling back to a stub when py-spy is unavailable."""
         try:
-            with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
-                output_path = f.name
+            return capture_cpu(dispatch, cpu_config, duration_seconds, pid=str(pid))
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, RuntimeError) as e:
+            logger.warning("py-spy CPU profile failed for PID %s (%s); falling back to stub", pid, e)
+            return _cpu_profile_stub(cpu_config.format)
 
-            cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
-            if result.returncode == 0:
-                return Path(output_path).read_bytes()
-        except FileNotFoundError:
-            logger.warning("py-spy not found; falling back to stub profile for PID %s", pid)
-        except subprocess.TimeoutExpired:
-            logger.warning("py-spy timed out; falling back to stub profile for PID %s", pid)
-        except PermissionError:
-            logger.warning("py-spy lacks permission to attach; falling back to stub profile for PID %s", pid)
-        finally:
-            if output_path is not None:
-                Path(output_path).unlink(missing_ok=True)
-
-        return _cpu_profile_stub(cpu_config.format)
-
-    def _profile_memory(self, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
-        """Profile memory using memray, with fallback stub."""
-        pid = self._container._process.pid
-        spec = resolve_memory_spec(memory_config, duration_seconds, pid=str(pid))
-
-        trace_path = None
-        output_path = None
+    def _profile_memory(
+        self, dispatch: LocalProfileDispatch, pid: int, duration_seconds: int, memory_config: job_pb2.MemoryProfile
+    ) -> bytes:
+        """Profile memory using memray, falling back to a stub when memray is unavailable."""
         try:
-            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as f:
-                trace_path = f.name
-
-            attach_cmd = build_memray_attach_cmd(spec, memray_bin="memray", trace_path=trace_path)
-            result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
-            if result.returncode != 0:
-                raise RuntimeError(f"memray attach failed: {result.stderr}")
-
-            if spec.is_raw:
-                return Path(trace_path).read_bytes()
-
-            if spec.output_is_file:
-                with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
-                    output_path = f.name
-
-            transform_cmd = build_memray_transform_cmd(
-                spec, memray_bin="memray", trace_path=trace_path, output_path=output_path or ""
-            )
-            result = subprocess.run(transform_cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                raise RuntimeError(f"memray {spec.reporter} failed: {result.stderr}")
-
-            if spec.output_is_file:
-                return Path(output_path).read_bytes()
-            else:
-                return result.stdout.encode("utf-8")
-
-        except FileNotFoundError:
-            logger.warning("memray not found; falling back to stub profile for PID %s", pid)
-        except subprocess.TimeoutExpired:
-            logger.warning("memray timed out; falling back to stub profile for PID %s", pid)
-        except PermissionError:
-            logger.warning("memray lacks permission to attach; falling back to stub profile for PID %s", pid)
-        except RuntimeError:
-            logger.warning("memray failed for PID %s; falling back to stub", pid, exc_info=True)
-        finally:
-            if trace_path is not None:
-                Path(trace_path).unlink(missing_ok=True)
-            if output_path is not None:
-                Path(output_path).unlink(missing_ok=True)
-
-        return _memory_profile_stub(memory_config.format)
+            return capture_memory_attach(dispatch, memory_config, duration_seconds, pid=str(pid))
+        except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError, RuntimeError) as e:
+            logger.warning("memray memory profile failed for PID %s (%s); falling back to stub", pid, e)
+            return _memory_profile_stub(memory_config.format)
 
     def cleanup(self) -> None:
         """Kill the subprocess and clean up resources."""
@@ -672,10 +596,6 @@ class ProcessRuntime:
         if bundle_id:
             bundle_store.extract_bundle_to(bundle_id, workdir)
         write_workdir_files(workdir, workdir_files)
-
-    def list_containers(self) -> list[ProcessContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
 
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all container IDs."""

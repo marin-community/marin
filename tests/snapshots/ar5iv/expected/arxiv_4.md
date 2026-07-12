@@ -14,7 +14,8 @@ The HST uses three FGSs at the edge of the field of view of the telescope (see t
 
 $$S(\\theta)={{I\_{A}-I\_{B}}\\over{I\_{A}+I\_{B}}}=\\int\_{-\\Delta\\phi/2}^{\\Delta\\phi/2}{F(\\phi)\\over F\_{tot}}{{sin^{2}({D\\pi(\\theta-\\phi)/\\lambda})}\\over{D\\pi(\\theta-\\phi)/{\\lambda}}}d\\phi$$  
 
-(1)   
+(1)
+
 where $S(\\theta)$ is the value of the observed S-curve expressed as a function of angle away from interferometric null,$I\_{A}$ and $I\_{B}$ are the intensities measured by the photomultipliers, $D$ is the aperture of the HST, $\\lambda$ is the wavelength, $F(\\phi)$ is the intensity distribution of the object in the direction of the scan and $F\_{tot}$ is the total integrated flux. The observed S-curve can be regarded as the convolution of the normalized intensity profile of the object on the sky and the S-curve resulting from a reference observation of a point-source on a negligible background. It follows from equation (1) that, in principle, the morphology of the source (in the direction of the scan) can be obtained by deconvolving the transfer function from the observed FGS interferometer output. A method for doing this has been described by Hershey (1992). Stronger backgrounds lead to lower amplitude S-curves and this effect becomes important for faint sources such as those discussed in detail later in this paper. To illustrate the general form of the FGS S-curves and how they change when the object has small extent simulations were created and the results are shown in Figure 1.
 
 The primary use of the FGS in transfer function mode is for observations of binary stars (see, e.g. Franz et al. 1992), where separations, position angles, and relative intensities of close binaries are measured. Lattanzi et al. (1997) have also successfully used the FGS to measure the diameters of the disks of Mira variables. The observations discussed in this paper are the first to attempt to study extended structures in extragalactic sources with the FGS.
@@ -39,7 +40,8 @@ The objects are modeled using normalized Gaussian intrinsic intensity profiles, 
 
 $$F=B+He^{-\\theta^{2}/{2\\sigma^{2}}}$$  
 
-(2)   
+(2)
+
 where B and H are constrained so that the sum over all values of F is 1.0, $\\theta$ is the angle with respect to the FGS interferometry null (normally expressed in milliarcseconds) and $\\sigma$ is expressed in the same units. The normalization of this function is important and may be derived easily from the theory of the FGSs (see eq.). This function $F$ is a model for the intensity profile of the object in one direction, summed over the 5 arcsec width of the FGS instantaneous field of view in the perpendicular direction. The model S-curve itself is then created by convolving the model source profile F with the appropriate calibration S-curve - the “PSF” - as listed in Table 1.
 
 The observation data sets were reduced using the standard FGS software referenced earlier. The noisy, un-smoothed data products rather than the smoothed versions were used (both are created by the standard FGS software), as we wished to retain the noise properties of the data. For the calibrator S-curves, the smoothed version was used, re-sampled to match the scale and range of the observed data. In both cases a 512 sample subset of the data around the central S-curve feature was used to make the convolutions more efficient. This reduced range does not affect the results, as there are no significant features further out in these data.

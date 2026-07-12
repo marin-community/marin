@@ -1,75 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fray: Execution contexts for distributed and parallel computing.
+"""Fray: minimal job and actor scheduling interface.
 
-Top-level fray exports are v2 APIs. For legacy v1 APIs, use ``fray.v1``.
+Import from the defining submodule (``fray.client``, ``fray.actor``, ``fray.types``,
+``fray.local_backend``, ``fray.current_client``) rather than the package: a re-export hub
+here ties every importer of any submodule to all of them, which over-selects CI tests.
 """
-
-from fray.v2 import (
-    ActorContext,
-    ActorFuture,
-    ActorGroup,
-    ActorHandle,
-    ActorMethod,
-    Client,
-    CpuConfig,
-    DeviceConfig,
-    DeviceKind,
-    Entrypoint,
-    EnvironmentConfig,
-    GpuConfig,
-    GpuType,
-    JobFailed,
-    JobHandle,
-    JobRequest,
-    JobStatus,
-    LocalActorHandle,
-    LocalActorMethod,
-    LocalClient,
-    LocalJobHandle,
-    ResourceConfig,
-    TpuConfig,
-    TpuTopologyInfo,
-    TpuType,
-    create_environment,
-    current_actor,
-    current_client,
-    get_tpu_topology,
-    set_current_client,
-    wait_all,
-)
-
-__all__ = [
-    "ActorContext",
-    "ActorFuture",
-    "ActorGroup",
-    "ActorHandle",
-    "ActorMethod",
-    "Client",
-    "CpuConfig",
-    "DeviceConfig",
-    "DeviceKind",
-    "Entrypoint",
-    "EnvironmentConfig",
-    "GpuConfig",
-    "GpuType",
-    "JobFailed",
-    "JobHandle",
-    "JobRequest",
-    "JobStatus",
-    "LocalActorHandle",
-    "LocalActorMethod",
-    "LocalClient",
-    "LocalJobHandle",
-    "ResourceConfig",
-    "TpuConfig",
-    "TpuTopologyInfo",
-    "TpuType",
-    "create_environment",
-    "current_actor",
-    "current_client",
-    "get_tpu_topology",
-    "set_current_client",
-    "wait_all",
-]

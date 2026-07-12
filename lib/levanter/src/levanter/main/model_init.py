@@ -8,7 +8,7 @@ import equinox as eqx
 from haliax.partitioning import named_jit
 
 import haliax as hax
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.jax_utils import use_cpu_device
@@ -33,10 +33,8 @@ def prepare_model_init_context(
             raise ValueError("initialize_from_hf requires a HF-compatible model configuration.")
 
         converter = model.hf_checkpoint_converter()
-        if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
-            converter = converter.replaced(tokenizer=tokenizer)
-        else:
-            converter = converter.replaced(tokenizer=tokenizer)
+        converter.warn_if_tokenizer_mismatch(tokenizer)
+        converter = converter.replaced(tokenizer=tokenizer)
 
         if isinstance(initialize_from_hf, str):
             converter = converter.replaced(reference_checkpoint=initialize_from_hf)
@@ -86,9 +84,10 @@ def load_model_from_source(
     if checkpoint_path is None:
         raise ValueError("Either hf_ref or checkpoint_path must be provided.")
 
+    resolved_checkpoint_path = latest_checkpoint_path(checkpoint_path)
     with use_cpu_device():
         model = eqx.filter_eval_shape(context.model.build, Vocab, key=model_key)
-        model = load_checkpoint(model, checkpoint_path, subpath="model")
+        model = load_checkpoint(model, resolved_checkpoint_path, subpath="model")
 
     model = hax.shard(model, parameter_axis_mapping)
     return named_jit(cast_to_param, parameter_axis_mapping)(model)

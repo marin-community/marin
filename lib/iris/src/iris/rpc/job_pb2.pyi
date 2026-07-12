@@ -1,4 +1,4 @@
-from . import logging_pb2 as _logging_pb2
+from . import iris_logging_pb2 as _iris_logging_pb2
 from . import time_pb2 as _time_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
@@ -34,6 +34,16 @@ class TaskState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATE_UNSCHEDULABLE: _ClassVar[TaskState]
     TASK_STATE_ASSIGNED: _ClassVar[TaskState]
     TASK_STATE_PREEMPTED: _ClassVar[TaskState]
+    TASK_STATE_COSCHED_FAILED: _ClassVar[TaskState]
+    TASK_STATE_MISSING: _ClassVar[TaskState]
+
+class PeerStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    PEER_STATUS_NONE: _ClassVar[PeerStatus]
+    PEER_STATUS_PENDING_SCHEDULING: _ClassVar[PeerStatus]
+    PEER_STATUS_ASSIGNED: _ClassVar[PeerStatus]
+    PEER_STATUS_SYNCED: _ClassVar[PeerStatus]
+    PEER_STATUS_REJECTED: _ClassVar[PeerStatus]
 
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -71,6 +81,14 @@ class PriorityBand(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PRIORITY_BAND_PRODUCTION: _ClassVar[PriorityBand]
     PRIORITY_BAND_INTERACTIVE: _ClassVar[PriorityBand]
     PRIORITY_BAND_BATCH: _ClassVar[PriorityBand]
+
+class ContainerProfile(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    CONTAINER_PROFILE_UNSPECIFIED: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_RESTRICTED: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_DEFAULT: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_DOCKER_ACCESS: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_PRIVILEGED: _ClassVar[ContainerProfile]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -91,6 +109,13 @@ TASK_STATE_WORKER_FAILED: TaskState
 TASK_STATE_UNSCHEDULABLE: TaskState
 TASK_STATE_ASSIGNED: TaskState
 TASK_STATE_PREEMPTED: TaskState
+TASK_STATE_COSCHED_FAILED: TaskState
+TASK_STATE_MISSING: TaskState
+PEER_STATUS_NONE: PeerStatus
+PEER_STATUS_PENDING_SCHEDULING: PeerStatus
+PEER_STATUS_ASSIGNED: PeerStatus
+PEER_STATUS_SYNCED: PeerStatus
+PEER_STATUS_REJECTED: PeerStatus
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -113,96 +138,15 @@ PRIORITY_BAND_UNSPECIFIED: PriorityBand
 PRIORITY_BAND_PRODUCTION: PriorityBand
 PRIORITY_BAND_INTERACTIVE: PriorityBand
 PRIORITY_BAND_BATCH: PriorityBand
+CONTAINER_PROFILE_UNSPECIFIED: ContainerProfile
+CONTAINER_PROFILE_RESTRICTED: ContainerProfile
+CONTAINER_PROFILE_DEFAULT: ContainerProfile
+CONTAINER_PROFILE_DOCKER_ACCESS: ContainerProfile
+CONTAINER_PROFILE_PRIVILEGED: ContainerProfile
 
 class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
-
-class LoginRequest(_message.Message):
-    __slots__ = ("identity_token",)
-    IDENTITY_TOKEN_FIELD_NUMBER: _ClassVar[int]
-    identity_token: str
-    def __init__(self, identity_token: _Optional[str] = ...) -> None: ...
-
-class LoginResponse(_message.Message):
-    __slots__ = ("token", "key_id", "user_id")
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    token: str
-    key_id: str
-    user_id: str
-    def __init__(self, token: _Optional[str] = ..., key_id: _Optional[str] = ..., user_id: _Optional[str] = ...) -> None: ...
-
-class GetAuthInfoRequest(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
-
-class GetAuthInfoResponse(_message.Message):
-    __slots__ = ("provider", "gcp_project_id")
-    PROVIDER_FIELD_NUMBER: _ClassVar[int]
-    GCP_PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
-    provider: str
-    gcp_project_id: str
-    def __init__(self, provider: _Optional[str] = ..., gcp_project_id: _Optional[str] = ...) -> None: ...
-
-class CreateApiKeyRequest(_message.Message):
-    __slots__ = ("user_id", "name", "ttl_ms")
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    TTL_MS_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    name: str
-    ttl_ms: int
-    def __init__(self, user_id: _Optional[str] = ..., name: _Optional[str] = ..., ttl_ms: _Optional[int] = ...) -> None: ...
-
-class CreateApiKeyResponse(_message.Message):
-    __slots__ = ("key_id", "token", "key_prefix")
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    token: str
-    key_prefix: str
-    def __init__(self, key_id: _Optional[str] = ..., token: _Optional[str] = ..., key_prefix: _Optional[str] = ...) -> None: ...
-
-class RevokeApiKeyRequest(_message.Message):
-    __slots__ = ("key_id",)
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    def __init__(self, key_id: _Optional[str] = ...) -> None: ...
-
-class ListApiKeysRequest(_message.Message):
-    __slots__ = ("user_id",)
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    def __init__(self, user_id: _Optional[str] = ...) -> None: ...
-
-class ApiKeyInfo(_message.Message):
-    __slots__ = ("key_id", "key_prefix", "user_id", "name", "created_at_ms", "last_used_at_ms", "expires_at_ms", "revoked")
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    LAST_USED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    REVOKED_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    key_prefix: str
-    user_id: str
-    name: str
-    created_at_ms: int
-    last_used_at_ms: int
-    expires_at_ms: int
-    revoked: bool
-    def __init__(self, key_id: _Optional[str] = ..., key_prefix: _Optional[str] = ..., user_id: _Optional[str] = ..., name: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., last_used_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., revoked: _Optional[bool] = ...) -> None: ...
-
-class ListApiKeysResponse(_message.Message):
-    __slots__ = ("keys",)
-    KEYS_FIELD_NUMBER: _ClassVar[int]
-    keys: _containers.RepeatedCompositeFieldContainer[ApiKeyInfo]
-    def __init__(self, keys: _Optional[_Iterable[_Union[ApiKeyInfo, _Mapping]]] = ...) -> None: ...
 
 class GetCurrentUserRequest(_message.Message):
     __slots__ = ()
@@ -292,8 +236,22 @@ class ProfileTaskResponse(_message.Message):
     error: str
     def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
 
+class Provenance(_message.Message):
+    __slots__ = ("tree_hash", "base_commit", "dirty", "branch", "built_by")
+    TREE_HASH_FIELD_NUMBER: _ClassVar[int]
+    BASE_COMMIT_FIELD_NUMBER: _ClassVar[int]
+    DIRTY_FIELD_NUMBER: _ClassVar[int]
+    BRANCH_FIELD_NUMBER: _ClassVar[int]
+    BUILT_BY_FIELD_NUMBER: _ClassVar[int]
+    tree_hash: str
+    base_commit: str
+    dirty: bool
+    branch: str
+    built_by: str
+    def __init__(self, tree_hash: _Optional[str] = ..., base_commit: _Optional[str] = ..., dirty: _Optional[bool] = ..., branch: _Optional[str] = ..., built_by: _Optional[str] = ...) -> None: ...
+
 class ProcessInfo(_message.Message):
-    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "git_hash", "cpu_millicores")
+    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "cpu_millicores", "provenance")
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     PID_FIELD_NUMBER: _ClassVar[int]
     PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -304,8 +262,8 @@ class ProcessInfo(_message.Message):
     OPEN_FD_COUNT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
-    GIT_HASH_FIELD_NUMBER: _ClassVar[int]
     CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
+    PROVENANCE_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     pid: int
     python_version: str
@@ -316,9 +274,9 @@ class ProcessInfo(_message.Message):
     open_fd_count: int
     memory_total_bytes: int
     cpu_count: int
-    git_hash: str
     cpu_millicores: int
-    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., git_hash: _Optional[str] = ..., cpu_millicores: _Optional[int] = ...) -> None: ...
+    provenance: Provenance
+    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class GetProcessStatusRequest(_message.Message):
     __slots__ = ("max_log_lines", "log_substring", "min_log_level", "target")
@@ -337,11 +295,11 @@ class GetProcessStatusResponse(_message.Message):
     PROCESS_INFO_FIELD_NUMBER: _ClassVar[int]
     LOG_ENTRIES_FIELD_NUMBER: _ClassVar[int]
     process_info: ProcessInfo
-    log_entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
-    def __init__(self, process_info: _Optional[_Union[ProcessInfo, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
+    log_entries: _containers.RepeatedCompositeFieldContainer[_iris_logging_pb2.LogEntry]
+    def __init__(self, process_info: _Optional[_Union[ProcessInfo, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_iris_logging_pb2.LogEntry, _Mapping]]] = ...) -> None: ...
 
 class TaskStatus(_message.Message):
-    __slots__ = ("task_id", "state", "worker_id", "worker_address", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled", "container_id", "resource_history")
+    __slots__ = ("task_id", "state", "worker_id", "worker_address", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "build_metrics", "current_attempt_id", "attempts", "pending_reason", "can_be_scheduled", "container_id", "backend_id", "cluster", "submitted_at")
     class PortsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -365,7 +323,9 @@ class TaskStatus(_message.Message):
     PENDING_REASON_FIELD_NUMBER: _ClassVar[int]
     CAN_BE_SCHEDULED_FIELD_NUMBER: _ClassVar[int]
     CONTAINER_ID_FIELD_NUMBER: _ClassVar[int]
-    RESOURCE_HISTORY_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
+    SUBMITTED_AT_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     state: TaskState
     worker_id: str
@@ -382,11 +342,13 @@ class TaskStatus(_message.Message):
     pending_reason: str
     can_be_scheduled: bool
     container_id: str
-    resource_history: _containers.RepeatedCompositeFieldContainer[ResourceUsage]
-    def __init__(self, task_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., current_attempt_id: _Optional[int] = ..., attempts: _Optional[_Iterable[_Union[TaskAttempt, _Mapping]]] = ..., pending_reason: _Optional[str] = ..., can_be_scheduled: _Optional[bool] = ..., container_id: _Optional[str] = ..., resource_history: _Optional[_Iterable[_Union[ResourceUsage, _Mapping]]] = ...) -> None: ...
+    backend_id: str
+    cluster: str
+    submitted_at: _time_pb2.Timestamp
+    def __init__(self, task_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., worker_id: _Optional[str] = ..., worker_address: _Optional[str] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., current_attempt_id: _Optional[int] = ..., attempts: _Optional[_Iterable[_Union[TaskAttempt, _Mapping]]] = ..., pending_reason: _Optional[str] = ..., can_be_scheduled: _Optional[bool] = ..., container_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class TaskAttempt(_message.Message):
-    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at", "finished_at", "is_worker_failure")
+    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at", "finished_at", "is_worker_failure", "attempt_uid")
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -395,6 +357,7 @@ class TaskAttempt(_message.Message):
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     IS_WORKER_FAILURE_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
     attempt_id: int
     worker_id: str
     state: TaskState
@@ -403,7 +366,8 @@ class TaskAttempt(_message.Message):
     started_at: _time_pb2.Timestamp
     finished_at: _time_pb2.Timestamp
     is_worker_failure: bool
-    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ...) -> None: ...
+    attempt_uid: str
+    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ..., attempt_uid: _Optional[str] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "process_count")
@@ -420,7 +384,7 @@ class ResourceUsage(_message.Message):
     def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
 
 class WorkerResourceSnapshot(_message.Message):
-    __slots__ = ("timestamp", "host_cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count", "net_recv_bps", "net_sent_bps")
+    __slots__ = ("timestamp", "host_cpu_percent", "memory_used_bytes", "memory_total_bytes", "disk_used_bytes", "disk_total_bytes", "running_task_count", "total_process_count", "net_recv_bytes", "net_sent_bytes")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     HOST_CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_USED_BYTES_FIELD_NUMBER: _ClassVar[int]
@@ -429,8 +393,8 @@ class WorkerResourceSnapshot(_message.Message):
     DISK_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     RUNNING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
     TOTAL_PROCESS_COUNT_FIELD_NUMBER: _ClassVar[int]
-    NET_RECV_BPS_FIELD_NUMBER: _ClassVar[int]
-    NET_SENT_BPS_FIELD_NUMBER: _ClassVar[int]
+    NET_RECV_BYTES_FIELD_NUMBER: _ClassVar[int]
+    NET_SENT_BYTES_FIELD_NUMBER: _ClassVar[int]
     timestamp: _time_pb2.Timestamp
     host_cpu_percent: int
     memory_used_bytes: int
@@ -439,9 +403,9 @@ class WorkerResourceSnapshot(_message.Message):
     disk_total_bytes: int
     running_task_count: int
     total_process_count: int
-    net_recv_bps: int
-    net_sent_bps: int
-    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., host_cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ..., net_recv_bps: _Optional[int] = ..., net_sent_bps: _Optional[int] = ...) -> None: ...
+    net_recv_bytes: int
+    net_sent_bytes: int
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., host_cpu_percent: _Optional[int] = ..., memory_used_bytes: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., disk_used_bytes: _Optional[int] = ..., disk_total_bytes: _Optional[int] = ..., running_task_count: _Optional[int] = ..., total_process_count: _Optional[int] = ..., net_recv_bytes: _Optional[int] = ..., net_sent_bytes: _Optional[int] = ...) -> None: ...
 
 class BuildMetrics(_message.Message):
     __slots__ = ("build_started", "build_finished", "from_cache", "image_tag")
@@ -456,7 +420,7 @@ class BuildMetrics(_message.Message):
     def __init__(self, build_started: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., build_finished: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
-    __slots__ = ("job_id", "state", "exit_code", "error", "started_at", "finished_at", "ports", "resource_usage", "status_message", "build_metrics", "failure_count", "preemption_count", "tasks", "name", "submitted_at", "resources", "task_state_counts", "task_count", "completed_count", "pending_reason", "has_children")
+    __slots__ = ("job_id", "state", "exit_code", "error", "started_at", "finished_at", "ports", "status_message", "build_metrics", "failure_count", "preemption_count", "tasks", "name", "submitted_at", "resources", "task_state_counts", "task_count", "completed_count", "pending_reason", "has_children", "parent_job_id", "backend_id", "cluster", "peer_status", "submitting_user")
     class PortsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -478,7 +442,6 @@ class JobStatus(_message.Message):
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     PORTS_FIELD_NUMBER: _ClassVar[int]
-    RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
     STATUS_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     BUILD_METRICS_FIELD_NUMBER: _ClassVar[int]
     FAILURE_COUNT_FIELD_NUMBER: _ClassVar[int]
@@ -492,6 +455,11 @@ class JobStatus(_message.Message):
     COMPLETED_COUNT_FIELD_NUMBER: _ClassVar[int]
     PENDING_REASON_FIELD_NUMBER: _ClassVar[int]
     HAS_CHILDREN_FIELD_NUMBER: _ClassVar[int]
+    PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+    CLUSTER_FIELD_NUMBER: _ClassVar[int]
+    PEER_STATUS_FIELD_NUMBER: _ClassVar[int]
+    SUBMITTING_USER_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     state: JobState
     exit_code: int
@@ -499,7 +467,6 @@ class JobStatus(_message.Message):
     started_at: _time_pb2.Timestamp
     finished_at: _time_pb2.Timestamp
     ports: _containers.ScalarMap[str, int]
-    resource_usage: ResourceUsage
     status_message: str
     build_metrics: BuildMetrics
     failure_count: int
@@ -513,21 +480,12 @@ class JobStatus(_message.Message):
     completed_count: int
     pending_reason: str
     has_children: bool
-    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ..., pending_reason: _Optional[str] = ..., has_children: _Optional[bool] = ...) -> None: ...
-
-class ReservationEntry(_message.Message):
-    __slots__ = ("resources", "constraints")
-    RESOURCES_FIELD_NUMBER: _ClassVar[int]
-    CONSTRAINTS_FIELD_NUMBER: _ClassVar[int]
-    resources: ResourceSpecProto
-    constraints: _containers.RepeatedCompositeFieldContainer[Constraint]
-    def __init__(self, resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ...) -> None: ...
-
-class ReservationConfig(_message.Message):
-    __slots__ = ("entries",)
-    ENTRIES_FIELD_NUMBER: _ClassVar[int]
-    entries: _containers.RepeatedCompositeFieldContainer[ReservationEntry]
-    def __init__(self, entries: _Optional[_Iterable[_Union[ReservationEntry, _Mapping]]] = ...) -> None: ...
+    parent_job_id: str
+    backend_id: str
+    cluster: str
+    peer_status: PeerStatus
+    submitting_user: str
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ..., pending_reason: _Optional[str] = ..., has_children: _Optional[bool] = ..., parent_job_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ..., peer_status: _Optional[_Union[PeerStatus, str]] = ..., submitting_user: _Optional[str] = ...) -> None: ...
 
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")
@@ -576,7 +534,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile")
+    __slots__ = ("env_vars", "setup_scripts")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -584,17 +542,11 @@ class EnvironmentConfig(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    PIP_PACKAGES_FIELD_NUMBER: _ClassVar[int]
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
-    EXTRAS_FIELD_NUMBER: _ClassVar[int]
-    PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
-    DOCKERFILE_FIELD_NUMBER: _ClassVar[int]
-    pip_packages: _containers.RepeatedScalarFieldContainer[str]
+    SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
-    extras: _containers.RepeatedScalarFieldContainer[str]
-    python_version: str
-    dockerfile: str
-    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ..., dockerfile: _Optional[str] = ...) -> None: ...
+    setup_scripts: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)
@@ -665,7 +617,7 @@ class CoschedulingConfig(_message.Message):
     def __init__(self, group_by: _Optional[str] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
-    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "git_hash")
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "provenance")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -689,7 +641,7 @@ class WorkerMetadata(_message.Message):
     GCE_INSTANCE_NAME_FIELD_NUMBER: _ClassVar[int]
     GCE_ZONE_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
-    GIT_HASH_FIELD_NUMBER: _ClassVar[int]
+    PROVENANCE_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     ip_address: str
     cpu_count: int
@@ -706,11 +658,11 @@ class WorkerMetadata(_message.Message):
     gce_instance_name: str
     gce_zone: str
     attributes: _containers.MessageMap[str, AttributeValue]
-    git_hash: str
-    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., git_hash: _Optional[str] = ...) -> None: ...
+    provenance: Provenance
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class RunTaskRequest(_message.Message):
-    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image")
+    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     NUM_TASKS_FIELD_NUMBER: _ClassVar[int]
     ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
@@ -722,6 +674,10 @@ class RunTaskRequest(_message.Message):
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     CONSTRAINTS_FIELD_NUMBER: _ClassVar[int]
     TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
+    ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
+    COSCHEDULING_FIELD_NUMBER: _ClassVar[int]
+    PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    CONTAINER_PROFILE_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     num_tasks: int
     entrypoint: RuntimeEntrypoint
@@ -733,48 +689,8 @@ class RunTaskRequest(_message.Message):
     attempt_id: int
     constraints: _containers.RepeatedCompositeFieldContainer[Constraint]
     task_image: str
-    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ...) -> None: ...
-
-class WorkerTaskStatus(_message.Message):
-    __slots__ = ("task_id", "attempt_id", "state", "exit_code", "error", "finished_at", "resource_usage", "log_entries", "container_id")
-    TASK_ID_FIELD_NUMBER: _ClassVar[int]
-    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
-    RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
-    LOG_ENTRIES_FIELD_NUMBER: _ClassVar[int]
-    CONTAINER_ID_FIELD_NUMBER: _ClassVar[int]
-    task_id: str
-    attempt_id: int
-    state: TaskState
-    exit_code: int
-    error: str
-    finished_at: _time_pb2.Timestamp
-    resource_usage: ResourceUsage
-    log_entries: _containers.RepeatedCompositeFieldContainer[_logging_pb2.LogEntry]
-    container_id: str
-    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., log_entries: _Optional[_Iterable[_Union[_logging_pb2.LogEntry, _Mapping]]] = ..., container_id: _Optional[str] = ...) -> None: ...
-
-class HeartbeatRequest(_message.Message):
-    __slots__ = ("tasks_to_run", "tasks_to_kill", "expected_tasks")
-    TASKS_TO_RUN_FIELD_NUMBER: _ClassVar[int]
-    TASKS_TO_KILL_FIELD_NUMBER: _ClassVar[int]
-    EXPECTED_TASKS_FIELD_NUMBER: _ClassVar[int]
-    tasks_to_run: _containers.RepeatedCompositeFieldContainer[RunTaskRequest]
-    tasks_to_kill: _containers.RepeatedScalarFieldContainer[str]
-    expected_tasks: _containers.RepeatedCompositeFieldContainer[WorkerTaskStatus]
-    def __init__(self, tasks_to_run: _Optional[_Iterable[_Union[RunTaskRequest, _Mapping]]] = ..., tasks_to_kill: _Optional[_Iterable[str]] = ..., expected_tasks: _Optional[_Iterable[_Union[WorkerTaskStatus, _Mapping]]] = ...) -> None: ...
-
-class HeartbeatResponse(_message.Message):
-    __slots__ = ("tasks", "resource_snapshot", "worker_healthy", "health_error")
-    TASKS_FIELD_NUMBER: _ClassVar[int]
-    RESOURCE_SNAPSHOT_FIELD_NUMBER: _ClassVar[int]
-    WORKER_HEALTHY_FIELD_NUMBER: _ClassVar[int]
-    HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
-    tasks: _containers.RepeatedCompositeFieldContainer[WorkerTaskStatus]
-    resource_snapshot: WorkerResourceSnapshot
-    worker_healthy: bool
-    health_error: str
-    def __init__(self, tasks: _Optional[_Iterable[_Union[WorkerTaskStatus, _Mapping]]] = ..., resource_snapshot: _Optional[_Union[WorkerResourceSnapshot, _Mapping]] = ..., worker_healthy: _Optional[bool] = ..., health_error: _Optional[str] = ...) -> None: ...
+    attempt_uid: str
+    coscheduling: CoschedulingConfig
+    priority: PriorityBand
+    container_profile: ContainerProfile
+    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ..., container_profile: _Optional[_Union[ContainerProfile, str]] = ...) -> None: ...

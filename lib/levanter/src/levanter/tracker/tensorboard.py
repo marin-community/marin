@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import jax
-from rigging.filesystem import url_to_fs
 import numpy as np
+from rigging.filesystem import StoragePath
 
-from levanter.tracker import Tracker, TrackerConfig
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.json_logger import _flatten
+from levanter.tracker.tracker import Tracker, TrackerConfig
 
 pylogger = logging.getLogger(__name__)
 
@@ -23,6 +24,37 @@ if typing.TYPE_CHECKING:
 
 def _is_scalar(v) -> bool:
     return isinstance(v, numbers.Number) or (isinstance(v, np.ndarray | jax.Array) and v.ndim == 0)
+
+
+def _log_summary_stats(
+    writer: "SummaryWriter",
+    key: str,
+    value: SummaryStats,
+    *,
+    step: int | None,
+) -> None:
+    writer.add_scalar(f"{key}/min", value.min.item(), global_step=step)
+    writer.add_scalar(f"{key}/max", value.max.item(), global_step=step)
+    writer.add_scalar(f"{key}/num", int(value.num), global_step=step)
+    writer.add_scalar(f"{key}/nonzero_count", int(value.nonzero_count), global_step=step)
+    writer.add_scalar(f"{key}/sum", value.sum.item(), global_step=step)
+    writer.add_scalar(f"{key}/sum_squares", value.sum_squares.item(), global_step=step)
+    writer.add_scalar(f"{key}/mean", value.mean.item(), global_step=step)
+    writer.add_scalar(f"{key}/variance", value.variance.item(), global_step=step)
+    writer.add_scalar(f"{key}/rms", value.rms.item(), global_step=step)
+    if value.histogram is not None:
+        counts, limits = value.histogram.to_numpy_histogram()
+        writer.add_histogram_raw(
+            f"{key}/histogram",
+            min=value.min.item(),
+            max=value.max.item(),
+            num=int(value.num),
+            sum=value.sum.item(),
+            sum_squares=value.sum_squares.item(),
+            bucket_limits=np.array(limits).tolist(),
+            bucket_counts=np.concatenate([[0], np.array(counts)]).tolist(),
+            global_step=step,
+        )
 
 
 class TensorboardTracker(Tracker):
@@ -40,7 +72,7 @@ class TensorboardTracker(Tracker):
             return
 
         del commit
-        metrics = _flatten_nested_dict(metrics)
+        metrics = _flatten(metrics)
         for k, value in metrics.items():
             try:
                 if isinstance(value, jax.Array):
@@ -49,21 +81,8 @@ class TensorboardTracker(Tracker):
                     else:
                         value = np.array(value)
 
-                if isinstance(value, Histogram):
-                    num = value.num
-                    if hasattr(num, "item"):
-                        num = num.item()
-                    self.writer.add_histogram_raw(
-                        k,
-                        min=value.min.item(),
-                        max=value.max.item(),
-                        num=num,
-                        sum=value.sum.item(),
-                        sum_squares=value.sum_squares.item(),
-                        bucket_limits=np.array(value.bucket_limits).tolist(),
-                        bucket_counts=np.concatenate([[0], np.array(value.bucket_counts)]).tolist(),
-                        global_step=step,
-                    )
+                if isinstance(value, SummaryStats):
+                    _log_summary_stats(self.writer, k, value, step=step)
                 elif isinstance(value, str):
                     self.writer.add_text(k, value)
                 elif isinstance(value, np.ndarray):
@@ -85,20 +104,34 @@ class TensorboardTracker(Tracker):
                 pylogger.exception(f"Error logging metric {k} with value {value}")
 
     def log_summary(self, metrics: dict[str, Any]):
+        metrics = _flatten(metrics)
         for k, v in metrics.items():
+            if isinstance(v, jax.Array):
+                if v.ndim == 0:
+                    v = v.item()
+                else:
+                    v = np.array(v)
+
             if _is_scalar(v):
                 self.writer.add_scalar(k, v, global_step=None)
+            elif isinstance(v, SummaryStats):
+                _log_summary_stats(self.writer, k, v, step=None)
             elif isinstance(v, str):
                 self.writer.add_text(k, v, global_step=None)
+            elif isinstance(v, np.ndarray) and np.issubdtype(v.dtype, np.number):
+                if v.ndim == 0:
+                    self.writer.add_scalar(k, v.item(), global_step=None)
+                else:
+                    self.writer.add_histogram(k, v.ravel(), global_step=None)
             else:
-                pylogger.error(f"Unsupported metric type: {type(v)} for key {k}")
+                self.writer.add_text(k, str(v), global_step=None)
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         log_path = self.writer.logdir
         # sync the artifact to the logdir via fsspec
         try:
-            fs, fs_path = url_to_fs(log_path)
-            fs.put(artifact_path, os.path.join(fs_path, name or os.path.basename(artifact_path)), recursive=True)
+            remote_path = StoragePath(log_path) / (name or os.path.basename(artifact_path))
+            remote_path.upload_from(artifact_path, recursive=True)
         except Exception:
             pylogger.exception(f"Error logging artifact {artifact_path} to {log_path}")
             return
@@ -125,7 +158,7 @@ class TensorboardConfig(TrackerConfig):
 
         pylogger.info(f"Writing Tensorboard logs to {dir_to_write}")
 
-        from tensorboardX import SummaryWriter  # noqa: F811
+        from tensorboardX import SummaryWriter  # noqa: F811, PLC0415  # optional dep: tensorboardx
 
         writer = SummaryWriter(
             dir_to_write,
@@ -138,15 +171,3 @@ class TensorboardConfig(TrackerConfig):
         )
 
         return TensorboardTracker(writer)
-
-
-def _flatten_nested_dict(d):
-    def items():
-        for key, value in d.items():
-            if isinstance(value, dict):
-                for subkey, subvalue in _flatten_nested_dict(value).items():
-                    yield key + "/" + subkey, subvalue
-            else:
-                yield key, value
-
-    return dict(items())

@@ -49,10 +49,10 @@ class InputDatasetFormat(str, Enum):
     |  what's the car's speed ?" }]     |  time taken. Answer is 375/3 = 125 kmph" |
     """
 
-    SINGLE_COLUMN_MULTI_TURN: str = "messages"
-    INSTRUCTION_RESPONSE: str = "instruction_response"
-    INSTRUCT_COLUMN_RESPONSE: str = "instruct_column_response"
-    INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
+    SINGLE_COLUMN_MULTI_TURN = "messages"
+    INSTRUCTION_RESPONSE = "instruction_response"
+    INSTRUCT_COLUMN_RESPONSE = "instruct_column_response"
+    INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
 
 
 @dataclass
@@ -91,7 +91,12 @@ class TransformAdapter:
     def transform_conversation_to_openai_format(
         self,
         row: dict[str, Any],
-    ) -> list[OpenAIChatMessage]:
+    ) -> list[OpenAIChatMessage] | None:
+        """Convert a raw dataset *row* into OpenAI-format messages.
+
+        Returns ``None`` for rows that should be dropped (missing data or a
+        shape the adapter intentionally does not process); callers skip those.
+        """
         if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
             messages = []
             instruction = row[self.instruction_column]
@@ -107,6 +112,7 @@ class TransformAdapter:
                     if completion[self.filter_on_key] > best_metric:
                         best_metric = completion[self.filter_on_key]
                         best_completion = completion
+                assert best_completion is not None, "filter_on_key requires a non-empty response list"
                 response = best_completion[self.content_key]
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))
@@ -145,8 +151,9 @@ class TransformAdapter:
                 # We do not process rows that have more than one messages.
                 # This occurs in Dolphin-R1 reasoning, where instructions are
                 # sometimes part of the 'system' prompt instead of 'user' prompt.
-                # We handle misaligned data gracefully rather than crash.
-                return []
+                # Return None (not []) so the caller drops the row instead of
+                # emitting an empty conversation.
+                return None
             else:
                 instruction_content = instruction[0][self.content_key]
                 messages.append(OpenAIChatMessage(role="user", content=instruction_content))

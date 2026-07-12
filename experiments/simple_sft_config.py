@@ -3,9 +3,8 @@
 
 from dataclasses import dataclass
 
-from levanter.schedule import IntSchedule
-
 from fray.cluster import ResourceConfig
+from levanter.schedule import IntSchedule
 
 
 def compute_per_device_parallelism(
