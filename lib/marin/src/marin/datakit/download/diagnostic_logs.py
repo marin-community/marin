@@ -1132,8 +1132,8 @@ def _download_ghalogs_shard(parts_prefix: str, shard: _ShardRange) -> str:
     return part_path
 
 
-def _concat_parts_server_side(fs: fsspec.AbstractFileSystem, target: str, parts: list[str]) -> None:
-    """Assemble ``target`` from ``parts`` in order, without streaming bytes through this process.
+def _concat_archive_parts(fs: fsspec.AbstractFileSystem, target: str, parts: list[str]) -> None:
+    """Assemble ``target`` from ``parts`` in order.
 
     ``target`` appears only once fully assembled; the source parts are left in place.
     """
@@ -1200,7 +1200,7 @@ def stage_ghalogs_archive(
     # Parts are zero-padded so lexicographic order is range order; every shard
     # verified its part's exact size before returning it.
     part_paths = sorted(outcome.results)
-    _concat_parts_server_side(fs, archive_path, part_paths)
+    _concat_archive_parts(fs, archive_path, part_paths)
     fs.invalidate_cache(os.path.dirname(path))  # exists() above may have cached the target as absent
     total = fs.size(path)
     if total != GHALOGS_ARCHIVE_BYTES:
