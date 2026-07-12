@@ -16,9 +16,24 @@ from . import june_67b
 
 MARIN_ROOT = Path(__file__).resolve().parents[3]
 MARIN_GPU_CLUSTER = "cw-us-east-02a"
+VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
 
 # Iris serializes the direct test callable by value; register its shared test helper too.
 cloudpickle.register_pickle_by_value(june_67b)
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--vllm-attention-backend",
+        choices=VLLM_ATTENTION_BACKENDS,
+        default="FLASH_ATTN",
+        help="Attention backend for the June 67B vLLM e2e.",
+    )
+
+
+@pytest.fixture
+def vllm_attention_backend(request: pytest.FixtureRequest) -> str:
+    return str(request.config.getoption("--vllm-attention-backend"))
 
 
 @pytest.fixture

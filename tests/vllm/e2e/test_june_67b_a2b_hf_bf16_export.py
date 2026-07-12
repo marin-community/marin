@@ -6,7 +6,7 @@
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/vllm/e2e/test_june_67b_a2b_bf16_export.py -o addopts= -vv -s
+    uv run pytest tests/vllm/e2e/test_june_67b_a2b_hf_bf16_export.py -o addopts= -vv -s
 """
 
 import dataclasses
@@ -142,6 +142,8 @@ def test_h100_node_exports_checkpoint_as_vllm_bf16(marin_gpu_client: IrisClient)
             entrypoint=Entrypoint.from_callable(assert_checkpoint_bf16_export),
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="512g", disk="256g"),
             environment=create_environment(extras=["gpu"], sync_packages=["marin-levanter"]),
+            # These e2es are manually triggered and highly interactive, so they use production priority.
+            # Routine or automated workloads should not copy this priority.
             priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         ),
         pending_timeout=PENDING_TIMEOUT,
