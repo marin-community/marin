@@ -354,6 +354,41 @@ def test_130m_sweep_crosses_archived_learning_rates_with_deduplicated_gain_grid(
     assert results_config.output_path == f"{train_step.path('gs://test-prefix')}/speedrun_results.json"
 
 
+def test_300m_sweep_uses_archived_learning_rates_and_speedrun_geometry():
+    sweep = build_sweep_configs(size="300m")
+    expected_learning_rates = (0.004, 0.006, 0.008, 0.010, 0.012)
+
+    assert len(sweep) == 40
+    assert len({name for name, _ in sweep}) == 40
+    assert all(name.startswith("qwen3_300m_error_aware_muon_") for name, _ in sweep)
+
+    configured_cells = set()
+    for _, config in sweep:
+        optimizer = config.train_config.optimizer_config
+        assert isinstance(optimizer, ErrorAwareMuonConfig)
+        gain = optimizer.blend_gain if optimizer.policy == "blend" else optimizer.correction_gain
+        if optimizer.policy == "muon":
+            gain = 0.0
+        configured_cells.add((optimizer.policy, gain, optimizer.learning_rate))
+        assert optimizer.adam_lr == pytest.approx(0.3 * optimizer.learning_rate)
+        assert optimizer.momentum == 0.98
+        assert optimizer.nesterov is False
+        assert optimizer.muon_epsilon == 1e-12
+        assert config.train_config.train_batch_size == 128
+        assert config.train_config.num_train_steps == 11444
+        assert config.train_config.resources.cpu == 32
+        assert config.train_config.resources.ram == "128g"
+        assert config.train_config.resources.disk == "50g"
+        assert config.train_config.resources.preemptible is True
+        assert config.train_config.resources.device.variant == "v5p-8"
+
+    assert configured_cells == {
+        (variant.policy, variant.gain, learning_rate)
+        for variant in FEEDBACK_VARIANTS
+        for learning_rate in expected_learning_rates
+    }
+
+
 def test_checked_in_results_cover_the_completed_grid_and_recompute_selection():
     results = json.loads(RESULTS_PATH.read_text())
     runs = [SweepRun(**run) for run in results["runs"]]
