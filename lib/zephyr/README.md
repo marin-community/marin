@@ -49,16 +49,15 @@ ctx.execute(pipeline)
 Each `execute()` submits its own coordinator + worker job and tears it down when
 the pipeline finishes.
 
-**Shared context (one pool, many pipelines):**
+**Shared pool (`ZephyrPool` — one pool, many pipelines):**
 
-Start a single long-lived coordinator + worker pool once, then run multiple
-pipelines against it — concurrently, and from other drivers/steps:
+A `ZephyrPool` starts a single long-lived coordinator + worker pool once, then
+serves many pipelines against it — concurrently, and from other drivers/steps.
+Open it as a `with` block to get the coordinator endpoint; the pool is torn
+down when the block exits (including on exception):
 
 ```python
-# Owner: `with` a context to start a shared pool and get its endpoint; the pool
-# is torn down when the block exits (including on exception).
-pool = ZephyrContext(max_workers=200, resources=ResourceConfig(cpu=2, ram="8g"), name="ingest-pool")
-with pool as endpoint:
+with ZephyrPool(max_workers=200, resources=ResourceConfig(cpu=2, ram="8g"), name="ingest") as endpoint:
     # Any driver (even in another Iris job) connects and submits pipelines.
     # Tasks are scheduled onto whichever workers have free capacity, so several
     # pipelines share the pool. A failing pipeline only fails its own execute();
@@ -68,11 +67,9 @@ with pool as endpoint:
 # pool is shut down here (workers drained)
 ```
 
-Using a `with` block is the explicit opt-in to a shared pool. Plain
-`ZephyrContext(...).execute(pipeline)` with no `with` and no endpoint is
-unchanged — a dedicated coordinator per pipeline, as before. `start()` /
-`shutdown()` are also available directly if you'd rather manage the pool's
-lifetime yourself.
+`ZephyrPool.start()` / `shutdown()` are also available directly if you'd rather
+manage the pool's lifetime yourself. Plain `ZephyrContext(...).execute(pipeline)`
+with no endpoint is unchanged — a dedicated coordinator per pipeline, as before.
 
 Connecting drivers can pick the endpoint up from the environment instead of a
 constructor argument — set `ZEPHYR_COORDINATOR_ENDPOINT` on a step's job (e.g.
@@ -85,12 +82,12 @@ ctx = ZephyrContext(resources=ResourceConfig(cpu=1, ram="2g"))  # picks up the e
 ctx.execute(pipeline)
 ```
 
-The pool's workers are sized by the owner's `resources` × `max_workers`.
-Each connecting pipeline still declares its own per-task cost via
-`map/reduce_task_resources`,
-so a pipeline needing more memory than a worker can provide is rejected up
-front rather than deadlocking unscheduled. Preempted workers are replenished by
-Iris automatically; the pool lives until the owner calls `shutdown()`.
+The pool's workers are sized by `ZephyrPool`'s `resources` × `max_workers`.
+Each connecting pipeline still declares its own per-task cost via the driver's
+`map/reduce_task_resources`, so a pipeline needing more memory than a worker can
+provide is rejected up front rather than deadlocking unscheduled. Preempted
+workers are replenished by Iris automatically; the pool lives until the owner
+calls `shutdown()` (or the `with` block exits).
 
 ## Real Usage
 

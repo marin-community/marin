@@ -14,13 +14,14 @@ Two lifecycles share the same coordinator/worker classes:
 
 * **Dedicated** (default): each ``ZephyrContext.execute()`` submits a fresh
   coordinator job that runs exactly one pipeline and tears everything down.
-* **Shared**: ``ZephyrContext.start()`` submits a long-lived coordinator job
-  with a fixed worker pool and publishes the coordinator's actor endpoint.
-  Other drivers connect with ``ZephyrContext(coordinator_endpoint=...)`` and
-  submit pipelines that run *concurrently*; the coordinator schedules tasks
-  from all active pipelines onto whichever workers have free resources. A
-  failing pipeline only fails its own execution — the coordinator and the
-  worker pool keep serving the others.
+* **Shared**: a ``ZephyrPool`` submits a long-lived coordinator job with a
+  fixed worker pool and publishes the coordinator's actor endpoint. Drivers
+  connect with ``ZephyrContext(coordinator_endpoint=...)`` (or the
+  ``ZEPHYR_COORDINATOR_ENDPOINT`` env var) and submit pipelines that run
+  *concurrently*; the coordinator schedules tasks from all active pipelines
+  onto whichever workers have free resources. A failing pipeline only fails
+  its own execution — the coordinator and the worker pool keep serving the
+  others.
 """
 
 import enum
@@ -118,7 +119,7 @@ MAX_CONCURRENT_PIPELINES = 16
 # pool must survive them rather than die on a small failure budget.
 SHARED_POOL_MAX_TASK_RETRIES = 1000
 
-# How long ZephyrContext.start() waits for the shared coordinator job to
+# How long ZephyrPool.start() waits for the shared coordinator job to
 # publish its endpoint before giving up.
 SHARED_CONTEXT_START_TIMEOUT = 600.0
 
@@ -2079,6 +2080,189 @@ def _compute_min_tasks_per_worker(
     )
 
 
+# 6 hours: long enough to wait out cluster contention for at least one worker.
+_DEFAULT_NO_WORKERS_TIMEOUT = 6 * 60 * 60
+
+
+def _default_max_workers(client: Client) -> int:
+    """Default worker count: cpu_count for LocalClient, else ``ZEPHYR_MAX_WORKERS`` or 128."""
+    if isinstance(client, LocalClient):
+        return os.cpu_count() or 1
+    env_val = os.environ.get("ZEPHYR_MAX_WORKERS")
+    return int(env_val) if env_val else 128
+
+
+@dataclass
+class ZephyrPool:
+    """A shared, long-lived Zephyr coordinator + worker pool.
+
+    Start one pool and run many pipelines against it concurrently — from this
+    process and from other Iris jobs. Open the pool as a context manager to get
+    the coordinator endpoint; a driver runs pipelines on it by pointing a
+    ``ZephyrContext`` at that endpoint::
+
+        with ZephyrPool(name="ingest", max_workers=200, resources=ResourceConfig(cpu=2, ram="8g")) as endpoint:
+            ZephyrContext(coordinator_endpoint=endpoint, resources=ResourceConfig(cpu=1, ram="2g")).execute(pipeline)
+
+    Drivers connect either by passing ``coordinator_endpoint=endpoint`` or by
+    exporting the endpoint as ``ZEPHYR_COORDINATOR_ENDPOINT`` on their jobs (a
+    plain ``ZephyrContext()`` then picks it up). Tasks from all active pipelines
+    are packed onto whichever workers have free capacity; a failing pipeline
+    only fails its own ``execute()``, and preempted workers are replenished by
+    Iris. The pool is torn down when the ``with`` block exits, or on
+    ``shutdown()``.
+
+    ``resources`` x ``max_workers`` sizes the worker pool. Connecting pipelines
+    declare their own per-task cost via the driver's
+    ``map/reduce_task_resources``, independent of the pool's worker size.
+
+    Args:
+        client: The fray client to use. If None, auto-detects via current_client().
+        max_workers: Number of workers in the pool. If None, defaults to
+            os.cpu_count() for LocalClient, or ``ZEPHYR_MAX_WORKERS`` / 128 for
+            distributed clients.
+        resources: Resource config per worker.
+        coordinator_resources: Resource config for the (non-preemptible) coordinator job.
+        chunk_storage_prefix: Storage prefix for intermediate chunks. Defaults to a
+            temp bucket under MARIN_PREFIX.
+        name: Descriptive name, used in the coordinator/worker job names.
+        no_workers_timeout: Seconds a pipeline waits for at least one live worker
+            before failing a stage.
+        stage_runner_factory: Callable ``() -> StageRunner``. Defaults to
+            ``InlineRunner`` for LocalClient and ``SubprocessRunner`` otherwise.
+        heartbeat_timeout: Seconds without a worker heartbeat before the coordinator
+            marks the worker FAILED and requeues its in-flight shard.
+        max_shard_failures: Max explicit task-error retries per shard before a
+            pipeline aborts (the pipeline, not the pool).
+        max_shard_infra_failures: Max infra failures observed while the same shard is
+            in flight before treating the shard payload as a deterministic crasher.
+    """
+
+    client: Client | None = None
+    max_workers: int | None = None
+    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    coordinator_resources: ResourceConfig = field(
+        default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
+    )
+    chunk_storage_prefix: str | None = None
+    name: str = ""
+    no_workers_timeout: float | None = None
+    stage_runner_factory: Callable[[], StageRunner] | None = None
+    heartbeat_timeout: float = 120.0
+    max_shard_failures: int = MAX_SHARD_FAILURES
+    max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+
+    # Coordinator endpoint, published once the pool is started.
+    endpoint: str | None = field(default=None, repr=False)
+    _serve_job: JobHandle | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        if self.client is None:
+            self.client = current_client()
+        if self.max_workers is None:
+            self.max_workers = _default_max_workers(self.client)
+        if self.no_workers_timeout is None:
+            self.no_workers_timeout = _DEFAULT_NO_WORKERS_TIMEOUT
+        if self.chunk_storage_prefix is None:
+            self.chunk_storage_prefix = marin_temp_bucket(ttl_days=1, prefix="zephyr")
+        if self.stage_runner_factory is None:
+            self.stage_runner_factory = _default_stage_runner_factory_for(self.client)
+        # Unique per pool so its coordinator job and endpoint file never collide.
+        self.name = f"{self.name}-{uuid.uuid4().hex[:8]}"
+
+    def start(self, timeout: float = SHARED_CONTEXT_START_TIMEOUT) -> str:
+        """Submit the shared coordinator + worker pool; block until its endpoint is published.
+
+        Returns the coordinator endpoint. Pass it to drivers as
+        ``ZephyrContext(coordinator_endpoint=...)`` or export it as
+        ``ZEPHYR_COORDINATOR_ENDPOINT``. Call ``shutdown()`` (or use the pool as
+        a ``with`` block) to tear it down.
+        """
+        if self._serve_job is not None:
+            raise RuntimeError("Pool is already started")
+
+        config = _SharedContextConfig(
+            name=self.name,
+            chunk_storage_prefix=self.chunk_storage_prefix,
+            max_workers=self.max_workers,
+            worker_resources=self.resources,
+            stage_runner_factory=self.stage_runner_factory,
+            no_workers_timeout=self.no_workers_timeout,
+            heartbeat_timeout=self.heartbeat_timeout,
+            max_shard_failures=self.max_shard_failures,
+            max_shard_infra_failures=self.max_shard_infra_failures,
+        )
+        # self.name is uuid-suffixed, so this directory is unique per pool.
+        base = f"{self.chunk_storage_prefix}/{self.name}-shared"
+        config_path = f"{base}/config.pkl"
+        endpoint_path = f"{base}/endpoint.txt"
+        ensure_parent_dir(config_path)
+        StoragePath(config_path).write_bytes(cloudpickle.dumps(config))
+
+        # Set the context var so the coordinator job inherits self.client
+        # instead of auto-detecting (which may pick a different backend).
+        with set_current_client(self.client):
+            self._serve_job = self.client.submit(
+                JobRequest(
+                    name=f"zephyr-{self.name}-shared",
+                    entrypoint=Entrypoint.from_callable(
+                        _run_shared_coordinator_job,
+                        args=(config_path, endpoint_path),
+                    ),
+                    resources=self.coordinator_resources,
+                )
+            )
+        logger.info("Shared coordinator job submitted: %s", self._serve_job.job_id)
+
+        # If the job never publishes its endpoint (crash, or slow-scheduling
+        # timeout), terminate it before re-raising so we never leak a running
+        # coordinator + full worker pool — the stale-coordinator failure mode
+        # this feature is meant to avoid.
+        try:
+            endpoint_file = StoragePath(endpoint_path)
+            backoff = ExponentialBackoff(initial=0.2, maximum=5.0)
+            deadline = time.monotonic() + timeout
+            while not endpoint_file.exists():
+                status = self._serve_job.status()
+                if status in (FrayJobStatus.FAILED, FrayJobStatus.STOPPED, FrayJobStatus.SUCCEEDED):
+                    raise RuntimeError(f"Shared coordinator job exited ({status}) before publishing its endpoint")
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"Shared coordinator did not publish an endpoint within {timeout}s")
+                time.sleep(backoff.next_interval())
+        except BaseException:
+            with suppress(Exception):
+                self._serve_job.terminate()
+            self._serve_job = None
+            raise
+
+        self.endpoint = endpoint_file.read_bytes().decode()
+        logger.info("Shared zephyr coordinator ready: %s", self.endpoint)
+        return self.endpoint
+
+    def shutdown(self) -> None:
+        """Gracefully stop the coordinator (workers drain and exit) and terminate the pool job."""
+        if self._serve_job is None:
+            return
+        if self.endpoint is not None:
+            with suppress(Exception):
+                self.client.get_actor(self.endpoint).shutdown.remote().result(timeout=30.0)
+        with suppress(Exception):
+            # Give the serve loop a moment to exit cleanly (workers land
+            # SUCCEEDED); terminate() below is the backstop that cascades.
+            self._serve_job.wait(timeout=60.0, raise_on_failure=False)
+        with suppress(Exception):
+            self._serve_job.terminate()
+        self._serve_job = None
+        self.endpoint = None
+
+    def __enter__(self) -> str:
+        """Start the pool and return its coordinator endpoint; ``__exit__`` tears it down."""
+        return self.start()
+
+    def __exit__(self, *exc: object) -> None:
+        self.shutdown()
+
+
 @dataclass
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
@@ -2090,24 +2274,22 @@ class ZephyrContext:
     ensures that if the coordinator job dies, its children are cleaned up
     automatically.
 
-    Alternatively a context can be *shared*: ``start()`` submits one
-    long-lived coordinator job with a fixed worker pool sized by
-    ``resources`` x ``max_workers`` and returns its coordinator endpoint.
-    Any driver — including in other processes/jobs — connects with
-    ``ZephyrContext(coordinator_endpoint=...)``; its execute() calls then
-    submit pipelines to the shared coordinator, which runs them concurrently
-    and packs tasks onto workers by free capacity. In connect mode
-    ``map/reduce_task_resources`` describe this pipeline's per-task costs
-    exactly as they would for a dedicated context; worker sizing belongs to
-    the context that called start(). The shared pool lives until the creator
-    calls shutdown().
+    To run on a shared, long-lived worker pool instead of a fresh coordinator
+    per pipeline, point the context at a ``ZephyrPool``'s endpoint — either by
+    passing ``coordinator_endpoint=...`` or by setting the
+    ``ZEPHYR_COORDINATOR_ENDPOINT`` env var (which a plain ``ZephyrContext()``
+    picks up). In that mode execute() submits the pipeline to the shared
+    coordinator, which runs it concurrently with other drivers' pipelines and
+    packs tasks onto workers by free capacity, and there is no driver-side
+    retry: the shared coordinator is non-preemptible and owns worker recovery.
+    ``map/reduce_task_resources`` still describe this pipeline's per-task cost;
+    the pool's worker size belongs to the ``ZephyrPool``.
 
     Args:
-        coordinator_endpoint: Endpoint name of a shared coordinator to connect
-            to (as returned by ``start()``). When set, execute() submits
-            pipelines to that coordinator instead of spawning a dedicated
-            coordinator job, and there is no driver-side retry: the shared
-            coordinator is non-preemptible and owns worker recovery.
+        coordinator_endpoint: Endpoint of a shared coordinator to connect to (as
+            returned by ``ZephyrPool.start()`` / ``ZephyrPool`` as a context
+            manager). When None, falls back to the ``ZEPHYR_COORDINATOR_ENDPOINT``
+            env var; when that is also unset, the context is dedicated.
         client: The fray client to use. If None, auto-detects using current_client().
         max_workers: Upper bound on worker count. The actual count is
             min(max_workers, num_shards), computed at first execute(). If None,
@@ -2166,8 +2348,6 @@ class ZephyrContext:
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
     # Handle to the coordinator job (for termination on retry/shutdown)
     _coordinator_job: JobHandle | None = field(default=None, repr=False)
-    # Handle to the shared coordinator job created by start()
-    _serve_job: JobHandle | None = field(default=None, repr=False)
     # Cached describe() of the shared coordinator we are connected to
     _coordinator_info: CoordinatorInfo | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
@@ -2225,7 +2405,7 @@ class ZephyrContext:
         )
 
         if self.no_workers_timeout is None:
-            self.no_workers_timeout = 6 * 60 * 60  # 6 hours
+            self.no_workers_timeout = _DEFAULT_NO_WORKERS_TIMEOUT
 
         if self.chunk_storage_prefix is None:
             # TODO: consider increasing TTL for long-running pipelines (e.g. multi-day fuzzy dedup)
@@ -2265,88 +2445,6 @@ class ZephyrContext:
                 len(data),
                 elapsed,
             )
-
-    def start(self, timeout: float = SHARED_CONTEXT_START_TIMEOUT) -> str:
-        """Start a shared, long-lived coordinator + worker pool and connect to it.
-
-        Submits a coordinator job that hosts the coordinator actor and a
-        fixed pool of ``max_workers`` workers, each sized by ``resources``.
-        Blocks until the coordinator publishes its endpoint, then connects
-        this context to it (subsequent execute() calls submit pipelines to
-        the shared coordinator).
-
-        Returns:
-            The coordinator endpoint name. Pass it to other drivers as
-            ``ZephyrContext(coordinator_endpoint=...)`` — or set it in their
-            environment as ``ZEPHYR_COORDINATOR_ENDPOINT`` — so their pipelines
-            run concurrently on this pool. The pool lives until this context
-            calls ``shutdown()``; prefer the ``serve()`` context manager, which
-            guarantees teardown.
-        """
-        if self.coordinator_endpoint is not None:
-            raise RuntimeError(
-                "Context is already connected to a shared coordinator "
-                f"(coordinator_endpoint / {ZEPHYR_COORDINATOR_ENDPOINT_ENV} is set); "
-                "start() creates a new pool and must not be called on a connected context"
-            )
-
-        config = _SharedContextConfig(
-            name=self.name,
-            chunk_storage_prefix=self.chunk_storage_prefix,
-            max_workers=self.max_workers,
-            worker_resources=self.resources,
-            stage_runner_factory=self.stage_runner_factory,
-            no_workers_timeout=self.no_workers_timeout,
-            heartbeat_timeout=self.heartbeat_timeout,
-            max_shard_failures=self.max_shard_failures,
-            max_shard_infra_failures=self.max_shard_infra_failures,
-        )
-        # self.name is uuid-suffixed, so this directory is unique per context.
-        base = f"{self.chunk_storage_prefix}/{self.name}-shared"
-        config_path = f"{base}/config.pkl"
-        endpoint_path = f"{base}/endpoint.txt"
-        ensure_parent_dir(config_path)
-        StoragePath(config_path).write_bytes(cloudpickle.dumps(config))
-
-        # Set the context var so the coordinator job inherits self.client
-        # instead of auto-detecting (which may pick a different backend).
-        with set_current_client(self.client):
-            self._serve_job = self.client.submit(
-                JobRequest(
-                    name=f"zephyr-{self.name}-shared",
-                    entrypoint=Entrypoint.from_callable(
-                        _run_shared_coordinator_job,
-                        args=(config_path, endpoint_path),
-                    ),
-                    resources=self.coordinator_resources,
-                )
-            )
-        logger.info("Shared coordinator job submitted: %s", self._serve_job.job_id)
-
-        # If the job never publishes its endpoint (crash, or slow-scheduling
-        # timeout), terminate it before re-raising so we never leak a running
-        # coordinator + full worker pool — the stale-coordinator failure mode
-        # this feature is meant to avoid.
-        try:
-            endpoint_file = StoragePath(endpoint_path)
-            backoff = ExponentialBackoff(initial=0.2, maximum=5.0)
-            deadline = time.monotonic() + timeout
-            while not endpoint_file.exists():
-                status = self._serve_job.status()
-                if status in (FrayJobStatus.FAILED, FrayJobStatus.STOPPED, FrayJobStatus.SUCCEEDED):
-                    raise RuntimeError(f"Shared coordinator job exited ({status}) before publishing its endpoint")
-                if time.monotonic() > deadline:
-                    raise TimeoutError(f"Shared coordinator did not publish an endpoint within {timeout}s")
-                time.sleep(backoff.next_interval())
-        except BaseException:
-            with suppress(Exception):
-                self._serve_job.terminate()
-            self._serve_job = None
-            raise
-
-        self.coordinator_endpoint = endpoint_file.read_bytes().decode()
-        logger.info("Shared zephyr coordinator ready: %s", self.coordinator_endpoint)
-        return self.coordinator_endpoint
 
     def _execute_shared(self, plan: PhysicalPlan) -> ZephyrExecutionResult:
         """Run one pipeline on the shared coordinator, blocking until done.
@@ -2524,51 +2622,14 @@ class ZephyrContext:
                 self._coordinator_job.terminate()
             self._coordinator_job = None
 
-    def __enter__(self) -> str:
-        """Start a shared pool for a ``with`` block and yield its endpoint.
-
-        Using the context as a ``with`` block is the explicit opt-in to shared
-        mode: it starts a long-lived coordinator + worker pool and returns the
-        endpoint to hand to connecting drivers (as ``coordinator_endpoint=`` or
-        via the ``ZEPHYR_COORDINATOR_ENDPOINT`` env var). ``__exit__`` tears the
-        pool down.
-
-        A context already pointed at a coordinator (endpoint argument or env
-        var) instead just yields that endpoint and does not tear it down on
-        exit — it does not own that pool.
-
-        Plain dedicated usage is unchanged: constructing ``ZephyrContext(...)``
-        and calling ``execute()`` *without* a ``with`` block (and without an
-        endpoint) still spins up a per-pipeline coordinator and tears it down,
-        exactly as before this feature.
-        """
-        if self.coordinator_endpoint is not None:
-            return self.coordinator_endpoint
-        return self.start()
-
-    def __exit__(self, *exc: object) -> None:
-        self.shutdown()
-
     def shutdown(self) -> None:
-        """Shut down owned coordinator infrastructure.
+        """Terminate a lingering dedicated coordinator job, if any.
 
-        For a shared context created via ``start()``, gracefully stops the
-        coordinator (workers drain and exit) and terminates the serve job.
-        Connect-only contexts (``coordinator_endpoint`` passed in) own
-        nothing and this only clears local state.
+        The dedicated ``execute()`` path already tears its coordinator down in
+        a ``finally``, so this is only needed as a belt-and-suspenders cleanup.
+        A context connected to a shared pool owns no infrastructure — the
+        ``ZephyrPool`` owns the pool — so shutdown() never affects the pool.
         """
-        if self._serve_job is not None:
-            if self.coordinator_endpoint is not None:
-                with suppress(Exception):
-                    self.client.get_actor(self.coordinator_endpoint).shutdown.remote().result(timeout=30.0)
-            with suppress(Exception):
-                # Give the serve loop a moment to exit cleanly (workers land
-                # SUCCEEDED); terminate() below is the backstop that cascades.
-                self._serve_job.wait(timeout=60.0, raise_on_failure=False)
-            with suppress(Exception):
-                self._serve_job.terminate()
-            self._serve_job = None
-            self.coordinator_endpoint = None
         self._terminate_coordinator_job()
 
 

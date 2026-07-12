@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the shared (long-lived) ZephyrContext.
+"""Tests for the shared (long-lived) Zephyr worker pool.
 
-A shared context starts one coordinator + worker pool via ``start()`` and
-serves multiple pipelines concurrently; connecting contexts submit pipelines
-through ``coordinator_endpoint``. These tests use ``LocalClient`` end-to-end so
-they exercise the real ``start()`` → ``execute()`` → ``shutdown()`` path (the
-coordinator runs in a background job thread, workers are in-process actors).
+A ``ZephyrPool`` starts one coordinator + worker pool and serves multiple
+pipelines concurrently; drivers submit pipelines by pointing a ``ZephyrContext``
+at the pool's endpoint. These tests use ``LocalClient`` end-to-end so they
+exercise the real ``ZephyrPool.start()`` → ``ZephyrContext.execute()`` →
+``ZephyrPool.shutdown()`` path (the coordinator runs in a background job thread,
+workers are in-process actors).
 """
 
 import uuid
@@ -22,6 +23,7 @@ from zephyr.dataset import Dataset
 from zephyr.execution import (
     ZEPHYR_COORDINATOR_ENDPOINT_ENV,
     ZephyrContext,
+    ZephyrPool,
     ZephyrWorkerError,
     _PipelineExecution,
 )
@@ -35,43 +37,43 @@ def _count_items(x):
 
 
 @pytest.fixture
-def shared_ctx(tmp_path):
-    """A started shared context (2 workers) and its own LocalClient.
+def shared_pool(tmp_path):
+    """A started ZephyrPool (2 workers) and its own LocalClient.
 
     Function-scoped and torn down after each test so the serve job's thread
     is released and no coordinator lingers between tests.
     """
     client = LocalClient(max_threads=8)
-    ctx = ZephyrContext(
+    pool = ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"shared-{uuid.uuid4().hex[:8]}",
     )
-    ctx.start()
-    yield ctx
-    ctx.shutdown()
+    pool.start()
+    yield pool
+    pool.shutdown()
     client.shutdown(wait=True)
 
 
-def _connect(shared_ctx: ZephyrContext) -> ZephyrContext:
-    """A separate driver connected to the shared coordinator (models a step)."""
+def _connect(pool: ZephyrPool) -> ZephyrContext:
+    """A separate driver connected to the shared pool (models a step)."""
     return ZephyrContext(
-        client=shared_ctx.client,
+        client=pool.client,
         resources=ResourceConfig(cpu=1, ram="512m"),
-        coordinator_endpoint=shared_ctx.coordinator_endpoint,
+        coordinator_endpoint=pool.endpoint,
         name=f"driver-{uuid.uuid4().hex[:8]}",
     )
 
 
-def test_shared_context_runs_concurrent_pipelines_with_isolated_results(shared_ctx):
-    """Three pipelines submitted concurrently to one shared coordinator each
-    get their own correct results and per-pipeline counters — no cross-talk."""
+def test_shared_pool_runs_concurrent_pipelines_with_isolated_results(shared_pool):
+    """Three pipelines submitted concurrently to one pool each get their own
+    correct results and per-pipeline counters — no cross-talk."""
     sizes = [4, 7, 10]
 
     def run_one(n: int):
-        driver = _connect(shared_ctx)
+        driver = _connect(shared_pool)
         ds = Dataset.from_list(list(range(n))).map(_count_items).map(lambda x: x * 2)
         return driver.execute(ds)
 
@@ -84,7 +86,7 @@ def test_shared_context_runs_concurrent_pipelines_with_isolated_results(shared_c
         assert outcome.counters.get("items") == n
 
 
-def test_shared_context_pipeline_failure_does_not_break_the_pool(shared_ctx):
+def test_shared_pool_pipeline_failure_does_not_break_the_pool(shared_pool):
     """One pipeline failing (a shard raises) fails only its own execute();
     a concurrent healthy pipeline and a later pipeline both still succeed."""
 
@@ -92,11 +94,11 @@ def test_shared_context_pipeline_failure_does_not_break_the_pool(shared_ctx):
         raise ValueError(f"bad value: {x}")
 
     def run_failing():
-        driver = _connect(shared_ctx)
+        driver = _connect(shared_pool)
         return driver.execute(Dataset.from_list([1, 2, 3]).map(explode))
 
     def run_healthy():
-        driver = _connect(shared_ctx)
+        driver = _connect(shared_pool)
         return driver.execute(Dataset.from_list([1, 2, 3, 4]).map(lambda x: x + 100))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -109,19 +111,19 @@ def test_shared_context_pipeline_failure_does_not_break_the_pool(shared_ctx):
         # The concurrent healthy pipeline is unaffected.
         assert sorted(healthy.result().results) == [101, 102, 103, 104]
 
-    # The coordinator survived the failure: a fresh pipeline still runs.
-    later = _connect(shared_ctx)
+    # The pool survived the failure: a fresh pipeline still runs.
+    later = _connect(shared_pool)
     assert sorted(later.execute(Dataset.from_list([5, 6]).map(lambda x: x * 10)).results) == [50, 60]
 
 
-def test_shared_context_rejects_pipeline_that_cannot_fit_a_worker(shared_ctx):
-    """A pipeline whose per-task cost exceeds the shared worker's resources is
+def test_shared_pool_rejects_pipeline_that_cannot_fit_a_worker(shared_pool):
+    """A pipeline whose per-task cost exceeds the pool worker's resources is
     rejected up front rather than deadlocking forever unscheduled."""
     # Workers have 512m; demand 4g per task so it can never be scheduled.
     driver = ZephyrContext(
-        client=shared_ctx.client,
+        client=shared_pool.client,
         resources=ResourceConfig(cpu=1, ram="4g"),
-        coordinator_endpoint=shared_ctx.coordinator_endpoint,
+        coordinator_endpoint=shared_pool.endpoint,
         name=f"toobig-{uuid.uuid4().hex[:8]}",
     )
     with pytest.raises(ValueError, match="exceeds per-worker resources"):
@@ -153,37 +155,39 @@ def test_coordinator_shutdown_fails_in_flight_run_promptly(tmp_path, actor_conte
         coordinator.shutdown()
 
 
-def test_shared_context_shutdown_disconnects(tmp_path):
-    """After shutdown() the context is disconnected and the serve job stops."""
+def test_pool_shutdown_disconnects(tmp_path):
+    """After shutdown() the pool is torn down and its endpoint cleared."""
     client = LocalClient(max_threads=8)
-    ctx = ZephyrContext(
+    pool = ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name=f"shared-{uuid.uuid4().hex[:8]}",
     )
-    endpoint = ctx.start()
-    assert endpoint and ctx.coordinator_endpoint == endpoint
+    endpoint = pool.start()
+    assert endpoint and pool.endpoint == endpoint
 
-    # Works while up.
-    assert sorted(ctx.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
+    # A driver runs on it while it is up.
+    driver = ZephyrContext(client=client, resources=ResourceConfig(cpu=1, ram="512m"), coordinator_endpoint=endpoint)
+    assert sorted(driver.execute(Dataset.from_list([1, 2]).map(lambda x: x + 1)).results) == [2, 3]
 
-    ctx.shutdown()
-    assert ctx.coordinator_endpoint is None
-    assert ctx._serve_job is None
+    pool.shutdown()
+    assert pool.endpoint is None
+    assert pool._serve_job is None
 
     client.shutdown(wait=True)
 
 
-def test_with_block_starts_pool_yields_endpoint_and_tears_down(tmp_path):
-    """`with pool as endpoint` starts the pool, yields its endpoint, tears down on exit.
+def test_pool_context_manager_yields_endpoint_and_tears_down(tmp_path):
+    """`with ZephyrPool(...) as endpoint` starts the pool, yields its endpoint,
+    and tears it down on exit.
 
-    Inside the block, a plain ZephyrContext with no endpoint is still a
-    dedicated context (unchanged), while one given the endpoint connects.
+    A plain ZephyrContext with no endpoint stays a dedicated context (unchanged),
+    while one given the endpoint connects to the pool.
     """
     client = LocalClient(max_threads=8)
-    pool = ZephyrContext(
+    pool = ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),
@@ -191,7 +195,7 @@ def test_with_block_starts_pool_yields_endpoint_and_tears_down(tmp_path):
         name=f"shared-{uuid.uuid4().hex[:8]}",
     )
     with pool as endpoint:
-        assert endpoint == pool.coordinator_endpoint
+        assert endpoint == pool.endpoint
 
         # Connecting driver → runs on the shared pool.
         shared_driver = ZephyrContext(
@@ -199,7 +203,7 @@ def test_with_block_starts_pool_yields_endpoint_and_tears_down(tmp_path):
         )
         assert sorted(shared_driver.execute(Dataset.from_list([1, 2, 3]).map(lambda x: x * 3)).results) == [3, 6, 9]
 
-        # Plain usage inside the block (no endpoint, env unset) stays dedicated.
+        # Plain usage (no endpoint, env unset) stays dedicated.
         dedicated = ZephyrContext(
             client=client,
             max_workers=2,
@@ -211,7 +215,7 @@ def test_with_block_starts_pool_yields_endpoint_and_tears_down(tmp_path):
         assert sorted(dedicated.execute(Dataset.from_list([4, 5]).map(lambda x: x + 1)).results) == [5, 6]
 
     # On block exit the pool is torn down.
-    assert pool.coordinator_endpoint is None
+    assert pool.endpoint is None
     assert pool._serve_job is None
     client.shutdown(wait=True)
 
@@ -219,7 +223,7 @@ def test_with_block_starts_pool_yields_endpoint_and_tears_down(tmp_path):
 def test_env_endpoint_is_picked_up_by_a_plain_context(tmp_path, monkeypatch):
     """A context with no explicit endpoint connects to the pool named in the env var."""
     client = LocalClient(max_threads=8)
-    pool = ZephyrContext(
+    pool = ZephyrPool(
         client=client,
         max_workers=2,
         resources=ResourceConfig(cpu=1, ram="512m"),

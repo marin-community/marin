@@ -34,16 +34,15 @@ ZephyrContext → ZephyrCoordinator (fray actor) → ZephyrWorker actors (fray a
 
 - **Dedicated** (default): each `ctx.execute()` submits a fresh coordinator job
   (`_run_coordinator_job`) that runs one pipeline and tears everything down.
-- **Shared**: `with ctx as endpoint:` (or `ctx.start()` directly) submits a
-  long-lived coordinator job (`_run_shared_coordinator_job`) with a fixed
-  worker pool and publishes the coordinator's actor endpoint; `__exit__` /
-  `ctx.shutdown()` tears it down. `__enter__` starting the pool is the explicit
-  opt-in to shared mode — plain `ZephyrContext(...).execute()` without a `with`
-  or endpoint stays dedicated. Drivers connect with
-  `ZephyrContext(coordinator_endpoint=...)` — or by setting
-  `ZEPHYR_COORDINATOR_ENDPOINT` in the driver job's env (read as a fallback in
-  `__post_init__`); their `execute()` calls submit pipelines via `run_pipeline`
-  RPC, which the coordinator runs **concurrently**.
+- **Shared**: `ZephyrPool` owns the pool. `with ZephyrPool(...) as endpoint:`
+  (or `pool.start()` directly) submits a long-lived coordinator job
+  (`_run_shared_coordinator_job`) with a fixed worker pool and publishes the
+  coordinator's actor endpoint; `__exit__` / `pool.shutdown()` tears it down.
+  `ZephyrContext` stays a pipeline driver only — dedicated (no endpoint) or
+  connecting. Drivers connect with `ZephyrContext(coordinator_endpoint=...)` —
+  or by setting `ZEPHYR_COORDINATOR_ENDPOINT` in the driver job's env (read as a
+  fallback in `ZephyrContext.__post_init__`); their `execute()` calls submit
+  pipelines via `run_pipeline` RPC, which the coordinator runs **concurrently**.
   All per-pipeline coordinator state lives in `_PipelineExecution` (registry
   `_executions[execution_id]`); the worker pool (`_worker_states`,
   `_worker_counters`, …) is shared. `pull_task` round-robins active executions
