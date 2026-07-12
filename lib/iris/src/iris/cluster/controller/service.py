@@ -725,15 +725,20 @@ def _peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bo
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, peer_status: int) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
     fold, so the local scheduling diagnostic is meaningless for it. Derive the
-    message from the handoff posture (single source of truth): awaiting the
-    peer's acceptance, awaiting its first status report, or pending on the peer
-    once it has reported tasks.
+    message from the handoff posture (single source of truth): waiting in the
+    federation queue for a peer with free capacity, awaiting the peer's acceptance,
+    awaiting its first status report, or pending on the peer once it has reported
+    tasks. A queued job names a peer only when it is pinned to one.
     """
+    if handoff_state == int(HandoffState.QUEUED_HANDOFF):
+        if not cluster:
+            return "Queued for a federation peer to report free capacity"
+        return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
     if peer_status == job_pb2.PEER_STATUS_ASSIGNED:
@@ -1308,14 +1313,6 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
-        # Reject root RPC submissions from stale clients. Direct in-process
-        # calls have no wire client; tests and harnesses use ctx=None.
-        # Nested submissions are exempt because they come from an already
-        # running workload, which would otherwise crash mid-flight as the
-        # freshness window slides forward.
-        if job_id.is_root and ctx is not None:
-            _check_client_freshness(request.client_revision_date, date.today())
-
         # Reconcile the requested job owner with the authenticated principal.
         #
         # The job name's user segment names the *acting* owner the job is
@@ -1343,6 +1340,20 @@ class ControllerServiceImpl:
         # trusts the name, so there is nothing to forge.
         if is_received_handoff and self._auth.provider:
             self._authorize_federation_handoff(identity, request, job_id)
+
+        # Reject root RPC submissions from stale clients. Direct in-process calls have
+        # no wire client; tests and harnesses use ctx=None. Nested submissions are
+        # exempt because they come from an already running workload, which would
+        # otherwise crash mid-flight as the freshness window slides forward. A received
+        # handoff is exempt for the same reason and one more: the wire client is the
+        # parent controller, which re-encodes the request from its own stored job state
+        # (the submitter's ``client_revision_date`` is not part of that state), and the
+        # parent already gated that submitter's client at its own LaunchJob. Gating here
+        # would reject every handoff, and a job may wait in the parent's federation
+        # queue for longer than the window before it is delivered. Runs after the
+        # handoff is authorized, so a forged ``federation`` field cannot dodge the gate.
+        if job_id.is_root and ctx is not None and not is_received_handoff:
+            _check_client_freshness(request.client_revision_date, date.today())
 
         # A received handoff carries the acting owner in its handoff name (from the
         # parent's signed ``owner_principal``), so it is exempt from re-pinning — the
@@ -1755,10 +1766,11 @@ class ControllerServiceImpl:
         # hint dict is cached per evaluate() cycle (#4848), so the lookup here
         # is a single dict get — we only attach this job's hint, never the
         # full routing decision.
-        peer_status = _peer_status(job.cluster, handle.handoff_state if handle else None, summary is not None)
+        handoff_state = handle.handoff_state if handle else None
+        peer_status = _peer_status(job.cluster, handoff_state, summary is not None)
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-            pending_reason = _federated_pending_reason(job.cluster, peer_status)
+            pending_reason = _federated_pending_reason(job.cluster, handoff_state, peer_status)
         elif job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -1878,7 +1890,7 @@ class ControllerServiceImpl:
         peer_status = _peer_status(j.cluster, handoff_state, task_summary is not None)
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING and is_federated(j.cluster):
-            pending_reason = _federated_pending_reason(j.cluster, peer_status)
+            pending_reason = _federated_pending_reason(j.cluster, handoff_state, peer_status)
         elif j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"

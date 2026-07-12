@@ -98,6 +98,20 @@ identity is refused before the handoff. In-cluster workers authenticate by netwo
 so a job submitted by a worker is `local_admin` — a root submitted by a logged-in user is the
 only thing that federates.
 
+## What the peer checks when a handoff arrives
+
+A handoff is authorized as a peer-to-peer delivery, not as a user submission. The peer
+verifies the requesting cluster's signed identity and its own `allowed_submitters` against the
+principal the parent asserts, then admits the job under the parent's job id.
+
+What it does *not* re-run is the client-freshness gate. That gate makes humans upgrade a stale
+`marin-iris` CLI, and the wire client here is the parent controller, which re-encodes the
+request from its own stored job state — the submitter's `client_revision_date` is not part of
+that state and does not survive the round-trip. The parent already gated the submitter's client
+when it accepted the job, and a queued job may wait longer than the freshness window before it
+is delivered, so gating on arrival would reject handoffs for a staleness the peer cannot
+actually observe.
+
 ## What travels with the job
 
 `FederationManager._inline_blobs` (`cluster/federation/manager.py`) carries the workspace
@@ -124,17 +138,36 @@ Every artifact a federated job touches must live in the peer's object store.
 
 ## Observing federation
 
-There is no `iris peers` command. Reachability and advertised shapes come from the
-`ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.
+There is no `iris peers` command. Reachability, advertised shapes, and free capacity come
+from the `ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.
 
 ```bash
-# Which peers are reachable, and what each advertises
+# Which peers are reachable, what each advertises, and how much is free
 uv run iris --cluster=marin rpc controller list-peers
 
 # Where a job was handed off, to whom, and under which principal
 uv run iris --cluster=marin query \
   "SELECT job_id, peer_id, owner_principal, handoff_state FROM federated_jobs"
 ```
+
+Each backend in the `list-peers` output carries an `availability` block — the free-capacity
+metric the queue gates on (`{"version": 1, "observation_epoch_ms": …, "amounts": {"h100": 504}}`).
+A backend with **no** `availability` block supplies no metric and is matched on shape alone,
+so jobs route to it without a capacity check.
+
+A queued job and a delivered one are both `pending` on the parent, but they are waiting on
+different things, and `job list` says which:
+
+| Pending reason | Meaning |
+| --- | --- |
+| `Queued for a federation peer to report free capacity` | In the queue, no peer chosen yet |
+| `Queued for peer X to report free capacity` | In the queue, pinned to `X` (`--target-cluster`) |
+| `Awaiting acceptance by peer X` | Promoted and delivered; awaiting the peer's admission |
+| `Handed off to peer X; awaiting first status report` | Admitted; the first sync has not landed |
+
+A job that sits on the first two lines is waiting for capacity, not stuck: compare its device
+request against the peer's advertised `amounts`. A job cancelled while queued never reaches the
+peer and terminates as `Cancelled before handoff`.
 
 A federated job's tasks live on the peer and are mirrored back, so `iris job summary` reports
 its state from `marin`. Its logs are relayed asynchronously into `marin`'s finelog and lag
