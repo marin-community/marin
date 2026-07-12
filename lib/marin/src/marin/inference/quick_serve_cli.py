@@ -12,13 +12,15 @@ Examples::
 
     marin-serve Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8
     marin-serve gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
-    marin-serve Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a \
-        --task-image <cuda-vllm-image>
+    marin-serve Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a
 
-``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``).
-``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the
-job to a named peer. The slice's tensor-parallel size and (for clamped-RoPE models)
-max sequence length are inferred automatically; override with
+``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). On the
+GPU path, stock CUDA vLLM is provisioned in an isolated ``uv`` tool env at
+``--vllm-version`` (pinned, overridable) rather than pulled into the workspace lock;
+vLLM is only ever a ``vllm serve`` subprocess, so this keeps its torch/CUDA tree out of
+Marin's resolution. ``--cluster`` selects the controller to submit to; ``--target-cluster``
+federates the job to a named peer. The slice's tensor-parallel size and (for clamped-RoPE
+models) max sequence length are inferred automatically; override with
 ``--tensor-parallel-size`` / ``--max-model-len``.
 """
 
@@ -51,20 +53,17 @@ from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
 
-logger = logging.getLogger(__name__)
-
 # vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
 _WORKER_EXTRAS = ("tpu", "vllm")
-# The GPU path cannot use the TPU-only vllm/tpu extras (they conflict with `gpu` in the
-# pyproject conflict tables). `gpu` brings CUDA jax + torch but no vLLM yet, so a CUDA
-# vLLM must be supplied via --task-image or an extra dependency group (see --extra).
-_GPU_WORKER_EXTRAS = ("gpu",)
+# The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
+# subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
+# lock), so the worker venv needs no accelerator extra at all — base Marin suffices.
+_GPU_WORKER_EXTRAS: tuple[str, ...] = ()
+# Pinned CUDA vLLM for the GPU path, overridable with --vllm-version. Stock PyPI vLLM
+# (>=0.25) targets torch 2.11 / CUDA 13; provisioned per-job via uvx, so a bump is just
+# this string with no workspace re-lock.
+DEFAULT_CUDA_VLLM_VERSION = "0.25.0"
 _ENDPOINT_READY_POLL_SECONDS = 5.0
-
-
-def _extras_provide_vllm(extras: tuple[str, ...]) -> bool:
-    """Whether any operator-supplied extra looks like it provides a CUDA vLLM build."""
-    return any("vllm" in extra.lower() for extra in extras)
 
 
 def _default_job_name(model: str) -> str:
@@ -179,16 +178,22 @@ def _mint_and_print_capability_url(
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
 @click.option(
+    "--vllm-version",
+    default=DEFAULT_CUDA_VLLM_VERSION,
+    help="CUDA vLLM version to provision in the isolated uv-tool env on the GPU path "
+    "(ignored on the TPU path and when --task-image is set).",
+)
+@click.option(
     "--extra",
     "extras",
     multiple=True,
-    help="Extra dependency-group/extra to add to the worker environment (repeatable). "
-    "On the GPU path, use this to supply a CUDA vLLM extra (the default `gpu` extra has none).",
+    help="Extra dependency-group/extra to add to the worker environment (repeatable).",
 )
 @click.option(
     "--task-image",
     default=None,
-    help="Override the task container image (e.g. a prebuilt CUDA vLLM image for the GPU path).",
+    help="Override the task container image. On the GPU path this bypasses the isolated "
+    "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
 @click.option("--wait/--no-wait", default=True, help="Hold the tunnel open until the endpoint is ready, then block.")
 @click.option(
@@ -221,6 +226,7 @@ def main(
     disk: str,
     max_retries_preemption: int,
     vllm_args: tuple[str, ...],
+    vllm_version: str,
     extras: tuple[str, ...],
     task_image: str | None,
     wait: bool,
@@ -255,11 +261,9 @@ def main(
         tpu_type: str | None = None
         device = gpu_device(gpu_variant, gpu_count)
         worker_extras = (*_GPU_WORKER_EXTRAS, *extras)
-        if task_image is None and not _extras_provide_vllm(extras):
-            logger.warning(
-                "GPU path: the default `gpu` extra has CUDA jax+torch but no vLLM, so the job will not "
-                "boot vLLM. Pass --task-image with a CUDA vLLM image, or --extra <vllm-cuda-group>."
-            )
+        # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a
+        # prebuilt --task-image, which is expected to ship its own vLLM on PATH.
+        cuda_vllm_version = None if task_image is not None else vllm_version
     else:
         topology = get_tpu_topology(tpu)
         if topology.vm_count != 1:
@@ -271,6 +275,8 @@ def main(
         tpu_type = tpu
         device = tpu_device(tpu)
         worker_extras = (*_WORKER_EXTRAS, *extras)
+        # The TPU path serves from the workspace TPU-vLLM; no isolated env.
+        cuda_vllm_version = None
 
     config = QuickServeConfig(
         model=model,
@@ -290,6 +296,7 @@ def main(
         # so raising --wait-timeout for a slow-booting model actually takes effect.
         vllm_startup_timeout_seconds=int(wait_timeout),
         extra_vllm_args=tuple(vllm_args),
+        vllm_version=cuda_vllm_version,
     )
 
     constraints: list[Constraint] = []

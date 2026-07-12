@@ -13,7 +13,12 @@ import pytest
 import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
+from marin.inference.quick_serve import (
+    QuickServeConfig,
+    resolve_model_path,
+    select_tensor_parallel_size,
+    select_vllm_launcher,
+)
 from marin.inference.quick_serve_cli import _mint_and_print_capability_url
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
@@ -21,6 +26,7 @@ from marin.inference.quick_serve_dashboard import (
     build_dashboard_app,
     serve_app_background,
 )
+from marin.inference.vllm_server import IsolatedCudaVllm, WorkspaceVllm
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -60,6 +66,52 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def test_isolated_cuda_vllm_command_pins_version_and_cuda_backend():
+    # The GPU path provisions a stock CUDA vLLM via uvx, keeping its torch/CUDA tree
+    # out of the workspace lock. `[runai]` keeps gs:// checkpoint streaming working.
+    assert IsolatedCudaVllm(version="0.25.0").command() == [
+        "uvx",
+        "--from",
+        "vllm[runai]==0.25.0",
+        "--python",
+        "3.12",
+        "--torch-backend",
+        "cu128",
+        "vllm",
+    ]
+
+
+def test_isolated_cuda_vllm_command_honors_overrides():
+    cmd = IsolatedCudaVllm(version="0.26.0", python_version="3.13", torch_backend="cu130").command()
+    assert "vllm[runai]==0.26.0" in cmd
+    assert cmd[cmd.index("--python") + 1] == "3.13"
+    assert cmd[cmd.index("--torch-backend") + 1] == "cu130"
+
+
+def test_workspace_vllm_command_runs_the_path_vllm():
+    # The TPU path invokes the `vllm` on the venv PATH (or the bare name if unresolved).
+    (binary,) = WorkspaceVllm().command()
+    assert binary.rsplit("/", 1)[-1] == "vllm"
+
+
+def test_select_vllm_launcher_gpu_provisions_isolated_cuda_vllm():
+    config = QuickServeConfig(
+        model="Qwen/Qwen3-0.6B", endpoint_name="/serve/x", gpu_type="H100", gpu_count=8, vllm_version="0.25.0"
+    )
+    assert select_vllm_launcher(config) == IsolatedCudaVllm(version="0.25.0")
+
+
+def test_select_vllm_launcher_falls_back_to_workspace_without_version():
+    # The TPU path (no version) and a --task-image GPU path (image ships its own vLLM)
+    # both serve from the vLLM already on PATH.
+    tpu = QuickServeConfig(model="m", endpoint_name="/serve/x", tpu_type="v6e-8")
+    gpu_with_image = QuickServeConfig(
+        model="m", endpoint_name="/serve/x", gpu_type="H100", gpu_count=8, vllm_version=None
+    )
+    assert select_vllm_launcher(tpu) == WorkspaceVllm()
+    assert select_vllm_launcher(gpu_with_image) == WorkspaceVllm()
 
 
 def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:
