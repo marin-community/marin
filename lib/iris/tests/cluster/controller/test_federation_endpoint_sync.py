@@ -18,6 +18,7 @@ from contextlib import ExitStack
 
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc import controller_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -25,7 +26,7 @@ from iris.time_proto import duration_from_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
 from ._test_support import ControllerTestState
-from .conftest import query_task
+from .conftest import promote_queued_federation, query_task
 from .test_federation_handoff import (
     _attach_federation,
     _cluster_pinned_request,
@@ -98,8 +99,17 @@ def _endpoint_named(
     return next((e for e in resp.endpoints if e.name == name), None)
 
 
-def _launch_federated_job(parent_service: ControllerServiceImpl, name: str = "fed-job") -> JobName:
+def _launch_federated_job(
+    parent_service: ControllerServiceImpl,
+    manager: FederationManager,
+    parent_state: ControllerTestState,
+    name: str = "fed-job",
+) -> JobName:
+    """Launch a cluster-pinned job and drive the tick's federation pass so the peer
+    materializes the job into a task — the post-handoff state the endpoint sync
+    round-trip builds on."""
     response = parent_service.launch_job(_cluster_pinned_request(name), None)
+    promote_queued_federation(manager, parent_state)
     return JobName.from_wire(response.job_id)
 
 
@@ -108,11 +118,11 @@ def test_federation_sync_reports_a_peer_registered_endpoint(tmp_path, log_client
     peer's federation_sync snapshot carries that endpoint with its address, access,
     owning task, and a positive lease remaining."""
     with ExitStack() as stack:
-        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
-        job_id = _launch_federated_job(parent_service)
+        job_id = _launch_federated_job(parent_service, manager, parent_state)
         _register_peer_endpoint(peer_service, peer_state, job_id)
 
         resp = _sync_as(peer_service, PARENT_ID)
@@ -129,11 +139,11 @@ def test_apply_sync_batch_makes_the_endpoint_resolvable_on_the_parent(tmp_path, 
     """Feeding the sync response into the parent's federation store mirrors the endpoint:
     the parent resolves the proxy name to a target tagged with the owning peer."""
     with ExitStack() as stack:
-        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
-        job_id = _launch_federated_job(parent_service)
+        job_id = _launch_federated_job(parent_service, manager, parent_state)
         _register_peer_endpoint(peer_service, peer_state, job_id)
 
         _apply(parent_service, _sync_as(peer_service, PARENT_ID))
@@ -148,11 +158,11 @@ def test_unregistered_endpoint_is_dropped_from_the_parent_on_next_sync(tmp_path,
     """When the endpoint is unregistered on the peer, the next sync no longer lists it
     and a subsequent apply_sync_batch removes the parent's mirror (resolve -> None)."""
     with ExitStack() as stack:
-        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
-        job_id = _launch_federated_job(parent_service)
+        job_id = _launch_federated_job(parent_service, manager, parent_state)
         endpoint_id = _register_peer_endpoint(peer_service, peer_state, job_id)
 
         _apply(parent_service, _sync_as(peer_service, PARENT_ID))
@@ -173,11 +183,11 @@ def test_federation_sync_scopes_endpoints_to_the_requester(tmp_path, log_client)
     """The endpoint snapshot is scoped to the requester: a sync for a different
     requester id does not surface this peer's endpoints."""
     with ExitStack() as stack:
-        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
-        job_id = _launch_federated_job(parent_service)
+        job_id = _launch_federated_job(parent_service, manager, parent_state)
         _register_peer_endpoint(peer_service, peer_state, job_id)
 
         # The owning requester sees it; a different requester's snapshot does not.
