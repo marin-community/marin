@@ -33,7 +33,6 @@ from iris.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
-from kubernetes.config.config_exception import ConfigException
 from levanter.checkpoint import load_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
@@ -70,6 +69,10 @@ def marin_gpu_client() -> Iterator[IrisClient]:
     # This test drives a live CoreWeave GPU node; it can only run where the cluster's
     # kube credentials are present. In CI (and any workstation without them) opening the
     # client raises ConfigException, so skip rather than error the whole integration run.
+    # Import kubernetes lazily: it ships with iris[controller] and is absent from the
+    # unit-test env, which still collects (imports) this module before deselecting it.
+    from kubernetes.config.config_exception import ConfigException  # noqa: PLC0415
+
     with contextlib.ExitStack() as stack:
         try:
             client = stack.enter_context(open_iris_client(cluster_name=CLUSTER_NAME, workspace=MARIN_ROOT))
