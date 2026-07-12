@@ -68,10 +68,23 @@ CLAUDE_CLEAN_QUALIFIED = """### Code review
 - [x] Gather context (diff, AGENTS.md/TESTING.md, PR description)
 - [x] Multi-agent correctness + compliance review
 
-Reviewed all 6 changed files. Two independent bug agents plus a compliance agent.
+**No code issues found.** Checked for bugs and CLAUDE.md/AGENTS.md/TESTING.md compliance
+across all 4 files. The gate exemption is placed safely and the tests assert observable
+behavior rather than internals."""
+
+# A qualified verdict clears one axis only. Here correctness is clear but the compliance pass
+# reports dead code, so the comment is actionable despite leading with "No correctness bugs".
+CLAUDE_SUBSET_CLEAN_WITH_FINDING = """### Code review
+
+- [x] Multi-agent correctness + compliance review
 
 **No correctness bugs found.** The logit-mixing math is sound (verified `_mix_top_logprobs`
-against the `pytest.approx` values in `test_logit_mixing.py`)."""
+against the `pytest.approx` values in `test_logit_mixing.py`).
+
+#### Findings (2 — both minor dead code, AGENTS.md *"Delete dead code: unused parameters"*)
+
+1. **`logit_mixing.py:513`** — `_unused_scratch` is never read.
+2. **`worker.py:88`** — the `legacy_mode` parameter is dead."""
 
 # A completed checklist that carries a real bug: checkbox scaffolding must not suppress it.
 CLAUDE_FINDING = """**Claude finished @rjpower's task in 3m 39s** —— [View job](https://github.com/marin-community/marin/actions/runs/28803285934)
@@ -129,6 +142,7 @@ CATALOG: list[tuple[str, str, str, Significance]] = [
     ("claude progress prose line", CLAUDE_BOT, CLAUDE_PROGRESS_RUNNING, Significance.PROGRESS),
     ("claude clean verdict", CLAUDE_BOT, CLAUDE_CLEAN, Significance.CLEAN),
     ("claude qualified clean verdict", CLAUDE_BOT, CLAUDE_CLEAN_QUALIFIED, Significance.CLEAN),
+    ("claude subset-clean with a finding", CLAUDE_BOT, CLAUDE_SUBSET_CLEAN_WITH_FINDING, Significance.CONCERN),
     ("claude review with a finding", CLAUDE_BOT, CLAUDE_FINDING, Significance.CONCERN),
     ("claude job failure", CLAUDE_BOT, CLAUDE_ERROR, Significance.CONCERN),
     ("codex review wrapper", CODEX_BOT, CODEX_WRAPPER, Significance.WRAPPER),

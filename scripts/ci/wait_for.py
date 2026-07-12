@@ -314,6 +314,17 @@ _CLEAN_RE = re.compile(
 )
 _CLEAN_HEAD = 400  # a clean verdict counts only if it leads the comment, not buried below a concern
 
+# A qualified verdict clears one axis, not the review: the bots write "No correctness bugs
+# found" and then report a compliance finding ("#### Findings (2 …)", "One hard-rule
+# violation …") further down. So a verdict only counts as clean when nothing else in the body
+# reports anything.
+_FINDING_RE = re.compile(
+    r"^\s*#{1,6}\s*findings?\b"
+    r"|\b(?:one|two|three|four|five|\d+)\s+(?:finding|issue|bug|problem|violation|concern)s?\b"
+    r"|\bviolat(?:es|ion|ions)\b|\bmust (?:be )?fix|\bneeds? fixing\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 # An automated-review summary whose actionable findings are posted as separate inline
 # comments (e.g. Codex's top-level review body).
 _WRAPPER_RE = re.compile(
@@ -336,7 +347,14 @@ def is_progress_placeholder(body: str) -> bool:
 
 
 def is_clean_verdict(body: str) -> bool:
-    return bool(_CLEAN_RE.search(body[:_CLEAN_HEAD]))
+    """Whether a body leads with a verdict that clears the whole review."""
+    verdict = _CLEAN_RE.search(body[:_CLEAN_HEAD])
+    if not verdict:
+        return False
+    # Drop the verdict itself ("no issues") and the checklist scaffolding ("- [x] Validate
+    # findings") before asking whether anything left over reports a finding.
+    rest = body[: verdict.start()] + body[verdict.end() :]
+    return not _FINDING_RE.search(_TASK_ITEM_RE.sub(" ", rest))
 
 
 def is_review_wrapper(body: str) -> bool:
