@@ -131,6 +131,18 @@ _POD_NOT_FOUND_GRACE_CYCLES = 3
 # (requesting too little memory), not transient infrastructure failure.
 _INFRASTRUCTURE_FAILURE_REASONS = frozenset({"Evicted", "DeadlineExceeded", "Preempting"})
 
+# The control plane stamps a ``DisruptionTarget`` pod condition (status "True")
+# whenever it disrupts a pod: scheduler preemption (PreemptionByScheduler),
+# node-pressure or graceful node shutdown (TerminationByKubelet), taint eviction
+# (DeletionByTaintManager), API eviction (EvictionByEvictionAPI), or pod GC
+# (DeletionByPodGC). It is authoritative and independent of the container exit
+# code, so it catches a preemption whose container was SIGKILLed after the grace
+# period — which surfaces as ``reason="Error"``, exit 137 and is missed by
+# _INFRASTRUCTURE_FAILURE_REASONS above. A container that OOMs against its own
+# cgroup limit gets no such condition, so it correctly stays an application
+# failure. GA since Kubernetes 1.26.
+_DISRUPTION_TARGET_CONDITION = "DisruptionTarget"
+
 # ---------------------------------------------------------------------------
 # Kueue gang admission (coscheduled jobs only)
 # ---------------------------------------------------------------------------
@@ -834,13 +846,33 @@ def _task_container_status(pod: dict) -> dict | None:
     return statuses[0]
 
 
-def _is_infrastructure_failure(pod: dict) -> bool:
-    """Check if the pod failure was caused by infrastructure (OOM, eviction, etc.).
+def _has_disruption_target_condition(pod: dict) -> bool:
+    """True if the control plane marked this pod for infrastructure disruption.
 
-    Returns True when the terminated reason indicates the failure was NOT caused
-    by the application itself, so it should be classified as a worker/preemption
-    failure rather than an application failure.
+    See :data:`_DISRUPTION_TARGET_CONDITION` — the authoritative preemption/
+    eviction/drain signal, independent of the container exit code.
     """
+    for condition in pod.get("status", {}).get("conditions", []):
+        if condition.get("type") == _DISRUPTION_TARGET_CONDITION and condition.get("status") == "True":
+            return True
+    return False
+
+
+def _is_infrastructure_failure(pod: dict) -> bool:
+    """Check if the pod failure was caused by infrastructure (preemption, eviction, etc.).
+
+    Returns True when the failure was NOT caused by the application itself, so it
+    should be classified as a worker/preemption failure rather than an
+    application failure.
+    """
+    # Authoritative first: the control plane explicitly disrupted this pod
+    # (preempted/evicted/drained), regardless of how the container exited. This
+    # catches a preemption SIGKILLed after the grace period — reason="Error",
+    # exit 137 — which the terminated-reason whitelist below misses. A container
+    # that OOMs on its own cgroup limit carries no such condition and correctly
+    # falls through to an application failure.
+    if _has_disruption_target_condition(pod):
+        return True
     status = _task_container_status(pod)
     if status is None:
         # Pod-level eviction: the pod status reason indicates infrastructure.
