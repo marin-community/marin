@@ -20,7 +20,6 @@ import contextlib
 import logging
 import re
 import time
-import tomllib
 import uuid
 from pathlib import Path
 
@@ -31,6 +30,7 @@ from iris.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
+from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
@@ -47,28 +47,6 @@ def _default_job_name(model: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", model.rsplit("/", 1)[-1].lower()).strip("-")[:24]
     suffix = uuid.uuid4().hex[:6]
     return f"serve-{slug}-{suffix}" if slug else f"serve-{suffix}"
-
-
-def _is_uv_workspace_root(pyproject: Path) -> bool:
-    """Whether ``pyproject`` defines the uv workspace (the ``[tool.uv.workspace]`` table).
-
-    That table lives only in the marin monorepo's top-level pyproject.toml, which is
-    the directory the serve job's ``uv sync --all-packages`` must run from.
-    """
-    try:
-        data = tomllib.loads(pyproject.read_text())
-    except (OSError, tomllib.TOMLDecodeError):
-        return False
-    return "workspace" in data.get("tool", {}).get("uv", {})
-
-
-def _find_workspace_root(start: Path) -> Path | None:
-    """Walk up from ``start`` for the marin checkout root (its uv workspace pyproject)."""
-    for parent in (start, *start.parents):
-        pyproject = parent / "pyproject.toml"
-        if pyproject.is_file() and _is_uv_workspace_root(pyproject):
-            return parent
-    return None
 
 
 def _resolve_workspace(spec: str | None) -> Path:
@@ -99,7 +77,7 @@ def _resolve_workspace(spec: str | None) -> Path:
             raise click.ClickException(f"--workspace {str(workspace)!r} has no pyproject.toml.")
         return workspace
 
-    workspace = _find_workspace_root(Path.cwd()) or _find_workspace_root(Path(__file__).resolve())
+    workspace = find_project_root(Path.cwd()) or find_project_root(Path(__file__))
     if workspace is None:
         raise click.ClickException(
             "marin-serve builds its serving container from a marin source checkout, but none was "
