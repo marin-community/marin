@@ -102,18 +102,21 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/normalize",
     )  # ~1,380 output shards
 
+    minhash_map = ResourceConfig(cpu=1, ram="4g", disk="2g")
     minhash = StepSpec(
         name="datakit-nemotron-smoke/minhash",
         deps=[normalized],
         fn=lambda output_path: compute_minhash_attrs(
             source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
-            map_worker_resources=ResourceConfig(cpu=1, ram="4g", disk="2g"),
-            reduce_worker_resources=ResourceConfig(cpu=3, ram="12g", disk="5g"),
+            worker_resources=minhash_map.scale(16),
+            map_task_resources=minhash_map,
+            reduce_task_resources=minhash_map.scale(3),
         ),
         override_output_path=f"{base}/minhash",
     )  # ~1,380 output shards
 
+    fuzzy_map = ResourceConfig(cpu=1, ram="10g", disk="2g")
     deduped = StepSpec(
         name="datakit-nemotron-smoke/fuzzy_dups",
         deps=[minhash],
@@ -122,12 +125,14 @@ def build_steps(run_id: str) -> list[StepSpec]:
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
             cc_max_iterations=3,
-            map_worker_resources=ResourceConfig(cpu=1, ram="10g", disk="2g"),
-            reduce_worker_resources=ResourceConfig(cpu=3, ram="24g", disk="5g"),
+            worker_resources=fuzzy_map.scale(16),
+            map_task_resources=fuzzy_map,
+            reduce_task_resources=fuzzy_map.scale(3),
         ),
         override_output_path=f"{base}/fuzzy_dups",
     )  # ~1,380 output shards
 
+    consolidate_map = ResourceConfig(cpu=1, ram="2g", disk="1g")
     consolidated = StepSpec(
         name="datakit-nemotron-smoke/consolidate",
         deps=[normalized, deduped],
@@ -146,11 +151,13 @@ def build_steps(run_id: str) -> list[StepSpec]:
                     keep_if_missing=True,
                 ),
             ],
-            map_worker_resources=ResourceConfig(cpu=1, ram="2g", disk="1g"),
+            worker_resources=consolidate_map.scale(16),
+            map_task_resources=consolidate_map,
         ),
         override_output_path=f"{base}/consolidate",
     )  # ~1,380 output shards
 
+    tokenize_map = ResourceConfig(cpu=1, ram="5g", disk="1g")
     tokenized = StepSpec(
         name="datakit-nemotron-smoke/tokenize",
         deps=[consolidated],
@@ -161,7 +168,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 validation_paths=[],
                 cache_path=output_path,
                 tokenizer="gpt2",
-                map_worker_resources=ResourceConfig(cpu=1, ram="5g", disk="1g"),
+                worker_resources=tokenize_map.scale(16),
+                map_task_resources=tokenize_map,
             )
         ),
         override_output_path=f"{base}/tokens",

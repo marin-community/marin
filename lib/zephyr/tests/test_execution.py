@@ -1389,48 +1389,46 @@ def test_multi_stage_integration(integration_ctx):
 def test_zephyr_context_only_resources_set_propagates_resources():
     # 1. Propagate resources when only resources is set
     ctx = ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"))
-    assert ctx.map_worker_resources == ResourceConfig(cpu=2, ram="4g")
-    assert ctx.reduce_worker_resources == ResourceConfig(cpu=2, ram="4g")
+    assert ctx.map_task_resources == ResourceConfig(cpu=2, ram="4g")
+    assert ctx.reduce_task_resources == ResourceConfig(cpu=2, ram="4g")
 
 
-def test_zephyr_context_map_worker_resources_smaller_than_resources_propagates_correctly():
-    # 2. Both resources and map_worker_resources can be set, but raises ValueError if resources is smaller
-    ctx = ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), map_worker_resources=ResourceConfig(cpu=1, ram="2g"))
-    assert ctx.map_worker_resources == ResourceConfig(cpu=1, ram="2g")
-    assert ctx.reduce_worker_resources == ResourceConfig(cpu=1, ram="2g")
+def test_zephyr_context_map_task_resources_smaller_than_resources_propagates_correctly():
+    # 2. Both resources and map_task_resources can be set, but raises ValueError if resources is smaller
+    ctx = ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), map_task_resources=ResourceConfig(cpu=1, ram="2g"))
+    assert ctx.map_task_resources == ResourceConfig(cpu=1, ram="2g")
+    assert ctx.reduce_task_resources == ResourceConfig(cpu=1, ram="2g")
 
 
-def test_zephyr_context_map_worker_resources_larger_than_resources_raises_value_error():
+def test_zephyr_context_map_task_resources_larger_than_resources_raises_value_error():
     with pytest.raises(ValueError, match="must be larger than or equal to"):
-        ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), map_worker_resources=ResourceConfig(cpu=3, ram="2g"))
+        ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), map_task_resources=ResourceConfig(cpu=3, ram="2g"))
 
 
-def test_zephyr_context_only_reduce_worker_resources_set_raises_value_error():
-    # 3. Only reduce_worker_resources raises ValueError
-    with pytest.raises(ValueError, match="Setting reduce_worker_resources"):
-        ZephyrContext(reduce_worker_resources=ResourceConfig(cpu=1))
+def test_zephyr_context_only_reduce_task_resources_set_raises_value_error():
+    # 3. Only reduce_task_resources raises ValueError
+    with pytest.raises(ValueError, match="Setting reduce_task_resources"):
+        ZephyrContext(resources=ResourceConfig(cpu=2, ram="4g"), reduce_task_resources=ResourceConfig(cpu=1))
 
 
-def test_zephyr_context_only_map_worker_resources_set_propagates_to_reduce_resources():
-    # 4. Only map_worker_resources propagates to reduce_worker_resources
-    ctx = ZephyrContext(map_worker_resources=ResourceConfig(cpu=3, ram="6g"))
-    assert ctx.reduce_worker_resources == ResourceConfig(cpu=3, ram="6g")
+def test_zephyr_context_map_task_resources_without_resources_raises_value_error():
+    with pytest.raises(ValueError, match="Setting map_task_resources without setting resources"):
+        ZephyrContext(map_task_resources=ResourceConfig(cpu=3, ram="6g"))
 
 
-def test_zephyr_context_no_resources_set_propagates_default_resources():
-    # 5. Default resources propagate when none is set
-    ctx = ZephyrContext()
-    assert ctx.resources == ResourceConfig(cpu=1, ram="1g")
-    assert ctx.map_worker_resources == ResourceConfig(cpu=1, ram="1g")
-    assert ctx.reduce_worker_resources == ResourceConfig(cpu=1, ram="1g")
+def test_zephyr_context_map_task_resources_propagates_to_reduce_resources():
+    # 4. map_task_resources propagates to reduce_task_resources when reduce is unset
+    ctx = ZephyrContext(resources=ResourceConfig(cpu=6, ram="12g"), map_task_resources=ResourceConfig(cpu=3, ram="6g"))
+    assert ctx.reduce_task_resources == ResourceConfig(cpu=3, ram="6g")
 
 
 def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(local_client):
     ctx = ZephyrContext(
         client=local_client,
         max_workers=2,
-        map_worker_resources=ResourceConfig(cpu=1, ram="2g", disk="2g"),
-        reduce_worker_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
+        resources=ResourceConfig(cpu=4, ram="8g", disk="8g"),
+        map_task_resources=ResourceConfig(cpu=1, ram="2g", disk="2g"),
+        reduce_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
         name="test-resources-exec",
     )
     ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
@@ -1438,24 +1436,35 @@ def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(lo
     assert sorted(result.results) == [2, 4, 6]
 
 
+def test_zephyr_context_min_tasks_per_worker_from_packing_computes_expected_tighter_factor():
+    ctx = ZephyrContext(
+        resources=ResourceConfig(cpu=8, ram="16g", disk="16g"),
+        map_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
+        reduce_task_resources=ResourceConfig(cpu=4, ram="8g", disk="8g"),
+    )
+    # map fits 4x, reduce fits 2x → min is 2
+    assert ctx.min_tasks_per_worker == 2
+
+
 def test_zephyr_context_mismatching_optional_parameters_raises_value_error():
     # Setting mismatching optional parameters between map and reduce should raise ValueError
     with pytest.raises(ValueError, match=r"Field 'preemptible' cannot differ"):
         ZephyrContext(
-            map_worker_resources=ResourceConfig(cpu=1, preemptible=False),
-            reduce_worker_resources=ResourceConfig(cpu=2, preemptible=True),
+            resources=ResourceConfig(cpu=4, ram="8g"),
+            map_task_resources=ResourceConfig(cpu=1, preemptible=False),
+            reduce_task_resources=ResourceConfig(cpu=2, preemptible=True),
         )
 
     with pytest.raises(ValueError, match=r"Field 'image' cannot differ"):
         ZephyrContext(
-            map_worker_resources=ResourceConfig(cpu=1, image="custom-image"),
-            reduce_worker_resources=ResourceConfig(cpu=2, image=None),
+            resources=ResourceConfig(cpu=4, ram="8g"),
+            map_task_resources=ResourceConfig(cpu=1, image="custom-image"),
+            reduce_task_resources=ResourceConfig(cpu=2, image=None),
         )
 
-    # If optional parameters match, it should succeed and propagate them
-    ctx = ZephyrContext(
-        map_worker_resources=ResourceConfig(cpu=1, preemptible=False, image="custom-image"),
-        reduce_worker_resources=ResourceConfig(cpu=2, preemptible=False, image="custom-image"),
+    # If optional parameters match, it should succeed
+    ZephyrContext(
+        resources=ResourceConfig(cpu=4, ram="8g"),
+        map_task_resources=ResourceConfig(cpu=1, preemptible=False, image="custom-image"),
+        reduce_task_resources=ResourceConfig(cpu=2, preemptible=False, image="custom-image"),
     )
-    assert ctx.resources.preemptible is False
-    assert ctx.resources.image == "custom-image"

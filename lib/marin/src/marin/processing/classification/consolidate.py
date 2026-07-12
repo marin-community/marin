@@ -144,7 +144,7 @@ def consolidate(
     filetype: str = "jsonl.gz",
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
-    map_worker_resources: ResourceConfig | None = None,
+    map_task_resources: ResourceConfig | None = None,
 ) -> ZephyrExecutionResult:
     """Consolidate documents by applying filters based on attributes.
 
@@ -160,9 +160,10 @@ def consolidate(
         worker_resources: Optional Zephyr worker resource config. Defaults to
             ``ResourceConfig(cpu=2, ram="4g")`` — Zephyr's 1 CPU / 1 GB default
             packs multiple workers per VM and OOMs on heavy-tailed inputs where
-            a single doc can blow past the per-worker share.
+            a single doc can blow past the per-worker share. Required when
+            ``map_task_resources`` is set.
         max_workers: Maximum number of Zephyr workers (defaults to Zephyr's default).
-        map_worker_resources: ResourceConfig for the map stage.
+        map_task_resources: ResourceConfig for map-stage tasks.
     """
     input_paths = sorted(str(m) for m in StoragePath(os.path.join(input_path, f"**/*.{filetype}")).glob())
     if not input_paths:
@@ -190,11 +191,10 @@ def consolidate(
     ctx_kwargs: dict = {
         "name": "consolidate-filter",
         "max_workers": max_workers,
+        "resources": worker_resources or ResourceConfig(cpu=2, ram="4g"),
     }
-    if map_worker_resources is not None:
-        ctx_kwargs["map_worker_resources"] = map_worker_resources
-    else:
-        ctx_kwargs["resources"] = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    if map_task_resources is not None:
+        ctx_kwargs["map_task_resources"] = map_task_resources
 
     ctx = ZephyrContext(**ctx_kwargs)
     return ctx.execute(ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"))

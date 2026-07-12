@@ -18,7 +18,7 @@ from typing import Protocol
 
 import cloudpickle
 import humanfriendly
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import open_url, unique_temp_path
 
 from zephyr.plan import PhysicalOp, Scatter, Shard

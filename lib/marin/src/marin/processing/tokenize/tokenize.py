@@ -135,7 +135,7 @@ class TokenizeConfigBase(abc.ABC):
 
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
-    map_worker_resources: ResourceConfig | None = None
+    map_task_resources: ResourceConfig | None = None
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
     """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly."""
@@ -311,7 +311,7 @@ def _run_split(
 
     ctx = ZephyrContext(
         resources=config.worker_resources,
-        map_worker_resources=config.map_worker_resources,
+        map_task_resources=config.map_task_resources,
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
