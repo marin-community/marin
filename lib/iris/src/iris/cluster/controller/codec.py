@@ -95,8 +95,8 @@ def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
     """Serialize a RuntimeEntrypoint, excluding inline workdir_files.
 
     The files live in ``job_workdir_files``, keyed by job id, so the JSON column stays
-    small.  Every path that rebuilds an entrypoint from this JSON must name them again
-    (see :func:`reconstruct_launch_job_request` and ``build_run_request_fields``).
+    small. An entrypoint rebuilt from this JSON therefore has no inline files until
+    they are re-attached from that table.
     """
     d = json_format.MessageToDict(ep, **_TO_DICT_OPTS)
     d.pop("workdir_files", None)
