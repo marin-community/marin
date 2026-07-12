@@ -644,6 +644,37 @@ def test_ghalogs_range_gives_up_on_clean_empty_responses(monkeypatch):
     assert server.get_calls <= diagnostic_logs._GHALOGS_MAX_RESUME_STALLS + 1
 
 
+def test_ghalogs_parts_prefix_uses_same_bucket_ttl_temp(monkeypatch):
+    archive = "gs://marin-eu-west4/raw/diagnostic_logs/ghalogs/files/github_run_logs.zip"
+    monkeypatch.setattr(
+        diagnostic_logs,
+        "marin_temp_bucket",
+        lambda ttl_days, prefix="", *, source_prefix=None: f"gs://marin-eu-west4/tmp/ttl={ttl_days}d/{prefix}",
+    )
+
+    parts = diagnostic_logs._ghalogs_parts_prefix(archive)
+
+    # Same bucket (GCS compose cannot cross buckets), under the TTL'd temp
+    # prefix, keyed by the archive path so the location is stable across runs.
+    assert parts == "gs://marin-eu-west4/tmp/ttl=7d/ghalogs-parts/raw/diagnostic_logs/ghalogs/files/github_run_logs.zip"
+
+
+def test_ghalogs_parts_prefix_falls_back_beside_archive_when_temp_bucket_differs(tmp_path, monkeypatch):
+    # The temp helper routes unknown buckets to the marin prefix, which lives in
+    # a different bucket — compose could not merge from there, so parts must
+    # stay next to the archive. Local paths (no bucket) fall back the same way.
+    archive = "gs://not-a-marin-bucket/data/github_run_logs.zip"
+    monkeypatch.setattr(
+        diagnostic_logs,
+        "marin_temp_bucket",
+        lambda ttl_days, prefix="", *, source_prefix=None: f"gs://marin-us-central2/tmp/ttl={ttl_days}d/{prefix}",
+    )
+
+    assert diagnostic_logs._ghalogs_parts_prefix(archive) == f"{archive}.parts"
+    local_archive = str(tmp_path / "github_run_logs.zip")
+    assert diagnostic_logs._ghalogs_parts_prefix(local_archive) == f"{local_archive}.parts"
+
+
 def test_stage_ghalogs_archive_skips_when_correctly_sized_copy_exists(tmp_path, monkeypatch):
     payload = b"already-staged-archive-bytes"
     server = _patch_zenodo(monkeypatch, _FakeZenodoServer(payload), len(payload))

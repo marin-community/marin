@@ -25,7 +25,15 @@ import requests
 from fray.types import ResourceConfig
 from fsspec.implementations.local import LocalFileSystem
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath, atomic_rename, marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.filesystem import (
+    StoragePath,
+    atomic_rename,
+    marin_prefix,
+    marin_temp_bucket,
+    open_url,
+    prefix_join,
+    url_to_fs,
+)
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
@@ -98,6 +106,10 @@ _GHALOGS_DOWNLOAD_SHARDS = 32
 # uneven (~1-17 MB/s observed), so parallel shards both add bandwidth and limit
 # the damage of an unlucky slow connection to a single shard.
 _GHALOGS_DOWNLOAD_MAX_WORKERS = 8
+# Lifecycle TTL on the parts prefix: long enough to cover realistic retry
+# windows after a failed staging run, bounded so an abandoned run cannot
+# strand ~142 GB of parts indefinitely.
+_GHALOGS_PARTS_TTL_DAYS = 7
 # A long stream reliably breaks mid-body (server-side idle/connection resets);
 # Zenodo serves the archive with Accept-Ranges: bytes, so each shard resumes
 # from its last written offset instead of restarting from zero. Give up only
@@ -1025,6 +1037,26 @@ def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[_ShardRange
     return [_ShardRange(bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
 
 
+def _ghalogs_parts_prefix(archive_path: str) -> str:
+    """Return the prefix holding the range parts while staging ``archive_path``.
+
+    Parts go to the bucket's ``tmp/ttl=Nd/`` lifecycle prefix so a failed run
+    that is never retried cannot strand ~142 GB of parts; retries within the
+    TTL still reuse completed parts. The prefix must share the archive's bucket
+    (GCS compose cannot cross buckets), so when the temp helper cannot place it
+    there — local paths in tests, buckets outside the marin config — parts fall
+    back to a ``.parts`` sibling of the archive instead.
+    """
+    parsed = StoragePath.parse(archive_path)
+    if parsed.scheme in ("gs", "s3") and parsed.bucket:
+        temp_prefix = marin_temp_bucket(
+            _GHALOGS_PARTS_TTL_DAYS, prefix=f"ghalogs-parts/{parsed.key}", source_prefix=archive_path
+        )
+        if StoragePath.parse(temp_prefix).bucket == parsed.bucket:
+            return temp_prefix
+    return f"{archive_path}.parts"
+
+
 def _ghalogs_part_path(parts_prefix: str, shard: _ShardRange) -> str:
     # Zero-padded starts keep lexicographic order equal to byte order, and the
     # explicit range means a part left behind by a different shard layout has a
@@ -1144,10 +1176,11 @@ def stage_ghalogs_archive(
     as independent zephyr tasks — each resuming across mid-stream drops (see
     :func:`_iter_ghalogs_range`) — then assembled server-side into
     ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}``, the path
-    :func:`materialize_ghalogs_to_parquet` reads from. Parts publish through an
-    atomic rename and re-runs skip existing ones, so a worker/pod death costs
-    at most the shards in flight. Idempotent: a correctly-sized copy is left
-    untouched, and a partial download never becomes the published archive.
+    :func:`materialize_ghalogs_to_parquet` reads from. Parts live on the
+    bucket's TTL'd temp prefix, publish through an atomic rename, and re-runs
+    skip existing ones, so a worker/pod death costs at most the shards in
+    flight. Idempotent: a correctly-sized copy is left untouched, and a partial
+    download never becomes the published archive.
     """
     # Enforced up front: a shard count the merge cannot handle would otherwise
     # only fail after the full archive has been downloaded.
@@ -1160,10 +1193,10 @@ def stage_ghalogs_archive(
         logger.info("GHALogs archive already staged (%d bytes): %s", GHALOGS_ARCHIVE_BYTES, archive_path)
         return
 
-    # Parts must live in the same bucket as the archive (GCS compose cannot
-    # cross buckets). They sit next to the final object and are removed after
-    # a successful merge; a failed run leaves them for the next run to reuse.
-    parts_prefix = f"{archive_path}.parts"
+    # Parts are removed after a successful merge; a failed run leaves them for
+    # the next run to reuse, and the temp prefix's TTL sweeps them if that run
+    # never comes (see _ghalogs_parts_prefix).
+    parts_prefix = _ghalogs_parts_prefix(archive_path)
     shards = _ghalogs_shard_ranges(GHALOGS_ARCHIVE_BYTES, num_shards)
     logger.info(
         "Staging %s -> %s: %d bytes as %d range shards",
