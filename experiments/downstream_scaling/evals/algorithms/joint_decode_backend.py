@@ -34,14 +34,14 @@ from joint_decode.coordinator import JointDecoder, SelectTokens
 from joint_decode.tpu.config import JointDecodeConfig as PackageConfig
 from joint_decode.tpu.config import JointDecodeModelConfig as PackageModelConfig
 from joint_decode.tpu.decoder import joint_decoder
-from marin.utils import fsspec_exists
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path
+from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, fsspec_exists, localize_mirror_path
 
 logger = logging.getLogger(__name__)
 

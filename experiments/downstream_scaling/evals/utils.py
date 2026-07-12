@@ -11,10 +11,30 @@ import re
 import fsspec
 from thalas.execution.executor import InputName, MirroredValue
 from thalas.execution.types import versioned
-from marin.utils import fsspec_exists, fsspec_glob
 from rigging.filesystem import data_config, marin_region, mirror_budget
 
 _STEP_CHECKPOINT_RE = re.compile(r"(?:^|/)step-(\d+)/?$")
+
+
+def fsspec_exists(path: str) -> bool:
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    return fs.exists(fs_path)
+
+
+def fsspec_glob(path: str) -> list[str]:
+    protocol, _ = fsspec.core.split_protocol(path)
+    fs, fs_path = fsspec.core.url_to_fs(path)
+    matches = fs.glob(fs_path)
+    if protocol is None:
+        return sorted(matches)
+
+    paths = []
+    for match in matches:
+        if fsspec.core.split_protocol(match)[0] is not None:
+            paths.append(match)
+        else:
+            paths.append(f"{protocol}://{match}")
+    return sorted(paths)
 
 
 def version_path(path: str | InputName | MirroredValue) -> str | InputName | MirroredValue:

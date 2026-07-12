@@ -17,14 +17,19 @@ from fray.cluster import ResourceConfig
 from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
-from marin.utils import fsspec_exists
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
     read_prompt_rows,
 )
-from experiments.downstream_scaling.evals.utils import discover_hf_checkpoints, localize_mirror_path, version_path
+from experiments.downstream_scaling.evals.utils import (
+    discover_hf_checkpoints,
+    fsspec_exists,
+    localize_mirror_path,
+    version_path,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -40,11 +40,11 @@ from thalas.execution.executor import (
     InputName,
     executor_main,
     output_path_of,
-    this_output_path,
-    versioned,
 )
 from thalas.execution.remote import remote
-from zephyr import Dataset, ZephyrContext
+from thalas.execution.types import this_output_path, versioned
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

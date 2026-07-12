@@ -25,7 +25,6 @@ import fsspec
 from joint_decode.config import JointDecodeSamplingConfig
 from joint_decode.gpu.config import JointDecodeConfig, JointDecodeModelConfig
 from joint_decode.gpu.decoder import joint_decoder
-from marin.utils import fsspec_exists
 from thalas.execution.executor import ExecutorStep, InputName, MirroredValue, executor_main
 from thalas.execution.types import this_output_path, versioned
 from transformers import AutoTokenizer
@@ -34,7 +33,7 @@ from experiments.downstream_scaling.evals.algorithms import xtok_selection
 from experiments.downstream_scaling.evals.framework.core import make_eval_step
 from experiments.downstream_scaling.evals.framework.schema import completions_file, read_prompt_rows
 from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KTask, GSM8KTaskConfig
-from experiments.downstream_scaling.evals.utils import version_path
+from experiments.downstream_scaling.evals.utils import fsspec_exists, version_path
 from experiments.downstream_scaling.models.delphi import DELPHI_HF_REPOS
 
 logger = logging.getLogger(__name__)

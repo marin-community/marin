@@ -26,7 +26,14 @@ from experiments.downstream_scaling.evals.algorithms.joint_decode_avg import (
 from experiments.downstream_scaling.evals.framework.core import make_eval_step
 from experiments.downstream_scaling.evals.tasks.gsm8k import GSM8KTask, GSM8KTaskConfig
 from experiments.downstream_scaling.models.delphi import DELPHI_CHECKPOINTS
-from experiments.models import llama_3_1_8b
+from experiments.models import ModelConfig, download_model_step
+
+# Executor-era advisor step: this runner still executes on the thalas
+# executor, which cannot version the lazy `download_model` handle that
+# `experiments.models.llama_3_1_8b` became. Same pin; the version payload
+# (name + versioned revision) matches the original runs', so completed
+# experiments keep resolving.
+LLAMA_3_1_8B = download_model_step(ModelConfig(hf_repo_id="meta-llama/Llama-3.1-8B", hf_revision="d04e592"))
 
 N_SAMPLES = 32
 N_PROBLEMS = 256
@@ -103,7 +110,7 @@ def make_algorithm(
 
 
 def build_steps(tpu_types: list[str], region: str):
-    advisor_model_path = output_path_of(llama_3_1_8b)
+    advisor_model_path = output_path_of(LLAMA_3_1_8B)
     return [
         make_eval_step(
             name=(

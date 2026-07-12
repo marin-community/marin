@@ -12,7 +12,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
-from zephyr import Dataset, ShardInfo, ZephyrContext
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 from zephyr.runners import InlineRunner
 
 from experiments.downstream_scaling.evals.framework.xregion import ledger

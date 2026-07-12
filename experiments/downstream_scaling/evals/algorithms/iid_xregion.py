@@ -25,7 +25,8 @@ from fray.cluster import ResourceConfig
 from thalas.execution.executor import ExecutorStep, InputName, MirroredValue
 from thalas.execution.remote import remote
 from thalas.execution.types import this_output_path, versioned
-from zephyr import Dataset, ShardInfo, ZephyrContext
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
