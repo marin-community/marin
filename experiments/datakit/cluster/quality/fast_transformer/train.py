@@ -17,7 +17,7 @@ import logging
 import os
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import equinox as eqx
 import jax
@@ -267,7 +267,7 @@ def fit(
     )
 
 
-def _save_scorer(model, remap: dict, vocab: int, tokenizer: str, max_tokens: int, out_dir: str, name: str) -> None:
+def _save_scorer(model, remap: dict, tokenizer: str, config: FastTransformerConfig, out_dir: str, name: str) -> None:
     """Serialise the model + vocab remap + meta in the format `scorer.py` loads."""
     out_dir = out_dir.rstrip("/")
     eqx_name, remap_name, meta_name = artifact_names(name)
@@ -278,7 +278,10 @@ def _save_scorer(model, remap: dict, vocab: int, tokenizer: str, max_tokens: int
         dst.write(src.read())
     with StoragePath(f"{out_dir}/{remap_name}").open("w") as fh:
         json.dump(remap, fh)
-    meta = {"vocab_size": vocab, "max_tokens": max_tokens, "tokenizer": tokenizer, "config": DEPLOY_CONFIG}
+    # Serialise the FULL config (not a hand-picked subset) so the loader rebuilds the exact
+    # architecture -- otherwise a non-default final_pool / mlp_ratio silently falls back to
+    # the dataclass default and scores with the wrong (or shape-mismatched) model.
+    meta = {"tokenizer": tokenizer, "max_tokens": config.max_tokens, "config": asdict(config)}
     with StoragePath(f"{out_dir}/{meta_name}").open("w") as fh:
         json.dump(meta, fh)
     logger.info("saved scorer -> %s/%s (+ %s, %s)", out_dir, eqx_name, remap_name, meta_name)
@@ -329,7 +332,7 @@ def train_from_labels(
     fitted = fit(config, data, hp)
     holdout = _metrics(predict(fitted.model, data.eval.ids), data.eval.scores)
     logger.info("HOLDOUT AUC=%.4f spearman=%.4f (best_epoch=%d)", holdout.auc, holdout.spearman_rho, fitted.best_epoch)
-    _save_scorer(fitted.model, remap, vocab, tokenizer, max_tokens, out_dir, name)
+    _save_scorer(fitted.model, remap, tokenizer, config, out_dir, name)
     return fitted
 
 

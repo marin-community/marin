@@ -57,18 +57,14 @@ class PooledScorer:
             meta = json.loads(fh.read())
         with open_url(remap_path, "r") as fh:
             remap = {int(k): int(v) for k, v in json.loads(fh.read()).items()}
-        vocab_size = len(remap) + 2  # PAD + UNK
-        c = meta["config"]
-        config = FastTransformerConfig(
-            vocab_size=vocab_size,
-            max_tokens=meta["max_tokens"],
-            pool_window=c["pool_window"],
-            pool_kind=c["pool_kind"],
-            embed_dim=c["embed_dim"],
-            hidden_dim=c["hidden_dim"],
-            num_layers=c["num_layers"],
-            num_heads=c["num_heads"],
-        )
+        # Rebuild from the full saved config so no field silently falls back to a dataclass
+        # default (a sweep checkpoint may set a non-default final_pool / mlp_ratio). vocab_size
+        # is authoritative from the remap; max_tokens falls back to the top-level meta for older
+        # checkpoints that saved only a partial config.
+        c = dict(meta["config"])
+        c["vocab_size"] = len(remap) + 2  # PAD + UNK
+        c.setdefault("max_tokens", meta["max_tokens"])
+        config = FastTransformerConfig(**c)
         template = FastTransformer(config, key=jr.PRNGKey(0))
         # eqx deserialise needs a local file path
         model = eqx.tree_deserialise_leaves(model_path, template)
