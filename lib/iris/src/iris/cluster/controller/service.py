@@ -1805,7 +1805,9 @@ class ControllerServiceImpl:
         if job.submitted_at_ms:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
 
-        reconstructed_request = reconstruct_launch_job_request(job)
+        # Status describes the job's shape; the workdir file bytes are payload no
+        # client of this RPC reads, so they stay out of the response.
+        reconstructed_request = reconstruct_launch_job_request(job, workdir_files={})
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
             request=redact_request_env_vars(reconstructed_request),

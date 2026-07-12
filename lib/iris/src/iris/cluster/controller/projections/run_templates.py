@@ -46,6 +46,7 @@ def build_run_request_fields(
     *,
     num_tasks: int,
     entrypoint_json: str,
+    workdir_files: dict[str, bytes],
     environment_json: str,
     bundle_id: str,
     resources: job_pb2.ResourceSpecProto,
@@ -60,13 +61,17 @@ def build_run_request_fields(
     """Build a RunTaskRequest carrying the per-job fields shared by the template
     and per-attempt construction paths.
 
+    ``entrypoint_json`` carries no inline workdir files (they live in
+    ``job_workdir_files``), so the caller supplies them via ``workdir_files`` —
+    ``reads.get_workdir_files(tx, job_id)`` — and they are re-attached here.
+
     The template path leaves ``task_id``/``attempt_id``/``priority`` at their
     proto defaults; the per-attempt path stamps them. proto_from_json returns
     shared cached instances — set via constructor kwarg so RunTaskRequest
-    copies them; callers then mutate the copy's workdir_files (never the cached
+    copies them, and the workdir files land on that copy (never the cached
     source).
     """
-    return job_pb2.RunTaskRequest(
+    request = job_pb2.RunTaskRequest(
         num_tasks=num_tasks,
         entrypoint=proto_from_json(entrypoint_json, job_pb2.RuntimeEntrypoint),
         environment=proto_from_json(environment_json, job_pb2.EnvironmentConfig),
@@ -80,6 +85,9 @@ def build_run_request_fields(
         priority=priority,
         container_profile=container_profile,
     )
+    for filename, data in workdir_files.items():
+        request.entrypoint.workdir_files[filename] = data
+    return request
 
 
 class RunTemplatesProjection(Projection):
@@ -136,6 +144,7 @@ class RunTemplatesProjection(Projection):
         template = build_run_request_fields(
             num_tasks=job.num_tasks,
             entrypoint_json=job.entrypoint_json,
+            workdir_files=reads.get_workdir_files(tx, job_id),
             environment_json=job.environment_json,
             bundle_id=job.bundle_id,
             resources=resources,
@@ -144,8 +153,6 @@ class RunTemplatesProjection(Projection):
             task_image=job.task_image,
             container_profile=job.container_profile,
         )
-        for filename, data in reads.get_workdir_files(tx, job_id).items():
-            template.entrypoint.workdir_files[filename] = data
 
         with self._lock:
             if self._guard.may_store(tx.seq, wire):

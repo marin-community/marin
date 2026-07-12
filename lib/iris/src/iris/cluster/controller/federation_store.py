@@ -63,7 +63,8 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         # promoted — the promotion CAS would reject it anyway.
         if job is None or job.state in TERMINAL_JOB_STATES:
             continue
-        request = reconstruct_launch_job_request(job)
+        # Shape only — this pass reads constraints and resources, never the payload.
+        request = reconstruct_launch_job_request(job, workdir_files={})
         constraints = [Constraint.from_proto(c) for c in request.constraints]
         shape = routing_constraints(strip_cluster_constraints(strip_backend_constraints(constraints)))
         band = (
@@ -167,6 +168,12 @@ class ControllerFederationStore:
             writes.mark_federated_job_killed(cur, local_job_id, now_ms=Timestamp.now().epoch_ms(), error=reason)
 
     def pending_handoffs(self) -> list[HandoffSpec]:
+        """The handles awaiting delivery, each with the full request the peer will run.
+
+        The peer executes this request, so it carries the job's inline workdir files
+        (the small ones the offload threshold kept out of the blob store, e.g. a
+        ``from_callable`` job's ``_callable_runner.py``) alongside the stored config.
+        """
         with self._db.read_snapshot() as tx:
             handles = reads.pending_handoff_handles(tx)
             pending = []
@@ -180,7 +187,9 @@ class ControllerFederationStore:
                         peer_id=handle.peer_id,
                         owner_principal=handle.owner_principal,
                         submitting_user=job.submitting_user,
-                        request=reconstruct_launch_job_request(job),
+                        request=reconstruct_launch_job_request(
+                            job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
+                        ),
                     )
                 )
         return pending
