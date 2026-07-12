@@ -249,9 +249,9 @@ def default_speedrun(
 
 def _resolve_tokenized_dataset(tokenized_dataset: str) -> ArtifactStep[TokenizedCache]:
     if tokenized_dataset.startswith("gs://marin-us-central1/tokenized/subcache/fineweb-edu-10B-"):
-        return fineweb_edu_10B_dataset()
+        return fineweb_edu_10B_dataset(pin=tokenized_dataset)
     if tokenized_dataset.startswith("gs://marin-us-central1/tokenized/subcache/fineweb-edu-10M-"):
-        return fineweb_edu_10M_dataset()
+        return fineweb_edu_10M_dataset(pin=tokenized_dataset)
     raise ValueError(
         f"Unsupported raw tokenized dataset path {tokenized_dataset!r}. "
         "Use a prebuilt cache step or dataset config with tokenizer metadata."

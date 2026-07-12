@@ -98,7 +98,9 @@ def test_default_speedrun_accepts_archived_tokenized_dataset(monkeypatch):
     _, config = build_config("130m")
     train_step, result_step = default_speedrun("prism-berkeley-qwen3-130m-test", config, version="2026.07.11")
     results_config = materialized_config(result_step, "gs://test-prefix")
+    train_dataset = next(dep for dep in train_step.deps if dep.name == "fineweb-edu-10B")
 
     assert result_step.deps == (train_step,)
+    assert train_dataset.override_path == config.tokenized_dataset
     assert results_config.wandb_entity is None
     assert results_config.output_path == f"{train_step.path('gs://test-prefix')}/speedrun_results.json"
