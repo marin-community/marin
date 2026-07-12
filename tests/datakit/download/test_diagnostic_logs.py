@@ -524,10 +524,12 @@ class _FakeZenodoServer:
             body = self.available[start:stop]
             status = http.client.PARTIAL_CONTENT if ranged else http.client.OK
 
-        brk = self.breaks.pop(0) if self.breaks else None
-        if brk is not None:
+        break_after_bytes = self.breaks.pop(0) if self.breaks else None
+        if break_after_bytes is not None:
             return _FakeStreamResponse(
-                status, [body[:brk]], break_exc=requests.exceptions.ChunkedEncodingError("connection broken")
+                status,
+                [body[:break_after_bytes]],
+                break_exc=requests.exceptions.ChunkedEncodingError("connection broken"),
             )
         chunks = [body[i : i + self.out_chunk] for i in range(0, len(body), self.out_chunk)] or [b""]
         return _FakeStreamResponse(status, chunks)
