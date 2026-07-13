@@ -133,6 +133,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "infra/iac",
 ]
 # lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
 # log-server ext is consumed as a pre-built wheel by default and only built from
