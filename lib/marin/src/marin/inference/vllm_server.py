@@ -33,11 +33,9 @@ WORKER_PYTHON_VERSION = "3.12"
 class VllmLauncher(Protocol):
     """Builds the argv and extra environment that run the ``vllm`` CLI.
 
-    vLLM is always launched as a subprocess, so a launcher is the command prefix
-    (before its ``serve …`` args) plus any environment it needs. This lets the TPU
-    path run the ``vllm`` on the workspace ``PATH`` while the isolated paths run vLLM
-    from a throwaway, uv-managed environment — a prebuilt CUDA wheel for GPU, or the
-    source-built TPU forks for a checkout-free TPU serve.
+    vLLM always runs as a subprocess, so a launcher is the command prefix (before its
+    ``serve …`` args) plus any environment it needs. Implementations run either the
+    ``vllm`` already on ``PATH`` or one provisioned in a throwaway uv-managed env.
     """
 
     def command(self) -> list[str]: ...
@@ -96,19 +94,10 @@ class IsolatedCudaVllm:
 class IsolatedTpuVllm:
     """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
 
-    The TPU counterpart to :class:`IsolatedCudaVllm`, for driving ``marin-serve --tpu``
-    from outside a workspace checkout. Marin's TPU vLLM is a source build of two git
-    forks (``vllm`` + its ``tpu-inference`` runtime) pinned by SHA; this provisions them
-    in an isolated uv-tool env instead of the workspace lock, so a checkout-free install
-    can still boot the server. The fork refs come from ``marin.inference.tpu_vllm_pins``,
-    kept in sync with the root ``pyproject`` sources.
-
-    Unlike the CUDA path — which pulls a prebuilt wheel — this **builds vLLM from
-    source**, so it exports ``VLLM_TARGET_DEVICE=tpu`` (:meth:`env`) and resolves torch
-    from the CPU index (TPU compute runs on jax/libtpu; torch is only a dependency).
-    Cold, uncached workers pay the same source-build cost the in-workspace ``uv sync``
-    pays today; a prebuilt fork wheel would remove it and is tracked in
-    https://github.com/marin-community/marin/issues/7143.
+    The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
+    runtime are two git forks pinned by SHA (see ``marin.inference.tpu_vllm_pins``); this
+    provisions them in an isolated uv-tool env rather than the workspace lock, so
+    ``marin-serve --tpu`` runs from outside a checkout.
     """
 
     vllm_ref: str
@@ -118,8 +107,8 @@ class IsolatedTpuVllm:
     """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
-    # torch is only a dependency here (jax/libtpu do TPU compute), so build/resolve it
-    # from the CPU index rather than dragging in a CUDA tree.
+    # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
+    # CPU index rather than dragging in a CUDA tree.
     torch_backend: str = "cpu"
 
     def command(self) -> list[str]:
@@ -137,8 +126,8 @@ class IsolatedTpuVllm:
         ]
 
     def env(self) -> dict[str, str]:
-        # vLLM source installs build for CUDA unless the TPU target is explicit; the uvx
-        # build subprocess inherits this from the launch environment.
+        # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
+        # inherits this from the launch environment.
         return {"VLLM_TARGET_DEVICE": "tpu"}
 
 

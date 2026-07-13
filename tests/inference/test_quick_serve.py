@@ -5,17 +5,14 @@
 
 import dataclasses
 import json
-import re
 import socket
 import time
 from unittest.mock import MagicMock
 
-import click
 import pytest
 import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.inference import quick_serve_cli
 from marin.inference.quick_serve import (
     QuickServeConfig,
     resolve_model_path,
@@ -25,7 +22,6 @@ from marin.inference.quick_serve import (
 from marin.inference.quick_serve_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
-    _resolve_workspace,
 )
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
@@ -73,36 +69,6 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
-
-
-def test_resolve_workspace_auto_locates_checkout_from_cwd(tmp_path, monkeypatch):
-    # Running from a subdirectory of a checkout still bundles the checkout root (the
-    # pyproject that declares [tool.uv.workspace]), so marin-serve works from anywhere
-    # inside a marin tree — not just its top level.
-    (tmp_path / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = ['lib/marin']\n")
-    workdir = tmp_path / "experiments"
-    workdir.mkdir()
-    monkeypatch.chdir(workdir)
-    assert _resolve_workspace(None) == tmp_path.resolve()
-
-
-def test_resolve_workspace_explicit_rejects_dir_without_pyproject(tmp_path):
-    # An explicit --workspace with no pyproject would make the container's `uv sync`
-    # fail with "No pyproject.toml found"; catch it client-side instead.
-    with pytest.raises(click.ClickException, match=re.escape("pyproject.toml")):
-        _resolve_workspace(str(tmp_path))
-
-
-def test_resolve_workspace_explicit_accepts_dir_with_pyproject(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    assert _resolve_workspace(str(tmp_path)) == tmp_path
-
-
-def test_resolve_workspace_returns_none_without_checkout(monkeypatch):
-    # No checkout found (a PyPI install in a bare shell): resolve to None so the TPU path
-    # serves checkout-free instead of raising.
-    monkeypatch.setattr(quick_serve_cli, "find_project_root", lambda _p: None)
-    assert _resolve_workspace(None) is None
 
 
 def test_checkout_free_setup_script_installs_pinned_marin_core_from_pypi():

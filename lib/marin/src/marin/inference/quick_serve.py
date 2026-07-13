@@ -129,10 +129,9 @@ class QuickServeConfig:
 def select_vllm_launcher(config: QuickServeConfig) -> VllmLauncher:
     """Pick how to launch vLLM: an isolated CUDA/TPU vLLM, or the workspace ``vllm``.
 
-    - ``vllm_version`` set → stock CUDA vLLM in a throwaway uv-tool env (GPU path),
-      keeping its torch/CUDA tree out of the Marin workspace lock.
+    - ``vllm_version`` set → stock CUDA vLLM in a throwaway uv-tool env (GPU path).
     - ``tpu_vllm_ref`` set → Marin's forked TPU vLLM in a throwaway uv-tool env
-      (checkout-free TPU path), source-built from the pinned git forks.
+      (checkout-free TPU path).
     - neither → the vLLM already on the active venv/image ``PATH``: the workspace
       TPU-vLLM stack, or a prebuilt ``--task-image`` that ships its own vLLM.
     """
