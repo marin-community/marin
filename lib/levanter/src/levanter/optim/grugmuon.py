@@ -10,6 +10,7 @@ All 2D arrays are routed to Muon, except those whose path contains
 """
 
 import math
+import os
 from dataclasses import dataclass
 from functools import partial
 
@@ -126,18 +127,18 @@ class GrugMuonConfig(MuonConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if "embed" in path_lower or "lm_head" in path_lower or "output" in path_lower:
+            # Route by role, not raw ndim: stacked-block scanning prepends a layer axis
+            # (attn/MLP 2D->3D, MoE experts 3D->4D), so an ndim test would misroute the
+            # scanned weights. Muon gets the weight matrices (whose orthogonalizable matrix
+            # is the trailing two dims); the embedding, LM head, router gate, and any
+            # bias/scalar (<2D) use AdamW.
+            if not hasattr(param, "ndim") or param.ndim < 2:
                 return "adamw"
-            elif hasattr(param, "ndim") and param.ndim == 2:
-                return "muon"
-            elif (
-                hasattr(param, "ndim")
-                and param.ndim == 3
-                and ("w_up_gate" in path_lower or "w_gate_up" in path_lower or "w_down" in path_lower)
-            ):
-                return "muon"
-            else:
+            # RMSNorm/LayerNorm gains are per-dimension scales, not orthogonalizable matrices
+            # (they stack to 2D under scan), so keep them on AdamW alongside embed/head/router.
+            if any(k in path_lower for k in ("embed", "lm_head", "output", "router", "norm")):
                 return "adamw"
+            return "muon"
 
         return jax.tree.map(mask_fn, params, paths)
 
@@ -181,8 +182,12 @@ def _grug_scale_with_muon(
         else:
             updates = buf
 
-        def transform_array(x, param):
-            if not hasattr(x, "ndim") or x.ndim not in (2, 3):
+        def transform_array(path, x, param):
+            if not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
+                return x
+            if os.environ.get("SCALE_MUON_NO_NS") == "1":
+                # No-op the Newton-Schulz orthogonalization (momentum-only update): skips
+                # the all-gather/reshard transient. Not real Muon; for memory/fit probes.
                 return x
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
@@ -192,6 +197,11 @@ def _grug_scale_with_muon(
                     coefficient_type,
                     None,
                 )
+            elif x.ndim == 4:
+                # Stacked MoE expert leaf (L, E, D, I) / (L, E, I, D): distribute whole
+                # matrices across chips (data-parallel over L*E) and run NS locally, never
+                # gathering D/I to full-replicated.
+                updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type)
             else:
                 if orthogonalization_layout == VMAP_REPLICATED:
                     updated = jax.vmap(
@@ -233,9 +243,9 @@ def _grug_scale_with_muon(
             return updated
 
         if params is None:
-            updates = jax.tree.map(lambda x: transform_array(x, None), updates)
+            updates = jax.tree_util.tree_map_with_path(lambda path, x: transform_array(path, x, None), updates)
         else:
-            updates = jax.tree.map(transform_array, updates, params)
+            updates = jax.tree_util.tree_map_with_path(transform_array, updates, params)
 
         return updates, ScaleByMuonState(momentum_buffer=buf)
 
@@ -265,6 +275,109 @@ def _match_update_sharding():
         return updates, state
 
     return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _zeropower_via_newtonschulz_local(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+) -> jax.Array:
+    """Newton-Schulz that assumes ``X`` is already fully local to one device.
+
+    Unlike :func:`_zeropower_via_newtonschulz_replicated`, this does NOT reshard ``X`` to
+    ``P(None, None)`` to gather it across devices. The caller must arrange sharding so each
+    device already holds the matrices it processes locally (e.g. vmapped over a leading axis
+    that is sharded on the batch/data axis).
+    """
+    assert X.ndim == 2
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    X = X / (jnp.linalg.norm(X) + eps)
+
+    transpose = False
+    if X.shape[0] > X.shape[1]:
+        X = X.T
+        transpose = True
+
+    for i in range(steps):
+        a, b, c = coeffs[i % len(coeffs)]
+        A = jnp.einsum("ik,jk->ij", X, X)
+        B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
+        X = a * X + jnp.einsum("ik,kj->ij", B, X)
+
+    if transpose:
+        X = X.T
+
+    return X.astype(orig_dtype)
+
+
+def _newtonschulz_4d_distributed(
+    path,
+    x: jax.Array,
+    steps: int,
+    eps: float,
+    coefficient_type: CoefficientType,
+) -> jax.Array:
+    """Newton-Schulz on a stacked 4D MoE expert leaf without gathering D/I to replicated.
+
+    The leaf is ``(L, E, D, I)`` for ``w_gate``/``w_up`` or ``(L, E, I, D)`` for ``w_down``,
+    sharded ``P(None, "expert", "data", "model")``. The "one matrix per chip" plan: bf16
+    cast, free-merge ``(L, E) -> LE`` keeping the sharding on the ``data`` axis, an explicit
+    all-to-all reshard to move ``LE`` onto the batch axis (each chip ends up owning
+    ``LE / shards`` *full* matrices), local NS, then reverse. Splitting the axis merge from
+    the cross-axis migration lets XLA do each cheaply instead of materializing the full stack.
+    """
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh.empty:
+        return x
+    mesh_shape_items = [(name, size) for name, size in mesh.shape.items() if size > 1]
+    if not mesh_shape_items:
+        return x
+
+    layers, expert_count, d, last = x.shape
+    merged = layers * expert_count
+
+    # Largest subset of batch mesh axes whose product divides ``merged``; NS replicates
+    # across any axes that don't divide it rather than silently skipping orthogonalization.
+    best_axes: tuple[str, ...] = ()
+    best_shards = 0
+    for mask in range(1, 1 << len(mesh_shape_items)):
+        subset = [mesh_shape_items[i] for i in range(len(mesh_shape_items)) if mask & (1 << i)]
+        prod = 1
+        for _, size in subset:
+            prod *= size
+        if merged % prod == 0 and prod > best_shards:
+            best_axes = tuple(name for name, _ in subset)
+            best_shards = prod
+    if not best_axes:
+        raise ValueError(
+            f"4D NS: no subset of batch mesh axes {dict(mesh.shape)} divides "
+            f"merged={merged} (layers={layers} * experts={expert_count}) for "
+            f"{jax.tree_util.keystr(path)}."
+        )
+
+    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+    if is_w_down:
+        intermediate_3d_spec = PartitionSpec(None, "model", "data")
+        orig_4d_spec = PartitionSpec(None, "expert", "model", "data")
+    else:
+        intermediate_3d_spec = PartitionSpec(None, "data", "model")
+        orig_4d_spec = PartitionSpec(None, "expert", "data", "model")
+    target_3d_spec = (
+        PartitionSpec(best_axes[0], None, None) if len(best_axes) == 1 else PartitionSpec(best_axes, None, None)
+    )
+
+    x_bf16 = x.astype(jnp.bfloat16)
+    x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+    x_distributed = reshard(x_flat, target_3d_spec)
+    local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+    updated_distributed = jax.vmap(local_ns)(x_distributed)
+    updated_flat = reshard(updated_distributed, intermediate_3d_spec)
+    updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
+    return updated_bf16.astype(x.dtype)
 
 
 def _zeropower_via_newtonschulz_replicated(

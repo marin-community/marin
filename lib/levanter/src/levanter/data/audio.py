@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, cast
 
+import braceexpand
 import datasets
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem import url_to_fs
 import jax
 import numpy as np
 from draccus import field
@@ -23,12 +24,12 @@ from typing_extensions import TypedDict
 
 
 from levanter.compat.hf_checkpoints import load_processor
-from levanter.data.dataset import AsyncDataset
+from levanter.data import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset, StopStrategy
 from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, datasource_from_hf_or_none
-from levanter.data.text._batch_tokenizer import BatchTokenizer
+from levanter.data.text import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 
 # intercept the logging nonsense here
@@ -201,7 +202,15 @@ class AudioDatasetSourceConfig:
         else:
             raise ValueError(f"Unknown split {split}")
 
-        return [str(m) for pat in urls for m in StoragePath(pat).expand_glob()]
+        def fsspec_expand_glob(url):
+            if "*" in url:
+                fs = url_to_fs(url)[0]
+                return fs.glob(url)
+            else:
+                return [url]
+
+        urls = [globbed for pat in urls for url in braceexpand.braceexpand(pat) for globbed in fsspec_expand_glob(url)]
+        return urls
 
 
 @dataclass

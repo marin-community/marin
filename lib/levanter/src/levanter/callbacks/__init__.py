@@ -12,7 +12,6 @@ from typing import Optional
 import wandb
 
 import jax
-from rigging.filesystem import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
@@ -27,10 +26,11 @@ from levanter.callbacks._metrics import (
 from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import _flush_while_waiting, profile
-from levanter.data.loader import DataLoader
+from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
+from levanter.utils.fsspec_utils import mkdirs
 from levanter.utils.jax_utils import barrier_sync
 from levanter.utils.logging import save_xla_dumps_to_wandb
 
@@ -171,7 +171,7 @@ def profile_ctx(
     logger.info("Starting profiler.")
 
     # Ensure destination exists (handles both local and remote filesystems)
-    StoragePath(path).mkdirs()
+    mkdirs(path)
 
     if device_profile:
         jax.profiler.start_trace(

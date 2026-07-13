@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem import open_url
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -58,8 +58,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
-from levanter.data.dataset import AsyncDataset
-from levanter.data.loader import DataLoader
+from levanter.data import AsyncDataset, DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
 from levanter.distributed import DistributedConfig
 from levanter.grad_accum import microbatched
@@ -69,8 +68,7 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
-from levanter.utils import cloud_utils
-from levanter.utils.hardware_topology import hardware_topology_summary
+from levanter.utils import cloud_utils, fsspec_utils
 from levanter.utils.jax_utils import zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
@@ -368,7 +366,7 @@ class Trainer:
             raise RuntimeError("Trainer is already entered")
 
         self._cmanagers = [
-            levanter.tracker.current_tracker(self.tracker),
+            levanter.current_tracker(self.tracker),
             haliax.partitioning.set_mesh(self.device_mesh),
             hax.axis_mapping(self.parameter_axis_mapping),
         ]
@@ -424,7 +422,7 @@ class Trainer:
 
         load_checkpoint = self.config.load_checkpoint
         # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
+        if load_checkpoint is True and not any(fsspec_utils.exists(path) for path in checkpoint_search_paths):
             raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
         elif load_checkpoint is None:
             load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
@@ -578,9 +576,7 @@ class Trainer:
 
     def _add_default_hooks(self):
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
-        self.add_hook(
-            levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
-        )
+        self.add_hook(levanter.callbacks.log_step_info(self.config.num_train_steps), every=1)
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
 
@@ -752,9 +748,11 @@ class Trainer:
         artifact_path = dir / name
 
         if isinstance(artifact, str):
-            StoragePath(str(artifact_path)).write_text(artifact, compression="infer")
+            with open_url(str(artifact_path), "w", compression="infer") as f:
+                f.write(artifact)
         else:
-            StoragePath(str(artifact_path)).write_bytes(artifact, compression="infer")
+            with open_url(str(artifact_path), "wb", compression="infer") as f:
+                f.write(artifact)
 
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 
@@ -928,7 +926,6 @@ class TrainerConfig:
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
-        levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.require_accelerator is None:
             self.require_accelerator = not sys.platform.startswith("darwin")

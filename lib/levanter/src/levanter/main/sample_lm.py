@@ -14,8 +14,6 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
-import levanter.config
-import levanter.tracker
 from levanter.callbacks import profile_ctx
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
@@ -104,7 +102,7 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
 
 
 def main(config: SampleLmConfig):
-    levanter.trainer.initialize(config)
+    levanter.initialize(config)
     tok_string: str | None = config.tokenizer
     if tok_string is None and config.hf_checkpoint is not None:
         # If we have an HF checkpoint, we can load the tokenizer from it
@@ -214,7 +212,7 @@ def main(config: SampleLmConfig):
                     ]
                     print(f"Tokens with text for sequence {seq_id}: {tokens_with_text}")
 
-    levanter.tracker.current_tracker().finish()
+    levanter.current_tracker().finish()
 
 
 if __name__ == "__main__":

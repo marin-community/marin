@@ -19,7 +19,6 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
-import levanter.config
 import levanter.tracker
 from levanter.analysis.model_perplexity import (
     ModelScoreReportBuilder,
@@ -41,7 +40,7 @@ from levanter.analysis.perplexity_gap import (
 )
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
-from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text import DatasetComponent
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -145,7 +144,7 @@ class _ModelRunner:
 
 
 def score_main(config: ModelPerplexityConfig) -> None:
-    levanter.trainer.initialize(config)
+    levanter.initialize(config)
     if not config.datasets:
         raise ValueError("Model perplexity scoring requires at least one dataset.")
 
@@ -221,7 +220,7 @@ def score_main(config: ModelPerplexityConfig) -> None:
 
 
 def main(config: GapFinderConfig) -> None:
-    levanter.trainer.initialize(config)
+    levanter.initialize(config)
     if not config.datasets:
         raise ValueError("Gap finder requires at least one dataset.")
 

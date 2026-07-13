@@ -9,9 +9,12 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstr
 # Convenience shorthand for batch sharding. Keep this aligned with Levanter's
 # default distributed batch mapping, which includes the cross-slice axis.
 Pbatch = P(("replica_dcn", "data"))
-Pembed_vocab = P("model", Pbatch[0])
-Plm_head = P(Pbatch[0], "model")
-Plogits = P(Pbatch[0], None, "model")
+# Params drop ``replica_dcn`` (shard over ``data`` only) so they *replicate* across the
+# cross-node replica axis, while ``Pbatch`` keeps it for the batch/activation split (each
+# replica processes a different data slice). At replica_axis_size=1 this is a no-op.
+Pembed_vocab = P("model", "data")
+Plm_head = P("data", "model")
+Plogits = P("data", None, "model")
 
 
 def unshard(x: jax.Array) -> jax.Array:

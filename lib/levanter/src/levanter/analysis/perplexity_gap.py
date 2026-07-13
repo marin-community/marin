@@ -4,18 +4,19 @@
 import heapq
 import itertools
 import json
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Sequence
 
 import numpy as np
 import regex
-from rigging.filesystem import StoragePath, open_url, prefix_join
+from rigging.filesystem import open_url
 
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text.datasets import DatasetComponent
-from levanter.data.text.formats import SupervisedLmDatasetFormat, TextLmDatasetFormat
+from levanter.data.text import DatasetComponent, SupervisedLmDatasetFormat, TextLmDatasetFormat
 from levanter.tokenizers import MarinTokenizer, _safe_split_for_tokenizer
+from levanter.utils.fsspec_utils import mkdirs
 
 
 LOG2E = float(np.log2(np.e))
@@ -880,14 +881,16 @@ def render_report_markdown(summary: dict[str, Any]) -> str:
 
 
 def write_report_files(output_path: str, summary: dict[str, Any]) -> tuple[str, str, str]:
-    summary_path = prefix_join(output_path, "summary.json")
-    report_path = prefix_join(output_path, "report.md")
-    worst_documents_path = prefix_join(output_path, "worst_documents.jsonl")
-    StoragePath(output_path).mkdirs()
+    summary_path = os.path.join(output_path, "summary.json")
+    report_path = os.path.join(output_path, "report.md")
+    worst_documents_path = os.path.join(output_path, "worst_documents.jsonl")
+    mkdirs(output_path)
 
-    StoragePath(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True))
+    with open_url(summary_path, "w") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
 
-    StoragePath(report_path).write_text(render_report_markdown(summary))
+    with open_url(report_path, "w") as f:
+        f.write(render_report_markdown(summary))
 
     with open_url(worst_documents_path, "w") as f:
         for row in worst_document_rows(summary):

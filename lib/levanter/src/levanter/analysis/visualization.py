@@ -9,13 +9,13 @@ from typing import Any, List, Optional
 
 import jax
 import wandb
-from rigging.filesystem import StoragePath
+from rigging.filesystem import open_url
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils
 
 from levanter.callbacks import StepInfo
-from levanter.data.loader import DataLoader
+from levanter.data import DataLoader
 from levanter.tokenizers import MarinTokenizer
 
 
@@ -68,7 +68,8 @@ def visualize_log_probs(
         "</body></html>"
     )
 
-    StoragePath(output_path).write_text(html)
+    with open_url(output_path, "w") as f:
+        f.write(html)
 
 
 def _escape(s: str) -> str:
@@ -244,7 +245,8 @@ def visualize_log_prob_diff(
         "</body></html>"
     )
 
-    StoragePath(output_path).write_text(html_str)
+    with open_url(output_path, "w") as f:
+        f.write(html_str)
 
 
 def compute_and_diff_log_probs(path: str, model, comparison_model, tokenizer, log_prob_fn, test_data, max_docs=128):
