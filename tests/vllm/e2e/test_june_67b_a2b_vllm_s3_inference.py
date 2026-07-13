@@ -10,12 +10,12 @@ Run from the repository root:
 """
 
 import logging
-import math
 import os
 import tempfile
 import time
 import tomllib
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -28,20 +28,21 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
 from .iris import run_remote_test_job
-from .june_67b import InferenceReference, read_inference_reference
+from .reference import (
+    CHECKPOINT_NAME,
+    RETURNED_LOGPROBS,
+    S3_MODEL_URI,
+    InferenceReference,
+    assert_completion_matches_reference,
+    completion_request,
+    read_inference_reference,
+)
 
 logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 30 * 60
 RUNTIME_TIMEOUT = 10 * 60
-MODEL_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/"
-LOGPROBS_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_logprobs.json"
-RETURNED_LOGPROBS = 50
 GPU_COUNT = 8
-# Clean step-42150 dev runs stayed below 0.0052 max probability error and 0.0078 L1
-# across both attention backends, leaving cross-node margin within these bounds.
-MAX_PROBABILITY_ERROR = 0.008
-TOP_PROBABILITY_L1_ERROR = 0.012
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 
@@ -60,7 +61,6 @@ def assert_vllm_logprobs_match_levanter(
     expected_inference: InferenceReference,
     attention_backend: str,
 ) -> None:
-    expected_logprobs = {entry.token_id: entry.logprob for entry in expected_inference.top_logprobs}
     with tempfile.TemporaryDirectory(prefix="june-67b-vllm-") as temp_dir:
         aws_config = Path(temp_dir) / "aws-config"
         # Run:ai ignores Iris's FSSPEC_S3 setting, and CoreWeave rejects its default path-style requests.
@@ -68,8 +68,8 @@ def assert_vllm_logprobs_match_levanter(
         os.environ["AWS_CONFIG_FILE"] = str(aws_config)
 
         model = ModelConfig(
-            name="june-67b-a2b-step-42150-bf16",
-            path=MODEL_URI,
+            name=f"june-67b-a2b-{CHECKPOINT_NAME}-bf16",
+            path=S3_MODEL_URI,
             engine_kwargs={"max_model_len": 128},
         )
         extra_args = [
@@ -88,7 +88,7 @@ def assert_vllm_logprobs_match_levanter(
 
         started = time.monotonic()
         with VllmEnvironment(model=model, timeout_seconds=RUNTIME_TIMEOUT, extra_args=extra_args) as environment:
-            assert environment.model_id == MODEL_URI
+            assert environment.model_id == S3_MODEL_URI
             ready = time.monotonic()
             logger.info("vLLM startup logs:\n%s", environment.logs_tail(max_lines=1_000))
             rank_metrics = []
@@ -98,46 +98,13 @@ def assert_vllm_logprobs_match_levanter(
                     f"{environment.server_url}/completions",
                     # Pin every request because vLLM's DP load balancer otherwise chooses the rank.
                     headers={"X-data-parallel-rank": str(rank)},
-                    json={
-                        "model": environment.model_id,
-                        "prompt": expected_inference.prompt,
-                        "add_special_tokens": False,
-                        "temperature": 0.0,
-                        "max_tokens": 1,
-                        "logprobs": RETURNED_LOGPROBS,
-                        "return_tokens_as_token_ids": True,
-                        "return_token_ids": True,
-                    },
+                    json={"model": environment.model_id, **completion_request(expected_inference)},
                     timeout=300,
                 )
                 response.raise_for_status()
                 choice = response.json()["choices"][0]
-                assert choice["prompt_token_ids"] == expected_inference.prompt_token_ids
-                assert choice["token_ids"] == [expected_inference.top_logprobs[0].token_id]
-                actual_logprobs = {
-                    int(token.removeprefix("token_id:")): logprob
-                    for token, logprob in choice["logprobs"]["top_logprobs"][0].items()
-                }
-                missing_token_ids = expected_logprobs.keys() - actual_logprobs.keys()
-                assert not missing_token_ids, sorted(missing_token_ids)
-                max_logprob_error = max(
-                    abs(actual_logprobs[token_id] - expected_logprob)
-                    for token_id, expected_logprob in expected_logprobs.items()
-                )
-                probability_errors = [
-                    abs(math.exp(actual_logprobs[token_id]) - math.exp(expected_logprob))
-                    for token_id, expected_logprob in expected_logprobs.items()
-                ]
-                rank_metric = {
-                    "rank": rank,
-                    "seconds": time.monotonic() - request_started,
-                    "max_abs_logprob_error": max_logprob_error,
-                    "max_abs_probability_error": max(probability_errors),
-                    "top_probability_l1_error": sum(probability_errors),
-                }
-                rank_metrics.append(rank_metric)
-                assert rank_metric["max_abs_probability_error"] <= MAX_PROBABILITY_ERROR, rank_metric
-                assert rank_metric["top_probability_l1_error"] <= TOP_PROBABILITY_L1_ERROR, rank_metric
+                rank_metric = assert_completion_matches_reference(expected_inference, choice, lane=rank)
+                rank_metrics.append(replace(rank_metric, seconds=time.monotonic() - request_started))
 
             logger.info(
                 "vLLM inference: %s",
@@ -154,7 +121,7 @@ def test_h100_node_matches_levanter_logprobs(
     marin_gpu_client: IrisClient,
     vllm_attention_backend: str,
 ) -> None:
-    expected_inference = read_inference_reference(LOGPROBS_RESOURCE)
+    expected_inference = read_inference_reference()
     run_remote_test_job(
         marin_gpu_client,
         JobRequest(

@@ -12,14 +12,17 @@ import pytest
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
 
-from . import june_67b
+from . import export_model, june_67b, reference
 
 MARIN_ROOT = Path(__file__).resolve().parents[3]
 MARIN_GPU_CLUSTER = "cw-us-east-02a"
+MARIN_TPU_CLUSTER = "marin"
 VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
 
 # Iris serializes the direct test callable by value; register its shared test helper too.
 cloudpickle.register_pickle_by_value(june_67b)
+cloudpickle.register_pickle_by_value(reference)
+cloudpickle.register_pickle_by_value(export_model)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -50,4 +53,10 @@ def marin_gpu_client() -> Iterator[IrisClient]:
             client = stack.enter_context(open_iris_client(cluster_name=MARIN_GPU_CLUSTER, workspace=MARIN_ROOT))
         except ConfigException as exc:
             pytest.skip(f"CoreWeave cluster {MARIN_GPU_CLUSTER!r} unavailable (no kube-config): {exc}")
+        yield client
+
+
+@pytest.fixture
+def marin_tpu_client() -> Iterator[IrisClient]:
+    with open_iris_client(cluster_name=MARIN_TPU_CLUSTER, workspace=MARIN_ROOT) as client:
         yield client

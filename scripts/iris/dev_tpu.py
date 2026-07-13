@@ -30,6 +30,7 @@ from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -707,6 +708,16 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
 @click.option("--no-sync", is_flag=True, help="Skip the initial sync after allocation.")
 @click.option("--setup-env/--no-setup-env", default=True, help="Install/update the remote uv environment after sync.")
 @click.option("--zone", type=str, default=None, help="Restrict the holder job to a specific zone.")
+@click.option("--cpu", type=float, default=0.5, show_default=True, help="Host CPU cores reserved by the holder job.")
+@click.option("--ram", default="1GB", show_default=True, help="Host RAM reserved by the holder job.")
+@click.option("--disk", default="5GB", show_default=True, help="Host disk reserved by the holder job.")
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default="interactive",
+    show_default=True,
+    help="Iris scheduler priority band for the holder job.",
+)
 @click.option("--timeout", type=int, default=900, show_default=True, help="Seconds to wait for workers to come up.")
 @click.pass_context
 def allocate(
@@ -716,6 +727,10 @@ def allocate(
     no_sync: bool,
     setup_env: bool,
     zone: str | None,
+    cpu: float,
+    ram: str,
+    disk: str,
+    priority: str,
     timeout: int,
 ) -> None:
     """Allocate a dev TPU session and hold it until Ctrl-C."""
@@ -743,7 +758,7 @@ def allocate(
     try:
         client_cm = controller_client(ctx.obj.config_file)
         client = client_cm.__enter__()
-        resources = ResourceSpec(cpu=0.5, memory="1GB", disk="5GB", device=tpu_device(tpu_type))
+        resources = ResourceSpec(cpu=cpu, memory=ram, disk=disk, device=tpu_device(tpu_type))
         constraints = []
         if zone:
             constraints.append(zone_constraint(zone))
@@ -753,13 +768,24 @@ def allocate(
                 name=f"dev-tpu-{session_name}",
                 resources=resources,
                 constraints=constraints or None,
+                priority_band=priority_band_value(priority),
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
 
         workers = wait_for_workers(job, client, timeout=timeout, project=project)
+        ssh_ready = True
         for worker in workers:
-            ensure_ssh_access(worker.node)
+            try:
+                ensure_ssh_access(worker.node)
+            except subprocess.CalledProcessError:
+                ssh_ready = False
+                logger.warning(
+                    "Direct SSH is unavailable for %s. The allocation remains usable through "
+                    "`iris task exec %s -- <command>`.",
+                    worker.node.name,
+                    worker.task_id,
+                )
 
         state = DevTpuState(
             session_name=session_name,
@@ -771,6 +797,8 @@ def allocate(
         save_state(state_file, state)
 
         if not no_sync:
+            if not ssh_ready:
+                raise click.ClickException("Initial sync requires direct SSH; rerun allocate with --no-sync")
             sync_all_workers(workers, local_path)
             if setup_env:
                 setup_all_workers(workers)
