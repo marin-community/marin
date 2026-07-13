@@ -246,10 +246,6 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
 # those lines hurts readability far more than the length limit helps.
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
-# The comment-filter tests carry review-bot comment bodies verbatim, down to the emoji, the
-# typographic dashes, and the long badge/job URLs the bots emit. Normalizing or rewrapping
-# those would stop the fixtures matching what the classifier actually sees on a PR.
-"tests/ci/test_wait_for.py" = ["RUF001", "E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
