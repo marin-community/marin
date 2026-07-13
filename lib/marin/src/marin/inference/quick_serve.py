@@ -1,16 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Quick single-model vLLM inference server for an Iris TPU slice.
+"""Quick single-model vLLM inference server for an Iris TPU or GPU slice.
 
-A quick-serve job boots one native vLLM server on a single-host TPU slice, fronts
-it with a browser dashboard + OpenAI-compatible reverse proxy, and registers the
+A quick-serve job boots one native vLLM server on a single-host slice, fronts it
+with a browser dashboard + OpenAI-compatible reverse proxy, and registers the
 dashboard as an Iris endpoint so it is reachable through the controller proxy. The
 job shuts itself down after a wall-clock timeout so a forgotten server does not sit
 on a slice indefinitely.
 
-This module holds the serving config and the in-job entrypoint that boots vLLM on
-the slice; the ``marin-serve`` launcher CLI is a separate module.
+On the TPU path vLLM is the TPU-vLLM stack installed in the workspace venv; on the
+GPU path stock CUDA vLLM is provisioned in an isolated uv-tool env (see
+:func:`select_vllm_launcher`). This module holds the serving config and the in-job
+entrypoint that boots vLLM on the slice; the ``marin-serve`` launcher CLI is a
+separate module.
 """
 
 import json
@@ -38,7 +41,13 @@ from marin.inference.quick_serve_dashboard import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.vllm_server import VllmEnvironment, _is_object_store_path
+from marin.inference.vllm_server import (
+    IsolatedCudaVllm,
+    VllmEnvironment,
+    VllmLauncher,
+    WorkspaceVllm,
+    _is_object_store_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +79,11 @@ class QuickServeConfig:
     gpu_count: int | None = None
     """GPU count per node when serving on a GPU slice. Its presence selects the GPU path:
     ``num_chips`` is taken directly from it rather than a TPU topology lookup."""
+    vllm_version: str | None = None
+    """When set, provision stock CUDA vLLM at this exact version in an isolated uv-tool
+    env (see :class:`IsolatedCudaVllm`) — the GPU serving path. ``None`` serves from the
+    vLLM already on the venv/image ``PATH``: the workspace TPU-vLLM stack, or a prebuilt
+    ``--task-image``."""
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     """Proxy access mode. PRIVATE (cluster identity only) or LINK (a scoped capability
     URL, minted CLI-side, that anyone holding the link can call off-cluster)."""
@@ -103,6 +117,19 @@ class QuickServeConfig:
         if self.gpu_count is not None:
             return f"{self.gpu_type}x{self.gpu_count}" if self.gpu_type else f"gpux{self.gpu_count}"
         return self.tpu_type or "unknown"
+
+
+def select_vllm_launcher(config: QuickServeConfig) -> VllmLauncher:
+    """Pick how to launch vLLM: an isolated CUDA vLLM, or the workspace ``vllm``.
+
+    A set ``vllm_version`` provisions stock CUDA vLLM in a throwaway uv-tool env so
+    its torch/CUDA tree never enters the Marin workspace lock — the GPU serving
+    path. Otherwise vLLM comes from the active venv/image: the TPU-vLLM stack, or a
+    prebuilt ``--task-image`` that ships its own vLLM.
+    """
+    if config.vllm_version:
+        return IsolatedCudaVllm(version=config.vllm_version)
+    return WorkspaceVllm()
 
 
 def select_tensor_parallel_size(
@@ -291,6 +318,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
         port=internal_port,
         timeout_seconds=config.vllm_startup_timeout_seconds,
         extra_args=extra_args,
+        launcher=select_vllm_launcher(config),
     ) as env:
         if env.model_id is None:
             raise RuntimeError("vLLM server did not report a model id.")

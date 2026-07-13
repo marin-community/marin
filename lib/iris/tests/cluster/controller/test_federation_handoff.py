@@ -13,6 +13,7 @@ full-resync set-replacement path.
 """
 
 from contextlib import ExitStack
+from unittest.mock import Mock
 
 import pytest
 from connectrpc.code import Code
@@ -24,11 +25,17 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.service import WORKDIR_FILE_OFFLOAD_THRESHOLD, ControllerServiceImpl, _peer_status
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.service import (
+    AVAILABILITY_METRIC_VERSION,
+    WORKDIR_FILE_OFFLOAD_THRESHOLD,
+    ControllerServiceImpl,
+    _peer_status,
+)
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName, WellKnownAttribute
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
@@ -55,6 +62,11 @@ _PEER_IDENTITY = VerifiedIdentity(user_id="parent-cluster", role="admin")
 
 _USER = "test-user"
 
+# A handoff reaches the peer over the wire, so the peer's ``launch_job`` sees a
+# non-None ctx and runs the checks it reserves for wire clients (the client-freshness
+# gate). Delivering with ctx=None would model an in-process call and hide them.
+_WIRE_CTX = object()
+
 
 class _InProcessPeerConnection:
     """A ``PeerConnection`` that delegates straight to a peer's in-process service.
@@ -78,7 +90,7 @@ class _InProcessPeerConnection:
     ) -> controller_pb2.Controller.LaunchJobResponse:
         self.launch_calls += 1
         with identity_scope(_PEER_IDENTITY):
-            return self._service.launch_job(request, None)
+            return self._service.launch_job(request, _WIRE_CTX)
 
     def federation_sync(
         self, request: controller_pb2.Controller.FederationSyncRequest
@@ -103,6 +115,28 @@ class _UnreachablePeerConnection(_InProcessPeerConnection):
 
     def terminate_job(self, job_id: JobName) -> None:
         raise ConnectError(Code.NOT_FOUND, "no such job")
+
+
+class _FullGpuPeerConnection(_InProcessPeerConnection):
+    """A reachable peer advertising an H100 backend with no free chips.
+
+    The queue's waiting case: the peer can host the shape (so submit queues the job
+    instead of rejecting it as unschedulable), but its availability metric reports
+    nothing free, so the tick's federation pass never promotes it.
+    """
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        summary = controller_pb2.Controller.BackendSummary(
+            backend_id="default",
+            advertised_attributes={
+                WellKnownAttribute.DEVICE_TYPE: controller_pb2.StringList(values=["gpu"]),
+                WellKnownAttribute.DEVICE_VARIANT: controller_pb2.StringList(values=["h100"]),
+            },
+        )
+        summary.availability.version = AVAILABILITY_METRIC_VERSION
+        summary.availability.observation_epoch_ms = 1
+        summary.availability.amounts["h100"] = 0
+        return [summary]
 
 
 class _RefusingPeerConnection(_InProcessPeerConnection):
@@ -239,6 +273,60 @@ def test_a_federated_job_carries_its_externalized_workdir_files_to_the_peer(tmp_
         manager.sync_once()
 
         assert peer_service._bundle_store.get(content_id(big)) == big
+
+
+def test_a_federated_job_carries_its_inline_workdir_files_to_the_peer(tmp_path, log_client):
+    """A workdir file small enough to stay inline is in no blob store, so only the
+    handoff request itself can carry it.
+
+    A queued handoff is rebuilt from the parent's stored job state, which keeps these
+    files outside ``entrypoint_json``; a reconstruction that forgets them delivers a
+    ``from_callable`` job with no ``_callable_runner.py`` and the peer's task dies on
+    ``can't open file '/app/_callable_runner.py'``.
+    """
+    runner = b"import pickle; pickle.load(open('_callable.pkl', 'rb'))()"
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-inline-workdir")
+        request.entrypoint.workdir_files["_callable_runner.py"] = runner
+        parent_service.launch_job(request, None)
+        promote_queued_federation(manager, parent_state)
+        manager.sync_once()
+
+        job_id = JobName.root(_USER, "fed-inline-workdir")
+        with peer_state._db.read_snapshot() as tx:
+            template = tx.caches[RunTemplatesProjection].get(tx, job_id)
+        assert template is not None
+        assert dict(template.entrypoint.workdir_files) == {"_callable_runner.py": runner}
+
+
+def test_a_federated_job_carries_its_container_profile_to_the_peer(tmp_path, log_client):
+    """The peer runs the job under the profile the parent authorized.
+
+    An elevated profile is the parent's decision (it gated the submitter), and the peer
+    trusts it on a received handoff — so the handoff must state it. Losing it silently
+    downgrades the task to the default profile, and a nested runtime (gVisor) that needs
+    it fails on the peer.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        request = _cluster_pinned_request("fed-profile")
+        request.container_profile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
+        parent_service.launch_job(request, None)
+        promote_queued_federation(manager, parent_state)
+        manager.sync_once()
+
+        job_id = JobName.root(_USER, "fed-profile")
+        with peer_state._db.read_snapshot() as tx:
+            template = tx.caches[RunTemplatesProjection].get(tx, job_id)
+        assert template is not None
+        assert template.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
 
 
 # ---------------------------------------------------------------------------
@@ -561,39 +649,86 @@ def test_dashboard_reads_expose_cluster_and_filter_by_it(tmp_path, log_client):
         assert _list("no-such-peer") == set()
 
 
-def test_federated_pending_reason_reflects_awaiting_acceptance(tmp_path, log_client):
-    """While a federated job is still queued (its pinned peer is unreachable, so it is
-    never promoted/delivered), the status RPCs expose the pre-registration state: the
-    posture says the peer has not accepted, the task count is the requested replica
-    count (there are no task rows yet), and the pending reason says the job is awaiting
-    the peer — on both the detail path and the batch-loading list path."""
+def test_federated_pending_reason_distinguishes_queued_from_delivered(tmp_path, log_client):
+    """A job waiting in the federation queue reads as queued, not as awaiting the peer.
+
+    Both postures are ``PENDING_SCHEDULING``, but they are the two sides of the queue:
+    a queued job waits for a peer to report free capacity (nothing has been sent), while
+    a promoted one waits for the peer to accept what was sent. An operator watching a
+    job that sits for hours needs to know which. The task count is the requested replica
+    count in both (no task rows yet) — checked on the detail path and the batch-loading
+    list path.
+    """
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        _attach_federation(parent_service, _UnreachablePeerConnection(peer_service))
+        manager = _attach_federation(parent_service, _UnreachablePeerConnection(peer_service))
 
         response = parent_service.launch_job(_cluster_pinned_request("awaiting-ack", replicas=3), None)
         job_id = JobName.from_wire(response.job_id)
-        # The pinned peer is unreachable, so the job stays QUEUED (never promoted).
+        # Submit only queues: no tick has run, so the job is not assigned to a peer yet.
         assert _handle(parent_state, job_id).handoff_state == int(HandoffState.QUEUED_HANDOFF)
         assert query_tasks_for_job(parent_state, job_id) == []
+
+        def _detail():
+            return parent_service.get_job_status(
+                controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+            ).job
+
+        def _listed():
+            (job,) = parent_service.list_jobs(
+                controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(cluster="cw")),
+                None,
+            ).jobs
+            return job
+
+        for status in (_detail(), _listed()):
+            assert status.peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING
+            assert status.task_count == 3
+            assert status.pending_reason == "Queued for peer cw to report free capacity"
+
+        # The tick promotes it to its pinned peer, whose delivery then fails transiently.
+        # The same job now reads as awaiting the peer's acceptance: it has been sent.
+        promote_queued_federation(manager, parent_state)
+        assert _handle(parent_state, job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+        for status in (_detail(), _listed()):
+            assert status.peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING
+            assert status.pending_reason == "Awaiting acceptance by peer cw"
+
+
+def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, log_client):
+    """A GPU job the peer advertises but has no free chips for stays queued, undelivered.
+
+    The point of the queue: the peer can host the shape (so submit admits the job rather
+    than failing it as unschedulable), but its availability metric says nothing is free,
+    so the tick's pass places it nowhere. Nothing is sent to the peer, and the job names
+    no peer — the tick stamps a cluster coordinate only when it promotes.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _FullGpuPeerConnection(peer_service)
+        manager = _attach_federation(parent_service, connection)
+        # No local backend can host an H100 job, so the unpinned job classifies as QUEUE
+        # (a locally feasible job would just run here).
+        parent_service._controller.provider.autoscaler = Mock(job_feasibility=Mock(return_value="no local GPU backend"))
+
+        request = make_direct_job_request("no-room", replicas=1)
+        request.resources.device.CopyFrom(job_pb2.DeviceConfig(gpu=job_pb2.GpuDevice(variant="h100", count=8)))
+        response = parent_service.launch_job(request, None)
+        job_id = JobName.from_wire(response.job_id)
+
+        promote_queued_federation(manager, parent_state)
+
+        handle = _handle(parent_state, job_id)
+        assert handle.handoff_state == int(HandoffState.QUEUED_HANDOFF)
+        assert handle.peer_id == ""
+        assert connection.launch_calls == 0
 
         status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
         ).job
-        assert status.peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING
-        assert status.task_count == 3
-        assert status.pending_reason == "Awaiting acceptance by peer cw"
-
-        # The list path loads the handles in bulk and reports the same posture,
-        # count, and reason.
-        (listed,) = parent_service.list_jobs(
-            controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(cluster="cw")),
-            None,
-        ).jobs
-        assert listed.peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING
-        assert listed.task_count == 3
-        assert listed.pending_reason == "Awaiting acceptance by peer cw"
+        assert status.pending_reason == "Queued for a federation peer to report free capacity"
 
 
 @pytest.mark.parametrize(
@@ -873,14 +1008,14 @@ def test_peer_admission_dedups_a_redrive_and_rejects_a_collision(tmp_path, log_c
         # First receipt from requester "parent": the peer materializes it locally as
         # an ordinary job with a RECEIVED handle recording the requester.
         with identity_scope(_PEER_IDENTITY):
-            first = peer_service.launch_job(_received_handoff_request("fed-job", "parent"), None)
+            first = peer_service.launch_job(_received_handoff_request("fed-job", "parent"), _WIRE_CTX)
         job_id = JobName.from_wire(first.job_id)
         assert len(query_tasks_for_job(peer_state, job_id)) == 1
 
         # (a) A re-drive from the SAME requester is idempotent: same job, no dup tasks
         # (the boot-recovery / retry path).
         with identity_scope(_PEER_IDENTITY):
-            again = peer_service.launch_job(_received_handoff_request("fed-job", "parent"), None)
+            again = peer_service.launch_job(_received_handoff_request("fed-job", "parent"), _WIRE_CTX)
         assert again.job_id == first.job_id
         assert len(query_tasks_for_job(peer_state, job_id)) == 1
 
@@ -888,7 +1023,7 @@ def test_peer_admission_dedups_a_redrive_and_rejects_a_collision(tmp_path, log_c
         # collision the parent must see — rejected, not silently bound to the wrong job.
         with identity_scope(_PEER_IDENTITY):
             with pytest.raises(ConnectError) as exc:
-                peer_service.launch_job(_received_handoff_request("fed-job", "other-parent"), None)
+                peer_service.launch_job(_received_handoff_request("fed-job", "other-parent"), _WIRE_CTX)
         assert exc.value.code == Code.ALREADY_EXISTS
 
         # (c) A handoff colliding with a purely LOCAL job (no RECEIVED handle) is
@@ -896,7 +1031,7 @@ def test_peer_admission_dedups_a_redrive_and_rejects_a_collision(tmp_path, log_c
         peer_service.launch_job(make_direct_job_request("local-job", replicas=1), None)
         with identity_scope(_PEER_IDENTITY):
             with pytest.raises(ConnectError) as exc:
-                peer_service.launch_job(_received_handoff_request("local-job", "parent"), None)
+                peer_service.launch_job(_received_handoff_request("local-job", "parent"), _WIRE_CTX)
         assert exc.value.code == Code.ALREADY_EXISTS
 
 
