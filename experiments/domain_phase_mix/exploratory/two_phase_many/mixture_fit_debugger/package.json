@@ -1,0 +1,22 @@
+{
+  "name": "marin-mixture-fit-debugger",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "export-data": "uv run ../export_mixture_fit_observatory.py",
+    "check": "tsc --noEmit",
+    "build:ui": "vite build",
+    "build": "npm run export-data && npm run check && npm run build:ui",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/d3": "^7.4.3",
+    "typescript": "^5.8.3",
+    "vite": "^6.2.6",
+    "vite-plugin-singlefile": "^2.2.0"
+  }
+}
