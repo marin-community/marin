@@ -27,15 +27,13 @@ from iris.rpc import job_pb2
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
-from .iris import run_remote_test_job
-from .june_67b import InferenceReference, read_inference_reference
+from .june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
+from .remote_job import run_remote_test_job
 
 logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 30 * 60
 RUNTIME_TIMEOUT = 10 * 60
-MODEL_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-18000/hf-bf16-vllm/b3d7310dd890c8b/"
-LOGPROBS_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_18000_logprobs.json"
 RETURNED_LOGPROBS = 50
 GPU_COUNT = 8
 # Clean e2es stayed below these bounds; one Triton dev node measured 0.00772
@@ -57,7 +55,7 @@ def _vllm_setup_script() -> str:
 
 
 def assert_vllm_logprobs_match_levanter(
-    expected_inference: InferenceReference,
+    expected_inference: InferenceGolden,
     attention_backend: str,
 ) -> None:
     expected_logprobs = {entry.token_id: entry.logprob for entry in expected_inference.top_logprobs}
@@ -68,8 +66,8 @@ def assert_vllm_logprobs_match_levanter(
         os.environ["AWS_CONFIG_FILE"] = str(aws_config)
 
         model = ModelConfig(
-            name="june-67b-a2b-step-18000-bf16",
-            path=MODEL_URI,
+            name=JUNE_67B_A2B.vllm_model_name,
+            path=JUNE_67B_A2B.export_uri,
             engine_kwargs={"max_model_len": 128},
         )
         extra_args = [
@@ -88,7 +86,7 @@ def assert_vllm_logprobs_match_levanter(
 
         started = time.monotonic()
         with VllmEnvironment(model=model, timeout_seconds=RUNTIME_TIMEOUT, extra_args=extra_args) as environment:
-            assert environment.model_id == MODEL_URI
+            assert environment.model_id == JUNE_67B_A2B.export_uri
             ready = time.monotonic()
             logger.info("vLLM startup logs:\n%s", environment.logs_tail(max_lines=1_000))
             rank_metrics = []
@@ -154,7 +152,7 @@ def test_h100_node_matches_levanter_logprobs(
     marin_gpu_client: IrisClient,
     vllm_attention_backend: str,
 ) -> None:
-    expected_inference = read_inference_reference(LOGPROBS_RESOURCE)
+    expected_inference = read_inference_golden(JUNE_67B_A2B.inference_golden_path)
     run_remote_test_job(
         marin_gpu_client,
         JobRequest(

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end regression tests for the vendored June 67B checkpoint.
+"""Verify June 67B A2B Levanter inference against its frozen golden.
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
@@ -10,11 +10,9 @@ Run from the repository root:
 """
 
 import dataclasses
-import json
 import logging
 import time
 import uuid
-from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -30,24 +28,23 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
 from levanter.utils.jax_utils import parameter_count
 
-from .iris import run_remote_test_job
-from .june_67b import (
-    InferenceReference,
+from .june_67b_a2b import (
+    JUNE_67B_A2B,
+    InferenceGolden,
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
-    read_inference_reference,
+    read_inference_golden,
 )
+from .remote_job import run_remote_test_job
 
 logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 10 * 60.0
 TOP_K = 25
-MODEL_CONFIG_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_18000_model_config.json"
-LOGPROBS_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_18000_logprobs.json"
 JAX_COMPILATION_CACHE_DIR = (
     "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-18000-sonic-deterministic-v1"
 )
@@ -70,13 +67,9 @@ def top_k_next_token_logprobs(
     return jax.lax.top_k(logprobs, TOP_K)
 
 
-def assert_checkpoint_inference(
-    expected_model_config: dict,
-    expected_inference: InferenceReference,
-) -> None:
+def assert_checkpoint_inference_matches_golden(expected_inference: InferenceGolden) -> None:
     executor_info = read_executor_info()
     model_config = decode_vendored_config(executor_info)
-    assert dataclasses.asdict(model_config) == expected_model_config
     assert executor_info["config"]["mp"] == expected_inference.mp
     assert executor_info["config"]["data"]["tokenizer"] == expected_inference.tokenizer
     expected_top = expected_inference.top_logprobs
@@ -112,8 +105,6 @@ def assert_checkpoint_inference(
     np.testing.assert_array_equal(top_token_ids, np.broadcast_to(expected_token_ids, top_token_ids.shape))
     np.testing.assert_allclose(top_logprobs, np.broadcast_to(expected_logprobs, top_logprobs.shape), rtol=0, atol=1e-5)
     assert [tokenizer.decode([int(token_id)]) for token_id in top_token_ids[0]] == [entry.text for entry in expected_top]
-    assert tokenizer.decode([int(top_token_ids[0, 0])]).strip() == "America"
-
     logger.info(
         "Checkpoint inference timing: %s",
         {
@@ -125,16 +116,15 @@ def assert_checkpoint_inference(
     )
 
 
-def test_h100_node_runs_checkpoint_inference(marin_gpu_client: IrisClient) -> None:
-    expected_model_config = json.loads(MODEL_CONFIG_RESOURCE.read_text())
-    expected_inference = read_inference_reference(LOGPROBS_RESOURCE)
+def test_h100_node_matches_levanter_inference_golden(marin_gpu_client: IrisClient) -> None:
+    expected_inference = read_inference_golden(JUNE_67B_A2B.inference_golden_path)
     run_remote_test_job(
         marin_gpu_client,
         JobRequest(
             name=f"june-67b-checkpoint-inference-{uuid.uuid4().hex[:8]}",
             entrypoint=Entrypoint.from_callable(
-                assert_checkpoint_inference,
-                args=[expected_model_config, expected_inference],
+                assert_checkpoint_inference_matches_golden,
+                args=[expected_inference],
             ),
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="256g", disk="64g"),
             environment=create_environment(

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""BF16 Hugging Face export regression for the June 67B checkpoint.
+"""Reproduce the June 67B A2B BF16 export and verify its persisted digest.
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
@@ -32,19 +32,18 @@ from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
-from .iris import run_remote_test_job
-from .june_67b import (
+from .june_67b_a2b import (
+    JUNE_67B_A2B,
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
 )
+from .remote_job import run_remote_test_job
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
-EXPECTED_EXPORT_SHA256 = "b3d7310dd890c8bcb201d9ebbcd65d31176a7a1aeff65d33b76cfe880b08915c"
-
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 
 
@@ -94,7 +93,7 @@ def _tree_sha256(export_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def assert_checkpoint_bf16_export() -> None:
+def assert_checkpoint_reproduces_bf16_export() -> None:
     executor_info = read_executor_info()
     model_config = executor_info["config"]["model"]
     vendored_config = decode_vendored_config(executor_info)
@@ -131,15 +130,15 @@ def assert_checkpoint_bf16_export() -> None:
             )
             _assert_vllm_bf16(export_dir)
             actual_sha256 = _tree_sha256(export_dir)
-            assert actual_sha256 == EXPECTED_EXPORT_SHA256, actual_sha256
+            assert actual_sha256 == JUNE_67B_A2B.export_sha256, actual_sha256
 
 
-def test_h100_node_exports_checkpoint_as_vllm_bf16(marin_gpu_client: IrisClient) -> None:
+def test_h100_node_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient) -> None:
     run_remote_test_job(
         marin_gpu_client,
         JobRequest(
             name=f"june-67b-bf16-export-{uuid.uuid4().hex[:8]}",
-            entrypoint=Entrypoint.from_callable(assert_checkpoint_bf16_export),
+            entrypoint=Entrypoint.from_callable(assert_checkpoint_reproduces_bf16_export),
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="512g", disk="256g"),
             environment=create_environment(extras=["gpu"], sync_packages=["marin-levanter"]),
             # These e2es are manually triggered and highly interactive, so they use production priority.
