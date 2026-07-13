@@ -1000,6 +1000,23 @@ class HFCheckpointConverter(Generic[LevConfig]):
         if self.config_overrides:
             dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
 
+        # transformers 5.x serializes RoPE only under `rope_parameters`; transformers <5.0 reads the
+        # legacy top-level `rope_theta`/`rope_scaling`. Back-fill the legacy keys so exported checkpoints
+        # load with the trained RoPE base frequency on either major version (else <5.0 silently defaults
+        # rope_theta to 10000 -> scrambled positions).
+        rope_parameters = dict_config.get("rope_parameters")
+        if isinstance(rope_parameters, dict) and "rope_theta" not in dict_config:
+            rope_theta = rope_parameters.get("rope_theta")
+            # Per-layer rope_parameters (e.g. Gemma3's full_attention/sliding_attention blocks) carry no
+            # flat rope_theta and have no legacy single-theta representation; leave those configs untouched.
+            if isinstance(rope_theta, (int, float)):
+                dict_config["rope_theta"] = rope_theta
+                rope_scaling = {k: v for k, v in rope_parameters.items() if k != "rope_theta"}
+                # Plain (unscaled) RoPE has no legacy rope_scaling block; only scaled variants (llama3, yarn,
+                # linear, …) need one.
+                if rope_scaling.get("rope_type") != "default":
+                    dict_config["rope_scaling"] = rope_scaling
+
         return dict_config
 
     def save_pretrained(
