@@ -95,9 +95,7 @@ def _fa4_installed() -> bool:
 def default_attention_type() -> AttentionBackend:
     accelerator_type = jax.local_devices()[0].platform
     if accelerator_type == "gpu":
-        if _fa4_installed():
-            return AttentionBackend.FA4
-        return AttentionBackend.NVTE
+        return AttentionBackend.FA4
     elif accelerator_type == "tpu":
         return AttentionBackend.SPLASH
     else:

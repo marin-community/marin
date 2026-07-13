@@ -29,7 +29,6 @@ from levanter.layers.attention import (
     AttentionMask,
     AttentionWithSink,
     _bin_and_group_axes_by_function,
-    _packed_segment_ids_or_error,
     _te_flash_attention,
     _tpu_splash_attention,
     default_attention_type,
@@ -576,6 +575,9 @@ def _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent, *, fa
     ref_out = eqx.filter_jit(ref_fn)((q, k, v))
     assert fa4_out.axes == ref_out.axes
     # tolerances match tests/grug/test_fa4_cute_attention.py (bf16 kernel vs fp32 reference)
+    output_abs_diff = jnp.abs(fa4_out.array.astype(jnp.float32) - ref_out.array.astype(jnp.float32))
+    assert float(jnp.max(output_abs_diff)) <= 0.25
+    assert float(jnp.mean(output_abs_diff)) <= 0.01
     assert_trees_all_close(fa4_out.array, ref_out.array, atol=7e-2, rtol=7e-2)
 
     def loss(fn):
@@ -588,6 +590,9 @@ def _assert_fa4_matches_reference(QPos, KPos, D, q, k, v, mask, cotangent, *, fa
     fa4_grads = eqx.filter_jit(eqx.filter_grad(loss(fa4_fn)))((q, k, v))
     ref_grads = eqx.filter_jit(eqx.filter_grad(loss(ref_fn)))((q, k, v))
     for fa4_grad, ref_grad in zip(jax.tree.leaves(fa4_grads), jax.tree.leaves(ref_grads), strict=True):
+        grad_abs_diff = jnp.abs(fa4_grad.astype(jnp.float32) - ref_grad.astype(jnp.float32))
+        assert float(jnp.max(grad_abs_diff)) <= 0.25
+        assert float(jnp.mean(grad_abs_diff)) <= 0.01
         assert_trees_all_close(fa4_grad, ref_grad, atol=7e-2, rtol=7e-2)
 
 
@@ -661,19 +666,6 @@ def test_fa4_forced_backend_raises_on_unsupported_config(unsupported_kwargs):
         dot_product_attention(
             data.QPos, data.KPos, data.D, data.q, data.k, data.v, attn_backend=AttentionBackend.FA4, **kwargs
         )
-
-
-def test_fa4_packed_segment_id_check_flags_non_contiguous_ids():
-    # AttentionMask segment semantics are id equality, so [0, 1, 0] lets the trailing 0-run
-    # attend back to the first; FA4 metadata cannot express that and must fail loudly.
-    # Pin to CPU: the TPU runtime cannot raise from on-device eqx.error_if assertions.
-    with jax.default_device(jax.devices("cpu")[0]):
-        packed = jnp.asarray([[3, 3, 1, 1, -1, -1]], dtype=jnp.int32)
-        jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(packed))
-
-        non_contiguous = jnp.asarray([[0, 1, 1, 0, -1, -1]], dtype=jnp.int32)
-        with pytest.raises(Exception, match="packed segment_ids"):
-            jax.block_until_ready(jax.jit(_packed_segment_ids_or_error)(non_contiguous))
 
 
 def test_fa4_rejects_non_contiguous_segment_ids():
