@@ -47,7 +47,7 @@ from fray.actor import ActorFuture, ActorHandle, current_actor
 from fray.client import Client, JobHandle
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
-from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig
+from fray.types import ActorConfig, Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, create_environment
 from fray.types import JobStatus as FrayJobStatus
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -1801,6 +1801,22 @@ def _stop_worker_group(client: Client, worker_group: Any) -> None:
         worker_group.shutdown()
 
 
+def _job_environment(
+    pip_dependency_groups: list[str] | None,
+    job_env_vars: dict[str, str] | None,
+) -> EnvironmentConfig | None:
+    """Environment for a coordinator + worker pool job: uv dependency extras + env vars.
+
+    A shared pool's generic workers run every connecting pipeline's stage code,
+    so the pool must be launched with the union of the stages' extras and any
+    env vars they need. Returns None when neither is set, so the job inherits
+    the parent environment exactly as before — existing callers are unaffected.
+    """
+    if not pip_dependency_groups and not job_env_vars:
+        return None
+    return create_environment(extras=pip_dependency_groups, env_vars=job_env_vars)
+
+
 @dataclass(frozen=True)
 class _CoordinatorJobConfig:
     """Serializable config for the coordinator job entrypoint."""
@@ -2136,6 +2152,14 @@ class ZephyrPool:
             pipeline aborts (the pipeline, not the pool).
         max_shard_infra_failures: Max infra failures observed while the same shard is
             in flight before treating the shard payload as a deterministic crasher.
+        pip_dependency_groups: Extra uv dependency groups the coordinator + worker
+            pool job is launched with. Because the pool's generic workers run
+            every connecting pipeline's stage functions, a shared pool must carry
+            the union of the stages' extras (e.g. ``["datakit"]`` so embed/assign
+            workers have luxical/faiss/sklearn/scipy).
+        job_env_vars: Env vars set on the coordinator + worker pool job (e.g.
+            ``{"JAX_PLATFORMS": "cpu"}`` so jax stages don't probe CUDA when the
+            pool spills onto GPU nodes).
     """
 
     client: Client | None = None
@@ -2151,6 +2175,8 @@ class ZephyrPool:
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+    pip_dependency_groups: list[str] | None = None
+    job_env_vars: dict[str, str] | None = None
 
     # Coordinator endpoint, published once the pool is started.
     endpoint: str | None = field(default=None, repr=False)
@@ -2210,6 +2236,7 @@ class ZephyrPool:
                         args=(config_path, endpoint_path),
                     ),
                     resources=self.coordinator_resources,
+                    environment=_job_environment(self.pip_dependency_groups, self.job_env_vars),
                 )
             )
         logger.info("Shared coordinator job submitted: %s", self._serve_job.job_id)
@@ -2323,6 +2350,11 @@ class ZephyrContext:
         max_shard_infra_failures: Maximum infra failures (preemption / heartbeat timeout)
             observed while the same shard was in flight before treating the shard payload
             as a deterministic crasher and aborting. Defaults to ``MAX_SHARD_INFRA_FAILURES``.
+        pip_dependency_groups: Extra uv dependency groups the *dedicated* coordinator
+            + worker job is launched with. Ignored when connected to a shared pool
+            (the ``ZephyrPool`` owns the pool's environment).
+        job_env_vars: Env vars set on the dedicated coordinator + worker job. Also
+            ignored when connected to a shared pool.
     """
 
     client: Client | None = None
@@ -2343,6 +2375,8 @@ class ZephyrContext:
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
     coordinator_endpoint: str | None = None
+    pip_dependency_groups: list[str] | None = None
+    job_env_vars: dict[str, str] | None = None
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -2568,6 +2602,7 @@ class ZephyrContext:
                                 args=(config_path, result_path),
                             ),
                             resources=self.coordinator_resources,
+                            environment=_job_environment(self.pip_dependency_groups, self.job_env_vars),
                         )
                     )
 

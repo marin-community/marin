@@ -89,6 +89,24 @@ provide is rejected up front rather than deadlocking unscheduled. Preempted
 workers are replenished by Iris automatically; the pool lives until the owner
 calls `shutdown()` (or the `with` block exits).
 
+Because the pool's workers are generic — they run every connecting pipeline's
+stage code — the pool must be launched with the environment those stages need,
+rather than inheriting it per-step. Set `pip_dependency_groups` for uv extras
+and `job_env_vars` for environment variables:
+
+```python
+ZephyrPool(
+    name="datakit",
+    max_workers=200,
+    resources=ResourceConfig(cpu=2, ram="8g"),
+    pip_dependency_groups=["datakit"],        # workers get luxical / faiss / sklearn / scipy
+    job_env_vars={"JAX_PLATFORMS": "cpu"},    # jax stages don't probe CUDA on GPU nodes
+)
+```
+
+Both default to `None`, in which case the pool job inherits its parent's
+environment exactly as before.
+
 ## Real Usage
 
 **Wikipedia Processing:**

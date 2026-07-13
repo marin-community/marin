@@ -25,6 +25,7 @@ from zephyr.execution import (
     ZephyrContext,
     ZephyrPool,
     ZephyrWorkerError,
+    _job_environment,
     _PipelineExecution,
 )
 from zephyr.shuffle import ListShard
@@ -217,6 +218,48 @@ def test_pool_context_manager_yields_endpoint_and_tears_down(tmp_path):
     # On block exit the pool is torn down.
     assert pool.endpoint is None
     assert pool._serve_job is None
+    client.shutdown(wait=True)
+
+
+def test_job_environment_none_when_unset_else_carries_extras_and_env_vars():
+    """_job_environment inherits the parent env (None) unless extras/env vars are set."""
+    # Backward-compatible: no extras and no env vars → inherit the parent job's env.
+    assert _job_environment(None, None) is None
+    assert _job_environment([], {}) is None
+
+    env = _job_environment(["datakit"], {"JAX_PLATFORMS": "cpu"})
+    assert env is not None
+    assert env.extras == ["datakit"]
+    assert env.env_vars["JAX_PLATFORMS"] == "cpu"
+
+
+def test_pool_launches_job_with_requested_extras_and_env_vars(tmp_path):
+    """A pool started with pip_dependency_groups / job_env_vars launches its
+    coordinator + worker job carrying those extras and env vars (so the generic
+    pool workers can import each stage's deps)."""
+    client = LocalClient(max_threads=8)
+    submitted = []
+    original_submit = client.submit
+
+    def recording_submit(request, adopt_existing=True):
+        submitted.append(request)
+        return original_submit(request, adopt_existing)
+
+    client.submit = recording_submit
+    pool = ZephyrPool(
+        client=client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"env-{uuid.uuid4().hex[:8]}",
+        pip_dependency_groups=["datakit"],
+        job_env_vars={"JAX_PLATFORMS": "cpu"},
+    )
+    with pool:
+        serve_request = next(r for r in submitted if r.name.endswith("-shared"))
+        assert serve_request.environment is not None
+        assert serve_request.environment.extras == ["datakit"]
+        assert serve_request.environment.env_vars["JAX_PLATFORMS"] == "cpu"
     client.shutdown(wait=True)
 
 
