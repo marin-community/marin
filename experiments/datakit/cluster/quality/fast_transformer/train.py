@@ -5,10 +5,9 @@
 
 Trains a regression head (MSE on the continuous normalized quality score) with
 an internal train/val split for early model selection, then reports the held-out
-oracle metrics using the *same* functions as the fasttext baseline
-(:mod:`experiments.datakit.cluster.quality.v0.ops.eval_holdout`) so the numbers
-are directly comparable: AUC and Spearman of predicted quality vs the Claude
-oracle, plus accuracy / precision / recall / F1 at threshold 0.5.
+oracle metrics (:mod:`experiments.datakit.cluster.quality.fast_transformer.metrics`):
+AUC and Spearman of predicted quality vs the Claude oracle, plus accuracy /
+precision / recall / F1 at threshold 0.5.
 """
 
 import argparse
@@ -30,13 +29,13 @@ from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.data import PackedData, build_remap, encode_texts, pack
 from experiments.datakit.cluster.quality.fast_transformer.inference import data_parallel_shardings, predict
+from experiments.datakit.cluster.quality.fast_transformer.metrics import auc, spearman_rho
 from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastTransformer,
     FastTransformerConfig,
     count_params,
 )
 from experiments.datakit.cluster.quality.fast_transformer.scorer import MODEL_STEM, artifact_names
-from experiments.datakit.cluster.quality.v0.ops.eval_holdout import auc, spearman_rho
 
 logger = logging.getLogger(__name__)
 

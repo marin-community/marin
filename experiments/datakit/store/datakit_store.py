@@ -9,10 +9,9 @@ for the datakit attribute datasets that the global pipelines produce:
     tokenize        per-source ``{id, input_ids}``, dense, sorted by id
     decontam        per-source ``{id, attributes: {contaminated, ...}}``, dense
     cluster_assign  per-source ``{id, cluster_<K>, ...}``, dense
-    quality         per-source ``{id, score: float}``, dense (flat schema;
-                    output of fasttext quality classifier via
-                    ``score_target_label`` path which writes a scalar
-                    directly under ``output_field_name="score"``)
+    quality         per-source ``{id, score, quality_bucket}``, dense, flat schema
+                    (fast-transformer output; ``quality_bucket`` is already the
+                    calibrated fixed-cutpoint bucket, consumed as-is)
     dedup           per-source ``{id, attributes: {is_cluster_canonical, ...}}``,
                     SPARSE -- singletons omitted by ``compute_fuzzy_dups_attrs``
 
@@ -25,9 +24,7 @@ a single map-side pass joins them per shard with no shuffle. The pass:
    with the three dense attribute tables (sanity-asserts id alignment).
 4. Drops contaminated rows; drops dedup-cluster non-canonicals (rows missing
    from dedup are singletons -> kept).
-5. Maps each surviving doc's ``score`` into one of ``len(_QUALITY_THRESHOLDS) + 1``
-   quality buckets (default 5; fixed cutoffs ``[0.2, 0.4, 0.6, 0.8]``), then
-   routes the row by ``(cluster_<view>, quality_bucket)`` directly into one
+5. Routes each surviving doc by ``(cluster_<view>, quality_bucket)`` directly into one
    of up to ``K_clusters * K_quality`` lazily-opened ``SerialCacheWriter``
    instances under ``<output>/cluster=<C>/quality=<Q>/part-NNNNN-of-MMMMM``.
    Memory peak stays at ``N_open_writers * _BATCH_FLUSH * avg-doc-size``
@@ -43,7 +40,6 @@ writes the small ``<output>/cluster=<C>/quality=<Q>/shard_ledger.json``. No
 second Zephyr context.
 """
 
-import bisect
 import contextlib
 import dataclasses
 import json
@@ -76,17 +72,9 @@ from zephyr.execution import ZephyrContext
 from zephyr.writers import atomic_rename
 
 from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
-from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import LlmQualityOutput
+from experiments.datakit.cluster.quality.fast_transformer.artifact import QualityScores
 
 logger = logging.getLogger(__name__)
-
-
-# Fixed quality-bucket thresholds: score is bucketed via bisect_right
-# against these cutoffs, yielding 0..(len(thresholds)) inclusive. With the
-# default below: bucket 0 = [0, 0.2), 1 = [0.2, 0.4), 2 = [0.4, 0.6),
-# 3 = [0.6, 0.8), 4 = [0.8, 1.0].
-_QUALITY_THRESHOLDS: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8)
-N_QUALITY_BUCKETS = len(_QUALITY_THRESHOLDS) + 1
 
 
 class BucketCacheStats(BaseModel):
@@ -111,8 +99,8 @@ class ClusteredStoreData(BaseModel):
             ``cache_path/cluster=<C>/quality=<Q>/``.
         cluster_view: Cluster-K used to partition the store
             (column name ``cluster_<view>`` read from the assignment shards).
-        quality_thresholds: Cutoffs used to bucket ``score`` via
-            ``bisect_right``. Length == ``N_QUALITY_BUCKETS - 1``.
+        bucket_edges: Score cutpoints behind the ``quality_bucket`` column,
+            copied from the (single) quality model's :class:`QualityScores`.
         split: Tokenize split fed into the store (e.g. ``"train"``).
         buckets: List of per-(cluster, quality) stats. Buckets that
             received zero records across every input shard are omitted.
@@ -121,10 +109,10 @@ class ClusteredStoreData(BaseModel):
         counters: Aggregated zephyr counters across the join pass.
     """
 
-    version: str = "v2"
+    version: str = "v3"
     cache_path: str
     cluster_view: int
-    quality_thresholds: list[float]
+    bucket_edges: list[float]
     split: str
     buckets: list[BucketCacheStats]
     source_names: list[str]
@@ -143,7 +131,7 @@ def _per_source_shard_tuples(
     tokenize: TokenizedAttrData,
     decontam: DeconAttributes,
     cluster_assign: AssignmentAttrData,
-    quality: LlmQualityOutput,
+    quality: QualityScores,
     dedup_attr_dir: str,
     split: str,
 ) -> list[dict[str, str]]:
@@ -165,21 +153,16 @@ def _per_source_shard_tuples(
     # cluster_assign / quality / dedup all mirror the source NormalizedData
     # basenames. Workers fail loud if a per-shard file is missing -- cheaper
     # than O(N_shards) serial GCS HEAD requests up front.
-    decon_dir = decontam.output_dir.rstrip("/")
+    decon_dir = decontam.main_output_dir.rstrip("/")
     cluster_dir = cluster_assign.output_dir.rstrip("/")
-    quality_dir = quality.output_dir.rstrip("/")
+    quality_dir = quality.main_output_dir.rstrip("/")
     dedup_dir = dedup_attr_dir.rstrip("/")
     return [
         {
             "tokenize": tok_path,
             "decontam": f"{decon_dir}/{os.path.basename(tok_path)}",
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
-            # Quality's writer uses ``data-NNNNN-of-MMMMM.parquet`` (set in
-            # cluster/quality/v0/all_sources_quality_llm.py) while every
-            # other co-partitioned step uses ``part-NNNNN-of-MMMMM.parquet``.
-            # Map the basename so the join stays purely basename-keyed
-            # without invalidating the existing quality cache.
-            "quality": f"{quality_dir}/{os.path.basename(tok_path).replace('part-', 'data-', 1)}",
+            "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
             # ``dedup`` may legitimately be absent for shards with zero
             # non-singletons. Worker checks existence before opening.
             "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
@@ -204,9 +187,16 @@ def _per_source_shard_tuples(
 # x ~5M rows x 3 id cols = ~750 MB just on strings).
 
 
+def _read_columns(path: str, columns: list[str]) -> pa.Table:
+    """Read a parquet via an fsspec handle rather than a path: pyarrow's native
+    S3 filesystem issues HeadObject probes the CW object store rejects with 400."""
+    with StoragePath(path).open("rb") as fh:
+        return pq.read_table(fh, columns=columns)
+
+
 def _load_decon_table(path: str) -> tuple[pa.Array, np.ndarray]:
     """Return ``(ids, contaminated)`` for one decon shard. ids is pyarrow, contam is bool numpy."""
-    table = pq.read_table(path, columns=["id", "attributes"])
+    table = _read_columns(path, ["id", "attributes"])
     ids = table.column("id").combine_chunks()
     contaminated = np.asarray(
         table.column("attributes").combine_chunks().field("contaminated"),
@@ -217,25 +207,23 @@ def _load_decon_table(path: str) -> tuple[pa.Array, np.ndarray]:
 
 def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarray]:
     """Return ``(ids, cluster)`` for one cluster-assign shard. ids is pyarrow, cluster is int32 numpy."""
-    table = pq.read_table(path, columns=["id", cluster_col])
+    table = _read_columns(path, ["id", cluster_col])
     ids = table.column("id").combine_chunks()
     cluster = np.asarray(table.column(cluster_col), dtype=np.int32)
     return ids, cluster
 
 
 def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    """Return ``(ids, score)`` for one quality shard. ids is pyarrow, scores are float64 numpy.
+    """Return ``(ids, quality_bucket)`` for one quality shard. ids is pyarrow, buckets int32 numpy.
 
-    Quality parquets have a flat ``{id: string, score: double}`` schema --
-    unlike decon/dedup which nest under ``attributes`` -- because the
-    fasttext quality classifier's ``score_target_label`` path writes the
-    extracted scalar directly via ``output_field_name``. Read the flat
-    ``score`` column, no struct field access.
+    Quality parquets have a flat ``{id, score, quality_bucket}`` schema; the
+    bucket is already calibrated + quantized by the scorer, so the store
+    consumes it as-is.
     """
-    table = pq.read_table(path, columns=["id", "score"])
+    table = _read_columns(path, ["id", "quality_bucket"])
     ids = table.column("id").combine_chunks()
-    score = np.asarray(table.column("score"), dtype=np.float64)
-    return ids, score
+    bucket = np.asarray(table.column("quality_bucket"), dtype=np.int32)
+    return ids, bucket
 
 
 def _load_dedup_canonical(path: str) -> dict[str, bool]:
@@ -246,14 +234,15 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
     """
     if not StoragePath(path).exists():
         return {}
-    # Sources with zero non-singletons (e.g. ghalogs/public) get an empty
-    # parquet stub from the dedup writer -- 176 bytes, num_rows=0, zero
-    # data columns. Treat that as "no non-singletons" rather than letting
-    # ``pq.read_table(columns=["id","attributes"])`` raise ArrowInvalid
-    # because the projected columns don't exist in the empty schema.
-    if pq.ParquetFile(path).metadata.num_rows == 0:
-        return {}
-    table = pq.read_table(path, columns=["id", "attributes"])
+    with StoragePath(path).open("rb") as fh:
+        pf = pq.ParquetFile(fh)
+        # Sources with zero non-singletons get an empty parquet stub from the
+        # dedup writer -- num_rows=0, zero data columns. Treat that as "no
+        # non-singletons" rather than letting the column projection raise
+        # ArrowInvalid because the columns don't exist in the empty schema.
+        if pf.metadata.num_rows == 0:
+            return {}
+        table = pf.read(columns=["id", "attributes"])
     ids = table.column("id").to_pylist()
     canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
     return dict(zip(ids, canonical, strict=True))
@@ -321,11 +310,6 @@ _BATCH_FLUSH = 256
 # iter_batches batch_size is row-group sized (~64K), which on long-doc
 # sources can pull a multi-GB chunk into memory at once.
 _TOKENIZE_BATCH_SIZE = 8192
-
-
-def _quality_bucket(score: float) -> int:
-    """Map a fasttext ``score`` (float in [0, 1]) to a bucket index 0..N_QUALITY_BUCKETS-1."""
-    return bisect.bisect_right(_QUALITY_THRESHOLDS, score)
 
 
 def _join_filter_stream_shard(
@@ -422,7 +406,7 @@ def _join_filter_stream_shard(
 
             decon_ids, contaminated = _load_decon_table(decon_path)
             cluster_ids, cluster_vals = _load_cluster_table(cluster_path, cluster_col)
-            quality_ids, scores = _load_quality_table(quality_path)
+            quality_ids, quality_buckets = _load_quality_table(quality_path)
             n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
             if not (n_decon == n_cluster == n_quality):
                 raise RuntimeError(
@@ -457,7 +441,7 @@ def _join_filter_stream_shard(
                     # Numpy slices -- O(0) views, not copies.
                     decon_slice = contaminated[row_idx : row_idx + batch_len]
                     cluster_slice = cluster_vals[row_idx : row_idx + batch_len]
-                    quality_slice = scores[row_idx : row_idx + batch_len]
+                    quality_slice = quality_buckets[row_idx : row_idx + batch_len]
                     row_idx += batch_len
 
                     for i, doc_id in enumerate(tok_ids):
@@ -469,7 +453,7 @@ def _join_filter_stream_shard(
                             n_dedup_dropped_total += 1
                             continue
                         # canonical True OR id missing from dedup (singleton) -> keep
-                        key = (int(cluster_slice[i]), _quality_bucket(quality_slice[i]))
+                        key = (int(cluster_slice[i]), int(quality_slice[i]))
                         # ``.values.to_numpy()`` copies just this row's tokens
                         # into a fresh int32 buffer (~4 bytes/token vs ~28 for
                         # boxed Python ints), so the pyarrow batch can be GC'd
@@ -616,7 +600,7 @@ def build_clustered_store(
     tokenize: dict[str, TokenizedAttrData],
     decontam: dict[str, DeconAttributes],
     cluster_assign: dict[str, AssignmentAttrData],
-    quality: dict[str, LlmQualityOutput],
+    quality: dict[str, QualityScores],
     dedup: FuzzyDupsAttrData,
     output_path: str,
     cluster_view: int = 40,
@@ -648,6 +632,13 @@ def build_clustered_store(
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
 
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
+    # quality_bucket values are only comparable across sources when every source
+    # was scored by the same calibrated model -- mixed models would silently join
+    # incomparable bucket ids.
+    models = {(q.model_dir, q.calib_file, tuple(q.bucket_edges)) for q in quality.values()}
+    if len(models) != 1:
+        raise ValueError(f"quality artifacts disagree on model/calibration: {sorted(models)}")
+    bucket_edges = list(models.pop()[2])
     counters: dict[str, int | float] = {}
 
     if aggregate_only:
@@ -666,11 +657,11 @@ def build_clustered_store(
             worker_resources = ResourceConfig(cpu=2, ram="16g", disk="10g")
 
         logger.info(
-            "build_clustered_store: %d sources, cluster_view=%d (column=%s), quality_thresholds=%s, split=%s -> %s",
+            "build_clustered_store: %d sources, cluster_view=%d (column=%s), bucket_edges=%s, split=%s -> %s",
             len(tokenize),
             cluster_view,
             cluster_col,
-            list(_QUALITY_THRESHOLDS),
+            bucket_edges,
             split,
             output_path,
         )
@@ -745,15 +736,18 @@ def build_clustered_store(
         )
         counters = dict(outcome.counters)
 
-    # Aggregation: scan per-shard sidecars in GCS rather than carrying
+    # Aggregation: scan per-shard sidecars in object storage rather than carrying
     # the full _WrittenShard records through coord.outcome.results.
     sidecar_glob = f"{output_path.rstrip('/')}/_done/shard-*.json"
     sidecar_paths = sorted(str(m) for m in StoragePath(sidecar_glob).glob())
     logger.info("build_clustered_store: loading %d shard sidecars (parallel)", len(sidecar_paths))
 
+    # GCS globs come back scheme-less while s3 globs keep their scheme; re-attach
+    # the output path's scheme where missing.
+    scheme = output_path.split("://", 1)[0]
+
     def _load_one(sp: str) -> list[_WrittenShard]:
-        sp_url = sp if sp.startswith("gs://") else f"gs://{sp}"
-        return _load_shard_sidecar(sp_url) or []
+        return _load_shard_sidecar(sp if "://" in sp else f"{scheme}://{sp}") or []
 
     # Sequential ``_load_shard_sidecar`` over O(100K) sidecars at ~50-100ms
     # per GCS GET runs into hours of wall-clock. The fetches are independent
@@ -770,7 +764,7 @@ def build_clustered_store(
     artifact = ClusteredStoreData(
         cache_path=output_path,
         cluster_view=cluster_view,
-        quality_thresholds=list(_QUALITY_THRESHOLDS),
+        bucket_edges=bucket_edges,
         split=split,
         buckets=buckets,
         source_names=sorted(tokenize),

@@ -25,7 +25,6 @@ from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UN
 from experiments.datakit.cluster.quality.fast_transformer.inference import predict
 from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformer, FastTransformerConfig
 
-BUCKET_EDGES = (0.2, 0.4, 0.6, 0.8)
 # bme scores begin/middle/end ~512-token (~2000-char) windows of the whole doc and
 # mean-pools them, so a shared boilerplate prefix no longer dominates the score.
 CHUNK_CHARS = 2_000

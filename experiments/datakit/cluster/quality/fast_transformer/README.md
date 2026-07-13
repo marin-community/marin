@@ -16,9 +16,13 @@ rubric.py    type-aware oracle rubric — how docs are scored 1..5 (labeling its
    │  labels: gs → merged parquet (5,578 oracle labels: consensus + junk-gate)
 train.py     train the pooled FastTransformer on the labels → model.eqx + remap + meta
 calibrate.py fit the monotonic bme calibration on the labels → calib_bme.json
-score.py     production scoring (one iris/zephyr job per source) → source/id/score/quality_bucket
-ops/report.py render the standalone single-page debugging report from the scored output
+score.py     score_normalized — the reference pipeline's per-source quality step
+             (datakit/quality/<source>) → source/id/score/quality_bucket + samples
 ```
+
+The stage report (single HTML page over all sources) lives in
+`experiments/datakit/reports/quality.py` and runs as the pipeline's
+`datakit/report/quality` step.
 
 Retrain + recalibrate the deployed model:
 
@@ -62,11 +66,9 @@ Core:
 - [`train.py`](train.py) — `train_from_labels`: train the deployed scorer from the label parquet, plus `fit`/`train_regressor` and the holdout metrics.
 - [`calibrate.py`](calibrate.py) — fit the monotonic bme calibration (`calib_bme.json`).
 - [`scorer.py`](scorer.py) — `PooledScorer`: load a trained model + vocab remap and score arbitrary text.
-- [`score.py`](score.py) — production batch-scoring step (bme + calibration → buckets).
-
-Ops ([`ops/`](ops/)):
-
-- [`ops/report.py`](ops/report.py) — render the standalone single-page debugging report (fetches spot-check text from the sample).
+- [`score.py`](score.py) — `score_normalized`: the per-source quality step (bme + calibration → buckets + samples side output).
+- [`metrics.py`](metrics.py) — rank-based AUC / Spearman used by the training holdout.
+- [`artifact.py`](artifact.py) — `QualityScores` step artifact + the fixed `BUCKET_EDGES`.
 
 ## Artifacts
 
