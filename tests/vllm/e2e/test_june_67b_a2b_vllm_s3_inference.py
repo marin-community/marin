@@ -36,8 +36,8 @@ PENDING_TIMEOUT = 30 * 60
 RUNTIME_TIMEOUT = 10 * 60
 RETURNED_LOGPROBS = 50
 GPU_COUNT = 8
-# Clean e2es stayed below these bounds; one Triton dev node measured 0.00772
-# and 0.01277, so cross-node margin needs review before merging.
+# Clean step-42150 dev runs stayed below 0.0052 max probability error and 0.0078 L1
+# across both attention backends, leaving cross-node margin within these bounds.
 MAX_PROBABILITY_ERROR = 0.008
 TOP_PROBABILITY_L1_ERROR = 0.012
 

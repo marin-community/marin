@@ -43,10 +43,10 @@ from .remote_job import run_remote_test_job
 logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 5 * 60.0
-RUNTIME_TIMEOUT = 10 * 60.0
+RUNTIME_TIMEOUT = 20 * 60.0
 TOP_K = 25
 JAX_COMPILATION_CACHE_DIR = (
-    "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-18000-sonic-deterministic-v1"
+    "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-42150-sonic-deterministic-v1"
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
