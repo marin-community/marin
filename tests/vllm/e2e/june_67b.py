@@ -20,10 +20,10 @@ from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransf
 
 RUN_ROOT = (
     "s3://marin-us-east-02a/marin/grug/"
-    "moe_67b_a2b_d2560_ep1_rep8_bs8192_seq8192_sw2k_v4_2048_muon_resume15k_v2_10T-9fcc1f"
+    "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3"
 )
 EXECUTOR_INFO_PATH = f"{RUN_ROOT}/.executor_info"
-CHECKPOINT_PATH = f"{RUN_ROOT}/checkpoints/step-18000"
+CHECKPOINT_PATH = f"{RUN_ROOT}/checkpoints/step-42150"
 
 
 @dataclass(frozen=True)

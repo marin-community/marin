@@ -43,7 +43,7 @@ from .june_67b import (
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
-EXPECTED_EXPORT_SHA256 = "b3d7310dd890c8bcb201d9ebbcd65d31176a7a1aeff65d33b76cfe880b08915c"
+EXPECTED_EXPORT_SHA256 = "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632"
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 

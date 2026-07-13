@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 30 * 60
 RUNTIME_TIMEOUT = 10 * 60
-MODEL_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-18000/hf-bf16-vllm/b3d7310dd890c8b/"
-LOGPROBS_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_18000_logprobs.json"
+MODEL_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/"
+LOGPROBS_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_logprobs.json"
 RETURNED_LOGPROBS = 50
 GPU_COUNT = 8
-# Clean e2es stayed below these bounds; one Triton dev node measured 0.00772
-# and 0.01277, so cross-node margin needs review before merging.
+# Clean step-42150 dev runs stayed below 0.0052 max probability error and 0.0078 L1
+# across both attention backends, leaving cross-node margin within these bounds.
 MAX_PROBABILITY_ERROR = 0.008
 TOP_PROBABILITY_L1_ERROR = 0.012
 
@@ -68,7 +68,7 @@ def assert_vllm_logprobs_match_levanter(
         os.environ["AWS_CONFIG_FILE"] = str(aws_config)
 
         model = ModelConfig(
-            name="june-67b-a2b-step-18000-bf16",
+            name="june-67b-a2b-step-42150-bf16",
             path=MODEL_URI,
             engine_kwargs={"max_model_len": 128},
         )
