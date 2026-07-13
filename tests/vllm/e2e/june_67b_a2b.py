@@ -18,6 +18,7 @@ from rigging.filesystem import StoragePath
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransformer
 
+
 @dataclass(frozen=True)
 class ModelIdentity:
     """Checkpoint, export, and golden values that form one model lineage."""
