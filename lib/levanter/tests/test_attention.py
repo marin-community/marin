@@ -1035,6 +1035,7 @@ def _fa4_qkv():
         {"bias": True},
         {"logits_soft_cap": 30.0},
         {"dropout": 0.1},
+        {"attention_dtype": jnp.float32},  # e.g. upcast_attn=True; FA4 CuTe is bf16/fp16 only
     ],
 )
 def test_try_fa4_cute_attention_unsupported_falls_back(kwargs):

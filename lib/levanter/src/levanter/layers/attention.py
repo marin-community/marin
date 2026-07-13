@@ -968,9 +968,11 @@ def _try_fa4_cute_attention(
 
     This is the fast, installed GPU flash-attention path (``nvidia-cutlass-dsl`` / ``flash-attn-4`` from the
     ``gpu`` extra). If the configuration is unsupported — additive bias, logits soft cap, attention sink,
-    dropout, or a mask the kernel can't express — either raise (when the backend was explicitly forced) or
-    warn and return ``None`` so the caller falls back to the reference implementation.
+    dropout, an fp32 (upcast) attention dtype, or a mask the kernel can't express — either raise (when the
+    backend was explicitly forced) or warn and return ``None`` so the caller falls back to the reference
+    implementation.
     """
+    resolved_dtype = attention_dtype or query.dtype
     unsupported = None
     if bias is not None:
         unsupported = "FA4 CuTe attention does not support an additive bias."
@@ -980,6 +982,9 @@ def _try_fa4_cute_attention(
         unsupported = "FA4 CuTe attention does not support attention sinks."
     elif dropout != 0.0:
         unsupported = "FA4 CuTe attention does not support dropout."
+    elif resolved_dtype not in (jnp.bfloat16, jnp.float16):
+        # The kernel only accepts bf16/fp16; e.g. upcast_attn drives attention_dtype to fp32.
+        unsupported = f"FA4 CuTe attention supports only bf16/fp16, got {jnp.dtype(resolved_dtype).name}."
 
     if unsupported is not None:
         if force:
