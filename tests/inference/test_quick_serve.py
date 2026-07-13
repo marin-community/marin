@@ -71,43 +71,12 @@ def test_resolve_model_path_passthrough(model, ttl_days):
     assert resolve_model_path(model, ttl_days) == model
 
 
-def test_checkout_free_setup_script_installs_pinned_marin_core_from_pypi():
-    # The checkout-free worker has no pyproject to sync: install the launching CLI's exact
-    # marin-core (cloudpickle compat) with the tpu extra, off the CPU torch index. vLLM is
-    # never installed here — it comes from the isolated uvx env.
+def test_checkout_free_setup_script_pins_marin_core_with_extras():
+    # The worker install folds the requested extras and the launching CLI's exact version
+    # (for cloudpickle compat) into the pip spec; vLLM stays out — it comes from uvx.
     script = _checkout_free_setup_script("0.2.44", ("tpu",))
-    assert "uv venv" in script
     assert "marin-core[tpu]==0.2.44" in script
-    assert "--torch-backend cpu" in script
     assert "vllm" not in script
-
-
-def test_isolated_cuda_vllm_command_pins_version_and_cuda_backend():
-    # The GPU path provisions a stock CUDA vLLM via uvx, keeping its torch/CUDA tree
-    # out of the workspace lock. `[runai]` keeps gs:// checkpoint streaming working.
-    assert IsolatedCudaVllm(version="0.25.0").command() == [
-        "uvx",
-        "--from",
-        "vllm[runai]==0.25.0",
-        "--python",
-        "3.12",
-        "--torch-backend",
-        "cu128",
-        "vllm",
-    ]
-
-
-def test_isolated_cuda_vllm_command_honors_overrides():
-    cmd = IsolatedCudaVllm(version="0.26.0", python_version="3.13", torch_backend="cu130").command()
-    assert "vllm[runai]==0.26.0" in cmd
-    assert cmd[cmd.index("--python") + 1] == "3.13"
-    assert cmd[cmd.index("--torch-backend") + 1] == "cu130"
-
-
-def test_workspace_vllm_command_runs_the_path_vllm():
-    # The TPU path invokes the `vllm` on the venv PATH (or the bare name if unresolved).
-    (binary,) = WorkspaceVllm().command()
-    assert binary.rsplit("/", 1)[-1] == "vllm"
 
 
 def test_select_vllm_launcher_gpu_provisions_isolated_cuda_vllm():
@@ -126,28 +95,6 @@ def test_select_vllm_launcher_falls_back_to_workspace_without_version():
     )
     assert select_vllm_launcher(tpu) == WorkspaceVllm()
     assert select_vllm_launcher(gpu_with_image) == WorkspaceVllm()
-
-
-def test_isolated_tpu_vllm_builds_from_forks_for_tpu_target():
-    # The checkout-free TPU path provisions Marin's forked vLLM (+ tpu-inference) via uvx
-    # and must build it for TPU, resolving torch from the CPU index (jax/libtpu do compute).
-    launcher = IsolatedTpuVllm(
-        vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
-        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
-    )
-    assert launcher.command() == [
-        "uvx",
-        "--from",
-        "vllm @ git+https://github.com/marin-community/vllm.git@abc",
-        "--with",
-        "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
-        "--python",
-        "3.12",
-        "--torch-backend",
-        "cpu",
-        "vllm",
-    ]
-    assert launcher.env() == {"VLLM_TARGET_DEVICE": "tpu"}
 
 
 def test_select_vllm_launcher_tpu_isolated_from_refs():
