@@ -1,11 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and checkpoint loading for the vendored June 67B model."""
+"""Checkpoint locations and loading helpers for the vendored June 67B model."""
 
 import json
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import draccus
@@ -18,37 +16,18 @@ from rigging.filesystem import StoragePath
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransformer
 
-RUN_ROOT = (
-    "s3://marin-us-east-02a/marin/grug/"
-    "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3"
-)
+from .reference import CHECKPOINT_NAME, RUN_NAME
+
+RUN_ROOT = f"s3://marin-us-east-02a/marin/grug/{RUN_NAME}"
 EXECUTOR_INFO_PATH = f"{RUN_ROOT}/.executor_info"
-CHECKPOINT_PATH = f"{RUN_ROOT}/checkpoints/step-42150"
+CHECKPOINT_PATH = f"{RUN_ROOT}/checkpoints/{CHECKPOINT_NAME}"
+GCS_RUN_ROOT = f"gs://marin-us-east5/grug/{RUN_NAME}"
+GCS_EXECUTOR_INFO_PATH = f"{GCS_RUN_ROOT}/.executor_info"
+GCS_CHECKPOINT_PATH = f"{GCS_RUN_ROOT}/checkpoints/{CHECKPOINT_NAME}"
 
 
-@dataclass(frozen=True)
-class TokenLogprobReference:
-    logprob: float
-    text: str
-    token_id: int
-
-
-@dataclass(frozen=True)
-class InferenceReference:
-    moe_implementation: str
-    mp: str
-    prompt: str
-    prompt_token_ids: list[int]
-    tokenizer: str
-    top_logprobs: list[TokenLogprobReference]
-
-
-def read_inference_reference(path: Path) -> InferenceReference:
-    return draccus.decode(InferenceReference, json.loads(path.read_text()))
-
-
-def read_executor_info() -> dict[str, Any]:
-    return json.loads(StoragePath(EXECUTOR_INFO_PATH).read_text())
+def read_executor_info(path: str = EXECUTOR_INFO_PATH) -> dict[str, Any]:
+    return json.loads(StoragePath(path).read_text())
 
 
 def decode_vendored_config(executor_info: dict[str, Any]) -> VendoredGrugModelConfig:
@@ -58,6 +37,7 @@ def decode_vendored_config(executor_info: dict[str, Any]) -> VendoredGrugModelCo
 def load_checkpoint(
     config: VendoredGrugModelConfig,
     mesh: jax.sharding.Mesh,
+    checkpoint_path: str = CHECKPOINT_PATH,
 ) -> tuple[VendoredTransformer, jax.Array]:
     template = eqx.filter_eval_shape(VendoredTransformer.init, config, key=jax.random.PRNGKey(0))
     checkpoint_state = load_levanter_checkpoint(
@@ -65,7 +45,7 @@ def load_checkpoint(
             "params": template,
             "pending_qb_betas": jax.ShapeDtypeStruct((config.num_layers, config.num_experts), jnp.float32),
         },
-        CHECKPOINT_PATH,
+        checkpoint_path,
         mesh=mesh,
     )
     jax.block_until_ready(checkpoint_state)

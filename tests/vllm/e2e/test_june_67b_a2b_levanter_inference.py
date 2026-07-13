@@ -32,24 +32,24 @@ from levanter.utils.jax_utils import parameter_count
 
 from .iris import run_remote_test_job
 from .june_67b import (
-    InferenceReference,
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
-    read_inference_reference,
 )
+from .reference import CHECKPOINT_NAME, CHECKPOINT_STEP, InferenceReference, read_inference_reference
 
 logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 20 * 60.0
 TOP_K = 25
-MODEL_CONFIG_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_model_config.json"
-LOGPROBS_RESOURCE = Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_logprobs.json"
+MODEL_CONFIG_RESOURCE = (
+    Path(__file__).parent / "resources" / f"june_tpu_67b_a2b_step_{CHECKPOINT_STEP}_model_config.json"
+)
 JAX_COMPILATION_CACHE_DIR = (
-    "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-42150-sonic-deterministic-v1"
+    f"s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/" f"june-tpu-67b-a2b-{CHECKPOINT_NAME}-sonic-deterministic-v1"
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
@@ -127,7 +127,7 @@ def assert_checkpoint_inference(
 
 def test_h100_node_runs_checkpoint_inference(marin_gpu_client: IrisClient) -> None:
     expected_model_config = json.loads(MODEL_CONFIG_RESOURCE.read_text())
-    expected_inference = read_inference_reference(LOGPROBS_RESOURCE)
+    expected_inference = read_inference_reference()
     run_remote_test_job(
         marin_gpu_client,
         JobRequest(
