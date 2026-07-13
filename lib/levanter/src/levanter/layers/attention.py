@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 class AttentionBackend(StrEnum):
     DEFAULT = "default"  # use the default attention type for the accelerator
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
+    GPU_FLASH = "gpu_flash"  # FlashAttention-4/CUTLASS (FA4 CuTe) on NVIDIA GPUs
     SPLASH = "splash"  # on TPU.
     JAX_FLASH = "jax_flash"  # Use the JAX reference implementation
     VANILLA = "vanilla"  # regular dot product attention
@@ -82,7 +83,10 @@ def _warn_splash_fallback_once(message: str) -> None:
 def default_attention_type() -> AttentionBackend:
     accelerator_type = jax.local_devices()[0].platform
     if accelerator_type == "gpu":
-        return AttentionBackend.NVTE
+        # FA4 CuTe (nvidia-cutlass-dsl / flash-attn-4) ships in levanter's `gpu` extra, whereas
+        # transformer_engine (NVTE) does not — defaulting to NVTE silently falls back to the slow
+        # reference kernel. FA4 CuTe falls back to the reference only for the configs it can't express.
+        return AttentionBackend.GPU_FLASH
     elif accelerator_type == "tpu":
         return AttentionBackend.SPLASH
     else:
@@ -196,6 +200,24 @@ def dot_product_attention(
                 precision=precision,
                 flash_block_size=flash_block_size,
                 force_te=not was_default,
+                scaling_factor=scaling_factor,
+                logits_soft_cap=logits_soft_cap,
+                attn_sink=attn_sink,
+            )
+
+        case AttentionBackend.GPU_FLASH:
+            attention_out = _try_fa4_cute_attention(
+                QPos,
+                KPos,
+                Key,
+                query,
+                key,
+                value,
+                mask=mask,
+                bias=bias,
+                dropout=dropout,
+                force=not was_default,
+                attention_dtype=attention_dtype,
                 scaling_factor=scaling_factor,
                 logits_soft_cap=logits_soft_cap,
                 attn_sink=attn_sink,
@@ -830,6 +852,165 @@ def _unflatten_bshd(attn_output, q_class, v_class):
     attn_output = attn_output.unflatten_axis("H", q_class["H"])
     attn_output = attn_output.unflatten_axis("D", v_class["D"])
     return attn_output
+
+
+def _to_grug_causal_mask(mask, q_class, QPos, KPos):
+    """Translate a levanter [AttentionMask][] into the grug ``AttentionMask`` that the FA4 CuTe kernel accepts.
+
+    FA4 CuTe only implements *causal self-attention* (optionally with a sliding window and/or packed
+    ``segment_ids``). Anything it can't express — dense/explicit masks, non-causal masks, a non-zero causal
+    offset — raises ``NotImplementedError`` so the caller falls back to the reference implementation.
+    """
+    from levanter.grug.attention._core import AttentionMask as GrugAttentionMask  # noqa: PLC0415  # optional GPU dep
+
+    if not isinstance(mask, AttentionMask):
+        # None (no mask) is non-causal; NamedArray masks are dense. Neither is supported.
+        raise NotImplementedError("FA4 CuTe attention requires a causal AttentionMask.")
+    if not mask.is_causal:
+        raise NotImplementedError("FA4 CuTe attention supports only causal masks.")
+    if mask.causal_offset is not None:
+        raise NotImplementedError("FA4 CuTe attention does not support a causal offset.")
+    if mask.explicit_mask is not None:
+        raise NotImplementedError("FA4 CuTe attention does not support explicit masks.")
+
+    grug_mask = GrugAttentionMask.causal(sliding_window=mask.sliding_window)
+
+    if mask.segment_ids is not None:
+        q_segment_ids, kv_segment_ids = (x.astype(jnp.int32) for x in mask.segment_ids)
+        batch_axes = tuple(q_class["B"])
+        for ax in batch_axes:
+            if ax.name not in q_segment_ids.axes:
+                q_segment_ids = q_segment_ids.broadcast_axis(ax)
+            if ax.name not in kv_segment_ids.axes:
+                kv_segment_ids = kv_segment_ids.broadcast_axis(ax)
+        q_seg = _maybe_flatten(q_segment_ids, batch_axes, "B").rearrange(("B", QPos)).array
+        kv_seg = _maybe_flatten(kv_segment_ids, batch_axes, "B").rearrange(("B", KPos)).array
+        grug_mask = grug_mask.with_segment_ids(q_seg, kv_seg)
+
+    return grug_mask
+
+
+def _fa4_cute_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    *,
+    attention_dtype: Optional[jnp.dtype],
+    scaling_factor: float,
+):
+    from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415  # optional GPU dep
+
+    attention_dtype = attention_dtype or query.dtype
+    query = query.astype(attention_dtype)
+    key = key.astype(attention_dtype)
+    value = value.astype(attention_dtype)
+
+    head_dim = query.resolve_axis(Key).size
+    expected_scale = 1.0 / math.sqrt(head_dim)
+    if not math.isclose(scaling_factor, expected_scale, rel_tol=1e-6):
+        # The kernel hard-codes 1/sqrt(head_dim); a custom scale can't be honored.
+        raise NotImplementedError("FA4 CuTe attention only supports the default 1/sqrt(head_dim) scaling.")
+
+    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    q_ = _reshape_axes_for_bshd_bins(query, q_class).array
+    k_ = _reshape_axes_for_bshd_bins(key, k_class).array
+    v_ = _reshape_axes_for_bshd_bins(value, v_class).array
+
+    QPos = query.resolve_axis(QPos)
+    KPos = key.resolve_axis(KPos)
+    grug_mask = _to_grug_causal_mask(mask, q_class, QPos, KPos)
+
+    # FA4 CuTe expects BSHD with a single (flattened) head axis and returns the same layout.
+    attn_output = gpu_fa4_cute_attention(q_, k_, v_, grug_mask)
+    attn_output = haliax.named(attn_output, ("B", "S", "H", "D"))
+    attn_output = _unflatten_bshd(attn_output, q_class, v_class)
+
+    reference_out_shape = eqx.filter_eval_shape(
+        simple_attention_with_dropout,
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        mask,
+        None,
+        True,
+        0.0,
+        attention_dtype,
+        None,
+    )
+    return attn_output.rearrange(reference_out_shape.axes).astype(reference_out_shape.dtype)
+
+
+def _try_fa4_cute_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    *,
+    force: bool,
+    attention_dtype: Optional[jnp.dtype] = None,
+    scaling_factor: float,
+    logits_soft_cap: Optional[float] = None,
+    attn_sink: Optional[NamedArray] = None,
+):
+    """Try the FA4 CuTe (FlashAttention-4/CUTLASS) GPU kernel.
+
+    This is the fast, installed GPU flash-attention path (``nvidia-cutlass-dsl`` / ``flash-attn-4`` from the
+    ``gpu`` extra). If the configuration is unsupported — additive bias, logits soft cap, attention sink,
+    dropout, or a mask the kernel can't express — either raise (when the backend was explicitly forced) or
+    warn and return ``None`` so the caller falls back to the reference implementation.
+    """
+    unsupported = None
+    if bias is not None:
+        unsupported = "FA4 CuTe attention does not support an additive bias."
+    elif logits_soft_cap is not None:
+        unsupported = "FA4 CuTe attention does not support logits_soft_cap."
+    elif attn_sink is not None:
+        unsupported = "FA4 CuTe attention does not support attention sinks."
+    elif dropout != 0.0:
+        unsupported = "FA4 CuTe attention does not support dropout."
+
+    if unsupported is not None:
+        if force:
+            raise NotImplementedError(unsupported)
+        warnings.warn(f"{unsupported} Falling back to the reference implementation.")
+        return None
+
+    try:
+        return _fa4_cute_attention(
+            QPos,
+            KPos,
+            Key,
+            query,
+            key,
+            value,
+            mask,
+            attention_dtype=attention_dtype,
+            scaling_factor=scaling_factor,
+        )
+    except ImportError as e:
+        msg = "flash-attn-4 / nvidia-cutlass-dsl is not installed. Install the levanter 'gpu' extra to use FA4 CuTe."
+        if force:
+            raise ImportError(msg) from e
+        warnings.warn(f"{msg}. Falling back to the reference implementation.")
+        return None
+    except NotImplementedError as e:
+        message = f"Could not use FA4 CuTe attention: {e}."
+        if force:
+            raise NotImplementedError(message) from e
+        warnings.warn(f"{message} Falling back to the reference implementation.")
+        return None
 
 
 def _try_tpu_splash_attention(

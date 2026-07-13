@@ -29,7 +29,10 @@ from levanter.layers.attention import (
     AttentionWithSink,
     _bin_and_group_axes_by_function,
     _te_flash_attention,
+    _to_grug_causal_mask,
     _tpu_splash_attention,
+    _try_fa4_cute_attention,
+    default_attention_type,
     dot_product_attention,
 )
 from levanter.utils.mesh import create_mesh_from_axis_specs
@@ -933,3 +936,170 @@ def test_attention_equivalence_jax_flash(
     o2 = sink_attention_ref_gpt_oss(q, k, v, sinks, sm_scale, sliding_window, start_q)
 
     torch.testing.assert_close(o1, o2)
+
+
+# ---------------------------------------------------------------------------
+# FA4 CuTe (GPU_FLASH) backend
+# ---------------------------------------------------------------------------
+
+
+def test_default_attention_type_is_fa4_cute_on_gpu(monkeypatch):
+    """On GPU the default backend must be the installed FA4 CuTe kernel, not NVTE (which is not a dependency)."""
+
+    class _FakeDevice:
+        platform = "gpu"
+
+    monkeypatch.setattr(jax, "local_devices", lambda: [_FakeDevice()])
+    assert default_attention_type() == AttentionBackend.GPU_FLASH
+
+
+def _grug_mask_matches_levanter(mask, QPos, KPos, batch=None):
+    B = hax.Axis("batch", batch) if batch is not None else None
+    Head = hax.Axis("kv_head", 2)
+    D = hax.Axis("head_size", 8)
+    q_axes = (B, Head, QPos, D) if B is not None else (Head, QPos, D)
+    k_axes = (B, Head, KPos, D) if B is not None else (Head, KPos, D)
+    q = hax.zeros(q_axes, dtype=jnp.bfloat16)
+    k = hax.zeros(k_axes, dtype=jnp.bfloat16)
+    v = hax.zeros(k_axes, dtype=jnp.bfloat16)
+
+    q_class, _, _ = _bin_and_group_axes_by_function(q, k, v, "position", "key_position", "head_size")
+    grug_mask = _to_grug_causal_mask(mask, q_class, QPos, KPos)
+
+    expected = mask.materialize(QPos, KPos)
+    expected = expected.rearrange((..., QPos, KPos)).array
+    actual = grug_mask.materialize_mask(QPos.size, KPos.size)
+    # Broadcast both to a common (..., Q, K) shape for comparison.
+    np.testing.assert_array_equal(
+        np.broadcast_to(np.asarray(actual), np.asarray(expected).shape),
+        np.asarray(expected),
+    )
+
+
+def test_to_grug_causal_mask_plain_causal():
+    QPos = hax.Axis("position", 16)
+    KPos = hax.Axis("key_position", 16)
+    _grug_mask_matches_levanter(AttentionMask.causal(), QPos, KPos)
+
+
+def test_to_grug_causal_mask_sliding_window():
+    QPos = hax.Axis("position", 16)
+    KPos = hax.Axis("key_position", 16)
+    _grug_mask_matches_levanter(AttentionMask.causal(sliding_window=4), QPos, KPos)
+
+
+def test_to_grug_causal_mask_segment_ids():
+    QPos = hax.Axis("position", 8)
+    KPos = hax.Axis("key_position", 8)
+    B = hax.Axis("batch", 2)
+    seg = hax.named(jnp.array([[0, 0, 0, 1, 1, 1, 1, 1], [0, 0, 1, 1, 1, 2, 2, 2]], dtype=jnp.int32), (B, QPos))
+    seg_k = seg.rename({"position": "key_position"})
+    mask = AttentionMask.causal(segment_ids=(seg, seg_k))
+    _grug_mask_matches_levanter(mask, QPos, KPos, batch=2)
+
+
+def test_to_grug_causal_mask_rejects_unsupported():
+    QPos = hax.Axis("position", 8)
+    KPos = hax.Axis("key_position", 8)
+    Head = hax.Axis("kv_head", 2)
+    D = hax.Axis("head_size", 8)
+    q = hax.zeros((Head, QPos, D), dtype=jnp.bfloat16)
+    k = hax.zeros((Head, KPos, D), dtype=jnp.bfloat16)
+    v = hax.zeros((Head, KPos, D), dtype=jnp.bfloat16)
+    q_class, _, _ = _bin_and_group_axes_by_function(q, k, v, "position", "key_position", "head_size")
+
+    # Non-causal (explicit/dense) mask.
+    explicit = AttentionMask.explicit(hax.ones((QPos, KPos), dtype=bool))
+    with pytest.raises(NotImplementedError):
+        _to_grug_causal_mask(explicit, q_class, QPos, KPos)
+
+    # Causal with a non-zero offset.
+    with pytest.raises(NotImplementedError):
+        _to_grug_causal_mask(AttentionMask.causal(offset=2), q_class, QPos, KPos)
+
+
+def _fa4_qkv():
+    QPos = hax.Axis("position", 16)
+    KPos = hax.Axis("key_position", 16)
+    Head = hax.Axis("kv_head", 2)
+    D = hax.Axis("head_size", 8)
+    q = hax.zeros((Head, QPos, D), dtype=jnp.bfloat16)
+    k = hax.zeros((Head, KPos, D), dtype=jnp.bfloat16)
+    v = hax.zeros((Head, KPos, D), dtype=jnp.bfloat16)
+    return QPos, KPos, D, q, k, v
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"bias": True},
+        {"logits_soft_cap": 30.0},
+        {"dropout": 0.1},
+    ],
+)
+def test_try_fa4_cute_attention_unsupported_falls_back(kwargs):
+    """Unsupported configurations return None (fallback) when the backend was chosen by default."""
+    QPos, KPos, D, q, k, v = _fa4_qkv()
+    bias = hax.zeros((QPos, KPos), dtype=jnp.float32) if kwargs.pop("bias", False) else None
+    with pytest.warns(UserWarning):
+        out = _try_fa4_cute_attention(
+            "position",
+            "key_position",
+            "head_size",
+            q,
+            k,
+            v,
+            mask=AttentionMask.causal(),
+            bias=bias,
+            force=False,
+            scaling_factor=1 / math.sqrt(D.size),
+            **kwargs,
+        )
+    assert out is None
+
+
+def test_try_fa4_cute_attention_unsupported_raises_when_forced():
+    """An explicitly-forced backend must raise instead of silently falling back."""
+    QPos, KPos, D, q, k, v = _fa4_qkv()
+    with pytest.raises(NotImplementedError):
+        _try_fa4_cute_attention(
+            "position",
+            "key_position",
+            "head_size",
+            q,
+            k,
+            v,
+            mask=AttentionMask.causal(),
+            logits_soft_cap=30.0,
+            force=True,
+            scaling_factor=1 / math.sqrt(D.size),
+        )
+
+
+@skip_if_module_missing("flash_attn.cute.flash_bwd_preprocess")
+@pytest.mark.parametrize("q_heads", [1, 4])
+def test_gpu_flash_matches_vanilla(q_heads):
+    """FA4 CuTe routed through dot_product_attention matches the reference for causal GQA self-attention."""
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+
+    QPos = hax.Axis("position", 128)
+    KPos = hax.Axis("key_position", 128)
+    B = hax.Axis("batch", 2)
+    Head = hax.Axis("kv_head", 2)
+    QG = hax.Axis("q_heads_per_group", q_heads)
+    D = hax.Axis("head_size", 64)
+    mask = AttentionMask.causal()
+
+    q = hax.random.normal(jrandom.PRNGKey(0), (B, Head, QG, QPos, D)) * 0.02
+    k = hax.random.normal(jrandom.PRNGKey(1), (B, Head, KPos, D)) * 0.02
+    v = hax.random.normal(jrandom.PRNGKey(2), (B, Head, KPos, D)) * 0.02
+
+    common = dict(mask=mask, attention_dtype=jnp.bfloat16, scaling_factor=1 / math.sqrt(D.size))
+    fa4 = dot_product_attention(
+        "position", "key_position", "head_size", q, k, v, attn_backend=AttentionBackend.GPU_FLASH, **common
+    )
+    ref = dot_product_attention(
+        "position", "key_position", "head_size", q, k, v, attn_backend=AttentionBackend.VANILLA, **common
+    )
+    assert_trees_all_close(fa4.array, ref.array, atol=7e-2, rtol=7e-2)
