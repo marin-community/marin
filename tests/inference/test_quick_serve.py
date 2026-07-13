@@ -15,13 +15,18 @@ import pytest
 import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.inference import quick_serve_cli
 from marin.inference.quick_serve import (
     QuickServeConfig,
     resolve_model_path,
     select_tensor_parallel_size,
     select_vllm_launcher,
 )
-from marin.inference.quick_serve_cli import _mint_and_print_capability_url, _resolve_workspace
+from marin.inference.quick_serve_cli import (
+    _checkout_free_setup_script,
+    _mint_and_print_capability_url,
+    _resolve_workspace,
+)
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
@@ -91,6 +96,24 @@ def test_resolve_workspace_explicit_rejects_dir_without_pyproject(tmp_path):
 def test_resolve_workspace_explicit_accepts_dir_with_pyproject(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     assert _resolve_workspace(str(tmp_path)) == tmp_path
+
+
+def test_resolve_workspace_returns_none_without_checkout(monkeypatch):
+    # No checkout found (a PyPI install in a bare shell): resolve to None so the TPU path
+    # serves checkout-free instead of raising.
+    monkeypatch.setattr(quick_serve_cli, "find_project_root", lambda _p: None)
+    assert _resolve_workspace(None) is None
+
+
+def test_checkout_free_setup_script_installs_pinned_marin_core_from_pypi():
+    # The checkout-free worker has no pyproject to sync: install the launching CLI's exact
+    # marin-core (cloudpickle compat) with the tpu extra, off the CPU torch index. vLLM is
+    # never installed here — it comes from the isolated uvx env.
+    script = _checkout_free_setup_script("0.2.44", ("tpu",))
+    assert "uv venv" in script
+    assert "marin-core[tpu]==0.2.44" in script
+    assert "--torch-backend cpu" in script
+    assert "vllm" not in script
 
 
 def test_isolated_cuda_vllm_command_pins_version_and_cuda_backend():

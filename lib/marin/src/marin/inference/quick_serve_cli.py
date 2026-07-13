@@ -18,15 +18,24 @@ Examples::
 GPU path, stock CUDA vLLM is provisioned in an isolated ``uv`` tool env at
 ``--vllm-version`` (pinned, overridable) rather than pulled into the workspace lock;
 vLLM is only ever a ``vllm serve`` subprocess, so this keeps its torch/CUDA tree out of
-Marin's resolution. ``--cluster`` selects the controller to submit to; ``--target-cluster``
-federates the job to a named peer. The slice's tensor-parallel size and (for clamped-RoPE
-models) max sequence length are inferred automatically; override with
-``--tensor-parallel-size`` / ``--max-model-len``.
+Marin's resolution.
+
+The TPU path serves vLLM from the workspace lock when run inside a marin checkout. Run
+outside one (a PyPI install, another project's shell) it goes checkout-free: the worker
+installs ``marin-core`` from PyPI and provisions Marin's forked TPU vLLM in an isolated
+``uv`` tool env (``--isolated-vllm`` forces that env even inside a checkout).
+
+``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job
+to a named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max
+sequence length are inferred automatically; override with ``--tensor-parallel-size`` /
+``--max-model-len``.
 """
 
 import contextlib
+import importlib.metadata
 import logging
 import re
+import shlex
 import time
 import uuid
 from pathlib import Path
@@ -53,6 +62,7 @@ from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
+from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 
 # vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
 _WORKER_EXTRAS = ("tpu", "vllm")
@@ -73,26 +83,20 @@ def _default_job_name(model: str) -> str:
     return f"serve-{slug}-{suffix}" if slug else f"serve-{suffix}"
 
 
-def _resolve_workspace(spec: str | None) -> Path:
-    """Resolve the marin source checkout bundled for the Iris serve job.
+def _resolve_workspace(spec: str | None) -> Path | None:
+    """Resolve the marin checkout to bundle for the Iris serve job, or ``None``.
 
-    The job runs ``uv sync`` with the worker extras (``tpu``/``vllm`` or ``gpu``)
-    against this directory inside the container, so it must be a marin checkout: those
-    extras resolve the accelerator stack — the TPU vLLM runtime, for one, comes from
-    marin's pinned git forks — via the root pyproject's ``[tool.uv]`` config, which is
-    not part of the published wheel.
+    A checkout lets the worker build its serving env from the workspace lock — the
+    reproducible in-checkout path. ``None`` (no checkout found) drives the checkout-free
+    TPU path instead: the worker installs ``marin-core`` from PyPI and provisions vLLM
+    from an isolated uvx env (see :func:`_checkout_free_setup_script`). The GPU path
+    still requires a checkout.
 
-    Resolution order, so ``marin-serve`` runs from any directory that can reach a
-    checkout:
+    Resolution order:
 
-    1. ``--workspace`` if given (explicit override).
+    1. ``--workspace`` if given (explicit override; validated).
     2. the checkout containing the current directory.
-    3. the checkout this CLI is installed from (a source/editable install), which
-       covers driving ``marin-serve`` from an unrelated project's shell.
-
-    Raises a :class:`click.ClickException` naming the fix when no checkout is found,
-    instead of letting the container's ``uv sync`` fail with an opaque
-    "finished before registering an endpoint".
+    3. the checkout this CLI is installed from (a source/editable install).
     """
     if spec is not None:
         workspace = Path(spec).expanduser()
@@ -101,16 +105,35 @@ def _resolve_workspace(spec: str | None) -> Path:
         if not (workspace / "pyproject.toml").is_file():
             raise click.ClickException(f"--workspace {str(workspace)!r} has no pyproject.toml.")
         return workspace
+    return find_project_root(Path.cwd()) or find_project_root(Path(__file__))
 
-    workspace = find_project_root(Path.cwd()) or find_project_root(Path(__file__))
-    if workspace is None:
-        raise click.ClickException(
-            "marin-serve builds its serving container from a marin source checkout, but none was "
-            "found from the current directory or this install. Run marin-serve from inside a marin "
-            "checkout, or pass --workspace <path-to-checkout>. Serving straight from a PyPI-only "
-            "install (no checkout) is not yet supported — see https://github.com/marin-community/marin/issues/7106."
-        )
-    return workspace
+
+def _marin_core_version() -> str:
+    """Installed marin-core version, to pin the checkout-free worker install.
+
+    The worker installs this exact version from PyPI so its interpreter matches the
+    launching CLI's — cloudpickled entrypoints are version-sensitive.
+    """
+    return importlib.metadata.version("marin-core")
+
+
+def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> str:
+    """Setup script that installs marin-core from PyPI into a fresh venv (no checkout).
+
+    The checkout-free TPU path bundles no workspace, so there is no pyproject to
+    ``uv sync``. Create the venv and install the published marin-core (pinned to the
+    launching CLI's version) with the worker extras; vLLM itself is not installed here —
+    it runs from the isolated uvx env (see :class:`marin.inference.vllm_server.IsolatedTpuVllm`).
+    ``--torch-backend cpu`` routes torch/torchvision to the CPU PyTorch index, which the
+    workspace's ``[tool.uv.sources]`` map does off-checkout and wheel metadata cannot.
+    """
+    extras_suffix = f"[{','.join(extras)}]" if extras else ""
+    spec = f"marin-core{extras_suffix}=={marin_version}"
+    return (
+        "set -e\n"
+        'uv venv "$IRIS_VENV" --python 3.12\n'
+        f'uv pip install --python "$IRIS_VENV" --link-mode symlink --torch-backend cpu {shlex.quote(spec)}\n'
+    )
 
 
 def _resolve_chat_template(spec: str | None) -> str | None:
@@ -195,7 +218,15 @@ def _mint_and_print_capability_url(
     "--workspace",
     default=None,
     help="Marin checkout to bundle as the Iris job workspace "
-    "(default: auto-located from the current directory or this install).",
+    "(default: auto-located from the current directory or this install; "
+    "with no checkout, the TPU path serves checkout-free from PyPI + an isolated vLLM).",
+)
+@click.option(
+    "--isolated-vllm",
+    is_flag=True,
+    default=False,
+    help="TPU path: provision vLLM from the isolated uvx env (Marin's forked TPU vLLM) "
+    "even inside a checkout. Auto-selected when marin-serve runs outside a checkout.",
 )
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
@@ -257,6 +288,7 @@ def main(
     gpu: str | None,
     target_cluster: str | None,
     workspace: str | None,
+    isolated_vllm: bool,
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
@@ -303,7 +335,16 @@ def main(
 
     endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
+    tpu_vllm_ref: str | None = None
+    tpu_inference_ref: str | None = None
     if gpu is not None:
+        if workspace_dir is None:
+            raise click.ClickException(
+                "marin-serve --gpu builds its serving container from a marin checkout (the worker "
+                "runs marin-core from it); none was found. Run from a checkout or pass --workspace. "
+                "Checkout-free serving is currently TPU-only — see "
+                "https://github.com/marin-community/marin/issues/7106."
+            )
         try:
             gpu_variant, gpu_count = parse_gpu_spec(gpu)
         except ValueError as exc:
@@ -324,9 +365,17 @@ def main(
         gpu_variant, gpu_count = None, None
         tpu_type = tpu
         device = tpu_device(tpu)
-        worker_extras = (*_WORKER_EXTRAS, *extras)
-        # The TPU path serves from the workspace TPU-vLLM; no isolated env.
         cuda_vllm_version = None
+        # Provision the forked TPU vLLM from an isolated uvx env when there is no checkout
+        # to build it from (or when explicitly requested); otherwise serve the workspace
+        # TPU-vLLM from the lock. The worker venv always needs the `tpu` extra for the
+        # serving glue's jax/libtpu; the `vllm` extra is only for the in-workspace build.
+        if isolated_vllm or workspace_dir is None:
+            tpu_vllm_ref = vllm_fork_ref()
+            tpu_inference_ref = tpu_inference_fork_ref()
+            worker_extras = ("tpu", *extras)
+        else:
+            worker_extras = (*_WORKER_EXTRAS, *extras)
 
     config = QuickServeConfig(
         model=model,
@@ -347,7 +396,16 @@ def main(
         vllm_startup_timeout_seconds=int(wait_timeout),
         extra_vllm_args=tuple(vllm_args),
         vllm_version=cuda_vllm_version,
+        tpu_vllm_ref=tpu_vllm_ref,
+        tpu_inference_ref=tpu_inference_ref,
     )
+
+    # No checkout to bundle → install marin-core from PyPI on the worker (checkout-free
+    # TPU path); otherwise sync the bundled workspace with the resolved extras.
+    if workspace_dir is None:
+        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), worker_extras)])
+    else:
+        environment = EnvironmentSpec(extras=worker_extras)
 
     constraints: list[Constraint] = []
     if region:
@@ -367,7 +425,7 @@ def main(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,
                 resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=device),
-                environment=EnvironmentSpec(extras=worker_extras),
+                environment=environment,
                 ports=["http"],
                 constraints=constraints or None,
                 max_retries_failure=0,
