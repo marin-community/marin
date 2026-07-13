@@ -189,6 +189,10 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, the `grug_moe_baseline()`
   lazy `Checkpoint`, and `StepRunner` wiring.
 - [`launch_cw_scale.py`](./launch_cw_scale.py) — CoreWeave scale-test launcher.
+- [`throughput_tuning_h100.md`](./throughput_tuning_h100.md) — 8×H100 throughput
+  (MFU / tok/s) reference for the d2048 GQA and MLA MoE: tested configs, tuning
+  levers (scan, batch, FSDP-vs-EP, ring-vs-a2a MoE backends), the MLA
+  attention-sharding improvement, and memory/compile mechanics.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`test_optimizer.py`](./test_optimizer.py) — unit tests for the AdamH
   parameter-group mask.
