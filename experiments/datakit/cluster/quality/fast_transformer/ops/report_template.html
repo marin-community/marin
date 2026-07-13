@@ -1,0 +1,209 @@
+<title>__TITLE__</title>
+<style>
+:root{
+  --ground:#fbfcfd; --panel:#ffffff; --panel2:#f3f5f8; --ink:#141821; --ink2:#5a6473;
+  --line:#dbe0e8; --accent:#0f8f8c; --accent-ink:#0b6b69;
+  --q0:#c1443b; --q1:#d98b3f; --q2:#c9b23e; --q3:#86a94e; --q4:#3f9457;
+  --shadow:0 1px 2px rgba(20,30,50,.06),0 3px 12px rgba(20,30,50,.05);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --ground:#0f1319; --panel:#161b23; --panel2:#1c222c; --ink:#e7ecf3; --ink2:#94a0b2;
+  --line:#28303c; --accent:#2bb7b3; --accent-ink:#8fe3e0; --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.35);
+}}
+:root[data-theme=dark]{
+  --ground:#0f1319; --panel:#161b23; --panel2:#1c222c; --ink:#e7ecf3; --ink2:#94a0b2;
+  --line:#28303c; --accent:#2bb7b3; --accent-ink:#8fe3e0; --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.35);
+}
+:root[data-theme=light]{
+  --ground:#fbfcfd; --panel:#ffffff; --panel2:#f3f5f8; --ink:#141821; --ink2:#5a6473;
+  --line:#dbe0e8; --accent:#0f8f8c; --accent-ink:#0b6b69; --shadow:0 1px 2px rgba(20,30,50,.06),0 3px 12px rgba(20,30,50,.05);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 22px 120px}
+h1{font-size:20px;font-weight:650;margin:0;letter-spacing:-.01em}
+h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink2);
+  margin:38px 0 14px;display:flex;align-items:center;gap:10px}
+h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.sub{color:var(--ink2);font-size:13px;margin-top:5px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}
+.themebtn{font:inherit;font-size:12px;color:var(--ink2);background:var(--panel2);border:1px solid var(--line);
+  border-radius:7px;padding:6px 11px;cursor:pointer}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 16px;box-shadow:var(--shadow)}
+.card .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink2)}
+.card .v{font-family:var(--mono);font-size:24px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .d{font-size:12px;color:var(--ink2);margin-top:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}}
+.htitle{font-size:12px;color:var(--ink2);margin-bottom:8px;display:flex;justify-content:space-between}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0 0;font-size:12px;color:var(--ink2)}
+.legend b{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.bmix{display:flex;height:22px;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+.bmix i{display:block}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink2);cursor:pointer;user-select:none;position:sticky;top:0;background:var(--panel)}
+th:hover{color:var(--ink)}
+td.num{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+tr.srow:hover{background:var(--panel2)}tr.srow{cursor:pointer}
+.tag{font-family:var(--mono);font-size:10.5px;padding:1px 6px;border-radius:5px;background:var(--panel2);color:var(--ink2);border:1px solid var(--line)}
+.flag{background:#c1443b1a;color:var(--q0);border-color:#c1443b55}
+.tablewrap{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:12px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+select,.chip{font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.chip{cursor:pointer;font-family:var(--mono);font-size:12px}
+.chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.doc{border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:9px;background:var(--panel)}
+.doc .h{display:flex;gap:9px;align-items:center;font-size:12px;color:var(--ink2);margin-bottom:6px;flex-wrap:wrap}
+.doc pre{font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+  margin:0;max-height:150px;overflow:hidden}
+.doc pre.open{max-height:none}
+.doc .more{color:var(--accent-ink);cursor:pointer;font-size:12px;margin-top:5px;display:inline-block}
+.bpill{font-family:var(--mono);font-size:11px;font-weight:600;color:#fff;border-radius:5px;padding:1px 7px}
+.count{color:var(--ink2);font-size:12px;margin-left:auto}
+</style>
+<div class="wrap">
+<header>
+  <div><h1>__TITLE__</h1><div class="sub" id="subline"></div></div>
+  <button class="themebtn" onclick="tgl()">◐ theme</button>
+</header>
+<div class="cards" id="cards"></div>
+
+<h2>Distribution shape</h2>
+<div class="grid2">
+  <div class="panel"><div class="htitle"><span>NEW · <span id="scname"></span></span><span id="ftms" class="mono"></span></div><div id="fthist"></div><div id="ftbar" style="margin-top:12px"></div></div>
+  <div class="panel" id="oldpanel"><div class="htitle"><span>OLD · <span id="blname"></span></span><span id="oldms" class="mono"></span></div><div id="oldhist"></div><div id="oldbar" style="margin-top:12px"></div></div>
+</div>
+<div class="legend" id="blegend"></div>
+
+<div id="confsection"><h2>Where the old scorer's docs land in the new buckets</h2>
+<div class="panel"><div id="conf"></div><div class="sub" style="margin-top:8px">Each row = an old-scorer bucket; cells show how those docs redistribute across the new buckets.</div></div></div>
+
+<h2>Per-domain behaviour</h2>
+<div class="panel" style="padding:8px 4px"><div id="domains"></div></div>
+
+<h2>Per-source · sorted by new mean <span class="sub" style="text-transform:none;letter-spacing:0">(click a row to spot-check it)</span></h2>
+<div class="tablewrap"><table id="stable"><thead><tr>
+  <th data-k="source">source</th><th data-k="domain">domain</th><th data-k="n">n</th>
+  <th data-k="ft_mean">new μ</th><th data-k="old_mean">old μ</th>
+  <th>new bucket mix (q0→q4)</th><th>flags</th></tr></thead><tbody id="sbody"></tbody></table></div>
+
+<h2>Spot-check documents</h2>
+<div class="panel">
+  <div class="controls">
+    <select id="fsrc"><option value="">all sources</option></select>
+    <select id="fdom"><option value="">all domains</option></select>
+    <span>bucket:</span><span id="fbkt"></span>
+    <span class="count" id="doccount"></span>
+  </div>
+  <div id="docs"></div>
+</div>
+</div>
+<script>
+const D=__DATA__;
+function qc(i){return getComputedStyle(document.documentElement).getPropertyValue(['--q0','--q1','--q2','--q3','--q4'][i]).trim();}
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function tgl(){const r=document.documentElement;const cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');r.setAttribute('data-theme',cur==='dark'?'light':'dark');drawAll();}
+
+function barsSVG(counts,max,colorFn){
+  const W=100,n=counts.length,gap=1,bw=(W-gap*(n-1))/n;let s=`<svg viewBox="0 0 ${W} 46" preserveAspectRatio="none" style="height:70px">`;
+  counts.forEach((c,i)=>{const h=max>0?c/max*40:0;const x=i*(bw+gap);s+=`<rect x="${x}" y="${42-h}" width="${bw}" height="${h}" fill="${colorFn(i)}" rx="0.4"/>`;});
+  return s+'</svg>';}
+function histSVG(counts,accent){return barsSVG(counts,Math.max(...counts,1),()=>accent);}
+function scaleTicks(){return '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--ink2)" class="mono"><span>0.0</span><span>0.2</span><span>0.4</span><span>0.6</span><span>0.8</span><span>1.0</span></div>';}
+function bidx(){return '<div style="display:flex;justify-content:space-around;font-size:10px;color:var(--ink2);margin-top:2px" class="mono">'+[0,1,2,3,4].map(i=>`<span>q${i}</span>`).join('')+'</div>';}
+function bucketBar(counts){const tot=counts.reduce((a,b)=>a+b,0)||1;let s='<div class="bmix">';counts.forEach((c,i)=>{s+=`<i style="width:${c/tot*100}%;background:${qc(i)}" title="q${i}: ${c} (${(c/tot*100).toFixed(0)}%)"></i>`;});return s+'</div>';}
+
+function confTable(conf){
+  let s='<div style="overflow-x:auto"><table style="width:auto"><thead><tr><th style="position:static">old&darr; / new&rarr;</th>';
+  for(let c=0;c<5;c++)s+=`<th style="position:static;text-align:center;color:${qc(c)}">q${c}</th>`;s+='</tr></thead><tbody>';
+  conf.forEach((r,ri)=>{const tot=r.reduce((a,b)=>a+b,0);
+    s+=`<tr><td><span class="bpill" style="background:${qc(ri)}">q${ri}</span> <span class="mono" style="color:var(--ink2)">${tot}</span></td>`;
+    r.forEach((v,ci)=>{const a=tot>0?v/tot:0;s+=`<td class="num" style="background:${qc(ci)}${Math.round(a*200+15).toString(16).padStart(2,'0')};text-align:center">${v?v:''}</td>`;});
+    s+='</tr>';});
+  return s+'</tbody></table></div>';}
+
+let sortK='ft_mean',sortDir=1;
+function drawTable(){
+  const b=document.getElementById('sbody');b.innerHTML='';
+  [...D.sources].sort((x,y)=>{let a=x[sortK],c=y[sortK];if(typeof a==='string')return a.localeCompare(c)*sortDir;return (a-c)*sortDir;}).forEach(r=>{
+    const tr=document.createElement('tr');tr.className='srow';
+    const fl=r.flags.map(f=>`<span class="tag ${f[0]==='uninformative'?'flag':''}">${f[0]} ${f[1]}</span>`).join(' ');
+    tr.innerHTML=`<td class="mono" style="font-size:12px">${esc(r.source)}</td><td><span class="tag">${r.domain}</span></td>`+
+      `<td class="num">${r.n}</td><td class="num" style="color:${qc(Math.min(4,Math.floor(r.ft_mean*5)))}">${r.ft_mean.toFixed(2)}</td>`+
+      `<td class="num" style="color:var(--ink2)">${D.meta.has_old?r.old_mean.toFixed(2):'—'}</td>`+
+      `<td style="min-width:130px">${bucketBar(r.ft_buckets)}</td><td>${fl}</td>`;
+    tr.onclick=()=>{document.getElementById('fsrc').value=r.source;document.getElementById('fdom').value='';drawDocs();document.getElementById('docs').scrollIntoView({behavior:'smooth'});};
+    b.appendChild(tr);});
+}
+function drawDomains(){
+  const doms=Object.entries(D.domains).sort((a,b)=>a[1].ft_mean-b[1].ft_mean);
+  let s='<table><thead><tr><th style="position:static">domain</th><th style="position:static">n</th><th style="position:static">new μ</th><th style="position:static">old μ</th><th style="position:static;width:180px">new bucket mix</th><th style="position:static;width:180px">old bucket mix</th></tr></thead><tbody>';
+  doms.forEach(([d,v])=>{s+=`<tr><td>${d}</td><td class="num">${v.n}</td><td class="num" style="color:${qc(Math.min(4,Math.floor(v.ft_mean*5)))}">${v.ft_mean.toFixed(2)}</td><td class="num" style="color:var(--ink2)">${D.meta.has_old?v.old_mean.toFixed(2):'—'}</td><td>${bucketBar(v.ft_buckets)}</td><td>${D.meta.has_old?bucketBar(v.old_buckets):''}</td></tr>`;});
+  document.getElementById('domains').innerHTML=s+'</tbody></table>';
+}
+function drawHists(){
+  document.getElementById('scname').textContent=D.meta.scorer;
+  document.getElementById('blname').textContent=D.meta.baseline;
+  const ac=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  document.getElementById('fthist').innerHTML=histSVG(D.overall.ft_hist,ac)+scaleTicks();
+  document.getElementById('ftbar').innerHTML=barsSVG(D.overall.ft_buckets,Math.max(...D.overall.ft_buckets,1),qc)+bidx();
+  document.getElementById('ftms').textContent=`μ=${D.overall.ft_mean.toFixed(3)} σ=${D.overall.ft_std.toFixed(3)}`;
+  document.getElementById('blegend').innerHTML=[0,1,2,3,4].map(i=>`<span><b style="background:${qc(i)}"></b>q${i}</span>`).join('')+' <span style="color:var(--ink2)">— bucket bars: counts per fixed 0.2 bucket</span>';
+  if(D.meta.has_old){
+    document.getElementById('oldhist').innerHTML=histSVG(D.overall.old_hist,'var(--ink2)')+scaleTicks();
+    document.getElementById('oldbar').innerHTML=barsSVG(D.overall.old_buckets,Math.max(...D.overall.old_buckets,1),qc)+bidx();
+    document.getElementById('oldms').textContent=`μ=${D.overall.old_mean.toFixed(3)} σ=${D.overall.old_std.toFixed(3)}`;
+    document.getElementById('conf').innerHTML=confTable(D.conf);
+  }else{
+    document.getElementById('oldpanel').style.display='none';
+    document.getElementById('confsection').style.display='none';
+  }
+}
+let fb=new Set([0,1,2,3,4]);
+function drawChips(){const el=document.getElementById('fbkt');el.innerHTML='';
+  [0,1,2,3,4].forEach(i=>{const c=document.createElement('span');c.className='chip'+(fb.has(i)?' on':'');c.textContent='q'+i;
+    c.style.background=fb.has(i)?qc(i):'';c.style.borderColor=fb.has(i)?qc(i):'';c.style.color=fb.has(i)?'#fff':'';
+    c.onclick=()=>{fb.has(i)?fb.delete(i):fb.add(i);drawChips();drawDocs();};el.appendChild(c);});}
+function drawDocs(){
+  const s=document.getElementById('fsrc').value,dm=document.getElementById('fdom').value;
+  const list=D.docs.filter(d=>(!s||d.source===s)&&(!dm||d.domain===dm)&&fb.has(d.ft_bucket));
+  document.getElementById('doccount').textContent=list.length+' docs';
+  const el=document.getElementById('docs');el.innerHTML='';
+  list.slice(0,120).forEach(d=>{const div=document.createElement('div');div.className='doc';
+    const oldtag=d.old!=null?`<span class="tag">old q${d.old_bucket} · ${d.old.toFixed(2)}</span>`:'';
+    div.innerHTML=`<div class="h"><span class="bpill" style="background:${qc(d.ft_bucket)}">new q${d.ft_bucket} · ${d.ft.toFixed(2)}</span>${oldtag}`+
+      `<span class="tag">${esc(d.source)}</span><span class="tag">${d.domain}</span>`+
+      `<span class="mono" style="color:var(--ink2);font-size:11px">${esc(d.id).slice(0,28)}</span></div>`+
+      `<pre>${esc(d.text)}</pre><span class="more">▾ expand</span>`;
+    const pre=div.querySelector('pre'),more=div.querySelector('.more');
+    more.onclick=()=>{pre.classList.toggle('open');more.textContent=pre.classList.contains('open')?'▴ collapse':'▾ expand';};
+    el.appendChild(div);});
+  if(!list.length)el.innerHTML='<div class="sub">no docs match this filter</div>';
+}
+function drawAll(){drawHists();drawDomains();drawTable();drawChips();drawDocs();}
+function init(){
+  const oldbit=D.meta.has_old?` vs <span class="mono">${esc(D.meta.baseline)}</span>`:'';
+  document.getElementById('subline').innerHTML=`<span class="mono">${esc(D.meta.scorer)}</span>${oldbit} · sample <span class="mono">${esc(D.meta.sample)||'—'}</span> · ${D.meta.n.toLocaleString()} docs · ${D.meta.nsrc} sources · ${D.meta.ndom} domains`;
+  const o=D.overall;
+  const cards=[['docs scored',o.n.toLocaleString(),''],
+    ['new score μ',o.ft_mean.toFixed(3),`σ ${o.ft_std.toFixed(3)}`],
+    ['new q0 share',(o.ft_buckets[0]/o.n*100).toFixed(0)+'%',D.meta.has_old?`old ${(o.old_buckets[0]/o.n*100).toFixed(0)}%`:''],
+    ['new q4 share',(o.ft_buckets[4]/o.n*100).toFixed(0)+'%',D.meta.has_old?`old ${(o.old_buckets[4]/o.n*100).toFixed(0)}%`:'']];
+  if(D.meta.has_old)cards.splice(2,0,['old score μ',o.old_mean.toFixed(3),`σ ${o.old_std.toFixed(3)}`]);
+  document.getElementById('cards').innerHTML=cards.map(c=>`<div class="card"><div class="k">${c[0]}</div><div class="v">${c[1]}</div><div class="d">${c[2]}</div></div>`).join('');
+  const fs=document.getElementById('fsrc');[...D.sources].sort((a,b)=>a.source.localeCompare(b.source)).forEach(r=>fs.innerHTML+=`<option>${esc(r.source)}</option>`);
+  const fd=document.getElementById('fdom');Object.keys(D.domains).sort().forEach(d=>fd.innerHTML+=`<option>${d}</option>`);
+  fs.onchange=drawDocs;fd.onchange=drawDocs;
+  document.querySelectorAll('#stable th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(sortK===k)sortDir*=-1;else{sortK=k;sortDir=k==='source'||k==='domain'?1:-1;}drawTable();});
+  drawAll();
+}
+init();
+</script>

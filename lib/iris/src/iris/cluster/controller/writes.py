@@ -48,8 +48,8 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.federation.store import FederationDirection
-from iris.cluster.types import LOCAL_CLUSTER, AttemptUid, JobName, WorkerId
+from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 
@@ -786,6 +786,40 @@ def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int) -> None:
     )
 
 
+@writes_to(federated_jobs_table, jobs_table)
+def promote_queued_handoff(tx: Tx, job_id: JobName, peer_id: str) -> bool:
+    """Conditionally promote a QUEUED_HANDOFF handle to PENDING_HANDOFF for ``peer_id``.
+
+    The control tick decides promotions on a (possibly stale) read snapshot, so the
+    write is a compare-and-set: it flips the handle only while it is still
+    ``QUEUED_HANDOFF``, uncancelled, and its job is nonterminal. A concurrent cancel
+    or terminalization between the tick's read and this commit bumps
+    ``cancel_intent_version`` / the job state, the CAS matches zero rows, and the
+    caller drops the promotion (releasing its reservation). Returns whether the
+    handle was actually promoted; on success it also stamps ``jobs.cluster`` so the
+    job now names the peer it was assigned to."""
+    job_nonterminal = (
+        select(jobs_table.c.job_id)
+        .where(jobs_table.c.job_id == job_id, jobs_table.c.state.notin_(list(TERMINAL_JOB_STATES)))
+        .exists()
+    )
+    result = tx.execute(
+        update(federated_jobs_table)
+        .where(
+            federated_jobs_table.c.job_id == job_id,
+            federated_jobs_table.c.direction == int(FederationDirection.SENT),
+            federated_jobs_table.c.handoff_state == int(HandoffState.QUEUED_HANDOFF),
+            federated_jobs_table.c.cancel_intent_version == 0,
+            job_nonterminal,
+        )
+        .values(handoff_state=int(HandoffState.PENDING_HANDOFF), peer_id=peer_id)
+    )
+    if result.rowcount == 0:
+        return False
+    tx.execute(update(jobs_table).where(jobs_table.c.job_id == job_id).values(cluster=peer_id))
+    return True
+
+
 @writes_to(federated_jobs_table)
 def bump_cancel_intent(tx: Tx, job_id: JobName) -> None:
     """Increment a handle's ``cancel_intent_version`` (versioned, idempotent cancel)."""
@@ -809,6 +843,20 @@ def mark_federated_job_killed(tx: Tx, job_id: JobName, *, now_ms: int, error: st
         update(jobs_table)
         .where(jobs_table.c.job_id == job_id)
         .values(state=job_pb2.JOB_STATE_KILLED, finished_at_ms=now_ms, error=error)
+    )
+
+
+@writes_to(jobs_table)
+def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, error: str) -> None:
+    """Fail a queued federated job whose scheduling deadline elapsed before promotion.
+
+    A queued handle owns no tasks, so the jobs row alone flips to ``UNSCHEDULABLE`` —
+    the same terminal state a locally scheduled job reaches on a scheduling timeout.
+    """
+    tx.execute(
+        update(jobs_table)
+        .where(jobs_table.c.job_id == job_id)
+        .values(state=job_pb2.JOB_STATE_UNSCHEDULABLE, finished_at_ms=now_ms, error=error)
     )
 
 

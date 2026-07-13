@@ -1,16 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Quick single-model vLLM inference server for an Iris TPU slice.
+"""Quick single-model vLLM inference server for an Iris TPU or GPU slice.
 
-A quick-serve job boots one native vLLM server on a single-host TPU slice, fronts
-it with a browser dashboard + OpenAI-compatible reverse proxy, and registers the
+A quick-serve job boots one native vLLM server on a single-host slice, fronts it
+with a browser dashboard + OpenAI-compatible reverse proxy, and registers the
 dashboard as an Iris endpoint so it is reachable through the controller proxy. The
 job shuts itself down after a wall-clock timeout so a forgotten server does not sit
 on a slice indefinitely.
 
-This module holds the serving config and the in-job entrypoint that boots vLLM on
-the slice; the ``marin-serve`` launcher CLI is a separate module.
+On the TPU path vLLM is the TPU-vLLM stack installed in the workspace venv; on the
+GPU path stock CUDA vLLM is provisioned in an isolated uv-tool env (see
+:func:`select_vllm_launcher`). This module holds the serving config and the in-job
+entrypoint that boots vLLM on the slice; the ``marin-serve`` launcher CLI is a
+separate module.
 """
 
 import json
@@ -38,7 +41,14 @@ from marin.inference.quick_serve_dashboard import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.vllm_server import VllmEnvironment, _is_object_store_path
+from marin.inference.vllm_server import (
+    IsolatedCudaVllm,
+    IsolatedTpuVllm,
+    VllmEnvironment,
+    VllmLauncher,
+    WorkspaceVllm,
+    _is_object_store_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +70,27 @@ class QuickServeConfig:
 
     model: str
     """HF model id (e.g. ``Qwen/Qwen3-0.6B``) or object-store path (``gs://...``)."""
-    tpu_type: str
-    """Single-host TPU slice type, e.g. ``v6e-8`` or ``v5litepod-8``."""
     endpoint_name: str
     """Iris endpoint name registered for the dashboard (a leading ``/`` is verbatim)."""
+    tpu_type: str | None = None
+    """Single-host TPU slice type, e.g. ``v6e-8`` or ``v5litepod-8``. Set on the TPU path;
+    ``None`` on the GPU path, where ``gpu_type``/``gpu_count`` describe the slice instead."""
+    gpu_type: str | None = None
+    """GPU variant (e.g. ``H100``) when serving on a GPU slice; ``None`` on the TPU path."""
+    gpu_count: int | None = None
+    """GPU count per node when serving on a GPU slice. Its presence selects the GPU path:
+    ``num_chips`` is taken directly from it rather than a TPU topology lookup."""
+    vllm_version: str | None = None
+    """When set, provision stock CUDA vLLM at this exact version in an isolated uv-tool
+    env (see :class:`IsolatedCudaVllm`) — the GPU serving path. ``None`` serves from the
+    vLLM already on the venv/image ``PATH``: the workspace TPU-vLLM stack, or a prebuilt
+    ``--task-image``."""
+    tpu_vllm_ref: str | None = None
+    """When set (with ``tpu_inference_ref``), provision Marin's forked TPU vLLM in an
+    isolated uv-tool env (see :class:`IsolatedTpuVllm`) — the checkout-free TPU serving
+    path. ``None`` serves the TPU vLLM from the workspace venv (the in-checkout path)."""
+    tpu_inference_ref: str | None = None
+    """``uvx --with`` requirement for the tpu-inference fork; paired with ``tpu_vllm_ref``."""
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     """Proxy access mode. PRIVATE (cluster identity only) or LINK (a scoped capability
     URL, minted CLI-side, that anyone holding the link can call off-cluster)."""
@@ -86,6 +113,35 @@ class QuickServeConfig:
     timeout_hours: float = 24.0
     vllm_startup_timeout_seconds: int = 1800
     extra_vllm_args: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def accelerator_label(self) -> str:
+        """Human-readable accelerator string for the dashboard and endpoint metadata.
+
+        Reports the GPU slice (e.g. ``H100x8``) on the GPU path and the TPU type on
+        the TPU path.
+        """
+        if self.gpu_count is not None:
+            return f"{self.gpu_type}x{self.gpu_count}" if self.gpu_type else f"gpux{self.gpu_count}"
+        return self.tpu_type or "unknown"
+
+
+def select_vllm_launcher(config: QuickServeConfig) -> VllmLauncher:
+    """Pick how to launch vLLM: an isolated CUDA/TPU vLLM, or the workspace ``vllm``.
+
+    - ``vllm_version`` set → stock CUDA vLLM in a throwaway uv-tool env (GPU path).
+    - ``tpu_vllm_ref`` set → Marin's forked TPU vLLM in a throwaway uv-tool env
+      (checkout-free TPU path).
+    - neither → the vLLM already on the active venv/image ``PATH``: the workspace
+      TPU-vLLM stack, or a prebuilt ``--task-image`` that ships its own vLLM.
+    """
+    if config.vllm_version:
+        return IsolatedCudaVllm(version=config.vllm_version)
+    if config.tpu_vllm_ref:
+        if not config.tpu_inference_ref:
+            raise ValueError("tpu_vllm_ref requires tpu_inference_ref (the tpu-inference fork).")
+        return IsolatedTpuVllm(vllm_ref=config.tpu_vllm_ref, tpu_inference_ref=config.tpu_inference_ref)
+    return WorkspaceVllm()
 
 
 def select_tensor_parallel_size(
@@ -224,15 +280,26 @@ def serve_in_job(config: QuickServeConfig) -> None:
     # the advertised interface (the address the controller proxy connects to), not
     # all interfaces.
     serving_socket = bind_serving_socket(advertise_host, port)
+    # On the k8s runtime (e.g. CoreWeave GPU pods) named ports are kernel-assigned:
+    # ``get_port`` returns 0 and the real port is only known after binding. Register
+    # the actual bound port so the controller proxy can reach the endpoint.
+    serving_port = serving_socket.getsockname()[1]
 
     model_path = resolve_model_path(config.model, config.cache_ttl_days)
-    num_chips = get_tpu_topology(config.tpu_type).chips_per_vm
+    accelerator = config.accelerator_label
+    if config.gpu_count is not None:
+        # GPU slices expose their chip count directly; vLLM auto-detects CUDA.
+        num_chips = config.gpu_count
+    else:
+        if config.tpu_type is None:
+            raise ValueError("QuickServeConfig requires tpu_type on the TPU path (or gpu_count on the GPU path).")
+        num_chips = get_tpu_topology(config.tpu_type).chips_per_vm
     if config.tensor_parallel_size is not None:
         tensor_parallel_size = config.tensor_parallel_size
         logger.info(
-            "quick-serve model=%s tpu=%s chips=%d tensor_parallel_size=%d (user-specified)",
+            "quick-serve model=%s accelerator=%s chips=%d tensor_parallel_size=%d (user-specified)",
             config.model,
-            config.tpu_type,
+            accelerator,
             num_chips,
             tensor_parallel_size,
         )
@@ -240,9 +307,9 @@ def serve_in_job(config: QuickServeConfig) -> None:
         num_attention_heads, num_key_value_heads = read_attention_heads(model_path)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
         logger.info(
-            "quick-serve model=%s tpu=%s chips=%d heads=%d kv_heads=%s -> tensor_parallel_size=%d",
+            "quick-serve model=%s accelerator=%s chips=%d heads=%d kv_heads=%s -> tensor_parallel_size=%d",
             config.model,
-            config.tpu_type,
+            accelerator,
             num_chips,
             num_attention_heads,
             num_key_value_heads,
@@ -263,6 +330,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
         port=internal_port,
         timeout_seconds=config.vllm_startup_timeout_seconds,
         extra_args=extra_args,
+        launcher=select_vllm_launcher(config),
     ) as env:
         if env.model_id is None:
             raise RuntimeError("vLLM server did not report a model id.")
@@ -275,16 +343,16 @@ def serve_in_job(config: QuickServeConfig) -> None:
             max_model_len=config.max_model_len,
             dtype=config.dtype,
             has_chat_template=has_chat_template,
-            tpu_type=config.tpu_type,
+            tpu_type=accelerator,
             endpoint=config.endpoint_name,
         )
         app = build_dashboard_app(upstream_base_url=upstream_base_url, model_id=model_id, info=info)
         with serve_app_background(app, serving_socket):
-            address = f"http://{advertise_host}:{port}"
+            address = f"http://{advertise_host}:{serving_port}"
             metadata = {
                 "model": str(model_id),
                 "kind": "quick-serve",
-                "tpu": config.tpu_type,
+                "accelerator": accelerator,
                 "tensor_parallel_size": str(tensor_parallel_size),
             }
             endpoint_id = ctx.registry.register(config.endpoint_name, address, metadata, access=config.access)

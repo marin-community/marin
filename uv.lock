@@ -4889,6 +4889,7 @@ version = "0.2.0"
 source = { editable = "lib/fray" }
 dependencies = [
     { name = "cloudpickle" },
+    { name = "humanfriendly" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
 ]
@@ -4916,6 +4917,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "humanfriendly", specifier = ">=10.0" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
 ]

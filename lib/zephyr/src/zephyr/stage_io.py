@@ -18,6 +18,7 @@ from typing import Protocol
 
 import cloudpickle
 import humanfriendly
+from fray.types import ResourceConfig
 from rigging.filesystem import open_url, unique_temp_path
 
 from zephyr.plan import PhysicalOp, Scatter, Shard
@@ -268,6 +269,13 @@ class ZephyrTaskResources:
 
     def can_fit(self, cost: "ZephyrTaskResources") -> bool:
         return self.cpu >= cost.cpu and (cost.memory == 0 or self.memory >= cost.memory)
+
+    @classmethod
+    def from_resource_config(cls, config: ResourceConfig) -> "ZephyrTaskResources":
+        return cls(
+            cpu=config.cpu,
+            memory=int(humanfriendly.parse_size(config.ram, binary=True)),
+        )
 
 
 @dataclass

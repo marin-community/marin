@@ -12,7 +12,6 @@ def test_exact_paragraph_deduplication(fox_corpus):
     result = dedup_exact_paragraph(
         input_paths=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
-        max_parallelism=4,
     )
     assert result["success"]
     assert result["mode"] == DedupMode.EXACT_PARAGRAPH

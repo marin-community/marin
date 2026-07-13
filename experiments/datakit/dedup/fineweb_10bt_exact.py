@@ -5,7 +5,7 @@
 
 Usage:
     MARIN_PREFIX=/tmp/marin uv run iris --config=lib/iris/config/examples/local.yaml job run -- \\
-        python experiments/datakit/dedup/fineweb_10bt_exact.py [--max-parallelism N]
+        python experiments/datakit/dedup/fineweb_10bt_exact.py
 """
 
 import argparse
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 OUTPUT_PREFIX = os.environ.get("OUTPUT_PREFIX", "exact-para-dedup-fineweb-10bt")
 
 
-def build_steps(max_parallelism: int) -> list[StepSpec]:
+def build_steps() -> list[StepSpec]:
     download = fineweb_edu.download(
         hf_urls_glob=["sample/10BT/*.parquet"],
         worker_resources=ResourceConfig(cpu=2, ram="8g"),
@@ -38,8 +38,6 @@ def build_steps(max_parallelism: int) -> list[StepSpec]:
         fn=lambda op: dedup_exact_paragraph(
             input_paths=os.path.join(download.output_path, "sample/10BT"),
             output_path=op,
-            max_parallelism=max_parallelism,
-            worker_resources=ResourceConfig(cpu=3.5, ram="32g", disk="5g"),
         ),
     )
     return [download, dedup_step]
@@ -47,16 +45,9 @@ def build_steps(max_parallelism: int) -> list[StepSpec]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--max-parallelism",
-        type=int,
-        default=64,
-        metavar="N",
-        help="Maximum parallelism passed to dedup_exact_paragraph (default: %(default)s).",
-    )
-    args = parser.parse_args()
+    parser.parse_args()
     configure_logging(logging.INFO)
-    StepRunner().run(build_steps(max_parallelism=args.max_parallelism))
+    StepRunner().run(build_steps())
 
 
 if __name__ == "__main__":

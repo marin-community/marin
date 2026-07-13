@@ -222,6 +222,59 @@ def _request_has_body(request: Request) -> bool:
     return "transfer-encoding" in request.headers
 
 
+class _UpstreamError(Exception):
+    """A forwarded request that the caller answers with ``status_code`` and this message.
+
+    Carries a transport failure (502/504) or an upstream 401 folded to 502.
+    """
+
+    def __init__(self, message: str, *, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+    def as_response(self) -> JSONResponse:
+        return JSONResponse({"error": str(self)}, status_code=self.status_code)
+
+
+async def _send_upstream(
+    client: httpx.AsyncClient,
+    request: Request,
+    upstream_url: str,
+    forward_headers: dict[str, str],
+    *,
+    name: str,
+    kind: str,
+    timeout_seconds: float,
+) -> httpx.Response:
+    """Forward ``request`` to ``upstream_url``, returning the streaming upstream response.
+
+    ``kind`` labels the upstream in error text ("Upstream" for a direct pod, "Peer" for a
+    federated hop) and ``name`` identifies the target (endpoint name / peer id). A transport
+    failure raises :class:`_UpstreamError` carrying the terminal 502/504 the caller relays; a
+    401 does too, folded to a 502 with the upstream body appended — the upstream refused *this
+    controller*, not the browser (whose Authorization is stripped), so relaying the challenge
+    verbatim would misfire the dashboard's login modal. A bodyless request forwards no body.
+    """
+    body = request.stream() if _request_has_body(request) else None
+    upstream_req = client.build_request(request.method, upstream_url, headers=forward_headers, content=body)
+    try:
+        upstream_resp = await client.send(upstream_req, stream=True)
+    except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+        logger.warning("Proxy timeout for %s: %s", name, exc)
+        raise _UpstreamError(f"{kind} timeout after {timeout_seconds:g}s", status_code=504) from exc
+    except httpx.HTTPError as exc:
+        logger.warning("Proxy %s error for %s: %s", kind.lower(), name, exc)
+        raise _UpstreamError(f"{kind} error: {exc!r}", status_code=502) from exc
+
+    if upstream_resp.status_code == 401:
+        detail = await _read_error_detail(upstream_resp)
+        await upstream_resp.aclose()
+        logger.warning("Proxy 401 from %s -> 502: %s", name, detail)
+        refused = f"{kind} '{name}' refused the controller (401)"
+        raise _UpstreamError(f"{refused}: {detail}" if detail else refused, status_code=502)
+    return upstream_resp
+
+
 class EndpointProxy:
     """Forwards arbitrary HTTP requests to a registered endpoint.
 
@@ -300,60 +353,137 @@ class EndpointProxy:
 
         logger.info("Proxy %s %s -> %s", request.method, request.url.path, upstream_url)
 
+        # Honor a prefix set by an upstream proxy in the chain (a parent controller
+        # forwarding a federated endpoint sends its own browser-facing prefix, which
+        # differs from this hop's ``/proxy/<name>``). Using it for BOTH the pod's
+        # X-Forwarded-Prefix and Location rewriting keeps self-URLs and redirects
+        # pointing at the browser-visible prefix. Absent (direct browser hit) → this
+        # hop's own prefix.
+        inbound_prefix = request.headers.get("x-forwarded-prefix")
+        effective_prefix = inbound_prefix if inbound_prefix is not None else proxy_prefix
+
         forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
-        forward_headers.update(_build_forwarded_headers(request, proxy_prefix=proxy_prefix))
+        forward_headers.update(_build_forwarded_headers(request, proxy_prefix=effective_prefix))
 
-        # Only forward a body when the request has one; a bodyless GET sent with
-        # content=request.stream() becomes a chunked empty body (see
-        # _request_has_body). content=None is httpx's "no body".
-        body = request.stream() if _request_has_body(request) else None
-        upstream_req = self._client.build_request(
-            request.method,
-            upstream_url,
-            headers=forward_headers,
-            content=body,
-        )
         try:
-            upstream_resp = await self._client.send(upstream_req, stream=True)
-        except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
-            logger.warning("Proxy timeout for %s: %s", encoded_name, exc)
-            return JSONResponse(
-                {"error": f"Upstream timeout after {self._timeout_seconds:g}s"},
-                status_code=504,
+            upstream_resp = await _send_upstream(
+                self._client,
+                request,
+                upstream_url,
+                forward_headers,
+                name=encoded_name,
+                kind="Upstream",
+                timeout_seconds=self._timeout_seconds,
             )
-        except httpx.HTTPError as exc:
-            logger.warning("Proxy upstream error for %s: %s", encoded_name, exc)
-            return JSONResponse(
-                {"error": f"Upstream error: {exc!r}"},
-                status_code=502,
-            )
+        except _UpstreamError as exc:
+            return exc.as_response()
 
-        # An upstream 401 means the upstream refused *the controller's* request,
-        # not that the browser must authenticate to iris. The dashboard treats any
-        # 401 as an iris auth challenge and pops its login modal, but the browser
-        # never authenticated to the upstream (Authorization is stripped
-        # client -> upstream), so a verbatim relay misdirects the user. Translate
-        # it to a 502 — the controller was authorized; its gateway call upstream
-        # was refused — folding the upstream body into the error the client reads.
-        if upstream_resp.status_code == 401:
-            detail = await _read_error_detail(upstream_resp)
-            await upstream_resp.aclose()
-            logger.warning("Proxy upstream 401 for %s -> 502: %s", encoded_name, detail)
-            refused = f"Upstream '{encoded_name}' refused the controller (401)"
-            return JSONResponse(
-                {"error": f"{refused}: {detail}" if detail else refused},
-                status_code=502,
-            )
-
+        # Rewrite Location/self-URLs to the browser-visible prefix so a redirect from
+        # the pod stays inside this hop's ``/proxy/<name>/`` rather than escaping to
+        # the upstream bind address.
         response_headers: dict[str, str] = {}
         for k, v in upstream_resp.headers.items():
             lk = k.lower()
             if lk in _HOP_BY_HOP:
                 continue
             if lk in _LOCATION_HEADERS:
-                v = _rewrite_location(v, upstream_base=base, proxy_prefix=proxy_prefix)
+                v = _rewrite_location(v, upstream_base=base, proxy_prefix=effective_prefix)
             response_headers[k] = v
 
+        return StreamingResponse(
+            upstream_resp.aiter_raw(),
+            status_code=upstream_resp.status_code,
+            headers=response_headers,
+            background=BackgroundTask(upstream_resp.aclose),
+        )
+
+
+# Resolves a federation peer id to its controller base URL (scheme://host[:port]),
+# or None when the peer is unknown / unreachable.
+PeerAddressResolver = Callable[[str], str | None]
+# Mints a short-lived aud="federation" bearer identifying this controller to a peer.
+FederationTokenMinter = Callable[[], str]
+
+
+class FederatedEndpointProxy:
+    """Forwards a /proxy request for a federated endpoint to the peer that owns it.
+
+    The endpoint lives on a child cluster; this controller cannot reach the child's
+    pod, so it forwards to the child controller's own path-style ``/proxy/<name>``
+    and lets that hop reach the pod. The child authorizes the forward by this
+    controller's short-lived ``aud="federation"`` bearer (the only cross-cluster
+    credential); the browser's ``Cookie`` / ``Authorization`` are dropped so no
+    parent session or user token leaks across the boundary.
+
+    The parent's browser-facing prefix (``/proxy/<name>``, ``/proxy/t/<tok>/<name>``)
+    is sent as ``X-Forwarded-Prefix`` so the child rewrites the pod's redirects and
+    self-URLs to it directly; the child's response — including ``Location`` — is then
+    relayed verbatim.
+    """
+
+    def __init__(
+        self,
+        peer_address: PeerAddressResolver,
+        mint_token: FederationTokenMinter,
+        *,
+        timeout_seconds: float = PROXY_TIMEOUT_SECONDS,
+    ) -> None:
+        self._peer_address = peer_address
+        self._mint_token = mint_token
+        self._timeout_seconds = timeout_seconds
+        self._client = httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False, limits=_HTTPX_LIMITS)
+
+    async def close(self) -> None:
+        """Close the underlying httpx.AsyncClient. Idempotent."""
+        await self._client.aclose()
+
+    async def dispatch(
+        self,
+        request: Request,
+        *,
+        peer_id: str,
+        encoded_name: str,
+        sub_path: str,
+        proxy_prefix: str,
+    ) -> Response:
+        """Forward ``request`` to the peer controller's ``/proxy/<encoded_name>``.
+
+        ``proxy_prefix`` is this hop's browser-facing prefix, forwarded so the child
+        (and pod) build URLs the browser can follow back through this controller.
+        """
+        base = self._peer_address(peer_id)
+        if base is None:
+            logger.warning("Proxy %s %s -> peer %r unavailable", request.method, request.url.path, peer_id)
+            return JSONResponse({"error": f"Peer '{peer_id}' unavailable"}, status_code=502)
+
+        upstream_url = f"{base.rstrip('/')}/proxy/{encoded_name}/{sub_path}"
+        if request.url.query:
+            upstream_url = f"{upstream_url}?{request.url.query}"
+
+        logger.info("Federated proxy %s %s -> %s (%s)", request.method, request.url.path, upstream_url, peer_id)
+
+        # _HOP_BY_HOP drops the browser's Cookie/Authorization; the child gets only
+        # this controller's federation bearer.
+        forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+        forward_headers.update(_build_forwarded_headers(request, proxy_prefix=proxy_prefix))
+        forward_headers["authorization"] = f"Bearer {self._mint_token()}"
+
+        try:
+            upstream_resp = await _send_upstream(
+                self._client,
+                request,
+                upstream_url,
+                forward_headers,
+                name=peer_id,
+                kind="Peer",
+                timeout_seconds=self._timeout_seconds,
+            )
+        except _UpstreamError as exc:
+            return exc.as_response()
+
+        # The child already rewrote Location/self-URLs to this hop's prefix (sent as
+        # X-Forwarded-Prefix), so relay its response headers verbatim minus hop-by-hop.
+        response_headers = {k: v for k, v in upstream_resp.headers.items() if k.lower() not in _HOP_BY_HOP}
         return StreamingResponse(
             upstream_resp.aiter_raw(),
             status_code=upstream_resp.status_code,
