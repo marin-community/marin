@@ -2381,6 +2381,30 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as snap:
             return reads.federated_handle(snap, task_id.root_job)
 
+    def _resolve_task_target(self, task: TaskWithAttempts, attempt_id: int, *, wire_name: str) -> TaskTarget:
+        """Resolve a running task to a :class:`TaskTarget` for on-demand worker RPCs.
+
+        CLUSTER_VIEW backends (K8s) route by task id with no worker; worker-daemon
+        backends resolve and liveness-check the owning worker. Raises
+        ``FAILED_PRECONDITION`` if the task is not yet placed and ``UNAVAILABLE`` if
+        its worker is gone or unhealthy. Shared by ``profile_task`` and
+        ``exec_in_container``.
+        """
+        task_worker_id = _task_worker_id(task)
+        if not task_worker_id:
+            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
+            return TaskTarget(task_id=task.task_id.to_wire(), attempt_id=attempt_id, worker_id=None, address=None)
+        worker = _read_worker(self._db, task_worker_id)
+        if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+        return TaskTarget(
+            task_id=task.task_id.to_wire(),
+            attempt_id=attempt_id,
+            worker_id=task_worker_id,
+            address=worker.address,
+        )
+
     @property
     def endpoint_service(self) -> EndpointServiceImpl:
         """The leased endpoint registry these RPCs delegate to (shared with the dashboard)."""
@@ -2583,27 +2607,7 @@ class ControllerServiceImpl:
             )
 
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
-        task_worker_id = _task_worker_id(task)
-        if not task_worker_id:
-            # A cluster backend (K8s) chooses the node itself: route by task, no worker.
-            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
-                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
-            task_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=attempt_id,
-                worker_id=None,
-                address=None,
-            )
-        else:
-            worker = _read_worker(self._db, task_worker_id)
-            if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-            task_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=attempt_id,
-                worker_id=task_worker_id,
-                address=worker.address,
-            )
+        task_target = self._resolve_task_target(task, attempt_id, wire_name=request.target)
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
         resp = self._backend_for_id(str(task.backend_id or "")).profile_task(task_target, request, timeout_ms)
@@ -2841,29 +2845,10 @@ class ControllerServiceImpl:
             timeout_seconds=request.timeout_seconds,
         )
 
-        task_worker_id = _task_worker_id(task)
-        if not task_worker_id:
-            # A cluster backend (K8s) execs directly into the pod; no worker daemon.
-            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
-                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
-            exec_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=task.current_attempt_id,
-                worker_id=None,
-                address=None,
-            )
-            timeout = request.timeout_seconds if request.timeout_seconds else 60
-        else:
-            worker = _read_worker(self._db, task_worker_id)
-            if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-            exec_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=task.current_attempt_id,
-                worker_id=task_worker_id,
-                address=worker.address,
-            )
-            timeout = request.timeout_seconds
+        exec_target = self._resolve_task_target(task, task.current_attempt_id, wire_name=request.task_id)
+        # A cluster-view (K8s) exec has no worker daemon and defaults an unset
+        # timeout to 60s; a worker-daemon exec passes the request timeout through.
+        timeout = request.timeout_seconds or (60 if exec_target.worker_id is None else 0)
 
         resp = self._backend_for_id(str(task.backend_id or "")).exec_in_container(exec_target, worker_request, timeout)
         return controller_pb2.Controller.ExecInContainerResponse(
