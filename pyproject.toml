@@ -174,7 +174,7 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d
 # Temporary fixed-base overlay: https://github.com/marin-community/vllm/pull/10
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "2dfbc791f9fc7555cb41d686d0499f2e52e203b9" }
 # Temporary fixed-base overlay: https://github.com/marin-community/tpu-inference/pull/7
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "4c63810d9d7c54f43191b52b5c9ea23e592e8cf9" }
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "328e8d039323a1935176759fd78299394a198034" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

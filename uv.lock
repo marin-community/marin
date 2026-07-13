@@ -4692,7 +4692,7 @@ requires-dist = [
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cpu'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "cpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'tpu'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "tpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'vllm'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "vllm" } },
-    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=4c63810d9d7c54f43191b52b5c9ea23e592e8cf9" },
+    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=328e8d039323a1935176759fd78299394a198034" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "transformers", specifier = ">=5.5.3,<6.0" },
@@ -10867,7 +10867,7 @@ wheels = [
 [[package]]
 name = "tpu-inference"
 version = "0.23.0"
-source = { git = "https://github.com/marin-community/tpu-inference.git?rev=4c63810d9d7c54f43191b52b5c9ea23e592e8cf9#4c63810d9d7c54f43191b52b5c9ea23e592e8cf9" }
+source = { git = "https://github.com/marin-community/tpu-inference.git?rev=328e8d039323a1935176759fd78299394a198034#328e8d039323a1935176759fd78299394a198034" }
 dependencies = [
     { name = "absl-py" },
     { name = "fastapi", extra = ["standard"], marker = "extra == 'extra-10-marin-core-vllm' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
