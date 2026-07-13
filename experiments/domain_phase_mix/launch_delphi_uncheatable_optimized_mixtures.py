@@ -160,11 +160,37 @@ ONE_PHASE_UNCHEATABLE_VALIDATION_MIXTURE_GCS_DIR = (
 ONE_PHASE_OLMIX_KL_SWEEP_MIXTURE_GCS_DIR = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_one_phase_olmix_kl_sweep_3e18_20260705/mixtures"
 )
+SEP_LF_KL_SWEEP_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_sep_lf_kl_sweep_mixtures_20260706/mixtures"
+)
+BEST_PHASE_MODEL_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_best_phase_model_validation_mixtures_20260710/mixtures"
+)
+SEP_FRONTIER_TIED_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_sep_frontier_tied_mixtures_20260710/mixtures"
+)
+CENTERED_RECENCY_REORDER_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_centered_recency_sepheads_reorder_mixtures_20260710/mixtures"
+)
+GENERALIZED_POWER_REORDER_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_generalized_power_sepheads_reorder_mixtures_20260710/mixtures"
+)
+SYMMETRIC_SEPHEADS_GEOMETRY_FRONTIER_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_symmetric_sepheads_geometry_frontier_mixtures_20260711/mixtures"
+)
+ORIGINAL_STYLE_MATCHED_SEPHEADS_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_original_style_matched_sepheads_ablation_20260712/mixtures"
+)
+ORIGINAL_STYLE_MATCHED_SEPHEADS_DATA_SEED = 690300
 TABLE9_REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 TABLE9_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], zone="us-east5-b", disk="80g")
 TABLE9_TARGET_METRIC = "olmo_base_easy/table9_51_component_macro_bpb"
 
-EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_uncheatable_optimized_mixtures_20260625"
+EXPERIMENT_NAME: str = "pinlin_calvin_xu/data_mixture/delphi_uncheatable_optimized_mixtures_20260625"
 DEFAULT_ANALYSIS_OUTPUT_PATH = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
 )
@@ -320,6 +346,104 @@ class DelphiValidationMixture(StrEnum):
     T9VRR_K0_S1 = "t9vrr_k0_s1"
     T9VRR_K0_S2 = "t9vrr_k0_s2"
     T9VRR_K0_S3 = "t9vrr_k0_s3"
+    SEPLF_UNCH_SEP_KL0 = "seplf_unch_sep_kl0"
+    SEPLF_UNCH_SEP_KL0P1 = "seplf_unch_sep_kl0p1"
+    SEPLF_UNCH_SEP_KL0P2 = "seplf_unch_sep_kl0p2"
+    SEPLF_UNCH_SEP_KL0P3 = "seplf_unch_sep_kl0p3"
+    SEPLF_UNCH_SEP_KL0P4 = "seplf_unch_sep_kl0p4"
+    SEPLF_UNCH_LF2P_KL0P2 = "seplf_unch_lf2p_kl0p2"
+    SEPLF_T9_SEP_KL0 = "seplf_t9_sep_kl0"
+    SEPLF_T9_SEP_KL0P1 = "seplf_t9_sep_kl0p1"
+    SEPLF_T9_SEP_KL0P2 = "seplf_t9_sep_kl0p2"
+    SEPLF_T9_SEP_KL0P3 = "seplf_t9_sep_kl0p3"
+    SEPLF_T9_SEP_KL0P4 = "seplf_t9_sep_kl0p4"
+    SEPLF_T9_LF2P_KL0P2 = "seplf_t9_lf2p_kl0p2"
+    BESTPHASE_UNCH_2P_KL5 = "bestphase_uncheatable_2p_kl5"
+    BESTPHASE_UNCH_TIED_KL5 = "bestphase_uncheatable_tied_kl5"
+    BESTPHASE_UNCH_1P_KL5 = "bestphase_uncheatable_1p_kl5"
+    BESTPHASE_UNCH_2P_KL10 = "bestphase_uncheatable_2p_kl10"
+    BESTPHASE_UNCH_TIED_KL10 = "bestphase_uncheatable_tied_kl10"
+    BESTPHASE_UNCH_1P_KL10 = "bestphase_uncheatable_1p_kl10"
+    BESTPHASE_T9_2P_KL5 = "bestphase_table9_2p_kl5"
+    BESTPHASE_T9_TIED_KL5 = "bestphase_table9_tied_kl5"
+    BESTPHASE_T9_1P_KL5 = "bestphase_table9_1p_kl5"
+    BESTPHASE_T9_2P_KL10 = "bestphase_table9_2p_kl10"
+    BESTPHASE_T9_TIED_KL10 = "bestphase_table9_tied_kl10"
+    BESTPHASE_T9_1P_KL10 = "bestphase_table9_1p_kl10"
+    SEPFRONT_UNCH_2P_S0 = "sepfront_unch_2p_s0"
+    SEPFRONT_UNCH_TIED_S0 = "sepfront_unch_tied_s0"
+    SEPFRONT_UNCH_2P_S1 = "sepfront_unch_2p_s1"
+    SEPFRONT_UNCH_TIED_S1 = "sepfront_unch_tied_s1"
+    SEPFRONT_UNCH_2P_S2 = "sepfront_unch_2p_s2"
+    SEPFRONT_UNCH_TIED_S2 = "sepfront_unch_tied_s2"
+    SEPFRONT_T9_2P_S0 = "sepfront_t9_2p_s0"
+    SEPFRONT_T9_TIED_S0 = "sepfront_t9_tied_s0"
+    SEPFRONT_T9_2P_S1 = "sepfront_t9_2p_s1"
+    SEPFRONT_T9_TIED_S1 = "sepfront_t9_tied_s1"
+    SEPFRONT_T9_2P_S2 = "sepfront_t9_2p_s2"
+    SEPFRONT_T9_TIED_S2 = "sepfront_t9_tied_s2"
+    CENTREC_SEP_UNCH_OKL1 = "centrec_sep_uncheatable_okl1"
+    CENTREC_SEP_UNCH_OKL3 = "centrec_sep_uncheatable_okl3"
+    CENTREC_SEP_T9_OKL1 = "centrec_sep_table9_okl1"
+    CENTREC_SEP_T9_OKL3 = "centrec_sep_table9_okl3"
+    GENPOW_SEP_UNCH_OKL0P3 = "genpow_sep_unch_okl0p3"
+    GENPOW_SEP_UNCH_OKL1 = "genpow_sep_unch_okl1"
+    GENPOW_SEP_T9_OKL0P3 = "genpow_sep_t9_okl0p3"
+    GENPOW_SEP_T9_OKL1 = "genpow_sep_t9_okl1"
+    SYMSEP_UNCH_1P_KL0P05 = "symsep_unch_1p_kl0p05"
+    SYMSEP_UNCH_1P_KL0P1 = "symsep_unch_1p_kl0p1"
+    SYMSEP_UNCH_1P_KL0P2 = "symsep_unch_1p_kl0p2"
+    SYMSEP_UNCH_2P_KL0P05 = "symsep_unch_2p_kl0p05"
+    SYMSEP_UNCH_2P_KL0P1 = "symsep_unch_2p_kl0p1"
+    SYMSEP_UNCH_2P_KL0P2 = "symsep_unch_2p_kl0p2"
+    SYMSEP_T9_1P_KL0P05 = "symsep_t9_1p_kl0p05"
+    SYMSEP_T9_1P_KL0P1 = "symsep_t9_1p_kl0p1"
+    SYMSEP_T9_1P_KL0P2 = "symsep_t9_1p_kl0p2"
+    SYMSEP_T9_2P_KL0P05 = "symsep_t9_2p_kl0p05"
+    SYMSEP_T9_2P_KL0P1 = "symsep_t9_2p_kl0p1"
+    SYMSEP_T9_2P_KL0P2 = "symsep_t9_2p_kl0p2"
+    GEOMFRONT_UNCH_1P_KL0P2 = "geomfront_unch_1p_kl0p2"
+    GEOMFRONT_UNCH_1P_KL0P3 = "geomfront_unch_1p_kl0p3"
+    GEOMFRONT_UNCH_1P_KL0P5 = "geomfront_unch_1p_kl0p5"
+    GEOMFRONT_UNCH_2P_KL0P2 = "geomfront_unch_2p_kl0p2"
+    GEOMFRONT_UNCH_2P_KL0P3 = "geomfront_unch_2p_kl0p3"
+    GEOMFRONT_UNCH_2P_KL0P5 = "geomfront_unch_2p_kl0p5"
+    GEOMFRONT_UNCH_TIED_KL0P2 = "geomfront_unch_tied_kl0p2"
+    GEOMFRONT_UNCH_TIED_KL0P3 = "geomfront_unch_tied_kl0p3"
+    GEOMFRONT_UNCH_TIED_KL0P5 = "geomfront_unch_tied_kl0p5"
+    GEOMFRONT_T9_1P_KL0P15 = "geomfront_t9_1p_kl0p15"
+    GEOMFRONT_T9_1P_KL0P2 = "geomfront_t9_1p_kl0p2"
+    GEOMFRONT_T9_1P_KL0P3 = "geomfront_t9_1p_kl0p3"
+    GEOMFRONT_T9_2P_KL0P15 = "geomfront_t9_2p_kl0p15"
+    GEOMFRONT_T9_2P_KL0P2 = "geomfront_t9_2p_kl0p2"
+    GEOMFRONT_T9_2P_KL0P3 = "geomfront_t9_2p_kl0p3"
+    GEOMFRONT_T9_TIED_KL0P15 = "geomfront_t9_tied_kl0p15"
+    GEOMFRONT_T9_TIED_KL0P2 = "geomfront_t9_tied_kl0p2"
+    GEOMFRONT_T9_TIED_KL0P3 = "geomfront_t9_tied_kl0p3"
+    ORIGSTYLE_SEP_UNCH_1P_KL0P05 = "origstyle_sep_unch_1p_kl0p05"
+    ORIGSTYLE_SEP_UNCH_1P_KL0P075 = "origstyle_sep_unch_1p_kl0p075"
+    ORIGSTYLE_SEP_UNCH_1P_KL0P1 = "origstyle_sep_unch_1p_kl0p1"
+    ORIGSTYLE_SEP_UNCH_1P_KL0P15 = "origstyle_sep_unch_1p_kl0p15"
+    ORIGSTYLE_SEP_UNCH_1P_KL0P2 = "origstyle_sep_unch_1p_kl0p2"
+    ORIGSTYLE_SEP_UNCH_1P_KL0P3 = "origstyle_sep_unch_1p_kl0p3"
+    ORIGSTYLE_SEP_UNCH_2P_KL0P05 = "origstyle_sep_unch_2p_kl0p05"
+    ORIGSTYLE_SEP_UNCH_2P_KL0P075 = "origstyle_sep_unch_2p_kl0p075"
+    ORIGSTYLE_SEP_UNCH_2P_KL0P1 = "origstyle_sep_unch_2p_kl0p1"
+    ORIGSTYLE_SEP_UNCH_2P_KL0P15 = "origstyle_sep_unch_2p_kl0p15"
+    ORIGSTYLE_SEP_UNCH_2P_KL0P2 = "origstyle_sep_unch_2p_kl0p2"
+    ORIGSTYLE_SEP_UNCH_2P_KL0P3 = "origstyle_sep_unch_2p_kl0p3"
+    ORIGSTYLE_SEP_T9_1P_KL0P05 = "origstyle_sep_t9_1p_kl0p05"
+    ORIGSTYLE_SEP_T9_1P_KL0P075 = "origstyle_sep_t9_1p_kl0p075"
+    ORIGSTYLE_SEP_T9_1P_KL0P1 = "origstyle_sep_t9_1p_kl0p1"
+    ORIGSTYLE_SEP_T9_1P_KL0P15 = "origstyle_sep_t9_1p_kl0p15"
+    ORIGSTYLE_SEP_T9_1P_KL0P2 = "origstyle_sep_t9_1p_kl0p2"
+    ORIGSTYLE_SEP_T9_1P_KL0P3 = "origstyle_sep_t9_1p_kl0p3"
+    ORIGSTYLE_SEP_T9_2P_KL0P05 = "origstyle_sep_t9_2p_kl0p05"
+    ORIGSTYLE_SEP_T9_2P_KL0P075 = "origstyle_sep_t9_2p_kl0p075"
+    ORIGSTYLE_SEP_T9_2P_KL0P1 = "origstyle_sep_t9_2p_kl0p1"
+    ORIGSTYLE_SEP_T9_2P_KL0P15 = "origstyle_sep_t9_2p_kl0p15"
+    ORIGSTYLE_SEP_T9_2P_KL0P2 = "origstyle_sep_t9_2p_kl0p2"
+    ORIGSTYLE_SEP_T9_2P_KL0P3 = "origstyle_sep_t9_2p_kl0p3"
     PROPORTIONAL_NOISE_3E18_A = "proportional_noise_3e18_a"
     PROPORTIONAL_NOISE_3E18_B = "proportional_noise_3e18_b"
     PROPORTIONAL_NOISE_3E18_C = "proportional_noise_3e18_c"
@@ -344,6 +468,7 @@ class MixtureSource:
     method: str
     wandb_series_tag: str
     expected_max_simulated_epoch: float | None = None
+    data_seed_override: int | None = None
 
 
 def _table9_dsp_validation_source(
@@ -631,6 +756,159 @@ def _proportional_noise_source(*, key: DelphiValidationMixture, label: str) -> M
         method=f"proportional_3e18_noise_repeat_{label.lower()}",
         wandb_series_tag="delphi-3e18-baseline-noise-panel",
         expected_max_simulated_epoch=None,
+    )
+
+
+def _sep_lf_kl_sweep_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    target_metric: str,
+    wandb_series_tag: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{SEP_LF_KL_SWEEP_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag=wandb_series_tag,
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _best_phase_model_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    series_target = "table9" if target_metric == TABLE9_TARGET_METRIC else "uncheatable"
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{BEST_PHASE_MODEL_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag=f"delphi-best-phase-model-{series_target}",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _sep_frontier_tied_source(
+    *,
+    key: DelphiValidationMixture,
+    objective: str,
+    policy: str,
+    repeat: int,
+    data_seed: int,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    target_metric = TABLE9_TARGET_METRIC if objective == "table9" else "eval/uncheatable_eval/bpb"
+    objective_tag = "t9" if objective == "table9" else "unch"
+    return MixtureSource(
+        key=key,
+        display_name=f"separate-heads {objective} KL=0.1 {policy} seed-pair {repeat}",
+        source_csv=f"{SEP_FRONTIER_TIED_MIXTURE_GCS_DIR}/sepfront_{objective_tag}_{policy}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=f"separate_heads_frontier_{objective}_{policy}_repeat_{repeat}",
+        wandb_series_tag="delphi-separate-heads-frontier-tied-pairs",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+        data_seed_override=data_seed,
+    )
+
+
+def _centered_recency_reorder_source(
+    *,
+    key: DelphiValidationMixture,
+    objective: str,
+    order_kl: float,
+    data_seed: int,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    target_metric = TABLE9_TARGET_METRIC if objective == "table9" else "eval/uncheatable_eval/bpb"
+    return MixtureSource(
+        key=key,
+        display_name=f"centered-recency reorder of separate-heads {objective}, order KL={order_kl:g}",
+        source_csv=f"{CENTERED_RECENCY_REORDER_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag="delphi-centered-recency-sepheads-reorder",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+        data_seed_override=data_seed,
+    )
+
+
+def _generalized_power_reorder_source(
+    *,
+    key: DelphiValidationMixture,
+    objective: str,
+    order_kl: float,
+    data_seed: int,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    target_metric = TABLE9_TARGET_METRIC if objective == "table9" else "eval/uncheatable_eval/bpb"
+    return MixtureSource(
+        key=key,
+        display_name=f"generalized-power reorder of separate-heads {objective}, order KL={order_kl:g}",
+        source_csv=f"{GENERALIZED_POWER_REORDER_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag="delphi-generalized-power-sepheads-reorder",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+        data_seed_override=data_seed,
+    )
+
+
+def _symmetric_frontier_source(
+    *,
+    key: DelphiValidationMixture,
+    family: str,
+    objective: str,
+    policy: str,
+    kl_reg: float,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    target_metric = TABLE9_TARGET_METRIC if objective == "table9" else "eval/uncheatable_eval/bpb"
+    return MixtureSource(
+        key=key,
+        display_name=f"{family} {objective} {policy} KL={kl_reg:g}",
+        source_csv=f"{SYMMETRIC_SEPHEADS_GEOMETRY_FRONTIER_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag="delphi-symmetric-sepheads-geometry-frontier",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _original_style_matched_sepheads_source(
+    *,
+    key: DelphiValidationMixture,
+    objective: str,
+    policy: str,
+    kl_reg: float,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    target_metric = TABLE9_TARGET_METRIC if objective == "table9" else "eval/uncheatable_eval/bpb"
+    return MixtureSource(
+        key=key,
+        display_name=f"original-style matched separate-heads {objective} {policy} KL={kl_reg:g}",
+        source_csv=f"{ORIGINAL_STYLE_MATCHED_SEPHEADS_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag="delphi-original-style-matched-sepheads-ablation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+        data_seed_override=ORIGINAL_STYLE_MATCHED_SEPHEADS_DATA_SEED,
     )
 
 
@@ -1680,7 +1958,417 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_J,
         label="J",
     ),
+    DelphiValidationMixture.SEPLF_UNCH_SEP_KL0: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_UNCH_SEP_KL0,
+        display_name="separate-heads uncheatable raw optimum (KL=0)",
+        method="seplf_unch_sep_kl0",
+        target_metric="eval/uncheatable_eval/bpb",
+        wandb_series_tag="delphi-sep-lf-kl-sweep-uncheatable",
+        expected_max_simulated_epoch=16.722468,
+    ),
+    DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P1: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P1,
+        display_name="separate-heads uncheatable KL=0.1",
+        method="seplf_unch_sep_kl0p1",
+        target_metric="eval/uncheatable_eval/bpb",
+        wandb_series_tag="delphi-sep-lf-kl-sweep-uncheatable",
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P2: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P2,
+        display_name="separate-heads uncheatable KL=0.2",
+        method="seplf_unch_sep_kl0p2",
+        target_metric="eval/uncheatable_eval/bpb",
+        wandb_series_tag="delphi-sep-lf-kl-sweep-uncheatable",
+        expected_max_simulated_epoch=4.610551,
+    ),
+    DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P3: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P3,
+        display_name="separate-heads uncheatable KL=0.3",
+        method="seplf_unch_sep_kl0p3",
+        target_metric="eval/uncheatable_eval/bpb",
+        wandb_series_tag="delphi-sep-lf-kl-sweep-uncheatable",
+        expected_max_simulated_epoch=3.872798,
+    ),
+    DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P4: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_UNCH_SEP_KL0P4,
+        display_name="separate-heads uncheatable KL=0.4",
+        method="seplf_unch_sep_kl0p4",
+        target_metric="eval/uncheatable_eval/bpb",
+        wandb_series_tag="delphi-sep-lf-kl-sweep-uncheatable",
+        expected_max_simulated_epoch=3.408462,
+    ),
+    DelphiValidationMixture.SEPLF_UNCH_LF2P_KL0P2: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_UNCH_LF2P_KL0P2,
+        display_name="LEARN-FORGET uncheatable KL=0.2 (confirming ~eff-exp)",
+        method="seplf_unch_lf2p_kl0p2",
+        target_metric="eval/uncheatable_eval/bpb",
+        wandb_series_tag="delphi-sep-lf-kl-sweep-uncheatable",
+        expected_max_simulated_epoch=3.300175,
+    ),
+    DelphiValidationMixture.SEPLF_T9_SEP_KL0: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_T9_SEP_KL0,
+        display_name="separate-heads Table-9 raw optimum (KL=0)",
+        method="seplf_t9_sep_kl0",
+        target_metric=TABLE9_TARGET_METRIC,
+        wandb_series_tag="delphi-sep-lf-kl-sweep-table9",
+        expected_max_simulated_epoch=14.970762,
+    ),
+    DelphiValidationMixture.SEPLF_T9_SEP_KL0P1: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_T9_SEP_KL0P1,
+        display_name="separate-heads Table-9 KL=0.1",
+        method="seplf_t9_sep_kl0p1",
+        target_metric=TABLE9_TARGET_METRIC,
+        wandb_series_tag="delphi-sep-lf-kl-sweep-table9",
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.SEPLF_T9_SEP_KL0P2: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_T9_SEP_KL0P2,
+        display_name="separate-heads Table-9 KL=0.2",
+        method="seplf_t9_sep_kl0p2",
+        target_metric=TABLE9_TARGET_METRIC,
+        wandb_series_tag="delphi-sep-lf-kl-sweep-table9",
+        expected_max_simulated_epoch=5.060286,
+    ),
+    DelphiValidationMixture.SEPLF_T9_SEP_KL0P3: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_T9_SEP_KL0P3,
+        display_name="separate-heads Table-9 KL=0.3",
+        method="seplf_t9_sep_kl0p3",
+        target_metric=TABLE9_TARGET_METRIC,
+        wandb_series_tag="delphi-sep-lf-kl-sweep-table9",
+        expected_max_simulated_epoch=4.328800,
+    ),
+    DelphiValidationMixture.SEPLF_T9_SEP_KL0P4: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_T9_SEP_KL0P4,
+        display_name="separate-heads Table-9 KL=0.4",
+        method="seplf_t9_sep_kl0p4",
+        target_metric=TABLE9_TARGET_METRIC,
+        wandb_series_tag="delphi-sep-lf-kl-sweep-table9",
+        expected_max_simulated_epoch=3.853026,
+    ),
+    DelphiValidationMixture.SEPLF_T9_LF2P_KL0P2: _sep_lf_kl_sweep_source(
+        key=DelphiValidationMixture.SEPLF_T9_LF2P_KL0P2,
+        display_name="LEARN-FORGET Table-9 KL=0.2 (confirming ~eff-exp)",
+        method="seplf_t9_lf2p_kl0p2",
+        target_metric=TABLE9_TARGET_METRIC,
+        wandb_series_tag="delphi-sep-lf-kl-sweep-table9",
+        expected_max_simulated_epoch=4.648602,
+    ),
+    DelphiValidationMixture.BESTPHASE_UNCH_2P_KL5: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_UNCH_2P_KL5,
+        display_name="Best phase model Uncheatable two-phase KL=5",
+        target_metric="eval/uncheatable_eval/bpb",
+        expected_max_simulated_epoch=1.164605,
+    ),
+    DelphiValidationMixture.BESTPHASE_UNCH_TIED_KL5: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_UNCH_TIED_KL5,
+        display_name="Best phase model Uncheatable aggregate-matched tied KL=5",
+        target_metric="eval/uncheatable_eval/bpb",
+        expected_max_simulated_epoch=1.164605,
+    ),
+    DelphiValidationMixture.BESTPHASE_UNCH_1P_KL5: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_UNCH_1P_KL5,
+        display_name="Best phase model Uncheatable optimized one-phase KL=5",
+        target_metric="eval/uncheatable_eval/bpb",
+        expected_max_simulated_epoch=1.143068,
+    ),
+    DelphiValidationMixture.BESTPHASE_UNCH_2P_KL10: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_UNCH_2P_KL10,
+        display_name="Best phase model Uncheatable two-phase KL=10",
+        target_metric="eval/uncheatable_eval/bpb",
+        expected_max_simulated_epoch=1.026664,
+    ),
+    DelphiValidationMixture.BESTPHASE_UNCH_TIED_KL10: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_UNCH_TIED_KL10,
+        display_name="Best phase model Uncheatable aggregate-matched tied KL=10",
+        target_metric="eval/uncheatable_eval/bpb",
+        expected_max_simulated_epoch=1.026664,
+    ),
+    DelphiValidationMixture.BESTPHASE_UNCH_1P_KL10: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_UNCH_1P_KL10,
+        display_name="Best phase model Uncheatable optimized one-phase KL=10",
+        target_metric="eval/uncheatable_eval/bpb",
+        expected_max_simulated_epoch=1.020232,
+    ),
+    DelphiValidationMixture.BESTPHASE_T9_2P_KL5: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_T9_2P_KL5,
+        display_name="Best phase model Table-9 two-phase KL=5",
+        target_metric=TABLE9_TARGET_METRIC,
+        expected_max_simulated_epoch=1.454163,
+    ),
+    DelphiValidationMixture.BESTPHASE_T9_TIED_KL5: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_T9_TIED_KL5,
+        display_name="Best phase model Table-9 aggregate-matched tied KL=5",
+        target_metric=TABLE9_TARGET_METRIC,
+        expected_max_simulated_epoch=1.454163,
+    ),
+    DelphiValidationMixture.BESTPHASE_T9_1P_KL5: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_T9_1P_KL5,
+        display_name="Best phase model Table-9 optimized one-phase KL=5",
+        target_metric=TABLE9_TARGET_METRIC,
+        expected_max_simulated_epoch=1.355453,
+    ),
+    DelphiValidationMixture.BESTPHASE_T9_2P_KL10: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_T9_2P_KL10,
+        display_name="Best phase model Table-9 two-phase KL=10",
+        target_metric=TABLE9_TARGET_METRIC,
+        expected_max_simulated_epoch=1.144575,
+    ),
+    DelphiValidationMixture.BESTPHASE_T9_TIED_KL10: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_T9_TIED_KL10,
+        display_name="Best phase model Table-9 aggregate-matched tied KL=10",
+        target_metric=TABLE9_TARGET_METRIC,
+        expected_max_simulated_epoch=1.144575,
+    ),
+    DelphiValidationMixture.BESTPHASE_T9_1P_KL10: _best_phase_model_source(
+        key=DelphiValidationMixture.BESTPHASE_T9_1P_KL10,
+        display_name="Best phase model Table-9 optimized one-phase KL=10",
+        target_metric=TABLE9_TARGET_METRIC,
+        expected_max_simulated_epoch=1.116847,
+    ),
+    DelphiValidationMixture.SEPFRONT_UNCH_2P_S0: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_UNCH_2P_S0,
+        objective="uncheatable",
+        policy="2p",
+        repeat=0,
+        data_seed=680000,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPFRONT_UNCH_TIED_S0: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_UNCH_TIED_S0,
+        objective="uncheatable",
+        policy="tied",
+        repeat=0,
+        data_seed=680000,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPFRONT_UNCH_2P_S1: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_UNCH_2P_S1,
+        objective="uncheatable",
+        policy="2p",
+        repeat=1,
+        data_seed=680001,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPFRONT_UNCH_TIED_S1: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_UNCH_TIED_S1,
+        objective="uncheatable",
+        policy="tied",
+        repeat=1,
+        data_seed=680001,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPFRONT_UNCH_2P_S2: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_UNCH_2P_S2,
+        objective="uncheatable",
+        policy="2p",
+        repeat=2,
+        data_seed=680002,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPFRONT_UNCH_TIED_S2: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_UNCH_TIED_S2,
+        objective="uncheatable",
+        policy="tied",
+        repeat=2,
+        data_seed=680002,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.SEPFRONT_T9_2P_S0: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_T9_2P_S0,
+        objective="table9",
+        policy="2p",
+        repeat=0,
+        data_seed=680100,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.SEPFRONT_T9_TIED_S0: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_T9_TIED_S0,
+        objective="table9",
+        policy="tied",
+        repeat=0,
+        data_seed=680100,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.SEPFRONT_T9_2P_S1: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_T9_2P_S1,
+        objective="table9",
+        policy="2p",
+        repeat=1,
+        data_seed=680101,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.SEPFRONT_T9_TIED_S1: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_T9_TIED_S1,
+        objective="table9",
+        policy="tied",
+        repeat=1,
+        data_seed=680101,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.SEPFRONT_T9_2P_S2: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_T9_2P_S2,
+        objective="table9",
+        policy="2p",
+        repeat=2,
+        data_seed=680102,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.SEPFRONT_T9_TIED_S2: _sep_frontier_tied_source(
+        key=DelphiValidationMixture.SEPFRONT_T9_TIED_S2,
+        objective="table9",
+        policy="tied",
+        repeat=2,
+        data_seed=680102,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.CENTREC_SEP_UNCH_OKL1: _centered_recency_reorder_source(
+        key=DelphiValidationMixture.CENTREC_SEP_UNCH_OKL1,
+        objective="uncheatable",
+        order_kl=1.0,
+        data_seed=680000,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.CENTREC_SEP_UNCH_OKL3: _centered_recency_reorder_source(
+        key=DelphiValidationMixture.CENTREC_SEP_UNCH_OKL3,
+        objective="uncheatable",
+        order_kl=3.0,
+        data_seed=680000,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.CENTREC_SEP_T9_OKL1: _centered_recency_reorder_source(
+        key=DelphiValidationMixture.CENTREC_SEP_T9_OKL1,
+        objective="table9",
+        order_kl=1.0,
+        data_seed=680100,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.CENTREC_SEP_T9_OKL3: _centered_recency_reorder_source(
+        key=DelphiValidationMixture.CENTREC_SEP_T9_OKL3,
+        objective="table9",
+        order_kl=3.0,
+        data_seed=680100,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.GENPOW_SEP_UNCH_OKL0P3: _generalized_power_reorder_source(
+        key=DelphiValidationMixture.GENPOW_SEP_UNCH_OKL0P3,
+        objective="uncheatable",
+        order_kl=0.3,
+        data_seed=680000,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.GENPOW_SEP_UNCH_OKL1: _generalized_power_reorder_source(
+        key=DelphiValidationMixture.GENPOW_SEP_UNCH_OKL1,
+        objective="uncheatable",
+        order_kl=1.0,
+        data_seed=680000,
+        expected_max_simulated_epoch=6.070029,
+    ),
+    DelphiValidationMixture.GENPOW_SEP_T9_OKL0P3: _generalized_power_reorder_source(
+        key=DelphiValidationMixture.GENPOW_SEP_T9_OKL0P3,
+        objective="table9",
+        order_kl=0.3,
+        data_seed=680100,
+        expected_max_simulated_epoch=6.448497,
+    ),
+    DelphiValidationMixture.GENPOW_SEP_T9_OKL1: _generalized_power_reorder_source(
+        key=DelphiValidationMixture.GENPOW_SEP_T9_OKL1,
+        objective="table9",
+        order_kl=1.0,
+        data_seed=680100,
+        expected_max_simulated_epoch=6.448497,
+    ),
 }
+
+_SYMMETRIC_FRONTIER_SPECS = {
+    DelphiValidationMixture.SYMSEP_UNCH_1P_KL0P05: ("separate-heads", "uncheatable", "1p", 0.05, 9.380395),
+    DelphiValidationMixture.SYMSEP_UNCH_1P_KL0P1: ("separate-heads", "uncheatable", "1p", 0.1, 7.220985),
+    DelphiValidationMixture.SYMSEP_UNCH_1P_KL0P2: ("separate-heads", "uncheatable", "1p", 0.2, 5.302521),
+    DelphiValidationMixture.SYMSEP_UNCH_2P_KL0P05: ("separate-heads", "uncheatable", "2p", 0.05, 5.666745),
+    DelphiValidationMixture.SYMSEP_UNCH_2P_KL0P1: ("separate-heads", "uncheatable", "2p", 0.1, 5.086449),
+    DelphiValidationMixture.SYMSEP_UNCH_2P_KL0P2: ("separate-heads", "uncheatable", "2p", 0.2, 4.331176),
+    DelphiValidationMixture.SYMSEP_T9_1P_KL0P05: ("separate-heads", "table9", "1p", 0.05, 17.540714),
+    DelphiValidationMixture.SYMSEP_T9_1P_KL0P1: ("separate-heads", "table9", "1p", 0.1, 13.352402),
+    DelphiValidationMixture.SYMSEP_T9_1P_KL0P2: ("separate-heads", "table9", "1p", 0.2, 6.648886),
+    DelphiValidationMixture.SYMSEP_T9_2P_KL0P05: ("separate-heads", "table9", "2p", 0.05, 9.311626),
+    DelphiValidationMixture.SYMSEP_T9_2P_KL0P1: ("separate-heads", "table9", "2p", 0.1, 6.435724),
+    DelphiValidationMixture.SYMSEP_T9_2P_KL0P2: ("separate-heads", "table9", "2p", 0.2, 4.308822),
+    DelphiValidationMixture.GEOMFRONT_UNCH_1P_KL0P2: ("eff-exp+geometry", "uncheatable", "1p", 0.2, 7.315369),
+    DelphiValidationMixture.GEOMFRONT_UNCH_1P_KL0P3: ("eff-exp+geometry", "uncheatable", "1p", 0.3, 5.380262),
+    DelphiValidationMixture.GEOMFRONT_UNCH_1P_KL0P5: ("eff-exp+geometry", "uncheatable", "1p", 0.5, 3.688639),
+    DelphiValidationMixture.GEOMFRONT_UNCH_2P_KL0P2: ("eff-exp+geometry", "uncheatable", "2p", 0.2, 4.296505),
+    DelphiValidationMixture.GEOMFRONT_UNCH_2P_KL0P3: ("eff-exp+geometry", "uncheatable", "2p", 0.3, 3.876880),
+    DelphiValidationMixture.GEOMFRONT_UNCH_2P_KL0P5: ("eff-exp+geometry", "uncheatable", "2p", 0.5, 3.183509),
+    DelphiValidationMixture.GEOMFRONT_UNCH_TIED_KL0P2: ("eff-exp+geometry", "uncheatable", "tied", 0.2, 4.296505),
+    DelphiValidationMixture.GEOMFRONT_UNCH_TIED_KL0P3: ("eff-exp+geometry", "uncheatable", "tied", 0.3, 3.876880),
+    DelphiValidationMixture.GEOMFRONT_UNCH_TIED_KL0P5: ("eff-exp+geometry", "uncheatable", "tied", 0.5, 3.183509),
+    DelphiValidationMixture.GEOMFRONT_T9_1P_KL0P15: ("eff-exp+geometry", "table9", "1p", 0.15, 13.000752),
+    DelphiValidationMixture.GEOMFRONT_T9_1P_KL0P2: ("eff-exp+geometry", "table9", "1p", 0.2, 11.703045),
+    DelphiValidationMixture.GEOMFRONT_T9_1P_KL0P3: ("eff-exp+geometry", "table9", "1p", 0.3, 9.634832),
+    DelphiValidationMixture.GEOMFRONT_T9_2P_KL0P15: ("eff-exp+geometry", "table9", "2p", 0.15, 5.746636),
+    DelphiValidationMixture.GEOMFRONT_T9_2P_KL0P2: ("eff-exp+geometry", "table9", "2p", 0.2, 5.465891),
+    DelphiValidationMixture.GEOMFRONT_T9_2P_KL0P3: ("eff-exp+geometry", "table9", "2p", 0.3, 4.928776),
+    DelphiValidationMixture.GEOMFRONT_T9_TIED_KL0P15: ("eff-exp+geometry", "table9", "tied", 0.15, 5.746636),
+    DelphiValidationMixture.GEOMFRONT_T9_TIED_KL0P2: ("eff-exp+geometry", "table9", "tied", 0.2, 5.465891),
+    DelphiValidationMixture.GEOMFRONT_T9_TIED_KL0P3: ("eff-exp+geometry", "table9", "tied", 0.3, 4.928776),
+}
+MIXTURE_SOURCES.update(
+    {
+        key: _symmetric_frontier_source(
+            key=key,
+            family=family,
+            objective=objective,
+            policy=policy,
+            kl_reg=kl_reg,
+            expected_max_simulated_epoch=expected_max_simulated_epoch,
+        )
+        for key, (family, objective, policy, kl_reg, expected_max_simulated_epoch) in _SYMMETRIC_FRONTIER_SPECS.items()
+    }
+)
+
+_ORIGINAL_STYLE_MATCHED_SEPHEADS_SPECS = {
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_1P_KL0P05: ("uncheatable", "1p", 0.05, 12.918367),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_1P_KL0P075: ("uncheatable", "1p", 0.075, 11.434867),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_1P_KL0P1: ("uncheatable", "1p", 0.1, 10.369754),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_1P_KL0P15: ("uncheatable", "1p", 0.15, 8.902462),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_1P_KL0P2: ("uncheatable", "1p", 0.2, 7.915496),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_1P_KL0P3: ("uncheatable", "1p", 0.3, 6.627064),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_2P_KL0P05: ("uncheatable", "2p", 0.05, 7.742066),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_2P_KL0P075: ("uncheatable", "2p", 0.075, 6.722458),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_2P_KL0P1: ("uncheatable", "2p", 0.1, 6.043568),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_2P_KL0P15: ("uncheatable", "2p", 0.15, 5.163211),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_2P_KL0P2: ("uncheatable", "2p", 0.2, 4.584567),
+    DelphiValidationMixture.ORIGSTYLE_SEP_UNCH_2P_KL0P3: ("uncheatable", "2p", 0.3, 3.844410),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_1P_KL0P05: ("table9", "1p", 0.05, 13.324778),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_1P_KL0P075: ("table9", "1p", 0.075, 11.894401),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_1P_KL0P1: ("table9", "1p", 0.1, 10.834981),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_1P_KL0P15: ("table9", "1p", 0.15, 9.368723),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_1P_KL0P2: ("table9", "1p", 0.2, 8.362538),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_1P_KL0P3: ("table9", "1p", 0.3, 7.042844),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_2P_KL0P05: ("table9", "2p", 0.05, 7.986666),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_2P_KL0P075: ("table9", "2p", 0.075, 7.087201),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_2P_KL0P1: ("table9", "2p", 0.1, 6.459543),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_2P_KL0P15: ("table9", "2p", 0.15, 5.637771),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_2P_KL0P2: ("table9", "2p", 0.2, 5.088830),
+    DelphiValidationMixture.ORIGSTYLE_SEP_T9_2P_KL0P3: ("table9", "2p", 0.3, 4.352144),
+}
+MIXTURE_SOURCES.update(
+    {
+        key: _original_style_matched_sepheads_source(
+            key=key,
+            objective=objective,
+            policy=policy,
+            kl_reg=kl_reg,
+            expected_max_simulated_epoch=expected_max_simulated_epoch,
+        )
+        for key, (
+            objective,
+            policy,
+            kl_reg,
+            expected_max_simulated_epoch,
+        ) in _ORIGINAL_STYLE_MATCHED_SEPHEADS_SPECS.items()
+    }
+)
 
 
 _EMBEDDED_MIXTURE_WEIGHT_CSVS: dict[DelphiValidationMixture, str] = {
@@ -1888,6 +2576,7 @@ class DelphiOptimizedTrainingConfig:
     run_id: int
     run_name: str
     data_seed: int
+    train_tokens_override: int | None
     trainer_seed: int = 0
     validation_configs: dict[str, DatasetComponent] | None = None
 
@@ -2149,6 +2838,20 @@ def run_delphi_optimized_training(config: DelphiOptimizedTrainingConfig) -> None
         target_flops=config.target_flops,
         batch_size=config.batch_size,
     )
+    if config.train_tokens_override is not None:
+        if config.train_tokens_override <= 0:
+            raise ValueError(f"train_tokens_override must be positive, got {config.train_tokens_override}")
+        train_steps = round(config.train_tokens_override / (config.batch_size * SEQ_LEN_DELPHI))
+        realized_override_tokens = train_steps * config.batch_size * SEQ_LEN_DELPHI
+        candidate = replace(
+            candidate,
+            tokens=float(realized_override_tokens),
+            train_steps=train_steps,
+            optimizer_config=completed_adamh_heuristic.build_optimizer_config(
+                config.batch_size,
+                realized_override_tokens,
+            ),
+        )
     params = candidate.model_config.total_trainable_params(completed_adamh_heuristic.vocab_size)
     realized_train_tokens = candidate.train_steps * config.batch_size * SEQ_LEN_DELPHI
     tp = _tensor_parallel_size(candidate.model_config.hidden_dim, config.tpu_type)
@@ -2195,6 +2898,8 @@ def run_delphi_optimized_training(config: DelphiOptimizedTrainingConfig) -> None
                     config.mixture.value,
                     source.method,
                     f"FLOPs={config.target_flops:.1e}",
+                    f"D={realized_train_tokens:.1e}",
+                    f"D/N={realized_train_tokens / params:.3f}",
                     f"label={config.label}",
                     f"N={params:.1e}",
                     f"data_seed={config.data_seed}",
@@ -2287,7 +2992,7 @@ def _predict_run_spec(
         non_embedding_params=non_embedding_params,
         total_trainable_params=total_params,
         tensor_parallel_size=_tensor_parallel_size(candidate.model_config.hidden_dim, tpu_type),
-        data_seed=RUN_ID_BASE + run_order,
+        data_seed=(source.data_seed_override if source.data_seed_override is not None else RUN_ID_BASE + run_order),
         trainer_seed=0,
         phase_boundary=PHASE_BOUNDARIES[0],
         phase_0_fraction=PHASE_FRACTIONS["phase_0"],
@@ -2445,6 +3150,7 @@ def build_launch_artifacts(
                 batch_size=batch_size,
             )
             source = MIXTURE_SOURCES[mixture]
+            data_seed = source.data_seed_override if source.data_seed_override is not None else RUN_ID_BASE + run_order
             training_step = ExecutorStep(
                 name=f"{EXPERIMENT_NAME}/{run_name}",
                 fn=run_delphi_optimized_training,
@@ -2461,7 +3167,8 @@ def build_launch_artifacts(
                     output_path=this_output_path(),
                     run_id=RUN_ID_BASE + run_order,
                     run_name=run_name,
-                    data_seed=RUN_ID_BASE + run_order,
+                    data_seed=data_seed,
+                    train_tokens_override=None,
                     trainer_seed=0,
                     validation_configs=validation_configs,
                 ),
@@ -2532,6 +3239,10 @@ def _write_local_static_manifest(
                 {
                     "run_order": run_order,
                     "run_id": RUN_ID_BASE + run_order,
+                    "data_seed": (
+                        source.data_seed_override if source.data_seed_override is not None else RUN_ID_BASE + run_order
+                    ),
+                    "trainer_seed": 0,
                     "run_name": f"{mixture.value}_{_slug(target_flops)}",
                     "mixture": mixture.value,
                     "mixture_display_name": source.display_name,
@@ -2591,8 +3302,9 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         type=int,
         default=0,
         help=(
-            "Offset added to generated run_order/run_id/data_seed. Keep 0 for normal launches; "
-            "use only for scoped retries that need to preserve the original manifest row seed."
+            "Offset added to generated run_order/run_id and default data_seed. Explicit per-mixture "
+            "seed overrides are unchanged. Keep 0 for normal launches; use only for scoped retries "
+            "that need to preserve the original manifest row seed."
         ),
     )
     parser.add_argument(

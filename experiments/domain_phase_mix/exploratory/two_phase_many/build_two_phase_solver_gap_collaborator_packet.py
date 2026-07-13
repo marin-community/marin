@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501
 
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
 #   "numpy",
 #   "pandas",
+#   "tabulate",
 # ]
 # ///
 
@@ -34,63 +36,46 @@ import numpy as np
 import pandas as pd
 from marin.evaluation.olmo_base_eval.components import MMLU_CATEGORY_WEIGHTS
 
-
 ROOT = Path(__file__).resolve().parents[4]
 TWO_PHASE_DIR = ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many"
 REFERENCE_OUTPUTS = TWO_PHASE_DIR / "reference_outputs"
 OUT_DIR = REFERENCE_OUTPUTS / "two_phase_solver_gap_collaborator_packet_20260701"
 
-TRAIN_TABLE9_PATH = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_paper_faithful_olmix_300m_20260625/fit_panel_table9_macro.csv"
-)
+TRAIN_TABLE9_PATH = REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625/fit_panel_table9_macro.csv"
 FULL_TABLE9_PATH = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_full_results_60m_300m_20260625/olmo_base_easy_full_results_60m_300m_wide.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_full_results_60m_300m_20260625/olmo_base_easy_full_results_60m_300m_wide.csv"
 )
 EXTRA_HELDOUT_PATH = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_extra_300m_heldout_eval_20260630/extra_300m_table9_heldout_panel.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_extra_300m_heldout_eval_20260630/extra_300m_table9_heldout_panel.csv"
 )
-PCTRL_MANIFEST_PATH = (
-    REFERENCE_OUTPUTS / "proportional_controllability_300m_20260520/training_manifest.csv"
-)
+PCTRL_MANIFEST_PATH = REFERENCE_OUTPUTS / "proportional_controllability_300m_20260520/training_manifest.csv"
 PCTRL_UNCHEATABLE_PATH = (
-    REFERENCE_OUTPUTS
-    / "pctrl_training_eval_wandb_collect_20260623/pctrl_final_metric_matrix_with_training_eval.csv"
+    REFERENCE_OUTPUTS / "pctrl_training_eval_wandb_collect_20260623/pctrl_final_metric_matrix_with_training_eval.csv"
 )
 QSP_UNCHEATABLE_PATH = (
     REFERENCE_OUTPUTS
     / "raw_metric_matrix_300m_training_eval_wandb_collect_20260623/pctrl_final_metric_matrix_with_training_eval.csv"
 )
 PPERT_UNCHEATABLE_PATH = (
-    REFERENCE_OUTPUTS
-    / "proportional_bump_confidence_reliability_20260616/ppert_300m_baseline_domain_bump_matrix.csv"
+    REFERENCE_OUTPUTS / "proportional_bump_confidence_reliability_20260616/ppert_300m_baseline_domain_bump_matrix.csv"
 )
 ONE_PHASE_SCORES_PATH = (
     REFERENCE_OUTPUTS
     / "one_phase_swarm_scores_export_300m_20260630/one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv"
 )
 ONE_VS_TWO_SUMMARY_PATH = (
-    REFERENCE_OUTPUTS
-    / "one_vs_two_phase_best_mixture_comparison_20260701/one_vs_two_phase_best_mixture_summary.csv"
+    REFERENCE_OUTPUTS / "one_vs_two_phase_best_mixture_comparison_20260701/one_vs_two_phase_best_mixture_summary.csv"
 )
 ONE_VS_TWO_DELTAS_PATH = (
-    REFERENCE_OUTPUTS
-    / "one_vs_two_phase_best_mixture_comparison_20260701/one_vs_two_phase_best_mixture_deltas.csv"
+    REFERENCE_OUTPUTS / "one_vs_two_phase_best_mixture_comparison_20260701/one_vs_two_phase_best_mixture_deltas.csv"
 )
 ONE_VS_TWO_HTML_PATH = (
-    REFERENCE_OUTPUTS
-    / "one_vs_two_phase_best_mixture_comparison_20260701/one_vs_two_phase_best_mixtures.html"
+    REFERENCE_OUTPUTS / "one_vs_two_phase_best_mixture_comparison_20260701/one_vs_two_phase_best_mixtures.html"
 )
 DSP_SOURCE_PATH = TWO_PHASE_DIR / "standalone_code/dsp_exact.py"
 EPOCH_METADATA_PATH = TWO_PHASE_DIR / "two_phase_many_epoch_metadata.csv"
-COMPONENT_METADATA_PATH = (
-    REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625/component_metadata.json"
-)
-DELPHI_SCALING_COMPLETED_PATH = (
-    REFERENCE_OUTPUTS / "delphi_scaling_progress_20260625/delphi_scaling_completed_wandb.csv"
-)
+COMPONENT_METADATA_PATH = REFERENCE_OUTPUTS / "olmo_base_easy_paper_faithful_olmix_300m_20260625/component_metadata.json"
+DELPHI_SCALING_COMPLETED_PATH = REFERENCE_OUTPUTS / "delphi_scaling_progress_20260625/delphi_scaling_completed_wandb.csv"
 
 TABLE9_MACRO_COL = "table9_macro_bpb"
 UNCH_BPB_COL = "eval/uncheatable_eval/bpb"
@@ -173,7 +158,7 @@ def slugify_column(name: str) -> str:
 
 
 def normalize_uncheatable(frame: pd.DataFrame, source_label: str) -> pd.DataFrame:
-    cols = ["run_name"] + uncheatable_cols(frame)
+    cols = ["run_name", *uncheatable_cols(frame)]
     out = frame[cols].copy()
     rename = {c: slugify_column(c) for c in cols if c != "run_name"}
     out = out.rename(columns=rename)
@@ -187,7 +172,7 @@ def first_nonnull_by_run(frame: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             pd.Series(
                 {
-                    col: (values.iloc[0] if not values.empty else np.nan)
+                    col: values.iloc[0] if not values.empty else np.nan
                     for col in group.columns
                     for values in [group[col].dropna()]
                 }
@@ -313,9 +298,8 @@ def add_correspondence_keys(frame: pd.DataFrame) -> pd.DataFrame:
     out.loc[single_domain, "phase_correspondence_key"] = out.loc[single_domain, "original_run_name"].astype(str)
     out.loc[single_source, "phase_correspondence_key"] = out.loc[single_source, "source_run_name"].astype(str)
 
-    two_pairable = (
-        out["training_phase_family"].eq("two_phase")
-        & out["diagnostic_group"].isin(["two_phase_qsplit_signal", "two_phase_domain_deletion"])
+    two_pairable = out["training_phase_family"].eq("two_phase") & out["diagnostic_group"].isin(
+        ["two_phase_qsplit_signal", "two_phase_domain_deletion"]
     )
     out.loc[two_pairable, "phase_correspondence_key"] = out.loc[two_pairable, "run_name"].astype(str)
 
@@ -383,9 +367,9 @@ def phase_correspondence_table(all_rows: pd.DataFrame) -> pd.DataFrame:
                 "single_phase_run_names": "|".join(sorted(single_rows["run_name"].astype(str).unique())),
                 "two_phase_run_names": "|".join(sorted(two_rows["run_name"].astype(str).unique())),
                 "proportional_repeat_run_names": "|".join(sorted(repeat_rows["run_name"].astype(str).unique())),
-                "single_phase_row_count": int(len(single_rows)),
-                "two_phase_row_count": int(len(two_rows)),
-                "proportional_repeat_row_count": int(len(repeat_rows)),
+                "single_phase_row_count": len(single_rows),
+                "two_phase_row_count": len(two_rows),
+                "proportional_repeat_row_count": len(repeat_rows),
                 "has_single_phase": bool(len(single_rows)),
                 "has_two_phase": bool(len(two_rows)),
                 "has_proportional_repeat_reference": bool(len(repeat_rows)),
@@ -419,12 +403,16 @@ def build_train_panel(table9_cols: list[str], phases: list[str]) -> pd.DataFrame
     train = train[keep].copy()
     train["source_run_name"] = train["run_name"]
     train["source_panel"] = train["panel_source"]
-    train["diagnostic_group"] = train["panel_source"].map(
-        {
-            "qsplit_signal": "two_phase_qsplit_signal",
-            "domain_deletion": "two_phase_domain_deletion",
-        }
-    ).fillna(train["panel_source"])
+    train["diagnostic_group"] = (
+        train["panel_source"]
+        .map(
+            {
+                "qsplit_signal": "two_phase_qsplit_signal",
+                "domain_deletion": "two_phase_domain_deletion",
+            }
+        )
+        .fillna(train["panel_source"])
+    )
     train = add_standard_metadata(
         train,
         split="train",
@@ -479,7 +467,9 @@ def build_pctrl_tilt_heldout(table9_cols: list[str], phases: list[str], train_na
     return heldout
 
 
-def build_proportional_noise_train(table9_cols: list[str], phases: list[str], proportional_row: pd.Series) -> pd.DataFrame:
+def build_proportional_noise_train(
+    table9_cols: list[str], phases: list[str], proportional_row: pd.Series
+) -> pd.DataFrame:
     full = pd.read_csv(FULL_TABLE9_PATH)
     full = ensure_table9_columns(full, table9_cols)
     noise = full[(full["scale"] == "300m_6b") & (full["panel"] == "proportional_noise")].copy()
@@ -514,6 +504,12 @@ def build_proportional_noise_train(table9_cols: list[str], phases: list[str], pr
 def build_one_phase_heldout(table9_cols: list[str], phases: list[str]) -> pd.DataFrame:
     one_phase = pd.read_csv(ONE_PHASE_SCORES_PATH)
     one_phase = ensure_table9_columns(one_phase, table9_cols)
+    for phase_column in phases:
+        domain = phase_column.removeprefix("phase_0_").removeprefix("phase_1_")
+        weight_column = f"weight_{domain}"
+        if weight_column not in one_phase.columns:
+            raise ValueError(f"Missing one-phase mixture column {weight_column}")
+        one_phase[phase_column] = one_phase[weight_column]
     keep = [
         "run_name",
         "source_experiment",
@@ -525,6 +521,8 @@ def build_one_phase_heldout(table9_cols: list[str], phases: list[str]) -> pd.Dat
         "training_wandb_state",
         "training_wandb_created_at",
         "training_wandb_url",
+        "is_shared_checkpoint_alias",
+        "shared_checkpoint_run_name",
         "target_uses_proportional_reference_mean",
         "proportional_reference_n",
         *phases,
@@ -536,6 +534,7 @@ def build_one_phase_heldout(table9_cols: list[str], phases: list[str]) -> pd.Dat
     one_phase["diagnostic_group"] = one_phase["panel_source"].map(
         {
             "single_phase_qsplit_signal": "single_phase_300m_qsplit",
+            "shared_stratified_baseline": "single_phase_shared_stratified",
             "domain_deletion": "single_phase_domain_deletion",
         }
     )
@@ -586,7 +585,7 @@ def collapsed_fit_matrix(train: pd.DataFrame, table9_cols: list[str]) -> pd.Data
     out.loc[idx, "source_panel"] = "qsplit_signal_with_proportional_reference_mean"
     out.loc[idx, "diagnostic_group"] = "two_phase_qsplit_signal"
     out.loc[idx, "packet_method"] = "qsplit_plus_domain_deletions_proportional_reference_mean"
-    out.loc[idx, "proportional_reference_n"] = int(len(reference_rows))
+    out.loc[idx, "proportional_reference_n"] = len(reference_rows)
     out.loc[idx, "proportional_reference_repeat_n"] = int(repeat_mask.sum())
     out["fit_matrix_role"] = np.where(
         out["run_name"].eq("baseline_proportional"),
@@ -662,9 +661,7 @@ def assert_packet_invariants(
     macro_delta = (table9_macro_values(all_rows, table9_cols) - all_rows[TABLE9_MACRO_COL].astype(float)).abs()
     if macro_delta.max() > 1e-10:
         idx = int(macro_delta.idxmax())
-        raise ValueError(
-            f"Table-9 macro mismatch for {all_rows.loc[idx, 'run_name']}: {float(macro_delta.loc[idx])}"
-        )
+        raise ValueError(f"Table-9 macro mismatch for {all_rows.loc[idx, 'run_name']}: {float(macro_delta.loc[idx])}")
 
     single_phase = all_rows["diagnostic_group"].eq("single_phase_300m_qsplit")
     if single_phase.any():
@@ -674,10 +671,9 @@ def assert_packet_invariants(
         phase1_domains = [c.removeprefix("phase_1_") for c in phase1_cols]
         if phase0_domains != phase1_domains:
             raise ValueError("Phase 0 and phase 1 domain columns do not align")
-        max_gap = (
-            all_rows.loc[single_phase, phase0_cols].to_numpy(dtype=float)
-            - all_rows.loc[single_phase, phase1_cols].to_numpy(dtype=float)
-        )
+        max_gap = all_rows.loc[single_phase, phase0_cols].to_numpy(dtype=float) - all_rows.loc[
+            single_phase, phase1_cols
+        ].to_numpy(dtype=float)
         max_gap_abs = float(np.abs(max_gap).max())
         if max_gap_abs > 1e-12:
             raise ValueError(f"Single-phase heldout rows have phase mismatch: max_abs_gap={max_gap_abs}")
@@ -746,9 +742,7 @@ def write_enriched_one_vs_two_summary(paths: PacketPaths) -> pd.DataFrame:
             merged[table9_col],
             merged[uncheatable_col],
         )
-    merged["primary_gap_two_minus_single_bpb"] = (
-        merged["two_phase_primary_bpb_3e18"] - merged["single_primary_bpb_3e18"]
-    )
+    merged["primary_gap_two_minus_single_bpb"] = merged["two_phase_primary_bpb_3e18"] - merged["single_primary_bpb_3e18"]
     merged.to_csv(paths.data / "one_vs_two_phase_best_mixture_summary.csv", index=False)
     outcomes.to_csv(paths.data / "one_vs_two_phase_validation_outcomes_3e18.csv", index=False)
     return merged
@@ -792,11 +786,11 @@ Every row has explicit phase labels:
 - `phase_correspondence_key`: original row key used to match single-phase rows to their two-phase source rows.
 - `paired_single_phase_run_name`, `paired_two_phase_run_name`, and `phase_pair_status`: row-level correspondence annotations.
 
-The full single-phase augmented panel is included in heldout: 240 single-phase qsplit rows and 39 single-phase domain-deletion rows. These rows are heldout because they are different checkpoints trained from single-phase exposure-average mixtures, even when their `source_run_name` points to a corresponding two-phase qsplit or domain-deletion row. The row correspondence is also materialized in `single_two_phase_correspondence_300m.csv`.
+The full 280-row single-phase augmented panel is included in heldout: 240 single-phase qsplit rows, the shared phase-tied stratified baseline, and 39 single-phase domain-deletion rows. The qsplit and domain-deletion rows are heldout because they are different checkpoints trained from single-phase exposure-average mixtures, even when their `source_run_name` points to a corresponding two-phase row. The stratified baseline is instead the exact shared checkpoint at the intersection of the one- and two-phase policy classes: its weights are already tied, so retraining it would only duplicate the same policy and seed. It is marked `is_shared_checkpoint_alias=true`; exclude it from diagnostics that require independent train/heldout observations. The row correspondence is materialized in `single_two_phase_correspondence_300m.csv`.
 
 Single-phase domain-deletion source rows reuse the original two-phase-style names `pctrl_del_*`. To keep packet `run_name` values unique, these rows are named `singleavg_pctrl_del_*` in this packet, keep their original value in `original_run_name`, and match their two-phase counterpart through `phase_correspondence_key`.
 
-The correspondence table has {summary["phase_correspondence_key_count"]} keys. Of these, {summary["paired_correspondence_key_count"]} have both a single-phase and a two-phase row. The only train-row correspondence key without a single-phase counterpart is `baseline_stratified`. The 10 proportional repeatability rows point back to `baseline_proportional` but are marked `repeat_reference_to_baseline` rather than treated as independent paired mixtures.
+The correspondence table has {summary["phase_correspondence_key_count"]} keys. Of these, {summary["paired_correspondence_key_count"]} have both a single-phase and a two-phase row; all 280 fit-panel policies now have an explicit counterpart. The 10 proportional repeatability rows point back to `baseline_proportional` but are marked `repeat_reference_to_baseline` rather than treated as independent paired mixtures.
 
 ## Headline Observation
 
@@ -852,7 +846,7 @@ A focused follow-up review was started after the blocker patches. It confirmed t
 
 After the review, the packet split was corrected so proportional repeatability rows are part of the raw train/reference split rather than heldout. This matches the actual fitting convention: the raw train/reference table has 290 rows, while the default DSP fit matrix has 280 rows because it collapses the original proportional checkpoint plus 10 proportional repeats into an 11-row proportional reference mean.
 
-The packet was then corrected again to include the full 279-row single-phase augmented panel, not just the 240 single-phase qsplit rows. Single-phase domain-deletion rows reuse the original `pctrl_del_*` names, so the packet now preserves those values in `original_run_name` and assigns disambiguated packet `run_name` values such as `singleavg_pctrl_del_*`. Every row has `training_phase_family`, `phase_weight_structure`, `phase_correspondence_key`, and pairing columns; `data/single_two_phase_correspondence_300m.csv` summarizes the row correspondence. This post-review correction was locally validated by rebuilding the packet, auditing row counts and pair counts, and rerunning the standalone DSP smoke fit.
+The packet was then corrected again to include the full 280-row single-phase augmented panel, not just the 240 single-phase qsplit rows. Single-phase domain-deletion rows reuse the original `pctrl_del_*` names, so the packet preserves those values in `original_run_name` and assigns disambiguated packet `run_name` values such as `singleavg_pctrl_del_*`. The phase-tied `baseline_stratified` checkpoint is represented as `singleavg_baseline_stratified` with shared-checkpoint provenance rather than redundantly retrained. Every row has `training_phase_family`, `phase_weight_structure`, `phase_correspondence_key`, and pairing columns; `data/single_two_phase_correspondence_300m.csv` summarizes the row correspondence. This post-review correction was locally validated by rebuilding the packet, auditing row counts and pair counts, and rerunning the standalone DSP smoke fit.
 """
     (paths.reviews / "cc_review_summary.md").write_text(summary)
 
@@ -960,28 +954,32 @@ def main() -> None:
         "by_training_phase_family": grouped_counts_dict(all_rows, ["split", "training_phase_family"]),
         "by_phase_pair_status": value_counts_dict(all_rows["phase_pair_status"].fillna("<missing>")),
         "table9_missing_rows": all_rows.loc[all_rows[TABLE9_MACRO_COL].isna(), "run_name"].tolist(),
-        "uncheatable_missing_rows": all_rows.loc[
-            all_rows["eval_uncheatable_eval_bpb"].isna(), "run_name"
-        ].tolist(),
+        "uncheatable_missing_rows": all_rows.loc[all_rows["eval_uncheatable_eval_bpb"].isna(), "run_name"].tolist(),
     }
     manifest: dict[str, Any] = {
         "packet_name": paths.root.name,
         "created_by": Path(__file__).name,
         "summary": {
-            "train_rows": int(len(train_out)),
-            "fit_matrix_rows": int(len(fit_matrix)),
-            "heldout_rows": int(len(heldout_out)),
-            "all_rows": int(len(all_rows)),
+            "train_rows": len(train_out),
+            "fit_matrix_rows": len(fit_matrix),
+            "heldout_rows": len(heldout_out),
+            "all_rows": len(all_rows),
             "proportional_reference_repeat_rows": int(proportional_noise["run_name"].nunique()),
             "proportional_reference_total_rows": 11,
             "single_phase_rows": int(all_rows["training_phase_family"].eq("single_phase").sum()),
             "two_phase_rows": int(all_rows["training_phase_family"].eq("two_phase").sum()),
             "single_phase_qsplit_rows": int(all_rows["diagnostic_group"].eq("single_phase_300m_qsplit").sum()),
-            "single_phase_domain_deletion_rows": int(all_rows["diagnostic_group"].eq("single_phase_domain_deletion").sum()),
-            "phase_correspondence_key_count": int(len(correspondence)),
+            "single_phase_shared_stratified_rows": int(
+                all_rows["diagnostic_group"].eq("single_phase_shared_stratified").sum()
+            ),
+            "shared_checkpoint_alias_rows": int(all_rows["is_shared_checkpoint_alias"].fillna(False).sum()),
+            "single_phase_domain_deletion_rows": int(
+                all_rows["diagnostic_group"].eq("single_phase_domain_deletion").sum()
+            ),
+            "phase_correspondence_key_count": len(correspondence),
             "paired_correspondence_key_count": int(correspondence["pair_status"].eq("paired_single_two").sum()),
-            "table9_component_count": int(len(table9_cols)),
-            "phase_weight_column_count": int(len(phases)),
+            "table9_component_count": len(table9_cols),
+            "phase_weight_column_count": len(phases),
             "table9_complete_rows": int(all_rows[TABLE9_MACRO_COL].notna().sum()),
             "uncheatable_complete_rows": int(all_rows["eval_uncheatable_eval_bpb"].notna().sum()),
         },

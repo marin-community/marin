@@ -1,0 +1,269 @@
+{
+  "all_data_fit_metrics_on_slice": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "20",
+    "chosen_value": 0.9243745803833008,
+    "r2": 0.7010051740706875,
+    "regret_at_1": 0.01576787233352661,
+    "rmse": 0.0870153981670324,
+    "spearman": 0.6151515151515151
+  },
+  "all_data_fit_model": {
+    "domains": [
+      "nemotron_full",
+      "starcoder"
+    ],
+    "intercept": -0.7449448849668239,
+    "l2": 0.1,
+    "nominal_parameter_count": 11,
+    "phase_0_overexposure_coef": [
+      0.23732509024987933,
+      0.033112634444575635
+    ],
+    "phase_0_preferred_log_exposure": [
+      0.0,
+      0.0
+    ],
+    "phase_0_underexposure_coef": [
+      0.0,
+      0.0
+    ],
+    "phase_1_overexposure_coef": [
+      0.0,
+      0.9909505813210914
+    ],
+    "phase_1_preferred_log_exposure": [
+      2.0,
+      2.0
+    ],
+    "phase_1_underexposure_coef": [
+      0.5392614950169811,
+      0.1279068241783422
+    ]
+  },
+  "all_data_fit_slice_minimum": {
+    "phase_1_starcoder_epochs": 2.6722445777635495,
+    "phase_1_starcoder_weight": 0.202,
+    "predicted_bpb": 0.8501963259118195
+  },
+  "canonical_dsp_all_data_fit_metrics_on_slice": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "16",
+    "chosen_value": 0.9199159741401672,
+    "r2": 0.7910059706521466,
+    "regret_at_1": 0.011309266090393066,
+    "rmse": 0.07274970135901747,
+    "spearman": 0.5670619235836627
+  },
+  "canonical_dsp_all_data_fit_model": {
+    "benefit_coef": [
+      3.6248875015661293,
+      0.47593867228862896
+    ],
+    "description": "Canonical DSP: phase-1 premium only multiplies benefit; penalties use raw exposure.",
+    "intercept": 3.3126974928365454,
+    "l2": 0.01,
+    "params": {
+      "gamma": 3.4236494670711757,
+      "rho": [
+        0.34363682161206843,
+        0.14842942935536105
+      ],
+      "tau": [
+        0.8374946552188222,
+        3.6761638947421584
+      ]
+    },
+    "penalty_coef": [
+      2.174202555880304,
+      0.0
+    ],
+    "total_parameter_count": 10,
+    "variant": "dsp_phase_benefit_penalty_nnls"
+  },
+  "canonical_dsp_all_data_fit_slice_minimum": {
+    "phase_1_starcoder_epochs": 5.106368351567971,
+    "phase_1_starcoder_weight": 0.386,
+    "predicted_bpb": 0.8984695250011401
+  },
+  "canonical_dsp_subset_fit_metrics_on_slice": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "10",
+    "chosen_value": 0.9086067080497742,
+    "r2": 0.9493821100224789,
+    "regret_at_1": 0.0,
+    "rmse": 0.035802742421612875,
+    "spearman": 0.976679841897233
+  },
+  "canonical_dsp_subset_fit_model": {
+    "benefit_coef": [
+      0.009079242112838157,
+      0.30719297233225956
+    ],
+    "description": "Canonical DSP: phase-1 premium only multiplies benefit; penalties use raw exposure.",
+    "intercept": 0.3040760380734203,
+    "l2": 0.01,
+    "params": {
+      "gamma": 100.00000000000004,
+      "rho": [
+        0.0001073763917535562,
+        0.06651937556985502
+      ],
+      "tau": [
+        0.20117010836129112,
+        0.27299512791770514
+      ]
+    },
+    "penalty_coef": [
+      0.0,
+      3.188673764255277
+    ],
+    "total_parameter_count": 10,
+    "variant": "dsp_phase_benefit_penalty_nnls"
+  },
+  "canonical_dsp_subset_fit_slice_minimum": {
+    "phase_1_starcoder_epochs": 3.7437881955796266,
+    "phase_1_starcoder_weight": 0.28300000000000003,
+    "predicted_bpb": 0.9124481222153307
+  },
+  "effective_exposure_dsp_all_data_fit_metrics_on_slice": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "38",
+    "chosen_value": 0.9129998087882996,
+    "r2": 0.9140322967689966,
+    "regret_at_1": 0.004393100738525391,
+    "rmse": 0.04665862511077726,
+    "spearman": 0.9064558629776021
+  },
+  "effective_exposure_dsp_all_data_fit_model": {
+    "benefit_coef": [
+      3.0698974813699147,
+      0.2515855087182236
+    ],
+    "description": "Empirical comparator: phase-1 multiplier enters benefit and penalty exposure.",
+    "intercept": -1.6613529724892424,
+    "l2": 0.01,
+    "params": {
+      "gamma": 5.145788451456673,
+      "rho": [
+        0.6683660675635574,
+        2.0
+      ],
+      "tau": [
+        -0.07173763803602205,
+        3.596207190246582
+      ]
+    },
+    "penalty_coef": [
+      2.073135627212064,
+      2.338949229400343
+    ],
+    "total_parameter_count": 10,
+    "variant": "dsp_effective_exposure_penalty_nnls"
+  },
+  "effective_exposure_dsp_all_data_fit_slice_minimum": {
+    "phase_1_starcoder_epochs": 4.392005939690587,
+    "phase_1_starcoder_weight": 0.332,
+    "predicted_bpb": 0.9284475296493051
+  },
+  "effective_exposure_dsp_subset_fit_metrics_on_slice": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "10",
+    "chosen_value": 0.9086067080497742,
+    "r2": 0.9945198211338505,
+    "regret_at_1": 0.0,
+    "rmse": 0.011780443536956182,
+    "spearman": 0.9459815546772068
+  },
+  "effective_exposure_dsp_subset_fit_model": {
+    "benefit_coef": [
+      1.3809326135490252,
+      0.5597255978087161
+    ],
+    "description": "Empirical comparator: phase-1 multiplier enters benefit and penalty exposure.",
+    "intercept": 2.2633972346852684,
+    "l2": 0.01,
+    "params": {
+      "gamma": 68.65173529460318,
+      "rho": [
+        0.06356715152630343,
+        0.05336775773468505
+      ],
+      "tau": [
+        3.327485607345983,
+        3.0067621921277303
+      ]
+    },
+    "penalty_coef": [
+      0.7240670618527149,
+      0.0
+    ],
+    "total_parameter_count": 10,
+    "variant": "dsp_effective_exposure_penalty_nnls"
+  },
+  "effective_exposure_dsp_subset_fit_slice_minimum": {
+    "phase_1_starcoder_epochs": 3.730559262026342,
+    "phase_1_starcoder_weight": 0.28200000000000003,
+    "predicted_bpb": 0.9190639621618073
+  },
+  "n_slice_runs": 45,
+  "n_total_completed_runs": 116,
+  "observed_slice_minimum": {
+    "bpb": 0.9086067080497742,
+    "phase_1_starcoder_weight": 0.2814080848021789
+  },
+  "subset_fit_metrics_on_slice": {
+    "best_candidate": "10",
+    "best_value": 0.9086067080497742,
+    "chosen_candidate": "17",
+    "chosen_value": 0.9132933020591736,
+    "r2": 0.9432783884070749,
+    "regret_at_1": 0.004686594009399414,
+    "rmse": 0.03789994294081016,
+    "spearman": 0.9047430830039525
+  },
+  "subset_fit_model": {
+    "domains": [
+      "nemotron_full",
+      "starcoder"
+    ],
+    "intercept": -0.42251984622958816,
+    "l2": 0.1,
+    "nominal_parameter_count": 11,
+    "phase_0_overexposure_coef": [
+      0.0,
+      0.0
+    ],
+    "phase_0_preferred_log_exposure": [
+      -1.5945348918918356,
+      0.0
+    ],
+    "phase_0_underexposure_coef": [
+      0.0,
+      0.0
+    ],
+    "phase_1_overexposure_coef": [
+      0.0,
+      0.45658220503787245
+    ],
+    "phase_1_preferred_log_exposure": [
+      2.0,
+      2.0
+    ],
+    "phase_1_underexposure_coef": [
+      0.44736327811218546,
+      0.1748375624932293
+    ]
+  },
+  "subset_fit_slice_minimum": {
+    "phase_1_starcoder_epochs": 3.386606989640934,
+    "phase_1_starcoder_weight": 0.256,
+    "predicted_bpb": 0.8932709171283261
+  },
+  "target": "eval/paloma/dolma_100_programing_languages/bpb"
+}

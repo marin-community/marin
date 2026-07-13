@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501
 
 # /// script
 # requires-python = ">=3.12"
@@ -24,7 +25,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 REPO_ROOT = Path(__file__).resolve().parents[4]
 REFERENCE_OUTPUTS = Path(__file__).resolve().parent / "reference_outputs"
 
@@ -34,24 +34,16 @@ DEFAULT_MANIFEST = (
     / "single_phase_exposure_average_qsplit240_300m_manifest.csv"
 )
 DEFAULT_UNCHEATABLE = (
-    REFERENCE_OUTPUTS
-    / "one_vs_two_phase_swarm_debug_20260630"
-    / "single_phase_qsplit240_wandb_eval_scalars.csv"
+    REFERENCE_OUTPUTS / "one_vs_two_phase_swarm_debug_20260630" / "single_phase_qsplit240_wandb_eval_scalars.csv"
 )
 DEFAULT_TABLE9 = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
-    / "single_phase_table9_wide.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_one_phase_parity_panel_300m_20260628" / "single_phase_table9_wide.csv"
 )
 DEFAULT_AUGMENTED_PANEL = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
-    / "one_phase_augmented_fit_panel.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_one_phase_parity_panel_300m_20260628" / "one_phase_augmented_fit_panel.csv"
 )
 DEFAULT_PROPORTIONAL_REFERENCE_TABLE9 = (
-    REFERENCE_OUTPUTS
-    / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
-    / "proportional_reference_table9.csv"
+    REFERENCE_OUTPUTS / "olmo_base_easy_one_phase_parity_panel_300m_20260628" / "proportional_reference_table9.csv"
 )
 DEFAULT_QSPLIT_TRAINING_EVAL = (
     REFERENCE_OUTPUTS
@@ -59,19 +51,20 @@ DEFAULT_QSPLIT_TRAINING_EVAL = (
     / "pctrl_final_metric_matrix_with_training_eval.csv"
 )
 DEFAULT_PCTRL_TRAINING_EVAL = (
-    REFERENCE_OUTPUTS
-    / "pctrl_training_eval_wandb_collect_20260623"
-    / "pctrl_final_metric_matrix_with_training_eval.csv"
+    REFERENCE_OUTPUTS / "pctrl_training_eval_wandb_collect_20260623" / "pctrl_final_metric_matrix_with_training_eval.csv"
 )
 DEFAULT_OUTPUT_DIR = REFERENCE_OUTPUTS / "one_phase_swarm_scores_export_300m_20260630"
 DEFAULT_OUTPUT_CSV = DEFAULT_OUTPUT_DIR / "one_phase_swarm_uncheatable_table9_scores_300m.csv"
 DEFAULT_AUGMENTED_OUTPUT_CSV = DEFAULT_OUTPUT_DIR / "one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv"
-DEFAULT_PROPORTIONAL_REFERENCE_OUTPUT_CSV = DEFAULT_OUTPUT_DIR / "proportional_reference_uncheatable_table9_scores_300m.csv"
+DEFAULT_PROPORTIONAL_REFERENCE_OUTPUT_CSV = (
+    DEFAULT_OUTPUT_DIR / "proportional_reference_uncheatable_table9_scores_300m.csv"
+)
 DEFAULT_SUMMARY_JSON = DEFAULT_OUTPUT_DIR / "summary.json"
 DEFAULT_README = DEFAULT_OUTPUT_DIR / "README.md"
 EXPECTED_ROWS = 240
-EXPECTED_AUGMENTED_ROWS = 279
+EXPECTED_AUGMENTED_ROWS = 280
 EXPECTED_DOMAIN_DELETION_ROWS = 39
+EXPECTED_SHARED_STRATIFIED_ROWS = 1
 EXPECTED_PROPORTIONAL_REFERENCE_ROWS = 11
 PHASE_SUM_TOL = 1e-9
 PHASE_TIE_TOL = 1e-12
@@ -158,11 +151,7 @@ def _table9_component_columns(table9: pd.DataFrame) -> list[str]:
         "native_table9_macro_bpb",
         "table9_macro_bpb",
     }
-    component_cols = [
-        col
-        for col in table9.columns
-        if col not in metadata_cols
-    ]
+    component_cols = [col for col in table9.columns if col not in metadata_cols]
     if len(component_cols) != 51:
         raise ValueError(f"expected 51 Table-9 component columns, found {len(component_cols)}")
     return component_cols
@@ -179,8 +168,7 @@ def _proportional_uncheatable_reference(qsplit_training_eval_path: Path) -> pd.D
     if missing:
         raise ValueError(f"qsplit training/eval is missing columns: {sorted(missing)}")
     reference = qsplit[
-        qsplit["run_name"].eq("baseline_proportional")
-        | qsplit["row_kind"].eq("noise_variable_subset_proportional")
+        qsplit["run_name"].eq("baseline_proportional") | qsplit["row_kind"].eq("noise_variable_subset_proportional")
     ].copy()
     if len(reference) != EXPECTED_PROPORTIONAL_REFERENCE_ROWS:
         raise ValueError(
@@ -222,7 +210,7 @@ def build_proportional_reference_export(
         raise ValueError(f"missing proportional uncheatable reference scores: {missing_uncheatable.to_dict()}")
 
     summary = {
-        "row_count": int(len(merged)),
+        "row_count": len(merged),
         "table9_macro_mean": float(merged["table9_macro_bpb"].mean()),
         "table9_macro_std": float(merged["table9_macro_bpb"].std(ddof=1)),
         "uncheatable_means": {col: float(merged[col].mean()) for col in UNCHEATABLE_COLUMNS},
@@ -255,11 +243,46 @@ def _pctrl_domain_deletion_uncheatable(pctrl_training_eval_path: Path) -> pd.Dat
     return _rename_training_eval_columns(deletion[keep_cols])
 
 
+def _shared_stratified_uncheatable(qsplit_training_eval_path: Path) -> pd.DataFrame:
+    qsplit = _read_csv(qsplit_training_eval_path, "qsplit training/eval")
+    required = {"run_name", *TRAINING_EVAL_COLUMN_RENAMES}
+    missing = required.difference(qsplit.columns)
+    if missing:
+        raise ValueError(f"qsplit training/eval is missing columns: {sorted(missing)}")
+    shared = qsplit.loc[qsplit["run_name"].eq("baseline_stratified")].copy()
+    if len(shared) != EXPECTED_SHARED_STRATIFIED_ROWS:
+        raise ValueError(f"expected {EXPECTED_SHARED_STRATIFIED_ROWS} shared stratified row, found {len(shared)}")
+    keep_cols = [
+        col
+        for col in [
+            "run_name",
+            "wandb_run_id",
+            "wandb_training_run_url",
+            *TRAINING_EVAL_COLUMN_RENAMES,
+        ]
+        if col in shared.columns
+    ]
+    shared = _rename_training_eval_columns(shared[keep_cols])
+    shared["run_name"] = "singleavg_baseline_stratified"
+    shared = shared.rename(
+        columns={
+            "wandb_run_id": "training_wandb_id",
+            "wandb_training_run_url": "training_wandb_url",
+        }
+    )
+    shared["training_wandb_name"] = "baseline_stratified"
+    shared["training_wandb_state"] = "finished"
+    shared["training_wandb_created_at"] = pd.NA
+    shared["uncheatable_source"] = "shared_phase_tied_stratified_checkpoint"
+    return shared
+
+
 def build_augmented_export(
     augmented_panel_path: Path,
     pure_export: pd.DataFrame,
     component_cols: list[str],
     proportional_reference: pd.DataFrame,
+    qsplit_training_eval_path: Path,
     pctrl_training_eval_path: Path,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     panel = _read_csv(augmented_panel_path, "one-phase augmented panel")
@@ -298,14 +321,23 @@ def build_augmented_export(
     pctrl_metrics["training_wandb_created_at"] = pd.NA
     pctrl_metrics["uncheatable_source"] = "proportional_controllability_domain_deletion_eval"
 
+    shared_stratified_metrics = _shared_stratified_uncheatable(qsplit_training_eval_path)
+
     metrics = pd.concat(
-        [pure_metrics, pctrl_metrics[pure_metrics.columns]],
+        [
+            pure_metrics,
+            pctrl_metrics[pure_metrics.columns],
+            shared_stratified_metrics[pure_metrics.columns],
+        ],
         ignore_index=True,
     )
     _assert_unique_run_names(metrics, "combined uncheatable metrics")
 
     proportional_means = {col: float(proportional_reference[col].mean()) for col in UNCHEATABLE_COLUMNS}
-    proportional_stds = {f"{col}_proportional_reference_std": float(proportional_reference[col].std(ddof=1)) for col in UNCHEATABLE_COLUMNS}
+    proportional_stds = {
+        f"{col}_proportional_reference_std": float(proportional_reference[col].std(ddof=1))
+        for col in UNCHEATABLE_COLUMNS
+    }
     prop_mask = metrics["run_name"].eq("singleavg_baseline_proportional")
     if int(prop_mask.sum()) != 1:
         raise ValueError("expected one singleavg_baseline_proportional metric row")
@@ -321,6 +353,8 @@ def build_augmented_export(
             "panel_source",
             "source_run_name",
             "source_panel",
+            "is_shared_checkpoint_alias",
+            "shared_checkpoint_run_name",
         ]
         if col in panel.columns
     ]
@@ -354,6 +388,8 @@ def build_augmented_export(
         "panel_source",
         "source_experiment",
         "source_run_name",
+        "is_shared_checkpoint_alias",
+        "shared_checkpoint_run_name",
         "uncheatable_source",
         "training_wandb_name",
         "training_wandb_id",
@@ -376,12 +412,16 @@ def build_augmented_export(
     output = output[ordered_cols + remaining]
 
     source_counts = output["source_panel"].value_counts(dropna=False).to_dict()
-    expected_counts = {"all": EXPECTED_ROWS, "proportional_domain_deletion": EXPECTED_DOMAIN_DELETION_ROWS}
+    expected_counts = {
+        "all": EXPECTED_ROWS,
+        "proportional_domain_deletion": EXPECTED_DOMAIN_DELETION_ROWS,
+        "shared_policy_intersection": EXPECTED_SHARED_STRATIFIED_ROWS,
+    }
     if source_counts != expected_counts:
         raise ValueError(f"unexpected augmented source_panel counts: {source_counts}")
 
     summary = {
-        "row_count": int(len(output)),
+        "row_count": len(output),
         "source_panel_counts": {str(key): int(value) for key, value in source_counts.items()},
         "weight_column_count": len(weight_cols),
         "table9_component_count": len(component_cols),
@@ -390,6 +430,7 @@ def build_augmented_export(
             "singleavg_baseline_proportional uses the mean of 11 proportional observations for "
             "Table-9 and uncheatable score columns; the 11 observations are exported separately."
         ),
+        "shared_checkpoint_alias_rows": int(output["is_shared_checkpoint_alias"].fillna(False).sum()),
         "score_summaries": {
             col: {
                 "min": float(output[col].min()),
@@ -406,7 +447,9 @@ def build_augmented_export(
     return output, summary
 
 
-def build_export(manifest_path: Path, uncheatable_path: Path, table9_path: Path) -> tuple[pd.DataFrame, dict[str, object]]:
+def build_export(
+    manifest_path: Path, uncheatable_path: Path, table9_path: Path
+) -> tuple[pd.DataFrame, dict[str, object]]:
     manifest = _read_csv(manifest_path, "manifest")
     uncheatable = _read_csv(uncheatable_path, "uncheatable")
     table9 = _read_csv(table9_path, "table9")
@@ -540,7 +583,7 @@ def build_export(manifest_path: Path, uncheatable_path: Path, table9_path: Path)
     merged = merged[ordered_cols + remaining].sort_values("run_id", kind="stable").reset_index(drop=True)
 
     summary = {
-        "row_count": int(len(merged)),
+        "row_count": len(merged),
         "expected_rows": EXPECTED_ROWS,
         "weight_column_count": len(weight_cols),
         "table9_component_count": len(component_cols),
@@ -587,7 +630,9 @@ def main() -> None:
     parser.add_argument("--pctrl-training-eval", type=Path, default=DEFAULT_PCTRL_TRAINING_EVAL)
     parser.add_argument("--output-csv", type=Path, default=DEFAULT_OUTPUT_CSV)
     parser.add_argument("--augmented-output-csv", type=Path, default=DEFAULT_AUGMENTED_OUTPUT_CSV)
-    parser.add_argument("--proportional-reference-output-csv", type=Path, default=DEFAULT_PROPORTIONAL_REFERENCE_OUTPUT_CSV)
+    parser.add_argument(
+        "--proportional-reference-output-csv", type=Path, default=DEFAULT_PROPORTIONAL_REFERENCE_OUTPUT_CSV
+    )
     parser.add_argument("--summary-json", type=Path, default=DEFAULT_SUMMARY_JSON)
     parser.add_argument("--readme", type=Path, default=DEFAULT_README)
     args = parser.parse_args()
@@ -603,6 +648,7 @@ def main() -> None:
         export,
         component_cols,
         proportional_reference,
+        args.qsplit_training_eval,
         args.pctrl_training_eval,
     )
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -632,7 +678,7 @@ def main() -> None:
                 "## Files",
                 "",
                 f"- `{args.output_csv.name}`: 240 pure qsplit candidate rows with provenance, W&B links, uncheatable eval scores, native OLMoBaseEval Table-9 macro/component BPBs, and 39 one-phase bucket weights.",
-                f"- `{args.augmented_output_csv.name}`: 279 model-fit rows: the 240 qsplit rows plus 39 proportional domain-deletion controls. This is the panel shape used by the one-phase OLMix/DSP Table-9 fits.",
+                f"- `{args.augmented_output_csv.name}`: 280 model-fit rows: 240 qsplit rows, the shared phase-tied stratified baseline, and 39 proportional domain-deletion controls. This matches the two-phase fit-panel row count.",
                 f"- `{args.proportional_reference_output_csv.name}`: 11 proportional reference observations used to replace the proportional fit row target mean and estimate repeat noise.",
                 f"- `{args.summary_json.name}`: export schema, input paths, score summaries, and validation checks.",
                 "",
@@ -645,6 +691,8 @@ def main() -> None:
                 "- `olmo_base_eval/easy_bpb/.../bpb` and `mmlu_*`: individual Table-9 component BPBs.",
                 "- `weight_*`: one-phase mixture weights for the 39 Dolma3/Dolmino buckets. The source manifest had tied `phase_0 == phase_1`; this export stores only one weight vector.",
                 "- `source_panel`: `all` for qsplit rows and `proportional_domain_deletion` for deletion controls in the augmented export.",
+                "- `source_panel=shared_policy_intersection`: the existing phase-tied stratified checkpoint, reused as the exact intersection of the one- and two-phase policy classes rather than redundantly retrained.",
+                "- `is_shared_checkpoint_alias`: true only for `singleavg_baseline_stratified`; exclude that alias from statistics requiring an independent heldout checkpoint because it points to the same physical run as the two-phase `baseline_stratified` row.",
                 "- `target_uses_proportional_reference_mean`: true only for the proportional fit row in the augmented export; its Table-9 and uncheatable targets are the 11-run proportional mean.",
                 "",
                 "## Validation",

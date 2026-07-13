@@ -10,6 +10,7 @@
 The panel is meant for apples-to-apples one-phase OLMix/DSP fitting:
 
 * 240 one-phase qsplit rows from the exposure-average 300M run.
+* 1 shared stratified baseline whose weights were already phase-constant.
 * 39 phase-constant 300M domain-deletion controls reused from proportional
   controllability.
 * 11 proportional observations used only to replace the single proportional
@@ -43,9 +44,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
 SINGLE_PHASE_MANIFEST = (
     SCRIPT_DIR
     / "reference_outputs"
@@ -63,6 +62,7 @@ SINGLE_PHASE_TARGET_MANIFEST = (
 WANDB_PROJECT = "marin-community/marin-eval"
 WANDB_GROUP = "olmo_base_eval_table9_single_phase_qsplit240_300m"
 N_EXPECTED_SINGLE_PHASE_ROWS = 240
+N_EXPECTED_SHARED_STRATIFIED_ROWS = 1
 N_EXPECTED_DELETION_ROWS = 39
 N_EXPECTED_PROPORTIONAL_REFERENCES = 11
 N_EXPECTED_COMPONENTS = 51
@@ -156,15 +156,12 @@ def collect_single_phase_wandb(
             row[component] = float(value)
         if missing_components:
             raise ValueError(
-                f"W&B run {run.id} ({run.name}) is missing Table-9 component keys: "
-                f"{missing_components[:10]}"
+                f"W&B run {run.id} ({run.name}) is missing Table-9 component keys: " f"{missing_components[:10]}"
             )
         computed_macro = float(np.mean([row[component] for component in components]))
         row["table9_macro_bpb"] = computed_macro
         if abs(computed_macro - float(macro)) > 1e-8:
-            raise ValueError(
-                f"W&B run {run.id} macro mismatch: component mean {computed_macro} vs summary {macro}"
-            )
+            raise ValueError(f"W&B run {run.id} macro mismatch: component mean {computed_macro} vs summary {macro}")
         rows.append(row)
 
     if not rows:
@@ -184,18 +181,16 @@ def collect_single_phase_wandb(
     deduped = all_rows.loc[latest_indices].sort_values("run_name", kind="mergesort").reset_index(drop=True)
 
     if len(deduped) != N_EXPECTED_SINGLE_PHASE_ROWS:
-        raise ValueError(
-            f"Expected {N_EXPECTED_SINGLE_PHASE_ROWS} deduped single-phase rows, found {len(deduped)}"
-        )
+        raise ValueError(f"Expected {N_EXPECTED_SINGLE_PHASE_ROWS} deduped single-phase rows, found {len(deduped)}")
     metadata = {
         "wandb_project": project,
         "wandb_group": group,
-        "wandb_runs_seen": int(len(runs)),
-        "wandb_runs_with_table9_macro": int(len(all_rows)),
+        "wandb_runs_seen": len(runs),
+        "wandb_runs_with_table9_macro": len(all_rows),
         "wandb_runs_skipped_without_table9_macro": int(skipped_without_macro),
-        "deduped_single_phase_rows": int(len(deduped)),
+        "deduped_single_phase_rows": len(deduped),
         "duplicate_run_name_groups": int(all_rows.loc[duplicate_mask, "run_name"].nunique()),
-        "duplicate_rows": int(len(duplicate_log)),
+        "duplicate_rows": len(duplicate_log),
         "dedupe_rule": "sort by run_name, wandb_created_at, wandb_run_id; keep latest per provenance run_name",
     }
     return deduped, duplicate_log, metadata
@@ -207,9 +202,7 @@ def load_single_phase_panel(components: list[str], columns: list[str], wandb_row
         raise ValueError(f"Expected {N_EXPECTED_SINGLE_PHASE_ROWS} manifest rows, found {len(manifest)}")
     target_manifest = pd.read_csv(SINGLE_PHASE_TARGET_MANIFEST, sep="\t")
     if len(target_manifest) != N_EXPECTED_SINGLE_PHASE_ROWS:
-        raise ValueError(
-            f"Expected {N_EXPECTED_SINGLE_PHASE_ROWS} target manifest rows, found {len(target_manifest)}"
-        )
+        raise ValueError(f"Expected {N_EXPECTED_SINGLE_PHASE_ROWS} target manifest rows, found {len(target_manifest)}")
     if set(target_manifest["run_name"]) != set(manifest["run_name"]):
         missing_targets = sorted(set(manifest["run_name"]).difference(target_manifest["run_name"]))
         extra_targets = sorted(set(target_manifest["run_name"]).difference(manifest["run_name"]))
@@ -268,6 +261,26 @@ def load_deletion_panel(components: list[str], columns: list[str]) -> pd.DataFra
     return out
 
 
+def load_shared_stratified_panel(components: list[str], columns: list[str]) -> pd.DataFrame:
+    """Represent the phase-tied stratified checkpoint in the single-phase panel."""
+    two_phase_panel, _metadata = paper_olmix.build_fit_panel(columns)
+    shared = two_phase_panel.loc[two_phase_panel["run_name"].eq("baseline_stratified")].copy()
+    if len(shared) != N_EXPECTED_SHARED_STRATIFIED_ROWS:
+        raise ValueError(f"Expected {N_EXPECTED_SHARED_STRATIFIED_ROWS} shared stratified row, found {len(shared)}")
+    validate_phase_tied(shared, columns, label="shared stratified baseline")
+    missing_components = sorted(set(components).difference(shared.columns))
+    if missing_components:
+        raise ValueError(f"Shared stratified baseline is missing Table-9 components: {missing_components}")
+
+    shared["source_run_name"] = shared["run_name"]
+    shared["source_panel"] = "shared_policy_intersection"
+    shared["panel_source"] = "shared_stratified_baseline"
+    shared["is_shared_checkpoint_alias"] = True
+    shared["shared_checkpoint_run_name"] = "baseline_stratified"
+    shared["run_name"] = "singleavg_baseline_stratified"
+    return shared
+
+
 def proportional_reference(components: list[str]) -> tuple[pd.DataFrame, pd.Series, pd.Series]:
     olmo = paper_olmix.load_olmo_wide_with_table9_components()
     reference = olmo.loc[
@@ -287,6 +300,7 @@ def proportional_reference(components: list[str]) -> tuple[pd.DataFrame, pd.Seri
 def build_fit_panel(
     *,
     signal: pd.DataFrame,
+    shared_stratified: pd.DataFrame,
     deletion: pd.DataFrame,
     components: list[str],
     columns: list[str],
@@ -298,17 +312,24 @@ def build_fit_panel(
         "panel_source",
         "source_run_name",
         "source_panel",
+        "is_shared_checkpoint_alias",
+        "shared_checkpoint_run_name",
         *columns,
         *components,
         "table9_macro_bpb",
     ]
     signal_for_panel = signal.copy()
+    signal_for_panel["is_shared_checkpoint_alias"] = False
+    signal_for_panel["shared_checkpoint_run_name"] = pd.NA
     deletion_for_panel = deletion.copy()
+    deletion_for_panel["is_shared_checkpoint_alias"] = False
+    deletion_for_panel["shared_checkpoint_run_name"] = pd.NA
     deletion_for_panel["source_run_name"] = deletion_for_panel.get("target_domain", "")
     deletion_for_panel["source_panel"] = "proportional_domain_deletion"
     panel = pd.concat(
         [
             signal_for_panel[keep],
+            shared_stratified[keep],
             deletion_for_panel[keep],
         ],
         ignore_index=True,
@@ -319,11 +340,13 @@ def build_fit_panel(
     panel.loc[prop_mask, components] = reference_means.to_numpy()
     panel.loc[prop_mask, "table9_macro_bpb"] = float(reference_means.mean())
 
-    expected_rows = N_EXPECTED_SINGLE_PHASE_ROWS + N_EXPECTED_DELETION_ROWS
+    expected_rows = N_EXPECTED_SINGLE_PHASE_ROWS + N_EXPECTED_SHARED_STRATIFIED_ROWS + N_EXPECTED_DELETION_ROWS
     if len(panel) != expected_rows:
         raise ValueError(f"Expected {expected_rows} fit rows, found {len(panel)}")
     if int(panel["panel_source"].eq("single_phase_qsplit_signal").sum()) != N_EXPECTED_SINGLE_PHASE_ROWS:
         raise ValueError("Unexpected one-phase qsplit row count")
+    if int(panel["panel_source"].eq("shared_stratified_baseline").sum()) != N_EXPECTED_SHARED_STRATIFIED_ROWS:
+        raise ValueError("Unexpected shared stratified row count")
     if int(panel["panel_source"].eq("domain_deletion").sum()) != N_EXPECTED_DELETION_ROWS:
         raise ValueError("Unexpected domain-deletion row count")
     if int(panel[components].isna().sum().sum()) != 0:
@@ -352,10 +375,12 @@ def main() -> None:
         components=components,
     )
     signal = load_single_phase_panel(components, manifest_columns, single_eval)
+    shared_stratified = load_shared_stratified_panel(components, manifest_columns)
     deletion = load_deletion_panel(components, manifest_columns)
     reference, reference_means, reference_stds = proportional_reference(components)
     panel = build_fit_panel(
         signal=signal,
+        shared_stratified=shared_stratified,
         deletion=deletion,
         components=components,
         columns=manifest_columns,
@@ -391,10 +416,11 @@ def main() -> None:
         "proportional_controllability_manifest": str(base.PCTRL_MANIFEST),
         "component_count": len(components),
         "domain_count": len(domains),
-        "fit_row_count": int(len(panel)),
+        "fit_row_count": len(panel),
         "single_phase_qsplit_rows": int(panel["panel_source"].eq("single_phase_qsplit_signal").sum()),
+        "shared_stratified_rows": int(panel["panel_source"].eq("shared_stratified_baseline").sum()),
         "domain_deletion_rows": int(panel["panel_source"].eq("domain_deletion").sum()),
-        "proportional_reference_observation_count": int(len(reference)),
+        "proportional_reference_observation_count": len(reference),
         "proportional_reference_macro_mean": float(reference_means.mean()),
         "proportional_reference_macro_std": float(reference["table9_macro_bpb"].std(ddof=1)),
         "single_phase_proportional_raw_macro": float(
@@ -409,7 +435,8 @@ def main() -> None:
         "max_deletion_phase_delta": max_deletion_delta,
         "fit_rows_note": (
             "The 11 proportional references are not extra model rows; they replace the one proportional "
-            "target row, so the fit panel has 240 + 39 = 279 rows."
+            "target row. The phase-tied stratified checkpoint is shared by the one- and two-phase policy "
+            "classes, so the fit panel has 240 + 1 + 39 = 280 rows without redundant retraining."
         ),
     }
     write_json(args.output_dir / "summary.json", summary)

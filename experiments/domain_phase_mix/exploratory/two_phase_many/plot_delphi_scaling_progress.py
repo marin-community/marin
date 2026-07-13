@@ -101,6 +101,14 @@ RUN_BASES = [
     "olmix_onephase_table9_d001_kl005_cap4_3e20",
     "olmix_onephase_table9_d001_kl005_cap4_1e21",
     "dsp_onephase_effexp_table9_kl0p1_3e18",
+    "olmix_onephase_uncheatable_d001_kl0p1_cap4_3e18",
+    "olmix_onephase_uncheatable_d001_kl0p1_cap4_2e19",
+    "olmix_onephase_uncheatable_d001_kl0p1_cap4_3e20",
+    "olmix_onephase_uncheatable_d001_kl0p1_cap4_1e21",
+    "olmix_onephase_table9_d001_kl0p005_cap4_3e18",
+    "olmix_onephase_table9_d001_kl0p005_cap4_2e19",
+    "olmix_onephase_table9_d001_kl0p005_cap4_3e20",
+    "olmix_onephase_table9_d001_kl0p005_cap4_1e21",
 ]
 
 SCALE_TO_FLOPS = {
@@ -121,6 +129,8 @@ MIXTURE_DISPLAY = {
     "dsp_effexp_table9_kl0025": "DSP Table-9 effective-exposure KL=0.025",
     "olmix_onephase_table9_d001_kl005_cap4": "1-phase OLMix Table-9",
     "dsp_onephase_effexp_table9_kl0p1": "1-phase DSP Table-9 KL=0.1",
+    "olmix_onephase_uncheatable_d001_kl0p1_cap4": "1-phase OLMix uncheatable KL=0.1",
+    "olmix_onephase_table9_d001_kl0p005_cap4": "1-phase OLMix Table-9 KL=0.005",
 }
 
 MIXTURE_COLOR = {
@@ -134,6 +144,8 @@ MIXTURE_COLOR = {
     "DSP Table-9 effective-exposure KL=0.025": "#2f855a",
     "1-phase OLMix Table-9": "#f59e0b",
     "1-phase DSP Table-9 KL=0.1": "#10b981",
+    "1-phase OLMix uncheatable KL=0.1": "#b45309",
+    "1-phase OLMix Table-9 KL=0.005": "#b45309",
 }
 
 UNCH_TARGET_MIXTURES = {
@@ -142,6 +154,7 @@ UNCH_TARGET_MIXTURES = {
     "olmix_d001_kl005_cap4",
     "dsp_effexp_kl01",
     "olmix_onephase_uncheatable_d001_kl005_cap4",
+    "olmix_onephase_uncheatable_d001_kl0p1_cap4",
     "dsp_onephase_effexp_uncheatable_kl0p1",
 }
 TABLE9_PROXY_MIXTURES = {
@@ -149,13 +162,16 @@ TABLE9_PROXY_MIXTURES = {
     "unimax8",
     "olmix_table9_d001_kl005_cap4",
     "olmix_onephase_table9_d001_kl005_cap4",
+    "olmix_onephase_table9_d001_kl0p005_cap4",
     "dsp_onephase_effexp_table9_kl0p1",
 }
 
 MIXTURE_LINE_DASH = {
     "1-phase OLMix uncheatable": "dash",
+    "1-phase OLMix uncheatable KL=0.1": "dashdot",
     "1-phase DSP uncheatable": "dash",
     "1-phase OLMix Table-9": "dash",
+    "1-phase OLMix Table-9 KL=0.005": "dashdot",
     "1-phase DSP Table-9 KL=0.1": "dash",
 }
 
@@ -288,9 +304,14 @@ def native_eval_names_for_run_base(run_base: str) -> tuple[str, ...]:
     if mixture == "olmix_d001_kl005_cap4":
         return (f"t9_{scale}_olmix_uncheatable",)
     if mixture == "dsp_effexp_kl01":
-        return (f"t9_{scale}_dsp_uncheatable",)
+        names = [f"t9_{scale}_dsp_uncheatable"]
+        if scale == "1e21":
+            names.append("t9_1e21_dsp_effexp_kl01")
+        return tuple(names)
     if mixture == "olmix_onephase_uncheatable_d001_kl005_cap4":
         return (f"t9_olmix_onephase_uncheatable_d001_kl005_cap4_{scale}",)
+    if mixture == "olmix_onephase_uncheatable_d001_kl0p1_cap4":
+        return (f"t9_olmix_onephase_uncheatable_d001_kl0p1_cap4_{scale}",)
     if mixture == "dsp_onephase_effexp_uncheatable_kl0p1":
         return (f"t9_dsp_onephase_effexp_uncheatable_kl0p1_{scale}",)
     if mixture == "olmix_table9_d001_kl005_cap4":
@@ -302,6 +323,8 @@ def native_eval_names_for_run_base(run_base: str) -> tuple[str, ...]:
         return (f"t9_{scale}_dsp_table9",)
     if mixture == "olmix_onephase_table9_d001_kl005_cap4":
         return (f"t9_olmix_onephase_table9_d001_kl005_cap4_{scale}",)
+    if mixture == "olmix_onephase_table9_d001_kl0p005_cap4":
+        return (f"t9_olmix_onephase_table9_d001_kl0p005_cap4_{scale}",)
     if mixture == "dsp_onephase_effexp_table9_kl0p1":
         return (f"t9_dsp_onephase_effexp_table9_kl0p1_{scale}",)
     return ()

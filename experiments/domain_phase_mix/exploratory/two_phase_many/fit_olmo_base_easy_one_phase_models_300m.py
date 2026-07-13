@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501
 
 # /// script
 # requires-python = ">=3.12"
@@ -9,8 +10,9 @@
 
 Inputs are the one-phase augmented parity panel materialized by
 `materialize_olmo_base_easy_one_phase_parity_panel_300m.py`: 240 one-phase
-qsplit rows, 39 phase-constant proportional-domain-deletion controls, and an
-11-observation proportional reference mean.
+qsplit rows, the shared phase-tied stratified baseline, 39 phase-constant
+proportional-domain-deletion controls, and an 11-observation proportional
+reference mean.
 
 The output mirrors the two-phase Table-9 KL overlay plots: predicted BPB,
 materialized epochs, and TV-to-proportional against KL. OLMix is fit
@@ -23,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -53,9 +54,7 @@ PANEL_PATH = (
     / "olmo_base_easy_one_phase_parity_panel_300m_20260628"
     / "one_phase_augmented_fit_panel.csv"
 )
-DEFAULT_OUTPUT_DIR = (
-    SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_one_phase_model_sweeps_300m_20260628"
-)
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "olmo_base_easy_one_phase_model_sweeps_300m_20260628"
 MACRO_TARGET = "table9_macro_bpb"
 PLOT_CONFIG = {"toImageButtonOptions": {"format": "png", "scale": 4}}
 DEFAULT_KL_GRID = (
@@ -137,13 +136,12 @@ def load_panel(path: Path) -> pd.DataFrame:
     missing = [component for component in components if component not in panel.columns]
     if missing:
         raise ValueError(f"Panel is missing Table-9 component columns: {missing[:8]}")
-    if panel[components + [MACRO_TARGET]].isna().any().any():
-        bad_cols = panel[components + [MACRO_TARGET]].columns[
-            panel[components + [MACRO_TARGET]].isna().any(axis=0)
-        ].tolist()
+    target_columns = [*components, MACRO_TARGET]
+    if panel[target_columns].isna().any().any():
+        bad_cols = panel[target_columns].columns[panel[target_columns].isna().any(axis=0)].tolist()
         raise ValueError(f"Panel has missing target values: {bad_cols[:8]}")
-    if len(panel) != 279:
-        raise ValueError(f"Expected 279 one-phase fit rows, found {len(panel)}")
+    if len(panel) != 280:
+        raise ValueError(f"Expected 280 one-phase fit rows, found {len(panel)}")
     return panel
 
 
@@ -158,7 +156,9 @@ def single_weights(panel: pd.DataFrame, domains: list[str]) -> np.ndarray:
     return phase0
 
 
-def proportional_reference(panel: pd.DataFrame, domains: list[str], panel_path: Path) -> tuple[np.ndarray, float, float, int]:
+def proportional_reference(
+    panel: pd.DataFrame, domains: list[str], panel_path: Path
+) -> tuple[np.ndarray, float, float, int]:
     proportional = panel[panel["run_name"].eq("singleavg_baseline_proportional")]
     if len(proportional) != 1:
         raise ValueError("Expected exactly one singleavg_baseline_proportional row")
@@ -180,8 +180,10 @@ def count_rows(panel: pd.DataFrame) -> dict[str, int]:
     if "panel_source" not in panel.columns:
         raise ValueError("Panel is missing panel_source")
     return {
-        "n_rows": int(len(panel)),
-        "n_signal_rows": int(panel["panel_source"].str.contains("qsplit", na=False).sum()),
+        "n_rows": len(panel),
+        "n_signal_rows": int(
+            panel["panel_source"].isin(["single_phase_qsplit_signal", "shared_stratified_baseline"]).sum()
+        ),
         "n_deletion_rows": int(panel["panel_source"].eq("domain_deletion").sum()),
     }
 
@@ -531,7 +533,9 @@ def write_overlay_plots(output_dir: Path, overlay: pd.DataFrame) -> None:
         fig.write_html(output_dir / filename, include_plotlyjs="cdn", config=PLOT_CONFIG)
 
 
-def write_fit_scatter(output_dir: Path, panel: pd.DataFrame, actual: np.ndarray, train_pred: np.ndarray, oof_pred: np.ndarray) -> None:
+def write_fit_scatter(
+    output_dir: Path, panel: pd.DataFrame, actual: np.ndarray, train_pred: np.ndarray, oof_pred: np.ndarray
+) -> None:
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -557,7 +561,9 @@ def write_fit_scatter(output_dir: Path, panel: pd.DataFrame, actual: np.ndarray,
     )
     lo = float(np.nanmin(np.column_stack([actual, train_pred, oof_pred])))
     hi = float(np.nanmax(np.column_stack([actual, train_pred, oof_pred])))
-    fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"dash": "dash", "color": "#64748b"}))
+    fig.add_trace(
+        go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", name="y=x", line={"dash": "dash", "color": "#64748b"})
+    )
     fig.update_layout(
         title="One-phase Table-9 macro DSP fit",
         xaxis_title="Observed Table-9 macro BPB",
@@ -566,7 +572,9 @@ def write_fit_scatter(output_dir: Path, panel: pd.DataFrame, actual: np.ndarray,
         width=950,
         height=760,
     )
-    fig.write_html(output_dir / "one_phase_dsp_table9_macro_fit_scatter.html", include_plotlyjs="cdn", config=PLOT_CONFIG)
+    fig.write_html(
+        output_dir / "one_phase_dsp_table9_macro_fit_scatter.html", include_plotlyjs="cdn", config=PLOT_CONFIG
+    )
 
 
 def write_report(
@@ -627,7 +635,7 @@ def main() -> None:
     )
     observed_target = panel[MACRO_TARGET].astype(float).to_numpy()
     row_counts = count_rows(panel)
-    if row_counts["n_signal_rows"] != 240 or row_counts["n_deletion_rows"] != 39:
+    if row_counts["n_signal_rows"] != 241 or row_counts["n_deletion_rows"] != 39:
         raise ValueError(f"Unexpected one-phase panel composition: {row_counts}")
 
     log_cs, coefficients, component_summary, olmix_train_components = fit_olmix_components(
@@ -789,8 +797,12 @@ def main() -> None:
 
     overlay = pd.DataFrame(overlay_rows).sort_values(["series", "kl_reg"]).reset_index(drop=True)
     overlay.to_csv(args.output_dir / "one_phase_olmix_dsp_kl_sweep_summary.csv", index=False)
-    overlay[overlay["model_family"].eq("OLMix")].to_csv(args.output_dir / "olmix_one_phase_kl_sweep_summary.csv", index=False)
-    overlay[overlay["model_family"].eq("DSP")].to_csv(args.output_dir / "dsp_one_phase_kl_sweep_summary.csv", index=False)
+    overlay[overlay["model_family"].eq("OLMix")].to_csv(
+        args.output_dir / "olmix_one_phase_kl_sweep_summary.csv", index=False
+    )
+    overlay[overlay["model_family"].eq("DSP")].to_csv(
+        args.output_dir / "dsp_one_phase_kl_sweep_summary.csv", index=False
+    )
     write_overlay_plots(args.output_dir, overlay)
     write_report(args.output_dir, dsp_summary, component_summary, overlay)
     (args.output_dir / "summary.json").write_text(
