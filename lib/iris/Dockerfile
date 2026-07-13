@@ -188,6 +188,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     git \
     build-essential \
+    ffmpeg \
     lldb \
     libibverbs1 \
     ibverbs-providers \
