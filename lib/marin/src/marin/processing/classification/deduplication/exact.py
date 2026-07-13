@@ -96,12 +96,11 @@ def dedup_exact_paragraph(
         result = dupekit.transform(batch, pipeline)
         return result.append_column(DEFAULT_FILE_PATH_COLUMN, pa.array([source] * result.num_rows, type=pa.string()))
 
-    map_task_resources = ResourceConfig(cpu=0.5, ram="10g", disk="2g")
     ctx_kwargs: dict = {
         "name": "exact-para-dedup",
-        "resources": map_task_resources.scale(10),
-        "map_task_resources": map_task_resources,
-        "reduce_task_resources": map_task_resources.scale(cpu=2, ram=2),
+        "resources": (resources := ResourceConfig(cpu=10, ram="100g", disk="20g")),
+        "map_task_resources": resources.scale(0.1),  # 1 cpu / 10g / 2g
+        "reduce_task_resources": resources.scale(cpu=0.1, ram=0.2, disk=0.1),  # 1 cpu / 20g / 2g
     }
     ctx = ZephyrContext(**ctx_kwargs)
 

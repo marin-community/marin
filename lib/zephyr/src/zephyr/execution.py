@@ -88,7 +88,7 @@ MAX_SHARD_INFRA_FAILURES = 20
 # Typical status text for a 6-stage pipeline is ~300 chars.
 MAX_STATUS_TEXT_LENGTH = 1000
 
-MAX_WORKERS_PER_JOB = 2_048
+MAX_WORKERS_PER_JOB = 1_024
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -1648,16 +1648,17 @@ def _try_read_coordinator_result(result_path: str) -> Any:
 
 
 def _tasks_per_worker(worker_resources: ResourceConfig, task_resources: ResourceConfig) -> int:
-    """Return how many concurrent copies of *task_resources* fit in *worker_resources*."""
+    """Return how many concurrent copies of *task_resources* fit in *worker_resources*.
+
+    Packing uses cpu and ram only. Zephyr does not track disk in runtime
+    admission (``ZephyrTaskResources`` is cpu+memory), so disk is ignored here
+    even though it still applies to Iris worker sizing.
+    """
     ratios = [worker_resources.cpu / task_resources.cpu]
     worker_ram = humanfriendly.parse_size(worker_resources.ram, binary=True)
     task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
     if task_ram > 0:
         ratios.append(worker_ram / task_ram)
-    worker_disk = humanfriendly.parse_size(worker_resources.disk, binary=True)
-    task_disk = humanfriendly.parse_size(task_resources.disk, binary=True)
-    if task_disk > 0:
-        ratios.append(worker_disk / task_disk)
     return max(1, math.floor(min(ratios)))
 
 
@@ -1700,7 +1701,8 @@ class ZephyrContext:
         client: The fray client to use. If None, auto-detects using current_client().
         max_workers: Upper bound on worker count. The actual count is
             min(max_workers, num_shards), computed at first execute(). If None,
-            defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
+            defaults to os.cpu_count() for LocalClient, or ``MAX_WORKERS_PER_JOB``
+            (1024) for distributed clients.
         resources: Resource config per worker.
         coordinator_resources: Resource config for the coordinator job. Defaults to 2 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults

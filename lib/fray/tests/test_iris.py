@@ -139,6 +139,12 @@ class TestResourceConfigScale:
         assert scaled.ram == "8g"
         assert scaled.disk == "4g"
 
+    def test_scale_with_fractional_factor_scales_all_dimensions_down(self):
+        scaled = ResourceConfig(cpu=2, ram="8g", disk="4g").scale(0.5)
+        assert scaled.cpu == 1
+        assert scaled.ram == "4g"
+        assert scaled.disk == "2g"
+
     def test_scale_with_individual_factors_scales_specified_dimensions(self):
         base = ResourceConfig(cpu=1, ram="4g", disk="2g")
         scaled = base.scale(cpu=3, ram=3, disk=2.5)

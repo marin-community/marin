@@ -427,11 +427,13 @@ class ResourceConfig:
         ram: float | None = None,
         disk: float | None = None,
     ) -> "ResourceConfig":
-        """Return a copy with cpu/ram/disk scaled by the given factors.
+        """Return a copy with cpu/ram/disk multiplied by the given factors.
 
-        ``rc.scale(2)`` multiplies cpu, ram, and disk by 2. Keyword factors
-        scale individual dimensions (omitted dimensions keep their current
-        value). ``factor`` cannot be combined with keyword factors.
+        ``rc.scale(2)`` multiplies cpu, ram, and disk by 2; ``rc.scale(0.5)``
+        halves all three. Keyword args ``cpu``, ``ram``, and ``disk`` are
+        multiplicative factors for individual dimensions (e.g. ``cpu=0.5``
+        halves CPU); omitted dimensions keep their current value. ``factor``
+        cannot be combined with keyword factors.
         """
         if factor is not None and (cpu is not None or ram is not None or disk is not None):
             raise ValueError("Pass either a single factor or cpu/ram/disk keyword factors, not both.")
