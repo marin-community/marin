@@ -28,7 +28,7 @@ from marin.inference.quick_serve_dashboard import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.vllm_server import IsolatedCudaVllm, WorkspaceVllm
+from marin.inference.vllm_server import IsolatedCudaVllm, IsolatedTpuVllm, WorkspaceVllm
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -137,6 +137,50 @@ def test_select_vllm_launcher_falls_back_to_workspace_without_version():
     )
     assert select_vllm_launcher(tpu) == WorkspaceVllm()
     assert select_vllm_launcher(gpu_with_image) == WorkspaceVllm()
+
+
+def test_isolated_tpu_vllm_builds_from_forks_for_tpu_target():
+    # The checkout-free TPU path provisions Marin's forked vLLM (+ tpu-inference) via uvx
+    # and must build it for TPU, resolving torch from the CPU index (jax/libtpu do compute).
+    launcher = IsolatedTpuVllm(
+        vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
+        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
+    )
+    assert launcher.command() == [
+        "uvx",
+        "--from",
+        "vllm @ git+https://github.com/marin-community/vllm.git@abc",
+        "--with",
+        "tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
+        "--python",
+        "3.12",
+        "--torch-backend",
+        "cpu",
+        "vllm",
+    ]
+    assert launcher.env() == {"VLLM_TARGET_DEVICE": "tpu"}
+
+
+def test_select_vllm_launcher_tpu_isolated_from_refs():
+    config = QuickServeConfig(
+        model="Qwen/Qwen3-0.6B",
+        endpoint_name="/serve/x",
+        tpu_type="v6e-8",
+        tpu_vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
+        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
+    )
+    assert select_vllm_launcher(config) == IsolatedTpuVllm(
+        vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
+        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
+    )
+
+
+def test_select_vllm_launcher_tpu_ref_requires_tpu_inference():
+    # A vLLM fork without its tpu-inference runtime would boot a broken TPU server; fail
+    # at config time instead.
+    config = QuickServeConfig(model="m", endpoint_name="/serve/x", tpu_type="v6e-8", tpu_vllm_ref="vllm @ git+...@abc")
+    with pytest.raises(ValueError, match="tpu_inference_ref"):
+        select_vllm_launcher(config)
 
 
 def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:

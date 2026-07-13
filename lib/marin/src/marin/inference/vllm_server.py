@@ -27,14 +27,20 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 
 
 class VllmLauncher(Protocol):
-    """Builds the argv that runs the ``vllm`` CLI, before its ``serve …`` args.
+    """Builds the argv and extra environment that run the ``vllm`` CLI.
 
-    vLLM is always launched as a subprocess, so a launcher is just the command
-    prefix. This lets the TPU path run the ``vllm`` on the workspace ``PATH`` while
-    the GPU path runs CUDA vLLM from an isolated, uv-managed environment.
+    vLLM is always launched as a subprocess, so a launcher is the command prefix
+    (before its ``serve …`` args) plus any environment it needs. This lets the TPU
+    path run the ``vllm`` on the workspace ``PATH`` while the isolated paths run vLLM
+    from a throwaway, uv-managed environment — a prebuilt CUDA wheel for GPU, or the
+    source-built TPU forks for a checkout-free TPU serve.
     """
 
     def command(self) -> list[str]: ...
+
+    def env(self) -> dict[str, str]:
+        """Extra environment variables to overlay on the vLLM subprocess env."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,9 @@ class WorkspaceVllm:
 
     def command(self) -> list[str]:
         return [shutil.which("vllm") or "vllm"]
+
+    def env(self) -> dict[str, str]:
+        return {}
 
 
 @dataclass(frozen=True)
@@ -74,6 +83,59 @@ class IsolatedCudaVllm:
             self.torch_backend,
             "vllm",
         ]
+
+    def env(self) -> dict[str, str]:
+        return {}
+
+
+@dataclass(frozen=True)
+class IsolatedTpuVllm:
+    """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
+
+    The TPU counterpart to :class:`IsolatedCudaVllm`, for driving ``marin-serve --tpu``
+    from outside a workspace checkout. Marin's TPU vLLM is a source build of two git
+    forks (``vllm`` + its ``tpu-inference`` runtime) pinned by SHA; this provisions them
+    in an isolated uv-tool env instead of the workspace lock, so a checkout-free install
+    can still boot the server. The fork refs come from ``marin.inference.tpu_vllm_pins``,
+    kept in sync with the root ``pyproject`` sources.
+
+    Unlike the CUDA path — which pulls a prebuilt wheel — this **builds vLLM from
+    source**, so it exports ``VLLM_TARGET_DEVICE=tpu`` (:meth:`env`) and resolves torch
+    from the CPU index (TPU compute runs on jax/libtpu; torch is only a dependency).
+    Cold, uncached workers pay the same source-build cost the in-workspace ``uv sync``
+    pays today; a prebuilt fork wheel would remove it and is tracked in
+    https://github.com/marin-community/marin/issues/7143.
+    """
+
+    vllm_ref: str
+    """``uvx --from`` spec for the vLLM fork, e.g.
+    ``vllm @ git+https://github.com/marin-community/vllm.git@<sha>``."""
+    tpu_inference_ref: str
+    """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
+    # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
+    python_version: str = "3.12"
+    # torch is only a dependency here (jax/libtpu do TPU compute), so build/resolve it
+    # from the CPU index rather than dragging in a CUDA tree.
+    torch_backend: str = "cpu"
+
+    def command(self) -> list[str]:
+        return [
+            "uvx",
+            "--from",
+            self.vllm_ref,
+            "--with",
+            self.tpu_inference_ref,
+            "--python",
+            self.python_version,
+            "--torch-backend",
+            self.torch_backend,
+            "vllm",
+        ]
+
+    def env(self) -> dict[str, str]:
+        # vLLM source installs build for CUDA unless the TPU target is explicit; the uvx
+        # build subprocess inherits this from the launch environment.
+        return {"VLLM_TARGET_DEVICE": "tpu"}
 
 
 @dataclass(frozen=True)
@@ -404,9 +466,10 @@ def _start_vllm_native_server(
     """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
     resolved_port = port if port is not None else 8000
+    launcher = launcher or WorkspaceVllm()
 
     cmd: list[str] = [
-        *(launcher or WorkspaceVllm()).command(),
+        *launcher.command(),
         "serve",
         model_name_or_path,
         "--trust-remote-code",
@@ -425,6 +488,9 @@ def _start_vllm_native_server(
     stdout_f = open(stdout_path, "w")  # noqa: SIM115
     stderr_f = open(stderr_path, "w")  # noqa: SIM115
     native_env = _vllm_env()
+    # A launcher (e.g. the isolated TPU build) may require extra env, such as the
+    # vLLM build target; overlay it after the canonical defaults so it wins.
+    native_env.update(launcher.env())
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "

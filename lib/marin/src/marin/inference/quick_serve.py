@@ -43,6 +43,7 @@ from marin.inference.quick_serve_dashboard import (
 )
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
+    IsolatedTpuVllm,
     VllmEnvironment,
     VllmLauncher,
     WorkspaceVllm,
@@ -84,6 +85,12 @@ class QuickServeConfig:
     env (see :class:`IsolatedCudaVllm`) — the GPU serving path. ``None`` serves from the
     vLLM already on the venv/image ``PATH``: the workspace TPU-vLLM stack, or a prebuilt
     ``--task-image``."""
+    tpu_vllm_ref: str | None = None
+    """When set (with ``tpu_inference_ref``), provision Marin's forked TPU vLLM in an
+    isolated uv-tool env (see :class:`IsolatedTpuVllm`) — the checkout-free TPU serving
+    path. ``None`` serves the TPU vLLM from the workspace venv (the in-checkout path)."""
+    tpu_inference_ref: str | None = None
+    """``uvx --with`` requirement for the tpu-inference fork; paired with ``tpu_vllm_ref``."""
     access: int = EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     """Proxy access mode. PRIVATE (cluster identity only) or LINK (a scoped capability
     URL, minted CLI-side, that anyone holding the link can call off-cluster)."""
@@ -120,15 +127,21 @@ class QuickServeConfig:
 
 
 def select_vllm_launcher(config: QuickServeConfig) -> VllmLauncher:
-    """Pick how to launch vLLM: an isolated CUDA vLLM, or the workspace ``vllm``.
+    """Pick how to launch vLLM: an isolated CUDA/TPU vLLM, or the workspace ``vllm``.
 
-    A set ``vllm_version`` provisions stock CUDA vLLM in a throwaway uv-tool env so
-    its torch/CUDA tree never enters the Marin workspace lock — the GPU serving
-    path. Otherwise vLLM comes from the active venv/image: the TPU-vLLM stack, or a
-    prebuilt ``--task-image`` that ships its own vLLM.
+    - ``vllm_version`` set → stock CUDA vLLM in a throwaway uv-tool env (GPU path),
+      keeping its torch/CUDA tree out of the Marin workspace lock.
+    - ``tpu_vllm_ref`` set → Marin's forked TPU vLLM in a throwaway uv-tool env
+      (checkout-free TPU path), source-built from the pinned git forks.
+    - neither → the vLLM already on the active venv/image ``PATH``: the workspace
+      TPU-vLLM stack, or a prebuilt ``--task-image`` that ships its own vLLM.
     """
     if config.vllm_version:
         return IsolatedCudaVllm(version=config.vllm_version)
+    if config.tpu_vllm_ref:
+        if not config.tpu_inference_ref:
+            raise ValueError("tpu_vllm_ref requires tpu_inference_ref (the tpu-inference fork).")
+        return IsolatedTpuVllm(vllm_ref=config.tpu_vllm_ref, tpu_inference_ref=config.tpu_inference_ref)
     return WorkspaceVllm()
 
 
