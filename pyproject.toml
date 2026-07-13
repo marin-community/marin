@@ -246,6 +246,10 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
 # those lines hurts readability far more than the length limit helps.
 "experiments/datakit/decontam/viewer/report.py" = ["E501"]
+# A mechanically-merged single-file MFU repro (regenerated via rav/merge_minimal.py):
+# it inlines several levanter modules, so their imports cannot sit at the top (E402),
+# and retains unused HF/pipeline code that references now-dropped deps (F821).
+"experiments/grug/moe/standalone/grug_moe_mfu.py" = ["E402", "F821"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
