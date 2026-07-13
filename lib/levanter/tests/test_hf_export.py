@@ -207,7 +207,7 @@ def test_export_linear_rope_keeps_scaling_factor(tmp_path):
     assert cfg["rope_scaling"] == {"rope_type": "linear", "factor": 2.0}
 
 
-def test_export_per_layer_rope_skips_legacy_backfill(tmp_path):
+def test_export_per_layer_rope_backfills_from_full_attention_block(tmp_path):
     config = Gemma3Config(
         max_seq_len=128,
         hidden_dim=16,
@@ -227,9 +227,10 @@ def test_export_per_layer_rope_skips_legacy_backfill(tmp_path):
         converter.save_pretrained(model, out, save_reference_code=False, save_tokenizer=False)
     cfg = json.loads((tmp_path / "model" / "config.json").read_text())
 
-    # Gemma3 stores per-layer rope_parameters with no flat rope_theta; there is no legacy
-    # single-theta equivalent, so the back-fill must not inject rope_theta: null or a bogus
-    # rope_scaling built from the nested per-layer blocks.
+    # Gemma3 stores per-layer rope_parameters with no flat rope_theta. The legacy top-level
+    # rope_theta corresponds to the full_attention block, so the back-fill must pull the trained
+    # value from there — never inject rope_theta: null or a rope_scaling block built from the
+    # nested per-layer dicts.
     assert cfg["rope_parameters"]["full_attention"]["rope_theta"] == 1000000.0
-    assert cfg.get("rope_theta") is None
+    assert cfg["rope_theta"] == 1000000.0
     assert "rope_scaling" not in cfg
