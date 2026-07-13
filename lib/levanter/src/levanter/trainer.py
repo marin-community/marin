@@ -29,6 +29,7 @@ from typing import (
 )
 
 import equinox as eqx
+import fsspec
 import haliax as hax
 from rigging.filesystem import open_url
 import haliax.tree_util
@@ -592,6 +593,14 @@ class Trainer:
         profiler = self.config.profiler
         total_prof_steps = profiler.resolve_num_profile_steps(num_train_steps=self.config.num_train_steps)
         if profiler.is_enabled and total_prof_steps > 0:
+            # log_dir is node-local (default ``logs/``) and does not survive ephemeral GPU nodes, so
+            # mirror the finished trace to the run's durable checkpoint dir when that is remote.
+            durable_base = self.config.checkpointer.expanded_path(self.run_id)
+            upload_dir = (
+                fsspec_utils.join_path(durable_base, "profiler")
+                if fsspec.core.split_protocol(durable_base)[0] is not None
+                else None
+            )
             self.add_hook(
                 levanter.callbacks.profile(
                     str(self.config.log_dir / self.run_id / "profiler"),
@@ -599,6 +608,7 @@ class Trainer:
                     total_prof_steps,
                     profiler.perfetto_link,
                     profiler_options=profiler.build_jax_profile_options(),
+                    upload_dir=upload_dir,
                 ),
                 every=1,
             )

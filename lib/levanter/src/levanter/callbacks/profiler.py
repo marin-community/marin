@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import jax
+from rigging.filesystem import url_to_fs
 
 from levanter.callbacks._core import StepInfo
 from levanter.utils.fsspec_utils import mkdirs
@@ -98,7 +99,14 @@ def profile(
     num_steps: int,
     create_perfetto_link: bool,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    upload_dir: str | None = None,
 ) -> Callable[[StepInfo], None]:
+    """Schedule the JAX device profiler between ``start_step`` and ``start_step + num_steps``.
+
+    ``path`` is the local trace directory the profiler writes to. When ``upload_dir`` is set (a
+    durable, typically remote location such as the run's S3/GCS checkpoint dir), process 0 mirrors
+    the finished trace there after ``stop_trace`` so it survives ephemeral node-local ``log_dir``s.
+    """
     trace_started = False
     mkdirs(path)
 
@@ -144,9 +152,19 @@ def profile(
 
         if create_perfetto_link and jax.process_index() == 0:
             event.set()
+        if upload_dir is not None and jax.process_index() == 0:
+            _upload_trace(path, upload_dir)
         barrier_sync()
 
     return profiler_callback_fn
+
+
+def _upload_trace(local_path: str, upload_dir: str) -> None:
+    """Mirror the local trace directory to a durable location (best-effort, process 0 only)."""
+    fs, dest = url_to_fs(upload_dir)
+    fs.makedirs(dest, exist_ok=True)
+    logger.info(f"Uploading profiler trace {local_path} -> {upload_dir}")
+    fs.put(local_path, dest, recursive=True)
 
 
 def _flush_while_waiting(event):

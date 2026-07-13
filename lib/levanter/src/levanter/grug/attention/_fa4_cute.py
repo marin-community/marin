@@ -271,9 +271,9 @@ def _gpu_compute_arch() -> int:
     raise RuntimeError("Could not determine CUDA compute capability for FA4/CuTe attention.")
 
 
-def _segmented_kernel_config(head_dim: int):
+def _segmented_kernel_config(head_dim: int, head_dim_v: int | None = None):
     arch = _gpu_compute_arch()
-    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
+    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch, head_dim_v=head_dim_v)
 
     # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
     # flash_attn/cute/interface.py. This Grug port is not that native SM100
@@ -302,7 +302,7 @@ def gpu_fa4_cute_attention(
         mask,
         backend_name="gpu_fa4_cute_attention",
     )
-    kernel_config = _segmented_kernel_config(q.shape[-1])
+    kernel_config = _segmented_kernel_config(q.shape[-1], v.shape[-1])
 
     return _fa4_cute_attention_forward_sharded(
         q,

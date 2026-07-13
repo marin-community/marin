@@ -155,7 +155,10 @@ def segmented_flash_attention_backward(
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
-    if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+    # Route every SM90 head-dim the native warp-specialized backward supports through it: GQA D128
+    # (ratio > 1) and MLA qk=192 / v=128 MHA (ratio == 1). The segmented Sm120 fallback is ~40x
+    # slower per call and dominated (~34%) the MLA step time in profiling.
+    if kernel_config.sm90_backward is not None and q.shape[-1] in (128, 192):
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
@@ -287,9 +290,8 @@ def segmented_flash_attention_backward_sm90_native(
         config=sm90_config,
         window_size_left=window_size_left,
     )
-    qhead_per_kvhead = q.shape[2] // k.shape[2]
-    if qhead_per_kvhead == 1:
-        raise NotImplementedError("native SM90 backward currently expects GQA so dK/dV accumulators are present.")
+    # MHA (ratio == 1, MLA) is the degenerate GQA group of size 1: dK/dV accumulators are per-head,
+    # so the native accumulation path is correct without a grouped reduction.
     preprocess_input_spec, preprocess_output_spec = _cutlass_attention_backward_sm90_preprocess_specs(
         modules,
         vector_elems=8,
@@ -304,8 +306,13 @@ def segmented_flash_attention_backward_sm90_native(
     )
     dpsum, lse_log2, _dq_accum = preprocess_call(out, dout, lse)
 
-    backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
-    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, sm90_config.tile)
+    mha = q.shape[2] == k.shape[2]
+    backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(
+        modules, vector_elems=8, mha=mha
+    )
+    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(
+        q, k, v, sm90_config.tile, mha=mha
+    )
     backward_call = modules.cjax.cutlass_call(
         backward_launcher,
         output_shape_dtype=backward_output_shape_dtype,
@@ -314,7 +321,7 @@ def segmented_flash_attention_backward_sm90_native(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq_accum, dk_accum, dv_accum = backward_call(
+    dq_accum, dk_out, dv_out = backward_call(
         q,
         k,
         v,
@@ -388,8 +395,11 @@ def segmented_flash_attention_backward_sm90_native(
         softmax_scale=1.0,
     )
     (dq,) = dq_postprocess(dq_accum)
-    (dk,) = dk_postprocess(dk_accum)
-    (dv,) = dv_postprocess(dv_accum)
+    if mha:
+        # MHA: dK/dV came out of the kernel epilogue as final softmax-scaled bf16 — no postprocess.
+        return dq, dk_out, dv_out
+    (dk,) = dk_postprocess(dk_out)
+    (dv,) = dv_postprocess(dv_out)
     return dq, dk, dv
 
 
@@ -435,7 +445,7 @@ def _cutlass_attention_backward_specs(
 
 
 def _cutlass_attention_backward_sm90_accum_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int
+    modules: _CutlassCuteModules, *, vector_elems: int, mha: bool = False
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
@@ -457,7 +467,11 @@ def _cutlass_attention_backward_sm90_accum_specs(
         sparse_cnt_spec,
         sparse_idx_spec,
     )
-    return input_spec, (scratch_spec, scratch_spec, scratch_spec)
+    # For MHA (qhead_per_kvhead == 1) the kernel writes final bf16 dK/dV directly in [B, S, H, D]
+    # layout (already softmax-scaled), so their outputs are 4D qkv_spec instead of the fp32
+    # accumulator scratch tensors used by the GQA (grouped-reduction) path.
+    output_spec = (scratch_spec, qkv_spec, qkv_spec) if mha else (scratch_spec, scratch_spec, scratch_spec)
+    return input_spec, output_spec
 
 
 def _cutlass_attention_backward_sm90_preprocess_specs(
@@ -635,6 +649,8 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     k: jax.Array,
     v: jax.Array,
     backward_tile: tuple[int, int],
+    *,
+    mha: bool = False,
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
@@ -644,6 +660,12 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     head_dim_rounded = ((head_dim + 31) // 32) * 32
     head_dim_v_rounded = ((v.shape[-1] + 31) // 32) * 32
     dq_accum = jax.ShapeDtypeStruct((batch, q_heads, seq_q_rounded * head_dim_rounded), jnp.float32)
+    if mha:
+        # MHA: the kernel emits final bf16 dK/dV in the input [B, S, H, D] layout (no grouped
+        # accumulation, no dK/dV postprocess). dQ still uses the fp32 atomic accumulator.
+        dk = jax.ShapeDtypeStruct(k.shape, k.dtype)
+        dv = jax.ShapeDtypeStruct(v.shape, v.dtype)
+        return dq_accum, dk, dv
     dk_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_rounded), jnp.float32)
     dv_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_v_rounded), jnp.float32)
     return dq_accum, dk_accum, dv_accum
@@ -769,8 +791,10 @@ def _validate_forward_inputs(
         raise ValueError(f"q/k head dimensions must match, got q={q.shape}, k={k.shape}")
     if k.shape[2] != v.shape[2]:
         raise ValueError(f"k/v head counts must match, got k={k.shape}, v={v.shape}")
-    if v.shape[-1] != q.shape[-1]:
-        raise NotImplementedError(f"gpu_fa4_cute_attention currently requires Dv == D, got q={q.shape}, v={v.shape}")
+    # Asymmetric V head dim (MLA qk=192 / v=128) is supported by the kernel; V/O layouts are
+    # sized on head_dim_v independently of the q/k head_dim. Both must be multiples of 8.
+    if v.shape[-1] % 8 != 0:
+        raise NotImplementedError(f"gpu_fa4_cute_attention requires Dv % 8 == 0, got v={v.shape}")
     if q.shape[2] % k.shape[2] != 0:
         raise ValueError(f"Hq must be divisible by Hkv for GQA, got q={q.shape}, k={k.shape}")
     if lower_bounds.shape != q.shape[:2]:

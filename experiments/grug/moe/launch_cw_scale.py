@@ -107,6 +107,15 @@ def build_scale_model() -> GrugModelConfig:
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
     num_heads = hidden_dim // HEAD_DIM
+    # SCALE_MLA=1 switches the block to Multi-head Latent Attention with num_heads = 2*d//128
+    # and its own qk/v head dims (128 nope + 64 rope, v=128); the dense head_dim is unused.
+    use_mla = os.environ.get("SCALE_MLA") == "1"
+    if use_mla:
+        num_heads = 2 * hidden_dim // HEAD_DIM
+    # Q latent rank. SCALE_Q_LORA_RANK=0 uses a direct Q projection (DeepSeek-V3 / TorchTitan
+    # deepseek_v3_16b default); >0 routes Q through a compressed latent. Defaults to d/2 (the
+    # grug MLA prototype value) when unset.
+    q_lora_rank = env_int("SCALE_Q_LORA_RANK", hidden_dim // 2)
     # SCALE_NUM_KV_HEADS overrides the KV-head count (set == num_heads for full MHA, which
     # the gpu_fa4_cute flash kernel supports; GQA needs the THD kernel, which requires
     # packed segment metadata the JAX path doesn't provide). Default ~4:1 GQA.
@@ -148,6 +157,8 @@ def build_scale_model() -> GrugModelConfig:
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
+        use_mla=use_mla,
+        q_lora_rank=q_lora_rank,
         intermediate_dim=intermediate_dim,
         shared_expert_intermediate_dim=shared_intermediate_dim,
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),

@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
@@ -33,6 +34,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.utils import fsspec_utils
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -490,12 +492,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
+            # log_dir is node-local and dies with the ephemeral GPU node, so mirror the finished
+            # trace to the run's durable checkpoint dir (S3) when that path is remote.
+            durable_base = trainer.checkpointer.expanded_path(run_id)
+            profiler_upload_dir = (
+                fsspec_utils.join_path(durable_base, "profiler")
+                if fsspec.core.split_protocol(durable_base)[0] is not None
+                else None
+            )
             state_callbacks.add_hook(
                 callbacks.profile(
                     str(trainer.log_dir / run_id / "profiler"),
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
+                    upload_dir=profiler_upload_dir,
                 ),
                 every=1,
             )
