@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dispatch Job"
+  short_description: "Execute and report an exact Iris job"
+  default_prompt: "Use $dispatch-job to execute this exact Iris work order and return structured lifecycle facts."

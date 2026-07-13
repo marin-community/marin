@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Adaptive Sweep"
+  short_description: "Design an adaptive sweep policy"
+  default_prompt: "Use $design-adaptive-sweep to design, review, and save a resource-adaptive sweep policy for this experiment."
