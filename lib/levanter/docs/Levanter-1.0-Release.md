@@ -501,10 +501,9 @@ when training on novel datasets. As an example, we have seen issues with early v
 model had suspiciously low loss.
 
 The visualization produces a heatmap of the log probability of each token in a sample of the validation set
-that is updated periodically during training. Here is an example of the token probability visualization in action on a
-small, quick training run:
-
-![video showing heat map of token probabilities for a sample of the validation set evolving as training progresses](figures/token_probabilities.mov)
+that is updated periodically during training. The original announcement included a screen recording of this visualization in action on a
+small, quick training run. That recording has been removed from the docs to keep the repository
+lightweight; the same visualization is logged live to Weights & Biases during training, as noted below.
 
 The darker, more purple the color, the lower the probability of the token. The lighter, more yellow the color, the higher the probability.
 This visualization is logged to WandB as training progresses and can be viewed interactively. We have found this to be a
