@@ -9,7 +9,7 @@ import jax
 from jax import shard_map
 from jax import numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
-from jax.sharding import get_abstract_mesh
+from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
@@ -232,11 +232,14 @@ def _fa4_cute_attention_forward_sharded(
         )
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
+    metadata_spec = P(batch_axes, None)
     _assert_sequence_axis_unsharded("q", q)
     _assert_sequence_axis_unsharded("k", k)
     _assert_sequence_axis_unsharded("v", v)
     _assert_sequence_axis_unsharded("lower_bounds", lower_bounds)
     _assert_sequence_axis_unsharded("valid", valid)
+    lower_bounds = reshard(lower_bounds, metadata_spec)
+    valid = reshard(valid, metadata_spec)
 
     @shard_map(
         mesh=mesh,

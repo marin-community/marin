@@ -55,10 +55,6 @@ def _seed_workers_and_attempts(db: ControllerDB) -> None:
     against a realistic per-tick row count (~1k live worker-bound attempts).
     """
     with db.transaction() as cur:
-        cur.execute(
-            text("INSERT INTO users (user_id, created_at_ms, role) VALUES (:uid, :ts, :role)"),
-            {"uid": "u1", "ts": 1_000, "role": "user"},
-        )
         for w_idx in range(_RESOURCE_WORKER_COUNT):
             worker_id = f"w-{w_idx:04d}"
             cur.execute(

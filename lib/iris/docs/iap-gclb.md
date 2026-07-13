@@ -131,8 +131,9 @@ per-cluster — it names that cluster's backend service, not the shared frontend
 The controller verifies IAP's signed `X-Goog-IAP-JWT-Assertion` (its `aud` is
 `signed_header_audience`) to map a request to an identity; leave that field empty
 to disable the IAP path entirely. For how the controller turns an identity into a
-role (`dashboard` read-only vs `user`/`admin` after `iris login`), see
-`lib/iris/src/iris/rpc/auth.py` and `lib/iris/docs/auth-loopback-transition.md`.
+role (`dashboard` read-only for an unprovisioned email vs `user`/`admin` for a
+provisioned one, resolved per request from the assertion — the controller mints no
+token), see `lib/iris/src/iris/rpc/auth.py` and `lib/iris/docs/auth-loopback-transition.md`.
 
 ## Access control
 
@@ -186,7 +187,7 @@ token is minted differ. Resolution lives in `rigging/credentials.py`
 | Caller | Token source | `aud` | Identity |
 | ------ | ------------ | ----- | -------- |
 | **Human** (after `iris login`) | re-mint from the cached desktop-OAuth refresh token (`IapRefreshTokenProvider`) | desktop client id | the signed-in user |
-| **Service account / CI** (ambient key, no login) | `fetch_id_token` from ambient SA credentials (`IapServiceAccountTokenProvider`) | dedicated programmatic audience if the cluster configures one, else the desktop client id | the SA email |
+| **Service account** (GCE metadata / key / impersonated ADC) | mint an ID token from the ambient SA credentials the resolver finds — a key, GCE metadata, or an impersonated ADC (`IapServiceAccountTokenProvider`) | dedicated programmatic audience if the cluster configures one, else the desktop client id | the SA email |
 | **Loopback / in-cluster** | none — reaches the controller directly, trusted by `auth.trusted_cidrs` / loopback | — | transport-trusted |
 
 ```mermaid
@@ -217,6 +218,51 @@ path falls back to the desktop client id (IAP registers it as a programmatic
 client) — sufficient for the common single-client setup. Set it only to give
 machine callers an `aud` distinct from the interactive-login client.
 
+### Headless / CI / agent: give the process service-account credentials
+
+The ambient-SA row above is automatic on a GCE VM whose service account is
+allowlisted. Off a VM — a CI runner, a dev box, an agent harness — there is no
+ambient service-account key, and the one credential you do have (your own
+`gcloud` user login) does **not** work directly: `IapServiceAccountTokenProvider`
+mints the edge token from *service-account* credentials, not end-user `gcloud`
+credentials, and `iris login` (the only path that turns a *human* identity into an
+edge token) needs a browser somewhere.
+
+So a fully unattended caller authenticates *as an allowlisted service account*.
+The keyless way is to point your application-default credentials at one by
+impersonation — your ordinary user login is the impersonation source, nothing is
+downloaded:
+
+```bash
+gcloud auth application-default login \
+  --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+iris --cluster=marin-dev cluster status   # just works; no iris-specific flag or env
+```
+
+`iris` reads that ADC through the standard Google resolver — `fetch_id_token`
+ignores the well-known ADC file, so `IapServiceAccountTokenProvider` mints the
+token through `google.auth.default()` for an impersonated ADC. On a GCE/GKE/Cloud
+Run workload, attach the SA instead (metadata; zero files); in external CI, use
+Workload Identity Federation. A downloaded SA key
+(`GOOGLE_APPLICATION_CREDENTIALS=key.json`) also works but is a long-lived secret —
+avoid it.
+
+Two IAM grants make this work, matching the audience-vs-identity split above:
+
+- **Impersonation** — you need `roles/iam.serviceAccountTokenCreator` on the
+  target service account (to mint tokens as it).
+- **Allowlist (identity → authorization)** — the service account must hold
+  `roles/iap.httpsResourceAccessor` on the cluster's backend service, exactly as
+  a human would (see [Access control](#access-control)). The edge token's `aud`
+  clears IAP authentication; the impersonated SA email is the identity IAP
+  authorizes and the controller maps to a role. There is no way to present a
+  *non*-allowlisted identity — so the SA you impersonate must be on the allowlist.
+
+To reach a plain HTTP endpoint (e.g. `/auth/config`) rather than an RPC, build
+credentials with `iris.cli.connect.client_credentials(config, name)` and attach
+`Proxy-Authorization: Bearer <creds.iap_provider.get_token()>`.
+
 ## Firewall
 
 `firewall` tags the controller VM and adds an **allow** rule so only the Google
@@ -232,31 +278,43 @@ access is carved out (allow the RFC1918 ranges at a higher priority) or confirme
 unused. Without any deny rule the port is still not internet-reachable (no public
 allow rule exists); the deny only makes that guarantee explicit.
 
-## Public proxy (open only `/proxy/*` off-cluster)
+## Capability-URL proxy (open only `/proxy/t/*` off-cluster)
 
 By default the whole controller sits behind IAP, so an off-cluster caller (e.g. a
 Daytona/Modal sandbox running an agent harness) cannot reach a registered
-endpoint through the controller proxy. The `public-proxy` stage opens only the
-`/proxy/*` path past IAP, leaving the dashboard, `/auth/*`, and the RPC mounts
-IAP-gated:
+endpoint through the controller proxy. IAP is all-or-nothing per backend — it
+authenticates *every* request to a backend or none — so it can't "attach the
+caller's identity when present, else pass through anonymous" on a single path.
+The `token-proxy` stage works around that by opening only the *capability-URL*
+path `/proxy/t/*` past IAP, leaving the dashboard, `/auth/*`, the RPC mounts, and
+every identity-gated `/proxy` path (including the dashboard's own
+`/proxy/system.log-server/…` log fetch) IAP-gated:
 
 ```
-                       ┌─ path /proxy/*  → iris-<cluster>-proxy-be  (IAP OFF) ─┐
-client → GCLB (:443) → URL map                                                  ├→ same NEG → controller VM:10000
-                       └─ default        → iris-<cluster>-be        (IAP ON) ──┘
+                       ┌─ path /proxy/t/*  → iris-<cluster>-proxy-be  (IAP OFF) ─┐
+client → GCLB (:443) → URL map                                                    ├→ same NEG → controller VM:10000
+                       └─ default          → iris-<cluster>-be        (IAP ON) ──┘
 ```
 
-The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP
-disabled) on the same NEG and health check the `backend` stage already created —
-no new NEG, no new controller — and a URL-map path rule routing `/proxy` and
-`/proxy/*` to it. Everything else on the host keeps flowing to the IAP-gated
-backend. The controller's own per-endpoint auth is then the gate for that path:
-`PRIVATE` (a cluster identity), `PUBLIC` (open), or `BEARER` (a scoped endpoint
-token — see the endpoint access modes). The controller needs no firewall or
-IAP-admin authority; this admin-run stage is the only thing that touches the LB.
+A **capability URL** carries a scoped endpoint token in its path —
+`/proxy/t/<token>/<endpoint>/<sub_path>` — so possession of the URL *is* the
+credential (gist-style: if you have the link, it works). No auth header or cookie
+is needed. The controller's `@public` token route lifts the token from the path
+and `_authorize_proxy` verifies it is scoped to that endpoint and unexpired before
+forwarding. Mint one with `iris endpoints mint <name>` (or let `marin-serve
+--access link` print the ready-to-use URL at launch).
 
-`deploy` runs `public-proxy` by default (it reuses the cluster's existing NEG
-+ health check), so a plain deploy or re-deploy stands up the `/proxy` opening
+The stage adds a second backend service (`iris-<cluster>-proxy-be`, IAP disabled)
+on the same NEG and health check the `backend` stage already created — no new NEG,
+no new controller — and a URL-map path rule routing `/proxy/t` and `/proxy/t/*` to
+it. Everything else on the host keeps flowing to the IAP-gated backend, so the
+browser's IAP identity still reaches PRIVATE endpoints and the dashboard's log
+viewer. The controller's `_authorize_proxy` is the sole gate for the capability
+path; it needs no firewall or IAP-admin authority, and this admin-run stage is the
+only thing that touches the LB.
+
+`deploy` runs `token-proxy` by default (it reuses the cluster's existing NEG +
+health check), so a plain deploy or re-deploy stands up the `/proxy/t` opening
 idempotently:
 
 ```bash
@@ -264,21 +322,26 @@ uv run lib/iris/scripts/iap_gclb.py deploy marin-dev --domain iris-dev.oa.dev \
     --web-client-secrets scratch/web.json \
     --desktop-client-secrets scratch/desktop.json
 
-# Opt out to keep the controller fully IAP-gated (no off-cluster /proxy):
-#   ... deploy ... --no-public-proxy
+# Opt out to keep the controller fully IAP-gated (no off-cluster capability URLs):
+#   ... deploy ... --no-token-proxy
 
 # Or run just this stage against an already-deployed cluster:
-uv run lib/iris/scripts/iap_gclb.py public-proxy marin-dev --domain iris-dev.oa.dev
+uv run lib/iris/scripts/iap_gclb.py token-proxy marin-dev --domain iris-dev.oa.dev
 ```
 
-`public-proxy` is idempotent (a no-op once the backend + path rule exist).
-`teardown` removes the IAP-free backend and its `/proxy/*` rule along with the
-rest of the cluster's stack; `status` reports whether the public-proxy backend
+`token-proxy` is idempotent (a no-op once the backend + path rule exist).
+`teardown` removes the IAP-free backend and its `/proxy/t/*` rule along with the
+rest of the cluster's stack; `status` reports whether the token-proxy backend
 exists.
 
 The firewall allow-rule still admits only the Google LB ranges, so nothing
-bypasses the LB; removing IAP on `/proxy/*` only changes *which* GCLB backend that
-path lands on, and the controller's `_authorize_proxy` remains the sole gate.
+bypasses the LB; opening `/proxy/t/*` only changes *which* GCLB backend that path
+lands on, and the controller's `_authorize_proxy` remains the sole gate.
+
+On CoreWeave/k8s clusters there is no IAP layer: the controller Service is
+ClusterIP-internal and a single Traefik ingress already routes all of `/proxy`
+(including `/proxy/t/*`) to it with no edge auth, so the controller's own
+per-endpoint auth is the sole gate there and no equivalent stage is needed.
 
 ## Verify
 

@@ -15,7 +15,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://localhost:8080",
+      // API_PROXY lets dev environments where :8080 is taken point the
+      // proxy at a server started with a custom PORT.
+      "/api": process.env.API_PROXY ?? "http://localhost:8080",
     },
   },
   plugins: [react()],

@@ -14,7 +14,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from levanter.data.text import TextLmDatasetFormat
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.datakit.normalize import NormalizedData, generate_id
 from marin.execution.step_spec import StepSpec

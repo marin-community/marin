@@ -26,7 +26,7 @@ building shard_specs over ~10K+ nemotron shards)::
 
 import logging
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData

@@ -17,24 +17,24 @@ The shared tokenization core lives in :mod:`marin.processing.tokenize._core`.
 import abc
 import dataclasses
 import logging
-import os
 import re
 import time
 from collections.abc import Sequence
 
 from datasets import load_dataset_builder
-from fray import ResourceConfig
-from levanter.data.text import (
+from fray.types import ResourceConfig
+from levanter.data.text.datasets import (
     DatasetComponent,
     HfDatasetSourceConfig,
-    LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
-    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
+from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import FileEntry
+from rigging.filesystem import StoragePath, prefix_join
+from zephyr.dataset import Dataset, FileEntry
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
@@ -49,7 +49,6 @@ from marin.processing.tokenize._core import (
     tokenize_pipeline,
 )
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -283,8 +282,8 @@ def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) 
 
 
 def _split_already_done(cache_path: str, split_name: str) -> bool:
-    ledger_path = os.path.join(cache_path, split_name, "shard_ledger.json")
-    if fsspec_exists(ledger_path):
+    ledger_path = ShardedCacheLayout.parse(cache_path).child(split_name).ledger
+    if StoragePath(ledger_path).exists():
         logger.info("Shard ledger already exists for %s at %s; skipping", split_name, ledger_path)
         return True
     return False
@@ -297,7 +296,7 @@ def _run_split(
     split_name: str,
 ) -> None:
     """End-to-end pipeline for one split: glob → tokenize → consolidate → stats."""
-    prefix = os.path.join(config.cache_path, split_name)
+    prefix = prefix_join(config.cache_path, split_name)
     pipeline_start = time.monotonic()
 
     sample_path = parquet_window_hint(file_groups)

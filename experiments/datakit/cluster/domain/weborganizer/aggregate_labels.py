@@ -34,7 +34,7 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.domain.weborganizer.all_sources_topic import WeborgTopicOutput, build_classify_steps
@@ -77,12 +77,9 @@ def _count_labels_one_source(*, source_name: str, attrs: WeborgTopicOutput) -> S
     """Scan one source's classify parquets, return ``{label: count}``."""
     counts: Counter[str] = Counter()
     n_docs = 0
-    fs, resolved = url_to_fs(attrs.output_dir)
-    protocol = attrs.output_dir.split("://", 1)[0] if "://" in attrs.output_dir else ""
-    paths = sorted(p for p in fs.ls(resolved) if p.endswith(".parquet"))
+    paths = sorted((p for p in StoragePath(attrs.output_dir).ls() if str(p).endswith(".parquet")), key=str)
     for path in paths:
-        full = f"{protocol}://{path}" if protocol and not path.startswith(f"{protocol}://") else path
-        with fs.open(full, "rb") as f:
+        with path.open("rb") as f:
             # Column projection: skip ``id`` (largest col); only ``topic.top_label``
             # feeds the histogram.
             table = pq.read_table(f, columns=["topic"])
@@ -117,8 +114,7 @@ def aggregate_label_counts(
     per_source_paths: dict[str, str] = {}
     for name, counts_obj in per_source.items():
         json_path = f"{per_source_dir}/{_safe_filename(name)}.json"
-        with open_url(json_path, "w") as f:
-            f.write(counts_obj.model_dump_json(indent=2))
+        StoragePath(json_path).write_text(counts_obj.model_dump_json(indent=2))
         per_source_paths[name] = json_path
 
     # Corpus rollup (sum across sources)
@@ -130,7 +126,7 @@ def aggregate_label_counts(
 
     # TSV rollup, score-sorted
     tsv_path = f"{output_path.rstrip('/')}/top_labels.tsv"
-    with open_url(tsv_path, "w") as f:
+    with StoragePath(tsv_path).open("w") as f:
         f.write("label\tdocs\tfraction\n")
         for label, n in corpus.most_common():
             frac = n / n_docs_total if n_docs_total else 0.0

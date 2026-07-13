@@ -495,6 +495,8 @@ export interface UserSummary {
   user: string
   taskStateCounts?: Record<string, number>
   jobStateCounts?: Record<string, number>
+  // Config-derived role from the controller's in-memory RolePolicy.
+  role?: string
 }
 
 export interface ListUsersResponse {
@@ -510,6 +512,8 @@ export interface LogEntry {
   attemptId?: number
   level?: string
   key?: string
+  /** Store row id, ascending in write order. int64, so proto JSON sends a string. */
+  seq?: string
 }
 
 export interface FetchLogsResponse {
@@ -550,23 +554,6 @@ export interface GetCurrentUserResponse {
   userId: string
   role: string
   displayName?: string
-}
-
-// -- API Keys --
-
-export interface ApiKeyInfo {
-  keyId: string
-  keyPrefix: string
-  userId: string
-  name: string
-  createdAtMs: string
-  lastUsedAtMs: string
-  expiresAtMs: string
-  revoked: boolean
-}
-
-export interface ListApiKeysResponse {
-  keys: ApiKeyInfo[]
 }
 
 // -- Scheduler State --
@@ -672,8 +659,6 @@ export interface BackendSummary {
   capabilities: string[]
   /** Map of attribute key → list of string values. */
   advertisedAttributes: Record<string, { values: string[] }>
-  restricted: boolean
-  allowedUserCount: number
   scaleGroups: string[]
   workerCount: number
   pendingTaskCount: number
@@ -705,7 +690,6 @@ export interface PeerSummary {
   // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
   // absent on the wire when empty — hence optional here.
   controllerAddress?: string
-  dashboardUrl?: string
   /** Last capability heartbeat succeeded. */
   reachable?: boolean
   /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */

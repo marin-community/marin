@@ -27,7 +27,7 @@ tokenization/download operations.
 
 from functools import partial
 
-from levanter.data.text import ChatLmDatasetFormat
+from levanter.data.text.formats import ChatLmDatasetFormat
 
 from experiments.defaults import default_tokenize
 from experiments.domain_phase_mix.config import DatasetComponent, Domain

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from levanter.main.train_lm import LmConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 
 from experiments.domain_phase_mix.proxy_sweep import (
     REGMIX_1_2B_CHINCHILLA_BUDGET,

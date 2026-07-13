@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Literal
 
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 SplitName = Literal["train", "validation"]
 _STATS_FILE_NAME = ".stats.json"
@@ -51,8 +51,7 @@ def read_tokenized_cache_stats(cache_root: str, split: SplitName) -> TokenizedCa
     """Read tokenized cache stats for one split."""
     stats_path = tokenized_cache_stats_path(cache_root, split)
     try:
-        with open_url(stats_path, mode="r") as f:
-            stats = json.load(f)
+        stats = json.loads(StoragePath(stats_path).read_text())
     except FileNotFoundError as exc:
         raise FileNotFoundError(f"Tokenized cache stats not found at {stats_path}") from exc
 

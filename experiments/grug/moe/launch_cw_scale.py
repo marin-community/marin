@@ -48,8 +48,8 @@ from typing import cast
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import BlockShuffleConfig
-from levanter.optim import AdamConfig
+from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext

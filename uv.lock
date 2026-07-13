@@ -2572,6 +2572,23 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-secret-manager"
+version = "2.29.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-auth" },
+    { name = "grpc-google-iam-v1" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/7c/5c88cdde9664f6c75fb68aa11e0af4309a92bef38dd38df0456ffb0f469b/google_cloud_secret_manager-2.29.0.tar.gz", hash = "sha256:ee64133af8fdb3780affb65ec6ccf10ab15a0113d8edeba388665f4be87ce1be", size = 278437, upload-time = "2026-06-03T16:13:43.149Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/c2/fc3275bc42a522757cb5141d7dae51f048b93d2f5fe4574fcee5392cef03/google_cloud_secret_manager-2.29.0-py3-none-any.whl", hash = "sha256:21bac2d0adb0bb3c13c346d7223832f197c2266534528a1bf1402774e06395a3", size = 225042, upload-time = "2026-06-03T16:12:20.162Z" },
+]
+
+[[package]]
 name = "google-cloud-storage"
 version = "3.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4751,13 +4768,13 @@ requires-dist = [
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cpu'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "cpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'tpu'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "tpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'vllm'", specifier = "==0.26.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin-core", extra = "vllm" } },
-    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=808415f45bbfcb512e9c593c4a3330aed115917e" },
+    { name = "tpu-inference", marker = "extra == 'vllm'", git = "https://github.com/marin-community/tpu-inference.git?rev=734d2842aa883c8f7bcff87a4b437a366f3adbc0" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "transformers", specifier = ">=5.5.3,<6.0" },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d" },
+    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=82b5c9be5cef68503d7cf1588aca869cbbcc78ac" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
 provides-extras = ["gpu", "tpu", "cpu", "rl", "offline-rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
@@ -4861,14 +4878,14 @@ test = [
 
 [[package]]
 name = "marin-dupekit"
-version = "0.1.2.dev202606081019"
+version = "0.1.2.dev202607010930"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/dc/9d/3c2bea3f8a557649e8da8371f43b8a7e14d1a42a156c54d153d439ffacab/marin_dupekit-0.1.2.dev202606081019.tar.gz", hash = "sha256:449f3bb30f6b353d2541011de483b71dd40b796ed6f032b71568d3f3494a202d", size = 29869, upload-time = "2026-06-08T10:25:06.543Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/f6/dcdffb0a599f3741e88d6fd0ce556cc2ce030f90807f31c29a59bbb47cf4/marin_dupekit-0.1.2.dev202607010930.tar.gz", hash = "sha256:8830ae170f01b6fc9fddfc39fe29d77bacab0aaebbaf6f1848a7cc5b77680290", size = 29902, upload-time = "2026-07-01T09:36:46.448Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/ea/175c8dc37b21616b10658e62de9aa3873832e2c9b86c8353b043d6d11daa/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6fe8ee488f722e0193f247f6b8cf7c7b969ab7a4a8a7e04e519eb73e6ff77663", size = 4579143, upload-time = "2026-06-08T10:24:59.62Z" },
-    { url = "https://files.pythonhosted.org/packages/81/17/3eba4e92be4af8ae826fdda5f048df01c9a8082a58cf79f6df73ce665df3/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:1d8b7cf825739bbe26d6f561073ca0291114d0e80790de172272c4704892c707", size = 4197445, upload-time = "2026-06-08T10:25:01.44Z" },
-    { url = "https://files.pythonhosted.org/packages/01/66/a6b4807f96b6b0d12afbe9996273c598651bfe30423810605289fcd7a4e5/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0a05b48f495a509fdda39f6d7e5384e34c5972950981c4197e81c2bf3b41c8a3", size = 4416473, upload-time = "2026-06-08T10:25:03.457Z" },
-    { url = "https://files.pythonhosted.org/packages/ab/5a/99b44b1d6abc07af2ad3df953cfb4161d934e56643a5a812ba253e5d175d/marin_dupekit-0.1.2.dev202606081019-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:397cf89721d4b22274f8ab309fbc557d304aa0ecb965f413662f62c8d7d14ec3", size = 4758217, upload-time = "2026-06-08T10:25:04.956Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/a7/646f30562d207aa027f03c95605ed4c0ede413b993d1f0579683676c4666/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5ca40b90728127268bc6bd38985a795319b91db553ba6f67d8f24d845e8bf9cc", size = 4580721, upload-time = "2026-07-01T09:36:38.895Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/75/23642d2f71f37a5486375e87e3ce140097ffe3aa37fb25db05b5bb3b5f83/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0dc850f498c6056f5bafaac3ad81872f067324ab45893c8d8509c18eae59b1ab", size = 4192370, upload-time = "2026-07-01T09:36:41.144Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/d6/5d1f46582dcf867ef770cb093062107edb95d9d9c0268f8a324423f6cb20/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2473d4b67939a57b3cbdb393c3b7772c50b6b24efb040682dd1c1130293e9f9f", size = 4413413, upload-time = "2026-07-01T09:36:43.029Z" },
+    { url = "https://files.pythonhosted.org/packages/11/8c/c2c333fde146c77bc4a4a74b059c4c2e2f9d2234ba3c44b1e66011fa6028/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:6bdaf183bfbfdd7e7e8577891db763357ff6d43aaf81b6b3daa957c8b71f5392", size = 4755070, upload-time = "2026-07-01T09:36:44.78Z" },
 ]
 
 [[package]]
@@ -4932,14 +4949,14 @@ test = [
 
 [[package]]
 name = "marin-finelog-server"
-version = "0.2.10"
+version = "0.2.12.dev202607090934"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/78/5e/63cbc183a739832d8e735dedd5aed21d6d8276a4f03421bdf846fed5a39b/marin_finelog_server-0.2.10.tar.gz", hash = "sha256:814c164d5a10f2890308a6b824c2862a795d458fcbe36b891fb916c641a9f286", size = 198004, upload-time = "2026-06-16T15:21:08.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/b1/f6691e5c0c00260b7cb386a3ca075d6b38e60822e8f82c3e6e73c352ad68/marin_finelog_server-0.2.12.dev202607090934.tar.gz", hash = "sha256:de52360f17371a88404d440cdd6211c3e4716fac7183f0805e9db80245d2d345", size = 223389, upload-time = "2026-07-09T10:09:22.627Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/18/73aa6b0128d454f6af126bf9062f702814cfe1c2deac540508dfba143e70/marin_finelog_server-0.2.10-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1ab299a0054393422a5a25ba72ee684fc9fc287b45d18dd690b8f2ca083ed2a0", size = 41535735, upload-time = "2026-06-16T15:20:55.171Z" },
-    { url = "https://files.pythonhosted.org/packages/25/5c/a8a2c54c358599ce69708a87a7bc6b0fd6404287d54bde65c36efb08b78d/marin_finelog_server-0.2.10-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:ada401ea4ff64020f0c0b823eb35196af4e4b9c933d87178d53dba4596fa0b28", size = 39118100, upload-time = "2026-06-16T15:20:58.761Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/4a/d76239d03a1ab7c078907578ebf4eaf1b21f686b0dff6c618dfdabc4becc/marin_finelog_server-0.2.10-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:440b40c3d9ba785f14c441c4b60d17ffdc1a76e06fcffa0aa0c6acd3c408bc09", size = 40490992, upload-time = "2026-06-16T15:21:02.299Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/0f/9a8abea06fbd7fdfb5ba88e827a36c143534474e6cb93798ba7daf327d07/marin_finelog_server-0.2.10-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:0dc8dd1e584578f83cc94de1a679ab6c2962d6f59fad2f9c965d9dafca94c512", size = 43070955, upload-time = "2026-06-16T15:21:05.094Z" },
+    { url = "https://files.pythonhosted.org/packages/86/d9/6b07c81bbd9f9a2e0f5da7437d556e40a8e72a544adccd61119b0c7cbbe6/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c6a3e396a7801591e93a6e56525babcae3f1e34ecef2070c854b551b15417feb", size = 42268254, upload-time = "2026-07-09T10:09:07.736Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/bf/e0254ffea5cedf3912bda03820aacd7299530811d49a08cce48bf38b6823/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:a2cee80d1366df9454fa1de3f309544f07c62001fcf93af98c144cacd45dd60a", size = 39767175, upload-time = "2026-07-09T10:09:11.27Z" },
+    { url = "https://files.pythonhosted.org/packages/77/19/aeda9deb1fc7689fec120a461980dc25c3bf83dbd742375e6a41fa28fef9/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:73304b41560c81a24ea51452e1030862690b78cfe6f289524cdf361459de32a2", size = 41222043, upload-time = "2026-07-09T10:09:15.255Z" },
+    { url = "https://files.pythonhosted.org/packages/55/17/e22b91a595dd03b1ec65c71ab2af93ee5b963ccb20834cd04b823a12cfb6/marin_finelog_server-0.2.12.dev202607090934-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:81b593d4fd146bcc8266c1f661e51b5e5eeb76aa9ac58f5c941bcdbea9eb20b3", size = 43789685, upload-time = "2026-07-09T10:09:19.177Z" },
 ]
 
 [[package]]
@@ -4956,6 +4973,7 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 fray-tpu-test = [
     { name = "jax" },
@@ -4963,10 +4981,12 @@ fray-tpu-test = [
     { name = "libtpu" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -4980,6 +5000,7 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 fray-tpu-test = [
     { name = "jax", specifier = "==0.10.1" },
@@ -4987,10 +5008,12 @@ fray-tpu-test = [
     { name = "libtpu", specifier = "==0.0.41" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -5084,7 +5107,7 @@ dependencies = [
     { name = "marin-finelog-server" },
     { name = "marin-rigging" },
     { name = "pydantic" },
-    { name = "pyjwt" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
     { name = "s3fs" },
     { name = "sqlalchemy" },
@@ -5098,6 +5121,7 @@ dependencies = [
 [package.optional-dependencies]
 controller = [
     { name = "kubernetes" },
+    { name = "marin-rigging", extra = ["secrets"] },
 ]
 iap = [
     { name = "marin-rigging", extra = ["iap"] },
@@ -5152,8 +5176,9 @@ requires-dist = [
     { name = "marin-finelog-server", specifier = ">=0.2.10" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-rigging", extras = ["iap"], marker = "extra == 'iap'", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["secrets"], marker = "extra == 'controller'", editable = "lib/rigging" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyjwt", specifier = ">=2.12.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
@@ -5427,11 +5452,13 @@ name = "marin-rigging"
 version = "0.2.0"
 source = { editable = "lib/rigging" }
 dependencies = [
+    { name = "braceexpand" },
     { name = "click" },
     { name = "connect-python" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "pyyaml" },
     { name = "requests" },
     { name = "s3fs" },
@@ -5442,44 +5469,54 @@ dependencies = [
 iap = [
     { name = "google-auth-oauthlib" },
 ]
+secrets = [
+    { name = "google-cloud-secret-manager" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "braceexpand", specifier = ">=0.1.7" },
     { name = "click", specifier = ">=8.3.1" },
     { name = "connect-python", specifier = ">=0.9.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
+    { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.40" },
 ]
-provides-extras = ["iap"]
+provides-extras = ["iap", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -5496,7 +5533,7 @@ dependencies = [
     { name = "marin-haliax" },
     { name = "marin-iris" },
     { name = "marin-levanter" },
-    { name = "marin-rigging" },
+    { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
     { name = "scikit-learn" },
     { name = "watchdog" },
@@ -5513,7 +5550,7 @@ requires-dist = [
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
-    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "scikit-learn" },
     { name = "watchdog" },
@@ -10919,7 +10956,7 @@ wheels = [
 [[package]]
 name = "tpu-inference"
 version = "0.23.0"
-source = { git = "https://github.com/marin-community/tpu-inference.git?rev=808415f45bbfcb512e9c593c4a3330aed115917e#808415f45bbfcb512e9c593c4a3330aed115917e" }
+source = { git = "https://github.com/marin-community/tpu-inference.git?rev=734d2842aa883c8f7bcff87a4b437a366f3adbc0#734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
 dependencies = [
     { name = "absl-py" },
     { name = "fastapi", extra = ["standard"], marker = "extra == 'extra-10-marin-core-vllm' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -11348,8 +11385,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.20.1rc1.dev1459+g04f7da7e2.tpu"
-source = { git = "https://github.com/marin-community/vllm.git?rev=04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d#04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d" }
+version = "0.20.1rc1.dev1461+g82b5c9be5.tpu"
+source = { git = "https://github.com/marin-community/vllm.git?rev=82b5c9be5cef68503d7cf1588aca869cbbcc78ac#82b5c9be5cef68503d7cf1588aca869cbbcc78ac" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },

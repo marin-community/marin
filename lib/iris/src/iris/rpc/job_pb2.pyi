@@ -148,92 +148,6 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
-class LoginRequest(_message.Message):
-    __slots__ = ("identity_token",)
-    IDENTITY_TOKEN_FIELD_NUMBER: _ClassVar[int]
-    identity_token: str
-    def __init__(self, identity_token: _Optional[str] = ...) -> None: ...
-
-class LoginResponse(_message.Message):
-    __slots__ = ("token", "key_id", "user_id")
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    token: str
-    key_id: str
-    user_id: str
-    def __init__(self, token: _Optional[str] = ..., key_id: _Optional[str] = ..., user_id: _Optional[str] = ...) -> None: ...
-
-class GetAuthInfoRequest(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
-
-class GetAuthInfoResponse(_message.Message):
-    __slots__ = ("provider", "gcp_project_id")
-    PROVIDER_FIELD_NUMBER: _ClassVar[int]
-    GCP_PROJECT_ID_FIELD_NUMBER: _ClassVar[int]
-    provider: str
-    gcp_project_id: str
-    def __init__(self, provider: _Optional[str] = ..., gcp_project_id: _Optional[str] = ...) -> None: ...
-
-class CreateApiKeyRequest(_message.Message):
-    __slots__ = ("user_id", "name", "ttl_ms")
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    TTL_MS_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    name: str
-    ttl_ms: int
-    def __init__(self, user_id: _Optional[str] = ..., name: _Optional[str] = ..., ttl_ms: _Optional[int] = ...) -> None: ...
-
-class CreateApiKeyResponse(_message.Message):
-    __slots__ = ("key_id", "token", "key_prefix")
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    TOKEN_FIELD_NUMBER: _ClassVar[int]
-    KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    token: str
-    key_prefix: str
-    def __init__(self, key_id: _Optional[str] = ..., token: _Optional[str] = ..., key_prefix: _Optional[str] = ...) -> None: ...
-
-class RevokeApiKeyRequest(_message.Message):
-    __slots__ = ("key_id",)
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    def __init__(self, key_id: _Optional[str] = ...) -> None: ...
-
-class ListApiKeysRequest(_message.Message):
-    __slots__ = ("user_id",)
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    def __init__(self, user_id: _Optional[str] = ...) -> None: ...
-
-class ApiKeyInfo(_message.Message):
-    __slots__ = ("key_id", "key_prefix", "user_id", "name", "created_at_ms", "last_used_at_ms", "expires_at_ms", "revoked")
-    KEY_ID_FIELD_NUMBER: _ClassVar[int]
-    KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    LAST_USED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    REVOKED_FIELD_NUMBER: _ClassVar[int]
-    key_id: str
-    key_prefix: str
-    user_id: str
-    name: str
-    created_at_ms: int
-    last_used_at_ms: int
-    expires_at_ms: int
-    revoked: bool
-    def __init__(self, key_id: _Optional[str] = ..., key_prefix: _Optional[str] = ..., user_id: _Optional[str] = ..., name: _Optional[str] = ..., created_at_ms: _Optional[int] = ..., last_used_at_ms: _Optional[int] = ..., expires_at_ms: _Optional[int] = ..., revoked: _Optional[bool] = ...) -> None: ...
-
-class ListApiKeysResponse(_message.Message):
-    __slots__ = ("keys",)
-    KEYS_FIELD_NUMBER: _ClassVar[int]
-    keys: _containers.RepeatedCompositeFieldContainer[ApiKeyInfo]
-    def __init__(self, keys: _Optional[_Iterable[_Union[ApiKeyInfo, _Mapping]]] = ...) -> None: ...
-
 class GetCurrentUserRequest(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
@@ -506,7 +420,7 @@ class BuildMetrics(_message.Message):
     def __init__(self, build_started: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., build_finished: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
 
 class JobStatus(_message.Message):
-    __slots__ = ("job_id", "state", "exit_code", "error", "started_at", "finished_at", "ports", "status_message", "build_metrics", "failure_count", "preemption_count", "tasks", "name", "submitted_at", "resources", "task_state_counts", "task_count", "completed_count", "pending_reason", "has_children", "parent_job_id", "backend_id", "cluster", "peer_status")
+    __slots__ = ("job_id", "state", "exit_code", "error", "started_at", "finished_at", "ports", "status_message", "build_metrics", "failure_count", "preemption_count", "tasks", "name", "submitted_at", "resources", "task_state_counts", "task_count", "completed_count", "pending_reason", "has_children", "parent_job_id", "backend_id", "cluster", "peer_status", "submitting_user")
     class PortsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -545,6 +459,7 @@ class JobStatus(_message.Message):
     BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
     CLUSTER_FIELD_NUMBER: _ClassVar[int]
     PEER_STATUS_FIELD_NUMBER: _ClassVar[int]
+    SUBMITTING_USER_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     state: JobState
     exit_code: int
@@ -569,7 +484,8 @@ class JobStatus(_message.Message):
     backend_id: str
     cluster: str
     peer_status: PeerStatus
-    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ..., pending_reason: _Optional[str] = ..., has_children: _Optional[bool] = ..., parent_job_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ..., peer_status: _Optional[_Union[PeerStatus, str]] = ...) -> None: ...
+    submitting_user: str
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ..., pending_reason: _Optional[str] = ..., has_children: _Optional[bool] = ..., parent_job_id: _Optional[str] = ..., backend_id: _Optional[str] = ..., cluster: _Optional[str] = ..., peer_status: _Optional[_Union[PeerStatus, str]] = ..., submitting_user: _Optional[str] = ...) -> None: ...
 
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")

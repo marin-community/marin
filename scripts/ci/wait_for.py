@@ -10,8 +10,18 @@ the ``github.*`` kinds are built-in conveniences so common PR waits need no shel
 
     poll <shell command>    fires when the command exits 0
     github.ci <PR>          fires the moment any check fails, else when all checks pass
-    github.pr_comment <PR>  fires on a new issue/review comment (not your own)
-    github.review <PR>      fires on a new submitted review
+    github.pr_comment <PR>  fires on a new comment that raises a real code concern
+    github.review <PR>      fires on a decisive review, or one whose body raises a concern
+
+``github.pr_comment`` and ``github.review`` skip low-signal chatter by default so the
+caller is not woken for nothing. A catalog of rules (``COMMENT_RULES``) names, per bot,
+the mundane shapes that bot emits: the in-progress placeholder it posts the moment a PR
+opens and edits in place once done, its "no issues found" verdict, and the
+automated-review wrapper whose findings arrive as separate inline comments. Only the
+automation a rule names is ever suppressed, so a comment from a human — or from a bot the
+catalog does not cover — always fires. Comments are keyed on content, so a placeholder a
+bot later edits into a real finding re-surfaces as new activity. Pass
+``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
 with the shell (``| grep -q``, ``| jq -e``, ``test``). For example, wait for the
@@ -38,7 +48,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -231,9 +241,164 @@ def evaluate_ci(rows: Iterable[dict]) -> CiOutcome:
     )
 
 
-def select_new(records: list[GhRecord], baseline: set[int], ignore_authors: set[str]) -> list[GhRecord]:
-    """Records whose id is absent from the baseline snapshot and not from an ignored author."""
-    return [r for r in records if r.id not in baseline and r.author not in ignore_authors]
+def _fingerprint(record: GhRecord) -> str:
+    """A content signature for a record, so an edited comment counts as new activity."""
+    return f"{record.state or ''}\x00{record.body}"
+
+
+def select_new(records: list[GhRecord], baseline: dict[int, str], ignore_authors: set[str]) -> list[GhRecord]:
+    """Records that are new or edited since the baseline snapshot, excluding ignored authors.
+
+    Keying on content rather than id alone lets a comment that a review bot posts as an
+    in-progress placeholder and later edits in place re-surface once its real content lands.
+    """
+    return [r for r in records if r.author not in ignore_authors and baseline.get(r.id) != _fingerprint(r)]
+
+
+class Significance(StrEnum):
+    """How much a PR comment warrants waking the monitoring agent."""
+
+    CONCERN = "concern"  # raises a real code concern — worth firing on
+    PROGRESS = "progress"  # an in-progress placeholder, edited in place once the bot is done
+    CLEAN = "clean"  # an explicit "nothing to address" verdict
+    WRAPPER = "wrapper"  # an automated-review container; its findings arrive separately
+
+
+class CommentFilter(StrEnum):
+    """Which new comments a PR-activity arm fires on."""
+
+    SIGNIFICANT = "significant"  # only comments classified CONCERN
+    ALL = "all"  # every new comment
+
+
+# Bot logins as the REST API reports them (`.user.login`, which carries the `[bot]` suffix —
+# unlike the GraphQL login, which does not).
+CLAUDE_BOT = "claude[bot]"
+CODEX_BOT = "chatgpt-codex-connector[bot]"
+
+# --- body shapes -------------------------------------------------------------------
+#
+# The review bots announce themselves the moment a PR opens with a placeholder — a heading,
+# a task checklist, a spinner image, a link to the job — and then edit it in place into the
+# real review. The heading wording tracks whatever prompt the bot is running ("Code review in
+# progress", "Reviewing PR #123", "PR Review: <title>"), and the spinner is an opaque
+# user-attachments URL, so neither is worth matching on. What holds across every variant is
+# the structure: strip the scaffolding and a placeholder has no prose left.
+#
+# Structure alone is not enough to suppress — a reviewer may legitimately enumerate required
+# fixes as an all-unchecked task list — so a placeholder must both look like one (a checklist
+# or a "working…" label) and carry no substantive text.
+_TASK_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s.*$", re.MULTILINE)
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s.*$", re.MULTILINE)
+_HTML_TAG_RE = re.compile(r"<[^>]*>")
+_HRULE_RE = re.compile(r"^\s*(?:-{3,}|={3,}|\*{3,})\s*$", re.MULTILINE)
+_JOB_LINK_RE = re.compile(r"\[[^\]]*view (?:job|run)[^\]]*\]\([^)]*\)", re.IGNORECASE)
+_WORKING_LABEL = r"working(?:\.\.\.|…)"
+_WORKING_RE = re.compile(rf"{_WORKING_LABEL}|⏳|🔄", re.IGNORECASE)
+_PLACEHOLDER_FILLER_RE = re.compile(rf"i'?ll analyze this and get back to you\.?|{_WORKING_LABEL}", re.IGNORECASE)
+# Whitespace and markdown decoration carry no prose, so they do not count as residue.
+_DECORATION_RE = re.compile("[\\s*_`>#~|.\\-\u2014\u2013]+")  # \u2014\u2013: the em/en dashes the bots rule off with
+# Across 200 PRs of review-bot comments the two populations are cleanly separated: a
+# placeholder leaves at most 50 characters of residue (a progress line such as "Running a
+# multi-agent correctness review…"), while the shortest real review leaves 121. Nothing lands
+# in between, so the cutoff sits in the empty band.
+_PLACEHOLDER_RESIDUE_MAX = 80
+
+# An explicit "nothing to address" verdict. The bots qualify the noun they cleared ("No code
+# issues found", "No correctness bugs found", "No blocking issues"), so allow a couple of
+# words between the negation and it.
+_CLEAN_RE = re.compile(
+    r"\bno\s+(?:\w+[\s-]+){0,2}(?:issues?|bugs?|concerns?|problems?|blockers?|findings?)\b"
+    r"|\blgtm\b|\blooks good(?: to me)?\b|\bship it\b",
+    re.IGNORECASE,
+)
+_CLEAN_HEAD = 400  # a clean verdict counts only if it leads the comment, not buried below a concern
+
+# A qualified verdict clears one axis, not the review: the bots write "No correctness bugs
+# found" and then report a compliance finding ("#### Findings (2 …)", "One hard-rule
+# violation …") further down. So a verdict only counts as clean when nothing else in the body
+# reports anything.
+_FINDING_RE = re.compile(
+    r"^\s*#{1,6}\s*findings?\b"
+    r"|\b(?:one|two|three|four|five|\d+)\s+(?:finding|issue|bug|problem|violation|concern)s?\b"
+    r"|\bviolat(?:es|ion|ions)\b|\bmust (?:be )?fix|\bneeds? fixing\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# An automated-review summary whose actionable findings are posted as separate inline
+# comments (e.g. Codex's top-level review body).
+_WRAPPER_RE = re.compile(
+    r"automated review suggestions|<summary>[^<]*About Codex|#+\s*💡?\s*Codex Review", re.IGNORECASE
+)
+
+
+def _placeholder_residue(body: str) -> str:
+    """The prose a body carries once in-progress-placeholder scaffolding is stripped."""
+    for pattern in (_HTML_TAG_RE, _TASK_ITEM_RE, _HEADING_RE, _HRULE_RE, _JOB_LINK_RE, _PLACEHOLDER_FILLER_RE):
+        body = pattern.sub(" ", body)
+    return _DECORATION_RE.sub("", body)
+
+
+def is_progress_placeholder(body: str) -> bool:
+    """Whether a body is a bot's in-progress placeholder rather than a report."""
+    if not _TASK_ITEM_RE.search(body) and not _WORKING_RE.search(body):
+        return False
+    return len(_placeholder_residue(body)) <= _PLACEHOLDER_RESIDUE_MAX
+
+
+def is_clean_verdict(body: str) -> bool:
+    """Whether a body leads with a verdict that clears the whole review."""
+    verdict = _CLEAN_RE.search(body[:_CLEAN_HEAD])
+    if not verdict:
+        return False
+    # Drop the verdict itself ("no issues") and the checklist scaffolding ("- [x] Validate
+    # findings") before asking whether anything left over reports a finding.
+    rest = body[: verdict.start()] + body[verdict.end() :]
+    return not _FINDING_RE.search(_TASK_ITEM_RE.sub(" ", rest))
+
+
+def is_review_wrapper(body: str) -> bool:
+    return bool(_WRAPPER_RE.search(body))
+
+
+@dataclass(frozen=True)
+class CommentRule:
+    """One entry in the noise catalog: whose comments it judges, and which shape it suppresses."""
+
+    author: str
+    matches: Callable[[str], bool]
+    significance: Significance
+
+
+# The catalog of mundane comment shapes, keyed on author and body shape. A rule only ever
+# applies to the one bot it names, so a comment from anyone else — every human, and every bot
+# we have not catalogued — wakes the agent. Extend by adding a rule, not by loosening one:
+# suppressing a real review comment costs far more than an extra wake-up.
+COMMENT_RULES: tuple[CommentRule, ...] = (
+    CommentRule(CLAUDE_BOT, is_progress_placeholder, Significance.PROGRESS),
+    CommentRule(CLAUDE_BOT, is_clean_verdict, Significance.CLEAN),
+    CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
+)
+
+
+def classify_significance(body: str, author: str) -> Significance:
+    """Classify a comment body as one of the ``Significance`` levels.
+
+    An empty body is a container for inline comments that fire on their own. Otherwise the body
+    is judged against the rules naming ``author``; anything left over is a ``CONCERN``, so an
+    uncatalogued author always fires.
+    """
+    text = body.strip()
+    if not text:
+        return Significance.WRAPPER
+    for rule in COMMENT_RULES:
+        if author == rule.author and rule.matches(text):
+            return rule.significance
+    return Significance.CONCERN
+
+
+# Reviews that decide the merge always fire, regardless of body — the state is the signal.
+_DECISIVE_REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
 
 
 # ----------------------------------------------------------------------- sources
@@ -286,38 +451,47 @@ class CiSource(Source):
 
 
 class PrActivitySource(Source):
-    """Fires on a new comment or review since launch, diffed against an id-set baseline.
+    """Fires on a new comment or review since launch, diffed against a content baseline.
 
-    Subclasses supply the fetch (which endpoints) and the fired payload; the
-    baseline-snapshot / diff / absorb scaffold is shared.
+    Subclasses supply the fetch (which endpoints), the significance test (which new
+    records are worth firing on), and the fired payload; the baseline-snapshot / diff /
+    absorb scaffold is shared.
     """
 
     noun = "records"
 
-    def __init__(self, spec: EventSpec, repo: str, ignore_authors: set[str]):
+    def __init__(self, spec: EventSpec, repo: str, ignore_authors: set[str], comment_filter: CommentFilter):
         super().__init__(spec)
         self.repo = repo
         self.pr = _parse_pr(spec.arg)
         self.ignore_authors = ignore_authors
-        self.baseline: set[int] | None = None
+        self.comment_filter = comment_filter
+        self.baseline: dict[int, str] | None = None
 
     def _fetch(self) -> list[GhRecord]:
         raise NotImplementedError
+
+    def _is_significant(self, record: GhRecord) -> bool:
+        """Whether this new/edited record raises a real concern worth firing on."""
+        return classify_significance(record.body, record.author) is Significance.CONCERN
 
     def _payload(self, new: list[GhRecord]) -> dict:
         raise NotImplementedError
 
     def check(self) -> dict | None:
         records = self._fetch()
-        ids = {r.id for r in records}
+        fingerprints = {r.id: _fingerprint(r) for r in records}
         if self.baseline is None:
-            self.baseline = ids
-            self.last_status = f"baseline {len(ids)} {self.noun}"
+            self.baseline = fingerprints
+            self.last_status = f"baseline {len(records)} {self.noun}"
             return None
-        new = select_new(records, self.baseline, self.ignore_authors)
-        self.baseline |= ids  # absorb everything seen so ignored records never re-fire
-        self.last_status = f"{len(ids)} {self.noun}"
-        return self._payload(new) if new else None
+        changed = select_new(records, self.baseline, self.ignore_authors)
+        self.baseline.update(fingerprints)  # absorb current content so ignored/noise records never re-fire
+        fired = changed if self.comment_filter is CommentFilter.ALL else [r for r in changed if self._is_significant(r)]
+        self.last_status = f"{len(records)} {self.noun}" + (
+            f"; {len(changed)} new/edited, {len(fired)} significant" if changed else ""
+        )
+        return self._payload(fired) if fired else None
 
 
 class CommentSource(PrActivitySource):
@@ -333,17 +507,33 @@ class CommentSource(PrActivitySource):
         return out
 
     def _payload(self, new: list[GhRecord]) -> dict:
-        return {"comments": [{"author": r.author, "body": r.body, "url": r.url, "kind": r.kind} for r in new]}
+        return {
+            "comments": [
+                {
+                    "author": r.author,
+                    "body": r.body,
+                    "url": r.url,
+                    "kind": r.kind,
+                    "significance": classify_significance(r.body, r.author).value,
+                }
+                for r in new
+            ]
+        }
 
 
 class ReviewSource(PrActivitySource):
-    """Fires on a new submitted review (approve / changes-requested / commented)."""
+    """Fires on a decisive review (approve / changes-requested / dismissed) or one whose body raises a concern."""
 
     noun = "reviews"
 
     def _fetch(self) -> list[GhRecord]:
         # PENDING reviews are unsubmitted drafts; they are not events.
         return [r for r in gh_api_list(self.repo, f"pulls/{self.pr}/reviews", kind="review") if r.state != "PENDING"]
+
+    def _is_significant(self, record: GhRecord) -> bool:
+        # A merge-deciding state is the signal even with an empty body; a bare COMMENTED
+        # review is usually just a wrapper for inline comments that fire on their own.
+        return record.state in _DECISIVE_REVIEW_STATES or super()._is_significant(record)
 
     def _payload(self, new: list[GhRecord]) -> dict:
         return {"reviews": [{"author": r.author, "state": r.state, "url": r.url} for r in new]}
@@ -371,13 +561,15 @@ class PollSource(Source):
         }
 
 
-def build_source(spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float) -> Source:
+def build_source(
+    spec: EventSpec, *, repo: str, ignore_authors: set[str], poll_timeout: float, comment_filter: CommentFilter
+) -> Source:
     if spec.kind is EventKind.GITHUB_CI:
         return CiSource(spec, repo)
     if spec.kind is EventKind.GITHUB_PR_COMMENT:
-        return CommentSource(spec, repo, ignore_authors)
+        return CommentSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.GITHUB_REVIEW:
-        return ReviewSource(spec, repo, ignore_authors)
+        return ReviewSource(spec, repo, ignore_authors, comment_filter)
     if spec.kind is EventKind.POLL:
         return PollSource(spec, poll_timeout)
     raise click.BadParameter(f"unsupported event kind {spec.kind!r}")  # pragma: no cover
@@ -494,6 +686,13 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
 @click.option("--repo", default=None, help="OWNER/NAME (default: gh auto-detect from cwd).")
 @click.option("--ignore-author", "ignore_authors", multiple=True, help="Comment/review author to ignore (repeatable).")
 @click.option("--include-self", is_flag=True, help="Do not ignore the authenticated user's own comments.")
+@click.option(
+    "--comment-filter",
+    type=click.Choice([f.value for f in CommentFilter]),
+    default=CommentFilter.SIGNIFICANT.value,
+    help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
+    "in-progress placeholders, clean verdicts, and review wrappers; 'all' fires on every new comment.",
+)
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(
     specs: tuple[str, ...],
@@ -507,6 +706,7 @@ def main(
     repo: str | None,
     ignore_authors: tuple[str, ...],
     include_self: bool,
+    comment_filter: str,
     quiet: bool,
 ) -> None:
     """Block until the first armed event fires; print which one as JSON."""
@@ -520,7 +720,13 @@ def main(
         if needs_authors and not include_self:
             ignored.add(authenticated_user())
         sources = [
-            build_source(s, repo=resolved_repo, ignore_authors=ignored, poll_timeout=parse_duration(poll_timeout))
+            build_source(
+                s,
+                repo=resolved_repo,
+                ignore_authors=ignored,
+                poll_timeout=parse_duration(poll_timeout),
+                comment_filter=CommentFilter(comment_filter),
+            )
             for s in parsed
         ]
         deadline = None if timeout is None else time.monotonic() + parse_duration(timeout)

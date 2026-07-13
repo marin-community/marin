@@ -5,17 +5,16 @@
 
 import json
 import logging
-import os
 
 from fray.cluster import ResourceConfig
-from rigging.filesystem import atomic_rename, open_url
-from zephyr import Dataset, ZephyrContext
+from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, b
 def download_nemotron_cc(output_path: str, base_url: str = NCC_BASE_URL) -> None:
     """Download and process Nemotron-CC dataset from Common Crawl."""
 
-    paths_file_path = os.path.join(output_path, "data-jsonl.paths")
+    paths_file_path = prefix_join(output_path, "data-jsonl.paths")
     paths_file_url = f"{base_url}/{NCC_PATHS_SUFFIX}"
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
 
@@ -66,16 +65,16 @@ def download_nemotron_cc(output_path: str, base_url: str = NCC_BASE_URL) -> None
     with open_url(paths_file_path, "r", compression="gzip") as f:
         for line in f:
             file = line.strip()
-            output_file_path = os.path.join(output_path, file).replace("jsonl.zstd", "jsonl.zst")
+            output_file_path = prefix_join(output_path, file).replace("jsonl.zstd", "jsonl.zst")
             all_files.append((file, output_file_path))
 
     logger.info(f"Processing {len(all_files)} Nemotron CC files")
 
     pipeline = (
         Dataset.from_list(all_files)
-        .filter(lambda file_info: not fsspec_exists(file_info[1]))
+        .filter(lambda file_info: not StoragePath(file_info[1]).exists())
         .map(lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], base_url=base_url))
-        .write_jsonl(os.path.join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
+        .write_jsonl(prefix_join(output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
     # Each worker downloads a ~350MB zstd file and decompresses to ~1.5-2GB in memory.

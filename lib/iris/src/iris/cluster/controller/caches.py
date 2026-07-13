@@ -6,7 +6,7 @@
 A single :class:`~iris.cluster.controller.db.ControllerDB` owns one
 :class:`CacheRegistry` and exposes it as ``db.caches``; every ``Tx`` the DB mints
 mirrors the same registry as ``tx.caches``. So a write sink holding only a cursor
-(``commit_effects``, ``purge_job``) reaches a cache the same way a reader holding
+(``commit_effects``, ``delete_job``) reaches a cache the same way a reader holding
 the DB does — no cache reference threaded through call signatures.
 
 Caches register themselves by their concrete type and are retrieved by that type

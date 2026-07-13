@@ -20,6 +20,7 @@ class EmbeddedServer:
         host: str = ...,
         port: int = ...,
         debug_admin: bool = ...,
+        auth_policy: str | None = ...,
     ) -> None: ...
     @property
     def port(self) -> int:

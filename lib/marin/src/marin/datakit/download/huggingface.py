@@ -15,12 +15,13 @@ import time
 from dataclasses import dataclass, field
 
 import huggingface_hub
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from huggingface_hub.errors import HfHubHTTPError
 from packaging.version import Version
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join, url_to_fs
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.execution.step_spec import StepSpec
 from marin.utilities.validation_utils import write_provenance_json
@@ -164,13 +165,11 @@ def _relative_path_in_source(file_path: str, source_path: str) -> str:
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, _ = url_to_fs(output_path)
     try:
-        fs.mkdirs(output_path, exist_ok=True)
-        test_path = os.path.join(output_path, "test_write_access")
-        with fs.open(test_path, "w") as f:
-            f.write("test")
-        fs.rm(test_path)
+        StoragePath(output_path).mkdirs()
+        test_path = prefix_join(output_path, "test_write_access")
+        StoragePath(test_path).write_text("test")
+        StoragePath(test_path).rm()
     except Exception as e:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
@@ -196,7 +195,6 @@ def stream_file_to_fsspec(
         expected_size: Expected file size in bytes for validation. If provided,
             the download will fail if the downloaded size doesn't match.
     """
-    target_fs, _ = url_to_fs(gcs_output_path)
     chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
@@ -208,7 +206,7 @@ def stream_file_to_fsspec(
     last_exception = None
     for attempt in range(max_retries):
         try:
-            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            StoragePath(os.path.dirname(fsspec_file_path)).mkdirs()
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
                 previous_socket_timeout = socket.getdefaulttimeout()
@@ -301,7 +299,7 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
     # Ensure the output path is writable
-    output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
+    output_path = prefix_join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
     ensure_fsspec_path_writable(output_path)
 
     # Resolve source URL and filesystem. For production this is an hf:// URL backed
@@ -346,7 +344,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         relative_file_path = _relative_path_in_source(file, source_root)
         if relative_file_path.startswith(".."):
             raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
-        fsspec_file_path = os.path.join(output_path, relative_file_path)
+        fsspec_file_path = prefix_join(output_path, relative_file_path)
         expected_size = file_sizes.get(file)
         # Fully-qualify the source URL so subprocess workers can open it via fsspec
         # without having to reconstruct HfFileSystem / revision state.
@@ -371,7 +369,8 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
+            prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
+            skip_existing=True,
         )
     )
     ctx_kwargs: dict = {"name": "download-hf", "max_workers": cfg.zephyr_max_parallelism}

@@ -14,7 +14,8 @@ from typing import Any
 
 import fsspec
 import pandas as pd
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+import wandb
+from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
 
 from experiments.domain_phase_mix.analysis import query_wandb_runs
 from experiments.domain_phase_mix.nextgen.contracts import PlannedRun, RunRecord
@@ -136,8 +137,6 @@ def _resolve_wandb_run_for_planned(run_rows: list[dict], planned: PlannedRun) ->
 
 
 def _scan_trajectory(wandb_run_id: str, entity: str, project: str, objective_metric: str) -> pd.DataFrame:
-    import wandb
-
     api = wandb.Api()
     run = api.run(f"{entity}/{project}/{wandb_run_id}")
     keys = ["_step", objective_metric, "throughput/total_tokens"]

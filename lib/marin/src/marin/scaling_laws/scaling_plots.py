@@ -9,7 +9,6 @@ module free of visualization dependencies.
 """
 
 import logging
-import os
 
 import fsspec
 import jax.numpy as jnp
@@ -17,6 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 import wandb
+from rigging.filesystem import prefix_join
 
 from marin.scaling_laws.isoflop_analysis import QuadraticFitCoeffs, ScalingFit
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -267,8 +267,8 @@ def save_plots(
     fs, _, _ = fsspec.get_fs_token_paths(output_path)
     fs.makedirs(output_path, exist_ok=True)
 
-    iso_path = os.path.join(output_path, "isoflop_plot.html")
-    scaling_path = os.path.join(output_path, "scaling_plot.html")
+    iso_path = prefix_join(output_path, "isoflop_plot.html")
+    scaling_path = prefix_join(output_path, "scaling_plot.html")
 
     with fs.open(iso_path, "w") as f:
         f.write(fig_isoflop.to_html())

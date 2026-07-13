@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, this_output_path
 
 from experiments.domain_phase_mix.nextgen.contracts import (
     LoopConfig,

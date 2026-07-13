@@ -82,9 +82,12 @@ class DuckyConfig:
     """Prefix where full results spill (``gs://…`` in prod, a local dir for smoke). Carries a lifecycle TTL rule."""
 
     allowed_buckets: tuple[str, ...] = ()
-    """Object-store URI prefixes a query may read, e.g. ``("gs://marin-us-east5", "r2://")``.
-    A query referencing a ``gs://``/``s3://``/``r2://`` URI outside the allowlist is refused
-    before execution — the same-region guardrail. Empty disables enforcement (allow all).
+    """Object-store URI prefixes a query may read at all, e.g. ``("gs://marin-", "s3://marin-")``
+    — the outer bound that keeps queries on marin buckets. A URI outside it is refused before
+    execution. Whether an *allowed* GCS URI is same-region or egress-costly cross-region is a
+    separate decision made at query time by :func:`rigging.filesystem.is_cross_region_url`
+    (live bucket-location metadata), gated by the ``-- cross-region: allow`` opt-in comment; S3
+    URIs (R2/CoreWeave) are never cross-region-gated. Empty disables enforcement (allow all).
     Catches literal URIs in the SQL, not paths hidden behind views/macros."""
 
     # Optional per-backend credentials. A backend is enabled only when its full set is present.
@@ -146,6 +149,13 @@ class DuckyConfig:
     """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
 
     @property
+    def catalog_root_prefixes(self) -> tuple[str, ...]:
+        """The configured catalog roots (``finelog_root``/``datakit_root``). These are a
+        deliberate always-on egress, so a literal ``read_parquet`` of a root is exempt from the
+        cross-region opt-in — it behaves like the pre-baked view over the same prefix."""
+        return tuple(root for root in (self.finelog_root, self.datakit_root) if root)
+
+    @property
     def effective_allowed_buckets(self) -> tuple[str, ...]:
         """Object-store prefixes a query may read: the configured allowlist plus the catalog
         roots. Configuring a catalog root (``finelog_root``/``datakit_root``) declares that
@@ -155,8 +165,7 @@ class DuckyConfig:
         restrictive list)."""
         if not self.allowed_buckets:
             return ()
-        roots = tuple(root for root in (self.finelog_root, self.datakit_root) if root)
-        return self.allowed_buckets + roots
+        return self.allowed_buckets + self.catalog_root_prefixes
 
     @property
     def gcs_enabled(self) -> bool:

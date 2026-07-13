@@ -87,6 +87,15 @@ Use existing kernels for structure and API inspiration. Read
 specific kernel to follow. Unless there is a stronger local pattern, start by
 reimplementing the reference in Pallas.
 
+Wrap accelerator kernel boundaries in an explicit `jax.shard_map` by default.
+This applies to `pl.pallas_call`, Mosaic GPU kernels, and custom FFI calls.
+Reshard inputs to the intended local `PartitionSpec` before the `shard_map`,
+keep the sequence or other nonlocal dimensions unsharded unless the kernel is
+explicitly written for them, and add a regression check that the lowered JAXPR
+or HLO contains the expected `shard_map`. Do not rely on XLA to infer a good
+sharding for an opaque kernel call boundary. Exceptions are limited to wrappers
+whose inputs are explicitly documented and tested as fully local or replicated.
+
 Check correctness against the harness and reference implementation before
 tuning. Once the kernel is correct, run a performance harness on representative
 shapes/dtypes and compare against the roofline. If performance is not near the
@@ -137,6 +146,10 @@ def _cost_estimate(
   applicable.
 - Public API, fallback semantics, block-size config, and tuned table behavior
   match [API patterns](docs/api-patterns.md).
+- Every Pallas, Mosaic, or FFI kernel call is inside an explicit `shard_map`, or
+  its wrapper documents and tests why the inputs are fully local or replicated.
+  Tests or profile evidence show it did not lower through unintended
+  all-gathers.
 - Each `pl.pallas_call` has a reviewed `cost_estimate=`.
 - Benchmark/tuning artifacts include the required schema from
   [Performance workflow](docs/performance-workflow.md).
@@ -153,6 +166,8 @@ def _cost_estimate(
 - Reference implementation and public wrapper are in place.
 - Correctness tests cover values, gradients, and relevant backend paths.
 - Pallas implementation has explicit backend/shape validation.
+- Pallas, Mosaic, and FFI calls use an explicit `shard_map` boundary when
+  operating on sharded inputs.
 - Fallback behavior is tested for explicit and ordered implementation choices.
 - Cost estimates are attached to Pallas calls.
 - Benchmark or tuning script emits machine-readable rows.

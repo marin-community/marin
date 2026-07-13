@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass
 
 import fsspec
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, this_output_path
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.experiment import MixtureExperiment

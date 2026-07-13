@@ -11,16 +11,16 @@ from enum import StrEnum
 from typing import Any
 
 from datasets import Image, load_dataset
-from fray import LocalClient
+from fray.local_backend import LocalClient
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
-from marin.utils import fsspec_mkdirs, fsspec_url, normalize_fsspec_url_path
-from rigging.filesystem import atomic_rename, open_url, url_to_fs
-from zephyr import Dataset, ZephyrContext
+from rigging.filesystem import StoragePath, atomic_rename, open_url
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +88,13 @@ def _existing_record_count(output_file: str) -> int:
 
 
 def _surface_data_files(input_path: str, surface: HfRawTextSurfaceConfig) -> list[str]:
-    normalized_input_path = normalize_fsspec_url_path(input_path)
-    fs, root = url_to_fs(normalized_input_path)
-    pattern = posixpath.join(root, surface.input_glob)
-    matches = sorted(path for path in fs.glob(pattern) if path.endswith(".parquet"))
+    pattern = StoragePath(input_path) / surface.input_glob
+    matches = sorted(str(match) for match in pattern.glob() if str(match).endswith(".parquet"))
     if not matches:
         raise FileNotFoundError(
-            f"No parquet files matched {surface.input_glob!r} for surface {surface.name!r} under "
-            f"{normalized_input_path}"
+            f"No parquet files matched {surface.input_glob!r} for surface {surface.name!r} under {input_path}"
         )
-    return [fsspec_url(fs, path) for path in matches]
+    return matches
 
 
 def _load_surface_rows(input_path: str, surface: HfRawTextSurfaceConfig) -> Any:
@@ -144,8 +141,7 @@ def _write_ingestion_metadata(
     record_count: int,
     metadata: dict[str, Any],
 ) -> str:
-    fs, _ = url_to_fs(output_file)
-    bytes_written = int(fs.info(output_file)["size"])
+    bytes_written = StoragePath(output_file).size()
     return write_ingestion_metadata_json(
         manifest=manifest,
         materialized_output=MaterializedOutputMetadata(
@@ -171,7 +167,7 @@ def _write_surface(
 ) -> dict[str, Any]:
     manifest = _validate_manifest(surface, source_manifests, content_fingerprints)
     output_file = _output_file_path(output_path, surface)
-    fsspec_mkdirs(posixpath.dirname(output_file), exist_ok=True)
+    StoragePath(posixpath.dirname(output_file)).mkdirs(exist_ok=True)
 
     if skip_existing:
         try:
@@ -259,7 +255,7 @@ def materialize_hf_raw_text(
 ) -> dict[str, Any]:
     """Materialize configured Hugging Face raw-text surfaces as JSONL.GZ shards."""
 
-    fsspec_mkdirs(str(output_path), exist_ok=True)
+    StoragePath(str(output_path)).mkdirs(exist_ok=True)
 
     def _run_surface(surface: HfRawTextSurfaceConfig) -> dict[str, Any]:
         input_path = input_paths.get(surface.dataset_id)

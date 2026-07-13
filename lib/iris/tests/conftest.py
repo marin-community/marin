@@ -17,15 +17,14 @@ import pytest
 from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.local_client import make_local_client
 from iris.cluster.config import (
-    AuthConfig,
     IrisClusterConfig,
     LocalSliceConfig,
     ScaleGroupConfig,
     ScaleGroupResources,
     SliceConfig,
-    StaticAuthConfig,
     load_config,
     make_local_config,
 )
@@ -70,8 +69,26 @@ def log_client(embedded_log_server):
         client.close()
 
 
+@pytest.fixture
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    """A LogService RPC client against the per-test embedded server.
+
+    ``push_logs`` returns only once the batch is sealed into a segment, which is
+    what a read scans, so push→fetch is synchronously visible within a test
+    without any manual flush. The sync client exposes ``push_logs(request)`` /
+    ``fetch_logs(request)``.
+    """
+    return LogServiceClientSync(address=embedded_log_server.address)
+
+
 def _make_controller_only_config() -> IrisClusterConfig:
-    """Build a local config with no auto-scaled workers."""
+    """Build a null-auth local config with no auto-scaled workers.
+
+    A local cluster boots with no persistent signing key, so it can only run in
+    null-auth mode (an authed provider requires ``auth.signing_key``). Auth tests
+    exercise loopback trust and identity attribution against this permissive
+    controller; the token-verification logic itself is unit-tested directly.
+    """
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups = {
         "placeholder": ScaleGroupConfig(
@@ -89,9 +106,6 @@ def _make_controller_only_config() -> IrisClusterConfig:
             slice_template=SliceConfig(local=LocalSliceConfig()),
         )
     }
-    # Provide an empty static-auth block so auth tests can populate tokens
-    # (config.auth.static.tokens[...]) the way the proto config auto-vivified.
-    config.auth = AuthConfig(static=StaticAuthConfig())
     return make_local_config(config)
 
 

@@ -10,7 +10,7 @@ for simple datasets that don't have multiple splits.
 
 import os.path
 
-from levanter.data.text import TextLmDatasetFormat
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
 from marin.datakit.canonical.fineweb_edu import download as fineweb_edu_download
 from marin.datakit.download.huggingface import download_hf_step

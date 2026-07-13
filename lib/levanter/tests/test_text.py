@@ -14,26 +14,25 @@ import pytest
 
 import haliax as hax
 
-from levanter.data.text import (
-    BatchTokenizer,
-    ChatLmDatasetFormat,
+from levanter.data.text._batch_tokenizer import BatchTokenizer
+from levanter.data.text.cache import build_lm_dataset_cache
+from levanter.data.text.datasets import (
     ChatDataset,
     DatasetComponent,
-    GrugLmExample,
     LmDataConfig,
-    LmDatasetFormatBase,
-    PreferenceChatLmDatasetFormat,
-    PreferenceChatProcessor,
-    PrebuiltLmDatasetFormat,
-    SupervisedLmDatasetFormat,
     UrlDatasetSourceConfig,
-    build_lm_dataset_cache,
     count_corpus_sizes,
     dataset_for_component,
-    grug_lm_example_from_named,
-    named_lm_example_from_grug,
+)
+from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named, named_lm_example_from_grug
+from levanter.data.text.formats import (
+    ChatLmDatasetFormat,
+    LmDatasetFormatBase,
+    PrebuiltLmDatasetFormat,
+    SupervisedLmDatasetFormat,
     preprocessor_for_format,
 )
+from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
 from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss

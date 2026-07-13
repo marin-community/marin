@@ -9,7 +9,6 @@ import gc
 import logging as pylogging
 import operator
 import os
-import re
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -19,17 +18,18 @@ from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple
 import deepdiff
 import jax
 import jax.tree_util as jtu
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr import counters as zephyr_counters
 from rigging.filesystem import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
@@ -55,6 +55,51 @@ CACHE_LAYOUT_SHARDED = "sharded"
 
 DEFAULT_LOG_LEVEL = pylogging.INFO
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+
+@dataclass(frozen=True)
+class ShardedCacheLayout:
+    """Storage paths of a sharded Levanter cache: its top-level ledger and per-shard subdirectories."""
+
+    root: StoragePath
+
+    @staticmethod
+    def parse(root: str) -> "ShardedCacheLayout":
+        return ShardedCacheLayout(StoragePath.parse(root))
+
+    def __str__(self) -> str:
+        return str(self.root)
+
+    @property
+    def ledger(self) -> str:
+        """Path of the top-level ledger that aggregates the per-shard ledgers."""
+        return str(self.root / LEDGER_FILE_NAME)
+
+    def child(self, name: str) -> "ShardedCacheLayout":
+        """The sub-cache rooted at ``root/name`` (e.g. a per-split cache)."""
+        return ShardedCacheLayout(self.root / name)
+
+    def shard(self, shard_name: str) -> str:
+        """Absolute path of the shard subdirectory ``shard_name`` under this cache."""
+        return str(self.root / shard_name)
+
+    def relative_shard(self, shard_path: str) -> str:
+        """``shard_path`` as the ledger key relative to this root; raises unless strictly under it.
+
+        Segment comparison keeps a trailing or doubled separator from forking writer and
+        reader; a ``..`` that escapes a scheme-less (local) root is also rejected.
+        """
+        try:
+            relative = StoragePath.parse(shard_path).relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError(f"Sharded cache path {shard_path} is not under output path {self.root}") from exc
+        # A local relative key with a `..` segment escapes the cache directory when
+        # joined back; object-store keys treat `..` as a literal segment, so this only
+        # applies to scheme-less filesystem paths.
+        escapes = self.root.scheme is None and ".." in relative.split("/")
+        if not relative or escapes:
+            raise ValueError(f"Sharded cache path {shard_path} is not under output path {self.root}")
+        return relative
 
 
 @dataclass(frozen=True)
@@ -101,6 +146,7 @@ class TreeCache(AsyncDataset[T_co]):
     ):
         super().__init__()
         self.cache_dir = cache_dir
+        self._layout = ShardedCacheLayout.parse(cache_dir)
         self.ledger = ledger
         self._exemplar = exemplar
         self._shard_stores: Dict[str, TreeStore[T_co]] = {}
@@ -128,9 +174,6 @@ class TreeCache(AsyncDataset[T_co]):
     @property
     def is_sharded(self) -> bool:
         return self.ledger.layout == CACHE_LAYOUT_SHARDED
-
-    def _shard_path(self, shard_name: str) -> str:
-        return os.path.join(self.cache_dir, shard_name)
 
     async def async_len(self) -> int:
         return await self._reader.async_len()
@@ -274,7 +317,7 @@ class TreeCache(AsyncDataset[T_co]):
     def _shard_store(self, shard_name: str) -> TreeStore[T_co]:
         store = self._shard_stores.get(shard_name)
         if store is None:
-            store = TreeStore.open(self._exemplar, self._shard_path(shard_name), mode="r", cache_metadata=True)
+            store = TreeStore.open(self._exemplar, self._layout.shard(shard_name), mode="r", cache_metadata=True)
             self._shard_stores[shard_name] = store
         return store
 
@@ -284,7 +327,7 @@ class TreeCache(AsyncDataset[T_co]):
         if store is None:
             tree_store = TreeStore.open(
                 _field_exemplar(self._exemplar, field),
-                self._shard_path(shard_name),
+                self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
@@ -298,7 +341,7 @@ class TreeCache(AsyncDataset[T_co]):
         if store is None:
             tree_store = await TreeStore.open_async(
                 _field_exemplar(self._exemplar, field),
-                self._shard_path(shard_name),
+                self._layout.shard(shard_name),
                 mode="r",
                 cache_metadata=True,
             )
@@ -598,11 +641,10 @@ class CacheLedger:
 
     @staticmethod
     def load(cache_dir: str, metadata: Optional["CacheMetadata"] = None) -> "CacheLedger":
-        ledger_path = os.path.join(cache_dir, LEDGER_FILE_NAME)
+        ledger_path = ShardedCacheLayout.parse(cache_dir).ledger
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
-            with open_url(ledger_path) as file:
-                cache_ledger = CacheLedger.from_json(file.read())  # type: ignore[arg-type]
+            cache_ledger = CacheLedger.from_json(StoragePath(ledger_path).read_text())  # type: ignore[arg-type]
             if metadata:
                 diff = cache_ledger.metadata.compare_to(metadata)
                 if diff:
@@ -612,7 +654,7 @@ class CacheLedger:
             raise FileNotFoundError(f"Cache ledger not found at {ledger_path}") from exc
 
     def _serialize_and_commit(self, cache_dir):
-        path = os.path.join(cache_dir, LEDGER_FILE_NAME)
+        path = ShardedCacheLayout.parse(cache_dir).ledger
         return _serialize_json_and_commit(path, self)  # type: ignore[arg-type]
 
 
@@ -874,8 +916,7 @@ def write_levanter_cache(
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
-    with open_url(f"{output_path}/.success", "w") as f:
-        f.write("")
+    StoragePath(f"{output_path}/.success").write_text("")
 
     return {"path": output_path, "count": count, "exemplar": exemplar}
 
@@ -888,8 +929,7 @@ def _serialize_json_and_commit(path: str, obj):
 
     for _ in range(10):
         try:
-            with open_url(path, "w") as file:
-                file.write(obj.to_json())
+            StoragePath(path).write_text(obj.to_json())
             break
         except FileNotFoundError:
             logger.exception(f"Failed to write {path}")
@@ -962,7 +1002,7 @@ def _build_single_shard_cache(
     options: CacheOptions,
     metadata: CacheMetadata,
 ):
-    shard_path = os.path.join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
+    shard_path = prefix_join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
     existing = _try_load(shard_path, metadata)
     if existing is not None:
         logger.info(f"Found existing shard cache for {shard_name} at {shard_path}. Skipping build.")
@@ -1137,8 +1177,9 @@ def consolidate_shard_cache_ledgers(
         ledger._serialize_and_commit(output_path)
         return ledger
 
+    layout = ShardedCacheLayout.parse(output_path)
     for shard_path in shard_cache_paths:
-        _relative_shard_path(output_path, shard_path)
+        layout.relative_shard(shard_path)
 
     logger.info(f"Consolidating {len(shard_cache_paths)} shard cache ledgers into {output_path}")
 
@@ -1212,8 +1253,9 @@ def _merge_sharded_ledgers(
         layout=CACHE_LAYOUT_SHARDED,
         metadata=metadata,
     )
+    layout = ShardedCacheLayout.parse(output_path)
     for shard_path, ledger, field_counts in zip(shard_cache_paths, shard_ledgers, per_shard_field_counts, strict=True):
-        shard_name = _relative_shard_path(output_path, shard_path)
+        shard_name = layout.relative_shard(shard_path)
         if shard_name in final_ledger.shard_rows:
             raise ValueError(f"Multiple shard cache paths resolve to the same ledger shard path: {shard_name}")
 
@@ -1377,39 +1419,6 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
             delay *= 2
             if delay > 120:
                 raise
-
-
-def _collapse_duplicate_slashes(path: str) -> str:
-    """Collapse duplicate ``/`` in a path while preserving a URL scheme's ``://``.
-
-    Matches the normalization ``zephyr.dataset.format_shard_path`` applies when
-    writing shards, so consolidation is insensitive to a trailing slash in
-    ``MARIN_PREFIX`` (which yields ``//`` after the ``StepSpec`` path join).
-    """
-    return re.sub(r"(?<!:)//+", "/", path)
-
-
-def _relative_shard_path(output_path: str, shard_path: str) -> str:
-    output_path = _collapse_duplicate_slashes(output_path)
-    shard_path = _collapse_duplicate_slashes(shard_path)
-    if "://" in output_path or "://" in shard_path:
-        prefix = output_path.rstrip("/") + "/"
-        if shard_path.startswith(prefix):
-            return shard_path[len(prefix) :]
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
-
-    output_abs = os.path.abspath(output_path)
-    shard_abs = os.path.abspath(shard_path)
-    try:
-        common_path = os.path.commonpath([output_abs, shard_abs])
-    except ValueError as exc:
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}") from exc
-
-    if shard_abs == output_abs or common_path != output_abs:
-        raise ValueError(f"Sharded cache path {shard_path} is not under output path {output_path}")
-
-    relative_path = os.path.relpath(shard_abs, output_abs)
-    return relative_path
 
 
 def _field_counts_from_store(store: TreeStore) -> Dict[str, int]:

@@ -1,5 +1,13 @@
 # Loopback-trust auth: the SSH→public transition for Iris
 
+> **Superseded.** The `gcp` login provider and the controller-minted session JWT
+> this doc describes have been removed. Public clusters now authenticate users
+> **only through IAP** (the GCLB verifies an OIDC token and forwards a signed
+> assertion the controller checks; the controller mints no user token). See
+> `lib/iris/docs/iap-gclb.md` for the current model. The loopback / trusted-CIDR
+> trust and the null-auth reasoning below still apply; the `gcp`-provider
+> workflow and config examples do not.
+
 Part of the rollout of a public Iris controller (weaver #132). This documents
 the auth transition path for the users who today reach the controller over an
 SSH tunnel, and the security reasoning behind it.

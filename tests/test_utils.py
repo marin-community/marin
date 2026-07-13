@@ -5,7 +5,6 @@ import os
 
 import draccus
 import pytest
-from marin.utils import rebase_file_path
 
 
 def check_load_config(config_class: type, config_file: str) -> None:
@@ -46,61 +45,3 @@ def skip_in_ci(fn_or_msg):
         return decorator
 
     return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
-
-
-# rebase_file_path is pure string manipulation (os.path.relpath + string ops),
-# so these tests use string paths directly rather than materialising files via tmp_path.
-_REBASE_BASE_IN = "/in"
-_REBASE_BASE_OUT = "/out"
-
-
-@pytest.mark.parametrize(
-    ("rel_path", "kwargs", "expected_rel"),
-    [
-        pytest.param(
-            "nested/sample.parquet",
-            {"new_extension": ".parquet", "old_extension": ".parquet"},
-            "nested/sample.parquet",
-            id="matching_extension",
-        ),
-        pytest.param(
-            "sample.jsonl.gz",
-            {"new_extension": ".parquet", "old_extension": ".jsonl.gz"},
-            "sample.parquet",
-            id="compound_old_extension_replaced",
-        ),
-        pytest.param(
-            "noext",
-            {"new_extension": ".txt"},
-            "noext.txt",
-            id="no_dot_appends_new_extension",
-        ),
-    ],
-)
-def test_rebase_file_path(rel_path, kwargs, expected_rel):
-    file_path = os.path.join(_REBASE_BASE_IN, rel_path)
-    rebased = rebase_file_path(_REBASE_BASE_IN, file_path, _REBASE_BASE_OUT, **kwargs)
-    assert rebased == os.path.join(_REBASE_BASE_OUT, expected_rel)
-
-
-@pytest.mark.parametrize(
-    ("rel_path", "kwargs", "match"),
-    [
-        pytest.param(
-            "sample.parquet",
-            {"old_extension": ".parquet"},
-            "old_extension requires new_extension",
-            id="old_without_new",
-        ),
-        pytest.param(
-            "sample.jsonl",
-            {"new_extension": ".parquet", "old_extension": ".jsonl.gz"},
-            "does not end with old_extension",
-            id="mismatched_old_extension",
-        ),
-    ],
-)
-def test_rebase_file_path_raises(rel_path, kwargs, match):
-    file_path = os.path.join(_REBASE_BASE_IN, rel_path)
-    with pytest.raises(ValueError, match=match):
-        rebase_file_path(_REBASE_BASE_IN, file_path, _REBASE_BASE_OUT, **kwargs)

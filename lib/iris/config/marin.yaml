@@ -1,6 +1,9 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: marin
+
 finelog:
   config: marin
 dashboard_url: https://iris.oa.dev
@@ -38,22 +41,33 @@ storage:
 auth:
   iap:
     url: https://iris.oa.dev
-    # `iris login` drives the browser flow with the Marin desktop OAuth client
-    # shipped in rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT (no oauth_client_id /
-    # oauth_client_secret override here). The controller accepts login ID
-    # tokens minted for that client:
-    audiences:
-      - 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
-    # Service-account (CI / in-cluster) callers need no `programmatic_audiences`
-    # entry: with none set, the client mints its IAP edge token for the desktop
-    # client id above, which IAP registers as a programmatic client and admits.
+    # `iris login` drives the browser edge-login flow with the Marin desktop OAuth
+    # client shipped in rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT (no oauth_client_id /
+    # oauth_client_secret override here). Service-account (CI / in-cluster) callers
+    # need no `programmatic_audiences` entry: with none set, the client mints its
+    # IAP edge token for that same desktop client id, which IAP registers as a
+    # programmatic client and admits.
     # Audience of IAP's signed assertion: the iris-marin-be backend service in
     # hai-gcp-models (project number 748532799086).
     signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555
-    # IAP's allowlist already restricts who reaches the controller; anyone
-    # Google admits acts as admin (a provisioned user still gets their DB role).
+    # IAP's allowlist already restricts who reaches the controller, so anyone
+    # Google admits acts as admin.
     unprovisioned_role: admin
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  # Controller server-identity signing key (Ed25519), resolved from Secret Manager
+  # at startup — provision with `iris cluster init-keys --gcp-secret …`.
+  signing_key: gcp-secret://projects/hai-gcp-models/secrets/iris-marin-signing-key/versions/1
+
+# Federation peers this cluster may hand whole jobs to. A job pinned with
+# `cluster=cw-rno2a`, or one no local backend can host whose shape the peer
+# advertises, is delivered there and runs under the same job id. The peer decides
+# who it admits; the credential is this controller's short-lived aud="federation"
+# token, signed by the key above and trusted by name at the peer.
+peers:
+  cw-rno2a:
+    controller_address: https://iris-cw-rno2a.oa.dev
+  cw-us-east-02a:
+    controller_address: https://iris-cw-us-east-02a.oa.dev
 
 worker_provider: {}
 

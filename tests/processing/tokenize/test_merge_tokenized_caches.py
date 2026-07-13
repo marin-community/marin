@@ -4,8 +4,9 @@
 import importlib
 
 import numpy as np
-from levanter.data.text import TextLmDatasetFormat, UrlDatasetSourceConfig
-from levanter.store import SerialCacheWriter, TreeCache
+from levanter.data.text.datasets import UrlDatasetSourceConfig
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.store.cache import SerialCacheWriter, TreeCache
 from marin.processing.tokenize.merge_tokenized_caches import MergeTokenizedCachesConfig, _merge_tokenized_caches
 
 merge_tokenized_caches_module = importlib.import_module("marin.processing.tokenize.merge_tokenized_caches")
@@ -23,6 +24,10 @@ class _DummyTokenizer:
 
     def __len__(self):
         return self.vocab_size
+
+    def encode(self, text: str) -> list[int]:
+        del text
+        return [self.bos_token_id, 10, self.eos_token_id]
 
     def __call__(self, text, return_attention_mask=False, verbose=False, **kwargs):
         del verbose, kwargs

@@ -23,17 +23,19 @@ LOG_LEVEL_ERROR: LogLevel
 LOG_LEVEL_CRITICAL: LogLevel
 
 class LogEntry(_message.Message):
-    __slots__ = ("timestamp", "source", "data", "attempt_id", "level", "key")
+    __slots__ = ("timestamp", "source", "data", "attempt_id", "level", "key", "seq")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     DATA_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
+    SEQ_FIELD_NUMBER: _ClassVar[int]
     timestamp: _time_pb2.Timestamp
     source: str
     data: str
     attempt_id: int
     level: LogLevel
     key: str
-    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ..., level: _Optional[_Union[LogLevel, str]] = ..., key: _Optional[str] = ...) -> None: ...
+    seq: int
+    def __init__(self, timestamp: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., source: _Optional[str] = ..., data: _Optional[str] = ..., attempt_id: _Optional[int] = ..., level: _Optional[_Union[LogLevel, str]] = ..., key: _Optional[str] = ..., seq: _Optional[int] = ...) -> None: ...

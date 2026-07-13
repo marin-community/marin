@@ -71,19 +71,22 @@ Usage::
 
 import argparse
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 
-import fsspec
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem import atomic_rename, marin_prefix
+from rigging.filesystem import url_to_fs as _rigging_url_to_fs
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)
@@ -243,13 +246,13 @@ def _copy_shard(
     is safe — fsspec funnels async ops onto a single dedicated event loop,
     and synchronous APIs are reentrant.
     """
-    src_fs, _ = fsspec.core.url_to_fs(src_dir)
+    src_fs, _ = _url_to_fs(src_dir)
     # ``fixed_upload_size=True`` (set inside ``_open_kwargs_for`` for s3 dests)
     # is required for Cloudflare R2's multipart PUT and harmless on AWS S3.
     # It only matters for the write through ``dst_fs.open(..., "wb")``; the
     # ``fs.mv`` inside atomic_rename is a single ``CopyObject`` and can use
     # any S3 client config.
-    dst_fs, _ = fsspec.core.url_to_fs(dst_dir, **_open_kwargs_for(dst_dir))
+    dst_fs, _ = _url_to_fs(dst_dir, **_open_kwargs_for(dst_dir))
     src_base = src_dir.rstrip("/")
     dst_base = dst_dir.rstrip("/")
 
@@ -266,6 +269,9 @@ def _copy_shard(
     counters.pipeline.update_counter("upload/shards_copied", 1)
     counters.pipeline.update_counter("upload/files_copied", len(entries))
     counters.pipeline.update_counter("upload/bytes_copied", bytes_copied)
+    # Per-shard progress line so a long multi-shard sync is monitorable in the
+    # worker logs (the coordinator otherwise only dumps counters at shutdown).
+    logger.info("shard copied: %d files, %.1f MiB -> %s", len(entries), bytes_copied / 1024 / 1024, dst_dir)
     return {"shard_hash": _shard_hash(entries), "files": len(entries), "bytes": bytes_copied}
 
 
@@ -287,7 +293,7 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
       last step (see ``_finalize_executor_status``) so its presence on dst
       cleanly signals "this leaf is fully synced".
     """
-    src_fs, _ = fsspec.core.url_to_fs(src_dir)
+    src_fs, _ = _url_to_fs(src_dir)
     stripped_root = src_fs._strip_protocol(src_dir).rstrip("/")
     entries: list[tuple[str, str]] = []
     skipped_tmp = 0
@@ -326,6 +332,54 @@ def _open_kwargs_for(path: str) -> dict:
     return {"fixed_upload_size": True} if path.startswith("s3://") else {}
 
 
+# R2 data buckets whose filesystem must be built with *explicit* R2 endpoint +
+# credentials from ``R2_*`` env vars, rather than the process-global S3 config.
+# This is what lets a single process copy R2 -> CoreWeave: the CW side uses the
+# ambient S3 config (the cluster default, e.g. cwlota) and the R2 side is pinned
+# to its own client via constructor kwargs, so the two never clobber each other
+# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY_ID``,
+# ``R2_SECRET_ACCESS_KEY``, ``R2_ENDPOINT_URL`` in the job env.
+_R2_BUCKETS = frozenset({"marin-na"})
+
+
+def _s3_creds_kwargs(path: str) -> dict:
+    """Explicit R2 endpoint+creds for an ``s3://marin-na/...`` path, else ``{}``.
+
+    Returns empty for any non-R2 path so it keeps using the ambient S3 config
+    (the cluster's default object store). Only activates when the ``R2_*`` env
+    vars are present, so the script still works unchanged in single-backend runs.
+    """
+    if not path.startswith("s3://"):
+        return {}
+    bucket = path[len("s3://") :].split("/", 1)[0]
+    if bucket in _R2_BUCKETS and os.environ.get("R2_ENDPOINT_URL"):
+        # ``endpoint_url`` must be a *top-level* s3fs kwarg, not inside
+        # ``client_kwargs``: fsspec shallow-merges the ambient ``FSSPEC_S3`` config
+        # (which carries the cluster's top-level ``endpoint_url``, e.g. cwlota) with
+        # ours. A top-level key overrides it; putting it in ``client_kwargs`` instead
+        # leaves the ambient top-level endpoint in place and s3fs then passes
+        # ``endpoint_url`` to ``create_client`` twice.
+        return {
+            "key": os.environ["R2_ACCESS_KEY_ID"],
+            "secret": os.environ["R2_SECRET_ACCESS_KEY"],
+            "endpoint_url": os.environ["R2_ENDPOINT_URL"],
+            "client_kwargs": {"region_name": "auto"},
+        }
+    return {}
+
+
+def _url_to_fs(path: str, **extra):
+    """``url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`).
+
+    Goes through rigging's ``url_to_fs`` rather than raw fsspec so every S3
+    filesystem (both the R2 source and the CoreWeave dest) gets finite
+    ``connect_timeout``/``read_timeout`` + bounded retries. Without them a wedged
+    R2/CoreWeave socket (e.g. a hung ``CompleteMultipartUpload``) blocks
+    ``fsspec.asyn.sync`` forever and the copy thread never returns (#6487).
+    """
+    return _rigging_url_to_fs(path, **_s3_creds_kwargs(path), **extra)
+
+
 def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """Copy ``.executor_status`` from ``src_dir`` to ``dst_dir`` as a single op.
 
@@ -335,11 +389,11 @@ def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
     """
     src = _executor_status_path(src_dir)
     dst = _executor_status_path(dst_dir)
-    src_fs, _ = fsspec.core.url_to_fs(src)
+    src_fs, _ = _url_to_fs(src)
     if not src_fs.exists(src):
         logger.warning("source has no %s — not finalizing %s", _EXECUTOR_STATUS_FILENAME, dst_dir)
         return
-    dst_fs, _ = fsspec.core.url_to_fs(dst, **_open_kwargs_for(dst))
+    dst_fs, _ = _url_to_fs(dst, **_open_kwargs_for(dst))
     _copy_one(src_fs, dst_fs, src, dst)
     logger.info("Finalized %s", dst)
 
@@ -364,7 +418,7 @@ def _remove_tmp_orphans(dst_dir: str) -> None:
     them around would make a byte-for-byte src/dst comparison fail despite
     the real data matching.
     """
-    dst_fs, _ = fsspec.core.url_to_fs(dst_dir)
+    dst_fs, _ = _url_to_fs(dst_dir)
     if not dst_fs.exists(dst_dir):
         return
     orphans = [full for full in dst_fs.find(dst_dir) if _ATOMIC_RENAME_TMP_RE.search(full)]
@@ -606,6 +660,13 @@ def _parse_args() -> argparse.Namespace:
         help=f"Where shard sentinels + step status live (default: {DEFAULT_STATUS_PREFIX!r}).",
     )
     parser.add_argument(
+        "--max-sources",
+        type=int,
+        default=8,
+        help="Max source-syncs run concurrently by StepRunner (default 8). Each source "
+        "further fans out into its own Zephyr copy workers.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Build StepSpecs and list them, but don't run.",
@@ -705,7 +766,7 @@ def main() -> None:
         print(f"{len(steps)} sync StepSpec(s) built (dry run).")
         return
 
-    StepRunner().run(steps)
+    StepRunner().run(steps, max_concurrent=args.max_sources)
     print(f"Synced {len(steps)} source(s): {src_prefix} -> {args.dest_prefix}.")
 
 

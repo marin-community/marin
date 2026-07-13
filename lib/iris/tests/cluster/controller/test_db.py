@@ -77,16 +77,10 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     with db.transaction() as cur:
         cur.execute(
             text(
-                "INSERT INTO auth.api_keys (key_id, key_prefix, name, user_id, created_at_ms) "
-                "VALUES (:key_id, :key_prefix, :name, :user_id, :created_at_ms)"
+                "INSERT INTO auth.controller_secrets (key, value, created_at_ms) "
+                "VALUES (:key, :value, :created_at_ms)"
             ),
-            {
-                "key_id": "id1",
-                "key_prefix": "pfx",
-                "name": "test-key",
-                "user_id": "user1",
-                "created_at_ms": 1000,
-            },
+            {"key": "signing_key", "value": "secret-pem", "created_at_ms": 1000},
         )
 
     # Create a copy of the DB to replace from (replace_from expects a directory)
@@ -98,7 +92,7 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
 
     # Auth tables should still be accessible after replace_from via the write connection.
     with db.transaction() as q:
-        rows = q.execute(text("SELECT name FROM auth.api_keys WHERE key_id = 'id1'")).all()
+        rows = q.execute(text("SELECT value FROM auth.controller_secrets WHERE key = 'signing_key'")).all()
     assert len(rows) == 1
-    assert rows[0][0] == "test-key"
+    assert rows[0][0] == "secret-pem"
     db.close()

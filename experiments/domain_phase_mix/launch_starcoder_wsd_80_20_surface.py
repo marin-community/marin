@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 
 from fray.types import ResourceConfig
 from levanter.models.llama import LlamaConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.experiment.data import mixture
 from marin.experiment.train import train_lm

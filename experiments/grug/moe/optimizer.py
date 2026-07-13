@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import optax
-from levanter.optim import OptimizerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.optim.grugmuon import _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths

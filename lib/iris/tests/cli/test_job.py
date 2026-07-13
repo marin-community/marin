@@ -3,23 +3,31 @@
 
 """Tests for iris.cli.job — validate_region_zone, executor heuristic, and related CLI validation."""
 
+import io
+
 import click
 import pytest
 from click.testing import CliRunner
 from iris.cli.job import (
+    _collect_targets,
     _parse_tpu_alternatives,
+    _read_targets_from_stdin,
     _render_job_summary_text,
     build_job_constraints,
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
+    kick,
     run,
+    stop,
     validate_extra_resources,
     validate_region_zone,
 )
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     WellKnownAttribute,
     infer_preemptible_constraint,
     preemptible_constraint,
@@ -182,6 +190,28 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 
     # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
+
+
+def test_build_job_constraints_target_cluster_appends_cluster_pin():
+    """--target-cluster appends exactly one cluster EQ constraint naming the peer."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster="peer-cluster")
+
+    cluster_constraints = [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY]
+    assert len(cluster_constraints) == 1
+    pin = cluster_constraints[0]
+    assert pin.op == ConstraintOp.EQ
+    assert pin.values[0].value == "peer-cluster"
+
+
+def test_build_job_constraints_no_target_cluster_omits_cluster_pin():
+    """Omitting --target-cluster appends no cluster constraint."""
+    resources_proto = build_resources(tpu=None, gpu=None, cpu=0.5, memory="1GB", disk="5GB").to_proto()
+
+    constraints = build_job_constraints(resources_proto, tpu_variants=[], replicas=1, target_cluster=None)
+
+    assert [c for c in constraints if c.key == CLUSTER_CONSTRAINT_KEY] == []
 
 
 def test_job_run_cli_accepts_task_image_override(monkeypatch):
@@ -352,3 +382,119 @@ def test_render_job_summary_text_shows_peak_memory():
     assert "10 GB" in text
     assert "137" in text
     assert "OOM" in text
+
+
+# Bulk-action target collection (query→act bridge for kick/stop/kill)
+# ---------------------------------------------------------------------------
+
+
+def test_read_targets_from_stdin_drops_csv_header_and_extra_columns(monkeypatch):
+    # Exactly what `iris query -f csv "SELECT task_id, state FROM ..."` emits:
+    # a header line with no leading slash, then id + trailing columns per row.
+    stdin = io.StringIO("task_id,state\n/alice/job/0,3\n/bob/job/1,9\n")
+    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
+    assert _read_targets_from_stdin() == ["/alice/job/0", "/bob/job/1"]
+
+
+def test_read_targets_from_stdin_ignores_blank_and_non_id_lines(monkeypatch):
+    stdin = io.StringIO("/alice/job/0\n\n   \nNo jobs found.\n/bob/job\n")
+    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
+    assert _read_targets_from_stdin() == ["/alice/job/0", "/bob/job"]
+
+
+def test_read_targets_from_stdin_preserves_quoted_comma_and_space_ids(monkeypatch):
+    # JobName components may contain commas and spaces; iris query -f csv quotes
+    # comma-bearing fields via csv.writer, so a real CSV parse must round-trip them.
+    stdin = io.StringIO('task_id,state\n"/alice/a,b/0",3\n/alice/my job/1,3\n')
+    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
+    assert _read_targets_from_stdin() == ["/alice/a,b/0", "/alice/my job/1"]
+
+
+def test_read_targets_from_stdin_skips_rows_with_empty_first_field(monkeypatch):
+    # A NULL first column (e.g. an unassigned current_worker_id) emits a leading
+    # comma; the empty field must be skipped, not crash the whole action.
+    stdin = io.StringIO(",3\n/alice/job/0,worker-1\n")
+    monkeypatch.setattr("iris.cli.job.sys.stdin", stdin)
+    assert _read_targets_from_stdin() == ["/alice/job/0"]
+
+
+def test_collect_targets_merges_positional_and_stdin(monkeypatch):
+    monkeypatch.setattr("iris.cli.job.sys.stdin", io.StringIO("/from/stdin/0\n"))
+    assert _collect_targets(("/pos/job/0",), use_stdin=True) == ["/pos/job/0", "/from/stdin/0"]
+
+
+def test_collect_targets_dash_sentinel_reads_stdin(monkeypatch):
+    monkeypatch.setattr("iris.cli.job.sys.stdin", io.StringIO("/from/stdin/0\n"))
+    # '-' is consumed as the stdin sentinel, not passed through as a target.
+    assert _collect_targets(("/pos/job/0", "-"), use_stdin=False) == ["/pos/job/0", "/from/stdin/0"]
+
+
+def test_collect_targets_no_stdin_returns_positional_only():
+    assert _collect_targets(("/a/b/0", "/a/c/0"), use_stdin=False) == ["/a/b/0", "/a/c/0"]
+
+
+def test_kick_dry_run_lists_targets_without_sending(monkeypatch):
+    def _boom(_ctx):
+        raise AssertionError("dry-run must not open a client or send an RPC")
+
+    monkeypatch.setattr("iris.cli.job._remote_client", _boom)
+
+    result = CliRunner().invoke(
+        kick,
+        ["--stdin", "--dry-run"],
+        input="task_id\n/alice/job/0\n/bob/job/1\n",
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "would kick 2 target(s) to preempted" in result.output
+    assert "/alice/job/0" in result.output
+    assert "/bob/job/1" in result.output
+
+
+def test_kick_stdin_passes_collected_targets_to_client(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def kick_tasks(self, targets, *, desired_state, reason):
+            captured["targets"] = targets
+            captured["desired_state"] = desired_state
+            captured["reason"] = reason
+            return []
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: FakeClient())
+
+    result = CliRunner().invoke(
+        kick,
+        ["--stdin", "--state", "failed", "--reason", "drain"],
+        input="/alice/job/0\n/bob/job/1\n",
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["targets"] == ["/alice/job/0", "/bob/job/1"]
+    assert captured["desired_state"] == _job_pb2.TASK_STATE_FAILED
+    assert captured["reason"] == "drain"
+
+
+def test_kick_no_targets_is_usage_error(monkeypatch):
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: pytest.fail("should not reach client"))
+    result = CliRunner().invoke(kick, [], obj={"controller_url": "http://c.test", "config": None, "credentials": None})
+    assert result.exit_code != 0
+    assert "No targets given" in result.output
+
+
+def test_stop_dry_run_lists_jobs_without_sending(monkeypatch):
+    monkeypatch.setattr(
+        "iris.cli.job._remote_client",
+        lambda _ctx: pytest.fail("dry-run must not open a client"),
+    )
+    result = CliRunner().invoke(
+        stop,
+        ["--stdin", "--dry-run"],
+        input="job_id\n/alice/job\n",
+        obj={"controller_url": "http://c.test", "config": None, "credentials": None},
+    )
+    assert result.exit_code == 0, result.output
+    assert "would terminate 1 job(s)" in result.output
+    assert "/alice/job" in result.output

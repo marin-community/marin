@@ -63,6 +63,7 @@ def build_run_request(
     run_req = build_run_request_fields(
         num_tasks=row.num_tasks,
         entrypoint_json=row.entrypoint_json,
+        workdir_files=reads.get_workdir_files(cur, row.job_id),
         environment_json=row.environment_json,
         bundle_id=row.bundle_id,
         resources=row.resources,
@@ -75,9 +76,6 @@ def build_run_request(
         priority=row.priority_band,
         container_profile=row.container_profile,
     )
-    # Load inline workdir files from the job_workdir_files table.
-    for filename, data in reads.get_workdir_files(cur, row.job_id).items():
-        run_req.entrypoint.workdir_files[filename] = data
     # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
     if row.timeout_ms is not None and row.timeout_ms > 0:
         run_req.timeout.milliseconds = row.timeout_ms

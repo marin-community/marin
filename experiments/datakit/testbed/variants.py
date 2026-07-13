@@ -20,7 +20,7 @@ import logging
 import os
 from collections.abc import Sequence
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.lazy import ArtifactStep

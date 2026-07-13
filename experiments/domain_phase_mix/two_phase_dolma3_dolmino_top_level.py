@@ -13,7 +13,7 @@ from functools import cache, partial
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.processing.tokenize.data_configs import ExistingTokenizedCacheConfig
 from marin.processing.tokenize.merge_tokenized_caches import merge_tokenized_caches

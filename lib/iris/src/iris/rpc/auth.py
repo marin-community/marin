@@ -28,12 +28,25 @@ SESSION_COOKIE = "iris_session"
 # provisioned admin/user behind IAP resolves to their real role instead.
 DASHBOARD_ROLE = "dashboard"
 
+# Role carried by a verified federation token — a trusted peer handing a job off or
+# driving its sync/cancel/proxy. Method-scoped to FEDERATION_RPCS below, never a
+# general identity: a federation bearer the composite verifier accepts cannot reach
+# any other RPC even though it authenticated.
+FEDERATION_PEER_ROLE = "federation-peer"
+
+# The only RPCs a federation-peer identity may call: whole-job handoff, routed
+# cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
+# DASHBOARD_READABLE_RPCS. The on-demand exec/profile proxies (ProfileTask,
+# ExecInContainer) are deliberately excluded until their handlers scope a peer to
+# the jobs it federated per target — a peer must not exec into the receiving
+# cluster's own tasks or profile its controller.
+FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "FederationSync", "ListBackends"})
+
 
 class AuthzAction(StrEnum):
     """Actions requiring authorization. Add new actions here; policy is in POLICY."""
 
     ACT_AS_WORKER = "act_as_worker"
-    MANAGE_OTHER_KEYS = "manage_other_keys"
     MANAGE_BUDGETS = "manage_budgets"
     SET_CONTAINER_PROFILE = "set_container_profile"
 
@@ -41,7 +54,6 @@ class AuthzAction(StrEnum):
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
 POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
-    AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
     AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
 }
@@ -74,9 +86,7 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)
-        "GetAuthInfo",
         "GetCurrentUser",
-        "ListApiKeys",
         "ListUsers",
         "GetUserBudget",
         "ListUserBudgets",
@@ -109,6 +119,11 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
             Code.PERMISSION_DENIED,
             f"Read-only dashboard access cannot call {method_name}; "
             "this identity is not provisioned for write access",
+        )
+    if identity.role == FEDERATION_PEER_ROLE and method_name not in FEDERATION_RPCS:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Federation-peer identity cannot call {method_name}; it is scoped to the federation RPC subset",
         )
 
 

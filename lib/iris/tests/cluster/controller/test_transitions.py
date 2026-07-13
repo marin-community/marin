@@ -36,6 +36,7 @@ from iris.cluster.controller.reconcile.snapshot import (
     TaskHistogramRow,
     TaskUpdate,
     TransitionSnapshot,
+    is_derived_task_error,
     pick_earliest_task_error,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
@@ -4551,3 +4552,71 @@ def test_pick_earliest_task_error_none_without_a_failed_task():
         (1, job_pb2.TASK_STATE_PENDING, None, "requeued"),
     ]
     assert pick_earliest_task_error(candidates) is None
+
+
+def test_pick_earliest_task_error_skips_derived_cascade_for_real_crash():
+    """A coscheduled gang's bounce cascade must not mask the one real crash even
+    when a bounced sibling finished first.
+
+    Reproduces the reported job whose error surfaced as
+    ``Coscheduled sibling ... bounced for atomic re-scheduling`` instead of the
+    training crash that triggered the unwind.
+    """
+    real_crash = "RuntimeError: CUDA error: an illegal memory access was encountered"
+    bounce = "Coscheduled sibling /j/7 bounced for atomic re-scheduling"
+    candidates = [
+        # A bounced sibling that finished (and re-terminated) before the crasher:
+        # its error is derived and carries no root-cause signal.
+        (0, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(500), bounce),
+        (7, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(2000), real_crash),
+    ]
+    assert pick_earliest_task_error(candidates) == real_crash
+
+
+def test_pick_earliest_task_error_falls_back_to_derived_when_only_option():
+    """When every failed task holds only a derived error, still surface one —
+    an administrative reason beats an empty job error."""
+    only = "Coscheduled sibling /j/4 bounced for atomic re-scheduling"
+    candidates = [
+        (4, job_pb2.TASK_STATE_COSCHED_FAILED, Timestamp.from_ms(900), only),
+        (5, job_pb2.TASK_STATE_COSCHED_FAILED, Timestamp.from_ms(300), "Coscheduled sibling /j/4 failed"),
+    ]
+    # Earliest-finishing derived error wins the fallback (ties broken by index).
+    assert pick_earliest_task_error(candidates) == "Coscheduled sibling /j/4 failed"
+
+
+def test_pick_earliest_task_error_flags_cosched_failed_state_even_with_odd_text():
+    """A COSCHED_FAILED task is derived by state, so a genuine failure is still
+    preferred even if the sibling's error text does not match a known pattern."""
+    real = "OutOfMemoryError: RESOURCE_EXHAUSTED"
+    candidates = [
+        (0, job_pb2.TASK_STATE_COSCHED_FAILED, Timestamp.from_ms(100), "torn down"),
+        (1, job_pb2.TASK_STATE_FAILED, Timestamp.from_ms(800), real),
+    ]
+    assert pick_earliest_task_error(candidates) == real
+
+
+@pytest.mark.parametrize(
+    ("state", "error", "derived"),
+    [
+        # The coscheduled cascade — both message variants, even when the text
+        # has drifted onto a task re-terminated as FAILED.
+        (job_pb2.TASK_STATE_FAILED, "Coscheduled sibling /j/7 bounced for atomic re-scheduling", True),
+        (job_pb2.TASK_STATE_FAILED, "Coscheduled sibling /j/7 failed", True),
+        # COSCHED_FAILED is derived by state regardless of the recorded text.
+        (job_pb2.TASK_STATE_COSCHED_FAILED, "anything at all", True),
+        # Standalone failure reasons are NOT derived: each can be the
+        # state-driving root cause, so demoting it would detach job.error from
+        # the job's terminal state (e.g. an UNSCHEDULABLE job's timeout).
+        (job_pb2.TASK_STATE_UNSCHEDULABLE, "Scheduling timeout exceeded (10m)", False),
+        (job_pb2.TASK_STATE_PREEMPTED, "Preempted by /other/job", False),
+        (job_pb2.TASK_STATE_KILLED, "Cancelled before handoff", False),
+        # Genuine application failures are not derived.
+        (job_pb2.TASK_STATE_FAILED, "RuntimeError: CUDA error", False),
+        (job_pb2.TASK_STATE_FAILED, "DEADLINE_EXCEEDED: Shutdown barrier has failed", False),
+        # An app error that merely quotes the derived phrase mid-line is not derived.
+        (job_pb2.TASK_STATE_FAILED, "AssertionError: expected 'Coscheduled sibling' in header", False),
+    ],
+)
+def test_is_derived_task_error(state, error, derived):
+    assert is_derived_task_error(state, error) is derived

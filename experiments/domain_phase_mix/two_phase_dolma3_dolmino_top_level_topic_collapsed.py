@@ -9,7 +9,7 @@ import re
 
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 
 from experiments.domain_phase_mix.config import Domain, PhaseSchedule
 from experiments.domain_phase_mix.experiment import MixtureExperiment

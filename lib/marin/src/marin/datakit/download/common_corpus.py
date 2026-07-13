@@ -3,10 +3,12 @@
 
 """Download, filter, and normalize PleIAs/common_corpus from HuggingFace."""
 
-import os
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from fray.types import ResourceConfig
+from rigging.filesystem import prefix_join
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -53,14 +55,14 @@ def download_common_corpus_raw_step() -> StepSpec:
 def filter_common_corpus(input_path: str, output_path: str) -> None:
     """Filter common_corpus to English + open types, writing parquet."""
     pipeline = (
-        Dataset.from_files(os.path.join(input_path, "**/*.parquet"))
+        Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
         .load_parquet()
         .map(_count_total)
         .filter(_language_is_english)
         .filter(_open_type_allowed)
         .map(_count_kept)
         .write_parquet(
-            os.path.join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
+            prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
             skip_existing=True,
         )
     )

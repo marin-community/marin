@@ -24,6 +24,7 @@ from marin.transform.huggingface.raw_text import (
     materialize_hf_raw_text,
     render_hf_raw_text,
 )
+from rigging.filesystem import StoragePath
 
 
 def _read_jsonl_gz(path: Path) -> list[dict]:
@@ -34,15 +35,6 @@ def _read_jsonl_gz(path: Path) -> list[dict]:
 def _write_parquet(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows), path)
-
-
-class _FakeGcsFs:
-    protocol = "gs"
-
-    def glob(self, pattern: str) -> list[str]:
-        if pattern == "unit-bucket/raw/raw_web_markup/svg/data/val-*.parquet":
-            return ["unit-bucket/raw/raw_web_markup/svg/data/val-00000-of-00001.parquet"]
-        return []
 
 
 def _manifest(surface: HfRawTextSurfaceConfig) -> IngestionSourceManifest:
@@ -193,11 +185,11 @@ def test_materialize_hf_raw_text_reads_pinned_parquet_and_writes_ingestion_metad
 def test_surface_data_files_normalizes_duplicate_slashes_in_fsspec_url(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_paths: list[str] = []
 
-    def fake_url_to_fs(path: str):
-        captured_paths.append(path)
-        return _FakeGcsFs(), "unit-bucket/raw/raw_web_markup/svg"
+    def fake_glob(path: StoragePath) -> list[StoragePath]:
+        captured_paths.append(str(path))
+        return [StoragePath("gs://unit-bucket/raw/raw_web_markup/svg/data/val-00000-of-00001.parquet")]
 
-    monkeypatch.setattr("marin.transform.huggingface.raw_text.url_to_fs", fake_url_to_fs)
+    monkeypatch.setattr(StoragePath, "glob", fake_glob)
 
     files = _surface_data_files(
         "gs://unit-bucket//raw/raw_web_markup/svg",
@@ -214,7 +206,7 @@ def test_surface_data_files_normalizes_duplicate_slashes_in_fsspec_url(monkeypat
         ),
     )
 
-    assert captured_paths == ["gs://unit-bucket/raw/raw_web_markup/svg"]
+    assert captured_paths == ["gs://unit-bucket/raw/raw_web_markup/svg/data/val-*.parquet"]
     assert files == ["gs://unit-bucket/raw/raw_web_markup/svg/data/val-00000-of-00001.parquet"]
 
 

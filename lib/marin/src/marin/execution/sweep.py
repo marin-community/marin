@@ -25,10 +25,11 @@ announcements are inert because no followers exist.
 """
 
 import logging
-import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
+
+from rigging.filesystem import prefix_join
 
 from marin.execution.step_status import (
     STATUS_FAILED,
@@ -129,7 +130,7 @@ def _lead(
     """
     seq = 0
     for target in targets:
-        target_path = os.path.join(sweep_root, target.target_id)
+        target_path = prefix_join(sweep_root, target.target_id)
         try:
             with step_lock(target_path, target.target_id) as status_file:
                 # Announce before training so the gang enters run_fn together;

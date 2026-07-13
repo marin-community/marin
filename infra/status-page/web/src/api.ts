@@ -253,6 +253,32 @@ export interface ProbesSnapshot {
   error?: string;
 }
 
+// W&B training charts for the MoE hero run. Mirrors server/sources/wandb.ts.
+export interface WandbPoint {
+  x: number; // cumulative training tokens
+  y: number;
+}
+
+export interface WandbRunSeries {
+  run: string;
+  state: string;
+  points: WandbPoint[];
+}
+
+export interface WandbChart {
+  key: string;
+  title: string;
+  series: WandbRunSeries[];
+}
+
+export interface WandbSnapshot {
+  reportTitle: string;
+  reportUrl: string;
+  charts: WandbChart[];
+  fetchedAt: string;
+  error?: string;
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) {
@@ -272,3 +298,4 @@ export const fetchProvisioningHistory = () =>
   getJson<ProvisioningHistoryResponse>("/api/provisioning/history");
 export const fetchJobs = () => getJson<JobsSnapshot>("/api/jobs");
 export const fetchProbes = () => getJson<ProbesSnapshot>("/api/probes");
+export const fetchWandb = () => getJson<WandbSnapshot>("/api/wandb");

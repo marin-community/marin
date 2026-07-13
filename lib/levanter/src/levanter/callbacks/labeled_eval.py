@@ -13,13 +13,14 @@ from jax.sharding import Mesh
 import haliax as hax
 from haliax.partitioning import ResourceMapping
 
+from rigging.filesystem import prefix_join
+
 import levanter.tracker
 from levanter.callbacks._core import StepInfo
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
-from levanter.data.text import (
-    LmDataConfig,
-    LmDatasetSourceConfigBase,
+from levanter.data.text.datasets import LmDataConfig, LmDatasetSourceConfigBase
+from levanter.data.text.trace_chat import (
     TraceChatEvaluationFormat,
     build_trace_chat_dataset_cache,
     dataset_for_trace_chat_format,
@@ -67,10 +68,10 @@ def labeled_eval_cache_dir(
 
     cache_root = labeled_eval_config.cache_dir
     if cache_root is None and data_config.cache_dir is not None:
-        cache_root = os.path.join(data_config.cache_dir, "labeled_eval")
+        cache_root = prefix_join(data_config.cache_dir, "labeled_eval")
     if cache_root is None:
         raise ValueError(f"No cache_dir provided for labeled eval dataset {dataset_name}")
-    return os.path.join(cache_root, dataset_name)
+    return prefix_join(cache_root, dataset_name)
 
 
 def source_for_labeled_eval_dataset(dataset_config: LabeledLmEvalDatasetConfig) -> ShardedDataSource[dict]:

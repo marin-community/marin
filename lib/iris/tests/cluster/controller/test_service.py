@@ -24,7 +24,7 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
 )
-from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller import ops, reads
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
@@ -1387,9 +1387,6 @@ def test_live_user_stats_sql_aggregation(state, service):
 
 def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
-    db = state._db
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(3):
@@ -1415,8 +1412,6 @@ def test_list_workers_returns_all(service, state):
 
 
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
-    with state._db.transaction() as _tx:
-        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(count_cpu):
@@ -1587,11 +1582,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
 def test_register_requires_worker_role(state, mock_controller, tmp_path, log_client):
     """Non-worker user gets PERMISSION_DENIED on register()."""
-    db = state._db
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "alice", now, role="user")
-
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         controller=mock_controller,
@@ -1620,11 +1610,6 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
 
 def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
     """Worker-role user can call register()."""
-    db = state._db
-    now = Timestamp.now()
-    with db.transaction() as _tx:
-        writes.ensure_user(_tx, "system:worker", now, role="worker")
-
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         controller=mock_controller,
@@ -1823,6 +1808,24 @@ def test_launch_job_root_with_stale_client_date(service):
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(request, object())
     assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_launch_job_received_handoff_is_exempt_from_client_freshness(service):
+    """A federated handoff carries no client date and must still be admitted.
+
+    The parent rebuilds a handoff from its stored job state, which does not carry the
+    submitter's ``client_revision_date`` — so every delivered handoff arrives with the
+    field empty, which the freshness check would otherwise read as the (long past)
+    feature-introduction date and reject. The parent already gated the submitter's
+    client at its own LaunchJob.
+    """
+    request = make_job_request("received-handoff")
+    request.federation.requester_id = "parent-cluster"
+    request.federation.owner_principal = "test-user"
+    assert not request.client_revision_date
+
+    response = service.launch_job(request, object())
+    assert response.job_id == JobName.root("test-user", "received-handoff").to_wire()
 
 
 def test_launch_job_nested_with_stale_client_date_is_exempt(service):

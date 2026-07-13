@@ -5,7 +5,6 @@ import dataclasses
 import json
 import logging
 import math
-import os
 
 import jmp
 import levanter
@@ -15,6 +14,7 @@ from levanter.tracker import NoopConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from rigging.filesystem import filesystem as marin_filesystem
+from rigging.filesystem import prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -358,7 +358,7 @@ class LevanterLmEvalEvaluator(Evaluator):
 
         # Upload is best-effort: a transient GCS failure should not throw away an
         # otherwise successful (and very expensive) eval run.
-        results_path = os.path.join(output_path, "results.json")
+        results_path = prefix_join(output_path, "results.json")
         logger.info(f"Uploading results to GCS: {results_path}")
         try:
             fs = marin_filesystem("gcs")

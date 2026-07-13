@@ -5,6 +5,7 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
+import rigging.filesystem as fs
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, materialized_config
@@ -26,6 +27,19 @@ from marin.rl.rl_losses import RLOOLoss
 from marin.training.training import LevanterCheckpoint
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+
+# A minimal DataConfig covering just the regions these tests exercise (mirrors the
+# relevant entries in config/marin.yaml). eu-west4 -> europe-west4 stands in for any
+# non-identity bucket-to-region normalization; the mapping itself isn't what's under
+# test, so it's bound explicitly rather than resolved from the ambient cluster config.
+_TEST_DATA_CONFIG = fs.DataConfig(
+    scheme="gs",
+    region_buckets={
+        "us-central1": fs.BucketSpec(name="marin-us-central1", store=fs.StoreType.GCS),
+        "us-east5": fs.BucketSpec(name="marin-us-east5", store=fs.StoreType.GCS),
+        "europe-west4": fs.BucketSpec(name="marin-eu-west4", store=fs.StoreType.GCS),
+    },
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -51,6 +65,15 @@ def _noop(_config: _EmptyConfig) -> None:
 @pytest.fixture(autouse=True)
 def _default_launcher_region(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
+    # marin_region() checks GCE instance metadata before MARIN_PREFIX; on a real
+    # GCP host that resolves a real region and silently overrides the prefix
+    # these tests set, so pin it to "not on GCP" for hermetic region resolution.
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    # Bind a fixed DataConfig instead of resolving the ambient cluster config, so
+    # these tests are independent of the host's config search path (a per-user
+    # ~/.config/marin/clusters override, cwd, missing config/ dir, etc).
+    with fs.use_data_config(_TEST_DATA_CONFIG):
+        yield
 
 
 def _test_config(
@@ -157,7 +180,7 @@ def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
     hf_files = {
         "gs://marin-us-central1/models/test-model/hf/config.json",
     }
-    monkeypatch.setattr("marin.rl.model_utils.fsspec_exists", lambda path: path in hf_files)
+    monkeypatch.setattr("rigging.filesystem.StoragePath.exists", lambda self: str(self) in hf_files)
 
     assert is_hf_checkpoint("gs://marin-us-central1/models/test-model/hf")
     assert not is_hf_checkpoint("gs://marin-us-central1/checkpoints/test-run")

@@ -63,10 +63,12 @@ class PodRef:
 
 @dataclass(frozen=True)
 class CoreweaveTarget:
-    """Cluster-level kubectl target. Empty kubeconfig_path => kubectl default resolution."""
+    """Cluster-level kubectl target. Empty kubeconfig_path => kubectl default resolution;
+    empty kube_context => the file's current-context."""
 
     namespace: str
     kubeconfig_path: str
+    kube_context: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,7 +118,11 @@ def require_coreweave_platform(config: IrisClusterConfig) -> CoreweaveTarget:
     namespace = (kp.namespace if kp is not None else "") or "iris"
     cw_kubeconfig = config.platform.coreweave.kubeconfig_path
     kubeconfig_path = os.path.expanduser(cw_kubeconfig) if cw_kubeconfig else ""
-    return CoreweaveTarget(namespace=namespace, kubeconfig_path=kubeconfig_path)
+    return CoreweaveTarget(
+        namespace=namespace,
+        kubeconfig_path=kubeconfig_path,
+        kube_context=config.platform.coreweave.kube_context,
+    )
 
 
 def pod_label_selector(task_id: str) -> str:
@@ -128,6 +134,8 @@ def kubectl_base(target: CoreweaveTarget) -> list[str]:
     cmd = ["kubectl"]
     if target.kubeconfig_path:
         cmd.append(f"--kubeconfig={target.kubeconfig_path}")
+    if target.kube_context:
+        cmd.append(f"--context={target.kube_context}")
     cmd.append(f"--namespace={target.namespace}")
     return cmd
 

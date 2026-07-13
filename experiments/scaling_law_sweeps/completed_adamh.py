@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
-from levanter.optim import AdamHConfig
+from levanter.optim.adamh import AdamHConfig
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws import CandidateConfig
 

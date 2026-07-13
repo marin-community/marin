@@ -8,7 +8,6 @@ from rigging import credentials as creds
 from rigging.auth import (
     MARIN_DESKTOP_OAUTH_CLIENT,
     BearerTokenInjector,
-    GcpAccessTokenProvider,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
     StaticTokenProvider,
@@ -35,33 +34,18 @@ def _iap_auth(**kw) -> ClusterAuth:
     return ClusterAuth(AuthProvider.IAP, iap=IapAuth(url="https://iris", **kw))
 
 
-def test_env_override_wins_over_file_and_provider(monkeypatch):
+def test_env_override_sets_token_provider(monkeypatch):
+    # $MARIN_CLUSTER_TOKEN is the sole app-token source: an explicit bearer for
+    # CI / headless runs. The controller mints no user token otherwise.
     monkeypatch.setenv(creds.MARIN_CLUSTER_TOKEN_ENV, "env-tok")
-    monkeypatch.setattr(creds, "load_credentials", lambda cluster: _record(app_token="file-tok"))
-    c = credentials_for("marin", ClusterAuth(AuthProvider.GCP))
+    c = credentials_for("marin", _iap_auth())
     assert isinstance(c.token_provider, StaticTokenProvider)
     assert c.token_provider.get_token() == "env-tok"
 
 
-def test_login_file_app_token_used_when_no_env(monkeypatch):
-    monkeypatch.setattr(creds, "load_credentials", lambda cluster: _record(app_token="file-tok"))
-    c = credentials_for("marin", _iap_auth())
-    assert c.token_provider.get_token() == "file-tok"
-
-
-def test_gcp_cluster_falls_back_to_ambient_access_token():
-    c = credentials_for("marin", ClusterAuth(AuthProvider.GCP))
-    assert isinstance(c.token_provider, GcpAccessTokenProvider)
-    assert c.iap_provider is None
-
-
-def test_static_cluster_uses_supplied_token():
-    c = credentials_for("local", ClusterAuth(AuthProvider.STATIC), static_token="shared")
-    assert c.token_provider.get_token() == "shared"
-
-
-def test_iap_cluster_has_no_ambient_app_token():
-    # The Iris JWT comes only from login; without a file there is no app provider.
+def test_iap_cluster_has_no_ambient_authorization_bearer():
+    # Pure-IAP: the controller mints no user token, so with no env override there is
+    # no Authorization bearer — auth rides on the IAP edge (Proxy-Authorization).
     c = credentials_for("marin", _iap_auth())
     assert c.token_provider is None
 
@@ -79,18 +63,16 @@ def test_iap_edge_falls_back_to_service_account_for_ci():
 
 
 def test_iap_edge_service_account_falls_back_to_desktop_client_when_no_programmatic_audience():
-    # marin lists only the desktop client id in `audiences`, so the adapter leaves
-    # `programmatic_audiences` empty. The edge path must still mint a token -- using
-    # the desktop client id, which IAP admits as a programmatic client -- rather
-    # than attaching no edge token (which IAP rejects with 401). Regression guard
-    # for the cross-lane CI auth outage (#6936 and siblings).
+    # With no programmatic audience configured, the edge path still mints a token
+    # using the desktop client id rather than attaching none (which IAP rejects with
+    # 401). Regression guard for the cross-lane CI auth outage (#6936 and siblings).
     c = credentials_for("marin", _iap_auth())
     assert isinstance(c.iap_provider, IapServiceAccountTokenProvider)
     assert c.iap_provider._audience == MARIN_DESKTOP_OAUTH_CLIENT.client_id
 
 
 def test_iap_edge_desktop_fallback_honors_configured_desktop_client():
-    # A cluster overriding the desktop OAuth client falls back to *its* id, not the
+    # A cluster overriding the desktop OAuth client falls back to its id, not the
     # Marin default.
     c = credentials_for(
         "marin",

@@ -44,8 +44,6 @@ from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
 
-USER_ROLE_DEFAULT = "user"
-USER_ROLE_CHECK = "role IN ('admin', 'user', 'worker')"
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 
 
@@ -242,22 +240,19 @@ meta_table = Table(
 )
 
 
-users_table = Table(
-    "users",
-    metadata,
-    Column("user_id", String, primary_key=True),
-    Column("created_at_ms", TimestampMsType, nullable=False),
-    Column("display_name", String),
-    Column("role", String, nullable=False, server_default=USER_ROLE_DEFAULT),
-    CheckConstraint(USER_ROLE_CHECK, name="users_role_check"),
-)
-
-
 jobs_table = Table(
     "jobs",
     metadata,
     Column("job_id", JobNameType, primary_key=True),
-    Column("user_id", String, ForeignKey("users.user_id"), nullable=False),
+    # Plain owner string: roles are resolved from the config-derived RolePolicy
+    # (see controller/auth.py), so there is no ``users`` table to anchor an FK to.
+    Column("user_id", String, nullable=False),
+    # The authenticated principal that submitted this job, distinct from the
+    # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
+    # CIDR/loopback (null-auth) submission. Drives per-cluster federation
+    # authorization; a child inherits its root's value and a federated handoff
+    # carries it as a signed claim the receiving peer re-checks.
+    Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
@@ -449,18 +444,6 @@ task_attempts_table = Table(
 )
 
 
-backends_table = Table(
-    "backends",
-    metadata,
-    Column("backend_id", String, primary_key=True),
-    Column("kind", String, nullable=False, server_default=""),
-    Column("status", Integer, nullable=False, server_default="0"),
-    Column("attributes_json", String, nullable=False, server_default="{}"),
-    Column("allow_policy_json", String, nullable=False, server_default="{}"),
-    Column("last_seen_ms", Integer),
-)
-
-
 workers_table = Table(
     "workers",
     metadata,
@@ -527,9 +510,15 @@ endpoints_table = Table(
     # existing DB without a backfill; a NULL is read as PRIVATE (today's
     # cluster-identity-required behavior), so pre-migration rows are unchanged.
     Column("access", Integer, nullable=True),
+    # Owning peer cluster id for an endpoint mirrored from a federated child; NULL
+    # for a locally-registered endpoint. The /proxy route forwards a remote row to
+    # this peer's controller instead of dialing `address` directly. Set-replaced by
+    # the federation sync loop, keyed to the mirrored (cluster=peer) job/task rows.
+    Column("peer_id", String, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
+    Index("idx_endpoints_peer_id", "peer_id"),
 )
 
 
@@ -563,7 +552,9 @@ slices_table = Table(
 user_budgets_table = Table(
     "user_budgets",
     metadata,
-    Column("user_id", String, ForeignKey("users.user_id"), primary_key=True),
+    # Standalone runtime state (set via ``iris user budget set``); ``user_id`` is a
+    # plain-string PK with no FK — a budget can be set for any owner id.
+    Column("user_id", String, primary_key=True),
     Column("budget_limit", Integer, nullable=False, server_default="0"),
     Column("max_band", Integer, nullable=False, server_default="2"),
     Column("updated_at_ms", TimestampMsType, nullable=False),
@@ -649,23 +640,6 @@ federation_changelog_table = Table(
     # AUTOINCREMENT: seq is a cursor watermark, so it must never be reused after a
     # delete (a plain rowid alias can reuse the max after a delete).
     sqlite_autoincrement=True,
-)
-
-
-auth_api_keys_table = Table(
-    "api_keys",
-    auth_metadata,
-    Column("key_id", String, primary_key=True),
-    # Human-readable key prefix surfaced in `iris key list` / CreateApiKey
-    # responses ("jwt" for JWT-backed keys, the token's first 8 chars otherwise).
-    Column("key_prefix", String, nullable=False),
-    Column("user_id", String, nullable=False),
-    Column("name", String, nullable=False),
-    Column("created_at_ms", TimestampMsType, nullable=False),
-    Column("last_used_at_ms", TimestampMsType),
-    Column("expires_at_ms", TimestampMsType),
-    Column("revoked_at_ms", TimestampMsType),
-    Index("idx_api_keys_user", "user_id"),
 )
 
 

@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Literal
 
 import numpy as np
-from levanter.data.text import (
+from levanter.data.text.datasets import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
     DatasetComponent,

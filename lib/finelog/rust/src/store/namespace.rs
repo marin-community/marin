@@ -20,11 +20,13 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::{Array, Int64Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -42,7 +44,8 @@ use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
 use crate::store::segment::{
-    discover_segments, read_segment_footer, recover_next_seq, write_segment_to_dir,
+    discover_segments, read_segment_footer, recover_next_seq, segment_uncompressed_bytes,
+    write_segment_to_dir,
 };
 use crate::store::trigram::{sidecar_path, write_sidecar};
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
@@ -161,6 +164,13 @@ pub struct Namespace {
     /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
     /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+/// A namespace's sealed local segments as one consistent observation: the files a
+/// scan may read, and the lowest `seq` any of them holds.
+pub struct SegmentSnapshot {
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
 }
 
 impl Namespace {
@@ -321,20 +331,32 @@ impl Namespace {
         &self.arrow_schema
     }
 
-    /// Snapshot the SEALED local segment file paths under the insertion lock.
+    /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
+    /// one hold of the insertion lock so the two describe the same segment set.
+    /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
+    /// whose segments have all been evicted to remote).
     ///
-    /// Queries see only flushed data; the in-RAM buffer is NOT exposed.
-    /// Snapshotting the paths under the lock is the read side of the
-    /// query-visibility seam — compaction takes the write side before unlinking
-    /// a file, so a query that captured the pre-compaction paths keeps scanning
-    /// the files it snapshotted.
-    pub fn query_snapshot(&self) -> Vec<String> {
+    /// Snapshotting under the lock is the read side of the query-visibility seam —
+    /// compaction takes the write side before unlinking a file, so a query that
+    /// captured the pre-compaction paths keeps scanning the files it snapshotted.
+    ///
+    /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
+    pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
-        inner
-            .local_segments
-            .iter()
-            .map(|s| s.path.clone())
-            .collect()
+        SegmentSnapshot {
+            paths: inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.clone())
+                .collect(),
+            min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
+        }
+    }
+
+    /// Subscribe to the durability high-water mark. The current value is already
+    /// marked seen, so a caller must read `borrow()` before awaiting `changed()`.
+    pub fn watch_persisted_seq(&self) -> watch::Receiver<i64> {
+        self.persisted_seq.subscribe()
     }
 
     /// Wake the flush task after an append. Nudges the rate-limited flush loop;
@@ -625,11 +647,47 @@ impl Namespace {
                 .map(|s| segment_to_row(&self.name, s))
                 .collect::<Vec<_>>()
         };
-        let Some(job) = plan(&self.compaction_config, &rows) else {
+        // The planner's only I/O is the per-segment footer read behind this
+        // closure. Memoize it so the chosen job's uncompressed size can be
+        // logged without re-parsing the same footers.
+        let uncompressed: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
+        let planned = plan(&self.compaction_config, &rows, |row| {
+            *uncompressed
+                .borrow_mut()
+                .entry(row.path.clone())
+                .or_insert_with(|| self.segment_uncompressed(&row.path))
+        });
+        let Some(job) = planned else {
             return Ok(false);
         };
-        self.run_one_job(&dir, &job)?;
+        let memo = uncompressed.borrow();
+        let job_uncompressed = job
+            .inputs
+            .iter()
+            .filter_map(|s| memo.get(&s.path).copied())
+            .fold(0i64, i64::saturating_add);
+        drop(memo);
+        self.run_one_job(&dir, &job, job_uncompressed)?;
         Ok(true)
+    }
+
+    /// Decoded size of the segment at `path`, for the compaction memory budget.
+    ///
+    /// An unreadable footer reports `i64::MAX` so the planner isolates the
+    /// segment into a single-input job — promoted by rename — rather than
+    /// pulling an unmeasurable input into a merge.
+    fn segment_uncompressed(&self, path: &str) -> i64 {
+        match segment_uncompressed_bytes(std::path::Path::new(path)) {
+            Some(bytes) => bytes,
+            None => {
+                tracing::warn!(
+                    namespace = %self.name,
+                    path = %path,
+                    "unreadable segment footer; treating as over the merge memory budget"
+                );
+                i64::MAX
+            }
+        }
     }
 
     /// Synthesize and apply a single L0->L1 merge of ALL L0 segments.
@@ -657,18 +715,49 @@ impl Namespace {
         }
         let output_min_seq = l0.iter().map(|r| r.min_seq).min().expect("non-empty");
         let output_max_seq = l0.iter().map(|r| r.max_seq).max().expect("non-empty");
+        let uncompressed = l0
+            .iter()
+            .map(|r| self.segment_uncompressed(&r.path))
+            .fold(0i64, i64::saturating_add);
         let job = CompactionJob {
             inputs: l0,
             output_level: 1,
             output_min_seq,
             output_max_seq,
         };
-        self.run_one_job(&dir, &job)
+        self.run_one_job(&dir, &job, uncompressed)
     }
 
     /// Execute `job` (read+merge+write or rename) then commit the resulting swap.
-    fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
+    ///
+    /// `input_uncompressed_bytes` is the decoded size the planner budgeted the
+    /// job against; it is logged so the compressed-to-decoded ratio driving
+    /// merge memory is visible in production.
+    fn run_one_job(
+        &self,
+        dir: &std::path::Path,
+        job: &CompactionJob,
+        input_uncompressed_bytes: i64,
+    ) -> Result<(), StatsError> {
         let indexed = self.indexed_columns();
+        let started = Instant::now();
+        // A single-input job is a rename; a multi-input job reads every input
+        // into RAM. The distinction is the whole memory story, so name it.
+        let kind = if job.inputs.len() == 1 {
+            "bump"
+        } else {
+            "merge"
+        };
+        tracing::info!(
+            namespace = %self.name,
+            kind,
+            inputs = job.inputs.len(),
+            output_level = job.output_level,
+            input_bytes = job.inputs.iter().map(|s| s.byte_size).sum::<i64>(),
+            input_uncompressed_bytes,
+            input_rows = job.inputs.iter().map(|s| s.row_count).sum::<i64>(),
+            "compaction job starting"
+        );
         let swap = run_job(
             job,
             dir,
@@ -677,7 +766,21 @@ impl Namespace {
             &indexed,
             |path| self.input_key_bounds(path),
         )?;
-        self.commit_swap(swap)
+        let output_path = swap.added.path.clone();
+        let output_bytes = swap.added.size_bytes;
+        let output_rows = swap.added.row_count;
+        self.commit_swap(swap)?;
+        tracing::info!(
+            namespace = %self.name,
+            kind,
+            output_level = job.output_level,
+            output_path = %output_path,
+            output_bytes,
+            output_rows,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "compaction job committed"
+        );
+        Ok(())
     }
 
     /// Names of the schema's STRING columns carrying a trigram substring index

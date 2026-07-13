@@ -53,10 +53,16 @@ class Entry:
 
 
 def load_s3_config(config_path: str) -> S3Config:
-    """Load S3 endpoint and bucket from an Iris YAML config file."""
+    """Load S3 endpoint and bucket from an Iris YAML config file.
+
+    This browser runs on an operator's machine, so it takes the cluster's
+    externally reachable endpoint; ``object_storage_endpoint`` may name an address
+    only a pod can resolve.
+    """
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
-    endpoint = cfg["platform"]["coreweave"]["object_storage_endpoint"]
+    coreweave = cfg["platform"]["coreweave"]
+    endpoint = coreweave.get("external_object_storage_endpoint") or coreweave["object_storage_endpoint"]
     # Derive the bucket from the remote state dir (e.g. s3://marin-test/iris/state -> marin-test)
     remote_state_dir = cfg["storage"]["remote_state_dir"]
     bucket = remote_state_dir.removeprefix("s3://").split("/")[0]

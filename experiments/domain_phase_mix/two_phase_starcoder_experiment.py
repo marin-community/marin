@@ -32,7 +32,7 @@ from dataclasses import dataclass, replace
 
 import fsspec
 from fray.cluster import ResourceConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
 from marin.utils import create_cache_tokenizer_step

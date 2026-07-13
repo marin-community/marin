@@ -1,14 +1,4 @@
 {
-  "backends": [
-    {
-      "allow_policy_json": "{}",
-      "attributes_json": "{}",
-      "backend_id": "default",
-      "kind": "",
-      "last_seen_ms": null,
-      "status": 0
-    }
-  ],
   "endpoints": [],
   "federated_jobs": [],
   "federated_tasks": [],
@@ -28,14 +18,6 @@
   "task_attempts": [],
   "tasks": [],
   "user_budgets": [],
-  "users": [
-    {
-      "created_at_ms": 1704067200000,
-      "display_name": null,
-      "role": "user",
-      "user_id": "test-user"
-    }
-  ],
   "worker_attributes": [
     {
       "float_value": null,

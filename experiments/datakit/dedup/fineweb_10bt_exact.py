@@ -12,7 +12,7 @@ import argparse
 import logging
 import os
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.canonical import fineweb_edu
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

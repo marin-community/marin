@@ -16,7 +16,7 @@ from jaxtyping import PyTree
 
 import levanter.tracker
 from levanter.callbacks import StepInfo
-from levanter.data import DataLoader
+from levanter.data.loader import DataLoader
 from levanter.tracker.histogram import SummaryStats
 
 B = TypeVar("B")

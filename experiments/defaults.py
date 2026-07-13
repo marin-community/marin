@@ -15,23 +15,20 @@ from typing import Any
 
 import jmp
 import levanter.main.train_lm as levanter_train_lm
-from fray import ResourceConfig, current_client
-from fray.types import Entrypoint, JobRequest, create_environment
+from fray.current_client import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
 from levanter.adaptor import AdaptorConfig, LoraAdaptorConfig, NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import (
-    DEFAULT_LM_DATA_SHUFFLE,
-    LMMixtureDatasetConfig,
-    PreferenceLmDataConfig,
-)
+from levanter.data.text.datasets import DEFAULT_LM_DATA_SHUFFLE, LMMixtureDatasetConfig
+from levanter.data.text.preference import PreferenceLmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_dpo import SeparateReferenceConfig, TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.optim.model_averaging import EmaModelAveragingConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig, truncate_wandb_run_name

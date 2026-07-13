@@ -9,12 +9,8 @@ and prepares it as a tokenized dataset source for Levanter.
 import dataclasses
 import logging
 
-from levanter.data.text import (
-    LmDatasetFormatBase,
-    LmDatasetSourceConfigBase,
-    TextLmDatasetFormat,
-    UrlDatasetSourceConfig,
-)
+from levanter.data.text.datasets import LmDatasetSourceConfigBase, UrlDatasetSourceConfig
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
 
 from marin.datakit.download.huggingface import (

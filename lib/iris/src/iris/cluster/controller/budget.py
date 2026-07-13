@@ -169,7 +169,6 @@ def reconcile_user_budget_tiers(
             for user_id in tier.user_ids:
                 if not user_id:
                     raise ValueError("UserBudgetTier.user_ids contains an empty entry")
-                writes.ensure_user(_tx, user_id, now)
                 writes.set_user_budget(_tx, user_id, tier.budget_limit, tier.max_band, now)
                 count += 1
     if count:

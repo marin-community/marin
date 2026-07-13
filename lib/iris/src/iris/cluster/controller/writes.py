@@ -15,7 +15,7 @@ Areas covered:
   task_attempts  — task_attempts
   tasks          — tasks (insert, assign, state update)
   workers        — workers, worker_attributes
-  budgets        — users, user_budgets
+  budgets        — user_budgets
 """
 
 import secrets
@@ -29,26 +29,27 @@ from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.caches import CacheRegistry
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
+from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
-    USER_ROLE_DEFAULT,
     federated_jobs_table,
     federated_tasks_table,
     federation_changelog_table,
     federation_sync_state_table,
     job_config_table,
+    job_workdir_files_table,
     jobs_table,
     meta_table,
     slices_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
-    users_table,
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.federation.store import FederationDirection
-from iris.cluster.types import LOCAL_CLUSTER, AttemptUid, JobName, WorkerId
+from iris.cluster.federation.store import FederationDirection, HandoffState
+from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 from iris.time_proto import timestamp_from_proto
 
@@ -176,6 +177,7 @@ def insert_job(
     *,
     job_id: JobName,
     user_id: str,
+    submitting_user: str,
     parent_job_id: JobName | None,
     root_job_id: str,
     depth: int,
@@ -201,6 +203,7 @@ def insert_job(
         insert(jobs_table).values(
             job_id=job_id,
             user_id=user_id,
+            submitting_user=submitting_user,
             parent_job_id=parent_job_id,
             root_job_id=root_job_id,
             depth=depth,
@@ -294,9 +297,13 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table)
+@writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
 def delete_job(tx: Tx, job_id: JobName) -> None:
-    """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
+    """Delete a job row and drop the per-job memos its cascade would strand.
+
+    ``ON DELETE CASCADE`` removes the job's tasks, attempts, endpoints, config, and
+    workdir files.
+    """
     # Record the tombstone BEFORE the delete so a parent federating with this peer
     # learns the job was pruned. The event resolves and stamps its requester from
     # the RECEIVED federated_jobs row (still present here) and carries no FK to
@@ -304,6 +311,12 @@ def delete_job(tx: Tx, job_id: JobName) -> None:
     # root was received via handoff).
     record_federation_change(tx, job_id, tombstone=True)
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
+    # The attempt-counts and run-template memos are keyed by job id and derived from
+    # the cascaded rows. Drop them at this chokepoint — every job-row deletion flows
+    # through here — so a job later minted with the same id (a federation set-replace
+    # that drops a handle, then a re-handoff) cannot serve the dead job's counts.
+    tx.caches[AttemptCountsProjection].invalidate_for_jobs(tx, [job_id])
+    tx.caches[RunTemplatesProjection].invalidate_for_job(tx, job_id)
 
 
 @writes_to(slices_table)
@@ -718,26 +731,8 @@ def remove_worker(
 
 
 # ---------------------------------------------------------------------------
-# User / budget writes (previously ControllerDB methods)
+# Budget writes (previously ControllerDB methods)
 # ---------------------------------------------------------------------------
-
-
-@writes_to(users_table)
-def ensure_user(tx: Tx, user_id: str, now: Timestamp, role: str = USER_ROLE_DEFAULT) -> None:
-    """Create user if not exists. Does not update role for existing users."""
-    stmt = sqlite_insert(users_table).values(
-        user_id=user_id,
-        created_at_ms=now,
-        role=role,
-    )
-    stmt = stmt.on_conflict_do_nothing(index_elements=["user_id"])
-    tx.execute(stmt)
-
-
-@writes_to(users_table)
-def set_user_role(tx: Tx, user_id: str, role: str) -> None:
-    """Update the role for an existing user."""
-    tx.execute(update(users_table).where(users_table.c.user_id == user_id).values(role=role))
 
 
 @writes_to(user_budgets_table)
@@ -791,6 +786,40 @@ def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int) -> None:
     )
 
 
+@writes_to(federated_jobs_table, jobs_table)
+def promote_queued_handoff(tx: Tx, job_id: JobName, peer_id: str) -> bool:
+    """Conditionally promote a QUEUED_HANDOFF handle to PENDING_HANDOFF for ``peer_id``.
+
+    The control tick decides promotions on a (possibly stale) read snapshot, so the
+    write is a compare-and-set: it flips the handle only while it is still
+    ``QUEUED_HANDOFF``, uncancelled, and its job is nonterminal. A concurrent cancel
+    or terminalization between the tick's read and this commit bumps
+    ``cancel_intent_version`` / the job state, the CAS matches zero rows, and the
+    caller drops the promotion (releasing its reservation). Returns whether the
+    handle was actually promoted; on success it also stamps ``jobs.cluster`` so the
+    job now names the peer it was assigned to."""
+    job_nonterminal = (
+        select(jobs_table.c.job_id)
+        .where(jobs_table.c.job_id == job_id, jobs_table.c.state.notin_(list(TERMINAL_JOB_STATES)))
+        .exists()
+    )
+    result = tx.execute(
+        update(federated_jobs_table)
+        .where(
+            federated_jobs_table.c.job_id == job_id,
+            federated_jobs_table.c.direction == int(FederationDirection.SENT),
+            federated_jobs_table.c.handoff_state == int(HandoffState.QUEUED_HANDOFF),
+            federated_jobs_table.c.cancel_intent_version == 0,
+            job_nonterminal,
+        )
+        .values(handoff_state=int(HandoffState.PENDING_HANDOFF), peer_id=peer_id)
+    )
+    if result.rowcount == 0:
+        return False
+    tx.execute(update(jobs_table).where(jobs_table.c.job_id == job_id).values(cluster=peer_id))
+    return True
+
+
 @writes_to(federated_jobs_table)
 def bump_cancel_intent(tx: Tx, job_id: JobName) -> None:
     """Increment a handle's ``cancel_intent_version`` (versioned, idempotent cancel)."""
@@ -807,12 +836,27 @@ def mark_federated_job_killed(tx: Tx, job_id: JobName, *, now_ms: int, error: st
 
     A federated handle owns no local tasks, so there is no subtree to cancel — the
     jobs row alone flips to KILLED. Used when a ``PENDING_HANDOFF`` handoff is
-    cancelled before delivery; a delivered job's terminal state arrives via sync.
+    cancelled before delivery, and when the peer refuses it outright; a delivered
+    job's terminal state arrives via sync.
     """
     tx.execute(
         update(jobs_table)
         .where(jobs_table.c.job_id == job_id)
         .values(state=job_pb2.JOB_STATE_KILLED, finished_at_ms=now_ms, error=error)
+    )
+
+
+@writes_to(jobs_table)
+def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, error: str) -> None:
+    """Fail a queued federated job whose scheduling deadline elapsed before promotion.
+
+    A queued handle owns no tasks, so the jobs row alone flips to ``UNSCHEDULABLE`` —
+    the same terminal state a locally scheduled job reaches on a scheduling timeout.
+    """
+    tx.execute(
+        update(jobs_table)
+        .where(jobs_table.c.job_id == job_id)
+        .values(state=job_pb2.JOB_STATE_UNSCHEDULABLE, finished_at_ms=now_ms, error=error)
     )
 
 

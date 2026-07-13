@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import posixpath
 from pathlib import Path
 from typing import Any, Protocol
 
-import fsspec
 import jax
 from haliax.jax_utils import is_jax_array_like
 from levanter.tracker import current_tracker
+from rigging.filesystem import StoragePath
 
 GRUG_SHARDING_ARTIFACT_NAME = "grug_sharding_spec"
 GRUG_SHARDING_DUMP_FILENAME = f"{GRUG_SHARDING_ARTIFACT_NAME}.json"
@@ -33,9 +32,7 @@ def dump_grug_state_sharding(state: GrugStateWithSharding, path: Path) -> None:
     output = grug_state_sharding_dict(state)
     serialized = json.dumps(output, indent=2, sort_keys=True)
     _ensure_parent_dir(path)
-    with fsspec.open(str(path), "w") as out:
-        out.write(serialized)
-        out.write("\n")
+    StoragePath(str(path)).write_text(serialized + "\n")
 
 
 def dump_grug_state_sharding_artifact(state: GrugStateWithSharding, path: Path) -> None:
@@ -81,8 +78,6 @@ def _sharding_spec(value: Any) -> str:
 
 
 def _ensure_parent_dir(path: Path) -> None:
-    fs, _, paths = fsspec.get_fs_token_paths(str(path))
-    plain_path = paths[0]
-    parent = posixpath.dirname(plain_path)
-    if parent:
-        fs.makedirs(parent, exist_ok=True)
+    parent = StoragePath(str(path)).parent
+    if parent.key:
+        parent.mkdirs()

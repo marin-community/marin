@@ -29,7 +29,6 @@ Submit on iris in eu-west4 so the GCS reads stay in-region:
 
 import argparse
 import logging
-import os
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -39,7 +38,7 @@ import pyarrow.parquet as pq
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -74,26 +73,23 @@ class SourceStats:
 
 
 def _list_parquet(d: str) -> list[str]:
-    fs, p = url_to_fs(d)
     out: list[str] = []
-    for root, _, files in fs.walk(p):
+    for root, _, files in StoragePath(d).walk():
         for f in files:
             if f.endswith(".parquet") and not f.startswith("."):
-                out.append("gs://" + os.path.join(root, f))
+                out.append(str(root / f))
     return sorted(out)
 
 
 def _find_attr_dir(inference_base: str, source_name: str) -> str | None:
-    fs, base = url_to_fs(inference_base + "/quality-llm")
     parent_rel = "/".join(source_name.split("/")[:-1])
-    parent_abs = os.path.join(base, parent_rel) if parent_rel else base
-    if not fs.exists(parent_abs):
+    parent_path = StoragePath(inference_base) / "quality-llm" / parent_rel
+    if not parent_path.exists():
         return None
     leaf_prefix = source_name.split("/")[-1] + "_"
-    for entry in fs.ls(parent_abs):
-        bn = os.path.basename(entry.rstrip("/"))
-        if bn.startswith(leaf_prefix):
-            return "gs://" + entry.rstrip("/")
+    for entry in parent_path.ls():
+        if entry.name.startswith(leaf_prefix):
+            return str(entry)
     return None
 
 
@@ -106,9 +102,8 @@ def _read_attr_shard(path: str) -> list[tuple[str, int, float]]:
     0 here lets us join against row group 0 of the normalized shard
     without buffering multi-GB tables.
     """
-    fs, p = url_to_fs(path)
     rows: list[tuple[str, int, float]] = []
-    with fs.open(p, "rb") as fh:
+    with StoragePath(path).open("rb") as fh:
         pfile = pq.ParquetFile(fh)
         if pfile.num_row_groups == 0:
             return rows
@@ -131,11 +126,9 @@ def _read_attr_shard(path: str) -> list[tuple[str, int, float]]:
 
 
 def _normalized_shard_for(norm_dir: str, partition_id: int) -> str | None:
-    fs, p = url_to_fs(norm_dir)
-    for f in fs.ls(p):
-        bn = os.path.basename(f.rstrip("/"))
-        if bn.startswith(f"part-{partition_id:05d}-of-") and bn.endswith(".parquet"):
-            return "gs://" + f.rstrip("/")
+    for f in StoragePath(norm_dir).ls():
+        if f.name.startswith(f"part-{partition_id:05d}-of-") and f.name.endswith(".parquet"):
+            return str(f)
     return None
 
 
@@ -154,8 +147,7 @@ def _lookup_texts(norm_dir: str, by_pid: dict[int, set[str]], preview_chars: int
         if not shard:
             continue
         target = set(ids)
-        fs, p = url_to_fs(shard)
-        with fs.open(p, "rb") as fh:
+        with StoragePath(shard).open("rb") as fh:
             pfile = pq.ParquetFile(fh)
             for rg_idx in range(pfile.num_row_groups):
                 if not target:

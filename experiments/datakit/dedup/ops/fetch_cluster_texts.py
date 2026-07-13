@@ -36,7 +36,7 @@ from collections import defaultdict
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -75,14 +75,13 @@ def _build_file_idx_map() -> dict[int, dict]:
     parallel; the global ordering is reconstructed from the manifest's
     insertion order afterwards.
     """
-    with open_url(f"{DEDUP_ROOT}/.artifact.json", "rb") as fh:
-        art = json.loads(fh.read())
+    art = json.loads(StoragePath(f"{DEDUP_ROOT}/.artifact.json").read_bytes())
     sources: dict[str, dict] = art["sources"]
     norm_dirs = list(sources.keys())  # insertion order = dedup caller order
 
     def _list_one(norm_dir: str) -> list[str]:
-        afs, base = url_to_fs(sources[norm_dir]["attr_dir"])
-        return sorted(f for f in afs.ls(base) if f.endswith(".parquet"))
+        attr_dir = sources[norm_dir]["attr_dir"]
+        return sorted(str(p) for p in StoragePath(attr_dir).ls() if str(p).endswith(".parquet"))
 
     files_per_source: dict[str, list[str]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=READ_CONCURRENCY) as ex:
@@ -106,13 +105,12 @@ def _build_file_idx_map() -> dict[int, dict]:
 
 
 def _read_index() -> list[dict]:
-    fs, base = url_to_fs(INDEX_DIR)
-    files = sorted(f for f in fs.ls(base) if f.endswith(".parquet"))
+    files = sorted((p for p in StoragePath(INDEX_DIR).ls() if str(p).endswith(".parquet")), key=str)
     if not files:
         raise FileNotFoundError(f"no parquet files under {INDEX_DIR}")
 
-    def _read_one(f: str) -> list[dict]:
-        with fs.open(f, "rb") as fh:
+    def _read_one(f: StoragePath) -> list[dict]:
+        with f.open("rb") as fh:
             t = pq.read_table(fh)
         out: list[dict] = []
         cids = t.column("component_id").to_pylist()
@@ -138,10 +136,9 @@ def _split_record_id(record_id: str) -> tuple[str, str]:
 
 def _fetch_texts_for_file(file_idx: int, norm_path: str, wanted_ids: set[str]) -> dict[str, str]:
     """Stream the normalized parquet, picking out only the wanted ids."""
-    fs, p = url_to_fs(norm_path)
     out: dict[str, str] = {}
     target = len(wanted_ids)
-    with fs.open(p, "rb") as fh:
+    with StoragePath(norm_path).open("rb") as fh:
         pf = pq.ParquetFile(fh)
         for batch in pf.iter_batches(columns=["id", "text"], batch_size=READ_BATCH_ROWS):
             ids = batch.column("id").to_pylist()
@@ -229,11 +226,11 @@ def main() -> None:
     logger.info("assembled %d cluster examples", len(records))
 
     table = pa.Table.from_pylist(records, schema=_OUTPUT_SCHEMA)
-    fs, p = url_to_fs(OUTPUT_PATH)
-    out_dir = os.path.dirname(p)
-    if out_dir:
-        fs.mkdirs(out_dir, exist_ok=True)
-    with fs.open(p, "wb") as fh:
+    output_path = StoragePath(OUTPUT_PATH)
+    parent = output_path.parent
+    if parent.key:
+        parent.mkdirs()
+    with output_path.open("wb") as fh:
         pq.write_table(table, fh)
     logger.info("wrote %s (%d clusters)", OUTPUT_PATH, len(records))
 

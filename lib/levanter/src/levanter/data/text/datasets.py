@@ -21,10 +21,12 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
+from rigging.filesystem import StoragePath, prefix_join
 from rigging.timing import log_time
 
 import levanter
-from levanter.data import AsyncDataset
+import levanter.config
+from levanter.data.dataset import AsyncDataset
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import (
     ConcatDataset,
@@ -56,11 +58,9 @@ from levanter.data.text.formats import (
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions, TreeCache
-from levanter.utils import fsspec_utils
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()  # noqa
 
@@ -258,7 +258,7 @@ class LmDatasetSourceConfigBase(ChoiceRegistry):
         base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
         if base_cache is None:
             raise ValueError("cache_dir must be set or override_cache_dir must be provided")
-        return load_lm_dataset_cache(os.path.join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
+        return load_lm_dataset_cache(prefix_join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
 
     @classmethod
     def default_choice_name(cls) -> str | None:
@@ -680,7 +680,7 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
     if base is None:
         raise ValueError(f"No cache_dir provided for component {name}")
     if component.cache_dir is None:
-        return os.path.join(base, name)
+        return prefix_join(base, name)
     return base
 
 
@@ -849,7 +849,7 @@ class LmDataConfig:
 
         shard_source = source.get_shard_source(split)
         if shard_source is None:
-            if not fsspec_utils.exists(cache_path):
+            if not StoragePath(cache_path).exists():
                 logger.warning("No source for %s in %s split and no cache at %s, skipping", name, split, cache_path)
                 return None
             return load_lm_dataset_cache(
@@ -860,7 +860,7 @@ class LmDataConfig:
             )
 
         if not self.auto_build_caches:
-            if not fsspec_utils.exists(cache_path):
+            if not StoragePath(cache_path).exists():
                 raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
             return load_lm_dataset_cache(
                 cache_path,
@@ -900,7 +900,9 @@ class LmDataConfig:
             child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
             for child_name, child in component.children.items():
                 child_key = f"{name}/{child_name}"
-                cache = caches.get(child_key) if caches is not None else self._cache_for_component(child_key, child, split)
+                cache = (
+                    caches.get(child_key) if caches is not None else self._cache_for_component(child_key, child, split)
+                )
                 if cache is None:
                     if split == "train":
                         raise ValueError(f"No cache available for concat child {child_key} in {split} split")
@@ -1267,7 +1269,7 @@ class LmDataConfig:
                     return name, None, None
                 cache_path = cache_root
             else:
-                cache_path = os.path.join(cache_root, split)
+                cache_path = prefix_join(cache_root, split)
             source = component.source
 
             if source is None:
@@ -1278,7 +1280,7 @@ class LmDataConfig:
                 return name, cache, None
 
             shard_source = source.get_shard_source(split)
-            cache_exists = fsspec_utils.exists(cache_path)
+            cache_exists = StoragePath(cache_path).exists()
 
             if shard_source is None:
                 if not cache_exists:

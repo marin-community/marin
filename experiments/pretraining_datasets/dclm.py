@@ -3,7 +3,7 @@
 
 import dataclasses
 
-from levanter.data.text import TextLmDatasetFormat
+from levanter.data.text.formats import TextLmDatasetFormat
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 

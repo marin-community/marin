@@ -9,7 +9,7 @@ import traceback
 from urllib.parse import urlparse
 
 import requests
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig

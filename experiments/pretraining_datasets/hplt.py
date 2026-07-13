@@ -10,7 +10,7 @@ adding ~612.7B unique tokens from European web crawls.
 
 import os.path
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.download.hplt import download_hplt_v3_step, normalize_hplt_v3_step
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize

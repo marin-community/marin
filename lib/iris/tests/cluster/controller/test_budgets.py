@@ -21,11 +21,6 @@ def db(tmp_path: Path) -> ControllerDB:
     return ControllerDB(db_dir=tmp_path)
 
 
-def _create_user(db: ControllerDB, user_id: str, created_at_ms: int = 1000) -> None:
-    with db.transaction() as tx:
-        writes.ensure_user(tx, user_id, Timestamp.from_ms(created_at_ms))
-
-
 def _set_user_budget(db: ControllerDB, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
     with db.transaction() as tx:
         writes.set_user_budget(tx, user_id, budget_limit, max_band, now)
@@ -52,8 +47,7 @@ def test_pending_index_includes_priority_band(db: ControllerDB) -> None:
 
 
 def test_set_and_get_user_budget(db: ControllerDB) -> None:
-    """Round-trip set_user_budget / get_user_budget."""
-    _create_user(db, "bob")
+    """Round-trip set_user_budget / get_user_budget (no users row required)."""
     now = Timestamp.from_ms(2000)
     _set_user_budget(db, "bob", budget_limit=5000, max_band=1, now=now)
 
@@ -68,7 +62,6 @@ def test_set_and_get_user_budget(db: ControllerDB) -> None:
 
 def test_set_user_budget_upsert(db: ControllerDB) -> None:
     """set_user_budget updates an existing row on conflict."""
-    _create_user(db, "carol")
     _set_user_budget(db, "carol", budget_limit=100, max_band=2, now=Timestamp.from_ms(1000))
     _set_user_budget(db, "carol", budget_limit=999, max_band=3, now=Timestamp.from_ms(2000))
 
@@ -84,9 +77,6 @@ def test_get_user_budget_returns_none_for_unknown(db: ControllerDB) -> None:
 
 
 def test_list_user_budgets(db: ControllerDB) -> None:
-    _create_user(db, "u1")
-    _create_user(db, "u2")
-    _create_user(db, "u3")
     now = Timestamp.from_ms(3000)
     _set_user_budget(db, "u1", budget_limit=10, max_band=1, now=now)
     _set_user_budget(db, "u2", budget_limit=20, max_band=2, now=now)
@@ -182,11 +172,12 @@ def test_reconcile_rejects_empty_user_id(db: ControllerDB) -> None:
         reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
 
 
-def test_reconcile_creates_user_row_for_fk(db: ControllerDB) -> None:
-    """user_budgets has a FK on users; reconcile must ensure_user first."""
+def test_reconcile_sets_budget_for_any_user_without_a_users_row(db: ControllerDB) -> None:
+    """user_budgets is a standalone table with no FK to users, so a tier's budget is
+    written for any id directly — there is no users table to anchor."""
     tiers = [_tier(["henry"], 75000, job_pb2.PRIORITY_BAND_INTERACTIVE)]
     reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
 
-    with db.read_snapshot() as q:
-        row = q.execute(text("SELECT user_id FROM users WHERE user_id = 'henry'")).first()
-    assert row is not None
+    budget = _get_user_budget(db, "henry")
+    assert budget is not None
+    assert budget.budget_limit == 75000

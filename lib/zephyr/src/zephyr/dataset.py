@@ -5,7 +5,6 @@
 
 import functools
 import logging
-import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -14,7 +13,7 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 import fsspec
 from braceexpand import braceexpand
 from pyarrow import RecordBatch
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 from zephyr.expr import Expr
 from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
@@ -57,7 +56,7 @@ def resolve_glob(source: GlobSource) -> list[FileEntry]:
     Uses fsspec glob(detail=True) which returns file metadata from the same
     list-objects API call — no extra per-file stat RPCs.
     """
-    pattern = re.sub(r"(?<!:)//+", "/", source.pattern)
+    pattern = StoragePath.normalize(source.pattern)
 
     fs, _ = url_to_fs(pattern)
     protocol = fsspec.core.split_protocol(pattern)[0]
@@ -111,10 +110,7 @@ def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     basename = f"shard_{shard_idx}"
     formatted = pattern.format(shard=shard_idx, total=total, basename=basename)
 
-    # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
-    normalized = re.sub(r"(?<!:)//+", "/", formatted)
-
-    return normalized
+    return StoragePath.normalize(formatted)
 
 
 def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -> Callable[[int, int], str]:

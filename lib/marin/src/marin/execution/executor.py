@@ -95,11 +95,11 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 import draccus
-import levanter.utils.fsspec_utils as fsspec_utils
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
 from rigging.filesystem import (
+    StoragePath,
     collect_gcs_paths,
     get_bucket_location,
     marin_prefix,
@@ -1452,12 +1452,12 @@ class Executor:
         # Write out info for each step
         for step, info in zip(self.steps, executor_info_dict["steps"], strict=True):
             info_path = _get_info_path(self.output_paths[step])
-            fsspec_utils.mkdirs(os.path.dirname(info_path))
+            StoragePath(os.path.dirname(info_path)).mkdirs(exist_ok=True)
             with open_url(info_path, "w") as f:
                 print(json.dumps(info, indent=2, cls=CustomJsonEncoder), file=f)
 
         # Write out info for the entire execution
-        fsspec_utils.mkdirs(os.path.dirname(self.executor_info_path))
+        StoragePath(os.path.dirname(self.executor_info_path)).mkdirs(exist_ok=True)
         with open_url(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 

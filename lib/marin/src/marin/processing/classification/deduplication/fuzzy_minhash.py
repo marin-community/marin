@@ -20,15 +20,17 @@ from collections.abc import Iterator
 
 import dupekit
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
-from zephyr import Dataset, ZephyrContext, counters
+from rigging.filesystem import StoragePath, prefix_join
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -201,9 +203,9 @@ def compute_minhash_attrs(
         seed=seed,
         text_cap_chars=text_cap_chars,
     )
-    attr_dir = os.path.join(output_path, "outputs")
+    attr_dir = prefix_join(output_path, "outputs")
 
-    source_shards = sorted(fsspec_glob(f"{source.main_output_dir.rstrip('/')}/*.parquet"))
+    source_shards = sorted(str(m) for m in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 
@@ -229,7 +231,7 @@ def compute_minhash_attrs(
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
 
     def _output_path(shard_idx: int, total_shards: int, ad: str = attr_dir, bn: tuple = output_basenames) -> str:
-        return f"{ad}/{bn[shard_idx]}"
+        return prefix_join(ad, bn[shard_idx])
 
     pipeline = (
         Dataset.from_list(source_shards)

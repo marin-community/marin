@@ -49,9 +49,10 @@ class AttemptCountsProjection(Projection):
 
     watches: ClassVar = (task_attempts_table,)
 
-    # A deleted job is never invalidated (its rows are gone and it is never queried
-    # again), so entries for pruned jobs would otherwise accumulate. Clear the memo
-    # once it grows past this bound; warm entries simply re-derive on next read.
+    # Terminal jobs whose attempts never change again are read on the dashboard but
+    # never invalidated by an attempt write, so their entries would accumulate
+    # unbounded (deletion does invalidate, via delete_job). Clear the memo once it
+    # grows past this bound; warm entries simply re-derive on next read.
     _MAX_ENTRIES: ClassVar[int] = 100_000
 
     def __init__(self, db: ControllerDB) -> None:

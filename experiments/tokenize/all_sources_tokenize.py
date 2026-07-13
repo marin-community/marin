@@ -32,7 +32,7 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
 import logging
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner

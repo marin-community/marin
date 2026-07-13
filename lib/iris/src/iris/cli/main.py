@@ -10,10 +10,9 @@ import logging
 import sys
 
 import click
-from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, GcpAccessTokenProvider, StaticTokenProvider, run_iap_desktop_login
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapCredentialsUnavailable, run_iap_desktop_login
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import CredentialRecord, save_credentials
-from rigging.credentials import ClientCredentials
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import (
@@ -22,12 +21,11 @@ from iris.cli.connect import (
     iap_config,
     require_controller_url,
     resolve_cluster_name,
-    rpc_client,
     rpc_client_for_ctx,
 )
-from iris.cluster.config import IapAuthConfig, load_config
+from iris.cluster.config import load_config
 from iris.cluster.platforms.k8s.controller import configure_client_s3
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = logging.getLogger(__name__)
@@ -117,155 +115,69 @@ def iris(
         ctx.obj["controller_url"] = controller_url
 
 
-def _login_iap(controller_url: str, iap: IapAuthConfig, cluster_name: str) -> None:
-    """Two-step IAP login: desktop OAuth -> Iris JWT, caching both credentials.
-
-    Authenticates to IAP via the browser desktop flow, then exchanges the OIDC
-    ID token for an Iris JWT over the IAP transport (the ID token rides in
-    Proxy-Authorization so IAP admits the exchange request to the controller).
-    """
-    # Config may front a cluster-specific desktop client; otherwise the Marin
-    # desktop client shipped in rigging drives the flow (same fallback as
-    # rigging.credentials._desktop_client).
-    client_id = iap.oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
-    client_secret = iap.oauth_client_secret or MARIN_DESKTOP_OAUTH_CLIENT.client_secret
-    click.echo("Opening browser to authenticate with Google IAP...")
-    try:
-        id_token, refresh_token = run_iap_desktop_login(client_id, client_secret)
-    except Exception as e:
-        raise click.ClickException(f"IAP authentication failed: {e}") from e
-
-    with rpc_client(controller_url, ClientCredentials(iap_provider=StaticTokenProvider(id_token))) as client:
-        try:
-            response = client.login(job_pb2.LoginRequest(identity_token=id_token))
-        except Exception as e:
-            raise click.ClickException(f"Login failed: {e}") from e
-
-    save_credentials(
-        CredentialRecord(
-            cluster=cluster_name,
-            endpoint=controller_url,
-            app_token=response.token,
-            edge_refresh_token=refresh_token,
-            metadata={"user_id": response.user_id},
-        )
-    )
-    click.echo(f"Authenticated as {response.user_id}")
-    click.echo(f"Token stored for cluster '{cluster_name}' (IAP + Iris credentials cached)")
-
-
 @iris.command()
+@click.option(
+    "--headless",
+    is_flag=True,
+    help="Print the authorization URL and read back the pasted code instead of opening a browser. "
+    "Use on a remote box whose localhost is unreachable from your browser; auto-detected when no browser is registered.",
+)
 @click.pass_context
-def login(ctx):
-    """Authenticate with the cluster and store a JWT locally."""
+def login(ctx, headless):
+    """Authenticate to the cluster's IAP edge via the browser and cache the refresh token.
+
+    Pure-IAP: the controller mints no token. This runs the desktop OAuth browser
+    flow and caches the long-lived IAP edge refresh token, from which each later
+    RPC silently re-mints the short-lived edge token IAP requires. Non-IAP
+    clusters need no login (in-network / loopback trust admits the caller).
+
+    On a box with no local browser but where you can open a URL elsewhere, pass
+    ``--headless`` (auto-detected when no browser is registered) to authenticate by
+    pasting the returned code. Fully unattended callers (CI / agents, no human at
+    all) skip login entirely and instead give the process service-account
+    credentials on the cluster's IAP allowlist — e.g. ``gcloud auth
+    application-default login --impersonate-service-account=<sa>``; see
+    ``lib/iris/docs/iap-gclb.md``.
+    """
     controller_url = require_controller_url(ctx)
     config = ctx.obj.get("config")
     cluster_name = ctx.obj.get("cluster_name", "default")
 
     iap = iap_config(config)
-    if iap is not None:
-        _login_iap(controller_url, iap, cluster_name)
-        return
+    if iap is None:
+        raise click.ClickException(
+            "This cluster is not fronted by IAP; no login is needed (in-network / loopback trust applies)."
+        )
 
-    if config and config.auth is not None:
-        provider = config.auth.provider_kind()
+    # Config may front a cluster-specific desktop client; otherwise the Marin
+    # desktop client shipped in rigging drives the flow (same fallback as
+    # rigging.credentials._desktop_client).
+    client_id = iap.oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
+    client_secret = iap.oauth_client_secret or MARIN_DESKTOP_OAUTH_CLIENT.client_secret
+    if headless:
+        click.echo("Authenticating with Google IAP (headless: open the printed URL, then paste the result)...")
     else:
-        with rpc_client(controller_url) as client:
-            try:
-                auth_info = client.get_auth_info(job_pb2.GetAuthInfoRequest())
-            except Exception as e:
-                raise click.ClickException(f"Failed to discover auth method: {e}") from e
-        provider = auth_info.provider or None
-        if not provider:
-            raise click.ClickException("Controller has no authentication configured")
-
-    if provider == "gcp":
-        gcp_provider = GcpAccessTokenProvider()
-        try:
-            identity_token = gcp_provider.get_token()
-        except Exception as e:
-            raise click.ClickException(f"Failed to get GCP access token: {e}") from e
-    elif provider == "static":
-        if not config:
-            raise click.ClickException("Static auth requires --config (tokens are in the config file)")
-        tokens = dict(config.auth.static.tokens)
-        if not tokens:
-            raise click.ClickException("No static tokens configured")
-        identity_token = next(iter(tokens))
-    else:
-        raise click.ClickException(f"Unsupported auth provider: {provider}")
-
-    # All providers converge: exchange identity_token for JWT via Login RPC
-    with rpc_client(controller_url) as client:
-        try:
-            response = client.login(job_pb2.LoginRequest(identity_token=identity_token))
-        except Exception as e:
-            raise click.ClickException(f"Login failed: {e}") from e
+        click.echo("Opening browser to authenticate with Google IAP...")
+    try:
+        _id_token, refresh_token = run_iap_desktop_login(client_id, client_secret, headless=headless)
+    except Exception as e:
+        raise click.ClickException(
+            f"IAP authentication failed: {e}\n"
+            "If you are fully unattended (CI / agent), skip `iris login` and give the "
+            "process service-account credentials on the cluster's IAP allowlist, e.g. "
+            "`gcloud auth application-default login --impersonate-service-account=<sa>`. "
+            "See lib/iris/docs/iap-gclb.md."
+        ) from e
 
     save_credentials(
         CredentialRecord(
             cluster=cluster_name,
             endpoint=controller_url,
-            app_token=response.token,
-            metadata={"user_id": response.user_id},
+            edge_refresh_token=refresh_token,
         )
     )
-
-    click.echo(f"Authenticated as {response.user_id}")
-    # Token in URL is visible in browser history/logs — acceptable for internal clusters
-    click.echo(f"Dashboard: {controller_url}/auth/session_bootstrap?token={response.token}")
-    click.echo(f"Token stored for cluster '{cluster_name}'")
-
-
-@iris.group()
-@click.pass_context
-def key(ctx):
-    """Manage API keys."""
-    pass
-
-
-@key.command("create")
-@click.option("--name", required=True, help="Human-readable key name")
-@click.option("--user", "user_id", default="", help="Target user (admin only for other users)")
-@click.option("--ttl", "ttl_ms", default=0, type=int, help="Time-to-live in milliseconds (0 = no expiry)")
-@click.pass_context
-def key_create(ctx, name: str, user_id: str, ttl_ms: int):
-    """Create a new API key."""
-    with rpc_client_for_ctx(ctx) as client:
-        response = client.create_api_key(job_pb2.CreateApiKeyRequest(user_id=user_id, name=name, ttl_ms=ttl_ms))
-
-    click.echo(f"Key ID:  {response.key_id}")
-    click.echo(f"Token:   {response.token}")
-    click.echo(f"Prefix:  {response.key_prefix}")
-    click.echo("Store this token securely — it cannot be retrieved again.")
-
-
-@key.command("list")
-@click.option("--user", "user_id", default="", help="Filter by user (admin only for other users)")
-@click.pass_context
-def key_list(ctx, user_id: str):
-    """List API keys."""
-    with rpc_client_for_ctx(ctx) as client:
-        response = client.list_api_keys(job_pb2.ListApiKeysRequest(user_id=user_id))
-
-    if not response.keys:
-        click.echo("No API keys found.")
-        return
-
-    for k in response.keys:
-        status = "REVOKED" if k.revoked else "active"
-        click.echo(f"  {k.key_id}  {k.key_prefix}...  {k.name:<20s}  {k.user_id:<20s}  {status}")
-
-
-@key.command("revoke")
-@click.argument("key_id")
-@click.pass_context
-def key_revoke(ctx, key_id: str):
-    """Revoke an API key."""
-    with rpc_client_for_ctx(ctx) as client:
-        client.revoke_api_key(job_pb2.RevokeApiKeyRequest(key_id=key_id))
-
-    click.echo(f"Revoked key: {key_id}")
+    click.echo(f"IAP edge credentials cached for cluster '{cluster_name}'.")
+    click.echo("The controller authenticates each request via IAP; no cluster token is minted.")
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +258,7 @@ def budget_list(ctx):
 from iris.cli.actor import actor as actor_cmd  # noqa: E402
 from iris.cli.build import build  # noqa: E402
 from iris.cli.cluster import cluster  # noqa: E402
+from iris.cli.endpoints import endpoints  # noqa: E402
 from iris.cli.job import job  # noqa: E402
 from iris.cli.process_status import register_process_status_commands  # noqa: E402
 from iris.cli.query import query_cmd  # noqa: E402
@@ -355,8 +268,29 @@ from iris.cli.task import task  # noqa: E402
 iris.add_command(actor_cmd)
 iris.add_command(cluster)
 iris.add_command(build)
+iris.add_command(endpoints)
 iris.add_command(job)
 iris.add_command(task)
 iris.add_command(query_cmd)
 register_rpc_commands(iris)
 register_process_status_commands(iris)
+
+
+def main() -> None:
+    """Console-script entry point: run the ``iris`` group with clean auth errors.
+
+    IAP credential failures surface lazily from deep in an RPC call as a bare
+    ``IapCredentialsUnavailable``. Catch it here to print an actionable hint
+    instead of a stack trace; every other exception keeps its normal traceback.
+    """
+    try:
+        iris()
+    except IapCredentialsUnavailable as exc:
+        click.secho(f"Error: {exc}", fg="red", err=True)
+        click.echo(
+            "Run `iris login` for the interactive path, or for an unattended caller "
+            "`gcloud auth application-default login --impersonate-service-account=<sa>`. "
+            "See lib/iris/docs/iap-gclb.md.",
+            err=True,
+        )
+        sys.exit(1)

@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import fsspec
 from fray.cluster import ResourceConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import create_cache_tokenizer_step

@@ -23,10 +23,13 @@ from dataclasses import dataclass
 import draccus
 import pyarrow.parquet as pq
 import s3fs
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.utils import fsspec_glob
 from rigging.filesystem import open_url, url_to_fs
-from zephyr import Dataset, InputFileSpec, ZephyrContext, load_jsonl, load_parquet, write_jsonl_file
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import InputFileSpec, load_jsonl, load_parquet
+from zephyr.writers import write_jsonl_file
 
 logger = logging.getLogger(__name__)
 
@@ -317,7 +320,7 @@ def hydrate_stack_edu(cfg: StackEduHydrationConfig) -> str:
         max_workers=cfg.max_workers,
         resources=cfg.worker_resources,
     )
-    metric_files = ctx.execute(pipeline)
+    metric_files = ctx.execute(pipeline).results
 
     total_written = 0
     total_fallback = 0
@@ -387,4 +390,4 @@ def hydrate_stack_edu(cfg: StackEduHydrationConfig) -> str:
 
 
 if __name__ == "__main__":
-    draccus.wrap(hydrate_stack_edu)()
+    draccus.wrap()(hydrate_stack_edu)()

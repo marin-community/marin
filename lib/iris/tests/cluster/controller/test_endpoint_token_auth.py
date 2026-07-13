@@ -5,32 +5,38 @@
 
 Covers the auth mechanism a served endpoint relies on off-cluster:
 
-- ``JwtTokenManager.create_endpoint_token`` mints a ``scope=proxy`` token whose
-  ``aud`` is the endpoint's wire name, and one ``verify()`` accepts both it and
-  an ordinary full-identity token (PyJWT ``verify_aud`` regression).
+- ``JwtTokenManager.create_endpoint_token`` mints a ``scope=proxy`` token bound
+  to the fixed proxy-plane ``aud="iris-proxy"`` with the endpoint in an
+  ``endpoint`` claim; ``verify()`` surfaces that endpoint as the identity's
+  audience and accepts both it and an ordinary control-plane token (the
+  control-plane verifier's ``expected_audiences`` spans both planes).
 - ``authorize_method`` denies any audience-bearing identity every RPC.
-- ``_authorize_proxy`` enforces the PRIVATE / PUBLIC / BEARER access modes and is
-  the only place a scoped token is accepted.
+- ``_authorize_proxy`` enforces the PRIVATE / LINK access modes and is the only
+  place a scoped token is accepted.
 """
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.controller.auth import ENDPOINT_TOKEN_ROLE, JwtTokenManager
+from iris.cluster.controller.auth import CONTROL_PLANE_AUDIENCES, ENDPOINT_TOKEN_ROLE, JwtTokenManager
 from iris.cluster.controller.dashboard import _authorize_proxy
 from iris.cluster.controller.endpoint_service import ResolvedEndpoint
 from iris.cluster.types import EndpointAccess
 from iris.rpc.auth import authorize_method
 from rigging.server_auth import RequestAuthPolicy, VerifiedIdentity
+from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
 from starlette.requests import Request
 
-_SIGNING_KEY = "k" * 64
+_ISSUER = "test-cluster"
 _ENDPOINT = "/serve/foo"
 
 
 @pytest.fixture
 def jwt() -> JwtTokenManager:
-    return JwtTokenManager(_SIGNING_KEY)
+    key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
+    signer = JwtSigner(key, issuer=_ISSUER)
+    verifier = JwksVerifier(issuers={_ISSUER: [key.public_pem]}, expected_audiences=CONTROL_PLANE_AUDIENCES)
+    return JwtTokenManager(signer, verifier)
 
 
 def _resolved(access: int, name: str = _ENDPOINT) -> ResolvedEndpoint:
@@ -54,20 +60,15 @@ def test_endpoint_token_carries_audience(jwt):
 
 
 def test_full_token_has_no_audience_through_same_verify(jwt):
-    """A full-identity token (no aud) still verifies — PyJWT verify_aud regression.
+    """Both a control-plane and an endpoint token verify through one ``verify()``.
 
-    Both token kinds pass through one ``verify()``; without ``verify_aud=False``
-    the aud-bearing token would raise before the scope check.
+    The control-plane verifier's ``expected_audiences`` spans both the ``iris``
+    and ``iris-proxy`` planes, so a full-identity token (``aud="iris"``, no scope)
+    surfaces no audience while an endpoint token (``aud="iris-proxy"``,
+    ``scope="proxy"``) surfaces its bound endpoint.
     """
-    assert jwt.verify(jwt.create_token("alice", "admin", "k1")).audience is None
+    assert jwt.verify(jwt.create_token("alice", "admin", "k1", ttl_seconds=60)).audience is None
     assert jwt.verify(jwt.create_endpoint_token(_ENDPOINT, "k2", ttl_seconds=60)).audience == _ENDPOINT
-
-
-def test_endpoint_token_revocation(jwt):
-    token = jwt.create_endpoint_token(_ENDPOINT, "iris_ket_revoke", ttl_seconds=60)
-    jwt.revoke("iris_ket_revoke")
-    with pytest.raises(ValueError, match="revoked"):
-        jwt.verify(token)
 
 
 # --- RPC over-grant is closed --------------------------------------------------
@@ -91,24 +92,20 @@ def policy(jwt) -> RequestAuthPolicy:
     return RequestAuthPolicy.enforcing(verifier=jwt)
 
 
-def test_public_allows_without_token(policy):
-    assert _authorize_proxy(_request(), _resolved(EndpointAccess.ENDPOINT_ACCESS_PUBLIC), policy) is None
-
-
-def test_bearer_accepts_matching_scoped_token(jwt, policy):
+def test_link_accepts_matching_scoped_token(jwt, policy):
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
-    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_BEARER), policy) is None
+    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_LINK), policy) is None
 
 
-def test_bearer_rejects_scoped_token_for_other_endpoint(jwt, policy):
+def test_link_rejects_scoped_token_for_other_endpoint(jwt, policy):
     token = jwt.create_endpoint_token("/serve/other", "k", ttl_seconds=60)
-    deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_BEARER), policy)
+    deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_LINK), policy)
     assert deny is not None and deny.status_code == 403
 
 
-def test_bearer_accepts_full_identity(jwt, policy):
-    token = jwt.create_token("alice", "admin", "k1")
-    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_BEARER), policy) is None
+def test_link_accepts_full_identity(jwt, policy):
+    token = jwt.create_token("alice", "admin", "k1", ttl_seconds=60)
+    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_LINK), policy) is None
 
 
 def test_private_rejects_scoped_token(jwt, policy):
@@ -123,7 +120,7 @@ def test_private_rejects_missing_token(policy):
 
 
 def test_private_accepts_full_identity(jwt, policy):
-    token = jwt.create_token("alice", "admin", "k1")
+    token = jwt.create_token("alice", "admin", "k1", ttl_seconds=60)
     assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.ENDPOINT_ACCESS_PRIVATE), policy) is None
 
 
@@ -141,7 +138,7 @@ def test_permissive_policy_allows_private_endpoint(jwt):
 def test_token_in_url_override(jwt, policy):
     """The URL-token fallback reuses the same check via the token override."""
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
-    assert _authorize_proxy(_request(), _resolved(EndpointAccess.ENDPOINT_ACCESS_BEARER), policy, token=token) is None
+    assert _authorize_proxy(_request(), _resolved(EndpointAccess.ENDPOINT_ACCESS_LINK), policy, token=token) is None
     wrong = jwt.create_endpoint_token("/serve/other", "k", ttl_seconds=60)
-    deny = _authorize_proxy(_request(), _resolved(EndpointAccess.ENDPOINT_ACCESS_BEARER), policy, token=wrong)
+    deny = _authorize_proxy(_request(), _resolved(EndpointAccess.ENDPOINT_ACCESS_LINK), policy, token=wrong)
     assert deny is not None and deny.status_code == 403

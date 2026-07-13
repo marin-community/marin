@@ -10,10 +10,22 @@ deployment:
     machine_type: n2-highmem-4
     boot_disk_size_gb: 200
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com
-# Authenticated-ingress policy. This LOCAL finelog is default-deny;
-# it admits its own cluster's private network (VPC + pod ranges) and loopback (SSH
-# tunnel / controller proxy), never the public internet. No jwt layer — that is
-# the GLOBAL finelog's job, for cross-cluster relay pushes.
+# marin is the federation hub. cidr admits marin's own network and loopback; jwt
+# admits each per-cluster finelog forwarding rows here, by its Ed25519 public key.
 auth:
   - type: cidr
     cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  - type: jwt
+    keys:
+      - cluster: cw-rno2a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAy1h0qFGWhuXow28GRDSLdXmb7jTZPo4L+RS/G5zlmhs=
+              -----END PUBLIC KEY-----
+      - cluster: cw-us-east-02a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAJYrTAboQmQmVnSRcsxusCfosRTUl7t2L3q2yRzW5Kwk=
+              -----END PUBLIC KEY-----

@@ -11,13 +11,8 @@ import logging
 import os
 
 import transformers
-from levanter.data.text import (
-    LmDatasetFormatBase,
-    LmDatasetSourceConfigBase,
-    TextLmDatasetFormat,
-    UrlDatasetSourceConfig,
-    preprocessor_for_format,
-)
+from levanter.data.text.datasets import LmDatasetSourceConfigBase, UrlDatasetSourceConfig
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat, preprocessor_for_format
 from levanter.store.cache import CacheMetadata, consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
 from rigging.filesystem import open_url

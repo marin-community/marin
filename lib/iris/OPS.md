@@ -4,11 +4,45 @@ All subcommands have `--help`. Use it.
 
 Connection selectors:
 
-- `--cluster=NAME` (preferred for known clusters): resolves a named config and auto-tunnels.
-- `--config=PATH`: pins an exact YAML config file and auto-tunnels.
-- `--controller-url=URL`: connects to a manually established tunnel.
+- `--cluster=NAME` (preferred for known clusters): resolves a named config.
+- `--config=PATH`: pins an exact YAML config file.
+- `--controller-url=URL`: connects to an explicit URL.
+
+How the controller is reached depends on the cluster. **IAP-fronted clusters
+(marin, marin-dev) are reached directly over their IAP HTTPS URL — there is no
+SSH tunnel**; `require_controller_url` returns the IAP URL and every request is
+authenticated at the edge (see [Authentication](#authentication-headless--ci) and
+`docs/iap-gclb.md`). Non-IAP clusters open an SSH tunnel to the controller VM
+automatically.
 
 Use `iris cluster list` to see named clusters. Use `--config` when you mean a custom or pinned file path.
+
+## Authentication (headless / CI)
+
+For an IAP-fronted cluster the CLI authenticates every request at the IAP edge;
+the controller mints no token. Two ways to get an edge token:
+
+- **Interactive** — `iris --cluster=NAME login` runs the desktop OAuth browser
+  flow and caches a refresh token. Needs a browser; not usable headless.
+- **Headless / CI / agent** — do **not** run `iris login` (it needs a browser).
+  Instead give the process credentials for an *IAP-allowlisted service account*.
+  The keyless way is to point your ADC at one by impersonation — no browser, no
+  key file; iris reads it through the standard resolver with no flag or env:
+
+  ```bash
+  gcloud auth application-default login \
+    --impersonate-service-account=iris-controller@hai-gcp-models.iam.gserviceaccount.com
+  iris --cluster=marin-dev cluster status
+  ```
+
+  Needs `roles/iam.serviceAccountTokenCreator` on the SA (to impersonate) and
+  `roles/iap.httpsResourceAccessor` on the cluster backend for that SA (the IAP
+  allowlist — the impersonated SA email is the identity IAP authorizes). On a GCE
+  VM whose service account is already allowlisted none of this is needed: ambient
+  metadata credentials are used automatically.
+
+See `docs/iap-gclb.md` ("The three caller paths") for the audience-vs-identity
+model behind this.
 
 ## Cluster Lifecycle
 
@@ -27,7 +61,21 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+**Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+
+**Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
+
+### Rolling back a controller deploy (migration-aware)
+
+**Roll back the last deploy.** `iris cluster controller restart --rollback` reads `rollout-record.json`, then redeploys the previous image and restores its pre-deploy checkpoint — no coordinates to look up. Run it while the controller is still reachable so it takes the in-place path.
+
+```bash
+iris --cluster=marin cluster controller restart --rollback
+```
+
+**Why it restores a checkpoint, not just the old image.** A restart runs forward-only migrations in place on the on-VM state DB (`schema_migrations` tracks applied stems; there is no down-migration), and some are destructive — e.g. `0039_drop_api_keys`, `0040_drop_users`. Redeploying the old image alone would leave it loading a schema it does not understand, hitting missing-table errors at runtime. So a correct rollback must **also restore the pre-deploy (pre-migration) checkpoint** — the one taken while the old code was still running. `--rollback` does both from the record: it writes `rollback_requested` and restarts the previous image; on boot the controller restores that checkpoint over its migrated local DB, then marks the record `rolled_back`. That consume-once step is a one-shot — a later crash or VM reboot reuses the restored DB instead of rewinding to the checkpoint again.
+
+For a wedged/unreachable controller, or a deploy with no prior rollout record, use the fully-manual on-VM procedure below instead, which never risks recreating the VM.
 
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 
@@ -144,6 +192,10 @@ running on a worker (ASSIGNED / BUILDING / RUNNING) can be kicked; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
 
+`kick`, `stop`, and `kill` also read ids from **stdin** (`--stdin`, or a literal
+`-` target) and take `--dry-run`. This is the query→act bridge: select the
+targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
+
 ## Process Inspection & Profiling
 
 ```bash
@@ -217,6 +269,56 @@ iris process logs --since 24h | grep 'event=worker_failed'
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
+### Bulk actions: query → act
+
+`iris query` is admin-only and read-only, so it is the safe surface for *finding*
+the exact set of tasks/jobs you want to act on. `iris job kick`, `iris job stop`,
+and `iris job kill` read ids from **stdin** (`--stdin`, or a literal `-`), so a
+query pipes straight into an action — no hand-copying ids. Stdin parsing is
+CSV-tolerant: it takes the first field of each line and keeps only ids (leading
+`/`), so a `-f csv` header row and trailing columns are dropped automatically.
+
+**Always `--dry-run` first** to confirm the set, then re-run without it:
+
+```bash
+# Drain everything EXCEPT one protected job off a slice, so it can bind its ports.
+SLICE=marin-tpu-v4-reserved-2048-us-central2-b-...
+SEL="SELECT t.task_id FROM tasks t JOIN workers w ON t.current_worker_id=w.worker_id
+     WHERE w.slice_id='$SLICE' AND t.state IN (2,3,9) AND t.job_id NOT LIKE '/larry/%'"
+
+iris query -f csv "$SEL" | iris job kick --stdin --dry-run          # preview
+iris query -f csv "$SEL" | iris job kick --stdin --reason "drain slice for /larry"
+```
+
+`--state preempted` (default) reschedules the kicked tasks elsewhere; `--state
+failed` does not retry. Prefer kicking **tasks** (`t.task_id`, task index kept)
+over whole jobs when you only need to clear specific workers — a job target
+kicks *all* its active tasks, including ones on other slices.
+
+Canonical joins (the schema doesn't pre-wire these, so keep them here):
+
+```sql
+-- Which scale group is the size-N slice? (find the slice_id to target)
+SELECT scale_group, device_variant, count(*) AS workers, count(DISTINCT slice_id) AS slices
+FROM workers WHERE device_type='tpu' GROUP BY scale_group, device_variant;
+
+-- Everything occupying a slice's workers, by job and task state.
+SELECT t.job_id, t.state, count(*) FROM tasks t
+JOIN workers w ON t.current_worker_id=w.worker_id
+WHERE w.slice_id='<slice_id>' AND t.state IN (2,3,9) GROUP BY t.job_id, t.state;
+
+-- Co-tenants sharing a worker VM with a given job (CPU tasks bin-packed onto
+-- TPU hosts show up here — a common source of host-global port collisions).
+SELECT t.job_id, t.task_id, w.md_tpu_worker_id FROM tasks t
+JOIN workers w ON t.current_worker_id=w.worker_id
+WHERE w.worker_id IN (
+  SELECT current_worker_id FROM tasks WHERE job_id LIKE '/larry/%' AND state IN (2,3,9)
+) AND t.job_id NOT LIKE '/larry/%' AND t.state IN (2,3,9);
+```
+
+To *dump* rather than act, feed the same selection to `iris job logs` /
+`iris job summary` per id, or read the task rows directly with a wider `SELECT`.
+
 ### Offline checkpoint analysis
 
 For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
@@ -271,12 +373,24 @@ uv run python scripts/job_profile_summary.py /user/job/id -o merged.folded --svg
 ## Users & Auth
 
 ```bash
-iris login                            # authenticate, store JWT locally
+iris login                            # IAP clusters: cache the IAP edge refresh token locally
 iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
-iris key create --name ci-bot         # create API key
-iris key list / iris key revoke       # manage API keys
 ```
+
+Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
+and forwards a signed assertion the controller verifies; the controller mints **no**
+user token. `iris login` runs the browser desktop-OAuth flow once and caches the IAP
+edge refresh token (each RPC silently re-mints the short-lived edge token from it).
+Authorization is **config-driven** — roles are resolved per request from an in-memory
+`RolePolicy` built from the cluster config at controller start (admins from
+`auth.admin_users`, the IAP `unprovisioned_role` for everyone else). There is no
+`users` table and no reconciliation: config is the sole source of truth. To deprovision
+a user, remove them from `auth.admin_users` and reload/restart the controller; the
+rebuilt policy resolves them to the non-admin default on their next request (no token to
+revoke — the role is resolved per request). The only fleet-wide credential kill switch
+is rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
+re-auths every worker.
 
 ### Calling the IAP endpoint with `curl`
 

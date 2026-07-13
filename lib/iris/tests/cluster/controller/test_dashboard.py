@@ -46,7 +46,8 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
-from rigging.server_auth import RequestAuthPolicy, StaticTokenVerifier
+from rigging.server_auth import RequestAuthPolicy
+from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
@@ -498,6 +499,33 @@ def test_list_endpoints_filters_by_task_ids(client, state):
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"
+
+
+def test_proxy_refuses_ambiguous_endpoint_name(client, state, job_request):
+    """A /proxy name that resolves to disagreeing rows — a local and a remote one —
+    is refused with 404 rather than forwarded to an arbitrarily-picked row. Guards
+    against falling back to EndpointProxy's single-row re-resolution when
+    resolve_proxy_target fails closed on the ambiguity.
+    """
+    job_id = submit_job(state, "amb", job_request)
+    task = job_id.task(0)
+    with state._db.transaction() as cur:
+        for endpoint_id, peer in (("local-row", None), ("remote-row", "cw")):
+            state._endpoints.add(
+                cur,
+                EndpointRow(
+                    endpoint_id=endpoint_id,
+                    name="/serve/amb",
+                    address="10.0.0.9:8000",
+                    task_id=task,
+                    metadata={},
+                    registered_at=Timestamp.now(),
+                    peer_id=peer,
+                ),
+            )
+
+    resp = client.get("/proxy/serve.amb/")
+    assert resp.status_code == 404
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):
@@ -1281,27 +1309,13 @@ def test_fetch_logs_for_missing_task_returns_empty_entries(client):
     [
         "/iris.cluster.ControllerService/FetchLogs",
         "/iris.logging.LogService/FetchLogs",
+        "/finelog.logging.LogService/FetchLogs",
     ],
 )
 def test_fetch_logs_outside_endpoint_proxy_is_not_exposed(client, path):
     resp = client.post(path, json={}, headers={"Content-Type": "application/json"})
 
     assert resp.status_code == 404
-
-
-def test_fetch_logs_via_legacy_bare_path_is_bridged(client):
-    """Clients built before the proxy lift resolve /system/log-server to the bare
-    controller URL and call /finelog.logging.LogService/FetchLogs directly. That
-    bare path is bridged to the log server through the generic endpoint proxy.
-    """
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/finelog.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    assert resp.json().get("entries", []) == []
 
 
 # =============================================================================
@@ -1443,10 +1457,10 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service):
     """Auth config endpoint reports auth enabled with provider name."""
-    verifier = StaticTokenVerifier({"test-token": "test-user"})
+    verifier = MockVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(
         service,
-        auth_provider="gcp",
+        auth_provider="iap",
         auth_policy=RequestAuthPolicy.enforcing(verifier=verifier),
     )
     authed_client = TestClient(dashboard.app)
@@ -1455,7 +1469,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     assert resp.status_code == 200
     data = resp.json()
     assert data["auth_enabled"] is True
-    assert data["provider"] == "gcp"
+    assert data["provider"] == "iap"
 
 
 def test_auth_config_worker_capabilities(client):
@@ -1692,12 +1706,14 @@ def test_k8s_cluster_status_without_direct_provider(client):
 # =============================================================================
 
 
-def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allowed_users=None, advertised=None):
+def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, advertised=None):
     backend = Mock(capabilities=capabilities)
     backend.name = name
     backend.autoscaler = autoscaler
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
-    backend.allowed_users = allowed_users if allowed_users is not None else frozenset({"*"})
+    # Default: this backend supplies no federation availability metric (UNSET). Tests
+    # exercising the metric override the return value explicitly.
+    backend.available_resources.return_value = None
     # status() authors the BackendStatus variant the backend's capability selects:
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
@@ -1939,7 +1955,8 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))
+    gcp_backend.available_resources.return_value = {"v6e-16": 32}  # supplies the federation metric
+    k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
     controller_mock.backend_id_for_scale_group = lambda sg: controller_mock.scale_group_to_backend.get(
@@ -1967,6 +1984,11 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     assert summaries["eu-k8s"].get("scaleGroups", []) == []
     # Advertised attributes round-trip through the proto map<string, StringList>.
     assert summaries["gcp"]["advertisedAttributes"]["device-variant"]["values"] == ["v5e-4", "v6e-16"]
+    # The federation availability metric is populated for a supplying backend and left
+    # UNSET (absent) for one that returns None.
+    assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
+    assert summaries["gcp"]["availability"]["version"] == 1
+    assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1
     assert resp["unroutableSample"][0]["reason"] == "no backend matches the job's constraints"

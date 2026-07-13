@@ -32,7 +32,7 @@ from typing import Literal
 
 import anthropic
 from pydantic import BaseModel, Field
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -101,19 +101,17 @@ def _format_cluster_prompt(cluster: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# IO helpers (GCS + local both supported via fsspec / open_url)
+# IO helpers (GCS + local both supported via fsspec / StoragePath)
 # ---------------------------------------------------------------------------
 
 
 def _read_json(uri: str) -> dict:
-    with open_url(uri, "r") as f:
-        return json.load(f)
+    return json.loads(StoragePath(uri).read_text())
 
 
 def _write_json(uri: str, payload: dict) -> None:
     text = json.dumps(payload, indent=2)
-    with open_url(uri, "w") as f:
-        f.write(text)
+    StoragePath(uri).write_text(text)
 
 
 def _progress_uri(output_uri: str, cluster_id: int) -> str:

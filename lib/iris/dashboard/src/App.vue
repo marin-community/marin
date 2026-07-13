@@ -81,9 +81,13 @@ onMounted(async () => {
   try {
     // fetchConfig fetches /auth/config once, populates capabilities + backends,
     // and returns auth-related fields for login redirection.
-    const { authEnabled: ae, hasSession, authOptional } = await fetchConfig()
+    const { authEnabled: ae, authenticated, authOptional } = await fetchConfig()
     authEnabled.value = ae
-    if (ae && !authOptional && !hasSession && route.path !== '/login') {
+    // Only send the browser to the login page when auth is required and this
+    // request is not already authenticated. Behind IAP the caller is
+    // authenticated at the edge (no session cookie), so `authenticated` is true
+    // and the bearer-token login page is skipped.
+    if (ae && !authOptional && !authenticated && route.path !== '/login') {
       router.push('/login')
     }
   } catch {

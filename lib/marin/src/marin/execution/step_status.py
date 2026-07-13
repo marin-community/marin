@@ -21,13 +21,13 @@ from collections.abc import Callable, Generator
 from threading import Event, Thread
 from typing import TypeVar
 
-from rigging.distributed_lock import (
+from rigging.filesystem import prefix_join, url_to_fs
+from rigging.filesystem.distributed_lock import (
     HEARTBEAT_INTERVAL,
     LeaseLostError,
     create_lock,
     default_worker_id,
 )
-from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
 
 def get_status_path(output_path: str) -> str:
     """Return the path of the status file associated with `output_path`."""
-    return os.path.join(output_path, ".executor_status")
+    return prefix_join(output_path, ".executor_status")
 
 
 class StatusFile:
@@ -52,7 +52,7 @@ class StatusFile:
       Contains {worker_id, timestamp}. Must be refreshed periodically.
     - Status file (simple text): Step state - SUCCESS, FAILED, DEP_FAILED, or RUNNING.
 
-    Lock acquisition and release delegate to ``rigging.distributed_lock``.
+    Lock acquisition and release delegate to ``rigging.filesystem.distributed_lock``.
     """
 
     def __init__(self, output_path: str, worker_id: str):

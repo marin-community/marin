@@ -292,6 +292,41 @@ def test_is_infrastructure_failure_with_pod_level_reason():
     assert _is_infrastructure_failure(pod)
 
 
+def _add_condition(pod: dict, type_: str, status: str, reason: str = "") -> dict:
+    pod["status"].setdefault("conditions", []).append({"type": type_, "status": status, "reason": reason})
+    return pod
+
+
+@pytest.mark.parametrize("reason", ["PreemptionByScheduler", "TerminationByKubelet", "EvictionByEvictionAPI"])
+def test_task_update_disruption_target_is_worker_failed(reason):
+    """A preemption SIGKILLed after grace surfaces as reason='Error' exit 137 — not in
+    the reason whitelist — but the control plane's DisruptionTarget condition marks it
+    as infrastructure, so it must be WORKER_FAILED (preemption budget), not FAILED."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
+    _add_condition(pod, "DisruptionTarget", "True", reason)
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert update.exit_code == 137
+
+
+def test_task_update_oom_killed_without_disruption_target_stays_application_failure():
+    """A self-inflicted cgroup OOM carries no DisruptionTarget condition, so it stays a
+    FAILED (misconfigured job) even though it also exits 137 — the condition, not the
+    exit code, is what distinguishes preemption from OOM guilt."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="OOMKilled")
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+
+
+def test_disruption_target_condition_status_false_is_not_infrastructure():
+    """A DisruptionTarget condition with status != 'True' does not mark a disruption."""
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=1, reason="Error")
+    _add_condition(pod, "DisruptionTarget", "False", "")
+    assert not _is_infrastructure_failure(pod)
+
+
 # ---------------------------------------------------------------------------
 # Node resource parsing
 # ---------------------------------------------------------------------------

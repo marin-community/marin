@@ -3,11 +3,10 @@
 
 """Server-side authentication: verify a bearer token, bind identity, enforce a policy.
 
-The companion to ``rigging.auth`` (which *attaches* a token on the client). This
-module *verifies* one on the server and binds the resulting identity for the
-request: the Google-credential verifiers (GCP access token, IAP OIDC ID token,
-IAP signed-header assertion), a static-token verifier, the authenticator chain
-that resolves a request to an identity, and the enforcement points a service
+The companion to ``rigging.auth`` (which attaches a token on the client). This
+module verifies one on the server and binds the resulting identity for the
+request: the IAP signed-header assertion verifier, the authenticator chain that
+resolves a request to an identity, and the enforcement points a service
 mounts unconditionally — ``PolicyAuthInterceptor`` for Connect RPCs and
 ``RouteAuthMiddleware`` for HTTP routes annotated ``@public`` / ``@requires_auth``.
 
@@ -17,7 +16,7 @@ a null-auth chain ends in an anonymous-admin terminal
 (``RequestAuthPolicy.permissive``), and the enforcement points behave correctly
 under either.
 
-It carries no service-specific policy — no token *minting*, no role semantics, no
+It carries no service-specific policy — no token minting, no role semantics, no
 RBAC. A service supplies those: it injects its own ``TokenVerifier`` (e.g. one
 that checks JWTs it signed) and a role resolver, reads the bound identity via
 ``get_verified_identity``, and authorizes against its own policy.
@@ -27,7 +26,7 @@ import contextlib
 import ipaddress
 import logging
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
@@ -36,7 +35,6 @@ from typing import Protocol
 
 import google.auth.transport.requests
 import google.oauth2.id_token
-import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from google.auth.exceptions import GoogleAuthError
@@ -44,6 +42,16 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Match, Mount, Route
 from starlette.types import Receive, Scope, Send
+
+from rigging.auth_config import (
+    AnonymousLayer,
+    AuthLayerSpec,
+    AuthStackConfig,
+    CidrLayer,
+    IapAssertionLayer,
+    JwtLayer,
+    LoopbackLayer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,93 +153,6 @@ class TokenVerifier(Protocol):
         ...
 
 
-class StaticTokenVerifier:
-    """Maps fixed tokens to identities. Useful for testing and login exchange."""
-
-    def __init__(self, tokens: dict[str, str], roles: dict[str, str] | None = None):
-        """Args:
-        tokens: Mapping of token string to username.
-        roles: Optional mapping of username to role (defaults to "user").
-        """
-        self._tokens = tokens
-        self._roles = roles or {}
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        user = self._tokens.get(token)
-        if user is None:
-            raise ValueError("Invalid token")
-        role = self._roles.get(user, "user")
-        return VerifiedIdentity(user_id=user, role=role)
-
-
-class GcpAccessTokenVerifier:
-    """Verifies GCP OAuth2 access tokens via Google's tokeninfo endpoint.
-
-    Optionally checks that the user has access to a specific GCP project
-    using the Cloud Resource Manager API with the user's own token.
-    """
-
-    _TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
-    _PROJECT_URL_TEMPLATE = "https://cloudresourcemanager.googleapis.com/v3/projects/{}"
-
-    def __init__(self, project_id: str | None = None):
-        self._project_id = project_id
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
-        if resp.status_code != 200:
-            raise ValueError(f"Token verification failed (status {resp.status_code})")
-        info = resp.json()
-        email = info.get("email")
-        if not email:
-            raise ValueError("Token does not contain an email claim")
-
-        if self._project_id:
-            proj_resp = requests.get(
-                self._PROJECT_URL_TEMPLATE.format(self._project_id),
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            if proj_resp.status_code != 200:
-                raise ValueError(f"User {email} does not have access to project {self._project_id}")
-
-        return VerifiedIdentity(user_id=email, role="user")
-
-
-class IapIdTokenVerifier:
-    """Verifies a Google OIDC ID token and returns the caller's identity.
-
-    Raises ValueError unless the token's signature and issuer are valid and its
-    ``aud`` claim is one of ``audiences`` (the email is taken from the verified
-    claims). Used as the login identity proof for an IAP-fronted service;
-    IAP's own IAM is the access gate, so no further project check is done here.
-    """
-
-    def __init__(self, audiences: Iterable[str]):
-        self._audiences = frozenset(audiences)
-        if not self._audiences:
-            raise ValueError("IapIdTokenVerifier requires at least one audience")
-        self._request = google.auth.transport.requests.Request()
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        try:
-            # audience=None: verify signature/issuer/expiry here, then check the
-            # aud claim against our allow-set so multiple audiences are supported.
-            payload = google.oauth2.id_token.verify_oauth2_token(token, self._request)
-        except (ValueError, GoogleAuthError) as exc:
-            raise ValueError(f"IAP ID token verification failed: {exc}") from exc
-
-        aud = payload.get("aud")
-        if aud not in self._audiences:
-            raise ValueError(f"ID token audience {aud!r} is not an accepted IAP audience")
-        email = payload.get("email")
-        if not email:
-            raise ValueError("ID token has no email claim (request the 'email' scope)")
-        if payload.get("email_verified") is False:
-            raise ValueError(f"ID token email {email} is not verified")
-        return VerifiedIdentity(user_id=email, role="user")
-
-
 # IAP injects this signed JWT on every request it admits; its `aud` is the
 # backend-service resource path and it is signed with IAP's own (ES256) keys,
 # published at the URL below.
@@ -270,7 +191,7 @@ class IapAssertionVerifier:
 
     IAP signs a JWT asserting the authenticated identity and attaches it to every
     request it forwards. Verifying its signature and ``aud`` proves the request
-    genuinely passed through IAP for *this* backend, so the asserted email can be
+    genuinely passed through IAP for this backend, so the asserted email can be
     trusted without a service JWT — an internal caller that bypasses the load
     balancer cannot forge it.
 
@@ -314,10 +235,10 @@ def _direct_peer_ip(client_address: str | None, headers: dict) -> ipaddress.IPv4
     """Return the transport-peer IP of a genuine direct connection, else None.
 
     A connection counts as direct iff its transport peer parses as ``ip:port``
-    with a nonzero port *and* the request carries no ``X-Forwarded-For``
+    with a nonzero port and the request carries no ``X-Forwarded-For``
     header. This is the shared trust gate for every network-location
     authenticator (loopback, trusted CIDR): identity may only ever be granted
-    to the *socket peer*, never to a client-supplied header.
+    to the socket peer, never to a client-supplied header.
 
     The two conditions are individually sufficient and kept together as
     defence in depth. A uvicorn-fronted service configured with
@@ -498,16 +419,13 @@ class CidrAuthenticator:
     inside one of ``cidrs`` authenticates as :data:`ANONYMOUS_ADMIN` — the same
     convention as :class:`LoopbackAuthenticator`.
 
-    Trust model: the CIDR check runs against the *transport peer address*
-    (``AuthRequest.client_address``) and never against ``X-Forwarded-For`` or
-    any other client-supplied header. Any request that carries
-    ``X-Forwarded-For`` is refused CIDR trust outright (see
-    :func:`_direct_peer_ip`): a forwarded request's peer is the proxy hop, so
-    an in-network ingress (Traefik, a load balancer) would otherwise lend its
-    own address to every anonymous internet request it forwards — and under
-    uvicorn's ``forwarded_allow_ips="*"`` the scope client is itself rewritten
-    from the spoofable header. Configure only ranges where holding an address
-    implies operator-level trust; never an ingress hop's source ranges.
+    The check runs against the transport peer address
+    (``AuthRequest.client_address``), never ``X-Forwarded-For`` or any other
+    client-supplied header; a forwarded request is refused CIDR trust outright
+    (see :func:`_direct_peer_ip` for the forwarded-header trust model).
+    Configure only ranges where holding an address implies operator-level trust;
+    never an ingress hop's source ranges, or that hop would lend its address to
+    every anonymous internet request it forwards.
     """
 
     def __init__(self, cidrs: Sequence[str]):
@@ -550,6 +468,37 @@ def resolve_auth(
     raise ValueError("Missing authentication")
 
 
+def _authenticator_for_layer(
+    layer: AuthLayerSpec,
+    jwt_verifier: "TokenVerifier | None",
+    iap_assertion_verifier: "IapAssertionVerifier | None",
+) -> RequestAuthenticator:
+    """Compile one declarative :class:`~rigging.auth_config.AuthLayerSpec` into an authenticator.
+
+    Binds the injected verifiers: a ``jwt`` layer binds ``jwt_verifier`` (as
+    :class:`JwtAuthenticator`, or :class:`BestEffortJwtAuthenticator` when
+    ``optional``); an ``iap_assertion`` layer binds ``iap_assertion_verifier``.
+    Raises ``ValueError`` if a layer names a verifier that was not supplied.
+    """
+    match layer:
+        case JwtLayer(optional=optional):
+            if jwt_verifier is None:
+                raise ValueError("a 'jwt' auth layer requires a jwt_verifier")
+            return BestEffortJwtAuthenticator(jwt_verifier) if optional else JwtAuthenticator(jwt_verifier)
+        case IapAssertionLayer():
+            if iap_assertion_verifier is None:
+                raise ValueError("an 'iap_assertion' auth layer requires an iap_assertion_verifier")
+            return IapAssertionAuthenticator(iap_assertion_verifier)
+        case CidrLayer(cidrs=cidrs):
+            return CidrAuthenticator(cidrs)
+        case LoopbackLayer():
+            return LoopbackAuthenticator()
+        case AnonymousLayer():
+            return AnonymousAuthenticator()
+        case _:
+            raise ValueError(f"unknown auth layer: {layer!r}")
+
+
 @dataclass(frozen=True)
 class RequestAuthPolicy:
     """Server-side auth policy: an ordered authenticator chain plus a fallback verifier.
@@ -557,8 +506,10 @@ class RequestAuthPolicy:
     The chain fully determines the outcome for every request, so a service
     mounts its enforcement points (:class:`PolicyAuthInterceptor`,
     :class:`RouteAuthMiddleware`) unconditionally and never branches on an
-    "is auth on" flag. Build with :meth:`enforcing` or :meth:`permissive`;
-    the zero-arg default is the permissive (allow-everyone) chain.
+    "is auth on" flag. Build with :meth:`from_config` (a declarative
+    :class:`~rigging.auth_config.AuthStackConfig`) or the :meth:`enforcing` /
+    :meth:`permissive` shortcuts; the zero-arg default is the permissive
+    (allow-everyone) chain.
 
     ``verifier`` backs the token authenticator at the head of the chain and is
     also exposed for out-of-band token checks (e.g. a session-cookie exchange).
@@ -566,6 +517,30 @@ class RequestAuthPolicy:
 
     authenticators: tuple[RequestAuthenticator, ...] = (AnonymousAuthenticator(),)
     verifier: "TokenVerifier | None" = None
+
+    @classmethod
+    def from_config(
+        cls,
+        stack: AuthStackConfig,
+        *,
+        jwt_verifier: "TokenVerifier | None" = None,
+        iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+    ) -> "RequestAuthPolicy":
+        """Compile a declarative stack into the authenticator chain.
+
+        A ``jwt`` layer binds ``jwt_verifier`` (as :class:`JwtAuthenticator`, or
+        :class:`BestEffortJwtAuthenticator` when ``optional=True``); an
+        ``iap_assertion`` layer binds ``iap_assertion_verifier``. Raises
+        ``ValueError`` if a layer names a verifier that was not supplied, or if
+        ``stack`` is empty. :meth:`enforcing` / :meth:`permissive` are thin
+        wrappers that build a stack and call this.
+        """
+        if not stack.layers:
+            raise ValueError("cannot compile an empty auth stack (a total lockout)")
+        authenticators = tuple(
+            _authenticator_for_layer(layer, jwt_verifier, iap_assertion_verifier) for layer in stack.layers
+        )
+        return cls(authenticators=authenticators, verifier=jwt_verifier)
 
     @classmethod
     def enforcing(
@@ -582,18 +557,26 @@ class RequestAuthPolicy:
         otherwise network-location trust (trusted CIDR, then loopback).
         ``optional`` appends the anonymous-admin terminal: a credentialless
         request is admitted, but a presented-and-invalid credential still rejects.
+
+        A thin wrapper over :meth:`from_config`: it builds the matching
+        :class:`~rigging.auth_config.AuthStackConfig` (a layer included exactly
+        when its verifier / CIDR list is supplied) and compiles it.
         """
-        chain: list[RequestAuthenticator] = []
+        layers: list[AuthLayerSpec] = []
         if verifier is not None:
-            chain.append(JwtAuthenticator(verifier))
+            layers.append(JwtLayer())
         if iap_assertion_verifier is not None:
-            chain.append(IapAssertionAuthenticator(iap_assertion_verifier))
+            layers.append(IapAssertionLayer())
         if trusted_cidrs:
-            chain.append(CidrAuthenticator(trusted_cidrs))
-        chain.append(LoopbackAuthenticator())
+            layers.append(CidrLayer(tuple(trusted_cidrs)))
+        layers.append(LoopbackLayer())
         if optional:
-            chain.append(AnonymousAuthenticator())
-        return cls(authenticators=tuple(chain), verifier=verifier)
+            layers.append(AnonymousLayer())
+        return cls.from_config(
+            AuthStackConfig(layers=tuple(layers)),
+            jwt_verifier=verifier,
+            iap_assertion_verifier=iap_assertion_verifier,
+        )
 
     @classmethod
     def permissive(cls, *, verifier: "TokenVerifier | None" = None) -> "RequestAuthPolicy":
@@ -601,12 +584,15 @@ class RequestAuthPolicy:
 
         A valid bearer token still attributes the caller (e.g. worker tokens);
         an invalid one is ignored rather than rejected.
+
+        A thin wrapper over :meth:`from_config`: it builds the ``[jwt(optional=true)?,
+        anonymous]`` stack and compiles it.
         """
-        chain: list[RequestAuthenticator] = []
+        layers: list[AuthLayerSpec] = []
         if verifier is not None:
-            chain.append(BestEffortJwtAuthenticator(verifier))
-        chain.append(AnonymousAuthenticator())
-        return cls(authenticators=tuple(chain), verifier=verifier)
+            layers.append(JwtLayer(optional=True))
+        layers.append(AnonymousLayer())
+        return cls.from_config(AuthStackConfig(layers=tuple(layers)), jwt_verifier=verifier)
 
     @property
     def allows_anonymous(self) -> bool:

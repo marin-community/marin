@@ -24,9 +24,17 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import Callable
 
 import duckdb
 from iris.env_resources import TaskResources
+from rigging.filesystem import (
+    MARIN_CROSS_REGION_OVERRIDE_ENV,
+    StoragePath,
+    cached_marin_region,
+    get_bucket_location,
+    is_cross_region_url,
+)
 
 from ducky.catalog import DATAKIT_SCHEMA, FINELOG_SCHEMA, View, build_catalog
 from ducky.config import DuckyConfig
@@ -40,10 +48,77 @@ _QUERY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 # closing quote/paren/whitespace of the SQL literal.
 _OBJECT_URI_RE = re.compile(r"""(?:gs|s3|r2)://[^\s'")]+""", re.IGNORECASE)
 
+# The opt-in directive for reading cross-region buckets: a leading SQL line comment such as
+# `-- cross-region: allow`. Accepts `cross-region`/`cross region` and `allow`/`allowed`.
+_CROSS_REGION_DIRECTIVE_RE = re.compile(r"^\s*--\s*cross[- ]region\s*:?\s*allow(ed)?\b", re.IGNORECASE)
+
+
+def _opts_in_cross_region(sql: str) -> bool:
+    """True if the SQL's leading comment block opts in to cross-region reads.
+
+    Only the header is scanned — the run of blank/``--`` comment lines before the first
+    statement line — so the directive can't hide inside a string literal further down.
+    """
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("--"):
+            return False  # first real statement line ends the header
+        if _CROSS_REGION_DIRECTIVE_RE.match(line):
+            return True
+    return False
+
 
 def _object_uris(sql: str) -> list[str]:
     """Distinct gs://, s3://, r2:// URIs referenced literally in the SQL (order-preserving)."""
     return list(dict.fromkeys(_OBJECT_URI_RE.findall(sql)))
+
+
+def _is_gcs_uri(uri: str) -> bool:
+    """True for a ``gs://``/``gcs://`` URI. Only GCS is subject to the cross-region guard —
+    the S3 backends (R2, CoreWeave) are region-agnostic to us and always allowed."""
+    return uri.lower().startswith(("gs://", "gcs://"))
+
+
+# Buckets whose GCS location we've successfully resolved once — cached so a same-region read
+# doesn't re-probe metadata every query. Only *successes* are cached: a failed lookup retries
+# so a transient blip can't wedge a bucket into fail-closed for the whole process lifetime.
+_region_confirmed_buckets: set[str] = set()
+
+
+def _region_resolvable(bucket: str) -> bool:
+    """Whether ``bucket``'s GCS location metadata is readable. Successes are cached; failures
+    retry (not cached) so a transient error or permission blip self-heals."""
+    if bucket in _region_confirmed_buckets:
+        return True
+    try:
+        get_bucket_location(bucket)
+    except Exception:
+        return False
+    _region_confirmed_buckets.add(bucket)
+    return True
+
+
+def needs_cross_region_optin(uri: str) -> bool:
+    """Whether reading GCS ``uri`` requires the ``-- cross-region: allow`` opt-in.
+
+    Fails closed on uncertainty. A GCS URI needs the opt-in if it's confirmed cross-region by
+    :func:`rigging.filesystem.is_cross_region_url`, or — on a GCP VM — if we cannot resolve the
+    bucket's region at all, so a missing ``storage.buckets.get`` permission or a metadata lookup
+    failure can't silently bypass the gate (``is_cross_region_url`` returns ``False`` on such
+    failures). Off-GCP (no VM region) region gating doesn't apply and the fee override disables
+    it, so both return ``False``.
+    """
+    if is_cross_region_url(uri):
+        return True
+    if cached_marin_region() is None or os.environ.get(MARIN_CROSS_REGION_OVERRIDE_ENV):
+        return False
+    bucket = StoragePath.parse(uri).netloc
+    if not bucket or _region_resolvable(bucket):
+        return False
+    logger.warning("cross-region guard: could not resolve region for gs://%s; requiring opt-in", bucket)
+    return True
 
 
 def _is_allowed(uri: str, allowed: tuple[str, ...]) -> bool:
@@ -63,6 +138,51 @@ def disallowed_uris(sql: str, allowed: tuple[str, ...]) -> list[str]:
     return [uri for uri in _object_uris(sql) if not _is_allowed(uri, allowed)]
 
 
+def check_query_access(
+    sql: str,
+    allowed: tuple[str, ...],
+    exempt_prefixes: tuple[str, ...],
+    needs_opt_in: Callable[[str], bool],
+) -> None:
+    """Raise if ``sql`` references object-store URIs it may not read.
+
+    ``allowed`` is the outer bound — the object-store prefixes ducky may read at all (marin
+    buckets on either backend). A URI outside it is hard-refused. Among the allowed URIs, a
+    *GCS* URI for which ``needs_opt_in`` returns True is egress-costly (cross-region, or a
+    region we couldn't confirm), so it's read only when the query opts in with a leading
+    ``-- cross-region: allow`` comment. S3 URIs (R2/CoreWeave) are never cross-region-gated.
+    ``exempt_prefixes`` (the configured catalog roots) are deliberate always-on egress and skip
+    the opt-in, so a literal read of a root behaves like its pre-baked view. An empty
+    ``allowed`` disables all enforcement (allow-all).
+
+    ``needs_opt_in`` is injected (:func:`needs_cross_region_optin` in prod) so the region
+    decision uses live GCS bucket-location metadata rather than a naming convention, and fails
+    closed when the region can't be resolved.
+
+    :raises BucketNotAllowedError: a URI is outside ``allowed``.
+    :raises CrossRegionNotAllowedError: a cross-region (or region-unconfirmed) GCS URI wasn't opted in.
+    """
+    if not allowed:
+        return
+    forbidden = disallowed_uris(sql, allowed)
+    if forbidden:
+        raise BucketNotAllowedError(
+            f"query references buckets outside the allowlist: {', '.join(forbidden)}; "
+            f"allowed prefixes: {', '.join(allowed)}"
+        )
+    # Every referenced URI is allowed at this point; gate cross-region GCS reads.
+    cross = [
+        uri
+        for uri in _object_uris(sql)
+        if _is_gcs_uri(uri) and not _is_allowed(uri, exempt_prefixes) and needs_opt_in(uri)
+    ]
+    if cross and not _opts_in_cross_region(sql):
+        raise CrossRegionNotAllowedError(
+            f"query reads cross-region buckets: {', '.join(cross)}; "
+            f"add a leading '-- cross-region: allow' comment to opt in to the egress"
+        )
+
+
 class DuckyError(Exception):
     """Base for ducky errors surfaced to the dashboard as a clean message."""
 
@@ -72,11 +192,21 @@ class QueryError(DuckyError):
 
 
 class BucketNotAllowedError(DuckyError):
-    """The query references an object-store URI outside the configured allowlist.
+    """The query references an object-store URI outside every configured allowlist.
 
-    This is ducky's same-region guardrail: GCS HMAC keys are region-agnostic, so the
-    only way to keep queries in-region (avoiding cross-region egress) is to refuse
-    URIs whose bucket isn't allowlisted. Raised before any execution.
+    This is ducky's egress guardrail: GCS HMAC keys are region-agnostic, so the only way to
+    bound what a query can read (and avoid unexpected cross-region/cross-cloud egress) is to
+    refuse URIs whose bucket isn't allowlisted. Raised before any execution.
+    """
+
+
+class CrossRegionNotAllowedError(DuckyError):
+    """The query reads an egress-costly GCS bucket without opting in.
+
+    The referenced bucket lives in a different region than this VM, or (failing closed) its
+    region couldn't be confirmed — see :func:`needs_cross_region_optin` — and the query lacks
+    the leading ``-- cross-region: allow`` comment. Raised before execution; the user opts in by
+    adding the comment.
     """
 
 
@@ -265,12 +395,12 @@ class QueryRunner:
         if not _QUERY_ID_RE.match(query_id):
             raise ValueError(f"query_id must be a uuid4 hex, got {query_id!r}")
 
-        blocked = disallowed_uris(sql, self._config.effective_allowed_buckets)
-        if blocked:
-            raise BucketNotAllowedError(
-                f"query references buckets outside the allowlist: {', '.join(blocked)}; "
-                f"allowed prefixes: {', '.join(self._config.effective_allowed_buckets)}"
-            )
+        check_query_access(
+            sql,
+            self._config.effective_allowed_buckets,
+            self._config.catalog_root_prefixes,
+            needs_cross_region_optin,
+        )
 
         result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
         path_literal = _sql_literal(result_path)

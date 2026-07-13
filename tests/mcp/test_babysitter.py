@@ -10,7 +10,7 @@ from marin.mcp.babysitter import (
     parse_zephyr_thread_state,
     task_status_to_json,
 )
-from rigging.credential_store import CredentialRecord
+from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
 
 
 def _timestamp(epoch_ms: int):
@@ -115,22 +115,18 @@ def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch
     assert "resource_requests" in payload
 
 
-def test_token_provider_loads_app_token_from_credential_store(monkeypatch):
-    record = CredentialRecord(
-        cluster="iris-prod",
-        endpoint="https://controller.example.com",
-        app_token="stored-token",
-    )
-    monkeypatch.setattr(
-        babysitter,
-        "load_credentials",
-        lambda cluster: record if cluster == "iris-prod" else None,
-    )
-
-    provider = _token_provider("iris-prod")
-
+def test_token_provider_uses_env_override(monkeypatch):
+    # Pure-IAP: the controller mints no user token, so the only Authorization bearer
+    # is the explicit $MARIN_CLUSTER_TOKEN escape hatch (e.g. a worker JWT for CI).
+    monkeypatch.setenv(MARIN_CLUSTER_TOKEN_ENV, "env-token")
+    provider = _token_provider()
     assert provider is not None
-    assert provider.get_token() == "stored-token"
+    assert provider.get_token() == "env-token"
+
+
+def test_token_provider_none_without_env(monkeypatch):
+    monkeypatch.delenv(MARIN_CLUSTER_TOKEN_ENV, raising=False)
+    assert _token_provider() is None
 
 
 def test_parse_zephyr_progress_keeps_latest_stage_snapshot():

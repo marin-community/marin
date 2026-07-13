@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize.data_configs import (

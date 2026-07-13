@@ -27,13 +27,12 @@ from typing import Any
 import pandas as pd
 import wandb
 from huggingface_hub import snapshot_download
-from rigging.filesystem import is_remote_path, open_url
+from rigging.filesystem import StoragePath, is_remote_path, open_url, prefix_join
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import download_from_gcs, upload_to_gcs
 from marin.inference.vllm_server import VllmEnvironment
-from marin.utils import fsspec_exists, fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +139,12 @@ def _restore_trials_from_gcs(gcs_output_path: str, local_job_dir: Path) -> int:
 
     Returns the number of trials restored.
     """
-    trials_gcs_path = os.path.join(gcs_output_path, "harbor_trials")
-    if not fsspec_exists(trials_gcs_path):
+    trials_gcs_path = prefix_join(gcs_output_path, "harbor_trials")
+    if not StoragePath(trials_gcs_path).exists():
         return 0
 
     # Find completed trials (those with result.json)
-    result_files = fsspec_glob(os.path.join(trials_gcs_path, "*/result.json"))
+    result_files = [str(m) for m in StoragePath(prefix_join(trials_gcs_path, "*/result.json")).glob()]
 
     restored = 0
     for result_file in result_files:
@@ -187,7 +186,7 @@ def _create_trial_upload_hook(gcs_output_path: str, local_job_dir: Path):
         _fix_docker_permissions(local_trial_dir)
 
         # Upload to GCS: {output_path}/harbor_trials/{trial_name}/
-        trial_gcs_path = os.path.join(gcs_output_path, "harbor_trials", trial_name)
+        trial_gcs_path = prefix_join(gcs_output_path, f"harbor_trials/{trial_name}")
         try:
             upload_to_gcs(str(local_trial_dir), trial_gcs_path)
             logger.info(f"Uploaded trial {trial_name} to GCS")
@@ -608,8 +607,7 @@ class HarborEvaluator(Evaluator):
                     ext = ".json" if trajectory_content.strip().startswith("{") else ".jsonl"
                     trajectory_path = os.path.join(output_path, "trajectories", f"{trial_id}{ext}")
 
-                    with open_url(trajectory_path, "w") as dst:
-                        dst.write(trajectory_content)
+                    StoragePath(trajectory_path).write_text(trajectory_content)
 
                     results["trials"][trial_id]["trajectory_path"] = trajectory_path
                     logger.info(
@@ -645,8 +643,7 @@ class HarborEvaluator(Evaluator):
             "aggregate": results["aggregate"],
             "samples_path": samples_path,
         }
-        with open_url(results_path, "w") as f:
-            json.dump(aggregated_results, f, indent=2, ensure_ascii=False)
+        StoragePath(results_path).write_text(json.dumps(aggregated_results, indent=2, ensure_ascii=False))
 
         logger.info(f"Wrote samples to {samples_path}")
         logger.info(f"Wrote aggregated results to {results_path}")

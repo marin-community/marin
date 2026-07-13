@@ -29,6 +29,7 @@ Auth model:
 import functools
 import logging
 import os
+from collections.abc import Callable
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -37,9 +38,9 @@ from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
     RouteAuthMiddleware,
+    VerifiedIdentity,
     extract_bearer_token,
     public,
-    requires_auth,
 )
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -48,8 +49,9 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
+from iris.cluster.controller.auth import JwtTokenManager
 from iris.cluster.controller.backend import backend_descriptor
-from iris.cluster.controller.endpoint_proxy import EndpointProxy
+from iris.cluster.controller.endpoint_proxy import EndpointProxy, FederatedEndpointProxy
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ResolvedEndpoint
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
@@ -58,10 +60,9 @@ from iris.cluster.dashboard_common import (
     on_shutdown,
     static_files_mount,
 )
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.types import EndpointAccess
+from iris.cluster.types import EndpointAccess, JobName
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import SESSION_COOKIE, authorize_method
+from iris.rpc.auth import FEDERATION_PEER_ROLE, SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
@@ -72,12 +73,60 @@ from iris.rpc.stats_service import RpcStatsService
 logger = logging.getLogger(__name__)
 
 
+def _resolve_request_identity(policy: RequestAuthPolicy, request: Request, token: str | None = None) -> VerifiedIdentity:
+    """Resolve a Starlette request to a cluster identity via the auth policy.
+
+    Lifts the bearer token from the Authorization header or session cookie when no
+    explicit ``token`` is given, and forwards the peer address and headers the
+    policy's authenticators need (the signed IAP header, CIDR, loopback). Raises
+    ``ValueError`` when the request cannot be authenticated.
+    """
+    headers = dict(request.headers)
+    if token is None:
+        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
+    client = request.client
+    return policy.resolve(
+        token,
+        client_address=f"{client.host}:{client.port}" if client else None,
+        headers=headers,
+    )
+
+
+# Answers whether ``peer_id`` handed this cluster the job rooted at ``root_job``
+# (a RECEIVED federation handle). Gates a federation-peer's /proxy access to the
+# endpoints of jobs it actually federated here. None on a cluster that receives no
+# federation, where a federation-peer identity cannot arise.
+FederationOwnerCheck = Callable[[JobName, str], bool]
+
+
+def _authorize_federation_peer_proxy(
+    resolved: ResolvedEndpoint | None,
+    peer_id: str,
+    owner_check: FederationOwnerCheck | None,
+) -> Response | None:
+    """Authorize a parent controller's forwarded /proxy for one of its federated jobs.
+
+    The bearer proves the peer, not the end user: the parent already enforced the
+    endpoint's access mode against the user before forwarding, so this cluster only
+    confirms the endpoint belongs to a job this peer handed here. Scoped to the
+    endpoint's root job so a trusted peer cannot reach another peer's or a local
+    job's endpoint. ``/system/`` endpoints (no owning task) are never reachable this
+    way.
+    """
+    if resolved is None or resolved.task_id is None:
+        return JSONResponse({"error": "unknown endpoint"}, status_code=404)
+    if owner_check is None or not owner_check(resolved.task_id.root_job, peer_id):
+        return JSONResponse({"error": "peer not authorized for this endpoint"}, status_code=403)
+    return None
+
+
 def _authorize_proxy(
     request: Request,
     resolved: ResolvedEndpoint | None,
     policy: RequestAuthPolicy,
     *,
     token: str | None = None,
+    federation_owner_check: FederationOwnerCheck | None = None,
 ) -> Response | None:
     """Authorize a ``/proxy`` request against its endpoint's access mode.
 
@@ -86,34 +135,29 @@ def _authorize_proxy(
     unknown name, which is treated as ``PRIVATE`` — the forwarding layer then
     404s). This is the *only* place an endpoint-scoped token is accepted.
 
-    - ``PUBLIC``: allowed with no auth.
-    - ``BEARER``: a scoped token must match this endpoint's wire name; a full
+    - ``LINK``: a scoped token must match this endpoint's wire name; a full
       cluster identity also passes.
     - ``PRIVATE`` (and unknown): a full cluster identity is required; a scoped
       token is rejected.
+    - A ``federation-peer`` identity (a parent controller forwarding a federated
+      endpoint's /proxy) is authorized by job ownership, not access mode — see
+      :func:`_authorize_federation_peer_proxy`.
 
     ``token`` is the credential source: the URL-token fallback passes the token
     lifted from the path; otherwise the ``Authorization`` header / session
     cookie is used.
     """
     access = resolved.access if resolved is not None else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
-    if access == EndpointAccess.ENDPOINT_ACCESS_PUBLIC:
-        return None
-    headers = dict(request.headers)
-    if token is None:
-        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
-    client = request.client
     try:
-        identity = policy.resolve(
-            token,
-            client_address=f"{client.host}:{client.port}" if client else None,
-            headers=headers,
-        )
+        identity = _resolve_request_identity(policy, request, token)
     except ValueError:
         return JSONResponse({"error": "authentication required"}, status_code=401)
 
+    if identity.role == FEDERATION_PEER_ROLE:
+        return _authorize_federation_peer_proxy(resolved, identity.user_id, federation_owner_check)
+
     scoped = identity.audience is not None
-    if access == EndpointAccess.ENDPOINT_ACCESS_BEARER:
+    if access == EndpointAccess.ENDPOINT_ACCESS_LINK:
         if scoped and identity.audience != resolved.name:
             return JSONResponse({"error": "token not valid for this endpoint"}, status_code=403)
         return None
@@ -136,17 +180,20 @@ def _resolve_and_authorize_proxy(
     policy: RequestAuthPolicy,
     *,
     token: str | None = None,
+    federation_owner_check: FederationOwnerCheck | None = None,
 ) -> tuple[ResolvedEndpoint | None, Response | None]:
     """Resolve a proxy request's target and authorize it against the endpoint's
     access mode. Returns ``(resolved, deny)``; send ``deny`` and stop when it is
     not None.
     """
     resolved = endpoint_service.resolve_proxy_target(encoded_name)
-    deny = _authorize_proxy(request, resolved, policy, token=token)
+    deny = _authorize_proxy(request, resolved, policy, token=token, federation_owner_check=federation_owner_check)
     return resolved, deny
 
 
-_UNAUTHENTICATED_RPCS = frozenset({"Login", "GetAuthInfo"})
+# Every control RPC is authenticated: users reach the controller only through IAP,
+# which authenticates each request at the edge. No RPC is exempt from the policy.
+_UNAUTHENTICATED_RPCS: frozenset[str] = frozenset()
 
 
 def _check_csrf(request: Request) -> bool:
@@ -197,15 +244,6 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
 # ``iris.oa.dev``, or any other public host.
 PROXY_HOST_LABEL = "proxy"
 
-# Backward-compat for finelog clients built before logs moved behind the generic
-# endpoint proxy: they resolve /system/log-server to the bare controller URL and
-# POST to /finelog.logging.LogService/<method> directly. We forward those to the
-# log server through the same EndpointProxy the dashboard uses, so no typed
-# LogService forwarding mount is needed on the controller. The encoded name is
-# the endpoint's wire name with the leading slash dropped and "/" -> ".".
-_LOG_SERVICE_RPC_PREFIX = "finelog.logging.LogService"
-_LOG_SERVER_PROXY_NAME = LOG_SERVER_ENDPOINT_NAME.strip("/").replace("/", ".")
-
 
 def _extract_proxy_subdomain(host: str) -> str | None:
     """Return the encoded endpoint name from a Host header, or None.
@@ -250,11 +288,13 @@ class _SubdomainProxyMiddleware:
         endpoint_proxy: EndpointProxy,
         endpoint_service: ProxyTargetResolver,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        federation_owner_check: FederationOwnerCheck | None = None,
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
         self._endpoint_service = endpoint_service
         self._auth_policy = auth_policy
+        self._federation_owner_check = federation_owner_check
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -272,9 +312,31 @@ class _SubdomainProxyMiddleware:
             encoded_name,
             self._endpoint_service,
             self._auth_policy,
+            federation_owner_check=self._federation_owner_check,
         )
         if deny is not None:
             await deny(scope, receive, send)
+            return
+
+        # Refuse an unknown or fail-closed-ambiguous name here rather than dial with
+        # address=None (which would let EndpointProxy re-resolve and pick one of the
+        # ambiguous rows), matching the path-style route's guard.
+        if resolved is None:
+            response: Response = JSONResponse({"error": f"No endpoint '{encoded_name}'"}, status_code=404)
+            await response(scope, receive, send)
+            return
+
+        # Subdomain-style proxying of a federated endpoint is not supported: the
+        # child rewrites redirects to its own /proxy/<name> path, which does not map
+        # cleanly onto the bare-origin subdomain form. Use the path-style
+        # /proxy/<name>/ URL for a remote endpoint instead. Fail closed rather than
+        # serve broken navigation.
+        if resolved.peer_id:
+            response = JSONResponse(
+                {"error": f"Endpoint '{encoded_name}' is federated; use its /proxy/{encoded_name}/ URL"},
+                status_code=502,
+            )
+            await response(scope, receive, send)
             return
 
         response = await self._endpoint_proxy.dispatch(
@@ -282,7 +344,7 @@ class _SubdomainProxyMiddleware:
             encoded_name=encoded_name,
             sub_path=request.url.path.lstrip("/"),
             proxy_prefix="",
-            address=resolved.address if resolved is not None else None,
+            address=resolved.address,
         )
         await response(scope, receive, send)
 
@@ -316,6 +378,9 @@ class ControllerDashboard:
         port: int = 8080,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        jwt_manager: JwtTokenManager | None = None,
+        federated_proxy: FederatedEndpointProxy | None = None,
+        federation_owner_check: FederationOwnerCheck | None = None,
     ):
         self._service = service
         # Defaults to the service's own backend; the two must share one instance
@@ -325,6 +390,15 @@ class ControllerDashboard:
         self._port = port
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        # The signing authority, for serving public keys at /.well-known/jwks.json
+        # (None when the controller has no auth configured, so no signer exists).
+        self._jwt_manager = jwt_manager
+        # Forwards a /proxy request for a federated (remote) endpoint to the peer that
+        # owns it; None on a cluster with no federation peers (no remote endpoints).
+        self._federated_proxy = federated_proxy
+        # Authorizes an inbound federation-peer's /proxy by job ownership; set on a
+        # cluster that receives federation, None otherwise.
+        self._federation_owner_check = federation_owner_check
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -380,6 +454,36 @@ class ControllerDashboard:
 
         self._endpoint_proxy = EndpointProxy(self._endpoint_service.resolve_endpoint)
 
+        async def _dispatch_resolved(
+            request: Request, resolved: ResolvedEndpoint | None, *, encoded_name: str, sub_path: str, proxy_prefix: str
+        ) -> Response:
+            # resolve_proxy_target returns None for an unknown name and, fail-closed,
+            # for an ambiguous one (a name shared by a local and a remote row, or two
+            # peers). Refuse here rather than dial with address=None, which would let
+            # EndpointProxy re-resolve via the single-row resolver and arbitrarily pick
+            # one of the ambiguous rows — defeating the fail-closed guard.
+            if resolved is None:
+                return JSONResponse({"error": f"No endpoint '{encoded_name}'"}, status_code=404)
+            # A remote endpoint forwards to the peer that owns it; a local one dials
+            # its address directly.
+            if resolved.peer_id:
+                if self._federated_proxy is None:
+                    return JSONResponse({"error": "federation proxy unavailable"}, status_code=502)
+                return await self._federated_proxy.dispatch(
+                    request,
+                    peer_id=resolved.peer_id,
+                    encoded_name=encoded_name,
+                    sub_path=sub_path,
+                    proxy_prefix=proxy_prefix,
+                )
+            return await self._endpoint_proxy.dispatch(
+                request,
+                encoded_name=encoded_name,
+                sub_path=sub_path,
+                proxy_prefix=proxy_prefix,
+                address=resolved.address,
+            )
+
         # The proxy routes are @public so the route-annotation middleware does
         # not apply the whole-dashboard @requires_auth (which would over-grant a
         # served-model token the RPC surface). They enforce their own
@@ -387,15 +491,21 @@ class ControllerDashboard:
         @public
         async def _proxy_endpoint(request: Request) -> Response:
             name = request.path_params["endpoint_name"]
-            resolved, deny = _resolve_and_authorize_proxy(request, name, self._endpoint_service, self._auth_policy)
+            resolved, deny = _resolve_and_authorize_proxy(
+                request,
+                name,
+                self._endpoint_service,
+                self._auth_policy,
+                federation_owner_check=self._federation_owner_check,
+            )
             if deny is not None:
                 return deny
-            return await self._endpoint_proxy.dispatch(
+            return await _dispatch_resolved(
                 request,
+                resolved,
                 encoded_name=name,
                 sub_path=request.path_params["sub_path"],
                 proxy_prefix=f"/proxy/{name}",
-                address=resolved.address if resolved is not None else None,
             )
 
         @public
@@ -406,16 +516,21 @@ class ControllerDashboard:
             token = request.path_params["token"]
             name = request.path_params["endpoint_name"]
             resolved, deny = _resolve_and_authorize_proxy(
-                request, name, self._endpoint_service, self._auth_policy, token=token
+                request,
+                name,
+                self._endpoint_service,
+                self._auth_policy,
+                token=token,
+                federation_owner_check=self._federation_owner_check,
             )
             if deny is not None:
                 return deny
-            return await self._endpoint_proxy.dispatch(
+            return await _dispatch_resolved(
                 request,
+                resolved,
                 encoded_name=name,
                 sub_path=request.path_params["sub_path"],
                 proxy_prefix=f"/proxy/t/{token}/{name}",
-                address=resolved.address if resolved is not None else None,
             )
 
         @public
@@ -428,28 +543,21 @@ class ControllerDashboard:
             # internal bind IP. A path-only Location resolves against the
             # browser's current origin, so no internal address leaks.
             name = request.path_params["endpoint_name"]
-            _, deny = _resolve_and_authorize_proxy(request, name, self._endpoint_service, self._auth_policy)
+            _, deny = _resolve_and_authorize_proxy(
+                request,
+                name,
+                self._endpoint_service,
+                self._auth_policy,
+                federation_owner_check=self._federation_owner_check,
+            )
             if deny is not None:
                 return deny
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
 
-        @requires_auth
-        async def _legacy_log_service(request: Request) -> Response:
-            # Forward pre-proxy clients' bare LogService calls to the log server
-            # through the generic endpoint proxy (see _LOG_SERVER_PROXY_NAME).
-            method = request.path_params["method"]
-            return await self._endpoint_proxy.dispatch(
-                request,
-                encoded_name=_LOG_SERVER_PROXY_NAME,
-                sub_path=f"{_LOG_SERVICE_RPC_PREFIX}/{method}",
-                proxy_prefix="",
-            )
-
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
-            Route("/auth/session_bootstrap", self._session_bootstrap),
             Route("/auth/config", self._auth_config),
             Route("/auth/session", self._auth_session, methods=["POST"]),
             Route("/auth/logout", self._auth_logout, methods=["POST"]),
@@ -458,6 +566,7 @@ class ControllerDashboard:
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
+            Route("/.well-known/jwks.json", self._jwks),
             Route(
                 "/proxy/{endpoint_name:str}",
                 _proxy_endpoint_redirect,
@@ -476,20 +585,20 @@ class ControllerDashboard:
                 _proxy_endpoint,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
             ),
-            Route(
-                f"/{_LOG_SERVICE_RPC_PREFIX}/{{method}}",
-                _legacy_log_service,
-                methods=["POST"],
-            ),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
             Mount(stats_app.path, app=stats_app),
         ]
         routes.append(static_files_mount())
 
+        async def _close_proxies() -> None:
+            await self._endpoint_proxy.close()
+            if self._federated_proxy is not None:
+                await self._federated_proxy.close()
+
         app = Starlette(
             routes=routes,
-            lifespan=on_shutdown(self._endpoint_proxy.close),
+            lifespan=on_shutdown(_close_proxies),
         )
         # Starlette's default trailing-slash redirect builds an absolute
         # Location from ``scope["server"]`` (or the request's Host header).
@@ -509,6 +618,7 @@ class ControllerDashboard:
             endpoint_proxy=self._endpoint_proxy,
             endpoint_service=self._endpoint_service,
             auth_policy=self._auth_policy,
+            federation_owner_check=self._federation_owner_check,
         )
         return wrapped
 
@@ -518,23 +628,33 @@ class ControllerDashboard:
         return HTMLResponse(html_shell("controller"))
 
     @public
-    def _session_bootstrap(self, request: Request) -> Response:
-        """Accept token via query param, set cookie, redirect to dashboard."""
-        token = request.query_params.get("token", "")
-        if not token or self._auth_policy.verifier is None:
-            return RedirectResponse("/", status_code=302)
-        try:
-            self._auth_policy.verifier.verify(token)
-        except ValueError:
-            return JSONResponse({"error": "invalid token"}, status_code=401)
-        response = RedirectResponse("/", status_code=302)
-        _set_session_cookie(response, token, request)
-        return response
+    def _jwks(self, _request: Request) -> JSONResponse:
+        """Public JWKS (this controller's current + retained-previous public keys).
+
+        Public keys only — safe to serve unauthenticated. A federated finelog or
+        peer resolves this controller's verification key by ``kid`` from here (or
+        from an inline copy in its trust config). Empty when no signer exists (the
+        controller has no auth configured).
+        """
+        if self._jwt_manager is None:
+            return JSONResponse({"keys": []})
+        return JSONResponse(self._jwt_manager.public_jwks())
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:
-        """Unauthenticated endpoint telling the frontend whether auth is required."""
-        has_session = SESSION_COOKIE in request.cookies
+        """Report whether auth is required and whether this request is authenticated.
+
+        Public endpoint the frontend reads before rendering to decide whether to
+        show the login page. ``authenticated`` resolves the request through the
+        same policy the RPC surface enforces, so a request carrying any accepted
+        credential — a session cookie, a bearer token, or the signed IAP edge
+        header — is reported as authenticated.
+        """
+        try:
+            _resolve_request_identity(self._auth_policy, request)
+            authenticated = True
+        except ValueError:
+            authenticated = False
         descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
         union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
         representative = backend_descriptor(self._service.provider)
@@ -542,7 +662,7 @@ class ControllerDashboard:
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
-                "has_session": has_session,
+                "authenticated": authenticated,
                 # Union of every backend's capabilities gates which tabs the dashboard shows.
                 "capabilities": union_capabilities,
                 "backends": [

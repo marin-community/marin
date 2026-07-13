@@ -3,7 +3,7 @@
 
 """StarCoder2 data extras: download and tokenize ir_cpp, ir_python, ir_rust, ir_low_resource, documentation."""
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from marin.datakit.download.starcoder2_extras import (
     SUBSETS,

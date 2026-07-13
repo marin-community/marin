@@ -3,10 +3,9 @@
 
 """GCE deployment backend for finelog.
 
-Lifted verbatim from the original `cli.py`, reshaped to take a
-`FinelogConfig` instead of click args. All subprocess-to-gcloud plumbing
-(image-digest pinning, instance create, SSH-based bootstrap re-run,
-/health poll, status, logs) lives here.
+Takes a `FinelogConfig` and drives all subprocess-to-gcloud plumbing:
+image-digest pinning, instance create, SSH-based bootstrap re-run, /health
+poll, status, and logs.
 """
 
 import json
@@ -18,7 +17,7 @@ import time
 import click
 
 from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
-from finelog.deploy.config import FinelogConfig, assert_inlineable_auth, auth_policy_json
+from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
 LABEL_KEY = "finelog-name"
@@ -97,25 +96,43 @@ def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) 
     return False
 
 
-def _render_bootstrap(cfg: FinelogConfig) -> str:
-    """Pin the image and render the VM bootstrap script for ``cfg``.
+def render_bootstrap_for(cfg: FinelogConfig, image: str) -> str:
+    """Render the VM bootstrap script running ``image`` under ``cfg``'s port,
+    remote archive, and auth policy.
 
-    The script becomes startup-script metadata (readable to anyone with instance-
-    metadata access), so an auth stack carrying jwt secrets is rejected — those must
-    come through an operator-managed metadata secret, never inline.
+    ``image`` is separate from ``cfg.image`` so callers can supply an
+    already-pinned digest.
+
+    Raises if the config forwards: the rendered script becomes the instance's
+    startup-script metadata, readable by anyone with `compute.instances.get` and by
+    every process on the VM through the metadata server, so this backend has nowhere
+    to put a private signing key. A forwarding finelog belongs on the k8s backend,
+    which projects the key through a Secret.
     """
+    if cfg.forwarding is not None:
+        raise click.ClickException(
+            f"finelog config {cfg.name!r}: forwarding is not supported on the gcp backend — "
+            "its signing key would land in world-readable instance metadata"
+        )
+    return render_bootstrap(
+        image=image,
+        port=cfg.port,
+        remote_log_dir=cfg.remote_log_dir,
+        # The rendered script is world-readable to anyone with instance-metadata
+        # access, and every layer is inline-safe: a jwt layer carries only Ed25519
+        # public keys, a cidr layer only network prefixes.
+        auth_policy=auth_policy_json(cfg.auth) if cfg.auth else "",
+    )
+
+
+def _pinned_bootstrap(cfg: FinelogConfig) -> str:
+    """Pin ``cfg.image`` to a content digest and render the bootstrap for it."""
     pinned = resolve_image_digest(cfg.image)
     if pinned != cfg.image:
         click.echo(f"Pinned image: {cfg.image} -> {pinned}")
     else:
         click.echo(f"Using image: {pinned}")
-    assert_inlineable_auth(cfg)
-    return render_bootstrap(
-        image=pinned,
-        port=cfg.port,
-        remote_log_dir=cfg.remote_log_dir,
-        auth_policy=auth_policy_json(cfg.auth) if cfg.auth else "",
-    )
+    return render_bootstrap_for(cfg, pinned)
 
 
 def gcp_up(cfg: FinelogConfig) -> None:
@@ -129,7 +146,7 @@ def gcp_up(cfg: FinelogConfig) -> None:
         click.echo("Run `finelog deploy restart <name>` to refresh the container in place.")
         return
 
-    bootstrap = _render_bootstrap(cfg)
+    bootstrap = _pinned_bootstrap(cfg)
 
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
         f.write(bootstrap)
@@ -186,17 +203,11 @@ def gcp_down(cfg: FinelogConfig, *, yes: bool) -> None:
     click.echo(f"Deleted {cfg.name}.")
 
 
-def gcp_restart(cfg: FinelogConfig) -> None:
-    """Restart finelog in-place by re-running the bootstrap over SSH."""
+def _set_startup_script(cfg: FinelogConfig, bootstrap: str) -> None:
+    """Persist ``bootstrap`` as the instance's startup-script metadata, which a VM
+    reboot (host maintenance, manual reset) re-runs."""
     assert cfg.deployment.gcp is not None
     gcp = cfg.deployment.gcp
-
-    bootstrap = _render_bootstrap(cfg)
-
-    # Update the instance's startup-script metadata so that a future VM reboot
-    # (host maintenance, manual reset) brings up the same image we're about to
-    # restart into — otherwise GCE would re-run the bootstrap baked in at
-    # `gcp_up` time, pinning the VM to whatever image was current on day one.
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
         f.write(bootstrap)
         startup_path = f.name
@@ -211,13 +222,28 @@ def gcp_restart(cfg: FinelogConfig) -> None:
         f"--metadata-from-file=startup-script={startup_path}",
     )
 
-    click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
-    result = subprocess.run(
-        _ssh_args(cfg, "bash -s"),
-        input=bootstrap,
-        text=True,
-    )
+
+def apply_bootstrap(cfg: FinelogConfig, bootstrap: str) -> bool:
+    """Run ``bootstrap`` on the VM over SSH, then persist it as startup-script
+    metadata. Returns whether the container came up.
+
+    The script polls ``/health`` itself and exits non-zero on a crash-loop or
+    timeout, so a ``False`` return means the image never became healthy. Metadata
+    is written only on success, so a reboot re-runs the last bootstrap known to
+    boot rather than one that just failed.
+    """
+    result = subprocess.run(_ssh_args(cfg, "bash -s"), input=bootstrap, text=True)
     if result.returncode != 0:
+        return False
+    _set_startup_script(cfg, bootstrap)
+    return True
+
+
+def gcp_restart(cfg: FinelogConfig) -> None:
+    """Restart finelog in-place by re-running the bootstrap over SSH."""
+    bootstrap = _pinned_bootstrap(cfg)
+    click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
+    if not apply_bootstrap(cfg, bootstrap):
         raise click.ClickException("Bootstrap re-run failed; see SSH output above")
     click.echo("Bootstrap re-applied. Verifying health...")
     if not _wait_health_via_ssh(cfg, cfg.port):

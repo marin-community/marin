@@ -31,9 +31,8 @@ def test_iap_provider_parsed_with_audiences():
     assert m.auth.admin_users == ("alice@x.com", "bob@x.com")
 
 
-def test_provider_dispatch_gcp_static_none():
+def test_provider_dispatch_gcp_none():
     assert parse_manifest({"auth": {"gcp": True}}, name="c").auth.provider is AuthProvider.GCP
-    assert parse_manifest({"auth": {"static": {}}}, name="c").auth.provider is AuthProvider.STATIC
     assert parse_manifest({}, name="c").auth.provider is AuthProvider.NONE
 
 

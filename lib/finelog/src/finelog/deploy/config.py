@@ -8,6 +8,12 @@ name, port, image, optional remote-archive directory, and a deployment
 backend (exactly one of `gcp` or `k8s`).  The schema is intentionally small
 and explicit; finelog owns its deployment knobs so iris's cluster yaml only
 has to reference the config by name.
+
+Two blocks describe the two ends of cross-cluster log shipping. `auth:` names
+the senders a hub server admits, by public key. `forwarding:` names the hub a
+per-cluster server ships its rows to, and the private key it signs its bearer
+with. A server's own key pair is its identity: the hub records rows under the
+`cluster` the sender's key authenticates, never a value the sender asserts.
 """
 
 import json
@@ -16,6 +22,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import yaml
+from rigging.secrets import SecretSpec, as_secret_spec
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
@@ -54,6 +61,12 @@ class K8sDeployment:
     """Kubernetes deployment knobs."""
 
     namespace: str
+    # Kubeconfig file and context every kubectl operation binds to. Unset falls
+    # back to kubectl's own resolution (KUBECONFIG env var or ~/.kube/config);
+    # setting both makes deploys independent of the operator's environment and
+    # of the file's current-context.
+    kubeconfig: str | None = None
+    kube_context: str | None = None
     storage_class: str | None = None
     storage_gb: int = 200
     # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
@@ -81,10 +94,8 @@ class K8sDeployment:
 class CidrAuthLayer:
     """Admit a request whose transport peer is in one of ``cidrs``.
 
-    Reproduces intra-cluster reachability: a finelog serving its own cluster lists
-    that cluster's loopback/VPC ranges (e.g. ``10.0.0.0/8``, ``127.0.0.0/8``) so
-    local clients keep working without a token. Matches the transport peer only,
-    never a spoofable forwarded header.
+    Matches the transport peer only, never a spoofable forwarded header. See
+    ``INTRA_CLUSTER_CIDRS`` for the ranges an in-cluster finelog trusts.
     """
 
     cidrs: tuple[str, ...]
@@ -93,28 +104,50 @@ class CidrAuthLayer:
         return {"type": "cidr", "cidrs": list(self.cidrs)}
 
 
+# The private-network + loopback ranges an in-cluster finelog trusts by cidr: its
+# own cluster's pods (CoreWeave is 10.x; the rest of RFC 1918 covers other
+# platforms) plus loopback (a port-forward), never the public internet. The
+# bundled deploy configs (`lib/finelog/config/*.yaml`) spell the same set into
+# their `cidr` layer; the controller's embedded fallback server uses it directly
+# (see iris `build_log_stack`).
+INTRA_CLUSTER_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "::1/128",
+)
+
+
 @dataclass(frozen=True)
 class JwtKeyEntry:
-    """A trusted cluster and its HS256 delegation secret."""
+    """A trusted cluster and its Ed25519 delegation public keys (PEM).
+
+    ``public_keys`` is a list so a key rotation can carry the old and new keys
+    together during the overlap window; a token signed by either verifies.
+    """
 
     cluster: str
-    secret: str
+    public_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class JwtAuthLayer:
-    """Admit a bearer JWT whose HS256 signature verifies against one of ``keys``.
+    """Admit a bearer JWT whose EdDSA signature verifies against one of ``keys`` and
+    whose audience is ``finelog``.
 
-    Each key is a trusted cluster's HS256 delegation secret; every configured key
-    admits equally. The keys are secret material, so a jwt layer may not be inlined
-    into a plaintext deploy artifact — the deploy path rejects it and requires a
-    secret source instead.
+    Each key is a trusted cluster's Ed25519 public key(s); every configured key
+    admits equally. Public keys are not secret material, so a jwt layer inlines
+    safely into a plaintext deploy artifact.
     """
 
     keys: tuple[JwtKeyEntry, ...]
 
     def to_policy_dict(self) -> dict:
-        return {"type": "jwt", "keys": [{"cluster": k.cluster, "secret": k.secret} for k in self.keys]}
+        return {
+            "type": "jwt",
+            "keys": [{"cluster": k.cluster, "public_keys": list(k.public_keys)} for k in self.keys],
+        }
 
 
 # One entry in the ordered auth stack. Evaluation order == list order (first
@@ -128,19 +161,39 @@ def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
     return json.dumps([layer.to_policy_dict() for layer in layers], separators=(",", ":"))
 
 
-def assert_inlineable_auth(cfg: "FinelogConfig") -> None:
-    """Raise if the auth stack carries secret material that must not be inlined.
+@dataclass(frozen=True)
+class ForwardingConfig:
+    """Ship this server's rows to a hub finelog, best-effort.
 
-    A `jwt` layer holds HS256 delegation keys; both deploy paths bake the policy into a
-    plaintext artifact (GCE startup-script metadata, a k8s manifest), so jwt keys must
-    instead come through a secret source (the finelog-env Secret, or an operator-managed
-    metadata secret). A cidr-only policy carries no secrets and inlines safely.
+    The server tails its own durable rows and pushes them to ``target``, signing an
+    ``aud="finelog"`` bearer with the Ed25519 private key at ``signing_key``. The hub
+    admits it through a `JwtAuthLayer` entry naming ``cluster`` and the matching public
+    key, and stamps every forwarded row with that cluster.
+
+    ``signing_key`` is a `rigging.secrets` reference (``gcp-secret://…``, ``env:…``,
+    ``file:…``), never the key itself: a deploy backend that can only reach the server
+    through world-readable plaintext (GCE instance metadata) cannot carry it at all.
     """
-    if any(isinstance(layer, JwtAuthLayer) for layer in cfg.auth):
-        raise ValueError(
-            f"{cfg.name}: jwt auth layers carry secret keys and cannot be inlined into a plaintext "
-            "deploy artifact; supply FINELOG_AUTH_POLICY through a secret source instead"
-        )
+
+    target: str
+    cluster: str
+    signing_key: SecretSpec
+
+    def __post_init__(self) -> None:
+        if not self.target.startswith("https://"):
+            raise ValueError(f"forwarding.target must be an https:// url; got {self.target!r}")
+        if not self.cluster:
+            raise ValueError("forwarding.cluster must name the origin cluster")
+        if not self.signing_key:
+            raise ValueError("forwarding.signing_key must name at least one secret source")
+
+    def to_env_json(self) -> str:
+        """Serialize to the `FINELOG_FORWARDING` JSON the server parses.
+
+        Carries no key material: the private key travels separately as
+        `FINELOG_SIGNING_KEY`, so this value inlines safely into a plaintext manifest.
+        """
+        return json.dumps({"target": self.target, "cluster": self.cluster}, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -173,6 +226,8 @@ class FinelogConfig:
     # Ordered authenticated-ingress layer stack. Empty leaves the server on its
     # allow-localhost default (loopback only, never open).
     auth: tuple[AuthLayer, ...] = ()
+    # Cross-cluster log shipping to a hub finelog. Unset forwards nothing.
+    forwarding: ForwardingConfig | None = None
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -184,6 +239,11 @@ def _config_search_paths(name_or_path: str) -> list[Path]:
         USER_CONFIG_DIR / f"{name_or_path}.yaml",
         _bundled_config_dir() / f"{name_or_path}.yaml",
     ]
+
+
+def find_finelog_config(name_or_path: str) -> Path | None:
+    """Return the path `name_or_path` resolves to, or None when no such config exists."""
+    return next((path for path in _config_search_paths(name_or_path) if path.is_file()), None)
 
 
 def _build_gcp(raw: dict) -> GcpDeployment:
@@ -209,17 +269,32 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
         if layer_type == "cidr":
             layers.append(CidrAuthLayer(cidrs=tuple(item.get("cidrs") or ())))
         elif layer_type == "jwt":
-            keys = tuple(JwtKeyEntry(cluster=k["cluster"], secret=k["secret"]) for k in item.get("keys") or ())
+            keys = tuple(
+                JwtKeyEntry(cluster=k["cluster"], public_keys=tuple(k["public_keys"])) for k in item.get("keys") or ()
+            )
             layers.append(JwtAuthLayer(keys=keys))
         else:
             raise ValueError(f"{path}: auth[{i}] has unknown type {layer_type!r} (expected cidr|jwt)")
     return tuple(layers)
 
 
+def _build_forwarding(raw: dict, path: Path) -> ForwardingConfig:
+    missing = [k for k in ("target", "cluster", "signing_key") if k not in raw]
+    if missing:
+        raise ValueError(f"{path}: forwarding is missing {', '.join(missing)}")
+    return ForwardingConfig(
+        target=raw["target"],
+        cluster=raw["cluster"],
+        signing_key=as_secret_spec(raw["signing_key"]),
+    )
+
+
 def _build_k8s(raw: dict) -> K8sDeployment:
     priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
         namespace=raw["namespace"],
+        kubeconfig=raw.get("kubeconfig"),
+        kube_context=raw.get("kube_context"),
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
@@ -236,11 +311,10 @@ def load_finelog_config(name_or_path: str) -> FinelogConfig:
       2. `~/.config/marin/finelog/<name>.yaml`.
       3. Repo-bundled `lib/finelog/config/<name>.yaml`.
     """
-    candidates = _config_search_paths(name_or_path)
-    for path in candidates:
-        if path.is_file():
-            return _load_from_path(path)
-    searched = "\n  ".join(str(p) for p in candidates)
+    path = find_finelog_config(name_or_path)
+    if path is not None:
+        return _load_from_path(path)
+    searched = "\n  ".join(str(p) for p in _config_search_paths(name_or_path))
     raise FileNotFoundError(f"finelog config '{name_or_path}' not found; searched:\n  {searched}")
 
 
@@ -263,6 +337,11 @@ def _load_from_path(path: Path) -> FinelogConfig:
         raise ValueError(f"{path}: `auth` must be a list of layers")
     auth = _build_auth_layers(auth_raw, path) if auth_raw else ()
 
+    forwarding_raw = raw.get("forwarding")
+    if forwarding_raw is not None and not isinstance(forwarding_raw, dict):
+        raise ValueError(f"{path}: `forwarding` must be a mapping")
+    forwarding = _build_forwarding(forwarding_raw, path) if forwarding_raw else None
+
     return FinelogConfig(
         name=raw["name"],
         port=int(raw["port"]),
@@ -271,6 +350,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         deployment=deployment,
         client_url=raw.get("client_url"),
         auth=auth,
+        forwarding=forwarding,
     )
 
 
@@ -311,4 +391,10 @@ def tunnel_target_for(cfg: FinelogConfig) -> TunnelTarget:
         )
     assert cfg.deployment.k8s is not None  # guaranteed by Deployment.__post_init__
     k8s = cfg.deployment.k8s
-    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
+    return K8sPortForwardTarget(
+        namespace=k8s.namespace,
+        service=cfg.name,
+        port=cfg.port,
+        kubeconfig=str(Path(k8s.kubeconfig).expanduser()) if k8s.kubeconfig else None,
+        context=k8s.kube_context,
+    )

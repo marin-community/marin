@@ -11,6 +11,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 from urllib.parse import urlparse
 
 import requests
@@ -23,6 +24,56 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
+
+
+class VllmLauncher(Protocol):
+    """Builds the argv that runs the ``vllm`` CLI, before its ``serve …`` args.
+
+    vLLM is always launched as a subprocess, so a launcher is just the command
+    prefix. This lets the TPU path run the ``vllm`` on the workspace ``PATH`` while
+    the GPU path runs CUDA vLLM from an isolated, uv-managed environment.
+    """
+
+    def command(self) -> list[str]: ...
+
+
+@dataclass(frozen=True)
+class WorkspaceVllm:
+    """Run the ``vllm`` installed in the active workspace venv (the TPU-vLLM stack)."""
+
+    def command(self) -> list[str]:
+        return [shutil.which("vllm") or "vllm"]
+
+
+@dataclass(frozen=True)
+class IsolatedCudaVllm:
+    """Run CUDA vLLM from a throwaway uv-managed environment via ``uvx``.
+
+    GPU serving pins CUDA vLLM here instead of in the Marin workspace lockfile:
+    vLLM is only ever a ``vllm serve`` subprocess, so ``uvx`` provisions it — and
+    its torch/CUDA wheel tree — in a cached, isolated environment that never
+    enters Marin's own resolution. Bumping the version is therefore just a string,
+    with no workspace re-lock. The ``[runai]`` extra keeps gs://-checkpoint
+    streaming working, at parity with the TPU path.
+    """
+
+    version: str
+    # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
+    python_version: str = "3.12"
+    # uv's PyTorch index selector; stock vLLM (>=0.25) targets torch 2.11 / CUDA 13.
+    torch_backend: str = "cu128"
+
+    def command(self) -> list[str]:
+        return [
+            "uvx",
+            "--from",
+            f"vllm[runai]=={self.version}",
+            "--python",
+            self.python_version,
+            "--torch-backend",
+            self.torch_backend,
+            "vllm",
+        ]
 
 
 @dataclass(frozen=True)
@@ -218,6 +269,7 @@ class VllmEnvironment:
         port: int | None = None,
         timeout_seconds: int = 3600,
         extra_args: list[str] | None = None,
+        launcher: VllmLauncher | None = None,
     ) -> None:
         validate_vllm_mode_env()
         self.model_name_or_path, self.model = resolve_model_name_or_path(model)
@@ -225,6 +277,8 @@ class VllmEnvironment:
         self.port = port
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
+        # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
+        self.launcher: VllmLauncher = launcher or WorkspaceVllm()
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
@@ -246,6 +300,7 @@ class VllmEnvironment:
                     port=self.port,
                     timeout_seconds=self.timeout_seconds,
                     extra_cli_args=self.extra_cli_args,
+                    launcher=self.launcher,
                 )
                 self.model_id = _get_first_model_id(self.vllm_server.server_url)
                 logger.info(
@@ -344,14 +399,14 @@ def _start_vllm_native_server(
     port: int | None = None,
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
+    launcher: VllmLauncher | None = None,
 ) -> VllmServerHandle:
     """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
     resolved_port = port if port is not None else 8000
 
-    vllm_bin = shutil.which("vllm") or "vllm"
     cmd: list[str] = [
-        vllm_bin,
+        *(launcher or WorkspaceVllm()).command(),
         "serve",
         model_name_or_path,
         "--trust-remote-code",

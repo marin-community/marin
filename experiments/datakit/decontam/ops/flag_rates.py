@@ -28,7 +28,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pyarrow import fs as pa_fs
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -127,12 +127,11 @@ def main() -> None:
         f"GRAND TOTAL\t{grand_total}\t{grand_flagged}\t{grand_flagged / grand_total if grand_total else 0:.6f}\n"
     )
 
-    fs_, path = url_to_fs(args.report)
-    parent = path.rsplit("/", 1)[0]
-    if parent:
-        fs_.makedirs(parent, exist_ok=True)
-    with fs_.open(path, "wb") as fh:
-        fh.write("".join(lines).encode("utf-8"))
+    report_path = StoragePath(args.report)
+    parent = report_path.parent
+    if parent.key:
+        parent.mkdirs()
+    report_path.write_bytes("".join(lines).encode("utf-8"))
 
     print()
     print(

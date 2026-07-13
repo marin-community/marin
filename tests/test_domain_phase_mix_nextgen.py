@@ -8,8 +8,8 @@ from dataclasses import asdict
 import numpy as np
 import pandas as pd
 from fray.cluster import ResourceConfig
-from levanter.data.text import DatasetComponent as LmDatasetComponent
-from levanter.data.text import HierarchicalMixtureDatasetComponent
+from levanter.data.text.datasets import DatasetComponent as LmDatasetComponent
+from levanter.data.text.datasets import HierarchicalMixtureDatasetComponent
 from marin.datakit.download.huggingface import DownloadConfig
 from marin.processing.tokenize import TokenizeConfig
 from marin.transform.stack_edu.hydrate import StackEduHydrationConfig

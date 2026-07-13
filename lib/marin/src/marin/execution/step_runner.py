@@ -21,21 +21,22 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
-import levanter.utils.fsspec_utils as fsspec_utils
 from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
-from fray.types import Entrypoint, GpuConfig, JobRequest, ResourceConfig, TpuConfig, create_environment
-from rigging.filesystem import open_url, url_to_fs
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
     STEP_RUNNER_EXECUTOR_VERSION,
     VERSION_KEY,
+    StepRecordIdentity,
     check_drift,
     is_mutable_version,
-    write_artifact,
+    write_step_record,
 )
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
@@ -62,26 +63,27 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _dependency_groups_for_resources(resources: ResourceConfig) -> list[str]:
-    """Return dependency groups required by the requested accelerator."""
-    device = resources.device
-    if isinstance(device, TpuConfig):
-        return ["tpu"]
-    if isinstance(device, GpuConfig):
-        return ["gpu"]
-    return []
+def _warn_if_secondary_task() -> None:
+    """Warn when StepRunner starts on a non-primary task of a multi-task Iris job.
 
-
-def _merge_dependency_groups(*groups: Iterable[str] | None) -> list[str]:
-    """Merge dependency groups while preserving order."""
-    merged: list[str] = []
-    for group in groups:
-        if group is None:
-            continue
-        for item in group:
-            if item not in merged:
-                merged.append(item)
-    return merged
+    The per-step distributed lock is won by exactly one task; the others lose the
+    race and spin without ever entering the step body. If every task was launched
+    to run the same step (an SPMD run), those tasks never join the step's
+    collective and the job deadlocks. Flags that launch mode without blocking the
+    run (#7080).
+    """
+    info = get_job_info()
+    if info is None or info.task_index == 0:
+        return
+    logger.warning(
+        "StepRunner is starting on Iris task %d of %d. The per-step distributed lock lets only one "
+        "task run each step, so this task will lose the lock race and spin without ever entering the "
+        "step body. If every task was launched to run the same step, the tasks that never enter it "
+        "cannot join its collective and the job will DEADLOCK (marin-community/marin#7080); run the "
+        "executor on a single task instead.",
+        info.task_index,
+        info.num_tasks,
+    )
 
 
 def _write_executor_info(step: StepSpec) -> None:
@@ -110,9 +112,8 @@ def _write_executor_info(step: StepSpec) -> None:
         "dependencies": list(step.dep_paths),
         "output_path": step.output_path,
     }
-    fsspec_utils.mkdirs(step.output_path)
-    with open_url(info_path, "w") as f:
-        f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
+    StoragePath(step.output_path).mkdirs()
+    StoragePath(info_path).write_text(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +208,10 @@ class StepRunner:
         # skipped when the driver (or a wrapping app) already installed handlers.
         if not logging.getLogger().handlers:
             configure_logging(level=logging.INFO)
+
+        # A non-primary Iris task loses the per-step lock race and never enters the
+        # step; warn before doing any work in case an SPMD launch was intended (#7080).
+        _warn_if_secondary_task()
 
         max_workers = max_concurrent or 8
         if max_workers < 1:
@@ -412,13 +417,25 @@ def check_cache(output_path: str) -> bool:
     return False
 
 
+def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
+    """The step's record identity, safe to serialize -- never the ``StepSpec``, which carries ``fn``."""
+    return StepRecordIdentity(
+        name=step.name,
+        deps=step.dep_names,
+        dep_paths=step.dep_paths,
+        config=step.hash_attrs,
+        fingerprint_payload=step.fingerprint_payload,
+    )
+
+
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
     An inline step that does not write its own record (``writes_record=False``) has its
-    return saved via :func:`~marin.execution.artifact.write_artifact`. For ``RemoteCallable``
-    steps (or any step with explicit ``resources``), the raw function + artifact save are
-    submitted as a Fray job; the runner process only manages the lock and status file.
+    return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
+    payload). For ``RemoteCallable`` steps (or any step with explicit ``resources``), the raw
+    function + artifact save are submitted as a Fray job; the runner process only manages the
+    lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
@@ -442,9 +459,10 @@ def run_step(step: StepSpec) -> None:
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    # A lazy step writes its own full record; a plain step's return is saved.
+                    # A lazy step writes its own full record; a plain step's return is saved
+                    # with its identity + lineage (name, deps, config) so the output is traceable.
                     if not step.writes_record:
-                        write_artifact(result, output_path)
+                        write_step_record(_step_record_identity(step), output_path=output_path, result=result)
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
@@ -469,13 +487,14 @@ def _submit_iris_job(
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
     ``raw_fn`` is wrapped to also persist its return value via
-    :func:`~marin.execution.artifact.write_artifact` inside the submitted job, since Fray
+    :func:`~marin.execution.artifact.write_step_record` inside the submitted job, since Fray
     jobs cannot return values back to the caller.
     """
+    identity = _step_record_identity(step)
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        write_artifact(result, output_path)
+        write_step_record(identity, output_path=output_path, result=result)
 
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)
@@ -504,11 +523,11 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
     """
     assert step.resources is not None
     env_vars = None
-    pip_dependency_groups = _dependency_groups_for_resources(step.resources)
+    pip_dependency_groups = None
     if isinstance(step.fn, RemoteCallable):
         raw_fn = step.fn.fn
         env_vars = step.fn.env_vars
-        pip_dependency_groups = _merge_dependency_groups(step.fn.pip_dependency_groups, pip_dependency_groups)
+        pip_dependency_groups = step.fn.pip_dependency_groups
     else:
         raw_fn = step.fn
     assert raw_fn is not None, f"Step {step.name} has no callable"

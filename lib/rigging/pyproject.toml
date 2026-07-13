@@ -7,11 +7,15 @@ name = "marin-rigging"
 version = "0.2.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "braceexpand>=0.1.7",
     "click>=8.3.1",
     "connect-python>=0.9.0",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "google-auth>=2.0.0",
+    # EdDSA (Ed25519) service-token signing/verification in rigging.token_authority.
+    # The [crypto] extra pulls in `cryptography`, which the EdDSA algorithm needs.
+    "PyJWT[crypto]>=2.12.0",
     "pyyaml>=6.0",
     "requests>=2.0.0",
     "s3fs>=2024.0.0",
@@ -22,12 +26,16 @@ dependencies = [
 # Interactive desktop-OAuth login for IAP (run_iap_desktop_login). Only the
 # human login path needs it; servers and workers never import it.
 iap = ["google-auth-oauthlib>=1.0.0"]
+# Resolving gcp-secret:// references in rigging.secrets. env:/file: references
+# need nothing extra; only the Secret Manager source imports this, lazily.
+secrets = ["google-cloud-secret-manager>=2.16.0"]
 
 [dependency-groups]
 test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-timeout",
+    "pytest-xdist",
 ]
 dev = [{ include-group = "test" }]
 

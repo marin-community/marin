@@ -2,6 +2,7 @@ import { useIris } from "../hooks/useIris";
 import { formatDuration, formatRelative } from "./chartUtils";
 import { ControlPlanePanel } from "./ControlPlanePanel";
 import { JobsPanel } from "./JobsPanel";
+import { WandbPanel } from "./WandbPanel";
 import { WorkersPanel } from "./WorkersPanel";
 
 function percentileTitle(spanMs: number, count: number): string {
@@ -65,6 +66,7 @@ export function IrisPanel() {
         )}
         {data?.error && <div className="text-sm text-rose-400">{data.error}</div>}
         <WorkersPanel />
+        <WandbPanel />
         <ControlPlanePanel />
         <JobsPanel />
       </div>

@@ -19,7 +19,7 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
 import logging
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import read_artifact

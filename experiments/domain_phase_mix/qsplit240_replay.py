@@ -20,7 +20,7 @@ import numpy as np
 from fray.cluster import ResourceConfig
 from fsspec import AbstractFileSystem
 from levanter.main.train_lm import LmConfig
-from levanter.optim import MuonHConfig
+from levanter.optim.muonh import MuonHConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import Executor

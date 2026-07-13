@@ -5,11 +5,10 @@
 
 This is the *mechanism* half of "one login": a single place a Marin client tool
 caches the bearer material for a cluster, stored owner-only and written
-atomically. rigging deliberately does not know what an ``app_token`` is or how an
-``edge_refresh_token`` was obtained — orchestrating a login and deciding what goes
-in the record is the job of the login orchestration layer above. Keeping the
-store opaque is what lets it live at the leaf without dragging in iris/IAP
-concepts.
+atomically. rigging deliberately does not know how an ``edge_refresh_token`` was
+obtained — orchestrating a login and deciding what goes in the record is the job
+of the login orchestration layer above. Keeping the store opaque is what lets it
+live at the leaf without dragging in iris/IAP concepts.
 
 It supersedes the two overlapping stores it replaces — iris's
 ``~/.iris/tokens.sqlite`` and rigging's ``~/.config/marin/iap/<name>.json`` — with
@@ -47,8 +46,6 @@ class CredentialRecord:
         edge_refresh_token: A long-lived refresh token for the network edge (e.g.
             the IAP desktop-OAuth refresh token), used to silently re-mint a
             short-lived edge token. None for clusters with no edge auth.
-        app_token: An opaque application bearer (e.g. an Iris JWT). None until a
-            login exchange produces one.
         metadata: Free-form non-secret annotations (e.g. the user id a token was
             issued to), for display and diagnostics.
     """
@@ -56,7 +53,6 @@ class CredentialRecord:
     cluster: str
     endpoint: str
     edge_refresh_token: str | None = None
-    app_token: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -80,7 +76,6 @@ def load_credentials(cluster: str) -> CredentialRecord | None:
         cluster=data["cluster"],
         endpoint=data["endpoint"],
         edge_refresh_token=data.get("edge_refresh_token"),
-        app_token=data.get("app_token"),
         metadata=dict(data.get("metadata") or {}),
     )
 

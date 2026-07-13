@@ -29,7 +29,7 @@ import jmp
 from fray.cluster import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import DatasetComponent
+from levanter.data.text.datasets import DatasetComponent
 from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -90,6 +90,7 @@ TARGET_BUDGETS: dict[float, tuple[str, int]] = {
     3e20: ("v5p-32", 256),
     1e21: ("v5p-64", 512),
 }
+
 
 class DelphiBaselineMixture(StrEnum):
     """Objective-agnostic baseline mixtures for issue #6607."""

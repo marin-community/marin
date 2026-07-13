@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import levanter
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.compat.hf_checkpoints import load_tokenizer as hf_load_tokenizer
 from levanter.data.loader import stack_tree

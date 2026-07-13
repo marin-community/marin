@@ -134,6 +134,16 @@ def proxy_path(name: str) -> str:
     return "/proxy/" + name.strip("/").replace("/", ".")
 
 
+def capability_path(name: str, token: str) -> str:
+    """Build the controller capability-URL path for an endpoint (scoped token in the path).
+
+    Targets the controller's ``@public`` ``/proxy/t/<token>/<name>/...`` route:
+    the token rides in the URL, so possession of the URL is the credential and no
+    auth header is needed. ``name`` is encoded the same way as :func:`proxy_path`.
+    """
+    return f"/proxy/t/{token}/" + name.strip("/").replace("/", ".")
+
+
 @dataclass(frozen=True)
 class ParsedTransport:
     """A transport URL resolved into its transport, scheme-implied auth, and path."""

@@ -11,8 +11,7 @@ from pathlib import Path
 from typing import Any, Optional, Protocol
 from urllib.parse import urlparse
 
-from levanter.utils.fsspec_utils import join_path
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 PROFILER_DIR_NAME = "profiler"
 WANDB_RUNS_SEGMENT = "runs"
@@ -86,7 +85,7 @@ def resolve_profile_dir(run: WandbRunLike) -> str:
     if not isinstance(log_dir, str) or not log_dir:
         raise RuntimeError(f"Run {run.path} does not expose trainer.log_dir.")
 
-    return join_path(join_path(log_dir, resolve_profile_run_id(run)), PROFILER_DIR_NAME)
+    return str(StoragePath(log_dir) / resolve_profile_run_id(run) / PROFILER_DIR_NAME)
 
 
 def mirror_profile_dir(profile_dir: str, root: Path | None, *, run_id: str) -> Path:

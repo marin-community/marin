@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::store::types::SegmentRow;
 
 const MIB: i64 = 1024 * 1024;
+const GIB: i64 = 1024 * MIB;
 
 /// Tuning knobs for the leveled compaction policy.
 ///
@@ -23,6 +24,19 @@ pub struct CompactionConfig {
     /// Per-level fanout cap. Promotes a non-terminal level once its contiguous
     /// run reaches this many segments, even if the byte target isn't met.
     pub max_segments_per_level: usize,
+    /// Ceiling on the summed UNCOMPRESSED size of a merge job's inputs.
+    ///
+    /// `level_targets` bound a job's COMPRESSED input size, but the merge decodes
+    /// every input into Arrow arrays and the k-way merge builds the whole merged
+    /// copy before either is freed. Peak RSS is therefore about twice this
+    /// ceiling, plus the merge's sort-key row encodings — not the compressed
+    /// size, which log text undershoots by 10-20x. This is the knob that bounds
+    /// merge memory.
+    ///
+    /// A run whose first segment alone exceeds the ceiling yields a single-input
+    /// job, which the executor promotes by rename instead of merging, so an
+    /// oversized segment never wedges its level.
+    pub max_merge_uncompressed_bytes: i64,
     /// Whole-namespace segment cap (eviction trigger).
     pub max_segments_per_namespace: usize,
     /// Whole-namespace byte cap on locally-retained segments (eviction trigger).
@@ -40,6 +54,7 @@ impl Default for CompactionConfig {
         CompactionConfig {
             level_targets: vec![64 * MIB, 256 * MIB, 256 * MIB],
             max_segments_per_level: 32,
+            max_merge_uncompressed_bytes: 4 * GIB,
             max_segments_per_namespace: 1000,
             max_bytes_per_namespace: 15 * 1024 * 1024 * 1024,
             check_interval: Duration::from_secs(30),

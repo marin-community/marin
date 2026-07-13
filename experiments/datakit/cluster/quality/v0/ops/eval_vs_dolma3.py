@@ -44,7 +44,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.v0.ops.eval_holdout import (
@@ -68,8 +68,7 @@ class CorrelationRow:
 
 
 def _read_holdout(scored_holdout: str) -> list[dict]:
-    fs, resolved = url_to_fs(scored_holdout)
-    with fs.open(resolved, "rb") as fh:
+    with StoragePath(scored_holdout).open("rb") as fh:
         t = pq.read_table(fh)
     out = []
     cols = {n: t.column(n).to_pylist() for n in ("source", "id", "text", "score_raw", "score_normalized")}
@@ -162,11 +161,9 @@ def compare(
         print(tsv_blob[:2000] + ("...[truncated]" if len(tsv_blob) > 2000 else ""))
         return overall
 
-    with open_url(report_path, "wb") as fh:
-        fh.write(tsv_blob.encode("utf-8"))
+    StoragePath(report_path).write_bytes(tsv_blob.encode("utf-8"))
     summary_path = os.path.splitext(report_path)[0] + ".summary.json"
-    with open_url(summary_path, "wb") as fh:
-        fh.write(json_blob.encode("utf-8"))
+    StoragePath(summary_path).write_bytes(json_blob.encode("utf-8"))
     logger.info("wrote %d-row TSV -> %s", len(enriched), report_path)
     logger.info("wrote summary -> %s", summary_path)
     return overall

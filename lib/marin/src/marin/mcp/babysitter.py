@@ -5,6 +5,7 @@
 
 import argparse
 import base64
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -23,7 +24,8 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
 from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
-from rigging.credential_store import cluster_name_from_url, load_credentials
+from rigging.credential_store import cluster_name_from_url
+from rigging.credentials import MARIN_CLUSTER_TOKEN_ENV
 from rigging.timing import Timestamp
 
 DEFAULT_LOG_LINES = 200
@@ -400,7 +402,7 @@ class IrisBabysitter:
 
     def __init__(self, config: IrisConnectionConfig):
         self.config = config
-        self.token_provider = _token_provider(config.cluster)
+        self.token_provider = _token_provider()
         interceptors = [BearerTokenInjector(self.token_provider, "authorization")] if self.token_provider else []
         self.controller = ControllerServiceClientSync(
             config.controller_url,
@@ -674,11 +676,16 @@ def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]
     return summary
 
 
-def _token_provider(cluster: str) -> TokenProvider | None:
-    record = load_credentials(cluster)
-    if record is None or record.app_token is None:
-        return None
-    return StaticTokenProvider(record.app_token)
+def _token_provider() -> TokenProvider | None:
+    """Explicit Authorization bearer for CI / headless runs, else None.
+
+    The controller mints no user token, so nothing is cached to attach; a caller
+    may inject one (e.g. a worker JWT) via ``$MARIN_CLUSTER_TOKEN``. Otherwise the
+    babysitter relies on transport trust (SSH tunnel / loopback), like any other
+    tokenless client.
+    """
+    override = os.environ.get(MARIN_CLUSTER_TOKEN_ENV)
+    return StaticTokenProvider(override) if override else None
 
 
 def _normalize_state_filter(state: str) -> str:

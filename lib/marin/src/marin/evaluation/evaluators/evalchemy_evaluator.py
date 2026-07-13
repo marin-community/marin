@@ -36,7 +36,7 @@ from typing import ClassVar
 
 import wandb
 from rigging.filesystem import filesystem as marin_filesystem
-from rigging.filesystem import is_remote_path
+from rigging.filesystem import is_remote_path, prefix_join
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -600,7 +600,7 @@ _enable_vllm_stat_logging()
         gcs_path_clean = gcs_path.rstrip("/")
 
         for filename in self.CONFIG_FILES:
-            remote = f"{gcs_path_clean}/{filename}"
+            remote = prefix_join(gcs_path_clean, filename)
             local = os.path.join(local_dir, filename)
             try:
                 if fs.exists(remote):

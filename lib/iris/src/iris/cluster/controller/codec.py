@@ -92,7 +92,12 @@ def constraints_from_json(constraints_json: str | None) -> list[Constraint]:
 
 
 def entrypoint_to_json(ep: job_pb2.RuntimeEntrypoint) -> str:
-    """Serialize a RuntimeEntrypoint, excluding inline workdir_files (stored separately)."""
+    """Serialize a RuntimeEntrypoint, excluding inline workdir_files.
+
+    The files live in ``job_workdir_files``, keyed by job id, so the JSON column stays
+    small. An entrypoint rebuilt from this JSON therefore has no inline files until
+    they are re-attached from that table.
+    """
     d = json_format.MessageToDict(ep, **_TO_DICT_OPTS)
     d.pop("workdir_files", None)
     return json.dumps(d)
@@ -145,8 +150,21 @@ def resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     )
 
 
-def reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRequest:
-    """Reconstruct a LaunchJobRequest proto from native job columns."""
+def reconstruct_launch_job_request(
+    job, *, workdir_files: dict[str, bytes]
+) -> controller_pb2.Controller.LaunchJobRequest:
+    """Reconstruct a LaunchJobRequest proto from native job columns.
+
+    ``job.entrypoint_json`` carries no inline workdir files, so the caller names them:
+    ``reads.get_workdir_files(tx, job_id)`` for a request that will be *run* — a
+    federated handoff delivers this request to the peer, and without the files the peer
+    has no ``_callable_runner.py`` to exec — or ``{}`` for a request that only describes
+    the job's shape.
+
+    ``bundle_blob``, ``client_revision_date`` and ``federation`` are not stored (the
+    bundle survives as ``bundle_id``; the other two belong to the submitting hop), so a
+    reconstruction never carries them.
+    """
     req = controller_pb2.Controller.LaunchJobRequest(
         name=job.name,
         bundle_id=job.bundle_id,
@@ -158,9 +176,12 @@ def reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRe
         existing_job_policy=job.existing_job_policy,
         priority_band=job.priority_band,
         task_image=job.task_image,
+        container_profile=job.container_profile,
         fail_if_exists=job.fail_if_exists,
     )
     req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))
+    for filename, data in workdir_files.items():
+        req.entrypoint.workdir_files[filename] = data
     req.environment.CopyFrom(proto_from_json(job.environment_json, job_pb2.EnvironmentConfig))
     req.resources.CopyFrom(
         resource_spec_from_scalars(job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json)

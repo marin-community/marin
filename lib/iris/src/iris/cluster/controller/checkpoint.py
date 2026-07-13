@@ -34,6 +34,7 @@ from pathlib import Path
 
 import fsspec.core
 import zstandard
+from rigging.filesystem import prefix_join
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.controller import reads
@@ -211,7 +212,7 @@ def upload_checkpoint(
     This is the slow half of checkpointing (zstd compression + GCS upload)
     and does not need any write lock on the database.
     """
-    prefix = remote_state_dir.rstrip("/") + "/controller-state"
+    prefix = prefix_join(remote_state_dir, "controller-state")
     checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
 
     _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
@@ -269,7 +270,7 @@ def _list_checkpoint_entries(remote_state_dir: str) -> list[str] | None:
 
     Returns None if the directory does not exist.
     """
-    prefix = remote_state_dir.rstrip("/") + "/controller-state"
+    prefix = prefix_join(remote_state_dir, "controller-state")
     fs, fs_path = fsspec.core.url_to_fs(prefix)
 
     if not fs.exists(fs_path):

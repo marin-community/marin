@@ -10,7 +10,7 @@ from contextlib import suppress
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext, ZephyrWorkerError

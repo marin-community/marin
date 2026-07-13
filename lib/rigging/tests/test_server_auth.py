@@ -12,12 +12,9 @@ from rigging.server_auth import (
     ANONYMOUS_ADMIN,
     AuthRequest,
     CidrAuthenticator,
-    GcpAccessTokenVerifier,
     IapAssertionVerifier,
-    IapIdTokenVerifier,
     PolicyAuthInterceptor,
     RequestAuthPolicy,
-    StaticTokenVerifier,
     VerifiedIdentity,
     _extract_cookie,
     _verified_identity,
@@ -26,6 +23,7 @@ from rigging.server_auth import (
     require_identity,
     resolve_auth,
 )
+from rigging.testing import MockVerifier
 
 
 @dataclass(frozen=True)
@@ -54,7 +52,7 @@ def _make_ctx(headers: dict | None = None, client_address: str | None = None):
 
 @pytest.fixture
 def verifier():
-    return StaticTokenVerifier({"valid-token-alice": "alice", "valid-token-bob": "bob"})
+    return MockVerifier({"valid-token-alice": "alice", "valid-token-bob": "bob"})
 
 
 @pytest.fixture
@@ -142,69 +140,6 @@ def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
     assert get_verified_user() is None
 
 
-def test_static_token_verifier_valid():
-    v = StaticTokenVerifier({"tok": "user1"})
-    result = v.verify("tok")
-    assert result.user_id == "user1"
-    assert result.role == "user"
-
-
-def test_static_token_verifier_with_custom_role():
-    v = StaticTokenVerifier({"tok": "admin1"}, roles={"admin1": "admin"})
-    result = v.verify("tok")
-    assert result.user_id == "admin1"
-    assert result.role == "admin"
-
-
-def test_static_token_verifier_invalid():
-    v = StaticTokenVerifier({"tok": "user1"})
-    with pytest.raises(ValueError, match="Invalid token"):
-        v.verify("bad")
-
-
-def _verify_oauth2_token_returning(payload):
-    """Patch target factory: a stand-in for google's verify_oauth2_token."""
-    return Mock(return_value=payload)
-
-
-def test_iap_id_token_verifier_accepts_matching_audience():
-    verifier = IapIdTokenVerifier(["desktop-client-id", "iap-client-id"])
-    payload = {"aud": "desktop-client-id", "email": "alice@example.com", "email_verified": True}
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
-        identity = verifier.verify("id-token")
-    assert identity == VerifiedIdentity(user_id="alice@example.com", role="user")
-
-
-def test_iap_id_token_verifier_rejects_wrong_audience():
-    verifier = IapIdTokenVerifier(["expected-aud"])
-    payload = {"aud": "some-other-client", "email": "alice@example.com"}
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
-        with pytest.raises(ValueError, match="audience"):
-            verifier.verify("id-token")
-
-
-def test_iap_id_token_verifier_rejects_missing_email():
-    verifier = IapIdTokenVerifier(["aud"])
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning({"aud": "aud"})):
-        with pytest.raises(ValueError, match="email"):
-            verifier.verify("id-token")
-
-
-def test_iap_id_token_verifier_rejects_unverified_email():
-    verifier = IapIdTokenVerifier(["aud"])
-    payload = {"aud": "aud", "email": "alice@example.com", "email_verified": False}
-    with patch("google.oauth2.id_token.verify_oauth2_token", _verify_oauth2_token_returning(payload)):
-        with pytest.raises(ValueError, match="not verified"):
-            verifier.verify("id-token")
-
-
-def test_iap_id_token_verifier_wraps_google_failure():
-    verifier = IapIdTokenVerifier(["aud"])
-    with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=ValueError("bad signature")):
-        with pytest.raises(ValueError, match="IAP ID token verification failed"):
-            verifier.verify("id-token")
-
-
 # --- IAP signed-header assertion -> implicit read-only dashboard identity -----
 
 _ASSERTION_HEADERS = {"x-goog-iap-jwt-assertion": "signed.assertion.jwt"}
@@ -286,7 +221,7 @@ def test_resolve_auth_iap_assertion_grants_dashboard_when_tokenless():
     identity = resolve_auth(
         AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "valid"}),
         RequestAuthPolicy.enforcing(
-            verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+            verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
         ).authenticators,
     )
     assert identity == VerifiedIdentity(user_id="alice@example.com", role="dashboard")
@@ -298,7 +233,7 @@ def test_resolve_auth_iris_jwt_wins_over_iap_assertion():
     identity = resolve_auth(
         AuthRequest(token="valid-token-alice", headers={"x-goog-iap-jwt-assertion": "valid"}),
         RequestAuthPolicy.enforcing(
-            verifier=StaticTokenVerifier({"valid-token-alice": "alice"}), iap_assertion_verifier=_FakeAssertionVerifier()
+            verifier=MockVerifier({"valid-token-alice": "alice"}), iap_assertion_verifier=_FakeAssertionVerifier()
         ).authenticators,
     )
     assert identity == VerifiedIdentity(user_id="alice", role="user")
@@ -311,7 +246,7 @@ def test_resolve_auth_rejects_tokenless_without_assertion():
         resolve_auth(
             AuthRequest(token=None, headers={}),
             RequestAuthPolicy.enforcing(
-                verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+                verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
             ).authenticators,
         )
 
@@ -321,7 +256,7 @@ def test_resolve_auth_rejects_forged_assertion():
         resolve_auth(
             AuthRequest(token=None, headers={"x-goog-iap-jwt-assertion": "forged"}),
             RequestAuthPolicy.enforcing(
-                verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+                verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
             ).authenticators,
         )
 
@@ -332,7 +267,7 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
     identity = resolve_auth(
         AuthRequest(token=None, headers={}, client_address="127.0.0.1:54321"),
         RequestAuthPolicy.enforcing(
-            verifier=StaticTokenVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
+            verifier=MockVerifier({}), iap_assertion_verifier=_FakeAssertionVerifier()
         ).authenticators,
     )
     assert identity == ANONYMOUS_ADMIN
@@ -342,9 +277,7 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
 
 
 def _cidr_stack(trusted_cidrs, tokens=None):
-    return RequestAuthPolicy.enforcing(
-        verifier=StaticTokenVerifier(tokens or {}), trusted_cidrs=trusted_cidrs
-    ).authenticators
+    return RequestAuthPolicy.enforcing(verifier=MockVerifier(tokens or {}), trusted_cidrs=trusted_cidrs).authenticators
 
 
 def test_cidr_admits_direct_peer_inside_cidr():
@@ -440,83 +373,6 @@ def test_different_users_get_different_identities(interceptor):
     assert users == ["alice", "bob"]
 
 
-def test_gcp_access_token_verifier_valid():
-    """GcpAccessTokenVerifier extracts email from tokeninfo."""
-    verifier = GcpAccessTokenVerifier()
-    mock_resp = Mock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"email": "alice@example.com"}
-
-    with patch("requests.get", return_value=mock_resp) as mock_get:
-        result = verifier.verify("fake-access-token")
-
-    assert result.user_id == "alice@example.com"
-    assert result.role == "user"
-    mock_get.assert_called_once_with(
-        "https://oauth2.googleapis.com/tokeninfo",
-        params={"access_token": "fake-access-token"},
-        timeout=10,
-    )
-
-
-def test_gcp_access_token_verifier_invalid_token():
-    verifier = GcpAccessTokenVerifier()
-    mock_resp = Mock()
-    mock_resp.status_code = 401
-
-    with patch("requests.get", return_value=mock_resp):
-        with pytest.raises(ValueError, match="Token verification failed"):
-            verifier.verify("bad-token")
-
-
-def test_gcp_access_token_verifier_no_email():
-    verifier = GcpAccessTokenVerifier()
-    mock_resp = Mock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"scope": "openid"}
-
-    with patch("requests.get", return_value=mock_resp):
-        with pytest.raises(ValueError, match="email"):
-            verifier.verify("token-without-email")
-
-
-def test_gcp_access_token_verifier_checks_project_access():
-    verifier = GcpAccessTokenVerifier(project_id="my-project")
-
-    tokeninfo_resp = Mock()
-    tokeninfo_resp.status_code = 200
-    tokeninfo_resp.json.return_value = {"email": "alice@example.com"}
-
-    project_resp = Mock()
-    project_resp.status_code = 200
-
-    with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]) as mock_get:
-        result = verifier.verify("valid-token")
-
-    assert result.user_id == "alice@example.com"
-    assert mock_get.call_count == 2
-    mock_get.assert_any_call(
-        "https://cloudresourcemanager.googleapis.com/v3/projects/my-project",
-        headers={"Authorization": "Bearer valid-token"},
-        timeout=10,
-    )
-
-
-def test_gcp_access_token_verifier_rejects_no_project_access():
-    verifier = GcpAccessTokenVerifier(project_id="restricted-project")
-
-    tokeninfo_resp = Mock()
-    tokeninfo_resp.status_code = 200
-    tokeninfo_resp.json.return_value = {"email": "alice@example.com"}
-
-    project_resp = Mock()
-    project_resp.status_code = 403
-
-    with patch("requests.get", side_effect=[tokeninfo_resp, project_resp]):
-        with pytest.raises(ValueError, match="does not have access"):
-            verifier.verify("valid-token")
-
-
 # ---------------------------------------------------------------------------
 # Permissive (null-auth) chain
 # ---------------------------------------------------------------------------
@@ -541,7 +397,7 @@ def test_permissive_policy_attributes_valid_token_and_ignores_invalid():
     # Null-auth with a verifier (worker tokens): a valid token attributes the
     # caller; an invalid/stale one falls through to anonymous admin instead of
     # failing the request.
-    policy = RequestAuthPolicy.permissive(verifier=StaticTokenVerifier({"worker-tok": "system:worker"}))
+    policy = RequestAuthPolicy.permissive(verifier=MockVerifier({"worker-tok": "system:worker"}))
     assert policy.allows_anonymous
     assert policy.resolve("worker-tok", headers={}).user_id == "system:worker"
     assert policy.resolve("stale-token", headers={}) == ANONYMOUS_ADMIN
@@ -549,7 +405,7 @@ def test_permissive_policy_attributes_valid_token_and_ignores_invalid():
 
 
 def test_optional_enforcing_policy_admits_anonymous_but_rejects_bad_token():
-    policy = RequestAuthPolicy.enforcing(verifier=StaticTokenVerifier({"tok": "alice"}), optional=True)
+    policy = RequestAuthPolicy.enforcing(verifier=MockVerifier({"tok": "alice"}), optional=True)
     assert policy.allows_anonymous
     assert policy.resolve(None, headers={}) == ANONYMOUS_ADMIN
     with pytest.raises(ValueError):

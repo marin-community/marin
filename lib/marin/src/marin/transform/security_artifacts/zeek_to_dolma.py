@@ -30,7 +30,9 @@ from marin.transform.security_artifacts.renderers import (
     DEFAULT_ZEEK_UNSET_FIELD,
     render_zeek_tsv_log,
 )
-from zephyr import Dataset, ZephyrContext, load_jsonl, load_parquet
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl, load_parquet
 
 logger = logging.getLogger(__name__)
 

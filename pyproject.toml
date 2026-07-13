@@ -15,7 +15,10 @@ dependencies = [
     "marin-haliax",
     "marin-levanter",
     "marin-core",
-    "marin-rigging",
+    # [secrets] so `iris cluster up` on a Kubernetes cluster can resolve the
+    # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
+    # cloud credentials and reads the key from a projected Secret instead.
+    "marin-rigging[secrets]",
     "marin-zephyr",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
@@ -147,9 +150,9 @@ vllm = { VLLM_TARGET_DEVICE = "tpu" }
 
 [tool.uv.extra-build-dependencies]
 vllm = [
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 
 [tool.uv.sources]
@@ -173,10 +176,10 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d
 # if this is a fixed-base overlay PR, then follow
 # .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
 # temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...808415f45bbfcb512e9c593c4a3330aed115917e
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "808415f45bbfcb512e9c593c4a3330aed115917e" }
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...82b5c9be5cef68503d7cf1588aca869cbbcc78ac
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "82b5c9be5cef68503d7cf1588aca869cbbcc78ac" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -245,6 +248,9 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
+# The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
+# those lines hurts readability far more than the length limit helps.
+"experiments/datakit/decontam/viewer/report.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
@@ -320,6 +326,9 @@ tensor-shapes = true
 # and compute deps a local venv commonly skips (torch, sympy). List both `pkg` and
 # `pkg.*`.
 ignore-missing-imports = [
+    # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
+    "google.cloud.secretmanager",
+    "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
     "jax_triton",

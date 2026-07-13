@@ -10,9 +10,11 @@ uses. The job is pinned to a single region and grabs a whole v6e-4 host (or a
 smaller CPU-only shape for a smoke); the ``DUCKY_*`` config env vars are forwarded
 to the task.
 
-Connect to the controller by passing ``--controller-url`` (e.g. a tunnel opened by
-``iris --cluster=<name> ...``). Deploy keeps no cluster-resolution/auth logic of its
-own — that lives in the iris CLI.
+Connect to the controller with ``--cluster <name>`` (resolved through the iris CLI's
+``open_iris_client``, which handles both IAP-fronted clusters — a direct HTTPS ingress
+with a service-account-minted IAP token — and SSH-tunnelled ones) or an explicit
+``--controller-url``. Deploy keeps no cluster-resolution/auth logic of its own — that
+lives in the iris CLI.
 """
 
 from __future__ import annotations
@@ -24,13 +26,13 @@ import subprocess
 from pathlib import Path
 
 import click
+from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import job_pb2
 
 from ducky.config import PORT_NAME
-from ducky.tunnel import cluster_tunnel
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +122,8 @@ def _build_dashboard() -> None:
 @click.option(
     "--cluster",
     default=None,
-    help="Iris cluster to auto-tunnel to (opens `iris cluster dashboard`); exclusive with --controller-url.",
+    help="Iris cluster to connect to (resolves the controller URL and auth via the iris CLI); "
+    "exclusive with --controller-url.",
 )
 @click.option(
     "--controller-url",
@@ -156,16 +159,17 @@ def cli(
 ) -> None:
     """Submit the best-effort-always-on ducky service to an Iris cluster.
 
-    Pass ``--cluster <name>`` to auto-open a controller tunnel, or ``--controller-url``
-    to target one you already have. By default a running instance is replaced (RECREATE);
-    ``--keep`` leaves a healthy instance alone and only recreates a gone/terminal one — run
-    it on a schedule as a watchdog so the service comes back if its Iris job is ever lost.
+    Pass ``--cluster <name>`` to resolve the controller through the iris CLI (IAP ingress or
+    SSH tunnel, with auth), or ``--controller-url`` to target one you already have. By default
+    a running instance is replaced (RECREATE); ``--keep`` leaves a healthy instance alone and
+    only recreates a gone/terminal one — run it on a schedule as a watchdog so the service
+    comes back if its Iris job is ever lost.
     """
     logging.basicConfig(level=logging.INFO)
     if cluster and controller_url:
         raise click.UsageError("Pass --cluster or --controller-url, not both.")
     if not cluster and not controller_url:
-        raise click.UsageError("Pass --cluster <name> to auto-tunnel, or --controller-url <url>.")
+        raise click.UsageError("Pass --cluster <name>, or --controller-url <url>.")
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
@@ -175,8 +179,12 @@ def cli(
 
     policy = job_pb2.EXISTING_JOB_POLICY_KEEP if keep else job_pb2.EXISTING_JOB_POLICY_RECREATE
 
-    def _submit(url: str) -> None:
-        client = IrisClient.remote(url, workspace=Path.cwd(), extra_bundle_includes=[DASHBOARD_DIST_INCLUDE])
+    with open_iris_client(
+        cluster_name=cluster,
+        controller_url=controller_url,
+        workspace=Path.cwd(),
+        extra_bundle_includes=[DASHBOARD_DIST_INCLUDE],
+    ) as client:
         job = submit_ducky(
             client,
             name=name,
@@ -192,13 +200,6 @@ def cli(
             job.job_id,
             PORT_NAME,
         )
-
-    if cluster:
-        with cluster_tunnel(cluster) as url:
-            _submit(url)
-    else:
-        assert controller_url is not None  # guarded above
-        _submit(controller_url)
 
 
 if __name__ == "__main__":

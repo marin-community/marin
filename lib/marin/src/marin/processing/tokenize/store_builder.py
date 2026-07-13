@@ -25,22 +25,25 @@ dispatches on the sharded layout.
 import dataclasses
 import json
 import logging
-import os
 import time
 
 import numpy as np
-from fray import ResourceConfig
-from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers, write_levanter_cache
+from fray.types import ResourceConfig
+from levanter.store.cache import (
+    CacheLedger,
+    ShardedCacheLayout,
+    consolidate_shard_cache_ledgers,
+    write_levanter_cache,
+)
 from pydantic import BaseModel
-from rigging.filesystem import open_url, url_to_fs
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import format_shard_path
+from rigging.filesystem import StoragePath, prefix_join
+from zephyr.dataset import Dataset, format_shard_path
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +146,7 @@ def build_from_datasets(
     """
     pipeline_start = time.monotonic()
 
-    output_pattern = f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}"
+    output_pattern = prefix_join(output_path, "part-{shard:05d}-of-{total:05d}")
     write_kwargs: dict = {"metadata": {}}
     if batch_size is not None:
         write_kwargs["batch_size"] = batch_size
@@ -156,8 +159,7 @@ def build_from_datasets(
         """
         shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
         if skip_existing:
-            fs = url_to_fs(shard_path)[0]
-            if fs.exists(f"{shard_path}/.success"):
+            if StoragePath(prefix_join(shard_path, ".success")).exists():
                 logger.info("Skipping write, output exists: %s", shard_path)
                 yield (shard_path, None)
                 return
@@ -203,9 +205,8 @@ def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[s
     """
     total_tokens = ledger.field_counts.get("input_ids", 0)
     stats = {"total_tokens": total_tokens, "total_elements": ledger.total_num_rows}
-    stats_path = os.path.join(output_path, ".stats.json")
-    with open_url(stats_path, "w") as f:
-        json.dump(stats, f)
+    stats_path = prefix_join(output_path, ".stats.json")
+    StoragePath(stats_path).write_text(json.dumps(stats))
     return stats_path, stats
 
 
@@ -268,7 +269,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
             logger.info("No shards for split %s; skipping", split)
             continue
 
-        split_output = os.path.join(config.cache_path, split)
+        split_output = prefix_join(config.cache_path, split)
 
         if _ledger_exists(split_output):
             logger.info("Shard ledger already exists for %s at %s; loading", split, split_output)
@@ -314,7 +315,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 def _ledger_exists(cache_path: str) -> bool:
     """Return whether a Levanter cache ledger already exists at ``cache_path``."""
-    return fsspec_exists(os.path.join(cache_path, "shard_ledger.json"))
+    return StoragePath(ShardedCacheLayout.parse(cache_path).ledger).exists()
 
 
 def build_levanter_store_step(

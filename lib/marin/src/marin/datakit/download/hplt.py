@@ -4,15 +4,17 @@
 """Download and filter HPLT v3.0 dataset, keeping only non-Common Crawl sources (WIDE, survey)."""
 
 import logging
-import os
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from functools import cache
 
 import requests
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from fray.types import ResourceConfig
+from rigging.filesystem import prefix_join
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
@@ -204,7 +206,7 @@ def download_hplt_v3(output_path: str) -> None:
     pipeline = (
         Dataset.from_list(all_shards)
         .flat_map(_download_and_filter_shard)
-        .write_parquet(os.path.join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
+        .write_parquet(prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"), skip_existing=True)
     )
 
     ctx = ZephyrContext(

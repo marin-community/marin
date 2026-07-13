@@ -4,12 +4,15 @@
 import json
 import time
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import google.auth.exceptions
+import google.auth.impersonated_credentials
 import pytest
 from rigging.auth import (
     BearerTokenInjector,
     GcpAccessTokenProvider,
+    IapCredentialsUnavailable,
     IapLoginRequired,
     IapRefreshTokenProvider,
     IapServiceAccountTokenProvider,
@@ -154,6 +157,54 @@ def test_iap_id_token_provider_refetches_after_expiry(monkeypatch):
     assert fetch_calls == 1
     assert provider.get_token() == "id-token"
     assert fetch_calls == 2
+
+
+def _raise_no_creds(*args, **kwargs):
+    raise google.auth.exceptions.DefaultCredentialsError("no ADC")
+
+
+def test_iap_id_token_provider_raises_actionable_error_without_credentials(monkeypatch):
+    """With neither ambient SA creds nor an impersonated ADC, get_token is actionable."""
+    monkeypatch.setattr("google.oauth2.id_token.fetch_id_token", _raise_no_creds)
+    monkeypatch.setattr("google.auth.default", _raise_no_creds)
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+
+    provider = IapServiceAccountTokenProvider("aud-123")
+    with pytest.raises(IapCredentialsUnavailable, match="impersonate"):
+        provider.get_token()
+
+
+def test_iap_id_token_provider_mints_from_impersonated_adc(monkeypatch):
+    """fetch_id_token ignores the well-known ADC, so an impersonated ADC mints here."""
+    monkeypatch.setattr("google.oauth2.id_token.fetch_id_token", _raise_no_creds)
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+
+    source = MagicMock(spec=google.auth.impersonated_credentials.Credentials)
+    monkeypatch.setattr("google.auth.default", lambda scopes=None: (source, "proj"))
+
+    class FakeIdCreds:
+        def __init__(self, target_credentials, target_audience, include_email):
+            self.token = "imp-id-token"
+
+        def refresh(self, request):
+            pass
+
+    monkeypatch.setattr("google.auth.impersonated_credentials.IDTokenCredentials", FakeIdCreds)
+    monkeypatch.setattr("google.auth.jwt.decode", lambda token, verify: {"exp": time.time() + 3600})
+
+    provider = IapServiceAccountTokenProvider("aud-123")
+    assert provider.get_token() == "imp-id-token"
+
+
+def test_iap_id_token_provider_rejects_non_impersonated_adc(monkeypatch):
+    """Bare user ADC (not impersonated) cannot mint an IAP token — hard-fail."""
+    monkeypatch.setattr("google.oauth2.id_token.fetch_id_token", _raise_no_creds)
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+    monkeypatch.setattr("google.auth.default", lambda scopes=None: (object(), "proj"))
+
+    provider = IapServiceAccountTokenProvider("aud-123")
+    with pytest.raises(IapCredentialsUnavailable):
+        provider.get_token()
 
 
 class FakeRefreshCreds:
