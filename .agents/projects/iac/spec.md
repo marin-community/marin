@@ -135,9 +135,9 @@ provisioning:
 
 ```text
 infra/iac/
-├── Pulumi.yaml                     # project: name=marin-iac, runtime=python, secretsprovider=gcpkms://…
-├── Pulumi.cw-us-east-02a.yaml      # stack config: marin-iac:cluster = cw-us-east-02a
-├── Pulumi.cw-rno2a.yaml            # stack config: marin-iac:cluster = cw-rno2a
+├── Pulumi.yaml                     # project: name=marin-iac, runtime=python
+├── Pulumi.cw-us-east-02a.yaml      # stack config: marin-iac:cluster = cw-us-east-02a, secretsprovider = gcpkms://…
+├── Pulumi.cw-rno2a.yaml            # stack config: marin-iac:cluster = cw-rno2a, secretsprovider = gcpkms://…
 ├── Pulumi.gcp.yaml                 # RESERVED (GCP) — not populated this pass
 ├── __main__.py                     # entry: dispatch by provider → build components
 ├── pyproject.toml                  # marin-iac package; deps: pulumi, pulumi-kubernetes, marin-iris, marin-rigging
@@ -157,7 +157,7 @@ infra/iac/
 the KMS key that encrypts secrets are provisioned once, by hand, *before* any `pulumi up` — they
 cannot be IaC-managed without a chicken-and-egg. Documented as a two-command bootstrap in the
 `infra/iac/` README. `pulumi login gs://marin-iac-state`; `secretsprovider: gcpkms://…` in
-`Pulumi.yaml`. Both are operator/CI environment, overridable by third-party deployers.
+`Pulumi.<stack>.yaml`. Both are operator/CI environment, overridable by third-party deployers.
 
 **Who runs apply.** `pulumi up` is **operator-run**; CI runs `pulumi preview` and posts the plan
 to the PR (no CI apply in the first cut, because these stacks touch reserved GPU fleets). Full
@@ -196,7 +196,7 @@ edge (the Pulumi win over TF's `kubernetes_manifest` two-apply problem).
 @dataclass(frozen=True)
 class NodePoolSpec:
     """One CoreWeave NodePool, projected from an Iris scale group. Mirrors the manifest Iris
-    builds today (controller.py:_build_nodepool_manifest) so a port preserves behavior."""
+    builds today (controller.py:_ensure_one_nodepool) so a port preserves behavior."""
     name: str                    # normalized {label_prefix}-{scale_group} (RFC1123: lower, _→-)
     instance_type: str           # slice_template.coreweave.instance_type
     min_nodes: int               # buffer_slices * slice_template.num_vms
@@ -228,7 +228,8 @@ class IrisRbacArgs:
 class IrisRbac(pulumi.ComponentResource):
     """The Namespace, `iris-controller` ServiceAccount, and namespace-qualified ClusterRole +
     ClusterRoleBinding formerly created by ensure_rbac(). ClusterRole verbs reproduce
-    coreweave.md §5 exactly (nodepools; pods, pods/exec, pods/log; nodes; configmaps). This is
+    ensure_rbac() in controller.py exactly (nodepools; pods, pods/exec, pods/log; nodes;
+    configmaps; metrics/pods; poddisruptionbudgets; kueue workloads; priorityclasses). This is
     the contract Iris's verify_prerequisites() checks."""
     def __init__(self, name: str, args: IrisRbacArgs, *, k8s_provider: pulumi.ProviderResource,
                  opts: pulumi.ResourceOptions | None = None) -> None: ...
@@ -298,8 +299,8 @@ File: `lib/iris/src/iris/cluster/platforms/k8s/controller.py` (the K8s controlle
 
 - **Removed from `start_controller()`** (`controller.py:411`, `:435`): `self.ensure_rbac()` and
   `self.ensure_nodepools(config)`. The methods `ensure_rbac()` (`:669`) and `ensure_nodepools()`
-  (`:830`) are **deleted** (no back-compat). `_build_nodepool_manifest`/`_nodepool_name` logic
-  moves into `iac.nodepools` as the single owner of NodePool shape.
+  (`:830`) are **deleted** (no back-compat). The manifest construction in `_ensure_one_nodepool`
+  and the `_nodepool_name` logic move into `iac.nodepools` as the single owner of NodePool shape.
 - **Added**: `verify_prerequisites(config)`, called where `ensure_rbac()` was.
 
 ```python
@@ -423,9 +424,9 @@ Two phases; phase 1 is what this design builds.
   stack, and posts the plan as a PR comment (`pulumi/actions`). **CI never runs `pulumi up`.**
 - **CI identity** — service account `pulumi-ci@<proj>`, least-privilege for preview:
   - `roles/cloudkms.cryptoKeyDecrypter` on the state key (decrypt state secrets to compute the diff),
-  - `roles/storage.objectViewer` on `gs://marin-iac-state`,
+  - object write/delete permissions on the `gs://marin-iac-state` lock prefix (e.g. `roles/storage.objectUser` on the `.pulumi/locks` path to acquire/release stack locks),
   - `roles/secretmanager.secretAccessor` on referenced secrets (once `access_key_secret_ref` is wired),
-  - a read-only kubeconfig for the target cluster (the k8s SSA dry-run).
+  - a kubeconfig for the target cluster with write permissions (create/patch/update/delete) for the specific resources managed by the IaC stack, which is required for Kubernetes Server-Side Apply (SSA) dry-run validation.
 - **Gate.** Reviewers read the posted plan; a NodePool `replace`/`delete` blocks the PR — the
   same gate as §4/§6.
 - **Apply.** After review/merge an **operator** runs `pulumi up <stack>` from a trusted
