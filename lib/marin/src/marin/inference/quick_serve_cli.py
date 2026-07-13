@@ -63,6 +63,7 @@ from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
+from marin.inference.vllm_server import WORKER_PYTHON_VERSION
 
 # vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
 _WORKER_EXTRAS = ("tpu", "vllm")
@@ -131,7 +132,7 @@ def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> 
     spec = f"marin-core{extras_suffix}=={marin_version}"
     return (
         "set -e\n"
-        'uv venv "$IRIS_VENV" --python 3.12\n'
+        f'uv venv "$IRIS_VENV" --python {WORKER_PYTHON_VERSION}\n'
         f'uv pip install --python "$IRIS_VENV" --link-mode symlink --torch-backend cpu {shlex.quote(spec)}\n'
     )
 

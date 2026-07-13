@@ -24,6 +24,10 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
+# The worker interpreter marin-serve provisions everywhere it controls one: the checkout-free
+# venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
+# worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
+WORKER_PYTHON_VERSION = "3.12"
 
 
 class VllmLauncher(Protocol):
@@ -68,7 +72,7 @@ class IsolatedCudaVllm:
 
     version: str
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
-    python_version: str = "3.12"
+    python_version: str = WORKER_PYTHON_VERSION
     # uv's PyTorch index selector; stock vLLM (>=0.25) targets torch 2.11 / CUDA 13.
     torch_backend: str = "cu128"
 
@@ -113,7 +117,7 @@ class IsolatedTpuVllm:
     tpu_inference_ref: str
     """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
-    python_version: str = "3.12"
+    python_version: str = WORKER_PYTHON_VERSION
     # torch is only a dependency here (jax/libtpu do TPU compute), so build/resolve it
     # from the CPU index rather than dragging in a CUDA tree.
     torch_backend: str = "cpu"
