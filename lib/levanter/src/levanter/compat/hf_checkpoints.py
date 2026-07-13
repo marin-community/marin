@@ -43,6 +43,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
+from jax.experimental import multihost_utils
 from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
@@ -81,6 +82,14 @@ if TYPE_CHECKING:
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
+
+
+def _global_array_to_numpy(value: Any) -> np.ndarray:
+    """Materialize a JAX value as a host NumPy array, gathering cross-host shards when needed."""
+    if isinstance(value, jax.Array) and not value.is_fully_addressable:
+        # This branch must be reached SPMD on all processes: process_allgather is a collective.
+        return np.asarray(multihost_utils.process_allgather(value, tiled=True))
+    return np.asarray(value)
 
 
 def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
@@ -1163,7 +1172,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     subset_arg = subset_keys
 
                 shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
-                shard_numpy = {k: np.asarray(v) for k, v in shard_weights.items()}
+                shard_numpy = {k: _global_array_to_numpy(v) for k, v in shard_weights.items()}
                 bytes_this_time = sum(v.nbytes for v in shard_numpy.values())
                 logger.info(
                     "Saving shard %s (%s, %.2f%% of model)",

@@ -11,6 +11,7 @@ import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import pytest
 import safetensors
 import transformers
@@ -27,6 +28,7 @@ from levanter.compat.hf_checkpoints import (
     ModelWithHfSerializationMixin,
     _causal_lm_architecture_name,
     _convert_to_jnp,
+    _global_array_to_numpy,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from test_utils import use_test_mesh
@@ -44,6 +46,40 @@ def test_conversion_to_jnp_bfloat16():
     assert x_jnp.dtype == jnp.bfloat16
     assert x_jnp.shape == x.shape
     assert_trees_all_close(x_jnp, jnp.arange(10, dtype=jnp.bfloat16) / 3.14)
+
+
+def test_global_array_to_numpy_gathers_non_addressable_jax_array(monkeypatch):
+    class FakeDistributedArray:
+        is_fully_addressable = False
+
+    fake_array = FakeDistributedArray()
+    gathered = np.asarray([[1, 2], [3, 4]], dtype=np.int32)
+
+    def fake_process_allgather(value, *, tiled):
+        assert value is fake_array
+        assert tiled is True
+        return gathered
+
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.jax.Array", FakeDistributedArray)
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.multihost_utils.process_allgather", fake_process_allgather)
+
+    np.testing.assert_array_equal(_global_array_to_numpy(fake_array), gathered)
+
+
+def test_global_array_to_numpy_uses_asarray_for_fully_addressable_jax_array(monkeypatch):
+    class FakeAddressableArray:
+        is_fully_addressable = True
+
+        def __array__(self):
+            return np.asarray([1, 2, 3], dtype=np.int32)
+
+    def fail_process_allgather(value, *, tiled):
+        raise AssertionError("fully addressable arrays should not use process_allgather")
+
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.jax.Array", FakeAddressableArray)
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.multihost_utils.process_allgather", fail_process_allgather)
+
+    np.testing.assert_array_equal(_global_array_to_numpy(FakeAddressableArray()), np.asarray([1, 2, 3]))
 
 
 def test_save_sharded_checkpoints():
