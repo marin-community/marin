@@ -25,6 +25,7 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
@@ -676,12 +677,14 @@ _TOKENIZER_ALLOW_PATTERNS = [
 
 
 def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
-    """Atomically fetch src_url to dest_path via a .tmp sibling.
+    """Atomically fetch src_url to dest_path via a unique temp sibling.
 
     Returns False if the source does not exist; re-raises all other errors.
-    Prevents partial writes from poisoning the local cache on any failure.
+    A partial file is never observable at dest_path, and the unique temp name
+    keeps concurrent fetches of the same dest from clobbering each other's
+    in-flight files.
     """
-    tmp = dest_path + ".tmp"
+    tmp = f"{dest_path}.{uuid.uuid4().hex}.tmp"
     try:
         data = StoragePath(src_url).read_bytes()
         with open(tmp, "wb") as dst:

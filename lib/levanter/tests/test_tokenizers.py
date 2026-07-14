@@ -28,6 +28,7 @@ from levanter.tokenizers import (
     HfMarinTokenizer,
     MarinTokenizer,
     TokenizerBackend,
+    _fetch_file_atomic,
     _load_tokenizer_config,
     _stage_from_hf,
     _stage_from_mirror,
@@ -1470,6 +1471,42 @@ def test_stage_from_mirror_absent(tmp_path):
 
     assert result is False
     assert not list(local_dir.iterdir())
+
+
+def test_fetch_file_atomic_fetches_file(tmp_path):
+    src = tmp_path / "remote" / "tokenizer.json"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b'{"version": 1}')
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+
+    assert _fetch_file_atomic(str(src), str(dest)) is True
+    assert dest.read_bytes() == b'{"version": 1}'
+
+
+def test_fetch_file_atomic_missing_source_returns_false(tmp_path):
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+
+    assert _fetch_file_atomic(str(tmp_path / "remote" / "absent.json"), str(dest)) is False
+    assert not dest.exists()
+
+
+def test_fetch_file_atomic_ignores_other_fetchers_temp_file(tmp_path):
+    # Concurrency contract: another fetcher's in-flight temp file (here: a
+    # stale leftover at the old fixed-suffix name) is never consumed,
+    # clobbered, or promoted to dest.
+    src = tmp_path / "remote" / "tokenizer.json"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b'{"version": 1}')
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+    stale_tmp = dest.parent / "tokenizer.json.tmp"
+    stale_tmp.write_bytes(b'{"trunc')
+
+    assert _fetch_file_atomic(str(src), str(dest)) is True
+    assert dest.read_bytes() == b'{"version": 1}'
+    assert stale_tmp.read_bytes() == b'{"trunc'
 
 
 def test_stage_tokenizer_local_cache_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):
