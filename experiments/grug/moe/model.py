@@ -158,6 +158,10 @@ class GrugModelConfig:
     qk_nope_head_dim: int = 128
     qk_rope_head_dim: int = 64
     v_head_dim: int = 128
+    # Scale the post-RMSNorm Q/KV latents by sqrt(hidden_dim / latent_dim) before the
+    # up-projection (kv: sqrt(d/kv_lora_rank), q: sqrt(d/q_lora_rank)). Off by default.
+    mla_scale_q_lora: bool = False
+    mla_scale_kv_lora: bool = False
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -783,6 +787,8 @@ class MultiheadLatentAttention(eqx.Module):
 
         # Compressed KV latent -> normed -> up-project to per-head k_nope and v.
         c_kv = self.kv_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dkv))
+        if cfg.mla_scale_kv_lora:
+            c_kv = c_kv * (cfg.hidden_dim / cfg.kv_lora_rank) ** 0.5
         k_nope_up = rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk), "... (n d) -> ... n d", d=nope)
         k_nope = reshard(k_nope_up, head_spec)
         v_up = rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv), "... (n d) -> ... n d", d=vd)
@@ -796,6 +802,8 @@ class MultiheadLatentAttention(eqx.Module):
             q = jnp.einsum("bsh,hd->bsd", x, self.w_q)
         else:
             c_q = self.q_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dq))
+            if cfg.mla_scale_q_lora:
+                c_q = c_q * (cfg.hidden_dim / cfg.q_lora_rank) ** 0.5
             q = jnp.einsum("bsc,cd->bsd", c_q, self.w_uq)
         q = reshard(rearrange(q, "... (n d) -> ... n d", d=nope + rope_d), head_spec)
         q_nope, q_rope = q[..., :nope], q[..., nope:]

@@ -129,6 +129,10 @@ def build_scale_model() -> GrugModelConfig:
     # Q latent rank. SCALE_Q_LORA_RANK=0 uses a direct Q projection; >0 routes Q through a
     # compressed latent. Defaults to d/2 (the grug MLA prototype value) when unset.
     q_lora_rank = env_int("SCALE_Q_LORA_RANK", hidden_dim // 2)
+    # SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA=1 rescale the post-RMSNorm Q/KV latents
+    # by sqrt(hidden_dim / latent_dim) before the up-projection.
+    mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA") == "1"
+    mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA") == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -160,6 +164,8 @@ def build_scale_model() -> GrugModelConfig:
         q_lora_rank=q_lora_rank,
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
+        mla_scale_q_lora=mla_scale_q_lora,
+        mla_scale_kv_lora=mla_scale_kv_lora,
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
