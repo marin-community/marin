@@ -13,6 +13,7 @@ import shutil
 import tempfile
 import time
 import urllib.parse
+import uuid
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
@@ -1571,6 +1572,25 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
 
 
+def _download_atomic(remote_path: StoragePath, local_path: str) -> None:
+    """Download to a unique temp file, then atomically move into place.
+
+    ``local_path`` never holds a partial file: readers see the previous
+    complete file or the new one, and a download killed midway leaves only an
+    orphaned temp file instead of poisoning a shared cache.
+    """
+    parent = os.path.dirname(local_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp_path = f"{local_path}.{uuid.uuid4().hex}.tmp"
+    try:
+        remote_path.download_to(tmp_path)
+        os.replace(tmp_path, local_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 @contextlib.contextmanager
 def _patch_hf_hub_download():
     """
@@ -1607,7 +1627,7 @@ def _patch_hf_hub_download():
                 if not remote_path.exists():
                     raise EntryNotFoundError(f"File {remote_path} not found")
 
-                remote_path.download_to(local_path)
+                _download_atomic(remote_path, local_path)
                 return local_path
 
             # Fallback to the original implementation

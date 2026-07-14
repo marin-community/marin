@@ -21,12 +21,15 @@ from jax.random import PRNGKey
 from test_utils import skip_if_no_torch
 from transformers import GPT2Config as HfGpt2Config
 
+from rigging.filesystem import StoragePath
+
 from levanter.compat.hf_checkpoints import (
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
     _causal_lm_architecture_name,
     _convert_to_jnp,
+    _download_atomic,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from test_utils import use_test_mesh
@@ -312,3 +315,41 @@ def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tok
 
     assert dict_config["model_type"] == "gpt2"
     assert dict_config["architectures"] == ["GPT2LMHeadModel"]
+
+
+class _InterruptedDownloadPath(StoragePath):
+    """Fake remote whose transfer writes partial bytes and then dies."""
+
+    def download_to(self, local_path: str, *, recursive: bool = False) -> None:
+        with open(local_path, "wb") as f:
+            f.write(b'{"trunc')
+        raise ConnectionError("simulated mid-download failure")
+
+
+def test_interrupted_download_leaves_no_partial_file(tmp_path):
+    # Regression for marin#7167: a download killed midway must not leave a
+    # truncated file at the final path, where it poisons the HF cache.
+    dest = tmp_path / "cache" / "tokenizer.json"
+    with pytest.raises(ConnectionError):
+        _download_atomic(_InterruptedDownloadPath("interrupted://remote/tokenizer.json"), str(dest))
+    assert not dest.exists()
+
+
+def test_failed_redownload_keeps_previous_complete_file(tmp_path):
+    dest = tmp_path / "cache" / "tokenizer.json"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b'{"ok": true}')
+    with pytest.raises(ConnectionError):
+        _download_atomic(_InterruptedDownloadPath("interrupted://remote/tokenizer.json"), str(dest))
+    assert dest.read_bytes() == b'{"ok": true}'
+
+
+def test_download_atomic_fetches_file(tmp_path):
+    # Happy path: without this, the failure tests above could pass with a
+    # helper that never writes anything.
+    src = tmp_path / "remote" / "tokenizer.json"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b'{"version": 1}')
+    dest = tmp_path / "cache" / "tokenizer.json"
+    _download_atomic(StoragePath(str(src)), str(dest))
+    assert dest.read_bytes() == b'{"version": 1}'
