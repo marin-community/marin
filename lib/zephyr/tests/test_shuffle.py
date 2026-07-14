@@ -153,7 +153,7 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     ]
     # Write as two separate chunks
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, sort_fn=lambda x: x["ts"])
     writer.write(_items_to_dataframe([items[0]], _key, lambda x: x["ts"], 1))
     writer.write(_items_to_dataframe([items[1]], _key, lambda x: x["ts"], 1))
     scatter_paths = list(writer.close())

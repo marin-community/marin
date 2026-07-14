@@ -7,7 +7,7 @@ import hashlib
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from zephyr import Dataset
+from zephyr.dataset import Dataset
 from zephyr.writers import infer_arrow_schema
 
 

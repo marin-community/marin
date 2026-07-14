@@ -6,8 +6,9 @@
 Each source-shard's scatter output is a set of zstd-compressed Parquet files,
 one combined file per flush (``c{chunk:04d}.parquet``) containing all target
 shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
-(``.scatter_meta``) records ``files -> [{path, bytes}, ...]`` plus a global
-``avg_item_bytes`` estimate.
+(``.scatter_meta``) records ``files -> [{path, bytes}, ...]``, a global
+``avg_item_bytes`` estimate, and exact per-target-shard payload bytes
+(``shard_bytes``) used by reducers to size the external-sort decision.
 
 On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
@@ -29,7 +30,6 @@ import concurrent.futures
 import functools
 import gc
 import io
-import itertools
 import logging
 import math
 from collections import defaultdict
@@ -115,6 +115,10 @@ _SHARD_COL = "__zephyr_shard__"
 _SORT_KEY_COL = "__zephyr_sort_key__"
 # A cloudpickle-serialized Python object representing the item
 _PAYLOAD_COL = "__payload__"
+# Temporary flat columns folded into the _SORT_KEY_COL struct during
+# _items_to_dataframe; never present in written chunks.
+_KEY_TMP_COL = "__zephyr_key_tmp__"
+_SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 
 # Python items consumed before creating a DataFrame.
 _DATAFRAME_ROW_COUNT = 1000
@@ -152,6 +156,42 @@ def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
         yield cloudpickle.loads(p)
 
 
+def _columns_to_dataframe(
+    payloads: list[bytes],
+    shards: list[int],
+    keys: list[Any],
+    sort_values: list[Any],
+) -> pl.DataFrame:
+    """Build the scatter DataFrame from pre-computed flat columns.
+
+    The sort-key struct is folded from two flat columns rather than per-row
+    Python dicts: series construction from homogeneous lists is the native
+    fast path, and ``pl.struct`` over existing columns is cheap. Field order
+    (key first) drives the (key, sort_value) sort order.
+    """
+    try:
+        return pl.DataFrame(
+            {
+                _PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary),
+                _SHARD_COL: pl.Series(shards, dtype=pl.Int32),
+                _KEY_TMP_COL: keys,
+                _SORT_VALUE_TMP_COL: sort_values,
+            }
+        ).select(
+            _PAYLOAD_COL,
+            _SHARD_COL,
+            pl.struct(
+                pl.col(_KEY_TMP_COL).alias("key"),
+                pl.col(_SORT_VALUE_TMP_COL).alias("sort_value"),
+            ).alias(_SORT_KEY_COL),
+        )
+    except (TypeError, pl.exceptions.InvalidOperationError) as err:
+        # Non-serializable keys surface as TypeError from Series construction
+        # or InvalidOperationError ("nested objects are not allowed") when the
+        # key column lands as Object dtype and pl.struct rejects it.
+        raise ValueError("key_fn must return an Arrow-serializable object.") from err
+
+
 def _items_to_dataframe(
     items: list[Any],
     key_fn: Callable,
@@ -161,28 +201,21 @@ def _items_to_dataframe(
     """Convert a list of Python items to a DataFrame with routing columns.
 
     Cloudpickle-serializes items into ``_PAYLOAD_COL`` and adds ``_SHARD_COL``
-    (int32 target shard index) and ``_SORT_KEY_COL``.  These columns are
-    consumed by :class:`ScatterWriter`; ``_SHARD_COL`` is stripped on write,
-    ``_SORT_KEY_COL`` is stripped on read.
+    (int32 target shard index) and ``_SORT_KEY_COL``. This is the adapter
+    between Python-item pipelines and the DataFrame-based
+    :class:`ScatterWriter`; DataFrame-native pipelines can feed the writer
+    directly.
     """
     shards: list[int] = []
-    sort_keys: list[dict[str, object | None]] = []
+    keys: list[Any] = []
+    sort_values: list[Any] = []
     for item in items:
         key = key_fn(item)
         shards.append(deterministic_hash(key) % num_output_shards if num_output_shards > 0 else 0)
-        sort_value = sort_fn(item) if sort_fn is not None else None
-        sort_keys.append({"key": key, "sort_value": sort_value})
-
-    try:
-        payloads = [cloudpickle.dumps(item) for item in items]
-        return pl.DataFrame({_PAYLOAD_COL: pl.Series(payloads, dtype=pl.Binary)}).with_columns(
-            [
-                pl.Series(_SHARD_COL, shards, dtype=pl.Int32),
-                pl.Series(_SORT_KEY_COL, sort_keys),
-            ]
-        )
-    except TypeError as err:
-        raise ValueError("key_fn must return an Arrow-serializable object.") from err
+        keys.append(key)
+        sort_values.append(sort_fn(item) if sort_fn is not None else None)
+    payloads = [cloudpickle.dumps(item) for item in items]
+    return _columns_to_dataframe(payloads, shards, keys, sort_values)
 
 
 # ---------------------------------------------------------------------------
@@ -217,16 +250,19 @@ class _SidecarSlice:
 
     Each entry in ``chunk_paths`` is one combined Parquet file written during a
     flush; the file contains data for all target shards sorted by
-    ``(_SHARD_COL, _SORT_KEY_COL)``.
+    ``(_SHARD_COL, _SORT_KEY_COL)``. ``target_bytes`` is the exact payload
+    bytes this mapper wrote for the reader's target shard, summed across all
+    chunks.
     """
 
     path: str
     chunk_paths: list[str]  # GCS parquet paths, one per flush event
     avg_item_bytes: float
+    target_bytes: int
 
 
-def _read_sidecar_slice(path: str) -> _SidecarSlice | None:
-    """Read one sidecar and return its file list.
+def _read_sidecar_slice(path: str, target_shard: int) -> _SidecarSlice | None:
+    """Read one sidecar and return its file list plus the target shard's payload bytes.
 
     Returns ``None`` if the sidecar has no files (empty writer).
 
@@ -244,17 +280,18 @@ def _read_sidecar_slice(path: str) -> _SidecarSlice | None:
         path=path,
         chunk_paths=[str(f) for f in files],
         avg_item_bytes=float(meta.get("avg_item_bytes", 0)),
+        target_bytes=int(meta.get("shard_bytes", {}).get(str(target_shard), 0)),
     )
 
 
-def _read_sidecar_slices_parallel(scatter_paths: list[str]) -> list[_SidecarSlice]:
+def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -> list[_SidecarSlice]:
     """Read every sidecar concurrently and return slices in input order.
 
     Empty sidecars (no files written) are dropped from the result.
     """
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {pool.submit(_read_sidecar_slice, p): i for i, p in enumerate(scatter_paths)}
+        futures = {pool.submit(_read_sidecar_slice, p, target_shard): i for i, p in enumerate(scatter_paths)}
         for fut in concurrent.futures.as_completed(futures):
             idx = futures[fut]
             ordered[idx] = fut.result()
@@ -282,10 +319,12 @@ class ScatterReader:
         files: list[tuple[str, list[str]]],
         target_shard: int,
         avg_item_bytes: float,
+        shard_payload_bytes: float = 0.0,
     ) -> None:
         self._files = files
         self._target_shard = target_shard
         self.avg_item_bytes = avg_item_bytes
+        self.shard_payload_bytes = shard_payload_bytes
 
     @classmethod
     def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
@@ -299,29 +338,34 @@ class ScatterReader:
         files: list[tuple[str, list[str]]] = []
         weighted_bytes = 0.0
         total_chunks = 0
+        shard_payload_bytes = 0.0
 
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
         ):
-            for slice_ in _read_sidecar_slices_parallel(scatter_paths):
+            for slice_ in _read_sidecar_slices_parallel(scatter_paths, target_shard):
                 files.append((slice_.path, slice_.chunk_paths))
                 weighted_bytes += slice_.avg_item_bytes * len(slice_.chunk_paths)
                 total_chunks += len(slice_.chunk_paths)
+                shard_payload_bytes += slice_.target_bytes
 
         avg_item_bytes = weighted_bytes / total_chunks if total_chunks > 0 else 0.0
 
         logger.info(
-            "ScatterReader for shard %d: %d source files, %d total chunks, avg_item_bytes=%.1f",
+            "ScatterReader for shard %d: %d source files, %d total chunks, "
+            "avg_item_bytes=%.1f, shard_payload_bytes=%.0f",
             target_shard,
             len(files),
             total_chunks,
             avg_item_bytes,
+            shard_payload_bytes,
         )
         return cls(
             files=files,
             target_shard=target_shard,
             avg_item_bytes=avg_item_bytes,
+            shard_payload_bytes=shard_payload_bytes,
         )
 
     def get_frames(self) -> list[pl.LazyFrame]:
@@ -354,7 +398,11 @@ class ScatterReader:
             if self.total_chunks == 0:
                 return
 
-            estimated_merge_memory_bytes = self.avg_item_bytes * self.total_chunks * _POLARS_STREAMING_CHUNK_SIZE
+            # Upper bound on merge memory: the target shard's entire data
+            # resident at once (the streaming merge holds strictly less in
+            # flight), using the exact per-shard payload bytes recorded in the
+            # sidecars — no row-count estimation.
+            estimated_merge_memory_bytes = self.shard_payload_bytes
             # Overhead per row in the Polars DataFrame plus the deserialized Python object.
             # Future Polars-only processing would remove the Python overhead.
             overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
@@ -379,15 +427,13 @@ class ScatterReader:
                     fan_in,
                 )
 
-                merged = external_sort_merge(
+                batches = external_sort_merge(
                     input_frames=self.get_frames(),
                     sort_key=_SORT_KEY_COL,
                     external_sort_dir=external_sort_dir,
                     fan_in=fan_in,
                     shard=self._target_shard,
                 )
-
-                yield from itertools.chain.from_iterable(map(_dataframe_to_items, merged))
 
             else:
                 logger.info(
@@ -397,11 +443,10 @@ class ScatterReader:
                     humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
                     humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
                 )
-                merged_lf = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL)
+                batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
 
-                yield from itertools.chain.from_iterable(
-                    _dataframe_to_items(batch) for batch in merged_lf.collect_batches()
-                )
+            for batch in batches:
+                yield from _dataframe_to_items(batch)
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +469,14 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 class ScatterWriter:
     """Writes scatter chunk files as zstd-compressed Parquet, one combined file per flush.
 
-    DataFrames are routed to per-target buffers via ``_SHARD_COL``. Each flush
-    combines all buffered targets into a single ``c{chunk:04d}.parquet`` file,
-    sorted by ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars
-    predicate pushdown skips non-target row groups on the read side.
+    Accepts routing-column DataFrames (see ``_items_to_dataframe`` for the
+    Python-items adapter) and buffers them as a frame list — appends are free,
+    and the frames are combined with one concat per flush. Buffering frames
+    keeps the interface ready for DataFrame/RecordBatch-native pipelines.
+
+    Each flush writes a single ``c{chunk:04d}.parquet`` file sorted by
+    ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
+    pushdown skips non-target row groups on the read side.
 
     Flushing is cgroup-memory-based: when the container memory usage exceeds
     ``_SCATTER_FLUSH_THRESHOLD``, all buffers are flushed together into one
@@ -456,8 +505,15 @@ class ScatterWriter:
         self._flush_threshold_bytes = int(self._memory_available_bytes * _SCATTER_FLUSH_THRESHOLD)
         self._flush_target_bytes = int(self._memory_available_bytes * _SCATTER_FLUSH_TARGET)
 
-        self._buffer: pl.DataFrame | None = None
+        # Buffered DataFrames, combined into one file per flush. Buffering
+        # frames (not Python items) keeps the writer format-agnostic: a future
+        # RecordBatch/DataFrame-native pipeline can feed frames directly.
+        self._frames: list[pl.DataFrame] = []
         self._chunk_paths: list[str] = []
+        # Payload bytes written per target shard, recorded in the sidecar so
+        # reducers know their shard's exact data size for the external-sort
+        # decision without opening any chunk files.
+        self._shard_bytes: defaultdict[int, int] = defaultdict(int)
         self._avg_item_bytes: float = 0.0
         self._total_bytes_written: int = 0
         self._total_rows_written: int = 0
@@ -472,12 +528,12 @@ class ScatterWriter:
 
     def _flush(self) -> None:
         """Flush the accumulated buffer into one combined Parquet file sorted by [_SHARD_COL, _SORT_KEY_COL]."""
-        if self._buffer is None:
+        if not self._frames:
             gc.collect()
             return
 
-        buffer = self._buffer
-        self._buffer = None
+        buffer = pl.concat(self._frames, rechunk=False)
+        self._frames = []
 
         if self._combiner_fn is not None:
             frames: list[pl.DataFrame] = []
@@ -498,6 +554,9 @@ class ScatterWriter:
 
         self._total_bytes_written += int(buffer_sorted.estimated_size())
         self._total_rows_written += len(buffer_sorted)
+        shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
+        for shard_val, nbytes in shard_sizes.iter_rows():
+            self._shard_bytes[shard_val] += int(nbytes)
 
         # Size row groups so each target shard fits in roughly one row group,
         # enabling Polars predicate pushdown to skip non-matching groups.
@@ -526,18 +585,15 @@ class ScatterWriter:
         gc.collect()
 
     def write(self, df: pl.DataFrame) -> None:
-        """Accumulate a DataFrame into the buffer, flushing on memory pressure.
+        """Buffer a DataFrame, flushing on memory pressure.
 
         The DataFrame must contain ``_SHARD_COL`` (int32) and ``_SORT_KEY_COL``
-        columns produced by ``_items_to_dataframe``.
+        columns as produced by ``_items_to_dataframe``.
         """
         if len(df) == 0:
             return
 
-        if self._buffer is None:
-            self._buffer = df
-        else:
-            self._buffer.extend(df)
+        self._frames.append(df)
         self._write_calls += 1
 
         if self._write_calls % _MEMORY_CHECK_INTERVAL == 0:
@@ -586,6 +642,7 @@ class ScatterWriter:
         sidecar: dict = {
             "files": list(self._chunk_paths),
             "avg_item_bytes": round(self._avg_item_bytes, 1),
+            "shard_bytes": {str(k): v for k, v in self._shard_bytes.items()},
         }
 
         with log_time(f"Writing scatter meta for {self._data_path}"):
