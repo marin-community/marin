@@ -112,17 +112,11 @@ targets:
   from initial state under a new regional identity.
 - Do not re-run a `(configuration, rung)` to estimate noise; training is treated as deterministic
   enough that one objective per logical trial suffices.
-- **GCS path formats (operator-fixed):** tokenized caches are written region-local, under
-  `tokenized/`, at `gs://marin-<region>/tokenized/contacts-v1/<CACHE_VERSION>/` and
-  `.../contacts-v1-val/<CACHE_VERSION>/`. Datasets must never be written to the bucket root. Run
-  outputs (checkpoints, W&B mirror) land at `gs://marin-<region>/<run_id>/<SWEEP_VERSION>/`.
-- **Versions are split:** `SWEEP_VERSION` keys run/checkpoint identity, `CACHE_VERSION` keys the
-  tokenize cache; both are calendar versions and both are emitted as W&B tags
-  (`sweep_version=…`, `cache_version=…`). Bump `SWEEP_VERSION` to fork a training campaign while
-  reusing the cache; bump `CACHE_VERSION` to rebuild it.
-- **W&B key aesthetics are not a constraint.** The component/eval keys carry the `tokenized/`
-  storage prefix (objective `eval/tokenized/contacts-v1-val/loss`) because the tokenize handle
-  name doubles as path and component key; this is accepted, not to be "fixed".
+- **Data locations (GCS, region-local):** raw docs at
+  `gs://marin-<region>/protein-structure/MarinFold/exp53_contacts_v1_5x/documents/{train,val}/`;
+  tokenized caches under `tokenized/` at `gs://marin-<region>/tokenized/contacts-v1{,-val}/<CACHE_VERSION>/`.
+  Never write datasets to the bucket root.
+- **W&B objective key** is `eval/tokenized/contacts-v1-val/loss` (the component key carries the `tokenized/` prefix).
 
 ## Reviewed Assumptions
 

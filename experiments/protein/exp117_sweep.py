@@ -108,6 +108,11 @@ WANDB_GROUP: str = "exp117-contacts-v1-tune"
 # W&B group, "smoke" tag, tiny cadence) so it never resumes or shares a run with a real point.
 SMOKE_RUN_PREFIX: str = "prot-exp117-smoke"
 SMOKE_WANDB_GROUP: str = "exp117-smoke"
+# Manual smoke identity token (not dated). Folded into the smoke run id so a re-run after a code
+# or recipe change gets a FRESH run + checkpoint path instead of resuming/merging the prior smoke
+# run of the same (point, region, tpu, overhead). Bump ("v2", ...) to fork a clean smoke run; the
+# old run and its checkpoints are left in place untouched.
+SMOKE_VERSION: str = "v1"
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Nominal point used when EPOCHS/LR/WD are omitted in smoke mode; overridden by any that are
@@ -417,21 +422,29 @@ def smoke_shape(point: Point, region: str, steps: int, tpu: str, overhead_factor
 
     Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path,
     but under a smoke-only identity and with an eval/checkpoint every ``steps //
-    SMOKE_NUM_EVALS`` so at least one of each fires within the short run. Unlike a sweep point,
-    the slice and ``overhead_factor`` are folded into the run id (and tagged): the HBM-calibration
-    campaign runs many ``(slice, region, overhead)`` combinations that share ``point`` + region,
-    and each must be its own W&B run rather than colliding/resuming.
+    SMOKE_NUM_EVALS`` so at least one of each fires within the short run. The slice,
+    ``overhead_factor``, and ``SMOKE_VERSION`` are folded into the run id (and tagged): the
+    HBM-calibration campaign runs many ``(slice, region, overhead)`` combinations that share
+    ``point`` + region, and ``SMOKE_VERSION`` forks a fresh identity after a recipe change so a
+    re-run never resumes/merges a prior smoke run rather than colliding.
     """
     every = max(1, steps // SMOKE_NUM_EVALS)
     base = run_id(point, region, SMOKE_RUN_PREFIX)
-    identity = f"{base}-{tpu}-oh{_fmt_overhead(overhead_factor)}"
+    identity = f"{base}-{tpu}-oh{_fmt_overhead(overhead_factor)}-{SMOKE_VERSION}"
     return RunShape(
         run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
         num_train_steps=steps,
         steps_per_eval=every,
         checkpoint_every=every,
-        tags=[*_tags(point, region), "smoke", "hbm-calib", f"tpu={tpu}", f"hbm_overhead={overhead_factor:g}"],
+        tags=[
+            *_tags(point, region),
+            "smoke",
+            "hbm-calib",
+            f"tpu={tpu}",
+            f"hbm_overhead={overhead_factor:g}",
+            f"smoke_version={SMOKE_VERSION}",
+        ],
     )
 
 
