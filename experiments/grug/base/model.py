@@ -81,14 +81,26 @@ class CausalSelfAttention(eqx.Module):
 
     @trace_grads
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        position_ids: jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
-        q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        q, k = apply_rotary_embedding(
+            q,
+            k,
+            seq_len=seq_len,
+            head_dim=head_dim,
+            rope=self.cfg.rope,
+            position_ids=position_ids,
+        )
         attn_out = attention(q, k, v, mask)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=Pbatch)
@@ -150,9 +162,14 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"], mask: AttentionMask | jax.Array) -> Float[Array, "B S D"]:
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        position_ids: jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
         x = trace_backward_activation(x, "resid_in")
-        x = x + self.attn(self.rms_attn(x), mask)
+        x = x + self.attn(self.rms_attn(x), mask, position_ids)
         x = trace_backward_activation(x, "resid_post_attn")
         x = x + self.mlp(self.rms_mlp(x))
         return trace_backward_activation(x, "resid_out")
@@ -187,17 +204,33 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        position_ids: jax.Array | None = None,
     ) -> Float[Array, "B S D"]:
         if mask is None:
             mask = AttentionMask.causal()
 
+        hidden = self.embed_tokens(token_ids)
+        return self.from_embeddings(hidden, mask=mask, position_ids=position_ids)
+
+    @named_call
+    def embed_tokens(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
         with jax.named_scope("token_embed"):
             hidden = self.token_embed.at[token_ids].get(out_sharding=Pbatch)
-            hidden = log_backward_activation(hidden)
+            return log_backward_activation(hidden)
+
+    @named_call
+    def from_embeddings(
+        self,
+        hidden: Float[Array, "B S D"],
+        *,
+        mask: AttentionMask | jax.Array,
+        position_ids: jax.Array | None = None,
+    ) -> Float[Array, "B S D"]:
+        """Run transformer blocks on caller-supplied input embeddings."""
         for i, block in enumerate(self.blocks):
             with jax.named_scope(f"block_{i}"):
                 block_fn = block if is_backward_flow_active() else eqx.filter_checkpoint(block)
-                hidden = block_fn(hidden, mask)
+                hidden = block_fn(hidden, mask, position_ids)
         with jax.named_scope("final_norm"):
             hidden = self.final_norm(hidden)
             return log_backward_activation(hidden)
@@ -207,8 +240,9 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        position_ids: jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        hidden = self(token_ids, mask=mask)
+        hidden = self(token_ids, mask=mask, position_ids=position_ids)
         return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=Plogits)
 
     def next_token_loss(
@@ -217,13 +251,14 @@ class Transformer(eqx.Module):
         loss_weight: Float[Array, "B S"],
         *,
         mask: AttentionMask | jax.Array | None = None,
+        position_ids: jax.Array | None = None,
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         loss_implementation: str | tuple[str, ...] | None = None,
     ) -> jax.Array:
         """Compute next-token cross-entropy loss for a batch."""
-        hidden = self(token_ids, mask=mask)
+        hidden = self(token_ids, mask=mask, position_ids=position_ids)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 

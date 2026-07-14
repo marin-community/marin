@@ -195,11 +195,14 @@ class AttentionMask(eqx.Module):
         return mask
 
 
-def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
+def _rotary_cache(
+    position_ids: jax.Array,
+    head_dim: int,
+    rope: RotaryConfig,
+) -> tuple[jax.Array, jax.Array]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
-    positions = jnp.arange(seq_len, dtype=jnp.float32)
-    angles = positions[:, None] * inv_freq[None, :]
+    angles = position_ids.astype(jnp.float32)[..., None] * inv_freq
     cos = jnp.cos(angles)
     sin = jnp.sin(angles)
     return cos, sin
@@ -213,10 +216,21 @@ def apply_rotary_embedding(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    position_ids: jax.Array | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
-    cos, sin = _rotary_cache(seq_len, head_dim, rope)
-    cos = cos[None, :, None, :]
-    sin = sin[None, :, None, :]
+    if position_ids is None:
+        position_ids = jnp.arange(seq_len, dtype=jnp.int32)
+    if position_ids.shape not in ((seq_len,), (q.shape[0], seq_len)):
+        raise ValueError(
+            f"position_ids must have shape ({seq_len},) or ({q.shape[0]}, {seq_len}), got {position_ids.shape}"
+        )
+    cos, sin = _rotary_cache(position_ids, head_dim, rope)
+    if position_ids.ndim == 1:
+        cos = cos[None, :, None, :]
+        sin = sin[None, :, None, :]
+    else:
+        cos = cos[:, :, None, :]
+        sin = sin[:, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
         dtype = x.dtype
@@ -344,8 +358,7 @@ def _tpu_splash_attention(
     # KV sequence must not be sharded for splash attention.
     if k_pspec[2] is not None:
         raise NotImplementedError(
-            "Splash attention does not support sharding the KV sequence dimension. "
-            f"Got KV sequence spec: {k_pspec[2]}"
+            f"Splash attention does not support sharding the KV sequence dimension. Got KV sequence spec: {k_pspec[2]}"
         )
 
     head_shards = splash_partition_spec_shard_factor(q_pspec[1], mesh)

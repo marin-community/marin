@@ -13,10 +13,40 @@ from levanter.data.text.examples import GrugLmExample
 import levanter.grug.attention._fa4_thd as fa4_thd
 from levanter.grug.attention import (
     AttentionMask,
+    RotaryConfig,
+    apply_rotary_embedding,
     attention,
     reference_attention,
     thd_segment_metadata_from_segment_ids,
 )
+
+
+def test_rotary_embedding_accepts_runtime_positions():
+    q, k, _ = _make_qkv(batch=2, q_len=5, k_len=5, q_heads=2, kv_heads=2)
+    rope = RotaryConfig()
+
+    default_q, default_k = apply_rotary_embedding(q, k, seq_len=5, head_dim=8, rope=rope)
+    explicit_q, explicit_k = apply_rotary_embedding(
+        q,
+        k,
+        seq_len=5,
+        head_dim=8,
+        rope=rope,
+        position_ids=jnp.broadcast_to(jnp.arange(5), (2, 5)),
+    )
+    zero_q, zero_k = apply_rotary_embedding(
+        q,
+        k,
+        seq_len=5,
+        head_dim=8,
+        rope=rope,
+        position_ids=jnp.zeros((2, 5), dtype=jnp.int32),
+    )
+
+    np.testing.assert_allclose(default_q, explicit_q, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(default_k, explicit_k, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(zero_q, q, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(zero_k, k, atol=1e-6, rtol=1e-6)
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
