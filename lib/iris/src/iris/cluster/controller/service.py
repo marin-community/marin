@@ -3181,17 +3181,18 @@ class ControllerServiceImpl:
             for key, values in adv.items():
                 summary.advertised_attributes[key].values.extend(sorted(values))
 
-            # Free-capacity metric for federation queueing. A backend that supplies
-            # it (worker-daemon) fills availability even when empty (authoritative
-            # zero); one that returns None (CLUSTER_VIEW) leaves it UNSET so a peer
-            # falls back to shape-only federation. observation_epoch_ms is the
-            # generation the parent's reservation ledger keys on.
-            free = backend.available_resources()
-            if free is not None:
+            # Capacity metric for federation queueing and the dashboard. A backend
+            # that supplies it fills availability even when empty (authoritative
+            # zero); one that returns None leaves it UNSET so a peer falls back to
+            # shape-only federation. observation_epoch_ms is the generation the
+            # parent's reservation ledger keys on.
+            capacity = backend.resource_capacity()
+            if capacity is not None:
                 summary.availability.version = AVAILABILITY_METRIC_VERSION
                 summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
-                for token, amount in free.items():
-                    summary.availability.amounts[token] = amount
+                for token, device_capacity in capacity.items():
+                    summary.availability.amounts[token] = device_capacity.free
+                    summary.availability.total_amounts[token] = device_capacity.total
 
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)

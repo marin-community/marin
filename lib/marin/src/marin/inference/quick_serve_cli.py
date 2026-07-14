@@ -3,28 +3,31 @@
 
 """``marin-serve`` — one-liner to serve an HF model on an Iris TPU or GPU slice.
 
-Submits a single Iris job that boots vLLM on a single-host TPU or GPU slice and
-registers a browser dashboard + OpenAI-compatible endpoint through the controller
-proxy. The job stops itself after ``--timeout-hours`` so a forgotten server frees
-its slice.
+Submits a single Iris job that boots a serving backend on a single-host TPU or GPU slice and
+registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
+stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
 
 Examples::
 
     marin-serve Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8
+    marin-serve Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8 --backend levanter
     marin-serve gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
     marin-serve Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a
 
-``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). The GPU
-path provisions stock CUDA vLLM in an isolated ``uv`` tool env at ``--vllm-version``.
+``--backend`` picks the stack that answers requests: ``vllm`` (default) runs vLLM as a
+subprocess, ``levanter`` runs Levanter's inference engine in-process on the slice's chips. Both
+expose the same OpenAI API through the same dashboard, so serving one model under each and
+pointing one client at both endpoints compares them directly.
 
-Inside a marin checkout the TPU path serves vLLM from the workspace lock. Outside one it
-serves from an isolated ``uv`` tool env: ``marin-core`` installed from PyPI plus Marin's
-forked TPU vLLM. ``--isolated-vllm`` selects that env inside a checkout too.
+``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). On the vLLM GPU
+path stock CUDA vLLM is provisioned in an isolated ``uv`` tool env at ``--vllm-version``; on the
+vLLM TPU path, a marin checkout serves vLLM from the workspace lock, and outside a checkout (or
+with ``--isolated-vllm``) from an isolated ``uv`` tool env holding Marin's forked TPU vLLM. The
+Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
 
-``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job
-to a named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max
-sequence length are inferred automatically; override with ``--tensor-parallel-size`` /
-``--max-model-len``.
+``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job to a
+named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
+inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``.
 """
 
 import contextlib
@@ -34,6 +37,7 @@ import re
 import shlex
 import time
 import uuid
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import click
@@ -53,11 +57,13 @@ from iris.cluster.types import (
     is_job_finished,
     tpu_device,
 )
+from iris.rpc import job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
+from marin.inference.serving_backend import LevanterBackend, ServingBackend, VllmBackend
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_server import WORKER_PYTHON_VERSION
 
@@ -67,11 +73,110 @@ _WORKER_EXTRAS = ("tpu", "vllm")
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
 # lock), so the worker venv needs no accelerator extra at all — base Marin suffices.
 _GPU_WORKER_EXTRAS: tuple[str, ...] = ()
+# Levanter serves in-process, so the worker venv needs the accelerator's JAX and nothing else:
+# marin-core already depends on marin-levanter[serve] for the FastAPI/uvicorn surface.
+_LEVANTER_TPU_EXTRAS = ("tpu",)
+_LEVANTER_GPU_EXTRAS = ("gpu",)
 # Pinned CUDA vLLM for the GPU path, overridable with --vllm-version. Stock PyPI vLLM
 # (>=0.25) targets torch 2.11 / CUDA 13; provisioned per-job via uvx, so a bump is just
 # this string with no workspace re-lock.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.0"
 _ENDPOINT_READY_POLL_SECONDS = 5.0
+
+# Options that only mean something to one backend, by Click parameter name. Passing one to the
+# other backend is a mistake worth failing on, but several carry non-None defaults, so only a
+# value the user actually typed counts (hence the ParameterSource check in _reject_foreign_flags).
+_VLLM_ONLY_OPTIONS = {
+    "vllm_version": "--vllm-version",
+    "vllm_args": "--vllm-arg",
+    "isolated_vllm": "--isolated-vllm",
+    "max_num_batched_tokens": "--max-num-batched-tokens",
+}
+_LEVANTER_ONLY_OPTIONS = {
+    "max_seqs": "--max-seqs",
+    "page_size": "--page-size",
+    "hbm_utilization": "--hbm-utilization",
+}
+
+
+def _reject_foreign_flags(backend: str, options: dict[str, str]) -> None:
+    """Fail if the user typed an option belonging to a backend they did not select."""
+    ctx = click.get_current_context()
+    typed = [flag for name, flag in options.items() if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE]
+    if typed:
+        raise click.ClickException(f"{', '.join(typed)} cannot be used with --backend {backend}.")
+
+
+@dataclass(frozen=True)
+class ServingPlan:
+    """How to serve on this slice: which backend, on what device, in which worker environment."""
+
+    backend: ServingBackend
+    device: job_pb2.DeviceConfig
+    worker_extras: tuple[str, ...]
+    tpu_type: str | None = None
+    gpu_type: str | None = None
+    gpu_count: int | None = None
+
+
+def _resolve_serving_plan(
+    *,
+    backend: str,
+    tpu: str,
+    gpu: str | None,
+    in_checkout: bool,
+    isolated_vllm: bool,
+    task_image: str | None,
+    cuda_vllm_version: str,
+    vllm: VllmBackend,
+    levanter: LevanterBackend,
+    extras: tuple[str, ...],
+) -> ServingPlan:
+    """Pick the backend, the slice's device, and the extras the worker venv needs to run it.
+
+    ``vllm`` and ``levanter`` arrive carrying the knobs the user set; what is decided here is which
+    of them serves, and where its runtime comes from. Levanter computes in the worker venv, so that
+    venv carries the accelerator's JAX and nothing else; vLLM runs as a subprocess, either from the
+    workspace lock or from an isolated uv-tool env.
+    """
+    if gpu is not None:
+        if not in_checkout:
+            raise click.ClickException(
+                "marin-serve --gpu serves from a marin checkout (the worker runs marin-core from "
+                "it); none was found. Run marin-serve from inside a marin checkout."
+            )
+        try:
+            gpu_type, gpu_count = parse_gpu_spec(gpu)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        device = gpu_device(gpu_type, gpu_count)
+        if backend == "levanter":
+            return ServingPlan(
+                levanter, device, (*_LEVANTER_GPU_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count
+            )
+        # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a prebuilt
+        # --task-image, which is expected to ship its own vLLM on PATH.
+        if task_image is None:
+            vllm = replace(vllm, vllm_version=cuda_vllm_version)
+        return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
+
+    topology = get_tpu_topology(tpu)
+    if topology.vm_count != 1:
+        raise click.ClickException(
+            f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); quick-serve supports "
+            f"single-host slices only (e.g. v6e-8, v5litepod-8)."
+        )
+    device = tpu_device(tpu)
+    if backend == "levanter":
+        return ServingPlan(levanter, device, (*_LEVANTER_TPU_EXTRAS, *extras), tpu_type=tpu)
+    if isolated_vllm or not in_checkout:
+        # Provision the forked TPU vLLM from an isolated uvx env when there is no checkout to build
+        # it from (or when explicitly requested); otherwise serve the workspace TPU-vLLM from the
+        # lock. The worker venv always needs the `tpu` extra for the serving glue's jax/libtpu; the
+        # `vllm` extra is only for the in-workspace build.
+        vllm = replace(vllm, tpu_vllm_ref=vllm_fork_ref(), tpu_inference_ref=tpu_inference_fork_ref())
+        return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
+    return ServingPlan(vllm, device, (*_WORKER_EXTRAS, *extras), tpu_type=tpu)
 
 
 def _default_job_name(model: str) -> str:
@@ -130,7 +235,7 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
     raise click.ClickException(
         f"Timed out after {timeout_seconds:.0f}s waiting for {endpoint_name!r}. "
-        "The job is still booting vLLM; re-check later via the Iris dashboard."
+        "The job is still booting the model; re-check later via the Iris dashboard."
     )
 
 
@@ -164,6 +269,12 @@ def _mint_and_print_capability_url(
 
 @click.command(context_settings={"show_default": True})
 @click.argument("model")
+@click.option(
+    "--backend",
+    type=click.Choice(["vllm", "levanter"]),
+    default="vllm",
+    help="Serving stack: vllm (subprocess) or levanter (in-process JAX inference engine).",
+)
 @click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
 @click.option(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
@@ -189,12 +300,28 @@ def _mint_and_print_capability_url(
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
-@click.option("--max-model-len", type=int, default=None, help="vLLM max sequence length (default: derived from model).")
 @click.option(
-    "--max-num-batched-tokens", type=int, default=512, help="Prefill batch size; small values avoid TPU VMEM overflow."
+    "--max-model-len",
+    type=int,
+    default=None,
+    help="Max sequence length (vLLM derives it from the model when unset; levanter serves a 4k window).",
+)
+@click.option(
+    "--max-num-batched-tokens",
+    type=int,
+    default=512,
+    help="vLLM backend: prefill batch size; small values avoid TPU VMEM overflow.",
+)
+@click.option("--max-seqs", type=int, default=16, help="Levanter backend: concurrent sequence slots.")
+@click.option("--page-size", type=int, default=128, help="Levanter backend: tokens per KV-cache page.")
+@click.option(
+    "--hbm-utilization",
+    type=float,
+    default=0.8,
+    help="Levanter backend: fraction of device HBM the KV cache may claim.",
 )
 @click.option("--tensor-parallel-size", type=int, default=None, help="TP size (default: auto from heads + chips).")
-@click.option("--dtype", default="bfloat16", help="vLLM dtype.")
+@click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
 @click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
 @click.option(
     "--no-cache", is_flag=True, default=False, help="Skip the GCS model cache; always download from HuggingFace."
@@ -205,7 +332,7 @@ def _mint_and_print_capability_url(
     type=click.Choice(["private", "link"]),
     default="private",
     help="Proxy access. private: cluster identity only. link: mints a scoped capability "
-    "URL anyone with the link can call off-cluster (printed once vLLM is ready).",
+    "URL anyone with the link can call off-cluster (printed once the model is ready).",
 )
 @click.option("--region", default=None, help="Comma-separated region(s) to pin the slice to.")
 @click.option("--cpu", type=float, default=8.0)
@@ -236,10 +363,12 @@ def _mint_and_print_capability_url(
     "--wait-timeout",
     type=float,
     default=1800.0,
-    help="Seconds allowed for vLLM to boot; bounds both the client wait and the in-job startup.",
+    help="Seconds the client waits for the endpoint to register; on --backend vllm it also bounds "
+    "the in-job server boot.",
 )
 def main(
     model: str,
+    backend: str,
     cluster: str | None,
     controller: str | None,
     tpu: str,
@@ -251,6 +380,9 @@ def main(
     chat_template: str | None,
     max_model_len: int | None,
     max_num_batched_tokens: int,
+    max_seqs: int,
+    page_size: int,
+    hbm_utilization: float,
     tensor_parallel_size: int | None,
     dtype: str,
     cache_ttl_days: int,
@@ -278,6 +410,7 @@ def main(
     tpu_from_cli = click.get_current_context().get_parameter_source("tpu") == ParameterSource.COMMANDLINE
     if gpu is not None and tpu_from_cli:
         raise click.ClickException("--gpu and --tpu are mutually exclusive; pass only one.")
+    _reject_foreign_flags(backend, _VLLM_ONLY_OPTIONS if backend == "levanter" else _LEVANTER_ONLY_OPTIONS)
 
     job_name = name or _default_job_name(model)
     if "/" in job_name:
@@ -293,75 +426,49 @@ def main(
 
     endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
-    tpu_vllm_ref: str | None = None
-    tpu_inference_ref: str | None = None
-    if gpu is not None:
-        if workspace_dir is None:
-            raise click.ClickException(
-                "marin-serve --gpu serves from a marin checkout (the worker runs marin-core from "
-                "it); none was found. Run marin-serve from inside a marin checkout."
-            )
-        try:
-            gpu_variant, gpu_count = parse_gpu_spec(gpu)
-        except ValueError as exc:
-            raise click.ClickException(str(exc)) from exc
-        tpu_type: str | None = None
-        device = gpu_device(gpu_variant, gpu_count)
-        worker_extras = (*_GPU_WORKER_EXTRAS, *extras)
-        # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a
-        # prebuilt --task-image, which is expected to ship its own vLLM on PATH.
-        cuda_vllm_version = None if task_image is not None else vllm_version
-    else:
-        topology = get_tpu_topology(tpu)
-        if topology.vm_count != 1:
-            raise click.ClickException(
-                f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); quick-serve supports "
-                f"single-host slices only (e.g. v6e-8, v5litepod-8)."
-            )
-        gpu_variant, gpu_count = None, None
-        tpu_type = tpu
-        device = tpu_device(tpu)
-        cuda_vllm_version = None
-        # Provision the forked TPU vLLM from an isolated uvx env when there is no checkout
-        # to build it from (or when explicitly requested); otherwise serve the workspace
-        # TPU-vLLM from the lock. The worker venv always needs the `tpu` extra for the
-        # serving glue's jax/libtpu; the `vllm` extra is only for the in-workspace build.
-        if isolated_vllm or workspace_dir is None:
-            tpu_vllm_ref = vllm_fork_ref()
-            tpu_inference_ref = tpu_inference_fork_ref()
-            worker_extras = ("tpu", *extras)
-        else:
-            worker_extras = (*_WORKER_EXTRAS, *extras)
+    plan = _resolve_serving_plan(
+        backend=backend,
+        tpu=tpu,
+        gpu=gpu,
+        in_checkout=workspace_dir is not None,
+        isolated_vllm=isolated_vllm,
+        task_image=task_image,
+        cuda_vllm_version=vllm_version,
+        vllm=VllmBackend(
+            max_num_batched_tokens=max_num_batched_tokens,
+            # The in-job vLLM boot budget must cover the same window the client waits, so raising
+            # --wait-timeout for a slow-booting model actually takes effect.
+            startup_timeout_seconds=int(wait_timeout),
+            extra_args=tuple(vllm_args),
+        ),
+        levanter=LevanterBackend(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
+        extras=extras,
+    )
 
     config = QuickServeConfig(
         model=model,
         endpoint_name=endpoint,
-        tpu_type=tpu_type,
-        gpu_type=gpu_variant,
-        gpu_count=gpu_count,
+        backend=plan.backend,
+        tpu_type=plan.tpu_type,
+        gpu_type=plan.gpu_type,
+        gpu_count=plan.gpu_count,
         access=endpoint_access,
         dtype=dtype,
         max_model_len=max_model_len,
-        max_num_batched_tokens=max_num_batched_tokens,
         tensor_parallel_size=tensor_parallel_size,
         chat_template_content=_resolve_chat_template(chat_template),
         cache_ttl_days=0 if no_cache else cache_ttl_days,
         timeout_hours=timeout_hours,
-        # The in-job vLLM startup budget must cover the same window the client waits,
-        # so raising --wait-timeout for a slow-booting model actually takes effect.
-        vllm_startup_timeout_seconds=int(wait_timeout),
-        extra_vllm_args=tuple(vllm_args),
-        vllm_version=cuda_vllm_version,
-        tpu_vllm_ref=tpu_vllm_ref,
-        tpu_inference_ref=tpu_inference_ref,
     )
 
     # No checkout to bundle → install marin-core from PyPI on the worker (checkout-free
     # TPU path); otherwise sync the bundled workspace with the resolved extras.
     if workspace_dir is None:
-        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), worker_extras)])
+        environment = EnvironmentSpec(
+            setup_scripts=[_checkout_free_setup_script(_marin_core_version(), plan.worker_extras)]
+        )
     else:
-        environment = EnvironmentSpec(extras=worker_extras)
+        environment = EnvironmentSpec(extras=plan.worker_extras)
 
     constraints: list[Constraint] = []
     if region:
@@ -380,7 +487,7 @@ def main(
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,
-                resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=device),
+                resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=plan.device),
                 environment=environment,
                 ports=["http"],
                 constraints=constraints or None,
@@ -392,6 +499,7 @@ def main(
             click.echo("")
             click.echo(f"  job          {job}")
             click.echo(f"  model        {model}")
+            click.echo(f"  backend      {backend}")
             if gpu is not None:
                 click.echo(f"  gpu          {config.accelerator_label}")
             else:
@@ -411,12 +519,12 @@ def main(
             click.echo("")
 
             if not wait:
-                click.echo("Submitted. Open the dashboard from the Iris UI once vLLM has booted.")
+                click.echo("Submitted. Open the dashboard from the Iris UI once the model has booted.")
                 if endpoint_access == EndpointAccess.ENDPOINT_ACCESS_LINK:
-                    click.echo("Re-run with --wait once vLLM registers to mint the off-cluster capability URL.")
+                    click.echo("Re-run with --wait once the server registers to mint the off-cluster capability URL.")
                 return
 
-            click.echo("Waiting for vLLM to boot and register (Ctrl-C to detach; the job keeps running) …")
+            click.echo("Waiting for the model to load and register (Ctrl-C to detach; the job keeps running) …")
             _wait_for_endpoint(client, job, endpoint, wait_timeout)
             click.echo("")
             click.echo(f"READY — dashboard: {proxy_url}/")

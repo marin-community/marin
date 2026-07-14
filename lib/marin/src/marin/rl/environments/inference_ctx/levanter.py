@@ -29,6 +29,15 @@ from openai.types.chat import ChatCompletion
 
 logger = logging.getLogger(__name__)
 
+# Base and midtrained checkpoints ship no chat template, but rollouts go through
+# /v1/chat/completions. This renders the plain "role: content" transcript that
+# `BaseInferenceContext.tokenize_prompt` falls back to, so the prompt the server generates from and
+# the prompt tokens recorded in the rollout stay identical.
+FALLBACK_CHAT_TEMPLATE = (
+    "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}"
+    "{% if not loop.last %}\n{% endif %}{% endfor %}"
+)
+
 UNSUPPORTED_LEVANTER_DECODING_FIELDS = (
     "top_k",
     "min_p",
@@ -61,7 +70,14 @@ class LevanterInferenceContext(BaseInferenceContext):
         inference_config: LevanterInferenceContextConfig,
     ):
         self.inference_server_config = inference_config.inference_server_config
-        self.tokenizer = inference_config.tokenizer
+        tokenizer = inference_config.tokenizer
+        if tokenizer.chat_template is None:
+            logger.warning(
+                "Tokenizer %s has no chat template; rendering rollout prompts as a plain 'role: content' transcript.",
+                tokenizer.name_or_path,
+            )
+            tokenizer = tokenizer.with_chat_template(FALLBACK_CHAT_TEMPLATE)
+        self.tokenizer = tokenizer
         self._stop_tokens = inference_config.stop_tokens
         self.max_tokens = inference_config.max_tokens
         self.mesh = inference_config.mesh
@@ -157,7 +173,7 @@ class LevanterInferenceContext(BaseInferenceContext):
             # `request_kwargs` never sets `stream`, so spreading it as untyped kwargs prevents
             # the non-streaming overload from being selected; the result is always a ChatCompletion.
             completion = await client.chat.completions.create(
-                model=getattr(self._inference_server.config, "model_name", "test-model"),
+                model=self._inference_server.config.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 **request_kwargs,
                 timeout=30,

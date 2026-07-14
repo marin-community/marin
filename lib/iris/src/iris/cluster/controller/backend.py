@@ -141,6 +141,15 @@ def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
 
 
 @dataclass(frozen=True)
+class DeviceCapacity:
+    """Free vs. total consumable capacity for one resource token, in the token's
+    natural unit (accelerator variant → chips)."""
+
+    free: int
+    total: int
+
+
+@dataclass(frozen=True)
 class TaskTarget:
     """Addresses one task attempt for on-demand RPCs (status / profile / exec).
 
@@ -492,14 +501,15 @@ class TaskBackend(Protocol):
         the (comma-expanded) attribute sets."""
         ...
 
-    def available_resources(self) -> dict[str, int] | None:
-        """Free consumable capacity right now, per resource token, for federation.
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+        """Free and total consumable capacity right now, per resource token.
 
         A federation parent advertises this to peers so a queued federated job can
-        wait for a peer that actually has room (see ``federation.availability``).
-        v1 reports free accelerator chips keyed by lowercased ``device-variant``
-        (e.g. ``{"h100": 8}``), computed from the same live-worker ``WorkerCapacity``
-        (``total - committed``) the scheduler uses.
+        wait for a peer that actually has room (see ``federation.availability``);
+        the dashboard renders the same numbers. v1 reports accelerator chips keyed
+        by lowercased ``device-variant`` (e.g. ``{"h100": DeviceCapacity(8, 64)}``),
+        computed from the same live-worker ``WorkerCapacity`` (``total - committed``)
+        the scheduler uses.
 
         Returns ``None`` when this backend does not supply the metric (a placement-
         owning ``CLUSTER_VIEW`` backend that does not track per-worker capacity); the
