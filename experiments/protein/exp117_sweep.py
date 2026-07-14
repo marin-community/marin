@@ -18,18 +18,14 @@ documents tokenized in-pipeline) mirrors #75 / MarinFold #70. Where #117 and #75
 **#117 wins** -- notably one permanent checkpoint every epoch (in addition to the 10-minute
 rolling resumption checkpoint).
 
-Objective being optimized: **final-step ``eval/contacts-v1-val/loss``** (read from W&B).
+Objective being optimized: **final-step ``eval/tokenized/contacts-v1-val/loss``** (read from W&B).
 
 Interface for the adaptive-sweep skills (identity-vs-execution split):
-  * ``TPU`` selects the slice and drives per-device batch sizing
-    (:func:`~experiments.coral.batch_config.tpu_batch_config`) *without* touching run
-    identity: the global batch stays 128 on every slice (so the objective is comparable),
-    and a same-region change to any compatible slice resumes the same run.
-  * ``REGION`` sets the storage prefix (checkpoint locality) and the W&B / trainer run id.
-    A region change starts a fresh run under a fresh regional identity; a same-region
-    re-dispatch resumes the rolling checkpoint. The contacts-v1 documents are tokenized
-    in-pipeline into a region-local cache; the raw docs currently live only in us-east5, so the
-    run must be dispatched there.
+  * ``TPU`` selects the slice and drives per-device batch sizing without touching run identity:
+    global batch stays 128 on every slice, so a same-region slice change resumes the same run.
+  * ``REGION`` sets the storage prefix (cache + checkpoint locality) and the run id. A region
+    change starts a fresh run; a same-region re-dispatch resumes. Documents are tokenized
+    in-pipeline into a region-local cache (raw docs are staged in every eligible region).
 
 Preview a point (builds nothing, submits nothing)::
 
@@ -41,7 +37,7 @@ Launch one run (secrets come from the iris command, never baked into the config)
     source ~/marin.env && uv run iris --cluster marin job run \\
         --user "$USERNAME" --no-wait --region us-east5 --memory=1GB \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
-        -e HUGGING_FACE_HUB_TOKEN "$HUGGING_FACE_HUB_TOKEN" \\
+        -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
         -e EPOCHS 8 -e LR 1e-2 -e WD 0.1 -e TPU v5p-8 -e REGION us-east5 \\
         -- python -m experiments.protein.exp117_sweep
@@ -57,7 +53,7 @@ folded into the run identity, so each ``(slice, region, overhead)`` is a distinc
     source ~/marin.env && uv run iris --cluster marin job run \\
         --user "$USERNAME" --no-wait --region us-east5 --memory=1GB \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
-        -e HUGGING_FACE_HUB_TOKEN "$HUGGING_FACE_HUB_TOKEN" \\
+        -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
         -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 -e HBM_OVERHEAD 0 \\
         -- python -m experiments.protein.exp117_sweep
@@ -95,20 +91,21 @@ _T = TypeVar("_T")
 
 # --- Identity ----------------------------------------------------------------
 
-# Fixed calendar version: keeps the run in the shared namespace and makes the run id,
-# checkpoint path, and fingerprint stable across invocations so re-runs of a point are
-# idempotent and resumable. Bump to fork a fresh campaign over the same recipe.
-# .1: tokenize the contacts-v1 documents in-pipeline (canonical dataset pattern), no adopt/
-# mirror:// and no lib hacks. (This is the same in-pipeline tokenize recipe as the earlier .1
-# campaign, so its already-built tokenize cache is reused; .0/.2-.4 explored other data paths.)
-VERSION: str = "2026.07.13.1"
+# Calendar versions (marin's ArtifactStep requires calendar ``YYYY.MM.DD[.N]`` or a mutable
+# ``dev``). Split so the training campaign and the tokenized cache version independently:
+#   * SWEEP_VERSION keys the run / checkpoint identity (``{run_id}/{SWEEP_VERSION}/``).
+#   * CACHE_VERSION keys the tokenize cache path (``tokenized/contacts-v1{,-val}/{CACHE_VERSION}/``).
+# Bump SWEEP_VERSION to fork a fresh training campaign while reusing the existing cache; bump
+# CACHE_VERSION to rebuild the cache. The train handle depends on the cache handles, so if
+# SWEEP_VERSION is a (fixed) calendar version the cache versions must be too -- a fixed handle
+# cannot depend on a mutable ``dev`` dep (marin ``_lower``).
+SWEEP_VERSION: str = "2026.07.13.1"
+CACHE_VERSION: str = "2026.07.13.1"
 RUN_PREFIX: str = "prot-exp117"
 WANDB_GROUP: str = "exp117-contacts-v1-tune"
 
-# Smoke mode: a throwaway end-to-end validation run under a separate identity, so it can
-# never resume, overwrite, or share a run/checkpoint with a real sweep point. Distinct run
-# prefix + W&B group + a "smoke" tag, plus tiny step/eval/checkpoint cadence, keep it fully
-# isolated and cheap while still exercising data -> train -> eval -> checkpoint on the slice.
+# Smoke mode: a throwaway end-to-end validation run under an isolated identity (distinct prefix,
+# W&B group, "smoke" tag, tiny cadence) so it never resumes or shares a run with a real point.
 SMOKE_RUN_PREFIX: str = "prot-exp117-smoke"
 SMOKE_WANDB_GROUP: str = "exp117-smoke"
 SMOKE_STEPS_DEFAULT: int = 20
@@ -127,18 +124,18 @@ TOKENIZER: str = "timodonnell/contacts-v1-tokenizer@5d68a24a899f"
 VOCAB_SIZE: int = 2845
 TEXT_KEY: str = "document"
 
-# Raw contacts-v1 documents (MarinFold exp53, the corpus #70's exp67 caches were built from),
-# tokenized in-pipeline into a region-local levanter cache (built once, fingerprint-cached,
-# reused) -- the canonical dataset pattern, no ``mirror://``/adopt. Bucket-relative so the raw
-# docs resolve region-local; they currently live only in us-east5.
+# Raw contacts-v1 documents (MarinFold exp53), region-relative so they resolve region-local.
 _DOCS_BASE: str = "protein-structure/MarinFold/exp53_contacts_v1_5x/documents"
 TRAIN_DOCS: str = f"{_DOCS_BASE}/train/*.parquet"
 VAL_DOCS: str = f"{_DOCS_BASE}/val/*.parquet"
 
-# Mixture component keys -> the prefix of each ``eval/<component>/loss`` W&B series. The
-# val key is the swept objective.
-COMPONENT_TRAIN: str = "contacts-v1"
-COMPONENT_VAL: str = "contacts-v1-val"
+# Tokenized-cache handle names. Each name is BOTH the storage subpath under the region prefix
+# (-> ``gs://marin-<region>/{name}/{CACHE_VERSION}/``) AND the mixture component key / eval
+# series prefix (``eval/<name>/loss``). The ``tokenized/`` prefix nests the caches under the
+# conventional ``tokenized/`` location instead of the bucket root; the val name is the swept
+# objective's series.
+COMPONENT_TRAIN: str = "tokenized/contacts-v1"
+COMPONENT_VAL: str = "tokenized/contacts-v1-val"
 
 # Exact train-corpus token count for the contacts-v1 train split at TOKENIZER. Steps/epoch
 # are derived from this, not estimated. Matches the #70 cache; re-derive if the tokenizer
@@ -171,12 +168,9 @@ TOKENS_PER_STEP: int = BATCH_SIZE * SEQ_LEN
 STEPS_PER_EPOCH: int = round(TRAIN_TOKENS / TOKENS_PER_STEP)
 STEPS_PER_EVAL: int = max(1, round(STEPS_PER_EPOCH / NUM_EVALS_PER_EPOCH))
 
-# Default HBM overhead multiplier for the batch-fit estimate (experiments.coral.batch_config).
-# 1.0 matches the coral calibration-study default and is conservative for this model: it
-# predicts at least as much microbatching as #75's hand-verified per-slice configs, so it
-# fits. Overridable per launch via the ``HBM_OVERHEAD`` env var (:func:`parse_overhead_factor`)
-# so the smoke campaign can probe how low it goes before OOM; a smaller value packs more per
-# device. Execution-only -- it never enters run identity.
+# Default HBM overhead multiplier for the batch-fit estimate. 1.0 is conservative (matches #75's
+# hand-verified per-slice microbatching). Overridable per launch via HBM_OVERHEAD to probe the
+# OOM floor; smaller packs more per device. Execution-only -- never enters run identity.
 HBM_OVERHEAD_FACTOR: float = 1.0
 
 
@@ -201,11 +195,12 @@ class Point:
 
 
 def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
-    """The W&B run name, trainer/resume id, and checkpoint subpath for a ``(point, region)``.
+    """The W&B run name, trainer/resume id, and run-output subpath for a ``(point, region)``.
 
     Keyed on the point and the region -- never the TPU -- so a region change is a fresh run
     while any compatible-slice re-dispatch in the same region resumes the same run. ``prefix``
     selects the identity namespace (``SMOKE_RUN_PREFIX`` isolates smoke runs from real ones).
+    Run outputs (checkpoints, W&B mirror) land at ``gs://marin-<region>/{run_id}/{SWEEP_VERSION}/``.
     """
     return f"{prefix}-cv1-1_5b-{point.point_id}-{region}"
 
@@ -333,17 +328,15 @@ def batch_fit(tpu: str, overhead_factor: float) -> tuple[int, int]:
 
 
 def _tokenize_cache(name: str, docs: str, *, validation: bool) -> ArtifactStep[TokenizedCache]:
-    """Tokenize a split of the contacts-v1 documents in-pipeline into a levanter cache handle.
+    """Tokenize a split of the raw documents region-local into a levanter cache handle.
 
-    ``docs`` is a bucket-relative raw-doc glob (resolved region-local). ``name`` is the mixture
-    component key; for the val cache it becomes the ``eval/<name>/loss`` objective series. The
-    cache is built once (fingerprint-cached) under ``{name}/{version}``; ``pack`` is applied on
-    the assembled data config (:func:`_apply_recipe_overrides`), not here.
+    ``name`` is the cache storage subpath and the mixture component key (see COMPONENT_TRAIN/VAL).
+    ``pack`` is applied later on the assembled data config (:func:`_apply_recipe_overrides`).
     """
     return tokenized(
         name=name,
         tokenizer=TOKENIZER,
-        version=VERSION,
+        version=CACHE_VERSION,
         paths=[docs],
         text_key=TEXT_KEY,
         validation=validation,
@@ -352,13 +345,9 @@ def _tokenize_cache(name: str, docs: str, *, validation: bool) -> ArtifactStep[T
 
 
 def _training_env(region: str) -> dict[str, str]:
-    """Environment for the dispatched training job: W&B metadata only.
-
-    Deliberately does *not* set ``MARIN_PREFIX``: the worker resolves ``marin_prefix()`` from
-    its own region (GCE metadata), and the job is pinned to ``region`` via ``ResourceConfig``,
-    so the worker's prefix is the target regional bucket -- where the tokenize output cache and
-    checkpoints land region-local. Secrets (WANDB_API_KEY, HUGGING_FACE_HUB_TOKEN) are passed by
-    the iris command, not baked into the config.
+    """W&B metadata for the dispatched job. No ``MARIN_PREFIX``: the worker resolves
+    ``marin_prefix()`` from its own (pinned) region, so caches and checkpoints land region-local.
+    Secrets come from the iris command, not the config.
     """
     env = {"WANDB_PROJECT": os.environ.get("WANDB_PROJECT", "marin")}
     for key in ("WANDB_ENTITY", "WANDB_MODE"):
@@ -385,6 +374,8 @@ def _tags(point: Point, region: str) -> list[str]:
         f"region={region}",
         f"steps={point.num_train_steps}",
         f"tokens_exact={tokens}",
+        f"sweep_version={SWEEP_VERSION}",
+        f"cache_version={CACHE_VERSION}",
     ]
 
 
@@ -520,7 +511,7 @@ def build_run(
         z_loss_weight=None,
         evals=None,  # no lm-eval-harness; the objective is the weight-0 val-loss eval
         resources=ResourceConfig.with_tpu(tpu, regions=singleton_region_list(region)),
-        version=VERSION,
+        version=SWEEP_VERSION,
         steps_per_eval=shape.steps_per_eval,
         wandb_project=os.environ.get("WANDB_PROJECT", "marin"),
         wandb_group=shape.wandb_group,
@@ -568,9 +559,8 @@ def main() -> None:
     region = parse_region()
     overhead_factor = parse_overhead_factor()
 
-    # No MARIN_PREFIX is set: the driver resolves marin_prefix() from its own region (it is
-    # submitted with --region), and the worker resolves it from its (pinned) region, where the
-    # mirror:// caches and the checkpoint output land region-local.
+    # No MARIN_PREFIX: driver and worker each resolve marin_prefix() from their own region (both
+    # pinned via --region / ResourceConfig), so caches and outputs land region-local.
     point, shape, mode = _resolve_run(region, tpu, overhead_factor)
 
     if preview():

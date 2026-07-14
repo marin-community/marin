@@ -21,8 +21,9 @@ experiment:
     EPOCHS={epochs} LR={learning_rate} WD={weight_decay} TPU={tpu_slice} REGION={region}
     uv run python -m experiments.protein.exp117_sweep
   objective:
-    # Full W&B metric key, comparable across every trial within a rung.
-    wandb_metric: eval/contacts-v1-val/loss
+    # Full W&B metric key, comparable across every trial within a rung. Carries the `tokenized/`
+    # prefix because the component key is the tokenize handle name (see Operator Directives).
+    wandb_metric: eval/tokenized/contacts-v1-val/loss
     # Value recorded at the final training step of the run.
     observation: final_step
     direction: minimize
@@ -111,11 +112,22 @@ targets:
   from initial state under a new regional identity.
 - Do not re-run a `(configuration, rung)` to estimate noise; training is treated as deterministic
   enough that one objective per logical trial suffices.
+- **GCS path formats (operator-fixed):** tokenized caches are written region-local, under
+  `tokenized/`, at `gs://marin-<region>/tokenized/contacts-v1/<CACHE_VERSION>/` and
+  `.../contacts-v1-val/<CACHE_VERSION>/`. Datasets must never be written to the bucket root. Run
+  outputs (checkpoints, W&B mirror) land at `gs://marin-<region>/<run_id>/<SWEEP_VERSION>/`.
+- **Versions are split:** `SWEEP_VERSION` keys run/checkpoint identity, `CACHE_VERSION` keys the
+  tokenize cache; both are calendar versions and both are emitted as W&B tags
+  (`sweep_version=…`, `cache_version=…`). Bump `SWEEP_VERSION` to fork a training campaign while
+  reusing the cache; bump `CACHE_VERSION` to rebuild it.
+- **W&B key aesthetics are not a constraint.** The component/eval keys carry the `tokenized/`
+  storage prefix (objective `eval/tokenized/contacts-v1-val/loss`) because the tokenize handle
+  name doubles as path and component key; this is accepted, not to be "fixed".
 
 ## Reviewed Assumptions
 
-- **Objective** `eval/contacts-v1-val/loss` at the final step (minimize) is the sole comparison
-  metric, confirmed against the trainer's `COMPONENT_VAL` series and validated via PREVIEW.
+- **Objective** `eval/tokenized/contacts-v1-val/loss` at the final step (minimize) is the sole
+  comparison metric, confirmed against the trainer's `COMPONENT_VAL` series and validated via PREVIEW.
 - **Grid** LR `[1e-3, 3.16e-3, 1e-2]` (half-decade, log10) and WD `[0.1..1.6]` (x2, log10) are the
   initial resolutions and the default spacing for any edge extension. Domains are **wide**
   (LR `[3.16e-5, 1e-1]`, WD `[0.025, 6.4]`) per operator choice, to give the #117 LR-boundary
