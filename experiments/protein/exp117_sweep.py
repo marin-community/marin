@@ -282,6 +282,24 @@ def parse_overhead_factor() -> float:
     return factor
 
 
+def parse_smoke_batch() -> int | None:
+    """Global-batch override for the direct max-batch probe (``SMOKE_BATCH``); smoke mode only.
+
+    When set, the run trains at exactly this global batch with ``per_device_parallelism=-1``
+    (full per-chip batch, NO gradient accumulation), bypassing the HBM estimate and ``HBM_OVERHEAD``
+    entirely. The job then either fits (succeeds) or OOMs, so a binary search over powers of 2 finds
+    each slice's true batch ceiling -- the empirical ground truth the estimate is calibrated against.
+    Folded into the run identity so every probe is a distinct W&B run.
+    """
+    raw = os.environ.get("SMOKE_BATCH")
+    if raw is None or not raw.strip():
+        return None
+    batch = int(raw)
+    if batch < 1:
+        raise SystemExit(f"SMOKE_BATCH must be >= 1, got {batch}")
+    return batch
+
+
 # --- Helpers -----------------------------------------------------------------
 
 
@@ -403,6 +421,7 @@ class RunShape:
     steps_per_eval: int
     checkpoint_every: int  # permanent-checkpoint keep interval (in steps)
     tags: list[str]
+    batch_override: int | None = None  # SMOKE_BATCH: force this global batch + per_device_parallelism=-1
 
 
 def production_shape(point: Point, region: str) -> RunShape:
@@ -417,7 +436,9 @@ def production_shape(point: Point, region: str) -> RunShape:
     )
 
 
-def smoke_shape(point: Point, region: str, steps: int, tpu: str, overhead_factor: float) -> RunShape:
+def smoke_shape(
+    point: Point, region: str, steps: int, tpu: str, overhead_factor: float, batch_override: int | None
+) -> RunShape:
     """Tiny, identity-isolated end-to-end run: ``SMOKE_NUM_EVALS`` evals + permanent ckpts.
 
     Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path,
@@ -431,25 +452,34 @@ def smoke_shape(point: Point, region: str, steps: int, tpu: str, overhead_factor
     every = max(1, steps // SMOKE_NUM_EVALS)
     base = run_id(point, region, SMOKE_RUN_PREFIX)
     identity = f"{base}-{tpu}-oh{_fmt_overhead(overhead_factor)}-{SMOKE_VERSION}"
+    tags = [
+        *_tags(point, region),
+        "smoke",
+        "hbm-calib",
+        f"tpu={tpu}",
+        f"hbm_overhead={overhead_factor:g}",
+        f"smoke_version={SMOKE_VERSION}",
+    ]
+    if batch_override is not None:
+        identity = f"{identity}-b{batch_override}"
+        tags.append(f"smoke_batch={batch_override}")
     return RunShape(
         run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
         num_train_steps=steps,
         steps_per_eval=every,
         checkpoint_every=every,
-        tags=[
-            *_tags(point, region),
-            "smoke",
-            "hbm-calib",
-            f"tpu={tpu}",
-            f"hbm_overhead={overhead_factor:g}",
-            f"smoke_version={SMOKE_VERSION}",
-        ],
+        tags=tags,
+        batch_override=batch_override,
     )
 
 
 def _apply_recipe_overrides(
-    step: ArtifactStep[LevanterCheckpoint], tpu: str, checkpoint_every: int, overhead_factor: float
+    step: ArtifactStep[LevanterCheckpoint],
+    tpu: str,
+    checkpoint_every: int,
+    overhead_factor: float,
+    force_full_batch: bool,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Apply the #117 knobs :func:`train_lm` does not expose.
 
@@ -480,7 +510,10 @@ def _apply_recipe_overrides(
         data = pod.train_config.data
         data = replace(data, components={key: replace(c, pack=True) for key, c in data.components.items()})
         if not ctx.is_fingerprint:
-            per_device_parallelism, _ = batch_fit(tpu, overhead_factor)
+            # force_full_batch (SMOKE_BATCH probe): place the whole per-chip batch with no
+            # accumulation and skip the estimate, so the run directly tests whether this global
+            # batch fits the slice's HBM.
+            per_device_parallelism = -1 if force_full_batch else batch_fit(tpu, overhead_factor)[0]
             eval_parallelism = (
                 trainer.per_device_eval_parallelism if per_device_parallelism == -1 else per_device_parallelism
             )
@@ -505,6 +538,7 @@ def build_run(
     per-device batch fit at run time; ``region`` scopes storage and cache locality.
     """
     name = shape.run_id
+    batch_size = shape.batch_override or BATCH_SIZE
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     step = train_lm(
@@ -518,7 +552,7 @@ def build_run(
         ),
         datasets={train_cache: 1.0},
         validation=[val_cache],
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         seq_len=SEQ_LEN,
         num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
@@ -532,16 +566,22 @@ def build_run(
         tags=shape.tags,
         env_vars=_training_env(region),
     )
-    return _apply_recipe_overrides(step, tpu, shape.checkpoint_every, overhead_factor)
+    return _apply_recipe_overrides(
+        step, tpu, shape.checkpoint_every, overhead_factor, force_full_batch=shape.batch_override is not None
+    )
 
 
 # --- Preview + entry point ---------------------------------------------------
 
 
 def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: str, overhead_factor: float) -> None:
-    per_device_parallelism, grad_accum = batch_fit(tpu, overhead_factor)
+    if shape.batch_override is not None:
+        per_device_parallelism, grad_accum, batch = -1, 1, shape.batch_override
+    else:
+        per_device_parallelism, grad_accum = batch_fit(tpu, overhead_factor)
+        batch = BATCH_SIZE
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
-    tokens = TOKENS_PER_STEP * shape.num_train_steps
+    tokens = batch * SEQ_LEN * shape.num_train_steps
     print(
         f"PREVIEW exp117 [{mode}] -- no submit\n"
         f"  run_id={shape.run_id} wandb_group={shape.wandb_group}\n"
@@ -551,7 +591,7 @@ def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: s
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B schedule={LR_SCHEDULE} warmup={WARMUP}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
         f"  hbm_overhead={overhead_factor:g} per_device_parallelism={per_device_parallelism} "
-        f"grad_accum={grad_accum} (global batch {BATCH_SIZE})\n"
+        f"grad_accum={grad_accum} (global batch {batch})\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
@@ -561,7 +601,8 @@ def _resolve_run(region: str, tpu: str, overhead_factor: float) -> tuple[Point, 
     """Resolve the ``(point, shape, mode)`` for this invocation from the environment."""
     if smoke():
         point = parse_point(defaults=Point(*SMOKE_POINT_DEFAULTS))
-        return point, smoke_shape(point, region, smoke_steps(), tpu, overhead_factor), "smoke"
+        shape = smoke_shape(point, region, smoke_steps(), tpu, overhead_factor, parse_smoke_batch())
+        return point, shape, "smoke"
     point = parse_point()
     return point, production_shape(point, region), "sweep"
 
