@@ -31,6 +31,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
@@ -195,13 +196,13 @@ class ProcessContainer:
                 for stream in ready:
                     line = stream.readline()
                     if line:
-                        emit("stdout" if stream is stdout else "stderr", line)
+                        emit(STDOUT_SOURCE if stream is stdout else STDERR_SOURCE, line)
 
             # Process exited - drain remaining output
             for line in stdout:
-                emit("stdout", line)
+                emit(STDOUT_SOURCE, line)
             for line in stderr:
-                emit("stderr", line)
+                emit(STDERR_SOURCE, line)
 
             self._exit_code = self._process.returncode
             self._running = False

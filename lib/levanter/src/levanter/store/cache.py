@@ -18,17 +18,18 @@ from typing import Any, Dict, Generic, List, Optional, Protocol, Sequence, Tuple
 import deepdiff
 import jax
 import jax.tree_util as jtu
-from rigging.filesystem import StoragePath, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr import counters as zephyr_counters
 from rigging.filesystem import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
@@ -643,8 +644,7 @@ class CacheLedger:
         ledger_path = ShardedCacheLayout.parse(cache_dir).ledger
         try:
             logger.info(f"Attempting to load cache ledger from {ledger_path}")
-            with open_url(ledger_path) as file:
-                cache_ledger = CacheLedger.from_json(file.read())  # type: ignore[arg-type]
+            cache_ledger = CacheLedger.from_json(StoragePath(ledger_path).read_text())  # type: ignore[arg-type]
             if metadata:
                 diff = cache_ledger.metadata.compare_to(metadata)
                 if diff:
@@ -916,8 +916,7 @@ def write_levanter_cache(
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
 
     # write success sentinel
-    with open_url(f"{output_path}/.success", "w") as f:
-        f.write("")
+    StoragePath(f"{output_path}/.success").write_text("")
 
     return {"path": output_path, "count": count, "exemplar": exemplar}
 
@@ -930,8 +929,7 @@ def _serialize_json_and_commit(path: str, obj):
 
     for _ in range(10):
         try:
-            with open_url(path, "w") as file:
-                file.write(obj.to_json())
+            StoragePath(path).write_text(obj.to_json())
             break
         except FileNotFoundError:
             logger.exception(f"Failed to write {path}")

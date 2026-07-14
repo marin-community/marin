@@ -4,7 +4,8 @@
 import jax
 import pytest
 
-from levanter.data import ListAsyncDataset, MixtureDataset
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.mixture import MixtureDataset
 
 
 def create_datasets():

@@ -1160,7 +1160,6 @@ class _ScriptedProvider:
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     advertised: dict[str, set[str]] = field(default_factory=dict)
-    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
@@ -1170,12 +1169,8 @@ class _ScriptedProvider:
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self._store, request)
@@ -1343,7 +1338,6 @@ class _UnreachableProvider:
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     advertised: dict[str, set[str]] = field(default_factory=dict)
-    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
@@ -1353,12 +1347,8 @@ class _UnreachableProvider:
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         self._store = store_from_runtime(runtime, self.health, self.autoscale)

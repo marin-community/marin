@@ -13,10 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from rigging.filesystem import is_cross_region_url, record_transfer, url_to_fs
+from rigging.filesystem import StoragePath, is_cross_region_url, record_transfer, url_to_fs
 
 from levanter.tensorstore_serialization import build_kvstore_spec
-from levanter.utils import fsspec_utils
 from levanter.utils.thread_utils import future_from_value
 
 
@@ -693,7 +692,7 @@ def _get_spec(path, shape):
     else:
         kvstore = build_kvstore_spec(path)
         spec = {"driver": "zarr3", "kvstore": kvstore}
-        fsspec_utils.mkdirs(os.path.dirname(path))
+        StoragePath(os.path.dirname(path)).mkdirs()
         spec["metadata"] = {
             "chunk_grid": {
                 "name": "regular",

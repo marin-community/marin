@@ -27,8 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from marin.utils import fsspec_glob
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 
 from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, QUANT_SCALE, dequantize_to_fp32
 
@@ -47,7 +46,7 @@ def _load_sample_parquet(sample_path: str) -> np.ndarray:
     ~30-50x speedup vs the serial list-comp.
     """
     # Per-source subdirs: {sample_path}/{source_name.replace('/','-')}/sample-NNNNNN.parquet
-    shard_paths = sorted(fsspec_glob(f"{sample_path.rstrip('/')}/**/*.parquet"))
+    shard_paths = sorted(str(m) for m in StoragePath(f"{sample_path.rstrip('/')}/**/*.parquet").glob())
     if not shard_paths:
         raise RuntimeError(f"No sample parquet shards under {sample_path}")
 
@@ -60,7 +59,10 @@ def _load_sample_parquet(sample_path: str) -> np.ndarray:
     t0 = time.monotonic()
 
     def _read(path: str) -> pa.Table:
-        return pq.read_table(path, columns=["embedding"])
+        # fsspec handle rather than a path: pyarrow's native S3 filesystem issues
+        # HeadObject probes the CW object store rejects with HTTP 400.
+        with StoragePath(path).open("rb") as fh:
+            return pq.read_table(fh, columns=["embedding"])
 
     tables: list[pa.Table] = [None] * len(shard_paths)  # type: ignore[list-item]
     with ThreadPoolExecutor(max_workers=_LOAD_PARALLELISM) as pool:

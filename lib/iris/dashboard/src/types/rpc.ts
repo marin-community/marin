@@ -512,6 +512,8 @@ export interface LogEntry {
   attemptId?: number
   level?: string
   key?: string
+  /** Store row id, ascending in write order. int64, so proto JSON sends a string. */
+  seq?: string
 }
 
 export interface FetchLogsResponse {
@@ -657,8 +659,6 @@ export interface BackendSummary {
   capabilities: string[]
   /** Map of attribute key → list of string values. */
   advertisedAttributes: Record<string, { values: string[] }>
-  restricted: boolean
-  allowedUserCount: number
   scaleGroups: string[]
   workerCount: number
   pendingTaskCount: number
@@ -690,7 +690,6 @@ export interface PeerSummary {
   // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
   // absent on the wire when empty — hence optional here.
   controllerAddress?: string
-  dashboardUrl?: string
   /** Last capability heartbeat succeeded. */
   reachable?: boolean
   /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */

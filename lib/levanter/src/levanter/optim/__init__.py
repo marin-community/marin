@@ -1,63 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-__all__ = [
-    # adam_mini
-    "MiniConfig",
-    "ScaleByMiniState",
-    # adopt
-    "AdoptConfig",
-    "ScaleByAdoptState",
-    # cautious
-    "CautiousConfig",
-    # config
-    "AdamConfig",
-    "AdamHConfig",
-    "LionConfig",
-    "OptimizerConfig",
-    # kron
-    "KronConfig",
-    # mars
-    "MarsConfig",
-    "ScaleByMarsState",
-    # muon
-    "MuonConfig",
-    "MuonHConfig",
-    "ScaleByMuonState",
-    "GrugMuonConfig",
-    "NamoConfig",
-    "NamoDConfig",
-    # rmsprop
-    "RMSPropMomentumConfig",
-    "ScaleByRMSPropMomState",
-    # scion
-    "ScaleByScionState",
-    "ScionConfig",
-    # soap
-    "SoapConfig",
-    # skipstep
-    "SkipStepConfig",
-    # model averaging
-    "EmaModelAveragingConfig",
-    "EmaDecaySqrtConfig",
-]
+"""Levanter optimizers.
 
-from .adam_mini import MiniConfig, ScaleByMiniState
-from .adopt import AdoptConfig, ScaleByAdoptState
-from .cautious import CautiousConfig
-from .config import AdamConfig, LionConfig, OptimizerConfig
-from .adamh import AdamHConfig
-from .kron import KronConfig
-from .mars import MarsConfig, ScaleByMarsState
-from .muon import MuonConfig, ScaleByMuonState
-from .grugmuon import GrugMuonConfig
-from .muonh import MuonHConfig
-from .namo import NamoConfig, NamoDConfig
-from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
-from .scion import ScaleByScionState, ScionConfig
-from .soap import SoapConfig
-from .skipstep import SkipStepConfig
-from .model_averaging import (
-    EmaDecaySqrtConfig,
-    EmaModelAveragingConfig,
-)
+Import a config from its defining submodule (``levanter.optim.config`` for ``AdamConfig`` /
+``OptimizerConfig``, ``levanter.optim.muon`` for ``MuonConfig``, ...) rather than the package.
+The submodules register themselves with ``OptimizerConfig`` (a ``draccus.PluginRegistry``), which
+discovers them lazily under ``levanter.optim`` on first parse -- so this module imports nothing
+and a change to one optimizer no longer selects every test that touches ``levanter.optim``.
+"""

@@ -5,7 +5,7 @@ import tempfile
 
 import numpy as np
 import pytest
-from levanter.data.text import ChatProcessor
+from levanter.data.text.formats import ChatProcessor
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from transformers import AutoTokenizer, PreTrainedTokenizer
 

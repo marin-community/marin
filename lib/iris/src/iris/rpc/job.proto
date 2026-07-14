@@ -370,6 +370,11 @@ message JobStatus {
 
   // Handoff lifecycle for a federated job; PEER_STATUS_NONE for a local one. See PeerStatus.
   PeerStatus peer_status = 37;
+
+  // The authenticated principal that submitted this job (an email, or
+  // "local_admin"), distinct from the friendly owner in the job name. Empty for
+  // pre-federation rows. Drives per-cluster federation authorization.
+  string submitting_user = 38;
 }
 
 // ============================================================================

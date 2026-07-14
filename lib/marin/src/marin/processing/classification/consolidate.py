@@ -21,14 +21,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from fray import ResourceConfig
-from rigging.filesystem import rebase_file_path
-from zephyr import Dataset, ZephyrContext, ZephyrExecutionResult
-
-from marin.utils import (
-    fsspec_exists,
-    fsspec_glob,
-)
+from fray.types import ResourceConfig
+from rigging.filesystem import StoragePath, rebase_file_path
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext, ZephyrExecutionResult
 
 
 class FilterType(StrEnum):
@@ -89,9 +85,9 @@ def _resolve_attribute_path(input_base: str, input_path: str, filt: FilterConfig
         new_extension=new_extension,
         old_extension=f".{filetype}",
     )
-    if fsspec_exists(attr_path):
+    if StoragePath(attr_path).exists():
         return attr_path
-    candidates = fsspec_glob(f"{attr_path}.*")
+    candidates = [str(m) for m in StoragePath(f"{attr_path}.*").glob()]
     if candidates:
         return candidates[0]
     return None
@@ -148,7 +144,7 @@ def consolidate(
     filetype: str = "jsonl.gz",
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
-    map_workers_per_actor: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
 ) -> ZephyrExecutionResult:
     """Consolidate documents by applying filters based on attributes.
 
@@ -164,11 +160,12 @@ def consolidate(
         worker_resources: Optional Zephyr worker resource config. Defaults to
             ``ResourceConfig(cpu=2, ram="4g")`` — Zephyr's 1 CPU / 1 GB default
             packs multiple workers per VM and OOMs on heavy-tailed inputs where
-            a single doc can blow past the per-worker share.
+            a single doc can blow past the per-worker share. Required when
+            ``map_task_resources`` is set.
         max_workers: Maximum number of Zephyr workers (defaults to Zephyr's default).
-        map_workers_per_actor: Number of workers per actor for the map stage.
+        map_task_resources: ResourceConfig for map-stage tasks.
     """
-    input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
+    input_paths = sorted(str(m) for m in StoragePath(os.path.join(input_path, f"**/*.{filetype}")).glob())
     if not input_paths:
         raise ValueError(f"No input files matched {input_path}/**/*.{filetype}")
     logger.info(f"Consolidating {len(input_paths)} document files via {len(filters)} filters")
@@ -191,12 +188,13 @@ def consolidate(
         # Drop rejected docs before the next join so its key extractor never sees None.
         ds = ds.filter(lambda r: r is not None)
 
-    if worker_resources is None:
-        worker_resources = ResourceConfig(cpu=2, ram="4g")
-    ctx_kwargs: dict = {"name": "consolidate-filter", "resources": worker_resources}
-    if map_workers_per_actor is not None:
-        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
-    if max_workers is not None:
-        ctx_kwargs["max_workers"] = max_workers
+    ctx_kwargs: dict = {
+        "name": "consolidate-filter",
+        "max_workers": max_workers,
+        "resources": worker_resources or ResourceConfig(cpu=2, ram="4g"),
+    }
+    if map_task_resources is not None:
+        ctx_kwargs["map_task_resources"] = map_task_resources
+
     ctx = ZephyrContext(**ctx_kwargs)
     return ctx.execute(ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"))

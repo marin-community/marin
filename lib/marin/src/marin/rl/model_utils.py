@@ -25,7 +25,7 @@ from levanter.compat.hf_checkpoints import (
 )
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
-from marin.utils import fsspec_exists
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ HF_CHECKPOINT_MARKERS = (
 
 
 def _has_hf_checkpoint_files(checkpoint: str) -> bool:
-    return any(fsspec_exists(os.path.join(checkpoint, marker)) for marker in HF_CHECKPOINT_MARKERS)
+    return any(StoragePath(os.path.join(checkpoint, marker)).exists() for marker in HF_CHECKPOINT_MARKERS)
 
 
 def is_hf_checkpoint(checkpoint: str) -> bool:

@@ -14,11 +14,9 @@ from fsspec.implementations.local import LocalFileSystem
 from huggingface_hub import CommitOperationAdd, create_commit, upload_folder
 from huggingface_hub.hf_api import HfApi
 from huggingface_hub.utils import RepositoryNotFoundError
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from tqdm_loggable.auto import tqdm
-
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +71,7 @@ def _actually_upload_to_hf(config: UploadToHfConfig):
             **config.upload_kwargs,
         )
     else:
-        all_paths = fsspec_glob(os.path.join(config.input_path, "**"))
+        all_paths = [str(m) for m in StoragePath(os.path.join(config.input_path, "**")).glob()]
         tiny_files = []
         large_files: dict[str, int] = {}  # path -> size
 
@@ -210,8 +208,7 @@ if __name__ == "__main__":
         )
 
     # also test memory fs
-    with open_url("memory://foo/bar/test.txt", "w") as f:
-        f.write("Hello, world!!!!!\nadad :-)")
+    StoragePath("memory://foo/bar/test.txt").write_text("Hello, world!!!!!\nadad :-)")
 
     _actually_upload_to_hf(
         UploadToHfConfig(

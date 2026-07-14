@@ -5,7 +5,7 @@ from typing import Sequence, Any
 
 import regex
 
-from levanter.data import BatchProcessor
+from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.py_utils import logical_cpu_core_count
 

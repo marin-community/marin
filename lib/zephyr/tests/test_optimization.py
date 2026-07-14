@@ -5,11 +5,10 @@
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from zephyr import Dataset, compute_plan
-from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
+from zephyr.dataset import Dataset, FilterOp, MapOp, ReshardOp, TakePerShardOp
 from zephyr.execution import ZephyrContext
 from zephyr.expr import col
-from zephyr.plan import Map, PhysicalStage, Reshard, StageType
+from zephyr.plan import Map, PhysicalStage, Reshard, StageType, compute_plan
 
 
 def test_optimize_consecutive_maps():

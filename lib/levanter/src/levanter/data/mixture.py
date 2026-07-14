@@ -14,7 +14,7 @@ from jaxtyping import PRNGKeyArray
 from haliax.util import StringHolderEnum
 from levanter.utils.jax_utils import local_cpu_mesh
 
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value

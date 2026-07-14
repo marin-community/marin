@@ -28,6 +28,8 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from rigging.filesystem import StoragePath
+
 EUROPE_WEST4_GCS_PREFIX = "gs://marin-eu-west4/"
 REGION = "europe-west4"
 TPU_TYPE = "v6e-4"
@@ -84,33 +86,24 @@ def _fs_path(path: str):
 
 
 def _exists(path: str) -> bool:
-    fs, plain_path = _fs_path(path)
-    return fs.exists(plain_path)
+    return StoragePath(path).exists()
 
 
 def _remove_tree(path: str) -> None:
-    fs, plain_path = _fs_path(path)
-    if fs.exists(plain_path):
-        fs.rm(plain_path, recursive=True)
+    target = StoragePath(path)
+    if target.exists():
+        target.rmtree()
 
 
 def _write_json(path: str, payload: dict[str, Any]) -> None:
-    import fsspec  # noqa: PLC0415
-
     parent = path.rsplit("/", 1)[0]
-    fs, plain_parent = _fs_path(parent)
-    fs.makedirs(plain_parent, exist_ok=True)
-    with fsspec.open(path, "w") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
+    StoragePath(parent).mkdirs()
+    StoragePath(path).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _read_json(path: str) -> dict[str, Any]:
-    import fsspec  # noqa: PLC0415
-
     _require_europe_west4_path("json_path", path)
-    with fsspec.open(path, "r") as f:
-        payload = json.load(f)
+    payload = json.loads(StoragePath(path).read_text())
     if not isinstance(payload, dict):
         raise TypeError(f"expected JSON object at {path}, got {type(payload).__name__}")
     return payload

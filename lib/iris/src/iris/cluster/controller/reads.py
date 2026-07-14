@@ -40,6 +40,7 @@ from iris.cluster.controller.db import Tx
 from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
+    endpoints_table,
     federated_jobs_table,
     federated_tasks_table,
     federation_changelog_table,
@@ -68,6 +69,7 @@ from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
     AttemptUid,
+    EndpointAccess,
     JobName,
     PendingTask,
     WorkerId,
@@ -547,6 +549,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.parent_job_id,
             jobs_table.c.backend_id,
             jobs_table.c.cluster,
+            jobs_table.c.submitting_user,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -1849,21 +1852,61 @@ def federated_handle(tx: Tx, job_id: JobName) -> FederatedHandle | None:
     return _sent_handle(row) if row is not None else None
 
 
-def pending_handoff_handles(tx: Tx) -> list[FederatedHandle]:
-    """SENT handles still awaiting delivery: ``PENDING_HANDOFF`` and not cancelled.
+def _uncancelled_sent_handles(tx: Tx, handoff_state: HandoffState) -> list[FederatedHandle]:
+    """SENT handles in ``handoff_state`` whose cancel intent is unset.
 
-    A cancelled pending handoff (``cancel_intent_version > 0``) is excluded so the
-    retry loop never delivers a job the user already asked to cancel.
+    The shared read behind the delivery and promotion queues: a cancelled handle
+    (``cancel_intent_version > 0``) is excluded so neither the retry loop nor the
+    tick's promotion ever acts on a job the user already asked to cancel.
     """
     rows = tx.execute(
         select(*_SENT_HANDLE_COLUMNS).where(
             federated_jobs_table.c.direction == int(FederationDirection.SENT),
-            federated_jobs_table.c.handoff_state == bindparam("pending_state"),
+            federated_jobs_table.c.handoff_state == bindparam("handoff_state"),
             federated_jobs_table.c.cancel_intent_version == 0,
         ),
-        {"pending_state": int(HandoffState.PENDING_HANDOFF)},
+        {"handoff_state": int(handoff_state)},
     ).all()
     return [_sent_handle(r) for r in rows]
+
+
+def pending_handoff_handles(tx: Tx) -> list[FederatedHandle]:
+    """SENT handles still awaiting delivery to the peer: ``PENDING_HANDOFF``, uncancelled.
+
+    Read each sync pass by the retry loop, which (re-)delivers them to the peer.
+    """
+    return _uncancelled_sent_handles(tx, HandoffState.PENDING_HANDOFF)
+
+
+def queued_handoff_handles(tx: Tx) -> list[FederatedHandle]:
+    """SENT handles queued on the parent awaiting a peer with free capacity: uncancelled ``QUEUED_HANDOFF``.
+
+    Read each control tick by the federation pass, which promotes any it can place.
+    """
+    return _uncancelled_sent_handles(tx, HandoffState.QUEUED_HANDOFF)
+
+
+def expired_queued_handoffs(tx: Tx, now_ms: int) -> list[JobName]:
+    """Queued federated jobs whose scheduling deadline has passed, to fail this tick.
+
+    A queued handoff owns no task rows, so the task-level scheduling-timeout scan never
+    sees it; without this a job with a ``scheduling_timeout`` would wait in the queue
+    past its deadline. Returns the nonterminal ``QUEUED_HANDOFF`` jobs whose stored
+    ``scheduling_deadline_epoch_ms`` is set and already elapsed; the tick marks them
+    ``UNSCHEDULABLE``.
+    """
+    rows = tx.execute(
+        select(federated_jobs_table.c.job_id)
+        .select_from(federated_jobs_table.join(jobs_table, federated_jobs_table.c.job_id == jobs_table.c.job_id))
+        .where(
+            federated_jobs_table.c.direction == int(FederationDirection.SENT),
+            federated_jobs_table.c.handoff_state == int(HandoffState.QUEUED_HANDOFF),
+            jobs_table.c.state.notin_(list(TERMINAL_JOB_STATES)),
+            jobs_table.c.scheduling_deadline_epoch_ms.isnot(None),
+            jobs_table.c.scheduling_deadline_epoch_ms < now_ms,
+        )
+    ).all()
+    return [r.job_id for r in rows]
 
 
 def pending_cancel_handles(tx: Tx) -> list[FederatedHandle]:
@@ -1901,6 +1944,40 @@ def federated_sent_job(tx: Tx, peer_id: str, job_id: JobName) -> JobName | None:
         )
     ).first()
     return row.job_id if row is not None else None
+
+
+def has_received_job_from_peer(tx: Tx, peer_id: str, job_id: JobName) -> bool:
+    """Whether ``job_id`` is a RECEIVED handle this cluster took from ``peer_id``.
+
+    Authorizes a federated /proxy: a peer's federation bearer may reach an endpoint
+    only on a job that peer actually handed here. Received ownership is recorded on
+    the root, so pass the endpoint job's root id.
+    """
+    row = tx.execute(
+        select(federated_jobs_table.c.job_id).where(
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+            federated_jobs_table.c.peer_id == peer_id,
+            federated_jobs_table.c.job_id == job_id,
+        )
+    ).first()
+    return row is not None
+
+
+def parent_mirror_seed(tx: Tx, parent_job_id: JobName):
+    """The ``submitting_user`` and ``root_submitted_at_ms`` of an existing parent row.
+
+    Seeds a mirrored child job — one born on a peer under a received root and
+    reported back over sync — from its already-present parent: the whole federated
+    subtree shares the root's submitter and root submit time. Returns the SA Row
+    (``.submitting_user``, ``.root_submitted_at_ms``) or ``None`` when the parent is
+    absent (a delta arrived out of order).
+    """
+    return tx.execute(
+        select(jobs_table.c.submitting_user, jobs_table.c.root_submitted_at_ms).where(
+            jobs_table.c.job_id == bindparam("job_id")
+        ),
+        {"job_id": parent_job_id},
+    ).first()
 
 
 def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:
@@ -2015,6 +2092,68 @@ def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
         )
     ).all()
     return [r.job_id for r in rows]
+
+
+@dataclass(frozen=True)
+class ReceivedEndpointRow:
+    """One live endpoint on a RECEIVED job, for the federation endpoint snapshot."""
+
+    endpoint_id: str
+    name: str
+    address: str
+    task_id: JobName
+    access: int
+    metadata: dict
+    lease_deadline: Timestamp | None
+
+
+def live_endpoints_for_requester(tx: Tx, requester_id: str, now: Timestamp) -> list[ReceivedEndpointRow]:
+    """Every live endpoint across the jobs this peer received from ``requester_id``.
+
+    Scoped through the received *root*: only the handed-off root gets a RECEIVED
+    ``federated_jobs`` row, but a job it spawns runs locally on this peer under the
+    same root, so an endpoint registered by such a child task is matched via its
+    job's ``root_job_id`` rather than a direct ``federated_jobs`` handle. Expired
+    leases are excluded (parity with the endpoint registry's own reads), so the
+    parent mirror set-replaced from this matches what the child would serve.
+    """
+    rows = tx.execute(
+        select(
+            endpoints_table.c.endpoint_id,
+            endpoints_table.c.name,
+            endpoints_table.c.address,
+            endpoints_table.c.task_id,
+            endpoints_table.c.access,
+            endpoints_table.c.metadata_json,
+            endpoints_table.c.lease_deadline_ms,
+        )
+        .select_from(
+            endpoints_table.join(jobs_table, jobs_table.c.job_id == endpoints_table.c.job_id).join(
+                federated_jobs_table, federated_jobs_table.c.job_id == jobs_table.c.root_job_id
+            )
+        )
+        .where(
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+            federated_jobs_table.c.peer_id == requester_id,
+        )
+    ).all()
+    result: list[ReceivedEndpointRow] = []
+    for r in rows:
+        deadline = r.lease_deadline_ms
+        if deadline is not None and deadline <= now:
+            continue
+        result.append(
+            ReceivedEndpointRow(
+                endpoint_id=r.endpoint_id,
+                name=r.name,
+                address=r.address,
+                task_id=r.task_id,
+                access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE if r.access is None else int(r.access),
+                metadata=r.metadata_json,
+                lease_deadline=deadline,
+            )
+        )
+    return result
 
 
 def changelog_rows_since(tx: Tx, requester_id: str, cursor_seq: int) -> list[ChangelogRow]:

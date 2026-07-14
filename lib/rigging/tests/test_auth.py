@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import google.auth.exceptions
+import google.auth.identity_pool
 import google.auth.impersonated_credentials
 import pytest
 from rigging.auth import (
@@ -194,6 +195,57 @@ def test_iap_id_token_provider_mints_from_impersonated_adc(monkeypatch):
 
     provider = IapServiceAccountTokenProvider("aud-123")
     assert provider.get_token() == "imp-id-token"
+
+
+def test_iap_id_token_provider_mints_from_wif_external_account_adc(monkeypatch):
+    """A GitHub-Actions WIF external-account ADC impersonating a SA mints here too.
+
+    google-github-actions/auth writes an ``external_account`` (identity_pool) ADC
+    with a ``service_account_impersonation_url``; fetch_id_token ignores it, so it
+    reaches the impersonation path like the gcloud-impersonate ADC does.
+    """
+    monkeypatch.setattr("google.oauth2.id_token.fetch_id_token", _raise_no_creds)
+    monkeypatch.setattr("google.auth.transport.requests.Request", lambda: object())
+
+    sa_email = "github-iris@hai-gcp-models.iam.gserviceaccount.com"
+    # A real WIF ADC as google-github-actions/auth@v3 writes it (constructed offline;
+    # no token is exchanged until a refresh, which the faked IDTokenCredentials skips).
+    wif_adc = google.auth.identity_pool.Credentials.from_info(
+        {
+            "type": "external_account",
+            "audience": (
+                "//iam.googleapis.com/projects/748532799086/locations/global/"
+                "workloadIdentityPools/github-pool/providers/github-oidc"
+            ),
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url": (
+                "https://iamcredentials.googleapis.com/v1/" f"projects/-/serviceAccounts/{sa_email}:generateAccessToken"
+            ),
+            "credential_source": {"file": "/tmp/oidc-token.txt"},
+        }
+    )
+    monkeypatch.setattr("google.auth.default", lambda scopes=None: (wif_adc, "proj"))
+
+    minted: dict[str, str] = {}
+
+    class FakeIdCreds:
+        def __init__(self, target_credentials, target_audience, include_email):
+            # Records what the external account resolved to: the ID token is minted
+            # as the impersonated SA (signer_email) for the requested audience.
+            minted["signer_email"] = target_credentials.signer_email
+            minted["audience"] = target_audience
+            self.token = "wif-id-token"
+
+        def refresh(self, request):
+            pass
+
+    monkeypatch.setattr("google.auth.impersonated_credentials.IDTokenCredentials", FakeIdCreds)
+    monkeypatch.setattr("google.auth.jwt.decode", lambda token, verify: {"exp": time.time() + 3600})
+
+    provider = IapServiceAccountTokenProvider("aud-123")
+    assert provider.get_token() == "wif-id-token"
+    assert minted == {"signer_email": sa_email, "audience": "aud-123"}
 
 
 def test_iap_id_token_provider_rejects_non_impersonated_adc(monkeypatch):

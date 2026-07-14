@@ -20,7 +20,7 @@ from typing import Literal
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
 from levanter.models.lm_model import LmConfig
-from levanter.optim import OptimizerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import CurriculumConfig

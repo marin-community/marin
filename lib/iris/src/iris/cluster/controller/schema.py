@@ -247,6 +247,12 @@ jobs_table = Table(
     # Plain owner string: roles are resolved from the config-derived RolePolicy
     # (see controller/auth.py), so there is no ``users`` table to anchor an FK to.
     Column("user_id", String, nullable=False),
+    # The authenticated principal that submitted this job, distinct from the
+    # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
+    # CIDR/loopback (null-auth) submission. Drives per-cluster federation
+    # authorization; a child inherits its root's value and a federated handoff
+    # carries it as a signed claim the receiving peer re-checks.
+    Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
@@ -438,18 +444,6 @@ task_attempts_table = Table(
 )
 
 
-backends_table = Table(
-    "backends",
-    metadata,
-    Column("backend_id", String, primary_key=True),
-    Column("kind", String, nullable=False, server_default=""),
-    Column("status", Integer, nullable=False, server_default="0"),
-    Column("attributes_json", String, nullable=False, server_default="{}"),
-    Column("allow_policy_json", String, nullable=False, server_default="{}"),
-    Column("last_seen_ms", Integer),
-)
-
-
 workers_table = Table(
     "workers",
     metadata,
@@ -516,9 +510,15 @@ endpoints_table = Table(
     # existing DB without a backfill; a NULL is read as PRIVATE (today's
     # cluster-identity-required behavior), so pre-migration rows are unchanged.
     Column("access", Integer, nullable=True),
+    # Owning peer cluster id for an endpoint mirrored from a federated child; NULL
+    # for a locally-registered endpoint. The /proxy route forwards a remote row to
+    # this peer's controller instead of dialing `address` directly. Set-replaced by
+    # the federation sync loop, keyed to the mirrored (cluster=peer) job/task rows.
+    Column("peer_id", String, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
+    Index("idx_endpoints_peer_id", "peer_id"),
 )
 
 

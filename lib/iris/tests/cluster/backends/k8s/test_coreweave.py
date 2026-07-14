@@ -11,6 +11,7 @@ K8sControllerProvider).
 
 import base64
 import json
+import os
 import threading
 import time
 
@@ -30,10 +31,10 @@ from iris.cluster.config import (
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
-    _CONTROLLER_PROXY_INGRESS_NAME,
     _CONTROLLER_STATE_PVC_NAME,
     _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
+    configure_client_s3,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import (
@@ -212,9 +213,6 @@ def test_start_controller_creates_all_resources():
     assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
-    # No public_proxy_host configured → no Ingress (ClusterIP only).
-    assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is None
-
     t.join(timeout=5)
     provider.shutdown()
 
@@ -286,6 +284,48 @@ def test_start_controller_s3_storage_creates_task_env_secret():
 
     t.join(timeout=5)
     provider.shutdown()
+
+
+def _s3_cluster_config(endpoint: str, external: str = "") -> IrisClusterConfig:
+    return IrisClusterConfig(
+        platform=PlatformConfig(
+            coreweave=CoreweavePlatformConfig(
+                object_storage_endpoint=endpoint,
+                external_object_storage_endpoint=external,
+            )
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint, external, expected",
+    [
+        # The operator's machine cannot resolve LOTA's private address, so the public
+        # endpoint wins whenever the config supplies one.
+        ("http://cwlota.com", "https://cwobject.com", "https://cwobject.com"),
+        # An endpoint reachable from both sides (R2) needs no second address.
+        ("https://acct.r2.cloudflarestorage.com", "", "https://acct.r2.cloudflarestorage.com"),
+        # Either field alone is enough to configure the operator's client.
+        ("", "https://cwobject.com", "https://cwobject.com"),
+    ],
+)
+def test_operator_client_signs_against_the_externally_reachable_endpoint(endpoint, external, expected, monkeypatch):
+    for var in ("AWS_ENDPOINT_URL", "AWS_REGION", "AWS_DEFAULT_REGION", "FSSPEC_S3"):
+        monkeypatch.delenv(var, raising=False)
+
+    configure_client_s3(_s3_cluster_config(endpoint, external))
+
+    assert os.environ["AWS_ENDPOINT_URL"] == expected
+    assert json.loads(os.environ["FSSPEC_S3"])["endpoint_url"] == expected
+
+
+def test_operator_client_leaves_a_caller_supplied_endpoint_alone(monkeypatch):
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:9000")
+    monkeypatch.delenv("FSSPEC_S3", raising=False)
+
+    configure_client_s3(_s3_cluster_config("http://cwlota.com", "https://cwobject.com"))
+
+    assert os.environ["AWS_ENDPOINT_URL"] == "http://localhost:9000"
 
 
 def test_start_controller_reconciles_when_already_available():
@@ -547,17 +587,19 @@ def test_start_controller_deployment_command_references_config_json():
 
 
 def test_configmap_strips_kubeconfig_path():
-    """ConfigMap must not contain kubeconfig_path so pods use in-cluster auth."""
+    """ConfigMap must not contain kubeconfig_path/kube_context so pods use in-cluster auth."""
     k8s = InMemoryK8sService(namespace="iris")
     cw_config = CoreweavePlatformConfig(
         region="LGA1",
         namespace="iris",
         kubeconfig_path="/home/user/.kube/coreweave-iris",
+        kube_context="marin_LGA1",
     )
     provider = K8sControllerProvider(config=cw_config, label_prefix="iris", poll_interval=0.05, kubectl=k8s)
 
     cluster_config = _make_cluster_config()
     cluster_config.platform.coreweave.kubeconfig_path = "/home/user/.kube/coreweave-iris"
+    cluster_config.platform.coreweave.kube_context = "marin_LGA1"
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
     t.start()
@@ -568,6 +610,7 @@ def test_configmap_strips_kubeconfig_path():
     cm_data = json.loads(cm["data"]["config.json"])
     cw_config_data = cm_data.get("platform", {}).get("coreweave", {})
     assert "kubeconfig_path" not in cw_config_data
+    assert "kube_context" not in cw_config_data
 
     t.join(timeout=5)
     provider.shutdown()

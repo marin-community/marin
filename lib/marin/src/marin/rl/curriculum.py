@@ -19,7 +19,7 @@ import numpy as np
 from marin.rl.decoding import SamplingParams
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from scipy import stats as scipy_stats
 
 logger = logging.getLogger(__name__)
@@ -514,8 +514,7 @@ class Curriculum:
 
         logger.info("Saving curriculum checkpoint to %s/%s at step %d", checkpoint_dir, filename, self.current_step)
 
-        fs, _ = url_to_fs(checkpoint_dir)
-        fs.makedirs(checkpoint_dir, exist_ok=True)
+        StoragePath(checkpoint_dir).mkdirs()
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
         # Convert stats to dict with numpy arrays converted to lists
@@ -544,8 +543,7 @@ class Curriculum:
             "current_step": self.current_step,
         }
 
-        with fs.open(checkpoint_path, "w") as f:
-            json.dump(checkpoint_data, f, indent=2)
+        StoragePath(checkpoint_path).write_text(json.dumps(checkpoint_data, indent=2))
 
     def restore_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
         """Restore curriculum state from latest checkpoint in directory.
@@ -554,14 +552,12 @@ class Curriculum:
             checkpoint_dir: Directory containing the checkpoint.
             filename: Name of the checkpoint file to load (default pattern).
         """
-        fs, _ = url_to_fs(checkpoint_dir)
         checkpoint_path = os.path.join(checkpoint_dir, filename)
 
-        if not fs.exists(checkpoint_path):
+        if not StoragePath(checkpoint_path).exists():
             return
 
-        with fs.open(checkpoint_path) as f:
-            checkpoint_data = json.load(f)
+        checkpoint_data = json.loads(StoragePath(checkpoint_path).read_text())
 
         # Restore state in-place, converting lists back to numpy arrays
         self.stats = {}

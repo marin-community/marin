@@ -1,44 +1,76 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""``marin-serve`` — one-liner to serve an HF model on an Iris TPU slice.
+"""``marin-serve`` — one-liner to serve an HF model on an Iris TPU or GPU slice.
 
-Submits a single Iris job that boots vLLM on a single-host TPU slice and registers
-a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The
-job stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
+Submits a single Iris job that boots vLLM on a single-host TPU or GPU slice and
+registers a browser dashboard + OpenAI-compatible endpoint through the controller
+proxy. The job stops itself after ``--timeout-hours`` so a forgotten server frees
+its slice.
 
 Examples::
 
     marin-serve Qwen/Qwen3-0.6B --cluster marin --tpu v6e-8
     marin-serve gs://my-bucket/ckpt --tpu v5litepod-8 --chat-template delphi_v0.jinja2
+    marin-serve Qwen/Qwen3-0.6B --cluster marin --gpu H100x8 --target-cluster cw-rno2a
 
-The TPU's tensor-parallel size and (for clamped-RoPE models) max sequence length are
-inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``.
+``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). The GPU
+path provisions stock CUDA vLLM in an isolated ``uv`` tool env at ``--vllm-version``.
+
+Inside a marin checkout the TPU path serves vLLM from the workspace lock. Outside one it
+serves from an isolated ``uv`` tool env: ``marin-core`` installed from PyPI plus Marin's
+forked TPU vLLM. ``--isolated-vllm`` selects that env inside a checkout too.
+
+``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job
+to a named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max
+sequence length are inferred automatically; override with ``--tensor-parallel-size`` /
+``--max-model-len``.
 """
 
 import contextlib
+import importlib.metadata
 import logging
 import re
+import shlex
 import time
 import uuid
 from pathlib import Path
 
 import click
 import requests
+from click.core import ParameterSource
 from iris.cli.connect import open_controller_endpoint
+from iris.cli.job import parse_gpu_spec
 from iris.client import IrisClient, Job
-from iris.cluster.constraints import region_constraint
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import EndpointAccess, Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
+from iris.cluster.types import (
+    EndpointAccess,
+    Entrypoint,
+    EnvironmentSpec,
+    ResourceSpec,
+    gpu_device,
+    is_job_finished,
+    tpu_device,
+)
+from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
-
-logger = logging.getLogger(__name__)
+from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
+from marin.inference.vllm_server import WORKER_PYTHON_VERSION
 
 # vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
 _WORKER_EXTRAS = ("tpu", "vllm")
+# The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
+# subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
+# lock), so the worker venv needs no accelerator extra at all — base Marin suffices.
+_GPU_WORKER_EXTRAS: tuple[str, ...] = ()
+# Pinned CUDA vLLM for the GPU path, overridable with --vllm-version. Stock PyPI vLLM
+# (>=0.25) targets torch 2.11 / CUDA 13; provisioned per-job via uvx, so a bump is just
+# this string with no workspace re-lock.
+DEFAULT_CUDA_VLLM_VERSION = "0.25.0"
 _ENDPOINT_READY_POLL_SECONDS = 5.0
 
 
@@ -46,6 +78,27 @@ def _default_job_name(model: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", model.rsplit("/", 1)[-1].lower()).strip("-")[:24]
     suffix = uuid.uuid4().hex[:6]
     return f"serve-{slug}-{suffix}" if slug else f"serve-{suffix}"
+
+
+def _marin_core_version() -> str:
+    """Installed ``marin-core`` version, used to pin the checkout-free worker install."""
+    return importlib.metadata.version("marin-core")
+
+
+def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> str:
+    """Build a fresh venv and install ``marin-core`` from PyPI at ``marin_version``.
+
+    The worker installs the launching CLI's exact ``marin-core`` version so cloudpickled
+    entrypoints stay compatible. ``--torch-backend cpu`` routes torch/torchvision to the
+    CPU PyTorch index (jax and libtpu do TPU compute; torch is only a dependency).
+    """
+    extras_suffix = f"[{','.join(extras)}]" if extras else ""
+    spec = f"marin-core{extras_suffix}=={marin_version}"
+    return (
+        "set -e\n"
+        f'uv venv "$IRIS_VENV" --python {WORKER_PYTHON_VERSION}\n'
+        f'uv pip install --python "$IRIS_VENV" --link-mode symlink --torch-backend cpu {shlex.quote(spec)}\n'
+    )
 
 
 def _resolve_chat_template(spec: str | None) -> str | None:
@@ -116,6 +169,23 @@ def _mint_and_print_capability_url(
     "--controller", default=None, envvar="IRIS_CONTROLLER", help="Pre-tunneled controller URL (overrides --cluster)."
 )
 @click.option("--tpu", default="v6e-8", help="Single-host TPU slice type (e.g. v6e-8, v5litepod-8).")
+@click.option(
+    "--gpu",
+    default=None,
+    help="GPU slice (e.g. H100x8); mutually exclusive with --tpu. Selects the GPU serving path.",
+)
+@click.option(
+    "--target-cluster",
+    default=None,
+    help="Federate the job to this peer cluster (e.g. cw-rno2a). --cluster still selects the controller.",
+)
+@click.option(
+    "--isolated-vllm",
+    is_flag=True,
+    default=False,
+    help="TPU path: provision vLLM from the isolated uvx env (Marin's forked TPU vLLM) "
+    "even inside a checkout. Auto-selected when marin-serve runs outside a checkout.",
+)
 @click.option("--name", default=None, help="Iris job name (default: derived from the model).")
 @click.option("--endpoint-name", default=None, help="Endpoint name to register (default: /serve/<job-name>).")
 @click.option("--chat-template", default=None, help="Jinja chat template: local file path or http(s) URL.")
@@ -143,6 +213,24 @@ def _mint_and_print_capability_url(
 @click.option("--disk", default="100g")
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--vllm-arg", "vllm_args", multiple=True, help="Extra raw flag forwarded to `vllm serve` (repeatable).")
+@click.option(
+    "--vllm-version",
+    default=DEFAULT_CUDA_VLLM_VERSION,
+    help="CUDA vLLM version to provision in the isolated uv-tool env on the GPU path "
+    "(ignored on the TPU path and when --task-image is set).",
+)
+@click.option(
+    "--extra",
+    "extras",
+    multiple=True,
+    help="Extra dependency-group/extra to add to the worker environment (repeatable).",
+)
+@click.option(
+    "--task-image",
+    default=None,
+    help="Override the task container image. On the GPU path this bypasses the isolated "
+    "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
+)
 @click.option("--wait/--no-wait", default=True, help="Hold the tunnel open until the endpoint is ready, then block.")
 @click.option(
     "--wait-timeout",
@@ -155,6 +243,9 @@ def main(
     cluster: str | None,
     controller: str | None,
     tpu: str,
+    gpu: str | None,
+    target_cluster: str | None,
+    isolated_vllm: bool,
     name: str | None,
     endpoint_name: str | None,
     chat_template: str | None,
@@ -172,18 +263,21 @@ def main(
     disk: str,
     max_retries_preemption: int,
     vllm_args: tuple[str, ...],
+    vllm_version: str,
+    extras: tuple[str, ...],
+    task_image: str | None,
     wait: bool,
     wait_timeout: float,
 ) -> None:
-    """Serve MODEL (an HF id or gs:// path) on an Iris TPU slice."""
+    """Serve MODEL (an HF id or gs:// path) on an Iris TPU or GPU slice."""
     logging.basicConfig(level=logging.INFO, format="[marin-serve] %(message)s")
 
-    topology = get_tpu_topology(tpu)
-    if topology.vm_count != 1:
-        raise click.ClickException(
-            f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); quick-serve supports "
-            f"single-host slices only (e.g. v6e-8, v5litepod-8)."
-        )
+    # None outside a marin checkout: the TPU path then serves checkout-free.
+    workspace_dir = find_project_root()
+
+    tpu_from_cli = click.get_current_context().get_parameter_source("tpu") == ParameterSource.COMMANDLINE
+    if gpu is not None and tpu_from_cli:
+        raise click.ClickException("--gpu and --tpu are mutually exclusive; pass only one.")
 
     job_name = name or _default_job_name(model)
     if "/" in job_name:
@@ -199,10 +293,52 @@ def main(
 
     endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
+    tpu_vllm_ref: str | None = None
+    tpu_inference_ref: str | None = None
+    if gpu is not None:
+        if workspace_dir is None:
+            raise click.ClickException(
+                "marin-serve --gpu serves from a marin checkout (the worker runs marin-core from "
+                "it); none was found. Run marin-serve from inside a marin checkout."
+            )
+        try:
+            gpu_variant, gpu_count = parse_gpu_spec(gpu)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        tpu_type: str | None = None
+        device = gpu_device(gpu_variant, gpu_count)
+        worker_extras = (*_GPU_WORKER_EXTRAS, *extras)
+        # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a
+        # prebuilt --task-image, which is expected to ship its own vLLM on PATH.
+        cuda_vllm_version = None if task_image is not None else vllm_version
+    else:
+        topology = get_tpu_topology(tpu)
+        if topology.vm_count != 1:
+            raise click.ClickException(
+                f"{tpu!r} is a multi-host slice (vm_count={topology.vm_count}); quick-serve supports "
+                f"single-host slices only (e.g. v6e-8, v5litepod-8)."
+            )
+        gpu_variant, gpu_count = None, None
+        tpu_type = tpu
+        device = tpu_device(tpu)
+        cuda_vllm_version = None
+        # Provision the forked TPU vLLM from an isolated uvx env when there is no checkout
+        # to build it from (or when explicitly requested); otherwise serve the workspace
+        # TPU-vLLM from the lock. The worker venv always needs the `tpu` extra for the
+        # serving glue's jax/libtpu; the `vllm` extra is only for the in-workspace build.
+        if isolated_vllm or workspace_dir is None:
+            tpu_vllm_ref = vllm_fork_ref()
+            tpu_inference_ref = tpu_inference_fork_ref()
+            worker_extras = ("tpu", *extras)
+        else:
+            worker_extras = (*_WORKER_EXTRAS, *extras)
+
     config = QuickServeConfig(
         model=model,
-        tpu_type=tpu,
         endpoint_name=endpoint,
+        tpu_type=tpu_type,
+        gpu_type=gpu_variant,
+        gpu_count=gpu_count,
         access=endpoint_access,
         dtype=dtype,
         max_model_len=max_model_len,
@@ -215,35 +351,53 @@ def main(
         # so raising --wait-timeout for a slow-booting model actually takes effect.
         vllm_startup_timeout_seconds=int(wait_timeout),
         extra_vllm_args=tuple(vllm_args),
+        vllm_version=cuda_vllm_version,
+        tpu_vllm_ref=tpu_vllm_ref,
+        tpu_inference_ref=tpu_inference_ref,
     )
 
-    constraints = None
+    # No checkout to bundle → install marin-core from PyPI on the worker (checkout-free
+    # TPU path); otherwise sync the bundled workspace with the resolved extras.
+    if workspace_dir is None:
+        environment = EnvironmentSpec(setup_scripts=[_checkout_free_setup_script(_marin_core_version(), worker_extras)])
+    else:
+        environment = EnvironmentSpec(extras=worker_extras)
+
+    constraints: list[Constraint] = []
     if region:
         regions = [r.strip() for r in region.split(",") if r.strip()]
         if regions:
-            constraints = [region_constraint(regions)]
+            constraints.append(region_constraint(regions))
+    if target_cluster:
+        constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
 
     endpoint_cluster = cluster if controller is None else None
     with open_controller_endpoint(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
         controller_url = endpoint_info.url
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
-        with IrisClient.remote(controller_url, workspace=Path.cwd(), credentials=endpoint_info.credentials) as client:
+        with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(serve_in_job, config),
                 name=job_name,
-                resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=tpu_device(tpu)),
-                environment=EnvironmentSpec(extras=_WORKER_EXTRAS),
+                resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=device),
+                environment=environment,
                 ports=["http"],
-                constraints=constraints,
+                constraints=constraints or None,
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
+                task_image=task_image,
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
             click.echo(f"  job          {job}")
             click.echo(f"  model        {model}")
-            click.echo(f"  tpu          {tpu}")
+            if gpu is not None:
+                click.echo(f"  gpu          {config.accelerator_label}")
+            else:
+                click.echo(f"  tpu          {tpu}")
+            if target_cluster:
+                click.echo(f"  target       {target_cluster}")
             click.echo(f"  endpoint     {endpoint}")
             if dashboard_url:
                 click.echo(f"  share url    {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")

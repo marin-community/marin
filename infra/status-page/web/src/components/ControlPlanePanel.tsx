@@ -152,7 +152,7 @@ export function ControlPlanePanel() {
                     METRICS.map((metric) => (
                       <Line
                         key={lineKey(s.id, metric)}
-                        type="monotone"
+                        type="linear"
                         dataKey={lineKey(s.id, metric)}
                         name={`${s.name} ${metric}`}
                         stroke={SERIES_COLORS[s.id] ?? "#94a3b8"}
@@ -160,7 +160,6 @@ export function ControlPlanePanel() {
                         strokeDasharray={METRIC_STYLES[metric].strokeDasharray}
                         dot={false}
                         isAnimationActive={false}
-                        connectNulls
                       />
                     )),
                   )}

@@ -10,7 +10,7 @@ from typing import Any, Sequence
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url, prefix_join
+from rigging.filesystem import StoragePath, open_url, prefix_join
 
 from levanter.analysis.perplexity_gap import (
     LOG2E,
@@ -22,7 +22,6 @@ from levanter.analysis.perplexity_gap import (
     write_report_files,
     _byte_span_to_char_span,
 )
-from levanter.utils.fsspec_utils import mkdirs
 
 
 SCORED_DOCUMENTS_FILENAME = "scored_documents.parquet"
@@ -202,10 +201,9 @@ def write_model_score_files(
     scored_documents_path = prefix_join(output_path, SCORED_DOCUMENTS_FILENAME)
     token_counts_path = prefix_join(output_path, TOKEN_COUNTS_FILENAME)
     token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
-    mkdirs(output_path)
+    StoragePath(output_path).mkdirs()
 
-    with open_url(summary_path, "w") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+    StoragePath(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True))
 
     table = _scored_documents_table(scored_documents)
     with open_url(scored_documents_path, "wb") as f:
@@ -216,16 +214,14 @@ def write_model_score_files(
         vocab_size=vocab_size,
         token_id_to_text=token_id_to_text,
     )
-    with open_url(token_count_summary_path, "w") as f:
-        json.dump(token_count_summary, f, indent=2, sort_keys=True)
+    StoragePath(token_count_summary_path).write_text(json.dumps(token_count_summary, indent=2, sort_keys=True))
     with open_url(token_counts_path, "wb") as f:
         pq.write_table(token_count_table, f)
 
 
 def read_model_score_summary(output_path: str) -> dict[str, Any]:
     summary_path = prefix_join(output_path, SUMMARY_FILENAME)
-    with open_url(summary_path) as f:
-        return json.load(f)
+    return json.loads(StoragePath(summary_path).read_text())
 
 
 def read_scored_documents(output_path: str) -> list[ScoredDocument]:
@@ -237,8 +233,7 @@ def read_scored_documents(output_path: str) -> list[ScoredDocument]:
 
 def read_token_count_summary(output_path: str) -> dict[str, Any]:
     token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
-    with open_url(token_count_summary_path) as f:
-        return json.load(f)
+    return json.loads(StoragePath(token_count_summary_path).read_text())
 
 
 def compare_scored_outputs(

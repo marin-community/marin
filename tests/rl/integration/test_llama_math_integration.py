@@ -12,7 +12,7 @@ import jmp
 import pytest
 from levanter.checkpoint import CheckpointerConfig
 from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig

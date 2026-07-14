@@ -9,7 +9,7 @@ import os
 from typing import Any, Mapping, Optional
 
 import jax
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 from levanter.tracker.json_logger import _flatten, _to_jsonable
 from levanter.tracker.tracker import NoopTracker, Tracker, TrackerConfig
@@ -43,8 +43,7 @@ class JsonFileTracker(Tracker):
     def finish(self):
         summary = {**self._summary_metrics, **self._last_metrics}
         output_file = os.path.join(self.output_path, "eval_results.json")
-        with open_url(output_file, "wt") as f:
-            json.dump(_to_jsonable(summary), f, indent=2)
+        StoragePath(output_file).write_text(json.dumps(_to_jsonable(summary), indent=2))
         logger.info(f"Saved eval results to {output_file}")
 
 

@@ -25,6 +25,7 @@ from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
 from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
@@ -88,6 +89,14 @@ class WellKnownAttribute(StrEnum):
     GPU_COUNT = "gpu-count"
 
 
+AUTO_DEVICE_VARIANT = "auto"
+"""Device-variant sentinel meaning "unspecified — let the platform pick a variant".
+
+A resource spec or scale group carrying this variant emits no ``device-variant``
+routing constraint or advertised attribute, so the job matches any variant.
+"""
+
+
 # The reserved cluster name for work this controller owns and runs itself. Every
 # ``jobs``/``tasks`` row carries a ``cluster`` column that defaults to
 # ``LOCAL_CLUSTER`` and holds a peer's id once the job is handed off, so the
@@ -96,6 +105,14 @@ class WellKnownAttribute(StrEnum):
 # ``"local"`` (enforced in config validation) — so the sentinel and the global
 # cluster-id namespace stay disjoint.
 LOCAL_CLUSTER = "local"
+
+LOCAL_ADMIN_SUBMITTER = "local_admin"
+"""``submitting_user`` for a job admitted without an authenticated email.
+
+A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
+than a person, so its jobs are attributed to this well-known principal. Per-cluster
+federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
+a peer only if that peer's policy names it explicitly."""
 
 
 def is_federated(cluster: str) -> bool:
@@ -692,6 +709,9 @@ class EnvironmentSpec:
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
+    - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
+      at submission (or forwarded from this process's own env when re-submitting inside
+      a task), so tasks stamp artifacts with the submitter's git identity
 
     Setup:
     - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
@@ -726,6 +746,10 @@ class EnvironmentSpec:
             "TOKENIZERS_PARALLELISM": "false",
             "HF_TOKEN": os.getenv("HF_TOKEN"),
             "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+            # Launch provenance: a task running from a git-less bundle inherits the
+            # submitter's identity via Provenance.capture(); transitive, since a task
+            # re-submitting captures this same env value.
+            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}

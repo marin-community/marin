@@ -181,18 +181,13 @@ class _FakeProvider:
         self._store: BackendWorkerStore | None = None
         self.health: WorkerHealthTracker = WorkerHealthTracker()
         self.advertised: dict[str, set[str]] = {}
-        self.allowed_users: frozenset[str] = frozenset({"*"})
         self._pending_dead: list[WorkerId] = []
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         assert self._store is not None

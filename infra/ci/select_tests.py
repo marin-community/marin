@@ -2,14 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """Select which tests to run based on changed files.
 
-Computes a precise test matrix from the diff between HEAD and a base ref using
-top-level import analysis: only imports at module scope (not inside def/class bodies
-or TYPE_CHECKING blocks) propagate test impact, matching the codebase's "no lazy
-imports" convention.
+Builds a module-level import graph over the workspace, walks it backwards from the
+changed modules, and emits the test files that transitively import them.
+
+Two rules shape the graph:
+
+- Only imports at module scope propagate. The codebase forbids lazy imports, so an
+  import inside a function body is assumed not to affect what a test exercises.
+- ``import a.b`` depends on ``a`` as well as ``a.b``, because Python executes
+  ``a/__init__.py`` on the way in. A package whose ``__init__`` re-exports its
+  submodules therefore ties every importer to all of them.
+
+Test helper modules under a test tree participate in the graph too, so a test that
+reaches source code only through a shared helper is still selected.
 
 Usage:
-    python infra/ci/select_tests.py --base-ref <SHA>
-    python infra/ci/select_tests.py --force-run-all
+    python infra/ci/select_tests.py --base-ref <SHA>                   # pull request
+    python infra/ci/select_tests.py --base-ref <SHA> --run-all-tests   # push to main
+    python infra/ci/select_tests.py --run-all-tests                    # manual run
 """
 
 import argparse
@@ -18,7 +28,7 @@ import json
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # Ordered list of workspace member short names.
 SCOPES: tuple[str, ...] = (
@@ -29,6 +39,22 @@ SCOPES: tuple[str, ...] = (
     "levanter",
     "zephyr",
     "marin",
+)
+
+
+@dataclass(frozen=True)
+class SourceRoot:
+    """A top-level package and the directory that must be importable for it to resolve."""
+
+    package_dir: str
+    """Repo-relative directory holding the package, e.g. ``lib/levanter/src/levanter``."""
+    import_root: str
+    """Repo-relative directory on ``sys.path``, e.g. ``lib/levanter/src``."""
+
+
+SOURCE_ROOTS: tuple[SourceRoot, ...] = (
+    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
+    SourceRoot("experiments", "."),
 )
 
 # Files whose change triggers running every package's full test suite.
@@ -52,7 +78,6 @@ UV_PACKAGE: dict[str, str] = {
     "marin": "marin-core",
 }
 
-# levanter's torch_test extra is intentionally omitted: torch/TPU legs stay in levanter-unit.yaml.
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
 }
@@ -62,61 +87,39 @@ TEST_DIR: dict[str, str] = {
     "marin": "tests",
 }
 
+# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
+# extra runners; every other scope finishes well under the workflow's per-leg budget. A
+# sharded scope splits its selected files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4}
+
+# A shard carries fixed environment-setup overhead, so stop adding runners once each would
+# hold fewer than this many files: a small selection runs faster in one leg than spread thin.
+MIN_FILES_PER_SHARD = 15
+
+# Suites that cannot be import-selected: each drives a whole subsystem (accelerator
+# kernels, a browser-driven smoke test) rather than a set of importable modules, so
+# path prefixes gate them. A locked dependency change moves the accelerator runtime
+# out from under all of them.
+DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
+EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "levanter-torch": ("lib/levanter/", "lib/haliax/", *DEPENDENCY_MANIFESTS),
+    "levanter-tpu": ("lib/levanter/", "lib/haliax/", *DEPENDENCY_MANIFESTS),
+    "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+}
+
 
 # ---------------------------------------------------------------------------
-# Pure helpers
+# Import parsing
 # ---------------------------------------------------------------------------
 
 
-def top_level_imports(path: Path, module_name: str | None = None) -> set[str]:
-    """Dotted module names from top-level import statements only.
-
-    Skips imports inside def/class bodies and if TYPE_CHECKING blocks.
-    Returns empty set on parse errors.
-    """
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
-    except SyntaxError:
-        return set()
-    result: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                result.add(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level > 0:
-                if module_name is not None:
-                    # Determine parent package
-                    if path.name == "__init__.py":
-                        package = module_name
-                    else:
-                        package = module_name.rsplit(".", 1)[0] if "." in module_name else ""
-
-                    parts = package.split(".") if package else []
-                    up = node.level - 1
-                    if up <= len(parts):
-                        base_parts = parts[:-up] if up > 0 else parts
-                        if node.module:
-                            result.add(".".join(base_parts + node.module.split(".")))
-                        else:
-                            for alias in node.names:
-                                result.add(".".join([*base_parts, alias.name]))
-                else:
-                    if node.module:
-                        result.add(node.module)
-            elif node.module:
-                result.add(node.module)
-    return result
-
-
-def path_to_module(path: Path, scope: str, repo_root: Path) -> str | None:
-    """Map a source .py file to its dotted module name, or None if not applicable.
+def path_to_module(path: Path, import_root: Path) -> str | None:
+    """Dotted module name for a .py file, or None if it is outside ``import_root``.
 
     lib/levanter/src/levanter/store/cache.py -> levanter.store.cache
     """
-    src_root = repo_root / f"lib/{scope}/src"
     try:
-        rel = path.relative_to(src_root)
+        rel = path.relative_to(import_root)
     except ValueError:
         return None
     parts = list(rel.with_suffix("").parts)
@@ -125,34 +128,51 @@ def path_to_module(path: Path, scope: str, repo_root: Path) -> str | None:
     return ".".join(parts) if parts else None
 
 
-def imports_touch_affected(imports: set[str], affected: set[str]) -> bool:
-    """True if any imported name overlaps with an affected module.
+def ancestors(dotted: str) -> list[str]:
+    """Every dotted prefix of a module name, shortest first: a.b.c -> [a, a.b, a.b.c]."""
+    parts = dotted.split(".")
+    return [".".join(parts[: i + 1]) for i in range(len(parts))]
 
-    Three cases:
-    - exact match: imp == aff
-    - imp is a parent package: aff.startswith(imp + ".")  e.g. imp="levanter.store", aff="levanter.store.cache"
-    - imp is a child of aff: imp.startswith(aff + ".")  e.g. imp="levanter.store.cache", aff="levanter.store"
-      (Python executes __init__.py of every parent package when loading a child, so a change
-      to levanter/store/__init__.py affects anything that imports levanter.store.cache)
+
+def _absolute_base(node: ast.ImportFrom, module_name: str, is_package: bool) -> str:
+    """Absolute dotted prefix named by a ``from ... import`` statement."""
+    if node.level == 0:
+        return node.module or ""
+    package = module_name if is_package else module_name.rsplit(".", 1)[0] if "." in module_name else ""
+    parts = package.split(".") if package else []
+    up = node.level - 1
+    if up > len(parts):
+        return ""
+    base_parts = parts[: len(parts) - up]
+    return ".".join(base_parts + (node.module.split(".") if node.module else []))
+
+
+def imported_names(path: Path, module_name: str) -> set[str]:
+    """Absolute dotted names referenced by top-level import statements.
+
+    ``from a.b import c`` yields both ``a.b`` and the candidate ``a.b.c``: the caller
+    decides which of those is a real module. A file that will not parse would silently
+    drop its edges from the graph, under-selecting tests, so the SyntaxError propagates.
     """
-    for imp in imports:
-        for aff in affected:
-            if aff == imp or aff.startswith(imp + ".") or imp.startswith(aff + "."):
-                return True
-    return False
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
+
+    names: set[str] = set()
+    is_package = path.name == "__init__.py"
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = _absolute_base(node, module_name, is_package)
+            if not base:
+                continue
+            names.add(base)
+            names.update(f"{base}.{alias.name}" for alias in node.names)
+    return names
 
 
-def downstream_modules(seeds: set[str], reverse: dict[str, set[str]]) -> set[str]:
-    """BFS: all modules that transitively depend on any seed module."""
-    visited = set(seeds)
-    queue = list(seeds)
-    while queue:
-        mod = queue.pop()
-        for dep in reverse.get(mod, ()):
-            if dep not in visited:
-                visited.add(dep)
-                queue.append(dep)
-    return visited
+def resolve(names: set[str], known: set[str]) -> set[str]:
+    """Known modules whose execution the given import names trigger, ancestors included."""
+    return {ancestor for name in names for ancestor in ancestors(name) if ancestor in known}
 
 
 # ---------------------------------------------------------------------------
@@ -160,31 +180,122 @@ def downstream_modules(seeds: set[str], reverse: dict[str, set[str]]) -> set[str
 # ---------------------------------------------------------------------------
 
 
-def build_reverse_deps(repo_root: Path) -> dict[str, set[str]]:
-    """Build a top-level-import reverse-dependency map across all workspace source files.
-
-    reverse[M] = {modules that import M at the top level of their source files}
-    """
-    reverse: dict[str, set[str]] = defaultdict(set)
-    for scope in SCOPES:
-        src = repo_root / f"lib/{scope}/src"
-        if not src.exists():
+def workspace_modules(repo_root: Path) -> dict[str, Path]:
+    """Every importable workspace source module, dotted name -> file."""
+    modules: dict[str, Path] = {}
+    for source_root in SOURCE_ROOTS:
+        package = repo_root / source_root.package_dir
+        if not package.exists():
             continue
-        for py in src.rglob("*.py"):
-            mod = path_to_module(py, scope, repo_root)
-            if mod is None:
-                continue
-            for imp in top_level_imports(py, module_name=mod):
-                reverse[imp].add(mod)
-    return dict(reverse)
+        import_root = repo_root / source_root.import_root
+        for py in package.rglob("*.py"):
+            module = path_to_module(py, import_root)
+            if module:
+                modules[module] = py
+    return modules
 
 
-def all_test_files(scope: str, repo_root: Path) -> list[Path]:
-    """All .py files in a scope's test directory, excluding conftest.py."""
-    test_dir = repo_root / "tests" if scope == "marin" else repo_root / f"lib/{scope}/tests"
+def build_importers(modules: dict[str, Path], emptied: frozenset[str] = frozenset()) -> dict[str, set[str]]:
+    """importers[M] = modules whose top-level imports execute M.
+
+    ``emptied`` names modules whose own imports are ignored, as if their body were
+    reduced to a docstring. The import-graph analyzer uses it to simulate deleting a
+    re-export hub; production selection passes the default empty set.
+    """
+    known = set(modules)
+    importers: dict[str, set[str]] = defaultdict(set)
+    for module, py in modules.items():
+        if module in emptied:
+            continue
+        for dependency in resolve(imported_names(py, module), known):
+            if dependency != module:
+                importers[dependency].add(module)
+    return dict(importers)
+
+
+def affected_modules(seeds: set[str], importers: dict[str, set[str]]) -> set[str]:
+    """BFS: the seeds plus every module that transitively imports one."""
+    visited = set(seeds)
+    queue = list(seeds)
+    while queue:
+        module = queue.pop()
+        for importer in importers.get(module, ()):
+            if importer not in visited:
+                visited.add(importer)
+                queue.append(importer)
+    return visited
+
+
+# ---------------------------------------------------------------------------
+# Test trees
+# ---------------------------------------------------------------------------
+
+
+def is_test_module(filename: str) -> bool:
+    """Whether pytest would collect this file by name (default ``python_files`` convention).
+
+    Only such files may be passed to pytest explicitly: an explicit path is imported even
+    when it does not match the collection convention, so handing pytest a helper module
+    (workload script, stub, generator) crashes the run if the helper's imports are not
+    installed in the lane's environment.
+    """
+    return (filename.startswith("test_") or filename.endswith("_test.py")) and filename.endswith(".py")
+
+
+def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
+    """Every .py under a scope's test directory, keyed by the name it imports itself as.
+
+    Test trees are imported as the ``tests`` package rooted at the test directory's parent,
+    which is what both relative (``from .conftest import x``) and absolute
+    (``from tests.cluster.conftest import x``) intra-tree imports resolve against.
+    """
+    test_dir = repo_root / TEST_DIR[scope]
     if not test_dir.exists():
-        return []
-    return sorted(p for p in test_dir.rglob("*.py") if p.name != "conftest.py")
+        return {}
+    import_root = repo_root / PurePosixPath(TEST_DIR[scope]).parent
+    tree: dict[str, Path] = {}
+    for py in test_dir.rglob("*.py"):
+        module = path_to_module(py, import_root)
+        if module:
+            tree[module] = py
+    return tree
+
+
+def _tree_dependencies(
+    module: str,
+    tree: dict[str, Path],
+    known: set[str],
+    cache: dict[str, set[str]],
+    visiting: set[str],
+) -> set[str]:
+    """Workspace modules a test-tree module depends on, following intra-tree helpers."""
+    if module in cache:
+        return cache[module]
+    if module in visiting:
+        return set()  # import cycle between helpers
+    visiting.add(module)
+
+    names = imported_names(tree[module], module)
+    dependencies = resolve(names, known)
+    for name in names:
+        for ancestor in ancestors(name):
+            if ancestor in tree and ancestor != module:
+                dependencies |= _tree_dependencies(ancestor, tree, known, cache, visiting)
+
+    visiting.discard(module)
+    cache[module] = dependencies
+    return dependencies
+
+
+def dependencies_by_test_file(scope: str, repo_root: Path, known: set[str]) -> dict[str, set[str]]:
+    """Collectable test file (repo-relative) -> workspace modules it transitively imports."""
+    tree = _test_tree(scope, repo_root)
+    cache: dict[str, set[str]] = {}
+    return {
+        str(py.relative_to(repo_root)): _tree_dependencies(module, tree, known, cache, set())
+        for module, py in tree.items()
+        if is_test_module(py.name)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +329,7 @@ class ClassifyResult:
     """Scopes that must run their full test suite."""
 
 
-def classify(
-    changed_files: list[str],
-    repo_root: Path,
-) -> ClassifyResult:
+def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
     """Classify repo-root-relative changed file paths."""
     broad = False
     src_modules: set[str] = set()
@@ -229,35 +337,35 @@ def classify(
     forced: set[str] = set()
 
     for filepath in changed_files:
-        p = Path(filepath)
-
         if filepath in BROAD_TRIGGERS:
             broad = True
             continue
 
-        # Scope-specific paths
+        source_root = next(
+            (root for root in SOURCE_ROOTS if filepath.startswith(f"{root.package_dir}/")),
+            None,
+        )
+        if source_root is not None:
+            if filepath.endswith(".py"):
+                module = path_to_module(repo_root / filepath, repo_root / source_root.import_root)
+                if module:
+                    src_modules.add(module)
+            continue
+
         for scope in SCOPES:
-            src_prefix = f"lib/{scope}/src/"
-            test_prefix = "tests/" if scope == "marin" else f"lib/{scope}/tests/"
-
-            if filepath.startswith(src_prefix) and filepath.endswith(".py"):
-                mod = path_to_module(repo_root / filepath, scope, repo_root)
-                if mod:
-                    src_modules.add(mod)
-                break
-
-            if filepath.startswith(test_prefix):
-                if p.name == "conftest.py":
+            if filepath.startswith(f"{TEST_DIR[scope]}/"):
+                # conftest.py, helper modules (stubs, workload scripts, generators), and
+                # non-Python assets (snapshots, fixtures, data files) can all change test
+                # behavior without being directly collectable: run the full scope so the
+                # tests that own this file are not missed.
+                if not is_test_module(PurePosixPath(filepath).name):
                     forced.add(scope)
-                elif p.suffix == ".py":
+                elif (repo_root / filepath).exists():
+                    # A test deleted by this diff still shows up in git's output; passing
+                    # it to pytest would abort the run before a single test executes.
                     direct_tests[scope].append(filepath)
-                else:
-                    # Non-Python test asset (snapshot, fixture, data file): run the full
-                    # scope so the tests that own this file are not missed.
-                    forced.add(scope)
                 break
 
-            # Per-package root files that can change test behavior
             if filepath in (f"lib/{scope}/conftest.py", f"lib/{scope}/pyproject.toml"):
                 forced.add(scope)
                 break
@@ -270,18 +378,73 @@ def classify(
     )
 
 
+def extra_suites(changed_files: list[str]) -> list[str]:
+    """Out-of-band suites to run for this diff."""
+    return sorted(
+        suite
+        for suite, prefixes in EXTRA_SUITE_TRIGGERS.items()
+        if any(filepath.startswith(prefix) for prefix in prefixes for filepath in changed_files)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test selection
 # ---------------------------------------------------------------------------
 
 
-def matrix_leg(scope: str, tests: list[str]) -> dict[str, str]:
-    """Build one unified-unit matrix leg with uv/pytest arguments."""
+def matrix_leg(scope: str, tests: list[str], shard: tuple[int, int] | None = None) -> dict[str, str]:
+    """Build one unified-unit matrix leg with uv/pytest arguments.
+
+    ``shard`` is a ``(index, total)`` pair when the scope's suite is split across several
+    runners; it rides in the label so each shard surfaces as its own workflow job.
+    """
     return {
+        "label": scope if shard is None else f"{scope} {shard[0]}/{shard[1]}",
         "package": UV_PACKAGE[scope],
         "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
         "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
     }
+
+
+def all_test_files(scope: str, repo_root: Path) -> list[str]:
+    """Every collectable test file in a scope's suite, repo-relative and sorted."""
+    return sorted(
+        str(py.relative_to(repo_root)) for py in _test_tree(scope, repo_root).values() if is_test_module(py.name)
+    )
+
+
+def shard_files(tests: list[str], count: int) -> list[list[str]]:
+    """Split ``tests`` into ``count`` contiguous, size-balanced chunks."""
+    base, extra = divmod(len(tests), count)
+    chunks: list[list[str]] = []
+    start = 0
+    for index in range(count):
+        size = base + (1 if index < extra else 0)
+        chunks.append(tests[start : start + size])
+        start += size
+    return chunks
+
+
+def scope_legs(scope: str, tests: list[str] | None, repo_root: Path) -> list[dict[str, str]]:
+    """Matrix legs for one scope: one leg, or several when the scope is sharded.
+
+    ``tests is None`` runs the full suite. A sharded scope expands that to its file list so
+    full and diff-driven runs spread across the same runners; below MIN_FILES_PER_SHARD it
+    stays a single leg.
+    """
+    cap = SHARD_COUNT.get(scope, 1)
+    files = tests if tests is not None else (all_test_files(scope, repo_root) if cap > 1 else None)
+    if cap <= 1 or files is None or len(files) <= MIN_FILES_PER_SHARD:
+        return [matrix_leg(scope, files or [])]
+
+    # Floor, not ceil: pick the largest shard count that still leaves every shard at least
+    # MIN_FILES_PER_SHARD files, so a medium selection is not split into runners so small that
+    # setup overhead dominates (16 files stays one leg, not two 8-file legs).
+    count = min(cap, len(files) // MIN_FILES_PER_SHARD)
+    if count <= 1:
+        return [matrix_leg(scope, sorted(files))]
+    chunks = shard_files(sorted(files), count)
+    return [matrix_leg(scope, chunk, shard=(index + 1, count)) for index, chunk in enumerate(chunks)]
 
 
 def compute_matrix(
@@ -292,46 +455,41 @@ def compute_matrix(
 ) -> list[dict[str, str]]:
     """Compute the test matrix.
 
-    Returns a list of matrix legs. Each leg has package (uv name), extras, and
-    test_paths. An empty tests list means run the full suite directory.
+    Returns a list of matrix legs. Each leg has a label, package (uv name), extras, and
+    test_paths. An empty tests list means run the full suite directory; a scope may fan out
+    into several sharded legs.
     """
     if not (src_modules or direct_tests or forced_scopes):
         return []
 
-    reverse = build_reverse_deps(repo_root)
-    affected = downstream_modules(src_modules, reverse) if src_modules else set()
+    modules = workspace_modules(repo_root)
+    known = set(modules)
+    affected = affected_modules(src_modules, build_importers(modules)) if src_modules else set()
 
-    forced_set = set(forced_scopes)
     matrix: list[dict[str, str]] = []
-
     for scope in SCOPES:
-        if scope in forced_set:
-            matrix.append(matrix_leg(scope, []))
+        if scope in forced_scopes:
+            matrix.extend(scope_legs(scope, None, repo_root))
             continue
 
-        selected: list[str] = []
-
-        for t in direct_tests.get(scope, []):
-            if t not in selected:
-                selected.append(t)
-
+        selected = list(direct_tests.get(scope, []))
         if affected:
-            for test_file in all_test_files(scope, repo_root):
-                rel = str(test_file.relative_to(repo_root))
-                if rel in selected:
-                    continue
-                if imports_touch_affected(top_level_imports(test_file), affected):
-                    selected.append(rel)
+            for test_file, dependencies in dependencies_by_test_file(scope, repo_root, known).items():
+                if test_file not in selected and dependencies & affected:
+                    selected.append(test_file)
 
         if selected:
-            matrix.append(matrix_leg(scope, sorted(selected)))
+            matrix.extend(scope_legs(scope, sorted(selected), repo_root))
 
     return matrix
 
 
-def full_matrix() -> list[dict[str, str]]:
-    """Matrix for --force-run-all: every scope with the full suite directory."""
-    return [matrix_leg(scope, []) for scope in SCOPES]
+def full_matrix(repo_root: Path) -> list[dict[str, str]]:
+    """Every scope, each running its full suite (sharded where configured)."""
+    legs: list[dict[str, str]] = []
+    for scope in SCOPES:
+        legs.extend(scope_legs(scope, None, repo_root))
+    return legs
 
 
 # ---------------------------------------------------------------------------
@@ -341,34 +499,42 @@ def full_matrix() -> list[dict[str, str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Select tests to run from a diff against a base ref.")
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--base-ref", metavar="SHA", help="Git SHA or ref to diff HEAD against")
-    mode.add_argument(
-        "--force-run-all",
+    parser.add_argument("--base-ref", metavar="SHA", help="Git SHA or ref to diff HEAD against")
+    parser.add_argument(
+        "--run-all-tests",
         action="store_true",
-        help="Bypass the analyzer; run every package's full suite",
+        help="Run every package's full suite regardless of the diff",
     )
     args = parser.parse_args()
+    if not (args.base_ref or args.run_all_tests):
+        parser.error("pass --base-ref, --run-all-tests, or both")
 
     repo_root = Path(__file__).parent.parent.parent
 
-    if args.force_run_all:
-        result = {"run_all": True, "reason": "force-run-all", "matrix": full_matrix()}
-    else:
-        changed = git_changed_files(args.base_ref, repo_root)
-        classification = classify(changed, repo_root)
-        if classification.broad:
-            result = {"run_all": True, "reason": "broad-trigger", "matrix": full_matrix()}
-        else:
-            matrix = compute_matrix(
-                classification.src_modules,
-                classification.direct_tests,
-                classification.forced,
-                repo_root,
-            )
-            result = {"run_all": False, "reason": "diff-driven", "matrix": matrix}
+    # Without a base ref there is nothing to gate the out-of-band suites on, so run them all.
+    if args.base_ref is None:
+        result = {"reason": "run-all-tests", "matrix": full_matrix(repo_root), "suites": sorted(EXTRA_SUITE_TRIGGERS)}
+        print(json.dumps(result, indent=2))
+        return
 
-    print(json.dumps(result, indent=2))
+    changed = git_changed_files(args.base_ref, repo_root)
+    classification = classify(changed, repo_root)
+    suites = extra_suites(changed)
+
+    if args.run_all_tests:
+        reason, matrix = "run-all-tests", full_matrix(repo_root)
+    elif classification.broad:
+        reason, matrix = "broad-trigger", full_matrix(repo_root)
+    else:
+        reason = "diff-driven"
+        matrix = compute_matrix(
+            classification.src_modules,
+            classification.direct_tests,
+            classification.forced,
+            repo_root,
+        )
+
+    print(json.dumps({"reason": reason, "matrix": matrix, "suites": suites}, indent=2))
 
 
 if __name__ == "__main__":

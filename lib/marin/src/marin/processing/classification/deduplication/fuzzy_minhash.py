@@ -20,16 +20,17 @@ from collections.abc import Iterator
 
 import dupekit
 import pyarrow as pa
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join
-from zephyr import Dataset, ZephyrContext, counters
+from rigging.filesystem import StoragePath, prefix_join
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
-from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,8 @@ def compute_minhash_attrs(
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
-    map_workers_per_actor: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
 ) -> MinHashAttrData:
     """Compute MinHash bucket attributes for *source* and persist as Parquet.
 
@@ -186,8 +188,10 @@ def compute_minhash_attrs(
         worker_resources: Per-worker resource request. Sized similarly to the
             old ``dedup_fuzzy_document``: dupekit's Rust MinHash pipeline uses
             a native thread pool and may consume up to ~2 cores beyond the
-            Python thread.
+            Python thread. Required when ``map_task_resources`` is set.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
+        map_task_resources: ResourceConfig for map-stage tasks.
+        reduce_task_resources: ResourceConfig for reduce-stage tasks.
 
     Returns:
         :class:`MinHashAttrData` describing the attr directory and counters.
@@ -204,7 +208,7 @@ def compute_minhash_attrs(
     )
     attr_dir = prefix_join(output_path, "outputs")
 
-    source_shards = sorted(fsspec_glob(prefix_join(source.main_output_dir, "*.parquet")))
+    source_shards = sorted(str(m) for m in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob())
     if not source_shards:
         raise FileNotFoundError(f"No parquet shards found under {source.main_output_dir}")
 
@@ -222,8 +226,10 @@ def compute_minhash_attrs(
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    if map_workers_per_actor is not None:
-        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
+    if map_task_resources is not None:
+        ctx_kwargs["map_task_resources"] = map_task_resources
+    if reduce_task_resources is not None:
+        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = ZephyrContext(**ctx_kwargs)
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.

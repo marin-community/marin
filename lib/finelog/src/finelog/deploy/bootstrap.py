@@ -129,13 +129,14 @@ exit 1
 """
 
 
-def render_bootstrap(image: str, port: int, remote_log_dir: str, auth_policy: str = "") -> str:
+def render_bootstrap(image: str, port: int, remote_log_dir: str, auth_policy: str) -> str:
     """Render the finelog bootstrap script.
 
     ``auth_policy`` is the ``FINELOG_AUTH_POLICY`` JSON (see
     ``deploy.config.auth_policy_json``); empty leaves the server on its private
-    allow-localhost default. It is passed single-quoted, so it must not contain a
-    single quote (the JSON never does — hex secrets, identifiers, CIDRs).
+    allow-localhost default, which on a remote VM admits nothing but an SSH
+    tunnel. It is passed single-quoted, so it must not contain a single quote
+    (the JSON never does — CIDR prefixes, cluster names, PEM public keys).
     """
     if not image:
         raise ValueError("image is required")

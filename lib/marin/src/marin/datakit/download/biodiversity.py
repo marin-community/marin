@@ -19,8 +19,11 @@ per-row ``flat_map``).
 
 from collections.abc import Iterator
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_file
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_file
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step

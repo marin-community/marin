@@ -18,8 +18,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import StoragePath, open_url
 from zephyr.writers import atomic_rename
 
 PROMPT_FORMAT_NUM_FEWSHOT = 5
@@ -531,7 +530,7 @@ def stage_prompt_format_sensitivity_source(cfg: PromptFormatSensitivityStagingCo
     if len(task.support_examples) != PROMPT_FORMAT_NUM_FEWSHOT:
         raise ValueError(f"{cfg.task_key} must have exactly {PROMPT_FORMAT_NUM_FEWSHOT} support examples")
 
-    fsspec_mkdirs(cfg.output_path, exist_ok=True)
+    StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
     compression = "gzip" if out_file.endswith(".gz") else None
 
@@ -543,8 +542,7 @@ def stage_prompt_format_sensitivity_source(cfg: PromptFormatSensitivityStagingCo
                 )
                 outfile.write("\n")
 
-    fs, _ = url_to_fs(out_file)
-    output_size = int(fs.info(out_file)["size"])
+    output_size = StoragePath(out_file).size()
     result: dict[str, Any] = {
         "record_count": len(task.heldout_examples),
         "bytes_written": output_size,

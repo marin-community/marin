@@ -24,10 +24,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-import fsspec
-from fray import ResourceConfig, set_current_client
+from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
-from fray.types import Entrypoint, JobRequest, create_environment
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -42,6 +41,7 @@ from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 configure_logging(level=logging.INFO)
@@ -112,8 +112,6 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
         fn=lambda output_path: dedup_exact_paragraph(
             input_paths=[read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir],
             output_path=output_path,
-            max_parallelism=4,
-            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
 
@@ -218,18 +216,16 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
 
 
 def _upload_tree(local_root: Path, s3_dest: str) -> None:
-    fs, _ = fsspec.core.url_to_fs(s3_dest)
     for path in local_root.rglob("*"):
         if not path.is_file():
             continue
         rel = path.relative_to(local_root)
-        fs.put(str(path), f"{s3_dest}/{rel}")
+        StoragePath(f"{s3_dest}/{rel}").upload_from(str(path))
 
 
 def _rm_s3(s3_prefix: str) -> None:
-    fs, _ = fsspec.core.url_to_fs(s3_prefix)
     try:
-        fs.rm(s3_prefix, recursive=True)
+        StoragePath(s3_prefix).rmtree()
     except FileNotFoundError:
         pass
 

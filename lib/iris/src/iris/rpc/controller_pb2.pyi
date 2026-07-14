@@ -113,12 +113,14 @@ class Controller(_message.Message):
         federation: Controller.FederationHandoff
         def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ..., federation: _Optional[_Union[Controller.FederationHandoff, _Mapping]] = ...) -> None: ...
     class FederationHandoff(_message.Message):
-        __slots__ = ("requester_id", "owner_principal")
+        __slots__ = ("requester_id", "owner_principal", "submitting_user")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
         OWNER_PRINCIPAL_FIELD_NUMBER: _ClassVar[int]
+        SUBMITTING_USER_FIELD_NUMBER: _ClassVar[int]
         requester_id: str
         owner_principal: str
-        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ...) -> None: ...
+        submitting_user: str
+        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ..., submitting_user: _Optional[str] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -350,7 +352,7 @@ class Controller(_message.Message):
         accepted: bool
         def __init__(self, worker_id: _Optional[str] = ..., accepted: _Optional[bool] = ...) -> None: ...
     class Endpoint(_message.Message):
-        __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata", "access")
+        __slots__ = ("endpoint_id", "name", "address", "task_id", "metadata", "access", "peer_id")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -364,13 +366,15 @@ class Controller(_message.Message):
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         ACCESS_FIELD_NUMBER: _ClassVar[int]
+        PEER_ID_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
         name: str
         address: str
         task_id: str
         metadata: _containers.ScalarMap[str, str]
         access: Controller.EndpointAccess
-        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ...) -> None: ...
+        peer_id: str
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., peer_id: _Optional[str] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
         __slots__ = ("name", "address", "task_id", "metadata", "attempt_id", "endpoint_id", "lease_duration", "access")
         class MetadataEntry(_message.Message):
@@ -705,8 +709,24 @@ class Controller(_message.Message):
         kubernetes: Controller.GetKubernetesClusterStatusResponse
         worker: Controller.WorkerFleetDetail
         def __init__(self, kubernetes: _Optional[_Union[Controller.GetKubernetesClusterStatusResponse, _Mapping]] = ..., worker: _Optional[_Union[Controller.WorkerFleetDetail, _Mapping]] = ...) -> None: ...
+    class ResourceAvailability(_message.Message):
+        __slots__ = ("version", "observation_epoch_ms", "amounts")
+        class AmountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        VERSION_FIELD_NUMBER: _ClassVar[int]
+        OBSERVATION_EPOCH_MS_FIELD_NUMBER: _ClassVar[int]
+        AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+        version: int
+        observation_epoch_ms: int
+        amounts: _containers.ScalarMap[str, int]
+        def __init__(self, version: _Optional[int] = ..., observation_epoch_ms: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
     class BackendSummary(_message.Message):
-        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "restricted", "allowed_user_count", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail")
+        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail", "availability")
         class AdvertisedAttributesEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -726,8 +746,6 @@ class Controller(_message.Message):
         KIND_FIELD_NUMBER: _ClassVar[int]
         CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
         ADVERTISED_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
-        RESTRICTED_FIELD_NUMBER: _ClassVar[int]
-        ALLOWED_USER_COUNT_FIELD_NUMBER: _ClassVar[int]
         SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
         WORKER_COUNT_FIELD_NUMBER: _ClassVar[int]
         PENDING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
@@ -735,13 +753,12 @@ class Controller(_message.Message):
         HAS_AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
         CAPACITY_HEALTH_FIELD_NUMBER: _ClassVar[int]
         DETAIL_FIELD_NUMBER: _ClassVar[int]
+        AVAILABILITY_FIELD_NUMBER: _ClassVar[int]
         backend_id: str
         name: str
         kind: str
         capabilities: _containers.RepeatedScalarFieldContainer[str]
         advertised_attributes: _containers.MessageMap[str, StringList]
-        restricted: bool
-        allowed_user_count: int
         scale_groups: _containers.RepeatedScalarFieldContainer[str]
         worker_count: int
         pending_task_count: int
@@ -749,7 +766,8 @@ class Controller(_message.Message):
         has_autoscaler: bool
         capacity_health: _containers.ScalarMap[str, int]
         detail: Controller.BackendStatus
-        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., restricted: _Optional[bool] = ..., allowed_user_count: _Optional[int] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ..., detail: _Optional[_Union[Controller.BackendStatus, _Mapping]] = ...) -> None: ...
+        availability: Controller.ResourceAvailability
+        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ..., detail: _Optional[_Union[Controller.BackendStatus, _Mapping]] = ..., availability: _Optional[_Union[Controller.ResourceAvailability, _Mapping]] = ...) -> None: ...
     class UnroutableJob(_message.Message):
         __slots__ = ("job_id", "reason")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -770,10 +788,9 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class PeerSummary(_message.Message):
-        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_contact_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
+        __slots__ = ("peer_id", "controller_address", "reachable", "last_contact_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
         PEER_ID_FIELD_NUMBER: _ClassVar[int]
         CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
-        DASHBOARD_URL_FIELD_NUMBER: _ClassVar[int]
         REACHABLE_FIELD_NUMBER: _ClassVar[int]
         LAST_CONTACT_MS_FIELD_NUMBER: _ClassVar[int]
         ACTIVE_FEDERATED_JOBS_FIELD_NUMBER: _ClassVar[int]
@@ -781,13 +798,12 @@ class Controller(_message.Message):
         BACKENDS_FIELD_NUMBER: _ClassVar[int]
         peer_id: str
         controller_address: str
-        dashboard_url: str
         reachable: bool
         last_contact_ms: int
         active_federated_jobs: int
         aggregate_spend_micros: int
         backends: _containers.RepeatedCompositeFieldContainer[Controller.BackendSummary]
-        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_contact_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
+        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_contact_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
     class ListPeersResponse(_message.Message):
         __slots__ = ("peers",)
         PEERS_FIELD_NUMBER: _ClassVar[int]
@@ -811,15 +827,41 @@ class Controller(_message.Message):
         changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         tombstone: bool
         def __init__(self, job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+    class FederationEndpoint(_message.Message):
+        __slots__ = ("endpoint_id", "name", "address", "task_id", "access", "metadata", "lease_remaining")
+        class MetadataEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: str
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
+        NAME_FIELD_NUMBER: _ClassVar[int]
+        ADDRESS_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ACCESS_FIELD_NUMBER: _ClassVar[int]
+        METADATA_FIELD_NUMBER: _ClassVar[int]
+        LEASE_REMAINING_FIELD_NUMBER: _ClassVar[int]
+        endpoint_id: str
+        name: str
+        address: str
+        task_id: str
+        access: Controller.EndpointAccess
+        metadata: _containers.ScalarMap[str, str]
+        lease_remaining: _time_pb2.Duration
+        def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., lease_remaining: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
-        __slots__ = ("deltas", "next_cursor", "cursor_stale")
+        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints")
         DELTAS_FIELD_NUMBER: _ClassVar[int]
         NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
         CURSOR_STALE_FIELD_NUMBER: _ClassVar[int]
+        ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
         deltas: _containers.RepeatedCompositeFieldContainer[Controller.FederationJobDelta]
         next_cursor: str
         cursor_stale: bool
-        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ...) -> None: ...
+        endpoints: _containers.RepeatedCompositeFieldContainer[Controller.FederationEndpoint]
+        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

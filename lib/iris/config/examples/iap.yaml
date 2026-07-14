@@ -16,6 +16,9 @@
 # the ingress. Each RPC carries the IAP OIDC ID token in Proxy-Authorization; the
 # controller authenticates it from IAP's signed assertion and mints no token.
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: example-iap
+
 platform:
   local:
 

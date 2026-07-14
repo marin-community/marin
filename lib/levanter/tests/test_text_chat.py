@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 from haliax import Axis
 
-from levanter.data.text import ChatProcessor, TraceChatProcessor
+from levanter.data.text.formats import ChatProcessor
+from levanter.data.text.trace_chat import TraceChatProcessor
 from levanter.data.text.trace_chat import (
     TRACE_LABEL_ASSISTANT_TEXT,
     TRACE_LABEL_ASSISTANT_TOOL_CALL,

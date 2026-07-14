@@ -20,11 +20,7 @@ from urllib import error, parse, request
 logger = logging.getLogger(__name__)
 
 WORKFLOWS = (
-    ".github/workflows/marin-unit.yaml",
-    ".github/workflows/iris-unit.yaml",
-    ".github/workflows/levanter-unit.yaml",
-    ".github/workflows/fray-unit.yaml",
-    ".github/workflows/zephyr-unit.yaml",
+    ".github/workflows/unified-unit.yaml",
     ".github/workflows/marin-integration.yaml",
 )
 MAX_RUNS_PER_WORKFLOW = 5
@@ -47,12 +43,20 @@ NO_SELF_CREDIT_SETTINGS = ("--settings", '{"attribution":{"commit":"","pr":""}}'
 DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>\S+::.+)$")
 FAILURE_RE = re.compile(r"(?:FAILED|ERROR)\s+(?P<test>\S+::.+?)(?:\s+-\s|$)")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-WORKFLOW_TEST_PREFIXES = (
-    ("Iris -", "lib/iris/"),
-    ("Levanter -", "lib/levanter/"),
-    ("Fray -", "lib/fray/"),
-    ("Zephyr -", "lib/zephyr/"),
-    ("Haliax -", "lib/haliax/"),
+
+# Every job runs pytest against a single package, whose pyproject.toml becomes pytest's
+# rootdir, so they all report node ids as `tests/...` no matter where the suite lives.
+# The job is what tells them apart, and its name is the name of its log file.
+JOB_TEST_PREFIXES = (
+    ("marin-rigging", "lib/rigging/"),
+    ("marin-haliax", "lib/haliax/"),
+    ("marin-iris", "lib/iris/"),
+    ("marin-fray", "lib/fray/"),
+    ("marin-levanter", "lib/levanter/"),
+    ("marin-zephyr", "lib/zephyr/"),
+    ("levanter-torch", "lib/levanter/"),
+    ("levanter-tpu", "lib/levanter/"),
+    ("iris-e2e-smoke", "lib/iris/"),
 )
 
 
@@ -81,19 +85,23 @@ def parse_failure_line(line: str) -> str | None:
     return match.group("test")
 
 
-def canonicalize_test_name(test_name: str, workflow_name: str = "") -> str:
-    """Normalize test ids across workflows so dedupe and aggregation are stable."""
+def subproject_prefix(log_name: str) -> str:
+    """Repo-relative prefix that turns one job's rootdir-relative node ids into repo paths."""
+    for job, prefix in JOB_TEST_PREFIXES:
+        if job in log_name:
+            return prefix
+    return ""
+
+
+def canonicalize_test_name(test_name: str, prefix: str = "") -> str:
+    """Normalize test ids across jobs so dedupe and aggregation are stable."""
     test_name = test_name.strip()
     if "::" not in test_name:
         return test_name
     file_path, sep, remainder = test_name.partition("::")
-    normalized_path = file_path
-    if file_path.startswith("tests/"):
-        for workflow_prefix, subproject_prefix in WORKFLOW_TEST_PREFIXES:
-            if workflow_name.startswith(workflow_prefix):
-                normalized_path = f"{subproject_prefix}{file_path}"
-                break
-    return f"{normalized_path}{sep}{remainder}"
+    if prefix and file_path.startswith("tests/"):
+        file_path = f"{prefix}{file_path}"
+    return f"{file_path}{sep}{remainder}"
 
 
 def github_api(
@@ -168,14 +176,9 @@ def download_logs(repo: str, token: str, run_id: int, destination: Path) -> Path
     return extract_dir
 
 
-def test_key(test_name: str, workflow_name: str = "") -> str:
-    """Normalize test ids used for cooldown markers and aggregation."""
-    return canonicalize_test_name(test_name, workflow_name)
-
-
 def test_file_key(test_name: str) -> str:
     """Return the file portion of a canonicalized pytest node id."""
-    return test_key(test_name).partition("::")[0]
+    return canonicalize_test_name(test_name).partition("::")[0]
 
 
 def collect_evidence(log_dir: Path, workflow_name: str, run: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -192,11 +195,12 @@ def collect_evidence(log_dir: Path, workflow_name: str, run: dict[str, Any]) -> 
         if log_hash in seen_file_hashes:
             continue
         seen_file_hashes.add(log_hash)
+        prefix = subproject_prefix(str(log_file))
         for line_number, raw_line in enumerate(log_text.splitlines(), start=1):
             duration = parse_duration_line(raw_line)
             if duration is not None:
                 name, seconds = duration
-                key = test_key(name, workflow_name)
+                key = canonicalize_test_name(name, prefix)
                 slow_observation_key = f"{run_id}:{key}"
                 record = evidence.setdefault(
                     key,
@@ -229,7 +233,7 @@ def collect_evidence(log_dir: Path, workflow_name: str, run: dict[str, Any]) -> 
             failure = parse_failure_line(raw_line)
             if failure is None:
                 continue
-            key = test_key(failure, workflow_name)
+            key = canonicalize_test_name(failure, prefix)
             failure_observation_key = f"{run_id}:{key}"
             record = evidence.setdefault(
                 key,

@@ -286,11 +286,6 @@ class AutoscaleRequest:
     dead_workers: list[WorkerId] = field(default_factory=list)
 
 
-def user_admitted(allowed_users: frozenset[str], user: str) -> bool:
-    """Whether an allow policy permits ``user`` (``"*"`` matches any user)."""
-    return "*" in allowed_users or user in allowed_users
-
-
 def assemble_scheduling_context(inputs: BackendSchedulingInputs, request: ScheduleRequest) -> SchedulingContext:
     """Join a backend's own worker-side inputs with the controller-owned request.
 
@@ -482,11 +477,6 @@ class TaskBackend(Protocol):
         prune readers and to seed/register a worker into its owning backend."""
         ...
 
-    allowed_users: frozenset[str]
-    """The allow policy: user ids permitted to route here (``"*"`` matches any).
-    Set by the composer via :meth:`configure_routing`; read for the dashboard's
-    restricted / allowed-user-count summary."""
-
     def advertised_attributes(self) -> dict[str, set[str]]:
         """Backend-global attributes the meta-scheduler routes against.
 
@@ -495,16 +485,27 @@ class TaskBackend(Protocol):
         that matches every job. Read once at startup (attributes are static)."""
         ...
 
-    def admits(self, user: str) -> bool:
-        """Whether this backend's allow policy permits ``user`` to route here."""
-        ...
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         """Set the routing metadata the meta-scheduler reads.
 
         Called once by the composer from the backend's config. ``advertised`` is
-        the (comma-expanded) attribute sets; ``allowed_users`` is the allow policy
-        (``"*"`` matches any user)."""
+        the (comma-expanded) attribute sets."""
+        ...
+
+    def available_resources(self) -> dict[str, int] | None:
+        """Free consumable capacity right now, per resource token, for federation.
+
+        A federation parent advertises this to peers so a queued federated job can
+        wait for a peer that actually has room (see ``federation.availability``).
+        v1 reports free accelerator chips keyed by lowercased ``device-variant``
+        (e.g. ``{"h100": 8}``), computed from the same live-worker ``WorkerCapacity``
+        (``total - committed``) the scheduler uses.
+
+        Returns ``None`` when this backend does not supply the metric (a placement-
+        owning ``CLUSTER_VIEW`` backend that does not track per-worker capacity); the
+        controller then leaves ``BackendSummary.availability`` UNSET so a peer reading
+        it falls back to shape-only federation. An empty dict is an authoritative
+        "nothing free"."""
         ...
 
     def status(self) -> controller_pb2.Controller.BackendStatus:

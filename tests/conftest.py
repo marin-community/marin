@@ -4,7 +4,8 @@ import os
 import tempfile
 
 import pytest
-from fray import LocalClient, set_current_client
+from fray.current_client import set_current_client
+from fray.local_backend import LocalClient
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"

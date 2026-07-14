@@ -12,15 +12,21 @@ import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import AuthConfig, IapAuthConfig
+from iris.cluster.config import AuthConfig, IapAuthConfig, PeerConfig
 from iris.cluster.controller.auth import (
+    _LEGACY_ISSUER,
     CONTROL_PLANE_AUDIENCES,
-    FINELOG_AUDIENCE,
+    FEDERATION_AUDIENCE,
+    FEDERATION_PEER_ROLE,
     SESSION_TOKEN_TTL_SECONDS,
+    WORKER_TOKEN_TTL_SECONDS,
     WORKER_USER,
     ControllerAuth,
+    FederationTokenVerifier,
     JwtTokenManager,
     RolePolicy,
+    _build_jwt_token_manager,
+    _ControlPlaneOrFederationVerifier,
     create_controller_auth,
     request_auth_policy,
     require_persistent_signing_key,
@@ -61,7 +67,9 @@ CSRF_HEADERS = {"Origin": "http://testserver"}
 
 # A persistent signing key for authed create_controller_auth calls: an authed
 # cluster requires one (the ephemeral fallback is null-auth only).
-_SIGNING_KEY = generate_ed25519_keypair().private_pem
+_SIGNING_KEYPAIR = generate_ed25519_keypair()
+_SIGNING_KEY = _SIGNING_KEYPAIR.private_pem
+_PUBLIC_KEY = _SIGNING_KEYPAIR.public_pem
 
 
 def _jwt_manager() -> JwtTokenManager:
@@ -312,16 +320,128 @@ def test_jwt_create_and_verify():
     assert identity.role == "user"
 
 
-def test_control_plane_verify_rejects_delegation_token():
-    """The cross-plane guard: an ``aud="finelog"`` delegation token is rejected at
-    this controller's control-plane verify — it can never be replayed at the RPC
-    surface even though it is signed by the same key."""
-    mgr = _jwt_manager()
-    delegation = mgr.create_delegation_token("test-cluster", "k-deleg", ttl_seconds=60)
+def _federation_setup(requester: str = "parent-cluster"):
+    """A parent JwtTokenManager plus a peer's verifier trusting the parent's key."""
+    key = signing_key_from_private_pem(generate_ed25519_keypair().private_pem)
+    signer = JwtSigner(key, issuer=requester)
+    cp_verifier = JwksVerifier(issuers={requester: [key.public_pem]}, expected_audiences=CONTROL_PLANE_AUDIENCES)
+    parent = JwtTokenManager(signer, cp_verifier)
+    peer_verifier = FederationTokenVerifier({requester: key.public_pem})
+    return parent, peer_verifier
+
+
+def test_federation_token_round_trips_to_a_scoped_requester_identity():
+    """A peer verifies a parent's federation token against the parent's key and gets a
+    method-scoped federation-peer identity whose user_id is the verified requester."""
+    parent, peer_verifier = _federation_setup("parent-cluster")
+    token = parent.create_federation_token("parent-cluster", "k-fed")
+    identity = peer_verifier.verify(token)
+    assert identity.user_id == "parent-cluster"
+    assert identity.role == FEDERATION_PEER_ROLE
+    assert identity.audience is None
+
+
+def test_control_plane_verify_rejects_a_federation_token():
+    """The cross-plane guard: a parent's own aud="federation" token is rejected at its
+    control-plane verify, so it can never be replayed at the general RPC surface."""
+    parent, _ = _federation_setup("parent-cluster")
+    token = parent.create_federation_token("parent-cluster", "k-fed")
     with pytest.raises(ValueError):
-        mgr.verify(delegation)
-    # Sanity: the token's audience really is the finelog plane.
-    assert jwt.decode(delegation, options={"verify_signature": False})["aud"] == FINELOG_AUDIENCE
+        parent.verify(token)
+    assert jwt.decode(token, options={"verify_signature": False})["aud"] == FEDERATION_AUDIENCE
+
+
+def test_federation_verifier_rejects_a_control_plane_token():
+    """The federation verifier accepts only aud="federation"; a control-plane token
+    signed by the same key is rejected (the plane is bound, not just the key)."""
+    parent, peer_verifier = _federation_setup("parent-cluster")
+    control = parent.create_token("bob", "admin", "k-ctl", ttl_seconds=60)
+    with pytest.raises(ValueError):
+        peer_verifier.verify(control)
+
+
+def test_federation_verifier_rejects_an_untrusted_issuer():
+    """A federation token minted by a cluster the peer does not trust is rejected —
+    only configured peer keys verify, so the requester can't be forged."""
+    stranger, _ = _federation_setup("evil-cluster")
+    _, peer_verifier = _federation_setup("parent-cluster")  # trusts only parent-cluster
+    forged = stranger.create_federation_token("evil-cluster", "k-fed")
+    with pytest.raises(ValueError):
+        peer_verifier.verify(forged)
+
+
+# ---------------------------------------------------------------------------
+# Token issuer: the cluster name, with a transitional legacy issuer
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("audience", "mint"),
+    [
+        ("control-plane", lambda mgr: mgr.create_token("alice", "admin", "k", ttl_seconds=60)),
+        ("proxy", lambda mgr: mgr.create_endpoint_token("ep", "k")),
+        ("federation", lambda mgr: mgr.create_federation_token("named", "k")),
+    ],
+)
+def test_every_token_is_issued_under_the_cluster_name(audience, mint):
+    """``iss`` is the cluster's identity on every plane — it is what a federation peer
+    keys its trust on, so no audience may mint under a different issuer."""
+    mgr = _build_jwt_token_manager(cluster_name="named", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    assert jwt.decode(mint(mgr), options={"verify_signature": False})["iss"] == "named"
+
+
+def test_worker_token_minted_before_the_cluster_was_named_still_verifies():
+    """Naming a cluster must not invalidate the worker tokens its fleet already holds.
+
+    A worker token is minted once per controller start and injected into every worker with
+    no refresh path, so it outlives the restart that first sets ``name``. Under the same
+    signing key, the control-plane verifier still accepts the legacy issuer."""
+    unnamed = _build_jwt_token_manager(cluster_name="", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    legacy = unnamed.create_token(WORKER_USER, "worker", "w1", ttl_seconds=WORKER_TOKEN_TTL_SECONDS)
+    assert jwt.decode(legacy, options={"verify_signature": False})["iss"] == _LEGACY_ISSUER
+
+    named = _build_jwt_token_manager(cluster_name="named", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    identity = named.verify(legacy)
+    assert identity.user_id == WORKER_USER
+    assert identity.role == "worker"
+
+
+def test_legacy_issuer_is_not_accepted_on_the_federation_plane():
+    """The legacy issuer is a control-plane migration aid only. A peer trusts each
+    cluster under its real name, so an unnamed cluster cannot federate to it."""
+    unnamed = _build_jwt_token_manager(cluster_name="", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    peer_verifier = FederationTokenVerifier({"named": _PUBLIC_KEY})
+    with pytest.raises(ValueError, match="issuer"):
+        peer_verifier.verify(unnamed.create_federation_token("", "k-fed"))
+
+
+def test_legacy_issuer_still_requires_this_controllers_key():
+    """Accepting the legacy issuer widens nothing: it resolves to the same key set, so a
+    token another cluster signed under ``iris`` is still rejected on the signature."""
+    stranger = _build_jwt_token_manager(
+        cluster_name="", signing_key_pem=generate_ed25519_keypair().private_pem, previous_public_keys=()
+    )
+    forged = stranger.create_token("mallory", "admin", "k", ttl_seconds=60)
+    named = _build_jwt_token_manager(cluster_name="named", signing_key_pem=_SIGNING_KEY, previous_public_keys=())
+    with pytest.raises(ValueError, match="signature"):
+        named.verify(forged)
+
+
+def test_composite_verifier_routes_each_plane_to_its_verifier():
+    """The composite accepts a control-plane token as a full identity and a federation
+    token as a method-scoped federation-peer identity, never crossing planes."""
+    parent, peer_verifier = _federation_setup("parent-cluster")
+    composite = _ControlPlaneOrFederationVerifier(parent, peer_verifier)
+
+    control = parent.create_token("bob", "admin", "k-ctl", ttl_seconds=60)
+    control_identity = composite.verify(control)
+    assert control_identity.user_id == "bob"
+    assert control_identity.role == "admin"
+
+    federation = parent.create_federation_token("parent-cluster", "k-fed")
+    fed_identity = composite.verify(federation)
+    assert fed_identity.role == FEDERATION_PEER_ROLE
+    assert fed_identity.user_id == "parent-cluster"
 
 
 def test_endpoint_token_surfaces_endpoint_as_audience():
@@ -666,17 +786,17 @@ def test_iap_assertion_resolver_is_the_role_policy():
 
 
 def test_require_persistent_signing_key():
-    # A relay controller signs delegation tokens the shared finelog pins to its public
-    # key, so an empty signing key is a silent trust-anchor break: fail fast.
-    relay = "iris+https://global-finelog/proxy/system.log-server"
+    # A controller with peers signs federation tokens each peer pins to its public key,
+    # so an empty signing key is a silent trust-anchor break: fail fast.
+    peers = {"cw-rno2a": PeerConfig(controller_address="https://peer:8080", cluster="cw-rno2a")}
     with pytest.raises(ValueError, match="requires a persistent"):
-        require_persistent_signing_key(relay, None)
-    require_persistent_signing_key(relay, _SIGNING_KEY)  # a key present: fine
+        require_persistent_signing_key(peers, None)
+    require_persistent_signing_key(peers, _SIGNING_KEY)  # a key present: fine
 
-    # No relay endpoint: nothing external pins this controller's key, so an ephemeral
-    # key is fine and must NOT be rejected.
-    require_persistent_signing_key("", None)
-    require_persistent_signing_key(None, None)
+    # No peers: nothing external pins this controller's key, so an ephemeral key is fine
+    # and must NOT be rejected. A cluster that only *receives* federated calls verifies
+    # with its peers' published keys and signs nothing anyone else pins.
+    require_persistent_signing_key({}, None)
 
 
 # -- Controller auth setup -----------------------------------------------------

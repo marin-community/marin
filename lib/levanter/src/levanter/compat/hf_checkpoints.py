@@ -46,7 +46,7 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
@@ -1598,17 +1598,14 @@ def _patch_hf_hub_download():
                 revision = "main"
 
             if repo_id and filename and _is_url_like(repo_id):
-                fs, path = url_to_fs(repo_id)
-                remote_path = os.path.join(path, filename)
-                # local_path = os.path.join(tmpdir, filename)
+                remote_path = StoragePath(repo_id) / filename
                 local_path = os.path.join(
                     cache_dir, repo_folder_name(repo_id=repo_id, repo_type=repo_type), "snapshots", revision, filename
                 )
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-                if not fs.exists(remote_path):
+                if not fetch_file_atomic(str(remote_path), local_path):
                     raise EntryNotFoundError(f"File {remote_path} not found")
-
-                fs.get(remote_path, local_path)
                 return local_path
 
             # Fallback to the original implementation
