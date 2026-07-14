@@ -238,6 +238,7 @@ def _start_proxy(
     *,
     endpoints: dict[str, str] | None = None,
     timeout_seconds: float = 30.0,
+    serve_timeout_seconds: float = 600.0,
 ) -> tuple[str, dict[str, str], EndpointProxy]:
     """Spin up an EndpointProxy + its hosting Starlette server.
 
@@ -248,7 +249,7 @@ def _start_proxy(
     address`` callable, no fakes for the persistent stores.
     """
     endpoints = endpoints if endpoints is not None else {}
-    ep_proxy = EndpointProxy(endpoints.get, timeout_seconds=timeout_seconds)
+    ep_proxy = EndpointProxy(endpoints.get, timeout_seconds=timeout_seconds, serve_timeout_seconds=serve_timeout_seconds)
     app = _build_proxy_app(ep_proxy)
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
@@ -401,6 +402,25 @@ def test_upstream_timeout_returns_504(threads: ThreadContainer, upstream: Upstre
         resp = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/slow")
     assert resp.status_code == 504
     assert "timeout" in resp.json()["error"].lower()
+
+
+def test_serve_endpoint_gets_longer_read_timeout(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
+    # A /serve/* endpoint keeps a short default (connect) budget but a long read
+    # budget, so a slow completion that outlasts the default timeout still
+    # completes instead of 504-ing. The /slow upstream sleeps 1.0s: the 0.5s
+    # default would time out a normal endpoint (see test above), but the 5s serve
+    # read budget lets the served-model request finish.
+    base_url, _, _ = _start_proxy(
+        threads,
+        endpoints={"/serve/model": f"127.0.0.1:{upstream.port}"},
+        timeout_seconds=0.5,
+        serve_timeout_seconds=5.0,
+    )
+
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(f"{base_url}/proxy/serve.model/slow")
+    assert resp.status_code == 200
+    assert resp.text == "late"
 
 
 def test_cookies_stripped_both_directions(proxy: ProxyHandle) -> None:
