@@ -13,7 +13,7 @@ canonical for every cluster.
 Sensitivity: within a cluster, variant ``i`` is the shared core repeated
 ``i+1`` times, so all variants share the same MinHash signature (identical
 shingle *set*) and cluster together, but their token counts differ by up to
-``V×``. If canonical selection depended on shard/reduce/merge order, the two
+``Vx``. If canonical selection depended on shard/reduce/merge order, the two
 runs would keep different-length survivors and the per-cluster canonical map
 would diverge -- exactly the drift #6798 is about, amplified.
 
