@@ -46,14 +46,14 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
 from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.tokenizers import MarinTokenizer, _fetch_file_atomic
+from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device
@@ -1604,7 +1604,7 @@ def _patch_hf_hub_download():
                 )
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-                if not _fetch_file_atomic(str(remote_path), local_path):
+                if not fetch_file_atomic(str(remote_path), local_path):
                     raise EntryNotFoundError(f"File {remote_path} not found")
                 return local_path
 
