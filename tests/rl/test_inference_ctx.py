@@ -165,7 +165,7 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     tokens = ctx.tokenize_prompt(prompt)
 
     decoded = gpt2_tokenizer.decode(tokens)
-    assert decoded == "user: Test prompt"
+    assert decoded == f"{gpt2_tokenizer.bos_token}user: Test prompt"
 
 
 def test_prompt_tokens_match_what_the_server_builds(gpt2_tokenizer, dummy_server):
