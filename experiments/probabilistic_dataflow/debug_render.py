@@ -82,10 +82,10 @@ def render_conditional_query_ir(
 ) -> str:
     rows = (
         ("program", query.program_name),
-        ("conditioned", _node_names(program, query.conditioned_ids)),
+        ("given", _node_names(program, query.given_ids)),
         ("targets", _node_names(program, query.target_ids)),
         ("required factors", "<br>".join(query.required_factor_ids) or "-"),
-        ("deployment", f"{query.deployment_environment} at t={query.execution_time}"),
+        ("environment", query.environment),
         ("budget", f"model_calls={query.model_call_budget}, generated_tokens={query.generated_token_budget}"),
     )
     return "\n\n".join((heading, _markdown_table(("Property", "Value"), rows)))
@@ -612,8 +612,7 @@ def _axis(axis: Axis) -> str:
 def _flow(flow: FlowInfo) -> str:
     return (
         f"provenance={_set(flow.provenance)}<br>"
-        f"available_at={flow.available_at}<br>"
-        f"environments={_set(flow.deployment_environments)}<br>"
+        f"environments={_set(flow.environments)}<br>"
         f"split_keys={_set(flow.split_keys)}<br>"
         f"random_ancestors={_set(flow.random_ancestors)}"
     )

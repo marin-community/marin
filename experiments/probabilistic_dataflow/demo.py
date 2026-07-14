@@ -56,7 +56,7 @@ def run_demo(*, training_steps: int) -> dict:
     except AvailabilityError as exc:
         leakage_diagnostic = str(exc)
     else:
-        raise AssertionError("Future-derived normalization unexpectedly passed availability analysis")
+        raise AssertionError("Training-only normalization unexpectedly passed environment analysis")
 
     packed, codec = build_mixed_synthetic_batch(examples_per_problem=2)
     result = train_smoke(steps=training_steps) if training_steps > 0 else None

@@ -65,11 +65,10 @@ InferenceOperator = ParallelQuery | Autoregressive | Refine
 @dataclass(frozen=True)
 class ConditionalQueryIR:
     program_name: str
-    conditioned_ids: tuple[int, ...]
+    given_ids: tuple[int, ...]
     target_ids: tuple[int, ...]
     required_factor_ids: tuple[str, ...]
-    deployment_environment: str
-    execution_time: int
+    environment: str
     model_call_budget: int
     generated_token_budget: int
 
@@ -92,7 +91,7 @@ class InferencePlanIR:
 
 
 def compile_query(query: Query, plan: InferenceOperator | None = None) -> InferencePlanIR:
-    _check_availability(query)
+    _check_environment(query)
     _check_split_isolation(query.program)
     _check_plan_values(query, plan)
     conditional_ir = _conditional_query_ir(query)
@@ -131,23 +130,13 @@ def _check_plan_values(query: Query, plan: InferenceOperator | None) -> None:
             )
 
 
-def _check_availability(query: Query) -> None:
-    for binding in query.evidence.bindings:
-        value = binding.value
-        if binding.environment != query.environment.name:
+def _check_environment(query: Query) -> None:
+    for value in query.given:
+        allowed_environments = value.flow.environments
+        if allowed_environments and query.environment not in allowed_environments:
             raise AvailabilityError(
-                f"Evidence for {value.name!r} is bound in {binding.environment!r}, not {query.environment.name!r}"
-            )
-        if binding.available_at > query.environment.execution_time:
-            raise AvailabilityError(
-                f"Evidence {value.name!r} is available at t={binding.available_at}, after deployment time "
-                f"t={query.environment.execution_time}; provenance={sorted(value.flow.provenance)}"
-            )
-        allowed_environments = value.flow.deployment_environments
-        if allowed_environments and query.environment.name not in allowed_environments:
-            raise AvailabilityError(
-                f"Evidence {value.name!r} is unavailable in deployment environment {query.environment.name!r}; "
-                f"allowed={sorted(allowed_environments)}"
+                f"Given input {value.name!r} is unavailable in environment {query.environment!r}; "
+                f"allowed={sorted(allowed_environments)}; provenance={sorted(value.flow.provenance)}"
             )
 
 
@@ -168,26 +157,25 @@ def _conditional_query_ir(query: Query) -> ConditionalQueryIR:
             factor_ids.append(node.factor_id)
     return ConditionalQueryIR(
         program_name=query.program.name,
-        conditioned_ids=tuple(value.node_id for value in query.evidence.values),
+        given_ids=tuple(value.node_id for value in query.given),
         target_ids=tuple(value.node_id for value in query.targets),
         required_factor_ids=tuple(factor_ids),
-        deployment_environment=query.environment.name,
-        execution_time=query.environment.execution_time,
+        environment=query.environment,
         model_call_budget=query.budget.model_calls,
         generated_token_budget=query.budget.generated_tokens,
     )
 
 
 def _required_generated_nodes(query: Query) -> tuple[int, ...]:
-    conditioned = {value.node_id for value in query.evidence.values}
+    given = {value.node_id for value in query.given}
     required: set[int] = set()
 
     def visit(node_id: int) -> None:
-        if node_id in conditioned:
+        if node_id in given:
             return
         node = query.program.node(node_id)
         if node.kind == NodeKind.VARIABLE:
-            raise CompilationError(f"Required input {node.name!r} is not bound by query evidence")
+            raise CompilationError(f"Required input {node.name!r} is not listed in query.given")
         for input_id in node.inputs:
             visit(input_id)
         if node.kind == NodeKind.SAMPLE:
@@ -195,7 +183,7 @@ def _required_generated_nodes(query: Query) -> tuple[int, ...]:
 
     for target in query.targets:
         visit(target.node_id)
-        if target.node_id not in conditioned and query.program.node(target).kind == NodeKind.SAMPLE:
+        if target.node_id not in given and query.program.node(target).kind == NodeKind.SAMPLE:
             required.add(target.node_id)
     return tuple(node.id for node in query.program.nodes if node.id in required)
 
@@ -204,7 +192,7 @@ def _default_calls(query: Query, required_nodes: tuple[int, ...]) -> list[ModelC
     remaining = set(required_nodes)
     produced: dict[int, int] = {}
     calls: list[ModelCallIR] = []
-    conditioned = {value.node_id for value in query.evidence.values}
+    given = {value.node_id for value in query.given}
     while remaining:
         ready = tuple(
             node_id
@@ -214,7 +202,7 @@ def _default_calls(query: Query, required_nodes: tuple[int, ...]) -> list[ModelC
         )
         if not ready:
             raise FactorizationError("Probabilistic factor graph contains a cycle")
-        call = _make_call(query, len(calls), ready, conditioned, produced, operator="parallel")
+        call = _make_call(query, len(calls), ready, given, produced, operator="parallel")
         calls.append(call)
         for node_id in ready:
             remaining.remove(node_id)
@@ -241,7 +229,7 @@ def _parallel_calls(
                     f"ParallelQuery cannot generate {query.program.node(left).name!r} and "
                     f"{query.program.node(right).name!r} together because the latter factor depends on the former"
                 )
-    return [_make_call(query, 0, requested, {value.node_id for value in query.evidence.values}, {}, "parallel")]
+    return [_make_call(query, 0, requested, {value.node_id for value in query.given}, {}, "parallel")]
 
 
 def _autoregressive_calls(
@@ -257,16 +245,16 @@ def _autoregressive_calls(
         )
 
     produced: dict[int, int] = {}
-    conditioned = {value.node_id for value in query.evidence.values}
+    given = {value.node_id for value in query.given}
     calls = []
     for node_id in order:
-        unresolved = _sample_ancestors(query.program, node_id) - produced.keys() - conditioned
+        unresolved = _sample_ancestors(query.program, node_id) - produced.keys() - given
         if unresolved:
             names = [query.program.node(ancestor).name for ancestor in sorted(unresolved)]
             raise FactorizationError(
                 f"Autoregressive order generates {query.program.node(node_id).name!r} before ancestors {names}"
             )
-        call = _make_call(query, len(calls), (node_id,), conditioned, produced, "autoregressive")
+        call = _make_call(query, len(calls), (node_id,), given, produced, "autoregressive")
         calls.append(call)
         produced[node_id] = call.id
     return calls
@@ -284,7 +272,7 @@ def _refinement_calls(
 
     target_ids = tuple(value.node_id for value in query.targets)
     latest_call_by_target = {target_id: call.id for call in calls for target_id in call.target_ids}
-    base_context = {value.node_id for value in query.evidence.values}
+    base_context = {value.node_id for value in query.given}
     for iteration in range(1, plan.steps):
         call_id = len(calls)
         dependencies = tuple(sorted(set(latest_call_by_target.values())))
@@ -299,11 +287,11 @@ def _make_call(
     query: Query,
     call_id: int,
     target_ids: tuple[int, ...],
-    conditioned: set[int],
+    given: set[int],
     produced: dict[int, int],
     operator: str,
 ) -> ModelCallIR:
-    context = set(conditioned)
+    context = set(given)
     dependencies = set()
     notes = []
     for target_id in target_ids:

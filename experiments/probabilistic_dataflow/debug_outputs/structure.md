@@ -16,19 +16,19 @@ flowchart LR
 
 | ID | Value | Kind | Type | Inputs | Operation/factor | Factor ID | FlowInfo |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| %0 | sequence | variable | residue_class[residue:set=4] bins=8 tokens=4 | - | - | - | provenance={synthetic.sequence}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
-| %1 | contacts | sample | contact[unordered_pair(residue):unordered_pair=6] bins=2 tokens=6 | %0 sequence | contact_map | synthetic_structure:contacts:1 | provenance={synthetic.sequence}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={synthetic_structure:contacts:1} |
-| %2 | distances | sample | distance[unordered_pair(residue):unordered_pair=6] bins=8 tokens=6 | %0 sequence<br>%1 contacts | distance_given_contacts | synthetic_structure:distances:2 | provenance={synthetic.sequence}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={synthetic_structure:contacts:1, synthetic_structure:distances:2} |
+| %0 | sequence | variable | residue_class[residue:set=4] bins=8 tokens=4 | - | - | - | provenance={synthetic.sequence}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
+| %1 | contacts | sample | contact[unordered_pair(residue):unordered_pair=6] bins=2 tokens=6 | %0 sequence | contact_map | synthetic_structure:contacts:1 | provenance={synthetic.sequence}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={synthetic_structure:contacts:1} |
+| %2 | distances | sample | distance[unordered_pair(residue):unordered_pair=6] bins=8 tokens=6 | %0 sequence<br>%1 contacts | distance_given_contacts | synthetic_structure:distances:2 | provenance={synthetic.sequence}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={synthetic_structure:contacts:1, synthetic_structure:distances:2} |
 
 ## 2. Conditional Query IR
 
 | Property | Value |
 | --- | --- |
 | program | synthetic_structure |
-| conditioned | %0 sequence |
+| given | %0 sequence |
 | targets | %1 contacts<br>%2 distances |
 | required factors | synthetic_structure:contacts:1<br>synthetic_structure:distances:2 |
-| deployment | deployment at t=0 |
+| environment | deployment |
 | budget | model_calls=16, generated_tokens=128 |
 
 ## 3. Inference Plan IR

@@ -16,7 +16,7 @@ author: jder
 
 ## Current TL;DR
 
-`PSD-007` preserves one ordinary Grug parameter set while selecting position IDs, attention, and label alignment from each compiled call. Synthetic text uses rotary positions `0..S-1`, causal attention, and shifted labels; scientific records use zero rotary positions, full segmented attention, scientific-position embeddings, and aligned labels. An 80-step equal-weight CPU smoke reduced combined loss from 4.1909 to 0.2022; text accuracy rose from 0% to 75% and scientific accuracy from 0% to 100%. A scientific-record permutation changed restored logits by `5.96e-08`. Held-out generalization, compositional position encoders, real text tokenization, and sampled refinement remain untested.
+`PSD-007` preserves one ordinary Grug parameter set while selecting position IDs, attention, and label alignment from each compiled call. Synthetic text uses rotary positions `0..S-1`, causal attention, and shifted labels; scientific records use zero rotary positions, full segmented attention, scientific-position embeddings, and aligned labels. An 80-step equal-weight CPU smoke reduced combined loss from 4.1909 to 0.2022; text accuracy rose from 0% to 75% and scientific accuracy from 0% to 100%. A scientific-record permutation changed restored logits by `5.96e-08`. `Query.given`, `Query.targets`, and `Query.environment` now directly describe a conditional query; the unused `Evidence`, `Environment`, and integer availability-time abstractions were removed. Held-out generalization, symbolic indexed availability, compositional position encoders, real text tokenization, and sampled refinement remain untested.
 
 ## Baseline
 
@@ -41,7 +41,7 @@ None.
 
 ### Promoted
 
-- `PSD-001`: The dataflow graph retained axes, provenance, availability, split keys, random ancestry, and factor IDs through query compilation. Evidence: `tests/experiment/test_probabilistic_dataflow.py` and the 2026-07-13 completion entry.
+- `PSD-001`: The dataflow graph retained axes, provenance, environment allowlists, split keys, random ancestry, and factor IDs through query compilation. Evidence: `tests/experiment/test_probabilistic_dataflow.py`, the 2026-07-13 completion entry, and the 2026-07-14 query simplification entry.
 - `PSD-002`: Parallel, autoregressive, and three-step refinement plans lowered to explicit model-call dependencies. Evidence: compiler demo output and behavior tests.
 - `PSD-003`: One unchanged Grug transformer learned packed calls from both synthetic program families with standard weighted cross-entropy. Evidence: 80-step smoke result below.
 - `PSD-006` (exploratory): Grug calls with zero runtime rotary positions and full segmented attention are equivariant to serialization of complete scientific records. Evidence: the 2026-07-13 semantic-record entry and `test_scientific_record_logits_are_equivariant_to_serialization_order`.
@@ -235,3 +235,13 @@ Can the execution IR treat serialization as a packing choice while retaining sci
 - Result: the dataflow suite passed 13 tests, the runtime-position attention test passed, the existing Grug base contract subset passed 3 tests, the generated reports matched, and Marin's required pre-commit checks passed.
 - Interpretation: the new optional position-ID path defaults to existing physical positions and does not require call-site changes. The explicit zero-position scientific path is covered separately from the default text-compatible path.
 - Next action: none for this spike.
+
+### 2026-07-14 11:28 EDT - Query and environment simplification
+
+- Hypothesis: the prototype's `Evidence`, `Environment`, and integer availability times add ceremony without demonstrating example-indexed availability.
+- Commit Hash: working tree based on `a9f14597e6c32da7446e8d2b8edc0925537a7d61`
+- Command: targeted source inspection with `rg`; focused scientific-dataflow tests; debug report regeneration.
+- Config: all synthetic programs now construct `Query(program, given=..., targets=..., environment=...)`; `Source` retains provenance, environment allowlists, and split keys; `FlowInfo` propagates those fields without a time.
+- Result: `Environment`, `Evidence`, `EvidenceBinding`, `Source.available_at`, and `FlowInfo.available_at` were removed. The indirect leakage example now rejects a training-only normalization supplied to a deployment query. Time-indexed future leakage is explicitly out of scope until availability can be expressed symbolically over named example indices.
+- Interpretation: the reduced query surface matches what the compiler actually uses. A future availability design should bind symbolic index expressions when selecting a concrete example instead of comparing hard-coded integers before example selection.
+- Next action: keep time availability out of the tutorial and DSL until the symbolic indexed design is implemented.

@@ -68,45 +68,21 @@ with Program("scalar_forecast") as program:
     )
 ```
 
-The second layer states which prediction to make now. `Evidence` is the set of
-values known for this prediction. An `Environment` names where and when the
-prediction runs. A `Query` combines the program, known values, requested
-outputs, and environment. Here, `current` is known and `future` is requested in
-the `deployment` environment at time `0`:
+The second layer states which prediction to make. A `Query` names:
 
-```python
-from experiments.probabilistic_dataflow.dsl import Environment, Evidence, Query
+- `given`: values supplied as model inputs;
+- `targets`: values the model must produce.
 
-deployment = Environment("deployment", execution_time=0)
-evidence = Evidence().bind(current, environment="deployment")
-query = Query(program, evidence, (future,), deployment)
+Here, `current` is given and `future` is the target:
+
+```text
+given: current
+targets: future
 ```
 
-The checked-in runnable example adds optional data-safety metadata. A `Source`
-records where a value came from. Its `available_at` field is the earliest time
-the value may be used, `deployment_environments` lists the environments where
-it may be supplied, and `split_keys` identifies its dataset split. The runnable
-example replaces the minimal `current` declaration above with:
-
-```python
-from experiments.probabilistic_dataflow.dsl import Source
-
-current_source = Source(
-    name="synthetic.scalar_current",
-    available_at=0,
-    deployment_environments=frozenset({"deployment", "training"}),
-    split_keys=frozenset({"synthetic-train"}),
-)
-# Inside Program("scalar_forecast"):
-current = program.variable("current", measurement, source=current_source)
-```
-
-This metadata does not fetch or deploy data. Before creating model inputs, the
-experiment uses it to reject a value that is unavailable at the query's
-environment or time. It also retains the source and split in the debug dump.
-
-The runnable definition is `scalar_forecast_problem()` in
-[`synthetic.py`](synthetic.py).
+The checked-in `scalar_forecast_problem()` in [`synthetic.py`](synthetic.py)
+constructs this program and its query. The following sections use that runnable
+object.
 
 ## 2. Read the scalar debug dump
 
@@ -128,6 +104,10 @@ from experiments.probabilistic_dataflow.compiler import (
     compile_query,
     lower_to_transformer,
 )
+from experiments.probabilistic_dataflow.synthetic import scalar_forecast_problem
+
+problem = scalar_forecast_problem()
+program = problem.program
 
 example = ConcreteExample(
     id="scalar-0",
@@ -135,7 +115,7 @@ example = ConcreteExample(
     values={"current": (3,), "future": (5,)},
 )
 
-plan = compile_query(query)
+plan = compile_query(problem.query)
 execution = lower_to_transformer(program, plan, example, TokenCodec())
 ```
 
@@ -155,22 +135,20 @@ the factor that connects `current` to `future`:
 ```
 
 This is the direct equivalent of a PyTorch module's data dependency:
-`future` is modeled from `current`. The report also retains the `Source`
-metadata attached to `current`.
+`future` is modeled from `current`.
 
 ### Conditional query: what is known now?
 
-In this table, **conditioned** means supplied as model input and **target**
-means requested as output:
+In this table, **given** means supplied as model input and **target** means
+requested as output:
 
 ```text
-conditioned: %0 current
-targets:     %1 future
-deployment:  deployment at t=0
+given:   %0 current
+targets: %1 future
 ```
 
-During training, the example contains the realized target `5` so it can be used
-as a label. During prediction, `future` is absent and must be generated.
+During training, the concrete example contains the realized target `5` so it can
+be used as a label. During prediction, `future` is absent and must be generated.
 
 ### Inference plan: how many model calls are needed?
 
@@ -247,17 +225,17 @@ with Program("synthetic_advection") as program:
         trajectory,
         learned_joint(initial, forcing, name="advection_transition"),
     )
-
-evidence = (
-    Evidence()
-    .bind(initial, environment="deployment")
-    .bind(forcing, environment="deployment")
-)
-query = Query(program, evidence, (future,), deployment)
 ```
 
-The complete `advection_problem()` in [`synthetic.py`](synthetic.py) attaches
-the same `Source` availability metadata used in the scalar debug report.
+Its query uses these roles:
+
+```text
+given: initial, forcing
+targets: future
+```
+
+The complete `advection_problem()` in [`synthetic.py`](synthetic.py) constructs
+this program and its query.
 
 The change in model inputs is mechanical:
 
@@ -309,11 +287,14 @@ the least-confident quarter of the future field:
 
 ```python
 from experiments.probabilistic_dataflow.compiler import ParallelQuery, Refine, compile_query
+from experiments.probabilistic_dataflow.synthetic import advection_problem
+
+problem = advection_problem()
 
 refinement_plan = compile_query(
-    query,
+    problem.query,
     Refine(
-        proposal=ParallelQuery((future,)),
+        proposal=ParallelQuery(problem.targets),
         steps=3,
         resample_fraction=0.25,
     ),

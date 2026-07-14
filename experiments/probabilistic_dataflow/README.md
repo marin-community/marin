@@ -17,7 +17,7 @@ The spike also includes a two-factor structure program to distinguish
 sequence -> contacts -> distances
 ```
 
-from a single joint prediction. A forced parallel plan for the dependent factors is rejected, while the default and explicit autoregressive planners preserve the dependency. A separate future-derived normalization example is rejected by availability analysis.
+from a single joint prediction. A forced parallel plan for the dependent factors is rejected, while the default and explicit autoregressive planners preserve the dependency. A separate training-only normalization example is rejected when requested as a deployment input.
 
 ## Scientist-facing surface
 
@@ -30,8 +30,12 @@ with Program("advection") as model:
     forcing = model.variable("forcing", state, source=forcing_source)
     future = model.sample("future", state, learned_joint(initial, forcing))
 
-deployment = Evidence().bind(initial, environment="deployment").bind(forcing, environment="deployment")
-query = Query(model, deployment, (future,), Environment("deployment", execution_time=0))
+query = Query(
+    program=model,
+    given=(initial, forcing),
+    targets=(future,),
+    environment="deployment",
+)
 plan = compile_query(query, Refine(ParallelQuery((future,)), steps=3, resample_fraction=0.25))
 ```
 
@@ -95,10 +99,10 @@ uv run python -m experiments.probabilistic_dataflow.debug_render --check
 
 - ordered, set, mesh, categorical, and unordered-pair axes;
 - typed discrete fields and canonical pair coordinates;
-- variables, deterministic map/join/select/reduce nodes, learned factors, evidence, and queries;
-- provenance, availability, deployment-environment, split-key, and random-ancestor propagation;
-- availability and split-isolation checks;
-- explicit train/deployment evidence differences;
+- variables, deterministic map/join/select/reduce nodes, learned factors, and conditional queries;
+- provenance, environment, split-key, and random-ancestor propagation;
+- environment-allowlist and split-isolation checks;
+- explicit train/deployment query-role differences;
 - default parallel scheduling, explicit autoregression, and fixed-step refinement;
 - factor-dependency preservation and explicit parallel-marginal approximation notes;
 - conditional-query, inference-plan, and transformer-execution IRs over the probabilistic dataflow graph;
@@ -118,6 +122,7 @@ uv run python -m experiments.probabilistic_dataflow.debug_render --check
 - Parallel field lowering is an explicit product-of-token-marginals approximation. The diagnostic is retained in the plan rather than silently treating it as the original joint factor.
 - Refinement call graphs are represented, but the smoke trainer uses only parallel proposal calls; training refinement requires proposal sampling rather than teacher-forced truth in feedback context.
 - Scientific positions currently use one learned embedding per fully qualified field coordinate. Compositional axis, topology, coordinate, and relation encoders are not implemented.
+- Time-indexed availability rules are not implemented. A future version should express availability symbolically over named indices and bind those indices when selecting an example.
 - No current scientific factor requires a within-call causal mask. Factor dependencies use separate calls; an explicitly sequential factor would need a semantic attention-edge representation.
 - Cross-domain calls share parameters but are not packed into the same physical row because their attention layouts differ.
 - Inference sampling, KV-cache execution, adaptive stopping, simulators, and external effects are not implemented.

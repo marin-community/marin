@@ -13,18 +13,18 @@ flowchart LR
 
 | ID | Value | Kind | Type | Inputs | Operation/factor | Factor ID | FlowInfo |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| %0 | current | variable | measurement[scalar] bins=16 tokens=1 | - | - | - | provenance={synthetic.scalar_current}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
-| %1 | future | sample | measurement[scalar] bins=16 tokens=1 | %0 current | scalar_transition | scalar_forecast:future:1 | provenance={synthetic.scalar_current}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={scalar_forecast:future:1} |
+| %0 | current | variable | measurement[scalar] bins=16 tokens=1 | - | - | - | provenance={synthetic.scalar_current}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
+| %1 | future | sample | measurement[scalar] bins=16 tokens=1 | %0 current | scalar_transition | scalar_forecast:future:1 | provenance={synthetic.scalar_current}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={scalar_forecast:future:1} |
 
 ## 2. Conditional Query IR
 
 | Property | Value |
 | --- | --- |
 | program | scalar_forecast |
-| conditioned | %0 current |
+| given | %0 current |
 | targets | %1 future |
 | required factors | scalar_forecast:future:1 |
-| deployment | deployment at t=0 |
+| environment | deployment |
 | budget | model_calls=4, generated_tokens=100000 |
 
 ## 3. Inference Plan IR

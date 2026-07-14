@@ -10,8 +10,6 @@ import numpy as np
 from experiments.probabilistic_dataflow.compiler import ConcreteExample
 from experiments.probabilistic_dataflow.dsl import (
     Budget,
-    Environment,
-    Evidence,
     FieldType,
     MeshAxis,
     OrderedAxis,
@@ -24,10 +22,10 @@ from experiments.probabilistic_dataflow.dsl import (
     learned_joint,
 )
 
-DEPLOYMENT = Environment("deployment", execution_time=0)
-TRAINING = Environment("training", execution_time=1)
+DEPLOYMENT = "deployment"
+TRAINING = "training"
 SYNTHETIC_SPLIT = frozenset({"synthetic-train"})
-ALL_ENVIRONMENTS = frozenset({DEPLOYMENT.name, TRAINING.name})
+ALL_ENVIRONMENTS = frozenset({DEPLOYMENT, TRAINING})
 
 
 @dataclass(frozen=True)
@@ -44,12 +42,15 @@ def scalar_forecast_problem() -> SyntheticProblem:
         current = program.variable(
             "current",
             measurement,
-            source=Source("synthetic.scalar_current", 0, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(
+                name="synthetic.scalar_current",
+                environments=ALL_ENVIRONMENTS,
+                split_keys=SYNTHETIC_SPLIT,
+            ),
         )
         future = program.sample("future", measurement, learned_joint(current, name="scalar_transition"))
 
-    evidence = Evidence().bind(current, environment=DEPLOYMENT.name)
-    query = Query(program, evidence, (future,), DEPLOYMENT)
+    query = Query(program, given=(current,), targets=(future,), environment=DEPLOYMENT)
     return SyntheticProblem(program, query, (future,))
 
 
@@ -64,22 +65,21 @@ def advection_problem() -> SyntheticProblem:
         initial = program.variable(
             "initial",
             state,
-            source=Source("synthetic.initial", 0, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(name="synthetic.initial", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
         )
         forcing = program.variable(
             "forcing",
             forcing_type,
-            source=Source("synthetic.forcing", 0, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(name="synthetic.forcing", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
         )
         future = program.sample("future", trajectory, learned_joint(initial, forcing, name="advection_transition"))
 
-    evidence = Evidence().bind(initial, environment=DEPLOYMENT.name).bind(forcing, environment=DEPLOYMENT.name)
     query = Query(
-        program,
-        evidence,
-        (future,),
-        DEPLOYMENT,
-        Budget(model_calls=8, generated_tokens=64),
+        program=program,
+        given=(initial, forcing),
+        targets=(future,),
+        environment=DEPLOYMENT,
+        budget=Budget(model_calls=8, generated_tokens=64),
     )
     return SyntheticProblem(program, query, (future,))
 
@@ -94,17 +94,16 @@ def symmetric_pairs_problem() -> SyntheticProblem:
         sequence = program.variable(
             "sequence",
             sequence_type,
-            source=Source("synthetic.sequence", 0, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(name="synthetic.sequence", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
         )
         contacts = program.sample("contacts", contacts_type, learned_joint(sequence, name="contact_map"))
 
-    evidence = Evidence().bind(sequence, environment=DEPLOYMENT.name)
     query = Query(
-        program,
-        evidence,
-        (contacts,),
-        DEPLOYMENT,
-        Budget(model_calls=8, generated_tokens=64),
+        program=program,
+        given=(sequence,),
+        targets=(contacts,),
+        environment=DEPLOYMENT,
+        budget=Budget(model_calls=8, generated_tokens=64),
     )
     return SyntheticProblem(program, query, (contacts,))
 
@@ -120,7 +119,7 @@ def factorized_structure_problem() -> tuple[SyntheticProblem, Value, Value, Valu
         sequence = program.variable(
             "sequence",
             sequence_type,
-            source=Source("synthetic.sequence", 0, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(name="synthetic.sequence", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
         )
         contacts = program.sample("contacts", contacts_type, learned_joint(sequence, name="contact_map"))
         distances = program.sample(
@@ -129,13 +128,12 @@ def factorized_structure_problem() -> tuple[SyntheticProblem, Value, Value, Valu
             learned_joint(sequence, contacts, name="distance_given_contacts"),
         )
 
-    evidence = Evidence().bind(sequence, environment=DEPLOYMENT.name)
     query = Query(
-        program,
-        evidence,
-        (contacts, distances),
-        DEPLOYMENT,
-        Budget(model_calls=16, generated_tokens=128),
+        program=program,
+        given=(sequence,),
+        targets=(contacts, distances),
+        environment=DEPLOYMENT,
+        budget=Budget(model_calls=16, generated_tokens=128),
     )
     return SyntheticProblem(program, query, (contacts, distances)), sequence, contacts, distances
 
@@ -148,12 +146,16 @@ def leaky_normalization_problem() -> SyntheticProblem:
         initial = program.variable(
             "initial",
             state,
-            source=Source("synthetic.initial", 0, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(name="synthetic.initial", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
         )
         future_statistics = program.variable(
             "future_statistics",
             state,
-            source=Source("synthetic.future_statistics", 1, ALL_ENVIRONMENTS, SYNTHETIC_SPLIT),
+            source=Source(
+                name="synthetic.future_statistics",
+                environments=frozenset({TRAINING}),
+                split_keys=SYNTHETIC_SPLIT,
+            ),
         )
         normalization = program.map("normalization", future_statistics, operation="mean_and_variance")
         forecast = program.sample(
@@ -162,8 +164,12 @@ def leaky_normalization_problem() -> SyntheticProblem:
             learned_joint(initial, normalization, name="normalized_forecast"),
         )
 
-    evidence = Evidence().bind(initial, environment=DEPLOYMENT.name).bind(normalization, environment=DEPLOYMENT.name)
-    query = Query(program, evidence, (forecast,), DEPLOYMENT)
+    query = Query(
+        program=program,
+        given=(initial, normalization),
+        targets=(forecast,),
+        environment=DEPLOYMENT,
+    )
     return SyntheticProblem(program, query, (forecast,))
 
 

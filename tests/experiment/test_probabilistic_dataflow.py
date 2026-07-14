@@ -17,8 +17,7 @@ from experiments.probabilistic_dataflow.compiler import (
 )
 from experiments.probabilistic_dataflow.debug_render import check_example_outputs, render_example_outputs
 from experiments.probabilistic_dataflow.dsl import (
-    Evidence,
-    EvidenceDifference,
+    QueryRoleDifference,
     UnorderedPairAxis,
     training_deployment_differences,
 )
@@ -40,15 +39,11 @@ from experiments.probabilistic_dataflow.training import (
 )
 
 
-def test_indirect_future_leakage_is_rejected_with_provenance() -> None:
+def test_indirect_environment_leakage_is_rejected_with_provenance() -> None:
     problem = leaky_normalization_problem()
 
     with pytest.raises(AvailabilityError, match=r"synthetic\.future_statistics"):
         compile_query(problem.query)
-
-    normalization = problem.program.value("normalization")
-    with pytest.raises(ValueError, match="dataflow provenance is available at t=1"):
-        Evidence().bind(normalization, environment="deployment", available_at=0)
 
 
 def test_scalar_tutorial_lowers_to_one_context_and_one_target_record() -> None:
@@ -62,7 +57,10 @@ def test_scalar_tutorial_lowers_to_one_context_and_one_target_record() -> None:
         codec,
     )
 
-    assert plan.calls[0].context_ids == (problem.program.value("current").node_id,)
+    current = problem.program.value("current")
+    assert problem.query.given == (current,)
+    assert problem.query.environment == "deployment"
+    assert plan.calls[0].context_ids == (current.node_id,)
     assert plan.calls[0].target_ids == (problem.program.value("future").node_id,)
     assert plan.calls[0].approximation_notes == ()
 
@@ -102,19 +100,12 @@ def test_training_deployment_report_identifies_teacher_forced_target() -> None:
     initial = problem.program.value("initial")
     forcing = problem.program.value("forcing")
     future = problem.program.value("future")
-    training = (
-        Evidence()
-        .bind(initial, environment="training")
-        .bind(forcing, environment="training")
-        .bind(future, environment="training", available_at=1)
-    )
-
     differences = training_deployment_differences(
         problem.program,
-        training=training,
-        deployment=problem.query.evidence,
+        training_given=(initial, forcing, future),
+        deployment_given=problem.query.given,
     )
-    assert differences == (EvidenceDifference("future", training_role="conditioned", deployment_role="generated"),)
+    assert differences == (QueryRoleDifference("future", training_role="given", deployment_role="generated"),)
 
 
 def test_parallel_field_lowering_records_approximation_and_target_alignment() -> None:
@@ -197,6 +188,9 @@ def test_debug_rendering_explains_ir_and_document_treatment() -> None:
     scalar = outputs["scalar.md"]
     assert "scalar_forecast.current[scalar]" in scalar
     assert "scalar_forecast.future[scalar]" in scalar
+    assert "| given | %0 current |" in scalar
+    assert "| environment | deployment |" in scalar
+    assert "available_at" not in scalar
     assert "| 0 | parallel | 0 | %0 current | %1 future | - | - |" in scalar
 
     advection = outputs["advection.md"]

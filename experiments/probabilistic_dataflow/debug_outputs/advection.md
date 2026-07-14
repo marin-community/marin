@@ -15,19 +15,19 @@ flowchart LR
 
 | ID | Value | Kind | Type | Inputs | Operation/factor | Factor ID | FlowInfo |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| %0 | initial | variable | state[cell:mesh=4] bins=16 tokens=4 | - | - | - | provenance={synthetic.initial}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
-| %1 | forcing | variable | forcing[time:ordered=3, cell:mesh=4] bins=16 tokens=12 | - | - | - | provenance={synthetic.forcing}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
-| %2 | future | sample | state_trajectory[time:ordered=3, cell:mesh=4] bins=16 tokens=12 | %0 initial<br>%1 forcing | advection_transition | synthetic_advection:future:2 | provenance={synthetic.forcing, synthetic.initial}<br>available_at=0<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={synthetic_advection:future:2} |
+| %0 | initial | variable | state[cell:mesh=4] bins=16 tokens=4 | - | - | - | provenance={synthetic.initial}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
+| %1 | forcing | variable | forcing[time:ordered=3, cell:mesh=4] bins=16 tokens=12 | - | - | - | provenance={synthetic.forcing}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={} |
+| %2 | future | sample | state_trajectory[time:ordered=3, cell:mesh=4] bins=16 tokens=12 | %0 initial<br>%1 forcing | advection_transition | synthetic_advection:future:2 | provenance={synthetic.forcing, synthetic.initial}<br>environments={deployment, training}<br>split_keys={synthetic-train}<br>random_ancestors={synthetic_advection:future:2} |
 
 ## 2. Conditional Query IR
 
 | Property | Value |
 | --- | --- |
 | program | synthetic_advection |
-| conditioned | %0 initial<br>%1 forcing |
+| given | %0 initial<br>%1 forcing |
 | targets | %2 future |
 | required factors | synthetic_advection:future:2 |
-| deployment | deployment at t=0 |
+| environment | deployment |
 | budget | model_calls=8, generated_tokens=64 |
 
 ## 3. Inference Plan IR

@@ -92,16 +92,14 @@ class FieldType:
 @dataclass(frozen=True)
 class Source:
     name: str
-    available_at: int
-    deployment_environments: frozenset[str]
+    environments: frozenset[str]
     split_keys: frozenset[str]
 
 
 @dataclass(frozen=True)
 class FlowInfo:
     provenance: frozenset[str] = frozenset()
-    available_at: int = 0
-    deployment_environments: frozenset[str] = frozenset()
+    environments: frozenset[str] = frozenset()
     split_keys: frozenset[str] = frozenset()
     random_ancestors: frozenset[str] = frozenset()
 
@@ -184,8 +182,7 @@ class Program:
         else:
             flow = FlowInfo(
                 provenance=frozenset({source.name}),
-                available_at=source.available_at,
-                deployment_environments=source.deployment_environments,
+                environments=source.environments,
                 split_keys=source.split_keys,
             )
         return self._append(name, value_type, NodeKind.VARIABLE, (), flow)
@@ -292,64 +289,17 @@ class Program:
 
 
 def _merge_flow(values: tuple[Value, ...], *, random_ancestor: str | None = None) -> FlowInfo:
-    environments = [value.flow.deployment_environments for value in values if value.flow.deployment_environments]
+    environments = [value.flow.environments for value in values if value.flow.environments]
     available_environments = frozenset.intersection(*environments) if environments else frozenset()
     random_ancestors = frozenset().union(*(value.flow.random_ancestors for value in values))
     if random_ancestor is not None:
         random_ancestors |= {random_ancestor}
     return FlowInfo(
         provenance=frozenset().union(*(value.flow.provenance for value in values)),
-        available_at=max((value.flow.available_at for value in values), default=0),
-        deployment_environments=available_environments,
+        environments=available_environments,
         split_keys=frozenset().union(*(value.flow.split_keys for value in values)),
         random_ancestors=random_ancestors,
     )
-
-
-@dataclass(frozen=True)
-class Environment:
-    name: str
-    execution_time: int
-
-
-@dataclass(frozen=True)
-class EvidenceBinding:
-    value: Value
-    available_at: int
-    environment: str
-
-
-@dataclass(frozen=True)
-class Evidence:
-    bindings: tuple[EvidenceBinding, ...] = ()
-
-    def bind(
-        self,
-        value: Value,
-        *,
-        environment: str,
-        available_at: int | None = None,
-    ) -> Self:
-        if any(binding.value == value for binding in self.bindings):
-            raise ValueError(f"Evidence already binds {value.name!r}")
-        if available_at is not None and available_at < value.flow.available_at:
-            raise ValueError(
-                f"Evidence cannot make {value.name!r} available at t={available_at}; "
-                f"its dataflow provenance is available at t={value.flow.available_at}"
-            )
-        binding = EvidenceBinding(
-            value=value,
-            available_at=value.flow.available_at if available_at is None else available_at,
-            environment=environment,
-        )
-        return Evidence((*self.bindings, binding))
-
-    @property
-    def values(self) -> tuple[Value, ...]:
-        return tuple(binding.value for binding in self.bindings)
-
-    def contains(self, value: Value) -> bool:
-        return any(binding.value == value for binding in self.bindings)
 
 
 @dataclass(frozen=True)
@@ -361,21 +311,23 @@ class Budget:
 @dataclass(frozen=True)
 class Query:
     program: Program
-    evidence: Evidence
+    given: tuple[Value, ...]
     targets: tuple[Value, ...]
-    environment: Environment
+    environment: str
     budget: Budget = Budget(model_calls=4, generated_tokens=100_000)
 
     def __post_init__(self) -> None:
         if not self.targets:
             raise ValueError("A query requires at least one target")
-        for value in (*self.evidence.values, *self.targets):
+        if len(set(self.given)) != len(self.given):
+            raise ValueError("A query cannot contain duplicate given values")
+        for value in (*self.given, *self.targets):
             if value._program is not self.program:
                 raise ValueError(f"Value {value.name!r} does not belong to query program {self.program.name!r}")
 
 
 @dataclass(frozen=True)
-class EvidenceDifference:
+class QueryRoleDifference:
     value_name: str
     training_role: str
     deployment_role: str
@@ -384,14 +336,14 @@ class EvidenceDifference:
 def training_deployment_differences(
     program: Program,
     *,
-    training: Evidence,
-    deployment: Evidence,
-) -> tuple[EvidenceDifference, ...]:
+    training_given: tuple[Value, ...],
+    deployment_given: tuple[Value, ...],
+) -> tuple[QueryRoleDifference, ...]:
     differences = []
     for node in program.nodes:
         value = program.value(node.name)
-        training_role = "conditioned" if training.contains(value) else "generated"
-        deployment_role = "conditioned" if deployment.contains(value) else "generated"
+        training_role = "given" if value in training_given else "generated"
+        deployment_role = "given" if value in deployment_given else "generated"
         if training_role != deployment_role:
-            differences.append(EvidenceDifference(node.name, training_role, deployment_role))
+            differences.append(QueryRoleDifference(node.name, training_role, deployment_role))
     return tuple(differences)
