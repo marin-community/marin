@@ -8,6 +8,7 @@ version = "0.2.0"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "cloudpickle>=3.1.2",
+    "humanfriendly>=10.0",
     "marin-iris",
     "marin-rigging",
 ]

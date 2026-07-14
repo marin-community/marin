@@ -27,10 +27,18 @@ pub fn compaction_sort_keys(schema: &Schema) -> Vec<String> {
 /// Return the next merge job, or `None` if nothing is due.
 ///
 /// Walks tiers from L0 upward and returns the first promotable run. The selected
-/// run prefix is capped at the level's byte target (`take_until_target`) so a
-/// large backlog drains one target-sized chunk per tick rather than OOMing a
-/// single merge.
-pub fn plan(config: &CompactionConfig, segments: &[SegmentRow]) -> Option<CompactionJob> {
+/// run prefix is capped both at the level's compressed byte target and at
+/// `config.max_merge_uncompressed_bytes` (`take_until_limits`), so a large
+/// backlog drains one bounded chunk per tick rather than OOMing a single merge.
+///
+/// `uncompressed_bytes` reports a segment's decoded size; the caller reads it
+/// from the parquet footer. It is consulted only for the prefix of the one run
+/// this call promotes.
+pub fn plan(
+    config: &CompactionConfig,
+    segments: &[SegmentRow],
+    uncompressed_bytes: impl Fn(&SegmentRow) -> i64,
+) -> Option<CompactionJob> {
     for (n, &target) in config.level_targets.iter().enumerate() {
         let level = n as i32;
         let mut at_level: Vec<&SegmentRow> = segments.iter().filter(|s| s.level == level).collect();
@@ -39,11 +47,14 @@ pub fn plan(config: &CompactionConfig, segments: &[SegmentRow]) -> Option<Compac
         }
         at_level.sort_by_key(|s| s.min_seq);
         for run in contiguous_runs(&at_level) {
-            if run_bytes(&run) >= target {
-                return Some(build_job(take_until_target(&run, target), level + 1));
-            }
-            if run.len() >= config.max_segments_per_level {
-                return Some(build_job(take_until_target(&run, target), level + 1));
+            if run_bytes(&run) >= target || run.len() >= config.max_segments_per_level {
+                let prefix = take_until_limits(
+                    &run,
+                    target,
+                    config.max_merge_uncompressed_bytes,
+                    &uncompressed_bytes,
+                );
+                return Some(build_job(prefix, level + 1));
             }
         }
     }
@@ -72,15 +83,31 @@ fn run_bytes(run: &[&SegmentRow]) -> i64 {
     run.iter().map(|s| s.byte_size).sum()
 }
 
-/// Take the shortest prefix of `run` whose byte sum hits `target`. Always
-/// returns at least one segment.
-fn take_until_target<'a>(run: &[&'a SegmentRow], target: i64) -> Vec<&'a SegmentRow> {
+/// Take the shortest prefix of `run` whose compressed byte sum hits `target`,
+/// stopping before any segment that would push the prefix's uncompressed size
+/// past `max_uncompressed`.
+///
+/// Always returns at least one segment: a lone segment over the ceiling becomes
+/// a single-input job, which the executor promotes by rename rather than
+/// merging, so it costs no memory and cannot wedge its level.
+fn take_until_limits<'a>(
+    run: &[&'a SegmentRow],
+    target: i64,
+    max_uncompressed: i64,
+    uncompressed_bytes: &impl Fn(&SegmentRow) -> i64,
+) -> Vec<&'a SegmentRow> {
     let mut out: Vec<&SegmentRow> = Vec::new();
-    let mut total: i64 = 0;
+    let mut compressed: i64 = 0;
+    let mut uncompressed: i64 = 0;
     for &seg in run {
+        let seg_uncompressed = uncompressed_bytes(seg);
+        if !out.is_empty() && uncompressed.saturating_add(seg_uncompressed) > max_uncompressed {
+            break;
+        }
         out.push(seg);
-        total += seg.byte_size;
-        if total >= target {
+        compressed += seg.byte_size;
+        uncompressed = uncompressed.saturating_add(seg_uncompressed);
+        if compressed >= target {
             break;
         }
     }
@@ -151,20 +178,32 @@ mod tests {
         }
     }
 
+    /// Report every segment as decoding to nothing, so the uncompressed ceiling
+    /// never binds and the compressed target alone decides the prefix.
+    fn ignore_uncompressed(_: &SegmentRow) -> i64 {
+        0
+    }
+
+    /// Decoded size as a fixed multiple of the on-disk size — the shape of real
+    /// log segments, which compress 10-20x.
+    fn ratio_uncompressed(ratio: i64) -> impl Fn(&SegmentRow) -> i64 {
+        move |s: &SegmentRow| s.byte_size * ratio
+    }
+
     // --- the 6 planner cases ---------------------
 
     #[test]
     fn plan_returns_none_when_under_target() {
         let cfg = config(vec![1024], 1024);
         let rows = vec![row(0, 1, 1, 128)];
-        assert_eq!(plan(&cfg, &rows), None);
+        assert_eq!(plan(&cfg, &rows, ignore_uncompressed), None);
     }
 
     #[test]
     fn plan_promotes_when_byte_target_reached() {
         let cfg = config(vec![1024], 1024);
         let rows = vec![row(0, 1, 1, 512), row(0, 2, 2, 512)];
-        let job = plan(&cfg, &rows).unwrap();
+        let job = plan(&cfg, &rows, ignore_uncompressed).unwrap();
         assert_eq!(job.output_level, 1);
         let mins: Vec<i64> = job.inputs.iter().map(|r| r.min_seq).collect();
         assert_eq!(mins, vec![1, 2]);
@@ -174,7 +213,7 @@ mod tests {
     fn plan_promotes_at_segment_count_below_byte_target() {
         let cfg = config(vec![1 << 30], 3);
         let rows = vec![row(0, 1, 1, 128), row(0, 2, 2, 128), row(0, 3, 3, 128)];
-        let job = plan(&cfg, &rows).unwrap();
+        let job = plan(&cfg, &rows, ignore_uncompressed).unwrap();
         assert_eq!(job.output_level, 1);
         let mins: Vec<i64> = job.inputs.iter().map(|r| r.min_seq).collect();
         assert_eq!(mins, vec![1, 2, 3]);
@@ -185,7 +224,7 @@ mod tests {
         // terminal level == len(level_targets) == 1; L1 is terminal here.
         let cfg = config(vec![1024], 2);
         let rows = vec![row(1, 1, 1, 128), row(1, 2, 2, 128), row(1, 3, 3, 128)];
-        assert_eq!(plan(&cfg, &rows), None);
+        assert_eq!(plan(&cfg, &rows, ignore_uncompressed), None);
     }
 
     #[test]
@@ -193,7 +232,7 @@ mod tests {
         // L2 is non-terminal (len == 2), so L1 count-promotes.
         let cfg = config(vec![64, 1 << 30], 2);
         let rows = vec![row(1, 1, 1, 8), row(1, 2, 2, 8)];
-        let job = plan(&cfg, &rows).unwrap();
+        let job = plan(&cfg, &rows, ignore_uncompressed).unwrap();
         assert_eq!(job.output_level, 2);
         let mins: Vec<i64> = job.inputs.iter().map(|r| r.min_seq).collect();
         assert_eq!(mins, vec![1, 2]);
@@ -203,7 +242,7 @@ mod tests {
     fn plan_single_l2_segment_at_l3_target_emits_single_input_job() {
         let cfg = config(vec![64, 256, 256], 32);
         let rows = vec![row(2, 1, 100, 256)];
-        let job = plan(&cfg, &rows).unwrap();
+        let job = plan(&cfg, &rows, ignore_uncompressed).unwrap();
         assert_eq!(job.output_level, 3);
         assert_eq!(job.inputs.len(), 1);
         assert_eq!(job.inputs[0].min_seq, 1);
@@ -212,20 +251,78 @@ mod tests {
     // --- take_until_target / contiguous_runs ----------------------------
 
     #[test]
-    fn take_until_target_shortest_prefix_at_least_one() {
+    fn take_until_limits_shortest_prefix_at_least_one() {
         let r0 = row(0, 1, 1, 30);
         let r1 = row(0, 2, 2, 40);
         let r2 = row(0, 3, 3, 50);
         let run = vec![&r0, &r1, &r2];
         // 30 + 40 >= 64 stops at 2.
-        let taken = take_until_target(&run, 64);
+        let taken = take_until_limits(&run, 64, i64::MAX, &ignore_uncompressed);
         let mins: Vec<i64> = taken.iter().map(|s| s.min_seq).collect();
         assert_eq!(mins, vec![1, 2]);
         // sub-target run still makes forward progress with >=1 input.
-        let taken = take_until_target(&run, 1_000_000);
+        let taken = take_until_limits(&run, 1_000_000, i64::MAX, &ignore_uncompressed);
         assert_eq!(taken.len(), 3);
         let single = vec![&r0];
-        assert_eq!(take_until_target(&single, 1_000_000).len(), 1);
+        assert_eq!(
+            take_until_limits(&single, 1_000_000, i64::MAX, &ignore_uncompressed).len(),
+            1
+        );
+    }
+
+    /// The compressed target alone would pull the whole run into one merge; the
+    /// uncompressed ceiling is what keeps the job's decoded inputs — and so the
+    /// executor's peak RSS — bounded.
+    #[test]
+    fn take_until_limits_stops_before_exceeding_uncompressed_ceiling() {
+        let r0 = row(0, 1, 1, 100);
+        let r1 = row(0, 2, 2, 100);
+        let r2 = row(0, 3, 3, 100);
+        let run = vec![&r0, &r1, &r2];
+        // Each segment decodes to 100 * 10 = 1000; a 2500 ceiling admits two.
+        let taken = take_until_limits(&run, i64::MAX, 2500, &ratio_uncompressed(10));
+        let mins: Vec<i64> = taken.iter().map(|s| s.min_seq).collect();
+        assert_eq!(mins, vec![1, 2]);
+    }
+
+    /// A segment that alone decodes past the ceiling must still make progress:
+    /// it becomes a single-input job, which the executor promotes by rename
+    /// rather than merging. Otherwise its level wedges forever.
+    #[test]
+    fn take_until_limits_isolates_a_segment_larger_than_the_ceiling() {
+        let big = row(2, 1, 100, 256);
+        let next = row(2, 101, 200, 16);
+        let run = vec![&big, &next];
+        let taken = take_until_limits(&run, i64::MAX, 1000, &ratio_uncompressed(20));
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].min_seq, 1);
+    }
+
+    /// An unreadable footer reports `i64::MAX`; the running total must saturate
+    /// rather than overflow into a negative sum that admits the segment.
+    #[test]
+    fn take_until_limits_saturates_on_unmeasurable_segment() {
+        let r0 = row(0, 1, 1, 10);
+        let r1 = row(0, 2, 2, 10);
+        let run = vec![&r0, &r1];
+        let taken = take_until_limits(&run, i64::MAX, 1000, &|_| i64::MAX);
+        assert_eq!(taken.len(), 1);
+    }
+
+    /// End-to-end through `plan`: a promotable L2 run whose segments each decode
+    /// past the ceiling yields a one-input job (a rename), not a merge.
+    #[test]
+    fn plan_isolates_oversized_segment_into_single_input_job() {
+        let cfg = CompactionConfig {
+            level_targets: vec![64, 256, 256],
+            max_merge_uncompressed_bytes: 1000,
+            ..Default::default()
+        };
+        let rows = vec![row(2, 1, 100, 200), row(2, 101, 200, 200)];
+        let job = plan(&cfg, &rows, ratio_uncompressed(20)).unwrap();
+        assert_eq!(job.output_level, 3);
+        assert_eq!(job.inputs.len(), 1);
+        assert_eq!(job.output_max_seq, 100);
     }
 
     #[test]
@@ -252,7 +349,7 @@ mod tests {
         // Two runs at L0: [1..1] (tiny) and [10..10],[11..11] (count-promotes).
         let cfg = config(vec![1 << 30], 2);
         let rows = vec![row(0, 1, 1, 8), row(0, 10, 10, 8), row(0, 11, 11, 8)];
-        let job = plan(&cfg, &rows).unwrap();
+        let job = plan(&cfg, &rows, ignore_uncompressed).unwrap();
         let mins: Vec<i64> = job.inputs.iter().map(|r| r.min_seq).collect();
         assert_eq!(mins, vec![10, 11]);
     }

@@ -16,8 +16,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.federation import peer as peer_module
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
-from iris.cluster.federation.router import PeerAdmissionDenied, PeerRouter, RoutingRequest
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER
+from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitDisposition
 from iris.managed_thread import get_thread_container, thread_container_scope
 from iris.rpc import controller_pb2
 from rigging.timing import Duration, ExponentialBackoff
@@ -72,7 +71,6 @@ def test_peers_config_round_trips_through_serialization():
             peers={
                 "cw-east": {
                     "controller_address": "http://cw:10000",
-                    "dashboard_url": "https://cw.dev",
                     "cluster": "cw-east",
                 }
             }
@@ -81,7 +79,6 @@ def test_peers_config_round_trips_through_serialization():
     reparsed = parse_config(config_to_dict(config))
     peer = reparsed.peers["cw-east"]
     assert peer.controller_address == "http://cw:10000"
-    assert peer.dashboard_url == "https://cw.dev"
     assert peer.cluster == "cw-east"
 
 
@@ -125,16 +122,8 @@ class _StubConnection:
         self.shutdown_count += 1
 
 
-def _peer(
-    peer_id: str,
-    connection: _StubConnection,
-    *,
-    dashboard_url: str = "https://cw.dev",
-    allow_policy: list[str] | None = None,
-) -> FederationPeer:
-    extra = {"allow_policy": {"users": allow_policy}} if allow_policy is not None else {}
-    config = PeerConfig(controller_address="http://cw:10000", dashboard_url=dashboard_url, **extra)
-    return FederationPeer(peer_id, config, connection)
+def _peer(peer_id: str, connection: _StubConnection) -> FederationPeer:
+    return FederationPeer(peer_id, PeerConfig(controller_address="http://cw:10000"), connection)
 
 
 def test_peer_probe_populates_backends_and_reachability():
@@ -165,7 +154,6 @@ def test_list_peers_view_surfaces_heartbeat_backends():
     (summary,) = manager.peer_summaries()
     assert summary.peer_id == "cw-east"
     assert summary.controller_address == "http://cw:10000"
-    assert summary.dashboard_url == "https://cw.dev"
     assert summary.reachable is True
     (forwarded,) = summary.backends
     assert forwarded.backend_id == "tpu-fleet"
@@ -229,7 +217,7 @@ def test_manager_without_peers_is_inert():
         manager.start()  # nothing to probe; no heartbeat thread
         assert manager.peer_summaries() == []
         request = RoutingRequest(constraints=[], local_feasible=True)
-        assert manager.route_submit(request).is_local is True
+        assert manager.classify_submit(request).disposition == SubmitDisposition.LOCAL
         manager.stop()  # idempotent no-op
 
 
@@ -260,78 +248,84 @@ def test_router_prefers_local_when_feasible_even_with_a_reachable_peer():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
     request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=True)
-    decision = PeerRouter([peer]).decide(request)
-    assert decision.is_local is True
-    assert decision.peer_id == ""
+    plan = PeerRouter([peer]).classify(request)
+    assert plan.disposition == SubmitDisposition.LOCAL
+    assert plan.pinned_peer_id == ""
 
 
-def test_router_hands_off_when_local_infeasible_and_a_peer_can_host():
+def test_router_queues_when_local_infeasible_and_a_peer_can_host():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
     request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False)
-    decision = PeerRouter([peer]).decide(request)
-    assert decision.peer_id == "cw"
+    plan = PeerRouter([peer]).classify(request)
+    # Submit does not pick a peer — it queues; the tick assigns by availability.
+    assert plan.disposition == SubmitDisposition.QUEUE
+    assert plan.pinned_peer_id == ""
 
 
-def test_router_stays_local_when_no_peer_can_host_the_shape():
-    # The peer only advertises CPU; a TPU job it cannot host stays local so the
-    # caller fails it unschedulable rather than wedging it on an incapable peer.
+def test_router_rejects_when_no_peer_can_host_the_shape():
+    # The peer only advertises CPU; a TPU job it cannot host is rejected now (no queue
+    # could help) rather than wedged on an incapable peer.
     peer = _peer("cw", _StubConnection((_device_backend("cpu-fleet", "cpu"),)))
     peer.probe()
     request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False)
-    assert PeerRouter([peer]).decide(request).is_local is True
+    assert PeerRouter([peer]).classify(request).disposition == SubmitDisposition.REJECT
 
 
-def test_router_skips_an_unreachable_peer():
+def test_router_rejects_when_the_only_shape_matching_peer_is_unreachable():
     connection = _StubConnection((_device_backend("tpu-fleet", "tpu"),))
     peer = _peer("cw", connection)
     peer.probe()
     connection.fail = True
     peer.probe()  # now unreachable; its last-known backends are stale
     request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False)
-    assert PeerRouter([peer]).decide(request).is_local is True
+    assert PeerRouter([peer]).classify(request).disposition == SubmitDisposition.REJECT
 
 
-def test_router_cluster_pin_forces_the_peer_even_when_locally_feasible():
+def test_router_cluster_pin_queues_to_the_peer_even_when_locally_feasible():
     peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)))
     peer.probe()
     request = RoutingRequest(constraints=[], local_feasible=True, cluster_pin="cw")
-    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+    plan = PeerRouter([peer]).classify(request)
+    assert plan.disposition == SubmitDisposition.QUEUE
+    assert plan.pinned_peer_id == "cw"
 
 
-def test_router_hands_off_a_gpu_job_to_a_peer_advertising_the_matching_variant():
+def test_router_queues_a_gpu_job_to_a_peer_advertising_the_matching_variant():
     # The matching mechanism: a peer whose backend advertises device-type=gpu and the
-    # requested device-variant hosts a GPU job (both routing constraints are satisfied).
+    # requested device-variant can host a GPU job (both routing constraints satisfied),
+    # so an unpinned job queues for peer availability instead of being rejected.
     peer = _peer("cw", _StubConnection((_gpu_backend("h100-fleet", "h100"),)))
     peer.probe()
     request = RoutingRequest(constraints=_gpu_constraints("h100"), local_feasible=False)
-    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+    plan = PeerRouter([peer]).classify(request)
+    assert plan.disposition == SubmitDisposition.QUEUE
+    assert plan.pinned_peer_id == ""
 
 
-def test_router_does_not_auto_route_a_gpu_job_to_a_peer_advertising_no_device_attributes():
-    # A peer backend that advertises nothing (today's implicit single-backend CoreWeave
-    # config synthesizes empty backend attributes) cannot satisfy device-type=gpu, so an
-    # auto-match GPU job stays local — the operational gap that keeps GPU federation on
-    # the explicit --target-cluster pin, which bypasses this capability check, until the
-    # backend advertises its device attributes.
+def test_router_rejects_a_gpu_job_when_a_peer_advertises_no_device_attributes():
+    # A peer backend that advertises nothing cannot satisfy device-type=gpu, so an
+    # auto-match GPU job is rejected — the operational gap that keeps GPU auto-federation
+    # off until the backend advertises its device attributes (a pin still bypasses this).
     peer = _peer("cw", _StubConnection((_backend("gpu-fleet"),)))
     peer.probe()
     request = RoutingRequest(constraints=_gpu_constraints("h100"), local_feasible=False)
-    assert PeerRouter([peer]).decide(request).is_local is True
+    assert PeerRouter([peer]).classify(request).disposition == SubmitDisposition.REJECT
 
 
-def test_router_pin_forces_a_gpu_peer_even_without_advertised_attributes():
-    # The v1 mitigation: an explicit pin force-routes regardless of advertised
-    # capability, so a GPU handoff to CoreWeave works today even though auto-match does
-    # not (see the empty-attributes case above).
+def test_router_pin_queues_a_gpu_peer_even_without_advertised_attributes():
+    # An explicit pin queues to that peer regardless of advertised capability, so a GPU
+    # handoff to CoreWeave works even when auto-match would not (see the case above).
     peer = _peer("cw", _StubConnection((_backend("gpu-fleet"),)))
     peer.probe()
     request = RoutingRequest(constraints=_gpu_constraints("h100"), local_feasible=False, cluster_pin="cw")
-    assert PeerRouter([peer]).decide(request).peer_id == "cw"
+    plan = PeerRouter([peer]).classify(request)
+    assert plan.disposition == SubmitDisposition.QUEUE
+    assert plan.pinned_peer_id == "cw"
 
 
 # ---------------------------------------------------------------------------
-# per-cluster allowlist (allow_policy on the submitting_user)
+# submitter allowlist (auth.allowed_submitters, enforced by the cluster the job lands on)
 # ---------------------------------------------------------------------------
 
 
@@ -349,59 +343,3 @@ def test_router_pin_forces_a_gpu_peer_even_without_advertised_attributes():
 )
 def test_user_admitted_matches_wildcard_domain_and_exact(allowed, user, admitted):
     assert user_admitted(allowed, user) is admitted
-
-
-def test_router_cluster_pin_denied_for_a_submitter_outside_the_allowlist():
-    peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)), allow_policy=["*@openathena.ai"])
-    peer.probe()
-    request = RoutingRequest(constraints=[], local_feasible=True, cluster_pin="cw", submitting_user="mallory@evil.com")
-    with pytest.raises(PeerAdmissionDenied):
-        PeerRouter([peer]).decide(request)
-
-
-def test_router_cluster_pin_admits_a_submitter_in_the_allowed_domain():
-    peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)), allow_policy=["*@openathena.ai"])
-    peer.probe()
-    request = RoutingRequest(
-        constraints=[], local_feasible=True, cluster_pin="cw", submitting_user="alice@openathena.ai"
-    )
-    assert PeerRouter([peer]).decide(request).peer_id == "cw"
-
-
-def test_router_cluster_pin_denies_a_local_admin_under_a_domain_policy():
-    # local_admin has no '@', so a domain allow policy never admits it; the pin is
-    # denied. (An enforcing parent also blocks local_admin federation service-side,
-    # regardless of the peer's policy — see the handoff tests.)
-    peer = _peer("cw", _StubConnection((_device_backend("tpu-fleet", "tpu"),)), allow_policy=["*@openathena.ai"])
-    peer.probe()
-    request = RoutingRequest(
-        constraints=[], local_feasible=True, cluster_pin="cw", submitting_user=LOCAL_ADMIN_SUBMITTER
-    )
-    with pytest.raises(PeerAdmissionDenied):
-        PeerRouter([peer]).decide(request)
-
-
-def test_router_auto_match_skips_a_peer_that_does_not_admit_the_submitter():
-    peer = _peer(
-        "cw",
-        _StubConnection((_device_backend("tpu-fleet", "tpu"),)),
-        allow_policy=["*@openathena.ai"],
-    )
-    peer.probe()
-    # The peer can host the shape but must not receive a non-OA submitter, so an
-    # auto-match stays local (the caller then fails it as unschedulable).
-    request = RoutingRequest(constraints=[_device_constraint("tpu")], local_feasible=False, submitting_user="x@evil.com")
-    assert PeerRouter([peer]).decide(request).is_local is True
-
-
-def test_router_auto_match_uses_a_peer_that_admits_the_submitter():
-    peer = _peer(
-        "cw",
-        _StubConnection((_device_backend("tpu-fleet", "tpu"),)),
-        allow_policy=["*@openathena.ai"],
-    )
-    peer.probe()
-    request = RoutingRequest(
-        constraints=[_device_constraint("tpu")], local_feasible=False, submitting_user="alice@openathena.ai"
-    )
-    assert PeerRouter([peer]).decide(request).peer_id == "cw"

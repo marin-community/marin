@@ -14,6 +14,10 @@
 //!   non-pure-prefix pattern, `regexp_matches(key, <pattern>)`. `attempt_id` is
 //!   per-row.
 //!
+//! Every scope also takes an optional exclusive upper bound `seq < until_cursor`,
+//! so the two cursors bracket an open seq interval a reader can page in either
+//! direction (see `FetchLogsRequest` in `proto/logging.proto`).
+//!
 //! These builders emit the `prefix()` / `regexp_matches()` predicates as the
 //! user's intent. The `prefix()` UDF alone is opaque to statistics pruning, so
 //! the half-open key range that makes a prefix tail fast (`key >= P AND
@@ -198,6 +202,16 @@ pub fn add_common_filters(
     }
 }
 
+/// Append the exclusive `seq < until_cursor` upper bound to `where_parts`.
+///
+/// A non-positive `until_cursor` appends nothing and so reads as unbounded
+/// above: seq starts at 1, and no row can precede it.
+pub fn add_seq_upper_bound(where_parts: &mut Vec<String>, until_cursor: i64) {
+    if until_cursor > 0 {
+        where_parts.push(format!("seq < {until_cursor}"));
+    }
+}
+
 /// Append the origin-cluster filter to `where_parts`.
 ///
 /// The `cluster` column carries the writer-supplied origin of each push, so
@@ -227,6 +241,7 @@ pub struct LogRow {
 /// The shaped result: entry fields + the cursor for the next poll.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShapedEntry {
+    pub seq: i64,
     pub source: String,
     pub data: String,
     pub epoch_ms: i64,
@@ -277,6 +292,7 @@ pub fn shape_log_read_result(
                 exact_attempt
             };
             ShapedEntry {
+                seq: r.seq,
                 source: r.source,
                 data: r.data,
                 epoch_ms: r.epoch_ms,
@@ -431,6 +447,31 @@ mod tests {
                 "(level = 0 OR level >= 3)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn seq_upper_bound_brackets_the_cursor_lower_bound() {
+        // (cursor, until_cursor) is an open interval: both bounds exclusive.
+        let mut p = build_log_predicates("/k", 10, MatchScope::MATCH_SCOPE_EXACT).unwrap();
+        add_seq_upper_bound(&mut p.where_parts, 20);
+        assert_eq!(
+            p.where_parts,
+            vec![
+                "key = '/k'".to_string(),
+                "seq > 10".to_string(),
+                "seq < 20".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn seq_upper_bound_unset_is_unbounded() {
+        // seq starts at 1, so 0 (and any non-positive) means "no upper bound".
+        let mut wp = vec!["seq > 0".to_string()];
+        add_seq_upper_bound(&mut wp, 0);
+        assert_eq!(wp, vec!["seq > 0".to_string()]);
+        add_seq_upper_bound(&mut wp, -1);
+        assert_eq!(wp, vec!["seq > 0".to_string()]);
     }
 
     #[test]

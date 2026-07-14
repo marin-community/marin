@@ -9,7 +9,6 @@ scheduler, no controller.
 """
 
 from iris.cluster.config import (
-    AllowPolicy,
     BackendConfig,
     ScaleGroupConfig,
     ScaleGroupResources,
@@ -49,20 +48,13 @@ def _accel_backend(*groups: tuple[str, str]) -> BackendConfig:
     return BackendConfig(kind="worker_daemon", scale_groups=scale_groups)
 
 
-def _job(name: str, *constraints: Constraint, user: str = "alice") -> RoutableJob:
-    return RoutableJob(job_id=JobName.root(user, name), user=user, constraints=list(constraints))
+def _job(name: str, *constraints: Constraint) -> RoutableJob:
+    return RoutableJob(job_id=JobName.root("alice", name), constraints=list(constraints))
 
 
 def _routing(configs: dict[str, BackendConfig]) -> dict[str, BackendRouting]:
     """Mirror how the composer/controller derive each backend's routing metadata."""
-    routing: dict[str, BackendRouting] = {}
-    for backend_id, cfg in configs.items():
-        allowed = frozenset(cfg.allow_policy.users)
-        routing[backend_id] = BackendRouting(
-            advertised=backend_attribute_sets(cfg),
-            admits=lambda user, allowed=allowed: "*" in allowed or user in allowed,
-        )
-    return routing
+    return {backend_id: BackendRouting(advertised=backend_attribute_sets(cfg)) for backend_id, cfg in configs.items()}
 
 
 def _route(configs: dict[str, BackendConfig], *jobs: RoutableJob):
@@ -158,25 +150,6 @@ def test_no_matching_backend_is_unschedulable_without_naming_a_backend():
 
     reason = result.unschedulable[job.job_id]
     assert "gcp" not in reason and "cw" not in reason
-
-
-def test_allow_policy_hides_forbidden_backend_from_routing_and_reason():
-    # bob's job matches only the restricted backend; he is not on its allow list,
-    # so it is unschedulable and the reason must not leak the backend name.
-    configs = {
-        "public": _backend(**{"device-variant": "v5p-8"}),
-        "secret": BackendConfig(
-            kind="worker_daemon",
-            attributes={"device-variant": "h100"},
-            allow_policy=AllowPolicy(users=["alice"]),
-        ),
-    }
-    job = _job("j", _eq("device-variant", "h100"), user="bob")
-
-    result = _route(configs, job)
-
-    assert job.job_id not in result.pins
-    assert "secret" not in result.unschedulable[job.job_id]
 
 
 def test_multiple_matches_break_ties_deterministically():

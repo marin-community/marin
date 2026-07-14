@@ -10,8 +10,8 @@ from datetime import timedelta
 from typing import cast
 
 import requests
-from fray import current_client
 from fray.client import JobHandle
+from fray.current_client import current_client
 from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
 from rigging.log_setup import configure_logging

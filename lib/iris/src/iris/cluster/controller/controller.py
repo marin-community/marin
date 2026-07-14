@@ -18,12 +18,13 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import RemoteLogHandler
+from rigging.filesystem import prefix_join
 from rigging.server_auth import TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
+from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth, FederationTokenProvider, request_auth_policy
@@ -49,9 +50,9 @@ from iris.cluster.controller.checkpoint import (
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.endpoint_proxy import FederatedEndpointProxy
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.federation_store import ControllerFederationStore
-from iris.cluster.controller.finelog_relay import build_log_forwarder
+from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
@@ -83,7 +84,12 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.federation.manager import DEFAULT_HEARTBEAT_INTERVAL, FederationManager
+from iris.cluster.federation.availability import Promotion, QueuedCandidate
+from iris.cluster.federation.manager import (
+    DEFAULT_HEARTBEAT_INTERVAL,
+    DEFAULT_MAX_HANDOFFS_PER_CYCLE,
+    FederationManager,
+)
 from iris.cluster.federation.peer import build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
@@ -156,6 +162,13 @@ class _TickInputs:
     routing: RoutingInputs | None = None
     reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
+    # Federated jobs queued on this parent awaiting a peer with free capacity, in
+    # priority-then-age order. The tick's federation pass assigns them to peers.
+    queued_federation: list[QueuedCandidate] = field(default_factory=list)
+    # Queued federated jobs whose scheduling deadline has elapsed while waiting for a
+    # peer; the tick fails them UNSCHEDULABLE (they own no task rows, so the task-level
+    # timeout scan never sees them).
+    expired_queued_federation: list[JobName] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -262,21 +275,20 @@ class ControllerConfig:
     cluster_id: str = ""
     """This cluster's real federation identity (from the cluster config ``name``).
 
-    Sent as the ``requester_id`` on each ``FederationSync`` and stamped on relayed
-    finelog batches so a shared hub namespaces this cluster's logs. Distinct from the
-    ``'local'`` sentinel the ``cluster`` column uses for this controller's own rows.
-    Required once this cluster hands jobs off; unused otherwise."""
+    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
+    hands jobs off; unused otherwise."""
 
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
 
-    finelog: ClusterFinelogConfig = field(default_factory=ClusterFinelogConfig)
-    """This cluster's finelog config. An empty ``relay_address`` leaves the log plane
-    single-cluster: no relay, local reads. Set it to forward logs to a shared store."""
-
     federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
     """How often the federation capability heartbeat probes each peer."""
+
+    max_federation_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE
+    """Cap on federation queue promotions to any one peer per control tick. Bounds a
+    burst of over-assignment against a single (possibly stale) availability
+    observation, on top of the reservation ledger."""
 
 
 class Controller:
@@ -353,8 +365,7 @@ class Controller:
         # The meta-scheduler routes against what each backend advertises, not the
         # config. Attributes are immutable, so the routing index is built once.
         self._backend_routing = {
-            bid: BackendRouting(advertised=backend.advertised_attributes(), admits=backend.admits)
-            for bid, backend in self._backends.items()
+            bid: BackendRouting(advertised=backend.advertised_attributes()) for bid, backend in self._backends.items()
         }
         self._backend_index = build_backend_index(self._backend_routing)
         # Worker→backend ownership by scale group, used to wire each backend's
@@ -397,14 +408,17 @@ class Controller:
             if config.peers and config.auth and config.auth.jwt_manager
             else None
         )
+        self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
         self._federation = FederationManager(
             build_peers(config.peers, federation_token_provider=federation_token_provider),
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
             ),
+            bundles=self._bundle_store,
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
+            max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
         )
 
         # The log client and its tables are built before the backend and autoscaler
@@ -418,23 +432,6 @@ class Controller:
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
-
-        # Finelog relay: when a relay target is configured, durably forwards this cluster's
-        # local finelog to the shared global store. The forwarding mechanism lives in
-        # finelog; this only supplies the local client, the cluster credential, and a state
-        # path. An empty relay_address leaves the log plane single-cluster — no forwarder
-        # thread, no egress, byte-identical behavior.
-        self._log_forwarder = (
-            build_log_forwarder(
-                config=config.finelog,
-                cluster_id=config.cluster_id,
-                source_client=self._log_client,
-                state_dir=self._db.db_dir,
-                jwt_manager=config.auth.jwt_manager if config.auth else None,
-            )
-            if config.finelog.relay_address
-            else None
-        )
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker
@@ -453,8 +450,6 @@ class Controller:
         self._seed_backend_liveness()
         self._db.register_reopen_hook(self._seed_backend_liveness)
 
-        self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
-
         self._endpoint_service = EndpointServiceImpl(
             db=self._db,
             system_endpoints={},
@@ -468,6 +463,19 @@ class Controller:
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
         )
+        # Forwards a /proxy request for an endpoint that lives on a federated child
+        # to that peer's controller, presenting this cluster's federation bearer.
+        # Present only when this controller has peers and a signing key to mint with.
+        federated_proxy = (
+            FederatedEndpointProxy(self._federation.peer_controller_address, federation_token_provider.get_token)
+            if federation_token_provider is not None
+            else None
+        )
+
+        def _federation_owner_check(root_job: JobName, peer_id: str) -> bool:
+            with self._db.read_snapshot() as q:
+                return reads.has_received_job_from_peer(q, peer_id, root_job)
+
         self._dashboard = ControllerDashboard(
             self._service,
             endpoint_service=self._endpoint_service,
@@ -476,6 +484,8 @@ class Controller:
             auth_provider=config.auth_provider,
             auth_policy=request_auth_policy(config.auth),
             jwt_manager=config.auth.jwt_manager if config.auth else None,
+            federated_proxy=federated_proxy,
+            federation_owner_check=_federation_owner_check,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -678,10 +688,6 @@ class Controller:
         # Start the federation capability heartbeat (a no-op with no peers).
         self._federation.start()
 
-        # Start the global-finelog log forwarder (only when a relay target is configured).
-        if self._log_forwarder is not None:
-            self._log_forwarder.start()
-
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
         self._atexit_registered = True
@@ -721,11 +727,6 @@ class Controller:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
         self._federation.stop()
-
-        # Stop the forwarder (joins its thread, closes its egress client) before
-        # log_stack.close() below tears down the local client it reads from.
-        if self._log_forwarder is not None:
-            self._log_forwarder.stop()
 
         self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
@@ -871,6 +872,7 @@ class Controller:
         scan_timeouts = run_reconcile and self._timeout_rate_limiter.should_run()
 
         inputs = self._build_tick_inputs(
+            now=now,
             run_schedule=run_schedule,
             run_reconcile=run_reconcile,
             run_autoscale=run_autoscale,
@@ -883,6 +885,15 @@ class Controller:
         if run_schedule:
             sched = self._schedule_phase(inputs)
             sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
+
+        # Federation pass: assign queued federated jobs to peers that have room. A pure
+        # decision over the tick's snapshot + the manager's reservation ledger; the
+        # promotions commit (conditionally) in the same end-of-tick transaction. Runs in
+        # the single scheduling thread right after local scheduling, so every scheduling
+        # decision — local placement and peer selection — flows through one place.
+        federation_promotions: list[Promotion] = []
+        if run_schedule and inputs.queued_federation:
+            federation_promotions = self._federation.plan_federation(inputs.queued_federation)
 
         recon_results: dict[str, ReconcileResult] = {}
         timeout_decisions: list[TerminalDecision] = []
@@ -904,7 +915,7 @@ class Controller:
 
         merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
 
-        self._commit_tick(
+        confirmed_promotions = self._commit_tick(
             sched_result=merged_sched,
             sched_results=sched_results,
             backend_pins=backend_pins,
@@ -913,8 +924,21 @@ class Controller:
             timeout_decisions=timeout_decisions,
             pending_kicks=pending_kicks,
             auto_results=auto_results,
+            federation_promotions=federation_promotions,
+            expired_queued_federation=inputs.expired_queued_federation,
             now=now,
         )
+
+        # Charge the reservation ledger only for promotions whose CAS committed, so a
+        # promotion raced by a cancel does not hold phantom peer capacity. The sync
+        # loop delivers each newly-PENDING handle on its next pass.
+        if confirmed_promotions:
+            self._federation.confirm_promotions(confirmed_promotions)
+            logger.info(
+                "Federation: promoted %d queued job(s): %s",
+                len(confirmed_promotions),
+                ", ".join(f"{p.job_id.to_wire()}->{p.peer_id}" for p in confirmed_promotions),
+            )
 
         # Force the next reconcile so workers are told to stop the kicked attempts
         # promptly instead of waiting a full reconcile interval.
@@ -942,6 +966,7 @@ class Controller:
     def _build_tick_inputs(
         self,
         *,
+        now: Timestamp,
         run_schedule: bool,
         run_reconcile: bool,
         run_autoscale: bool,
@@ -972,6 +997,9 @@ class Controller:
         with self._db.control_read_snapshot() as snap:
             if run_schedule:
                 inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
+                if self._config.peers:
+                    inputs.queued_federation = build_queued_candidates(snap)
+                    inputs.expired_queued_federation = reads.expired_queued_handoffs(snap, now.epoch_ms())
             # Execution-timeout finalization is controller-owned and global; it
             # runs alongside the worker-daemon reconcile.
             if run_reconcile and scan_timeouts and worker_daemon_backends:
@@ -1073,7 +1101,6 @@ class Controller:
             if task.backend_id == "" and task.job_id not in unpinned:
                 unpinned[task.job_id] = RoutableJob(
                     job_id=task.job_id,
-                    user=task.job_id.user,
                     constraints=constraints_from_json(task.constraints_json),
                 )
         if not unpinned:
@@ -1177,15 +1204,22 @@ class Controller:
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
+        federation_promotions: list[Promotion],
+        expired_queued_federation: list[JobName],
         now: Timestamp,
-    ) -> None:
+    ) -> list[Promotion]:
         """Apply this tick's merged decisions and authored effects in one write transaction.
 
         Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), each backend's reconcile effects, execution-timeout
-        finalizations, administrative kicks, per-backend autoscaler state. Each
-        backend already authored its own ``effects`` during reconcile; the
-        controller just commits them uniformly. A no-op tick opens no transaction.
+        UNSCHEDULABLE), queued-handoff scheduling-timeout failures, federation queue
+        promotions, each backend's reconcile effects, execution-timeout finalizations,
+        administrative kicks, per-backend autoscaler state. Each backend already authored
+        its own ``effects`` during reconcile; the controller just commits them uniformly.
+        A no-op tick opens no transaction.
+
+        Returns the federation promotions whose conditional CAS actually committed (a
+        concurrent cancel/terminalize between the tick's read and this write drops the
+        rest); the caller charges the reservation ledger for those.
         """
         states = [result.autoscaler_state for result in auto_results.values() if result.autoscaler_state is not None]
 
@@ -1197,14 +1231,35 @@ class Controller:
             or routing_unschedulable
         )
         has_recon = any(not result.effects.is_empty for result in recon_results.values())
-        if not (has_sched or has_recon or timeout_decisions or pending_kicks or states):
-            return
+        if not (
+            has_sched
+            or has_recon
+            or timeout_decisions
+            or pending_kicks
+            or states
+            or federation_promotions
+            or expired_queued_federation
+        ):
+            return []
 
+        confirmed: list[Promotion] = []
         with self._db.transaction() as cur:
             if sched_result is not None:
                 self._commit_schedule_decisions(
                     cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
                 )
+            # Fail queued handoffs past their scheduling deadline before promoting, so a
+            # just-expired job's promotion CAS (guarded on job-nonterminal) rejects it.
+            for job_id in expired_queued_federation:
+                writes.mark_federated_job_unschedulable(
+                    cur,
+                    job_id,
+                    now_ms=now.epoch_ms(),
+                    error="Scheduling timeout exceeded while queued for a federation peer",
+                )
+            for promotion in federation_promotions:
+                if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
+                    confirmed.append(promotion)
             for backend_id in self._backend_ids:
                 result = recon_results.get(backend_id)
                 if result is not None and not result.effects.is_empty:
@@ -1220,6 +1275,7 @@ class Controller:
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
+        return confirmed
 
     def _commit_schedule_decisions(
         self,

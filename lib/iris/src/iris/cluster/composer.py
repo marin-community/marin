@@ -311,7 +311,7 @@ def make_backends(
             unreachable_grace=unreachable_grace,
         )
         provider.name = backend_id
-        provider.configure_routing(backend_attribute_sets(backend_cfg), frozenset(backend_cfg.allow_policy.users))
+        provider.configure_routing(backend_attribute_sets(backend_cfg))
         backends[backend_id] = provider
         logger.info("Backend %r ready: %s", backend_id, type(provider).__name__)
     return backends

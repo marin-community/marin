@@ -5,7 +5,7 @@ import os
 import tempfile
 
 import pytest
-from zephyr import write_parquet_file
+from zephyr.writers import write_parquet_file
 
 
 @pytest.fixture

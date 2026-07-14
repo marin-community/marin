@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import json
 import logging
 
@@ -11,6 +10,7 @@ import levanter.eval_harness as eval_harness
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.py_utils import FailSafeJSONEncoder
 from rigging.filesystem import filesystem as marin_filesystem
 from rigging.filesystem import prefix_join
 
@@ -94,27 +94,10 @@ class LevanterLmEvalEvaluator(Evaluator):
         try:
             fs = marin_filesystem("gcs")
             with fs.open(results_path, "w") as f:
-                json.dump(results, f, indent=2, default=_json_default)
+                # Same encoder Levanter uses to serialize this ``outputs`` object, so the
+                # uploaded results.json matches Levanter's own eval artifact.
+                json.dump(results, f, indent=2, cls=FailSafeJSONEncoder)
             levanter.tracker.current_tracker().finish()
             logger.info("Upload completed successfully.")
         except Exception:
             logger.warning("Failed to upload results to GCS: %s", results_path, exc_info=True)
-
-
-def _json_default(value):
-    """
-    Provide a best-effort JSON serialization for objects returned by the eval harness.
-    """
-    if dataclasses.is_dataclass(value):
-        return dataclasses.asdict(value)
-
-    if isinstance(value, set):
-        return list(value)
-
-    if hasattr(value, "to_dict") and callable(value.to_dict):
-        try:
-            return value.to_dict()
-        except Exception:
-            pass
-
-    return repr(value)

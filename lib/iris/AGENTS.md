@@ -9,6 +9,7 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 - `TESTING.md` — testing policy, markers, and commands
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
+- `docs/federation.md` — peer routing, root-job-only handoff, and cross-cluster storage
 - `docs/image-push.md` — multi-region image push/pull architecture
 
 Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
@@ -55,7 +56,11 @@ design notes:
 
 - `controller/schema.py` — table definitions and indexes.
 - `controller/migrations/` — on-disk schema changes. Add a migration whenever
-  changing persisted schema.
+  changing persisted schema. A migration only ever runs against a DB created
+  before it: a fresh DB is materialized from `schema.py` and records every
+  migration as already applied. So write each one to carry the *previous* schema
+  forward, and to be re-runnable after a mid-migration crash — never to depend on
+  the current `schema.py`, which will keep moving.
 - `controller/db.py` — engine setup, transaction wrappers, and `Tx.execute`.
 - `controller/reads.py` / `controller/writes.py` — shared read/write helpers.
 - `controller/projections/` — write-through caches; do not write projection

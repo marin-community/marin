@@ -28,7 +28,7 @@ import logging
 import time
 
 import numpy as np
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.store.cache import (
     CacheLedger,
     ShardedCacheLayout,
@@ -37,8 +37,8 @@ from levanter.store.cache import (
 )
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import format_shard_path
+from zephyr.dataset import Dataset, format_shard_path
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import read_artifact

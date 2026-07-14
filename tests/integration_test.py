@@ -24,9 +24,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fray import ResourceConfig, set_current_client
+from fray.current_client import set_current_client
 from fray.iris_backend import FrayIrisClient
-from fray.types import Entrypoint, JobRequest, create_environment
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -112,8 +112,6 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]
         fn=lambda output_path: dedup_exact_paragraph(
             input_paths=[read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir],
             output_path=output_path,
-            max_parallelism=4,
-            worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
 

@@ -189,6 +189,26 @@ pub fn segment_bounds(
     Some((num_rows, lo, hi))
 }
 
+/// Footer-only sum of each row group's uncompressed byte size, or `None` on an
+/// unreadable footer.
+///
+/// This is the size of the segment's decoded column data — the scale of the
+/// Arrow arrays a merge materializes in RAM. The on-disk (compressed) size
+/// understates it by the compression ratio, which reaches 10-20x on log text,
+/// so the compaction planner budgets merge memory against this instead.
+pub fn segment_uncompressed_bytes(path: &Path) -> Option<i64> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = SerializedFileReader::new(file).ok()?;
+    Some(
+        reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|rg| rg.total_byte_size())
+            .sum(),
+    )
+}
+
 /// Footer-only row-group count for the parquet file at `path`, or `None` on an
 /// unreadable footer. Used by the trigram prune to confirm a sidecar's
 /// per-row-group entries align with the segment before attaching an access plan.

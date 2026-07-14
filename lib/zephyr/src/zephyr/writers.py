@@ -13,11 +13,13 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+import fsspec.config
 import msgspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
+from pyarrow import fs as pa_fs
 from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
 
 from zephyr import counters
@@ -201,6 +203,79 @@ def _accumulate_tables(
         yield pa.concat_tables(chunks, promote_options="permissive")
 
 
+# Finite network timeouts for the native S3FileSystem, matching the bounds
+# rigging's fsspec factory injects: an unbounded dead socket wedges a shard's
+# upload forever instead of failing it into a retry.
+_S3_NATIVE_CONNECT_TIMEOUT = 30
+_S3_NATIVE_REQUEST_TIMEOUT = 120
+
+
+def _s3_filesystem_kwargs() -> dict[str, str | bool | int]:
+    """Translate the ambient fsspec S3 config into pyarrow S3FileSystem kwargs.
+
+    Iris exports the store's connection settings for s3fs via ``FSSPEC_S3``
+    (see ``configure_client_s3``): ``endpoint_url``, a signing region of
+    ``auto`` for non-AWS endpoints, and ``addressing_style: virtual`` where
+    the endpoint rejects path-style requests (CoreWeave object storage).
+    Credentials come from the ``AWS_*`` environment, which pyarrow reads
+    natively.
+    """
+    conf = fsspec.config.conf.get("s3") or {}
+    client_kwargs = conf.get("client_kwargs") or {}
+    kwargs: dict[str, str | bool | int] = {
+        "connect_timeout": _S3_NATIVE_CONNECT_TIMEOUT,
+        "request_timeout": _S3_NATIVE_REQUEST_TIMEOUT,
+    }
+    endpoint = conf.get("endpoint_url") or client_kwargs.get("endpoint_url") or os.environ.get("AWS_ENDPOINT_URL")
+    if endpoint:
+        kwargs["endpoint_override"] = endpoint
+    region = client_kwargs.get("region_name") or os.environ.get("AWS_REGION")
+    if region:
+        kwargs["region"] = region
+    addressing = ((conf.get("config_kwargs") or {}).get("s3") or {}).get("addressing_style")
+    if addressing == "virtual":
+        kwargs["force_virtual_addressing"] = True
+    return kwargs
+
+
+def _pyarrow_filesystem(path: str) -> tuple[pa_fs.FileSystem, str] | None:
+    """Resolve ``path`` to a native pyarrow ``(filesystem, path)``, or ``None``.
+
+    Native filesystems stream writes with flat memory. Any Python file-object
+    sink instead materializes each write as a ``bytes`` (one full copy of the
+    largest parquet page) and buffers it whole in fsspec's ``BytesIO`` — on
+    mega-document shards that transient tips workers over their memory limit.
+    Returns ``None`` for protocols pyarrow cannot address (e.g. ``memory://``
+    in tests); those fall back to an fsspec handle.
+    """
+    if "://" not in path:
+        return pa_fs.LocalFileSystem(), path
+    if path.startswith("file://"):
+        return pa_fs.LocalFileSystem(), path[len("file://") :]
+    if path.startswith("gs://"):
+        return pa_fs.GcsFileSystem(), path[len("gs://") :]
+    if path.startswith("s3://"):
+        return pa_fs.S3FileSystem(**_s3_filesystem_kwargs()), path[len("s3://") :]
+    return None
+
+
+@contextmanager
+def _parquet_sink(temp_path: str):
+    """Yield ``(where_fd, native_fs)`` for ``pq.ParquetWriter``/``pq.write_table``.
+
+    Prefers a native pyarrow filesystem for flat-memory streaming; falls back
+    to a buffered fsspec handle (``filesystem=None``) for protocols pyarrow
+    cannot address.
+    """
+    native = _pyarrow_filesystem(temp_path)
+    if native is not None:
+        yield native[1], native[0]
+        return
+    fs, resolved_temp = url_to_fs(temp_path)
+    with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+        yield f, None
+
+
 def write_parquet_file(
     records: Iterable,
     output_path: str,
@@ -223,19 +298,13 @@ def write_parquet_file(
     ensure_parent_dir(output_path)
     count = 0
 
-    # Route the write through fsspec (rather than handing pyarrow a raw path,
-    # which it resolves via its native S3 client) so the filesystem's configured
-    # options apply: CoreWeave object storage rejects pyarrow's path-style S3
-    # addressing with HTTP 400, and R2 relies on fsspec's ``fixed_upload_size``
-    # to keep multipart parts uniform. Mirrors write_jsonl_file and SpillWriter.
     with atomic_rename(output_path) as temp_path:
-        fs, resolved_temp = url_to_fs(temp_path)
-        with fs.open(resolved_temp, "wb", block_size=_WRITE_BLOCK_SIZE) as f:
+        with _parquet_sink(temp_path) as (where_fd, native_fs):
             writer: pq.ParquetWriter | None = None
             try:
                 for table in _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes):
                     if writer is None:
-                        writer = pq.ParquetWriter(f, table.schema)
+                        writer = pq.ParquetWriter(where_fd, table.schema, filesystem=native_fs)
                     writer.write_table(table)
                     count += len(table)
                     counters.pipeline.update_counter(counters.RECORDS_OUT, len(table))
@@ -245,7 +314,7 @@ def write_parquet_file(
 
             if writer is None:
                 actual_schema = schema or pa.schema([])
-                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), f)
+                pq.write_table(pa.Table.from_pylist([], schema=actual_schema), where_fd, filesystem=native_fs)
 
     return {"path": output_path, "count": count}
 

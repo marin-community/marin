@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
-from levanter.data.text import DpoExample
+from levanter.data.text.preference import DpoExample
 from levanter.dpo import logp_sum, dpo_loss_from_logps
 from levanter.layers.attention import AttentionMask
 from levanter.adaptor.lora import (

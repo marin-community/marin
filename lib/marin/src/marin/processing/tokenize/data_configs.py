@@ -6,7 +6,7 @@ from dataclasses import replace
 from functools import lru_cache
 from typing import Literal
 
-from levanter.data.text import (
+from levanter.data.text.datasets import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
     DatasetComponent,

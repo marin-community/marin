@@ -13,7 +13,7 @@ All use parquet format with a "text" field.
 from dataclasses import dataclass, field
 from functools import cache
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step

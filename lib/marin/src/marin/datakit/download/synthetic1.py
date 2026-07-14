@@ -7,8 +7,11 @@ Downloads raw parquet files from HuggingFace, then transforms each row into a
 single document by concatenating prompt + score tag + response.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import strip_think_tags, text_document

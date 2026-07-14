@@ -30,6 +30,7 @@ from pathlib import Path
 from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
+from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
 from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
@@ -328,11 +329,11 @@ def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogL
     for line in result.stdout.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
-            logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
+            logs.append(LogLine(timestamp=timestamp, source=STDOUT_SOURCE, data=data))
     for line in result.stderr.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
-            logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
+            logs.append(LogLine(timestamp=timestamp, source=STDERR_SOURCE, data=data))
     return logs
 
 

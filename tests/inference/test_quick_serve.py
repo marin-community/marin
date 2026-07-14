@@ -13,14 +13,23 @@ import pytest
 import requests
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.inference.quick_serve import resolve_model_path, select_tensor_parallel_size
-from marin.inference.quick_serve_cli import _mint_and_print_capability_url
+from marin.inference.quick_serve import (
+    QuickServeConfig,
+    resolve_model_path,
+    select_tensor_parallel_size,
+    select_vllm_launcher,
+)
+from marin.inference.quick_serve_cli import (
+    _checkout_free_setup_script,
+    _mint_and_print_capability_url,
+)
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
     serve_app_background,
 )
+from marin.inference.vllm_server import IsolatedCudaVllm, IsolatedTpuVllm, WorkspaceVllm
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -60,6 +69,54 @@ def test_select_tensor_parallel_size(heads, chips, kv_heads, expected):
 def test_resolve_model_path_passthrough(model, ttl_days):
     # These paths must not touch the network or GCS; they return the input unchanged.
     assert resolve_model_path(model, ttl_days) == model
+
+
+def test_checkout_free_setup_script_pins_marin_core_with_extras():
+    # The worker install folds the requested extras and the launching CLI's exact version
+    # (for cloudpickle compat) into the pip spec; vLLM stays out — it comes from uvx.
+    script = _checkout_free_setup_script("0.2.44", ("tpu",))
+    assert "marin-core[tpu]==0.2.44" in script
+    assert "vllm" not in script
+
+
+def test_select_vllm_launcher_gpu_provisions_isolated_cuda_vllm():
+    config = QuickServeConfig(
+        model="Qwen/Qwen3-0.6B", endpoint_name="/serve/x", gpu_type="H100", gpu_count=8, vllm_version="0.25.0"
+    )
+    assert select_vllm_launcher(config) == IsolatedCudaVllm(version="0.25.0")
+
+
+def test_select_vllm_launcher_falls_back_to_workspace_without_version():
+    # The TPU path (no version) and a --task-image GPU path (image ships its own vLLM)
+    # both serve from the vLLM already on PATH.
+    tpu = QuickServeConfig(model="m", endpoint_name="/serve/x", tpu_type="v6e-8")
+    gpu_with_image = QuickServeConfig(
+        model="m", endpoint_name="/serve/x", gpu_type="H100", gpu_count=8, vllm_version=None
+    )
+    assert select_vllm_launcher(tpu) == WorkspaceVllm()
+    assert select_vllm_launcher(gpu_with_image) == WorkspaceVllm()
+
+
+def test_select_vllm_launcher_tpu_isolated_from_refs():
+    config = QuickServeConfig(
+        model="Qwen/Qwen3-0.6B",
+        endpoint_name="/serve/x",
+        tpu_type="v6e-8",
+        tpu_vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
+        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
+    )
+    assert select_vllm_launcher(config) == IsolatedTpuVllm(
+        vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
+        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
+    )
+
+
+def test_select_vllm_launcher_tpu_ref_requires_tpu_inference():
+    # A vLLM fork without its tpu-inference runtime would boot a broken TPU server; fail
+    # at config time instead.
+    config = QuickServeConfig(model="m", endpoint_name="/serve/x", tpu_type="v6e-8", tpu_vllm_ref="vllm @ git+...@abc")
+    with pytest.raises(ValueError, match="tpu_inference_ref"):
+        select_vllm_launcher(config)
 
 
 def _mint_response(token: str, ttl_hours: float) -> controller_pb2.Controller.MintEndpointTokenResponse:

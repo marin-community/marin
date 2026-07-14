@@ -9,7 +9,9 @@ Filter dolmino dataset by minimum document length.
 import dataclasses
 
 import draccus
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 
 @dataclasses.dataclass

@@ -63,6 +63,12 @@ class ResolvedEndpoint:
     address: str
     # A Controller.EndpointAccess value.
     access: int
+    # Set when the endpoint is mirrored from a federated child: the /proxy route
+    # forwards to this peer's controller instead of dialing ``address``. None = local.
+    peer_id: str | None = None
+    # The task that owns the endpoint; used to authorize a federation-peer's proxy
+    # against the owning job's federation handle. None for ``/system/`` endpoints.
+    task_id: JobName | None = None
 
 
 class EndpointServiceImpl:
@@ -193,6 +199,7 @@ class EndpointServiceImpl:
                     task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
                     access=e.access,
+                    peer_id=e.peer_id or "",
                 )
                 for e in endpoints
             ]
@@ -226,12 +233,22 @@ class EndpointServiceImpl:
     def resolve_proxy_target(self, encoded_name: str) -> ResolvedEndpoint | None:
         """Resolve a proxy request's ``encoded_name`` to its target, or None.
 
-        ``/system/`` endpoints always resolve as ``PRIVATE``.
+        A remote (federated) row carries ``peer_id`` so the proxy forwards to that
+        peer. When one name resolves to disagreeing targets — a local and a remote
+        row, or remote rows from different peers — this fails closed (returns None),
+        since a mistaken pick would forward a request to the wrong place or apply the
+        wrong access mode. ``/system/`` endpoints always resolve as ``PRIVATE``.
         """
         for name in proxy_name_to_endpoint_names(encoded_name):
-            row = self._db.caches[EndpointsProjection].resolve(name)
-            if row is not None:
-                return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)
+            rows = self._db.caches[EndpointsProjection].resolve_all(name)
+            if rows:
+                if len({row.peer_id for row in rows}) > 1:
+                    logger.warning("Ambiguous endpoint %r resolves to multiple peers; refusing to proxy", name)
+                    return None
+                row = rows[0]
+                return ResolvedEndpoint(
+                    name=row.name, address=row.address, access=row.access, peer_id=row.peer_id, task_id=row.task_id
+                )
             address = self._system_endpoints.get(name)
             if address is not None:
                 return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.ENDPOINT_ACCESS_PRIVATE)

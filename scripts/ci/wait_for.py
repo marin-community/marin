@@ -14,12 +14,14 @@ the ``github.*`` kinds are built-in conveniences so common PR waits need no shel
     github.review <PR>      fires on a decisive review, or one whose body raises a concern
 
 ``github.pr_comment`` and ``github.review`` skip low-signal chatter by default so the
-caller is not woken for nothing: status acknowledgements ("on it", "looking into
-this"), the review bots' in-progress placeholders (a checklist they post and edit in
-place once done), "no issues found" verdicts, and automated-review wrappers whose
-findings arrive as separate inline comments. Comments are keyed on content, so a
-placeholder that a bot later edits into a real finding re-surfaces as new activity.
-Pass ``--comment-filter all`` to fire on every new comment instead.
+caller is not woken for nothing. A catalog of rules (``COMMENT_RULES``) names, per bot,
+the mundane shapes that bot emits: the in-progress placeholder it posts the moment a PR
+opens and edits in place once done, its "no issues found" verdict, and the
+automated-review wrapper whose findings arrive as separate inline comments. Only the
+automation a rule names is ever suppressed, so a comment from a human — or from a bot the
+catalog does not cover — always fires. Comments are keyed on content, so a placeholder a
+bot later edits into a real finding re-surfaces as new activity. Pass
+``--comment-filter all`` to fire on every new comment instead.
 
 `poll` is the escape hatch for anything without a built-in: compose the predicate
 with the shell (``| grep -q``, ``| jq -e``, ``test``). For example, wait for the
@@ -46,7 +48,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -257,7 +259,7 @@ class Significance(StrEnum):
     """How much a PR comment warrants waking the monitoring agent."""
 
     CONCERN = "concern"  # raises a real code concern — worth firing on
-    ACK = "ack"  # a status acknowledgement or an in-progress placeholder
+    PROGRESS = "progress"  # an in-progress placeholder, edited in place once the bot is done
     CLEAN = "clean"  # an explicit "nothing to address" verdict
     WRAPPER = "wrapper"  # an automated-review container; its findings arrive separately
 
@@ -269,27 +271,59 @@ class CommentFilter(StrEnum):
     ALL = "all"  # every new comment
 
 
-# An in-progress placeholder the review bots post and then edit in place once done,
-# recognized by its "working…" spinner/progress label. (Checkbox state alone is not a
-# signal: a reviewer may enumerate required fixes as an all-unchecked task list.)
-_WORKING_RE = re.compile(r"working(?:\.\.\.|…)|<img[^>]*spin|⏳|🔄", re.IGNORECASE)
+# Bot logins as the REST API reports them (`.user.login`, which carries the `[bot]` suffix —
+# unlike the GraphQL login, which does not).
+CLAUDE_BOT = "claude[bot]"
+CODEX_BOT = "chatgpt-codex-connector[bot]"
 
-# A short status acknowledgement ("on it", "looking into this"), often just a link.
-_ACK_RE = re.compile(
-    r"^(?:🤖\s*|👀\s*|>+\s*)*"
-    r"(?:on it\b|working on (?:it|this)\b|looking into\b|taking a look\b"
-    r"|i'?ll (?:take a )?look\b|will (?:look|investigate|take a look)\b|investigating\b)",
-    re.IGNORECASE,
-)
-_ACK_MAX_LEN = 200
+# --- body shapes -------------------------------------------------------------------
+#
+# The review bots announce themselves the moment a PR opens with a placeholder — a heading,
+# a task checklist, a spinner image, a link to the job — and then edit it in place into the
+# real review. The heading wording tracks whatever prompt the bot is running ("Code review in
+# progress", "Reviewing PR #123", "PR Review: <title>"), and the spinner is an opaque
+# user-attachments URL, so neither is worth matching on. What holds across every variant is
+# the structure: strip the scaffolding and a placeholder has no prose left.
+#
+# Structure alone is not enough to suppress — a reviewer may legitimately enumerate required
+# fixes as an all-unchecked task list — so a placeholder must both look like one (a checklist
+# or a "working…" label) and carry no substantive text.
+_TASK_ITEM_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s.*$", re.MULTILINE)
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s.*$", re.MULTILINE)
+_HTML_TAG_RE = re.compile(r"<[^>]*>")
+_HRULE_RE = re.compile(r"^\s*(?:-{3,}|={3,}|\*{3,})\s*$", re.MULTILINE)
+_JOB_LINK_RE = re.compile(r"\[[^\]]*view (?:job|run)[^\]]*\]\([^)]*\)", re.IGNORECASE)
+_WORKING_LABEL = r"working(?:\.\.\.|…)"
+_WORKING_RE = re.compile(rf"{_WORKING_LABEL}|⏳|🔄", re.IGNORECASE)
+_PLACEHOLDER_FILLER_RE = re.compile(rf"i'?ll analyze this and get back to you\.?|{_WORKING_LABEL}", re.IGNORECASE)
+# Whitespace and markdown decoration carry no prose, so they do not count as residue.
+_DECORATION_RE = re.compile("[\\s*_`>#~|.\\-\u2014\u2013]+")  # \u2014\u2013: the em/en dashes the bots rule off with
+# Across 200 PRs of review-bot comments the two populations are cleanly separated: a
+# placeholder leaves at most 50 characters of residue (a progress line such as "Running a
+# multi-agent correctness review…"), while the shortest real review leaves 121. Nothing lands
+# in between, so the cutoff sits in the empty band.
+_PLACEHOLDER_RESIDUE_MAX = 80
 
-# An explicit "nothing to address" verdict.
+# An explicit "nothing to address" verdict. The bots qualify the noun they cleared ("No code
+# issues found", "No correctness bugs found", "No blocking issues"), so allow a couple of
+# words between the negation and it.
 _CLEAN_RE = re.compile(
-    r"\bno (?:issues?|bugs?|blocking issues?|concerns?|problems?|blockers?)\b(?:\s+found)?"
+    r"\bno\s+(?:\w+[\s-]+){0,2}(?:issues?|bugs?|concerns?|problems?|blockers?|findings?)\b"
     r"|\blgtm\b|\blooks good(?: to me)?\b|\bship it\b",
     re.IGNORECASE,
 )
 _CLEAN_HEAD = 400  # a clean verdict counts only if it leads the comment, not buried below a concern
+
+# A qualified verdict clears one axis, not the review: the bots write "No correctness bugs
+# found" and then report a compliance finding ("#### Findings (2 …)", "One hard-rule
+# violation …") further down. So a verdict only counts as clean when nothing else in the body
+# reports anything.
+_FINDING_RE = re.compile(
+    r"^\s*#{1,6}\s*findings?\b"
+    r"|\b(?:one|two|three|four|five|\d+)\s+(?:finding|issue|bug|problem|violation|concern)s?\b"
+    r"|\bviolat(?:es|ion|ions)\b|\bmust (?:be )?fix|\bneeds? fixing\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # An automated-review summary whose actionable findings are posted as separate inline
 # comments (e.g. Codex's top-level review body).
@@ -298,24 +332,68 @@ _WRAPPER_RE = re.compile(
 )
 
 
-def classify_significance(body: str) -> Significance:
+def _placeholder_residue(body: str) -> str:
+    """The prose a body carries once in-progress-placeholder scaffolding is stripped."""
+    for pattern in (_HTML_TAG_RE, _TASK_ITEM_RE, _HEADING_RE, _HRULE_RE, _JOB_LINK_RE, _PLACEHOLDER_FILLER_RE):
+        body = pattern.sub(" ", body)
+    return _DECORATION_RE.sub("", body)
+
+
+def is_progress_placeholder(body: str) -> bool:
+    """Whether a body is a bot's in-progress placeholder rather than a report."""
+    if not _TASK_ITEM_RE.search(body) and not _WORKING_RE.search(body):
+        return False
+    return len(_placeholder_residue(body)) <= _PLACEHOLDER_RESIDUE_MAX
+
+
+def is_clean_verdict(body: str) -> bool:
+    """Whether a body leads with a verdict that clears the whole review."""
+    verdict = _CLEAN_RE.search(body[:_CLEAN_HEAD])
+    if not verdict:
+        return False
+    # Drop the verdict itself ("no issues") and the checklist scaffolding ("- [x] Validate
+    # findings") before asking whether anything left over reports a finding.
+    rest = body[: verdict.start()] + body[verdict.end() :]
+    return not _FINDING_RE.search(_TASK_ITEM_RE.sub(" ", rest))
+
+
+def is_review_wrapper(body: str) -> bool:
+    return bool(_WRAPPER_RE.search(body))
+
+
+@dataclass(frozen=True)
+class CommentRule:
+    """One entry in the noise catalog: whose comments it judges, and which shape it suppresses."""
+
+    author: str
+    matches: Callable[[str], bool]
+    significance: Significance
+
+
+# The catalog of mundane comment shapes, keyed on author and body shape. A rule only ever
+# applies to the one bot it names, so a comment from anyone else — every human, and every bot
+# we have not catalogued — wakes the agent. Extend by adding a rule, not by loosening one:
+# suppressing a real review comment costs far more than an extra wake-up.
+COMMENT_RULES: tuple[CommentRule, ...] = (
+    CommentRule(CLAUDE_BOT, is_progress_placeholder, Significance.PROGRESS),
+    CommentRule(CLAUDE_BOT, is_clean_verdict, Significance.CLEAN),
+    CommentRule(CODEX_BOT, is_review_wrapper, Significance.WRAPPER),
+)
+
+
+def classify_significance(body: str, author: str) -> Significance:
     """Classify a comment body as one of the ``Significance`` levels.
 
-    Returns ``CONCERN`` unless the body matches a known noise shape — an in-progress
-    placeholder, a short status acknowledgement, a clean "nothing to address" verdict, or
-    an automated-review wrapper — so anything substantive fires.
+    An empty body is a container for inline comments that fire on their own. Otherwise the body
+    is judged against the rules naming ``author``; anything left over is a ``CONCERN``, so an
+    uncatalogued author always fires.
     """
     text = body.strip()
     if not text:
         return Significance.WRAPPER
-    if _WORKING_RE.search(text):
-        return Significance.ACK
-    if len(text) <= _ACK_MAX_LEN and _ACK_RE.match(text):
-        return Significance.ACK
-    if _WRAPPER_RE.search(text):
-        return Significance.WRAPPER
-    if _CLEAN_RE.search(text[:_CLEAN_HEAD]):
-        return Significance.CLEAN
+    for rule in COMMENT_RULES:
+        if author == rule.author and rule.matches(text):
+            return rule.significance
     return Significance.CONCERN
 
 
@@ -395,7 +473,7 @@ class PrActivitySource(Source):
 
     def _is_significant(self, record: GhRecord) -> bool:
         """Whether this new/edited record raises a real concern worth firing on."""
-        return classify_significance(record.body) is Significance.CONCERN
+        return classify_significance(record.body, record.author) is Significance.CONCERN
 
     def _payload(self, new: list[GhRecord]) -> dict:
         raise NotImplementedError
@@ -436,7 +514,7 @@ class CommentSource(PrActivitySource):
                     "body": r.body,
                     "url": r.url,
                     "kind": r.kind,
-                    "significance": classify_significance(r.body).value,
+                    "significance": classify_significance(r.body, r.author).value,
                 }
                 for r in new
             ]
@@ -612,8 +690,8 @@ def read_specs(argv_specs: tuple[str, ...], *, use_stdin: bool | None) -> list[E
     "--comment-filter",
     type=click.Choice([f.value for f in CommentFilter]),
     default=CommentFilter.SIGNIFICANT.value,
-    help="Which new comments fire github.pr_comment/github.review: 'significant' skips acks, in-progress "
-    "placeholders, clean verdicts, and review wrappers; 'all' fires on every new comment.",
+    help="Which new comments fire github.pr_comment/github.review: 'significant' skips the review bots' "
+    "in-progress placeholders, clean verdicts, and review wrappers; 'all' fires on every new comment.",
 )
 @click.option("--quiet", is_flag=True, help="Print only the fired event kind, not the JSON payload.")
 def main(

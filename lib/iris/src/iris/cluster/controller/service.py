@@ -74,7 +74,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.router import PeerAdmissionDenied, RoutingRequest, SubmitRouting
+from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.cluster.log_keys import build_log_source
@@ -105,7 +105,7 @@ from iris.rpc.proto_display import (
     resolve_container_profile,
     task_state_friendly,
 )
-from iris.time_proto import duration_from_proto, timestamp_to_proto
+from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,11 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
 
+# Semantics version of BackendSummary.availability (free-capacity metric). A peer
+# reading an unrecognized version treats the amounts as unknown. Bump when the
+# meaning of the amounts (units, tokens, aggregation) changes.
+AVAILABILITY_METRIC_VERSION = 1
+
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.
 _LOCAL_ADMIN_FEDERATION_DENIED = (
@@ -166,6 +171,16 @@ _LOCAL_ADMIN_FEDERATION_DENIED = (
     "Federating to a remote cluster requires an authenticated user — log in via "
     "IAP or present a user token so the submission carries your identity."
 )
+
+
+def _child_federation_refusal(job_id: JobName, peer_id: str) -> str:
+    """The message refusing to federate child ``job_id`` to ``peer_id``, naming the remedy."""
+    return (
+        f"Job {job_id} requests a shape no local backend provides, and peer {peer_id!r} advertises it, "
+        "but only whole root jobs are federated to a peer — a child job stays on the cluster that "
+        f"runs its parent. Submit the root job to {peer_id!r} instead, so its whole tree runs there: "
+        f"iris job run --target-cluster {peer_id} -- <command>"
+    )
 
 
 def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.RoutingDecision) -> None:
@@ -703,20 +718,27 @@ def _peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: bo
         return job_pb2.PEER_STATUS_REJECTED
     if has_reported_tasks:
         return job_pb2.PEER_STATUS_SYNCED
-    if handoff_state == int(HandoffState.PENDING_HANDOFF):
+    # QUEUED (awaiting a peer with capacity) and PENDING (awaiting the peer's ack) are
+    # both pre-registration on the peer, so both read as PENDING_SCHEDULING.
+    if handoff_state in (int(HandoffState.PENDING_HANDOFF), int(HandoffState.QUEUED_HANDOFF)):
         return job_pb2.PEER_STATUS_PENDING_SCHEDULING
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, peer_status: int) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
     """Pending reason for a federated job, which the local scheduler never sees.
 
     A handed-off job's tasks live on the peer and are excluded from the local
     fold, so the local scheduling diagnostic is meaningless for it. Derive the
-    message from the handoff posture (single source of truth): awaiting the
-    peer's acceptance, awaiting its first status report, or pending on the peer
-    once it has reported tasks.
+    message from the handoff posture (single source of truth): waiting in the
+    federation queue for a peer with free capacity, awaiting the peer's acceptance,
+    awaiting its first status report, or pending on the peer once it has reported
+    tasks. A queued job names a peer only when it is pinned to one.
     """
+    if handoff_state == int(HandoffState.QUEUED_HANDOFF):
+        if not cluster:
+            return "Queued for a federation peer to report free capacity"
+        return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
     if peer_status == job_pb2.PEER_STATUS_ASSIGNED:
@@ -1239,31 +1261,27 @@ class ControllerServiceImpl:
             f"Job {job_id} already exists and was not handed off by {request.federation.requester_id!r}",
         )
 
-    def _hand_off_job(
+    def _queue_federated_job(
         self,
         job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
-        peer_id: str,
+        pinned_peer_id: str,
         submitting_user: str,
     ) -> controller_pb2.Controller.LaunchJobResponse:
-        """Hand a job off to a federation peer and return the parent's job id.
+        """Admit a root job to the federation queue and return the parent's job id.
 
-        Only a root job is ever handed off — the peer runs it under the same,
-        cluster-invariant job id, so handing off a non-root job would clash with the
-        job's own tree on the peer. The manager persists the federated handle in one
-        local transaction, then synchronously delivers it to the peer. A failed
-        delivery is not fatal — the sync loop re-drives the handle — so an admitted or
-        already-present handle still returns its id.
+        The caller has established that ``job_id`` is a root: the peer runs it under the
+        same, cluster-invariant job id, so queueing a non-root job would clash with the
+        job's own tree on the peer. The manager persists the handle in ``QUEUED_HANDOFF``
+        (no peer chosen unless ``pinned_peer_id`` is set); the control tick later assigns
+        it to a peer with room and delivers it. Peer allowlist rejection surfaces later as
+        a failed job rather than synchronously here.
         """
-        if not job_id.is_root:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                f"Job {job_id} is not a root job; only whole root jobs may be federated to a peer.",
-            )
-        self._controller.federation.submit_federated_handle(
+        assert job_id.is_root, f"only whole root jobs may be federated to a peer; got {job_id}"
+        self._controller.federation.queue_federated(
             local_job_id=job_id,
             request=request,
-            peer_id=peer_id,
+            pinned_peer_id=pinned_peer_id,
             owner_principal=job_id.user,
             submitting_user=submitting_user,
         )
@@ -1295,14 +1313,6 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
-        # Reject root RPC submissions from stale clients. Direct in-process
-        # calls have no wire client; tests and harnesses use ctx=None.
-        # Nested submissions are exempt because they come from an already
-        # running workload, which would otherwise crash mid-flight as the
-        # freshness window slides forward.
-        if job_id.is_root and ctx is not None:
-            _check_client_freshness(request.client_revision_date, date.today())
-
         # Reconcile the requested job owner with the authenticated principal.
         #
         # The job name's user segment names the *acting* owner the job is
@@ -1330,6 +1340,20 @@ class ControllerServiceImpl:
         # trusts the name, so there is nothing to forge.
         if is_received_handoff and self._auth.provider:
             self._authorize_federation_handoff(identity, request, job_id)
+
+        # Reject root RPC submissions from stale clients. Direct in-process calls have
+        # no wire client; tests and harnesses use ctx=None. Nested submissions are
+        # exempt because they come from an already running workload, which would
+        # otherwise crash mid-flight as the freshness window slides forward. A received
+        # handoff is exempt for the same reason and one more: the wire client is the
+        # parent controller, which re-encodes the request from its own stored job state
+        # (the submitter's ``client_revision_date`` is not part of that state), and the
+        # parent already gated that submitter's client at its own LaunchJob. Gating here
+        # would reject every handoff, and a job may wait in the parent's federation
+        # queue for longer than the window before it is delivered. Runs after the
+        # handoff is authorized, so a forged ``federation`` field cannot dodge the gate.
+        if job_id.is_root and ctx is not None and not is_received_handoff:
+            _check_client_freshness(request.client_revision_date, date.today())
 
         # A received handoff carries the acting owner in its handoff name (from the
         # parent's signed ``owner_principal``), so it is exempt from re-pinning — the
@@ -1630,44 +1654,43 @@ class ControllerServiceImpl:
                 break
             feasibility_errors.append(error)
 
-        # Decide at submit whether this job runs locally or hands off to a peer.
-        # A job this cluster received via handoff (federation field set) always
-        # runs here — it is never re-federated — so it skips peer routing.
+        # Classify at submit: run locally, queue for federation, or reject. Submit
+        # never picks a peer — the control tick's federation pass does, once a peer
+        # reports free capacity. A job this cluster received via handoff (federation
+        # field set) always runs here — it is never re-federated — so it skips this.
         is_received_handoff = request.HasField("federation")
         if is_received_handoff:
-            routing = SubmitRouting()
+            plan = SubmitPlan(SubmitDisposition.LOCAL)
         else:
-            try:
-                routing = self._controller.federation.route_submit(
-                    RoutingRequest(
-                        constraints=constraints,
-                        local_feasible=feasible,
-                        cluster_pin=cluster_pin or "",
-                        submitting_user=submitting_user,
-                    )
+            plan = self._controller.federation.classify_submit(
+                RoutingRequest(
+                    constraints=constraints,
+                    local_feasible=feasible,
+                    cluster_pin=cluster_pin or "",
                 )
-            except PeerAdmissionDenied as denied:
-                if denied.submitting_user == LOCAL_ADMIN_SUBMITTER:
-                    raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED) from denied
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"Submitter {denied.submitting_user!r} is not permitted to run on cluster {denied.peer_id!r}.",
-                ) from denied
+            )
 
-        if not routing.is_local:
+        if plan.disposition == SubmitDisposition.QUEUE:
+            # Only a whole root job is ever federated. A child's submitter is the worker
+            # running its parent, which authenticates by network location as local_admin, so
+            # the structural limit is checked ahead of the identity gate below: it is the
+            # reason every dispatched accelerator sub-job is refused.
+            if not job_id.is_root:
+                raise ConnectError(Code.INVALID_ARGUMENT, _child_federation_refusal(job_id, plan.pinned_peer_id))
             # With auth on, a local_admin (CIDR/loopback) submission is never federated:
             # the peer would reject it anyway, so fail here rather than after a round-trip.
             # Null-auth (dev/loopback) has no real identity to carry, so it federates.
             if self._auth.provider and submitting_user == LOCAL_ADMIN_SUBMITTER:
                 raise ConnectError(Code.PERMISSION_DENIED, _LOCAL_ADMIN_FEDERATION_DENIED)
-            return self._hand_off_job(job_id, request, routing.peer_id, submitting_user)
+            return self._queue_federated_job(job_id, request, plan.pinned_peer_id, submitting_user)
 
-        # Local (including a received handoff): only now is infeasibility fatal —
-        # no peer could take it either.
-        if not feasible and feasibility_errors:
+        if plan.disposition == SubmitDisposition.REJECT:
+            # Not locally feasible and no reachable peer advertises the shape, so no
+            # queue could help — fail now (status quo fast-fail).
+            reason = feasibility_errors[0] if feasibility_errors else "no local backend or peer can host it"
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
-                f"Job {job_id} is unschedulable: {feasibility_errors[0]} (constraints: {constraints})",
+                f"Job {job_id} is unschedulable: {reason} (constraints: {constraints})",
             )
 
         # A received handoff runs as an ordinary local job; ``ops.job.submit``
@@ -1743,10 +1766,11 @@ class ControllerServiceImpl:
         # hint dict is cached per evaluate() cycle (#4848), so the lookup here
         # is a single dict get — we only attach this job's hint, never the
         # full routing decision.
-        peer_status = _peer_status(job.cluster, handle.handoff_state if handle else None, summary is not None)
+        handoff_state = handle.handoff_state if handle else None
+        peer_status = _peer_status(job.cluster, handoff_state, summary is not None)
         pending_reason = ""
         if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-            pending_reason = _federated_pending_reason(job.cluster, peer_status)
+            pending_reason = _federated_pending_reason(job.cluster, handoff_state, peer_status)
         elif job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -1781,7 +1805,9 @@ class ControllerServiceImpl:
         if job.submitted_at_ms:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
 
-        reconstructed_request = reconstruct_launch_job_request(job)
+        # Status describes the job's shape; the workdir file bytes are payload no
+        # client of this RPC reads, so they stay out of the response.
+        reconstructed_request = reconstruct_launch_job_request(job, workdir_files={})
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
             request=redact_request_env_vars(reconstructed_request),
@@ -1866,7 +1892,7 @@ class ControllerServiceImpl:
         peer_status = _peer_status(j.cluster, handoff_state, task_summary is not None)
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING and is_federated(j.cluster):
-            pending_reason = _federated_pending_reason(j.cluster, peer_status)
+            pending_reason = _federated_pending_reason(j.cluster, handoff_state, peer_status)
         elif j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
@@ -2355,6 +2381,30 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as snap:
             return reads.federated_handle(snap, task_id.root_job)
 
+    def _resolve_task_target(self, task: TaskWithAttempts, attempt_id: int, *, wire_name: str) -> TaskTarget:
+        """Resolve a running task to a :class:`TaskTarget` for on-demand worker RPCs.
+
+        CLUSTER_VIEW backends (K8s) route by task id with no worker; worker-daemon
+        backends resolve and liveness-check the owning worker. Raises
+        ``FAILED_PRECONDITION`` if the task is not yet placed and ``UNAVAILABLE`` if
+        its worker is gone or unhealthy. Shared by ``profile_task`` and
+        ``exec_in_container``.
+        """
+        task_worker_id = _task_worker_id(task)
+        if not task_worker_id:
+            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
+                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {wire_name} not yet assigned to a worker")
+            return TaskTarget(task_id=task.task_id.to_wire(), attempt_id=attempt_id, worker_id=None, address=None)
+        worker = _read_worker(self._db, task_worker_id)
+        if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
+            raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
+        return TaskTarget(
+            task_id=task.task_id.to_wire(),
+            attempt_id=attempt_id,
+            worker_id=task_worker_id,
+            address=worker.address,
+        )
+
     @property
     def endpoint_service(self) -> EndpointServiceImpl:
         """The leased endpoint registry these RPCs delegate to (shared with the dashboard)."""
@@ -2557,27 +2607,7 @@ class ControllerServiceImpl:
             )
 
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
-        task_worker_id = _task_worker_id(task)
-        if not task_worker_id:
-            # A cluster backend (K8s) chooses the node itself: route by task, no worker.
-            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
-                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
-            task_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=attempt_id,
-                worker_id=None,
-                address=None,
-            )
-        else:
-            worker = _read_worker(self._db, task_worker_id)
-            if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-            task_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=attempt_id,
-                worker_id=task_worker_id,
-                address=worker.address,
-            )
+        task_target = self._resolve_task_target(task, attempt_id, wire_name=request.target)
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
         resp = self._backend_for_id(str(task.backend_id or "")).profile_task(task_target, request, timeout_ms)
@@ -2815,29 +2845,10 @@ class ControllerServiceImpl:
             timeout_seconds=request.timeout_seconds,
         )
 
-        task_worker_id = _task_worker_id(task)
-        if not task_worker_id:
-            # A cluster backend (K8s) execs directly into the pod; no worker daemon.
-            if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
-                raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
-            exec_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=task.current_attempt_id,
-                worker_id=None,
-                address=None,
-            )
-            timeout = request.timeout_seconds if request.timeout_seconds else 60
-        else:
-            worker = _read_worker(self._db, task_worker_id)
-            if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
-            exec_target = TaskTarget(
-                task_id=task.task_id.to_wire(),
-                attempt_id=task.current_attempt_id,
-                worker_id=task_worker_id,
-                address=worker.address,
-            )
-            timeout = request.timeout_seconds
+        exec_target = self._resolve_task_target(task, task.current_attempt_id, wire_name=request.task_id)
+        # A cluster-view (K8s) exec has no worker daemon and defaults an unset
+        # timeout to 60s; a worker-daemon exec passes the request timeout through.
+        timeout = request.timeout_seconds or (60 if exec_target.worker_id is None else 0)
 
         resp = self._backend_for_id(str(task.backend_id or "")).exec_in_container(exec_target, worker_request, timeout)
         return controller_pb2.Controller.ExecInContainerResponse(
@@ -3127,9 +3138,6 @@ class ControllerServiceImpl:
 
         summaries: list[controller_pb2.Controller.BackendSummary] = []
         for backend_id, backend in sorted(backends.items()):
-            allowed_users = backend.allowed_users
-            restricted = "*" not in allowed_users
-
             caps = backend.capabilities
             if BackendCapability.CLUSTER_VIEW in caps:
                 kind = "kubernetes"
@@ -3160,8 +3168,6 @@ class ControllerServiceImpl:
                 name=backend.name,
                 kind=kind,
                 capabilities=sorted(c.value for c in caps),
-                restricted=restricted,
-                allowed_user_count=len(allowed_users),
                 scale_groups=sorted(backend_to_sgs.get(backend_id, [])),
                 worker_count=worker_count_by_backend.get(backend_id, 0),
                 pending_task_count=pending_by_backend.get(backend_id, 0),
@@ -3174,6 +3180,18 @@ class ControllerServiceImpl:
             # each entry's repeated field in place.
             for key, values in adv.items():
                 summary.advertised_attributes[key].values.extend(sorted(values))
+
+            # Free-capacity metric for federation queueing. A backend that supplies
+            # it (worker-daemon) fills availability even when empty (authoritative
+            # zero); one that returns None (CLUSTER_VIEW) leaves it UNSET so a peer
+            # falls back to shape-only federation. observation_epoch_ms is the
+            # generation the parent's reservation ledger keys on.
+            free = backend.available_resources()
+            if free is not None:
+                summary.availability.version = AVAILABILITY_METRIC_VERSION
+                summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
+                for token, amount in free.items():
+                    summary.availability.amounts[token] = amount
 
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)
@@ -3260,6 +3278,32 @@ class ControllerServiceImpl:
             changed_tasks=changed_tasks,
         )
 
+    def _federation_endpoint_snapshot(
+        self, q, requester_id: str, now: Timestamp
+    ) -> list[controller_pb2.Controller.FederationEndpoint]:
+        """The requester's full current endpoint set across its RECEIVED jobs.
+
+        Sent every sync so the parent set-replaces; a re-register, access change, or
+        lease expiry on this peer self-heals within one sync interval. Lease time is
+        reported as remaining duration (parent adds it to its own clock), avoiding
+        cross-cluster skew.
+        """
+        endpoints: list[controller_pb2.Controller.FederationEndpoint] = []
+        for e in reads.live_endpoints_for_requester(q, requester_id, now):
+            ep = controller_pb2.Controller.FederationEndpoint(
+                endpoint_id=e.endpoint_id,
+                name=e.name,
+                address=e.address,
+                task_id=e.task_id.to_wire(),
+                access=e.access,
+                metadata=e.metadata,
+            )
+            if e.lease_deadline is not None:
+                remaining_ms = max(0, e.lease_deadline.epoch_ms() - now.epoch_ms())
+                ep.lease_remaining.CopyFrom(duration_to_proto(Duration.from_ms(remaining_ms)))
+            endpoints.append(ep)
+        return endpoints
+
     def federation_sync(
         self,
         request: controller_pb2.Controller.FederationSyncRequest,
@@ -3293,6 +3337,9 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as q:
             min_seq = reads.changelog_min_seq(q)
             next_cursor = str(reads.changelog_max_seq(q))
+            # Endpoints are the requester's full current set, sent every sync
+            # independently of the changelog cursor, so the parent set-replaces.
+            endpoints = self._federation_endpoint_snapshot(q, requester_id, Timestamp.now())
             # Stale when the requester has no cursor, or its cursor sits below the
             # oldest retained event (an unconsumed event, including a tombstone, may
             # be gone). A full resync subsumes everything, so it advances to the max.
@@ -3304,7 +3351,7 @@ class ControllerServiceImpl:
                     if delta is not None:
                         deltas.append(delta)
                 return controller_pb2.Controller.FederationSyncResponse(
-                    deltas=deltas, next_cursor=next_cursor, cursor_stale=True
+                    deltas=deltas, next_cursor=next_cursor, cursor_stale=True, endpoints=endpoints
                 )
 
             tombstoned: dict[JobName, bool] = {}
@@ -3333,5 +3380,5 @@ class ControllerServiceImpl:
                     deltas.append(delta)
 
         return controller_pb2.Controller.FederationSyncResponse(
-            deltas=deltas, next_cursor=next_cursor, cursor_stale=False
+            deltas=deltas, next_cursor=next_cursor, cursor_stale=False, endpoints=endpoints
         )

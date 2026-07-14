@@ -11,7 +11,7 @@ from enum import StrEnum
 from typing import Any
 
 from datasets import load_dataset
-from fray import LocalClient
+from fray.local_backend import LocalClient
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
@@ -19,7 +19,8 @@ from marin.datakit.ingestion_manifest import (
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
 from rigging.filesystem import StoragePath, atomic_rename, open_url
-from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

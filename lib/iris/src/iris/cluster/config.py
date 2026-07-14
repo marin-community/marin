@@ -207,6 +207,11 @@ class CoreweavePlatformConfig(_Config):
     kubeconfig_path: str = ""  # optional; in-cluster auth if empty
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     object_storage_endpoint: str = ""  # S3 base endpoint, not bucket-specific
+    # The same buckets as addressed from outside CoreWeave, for an operator running
+    # `iris` on their own machine. CoreWeave's in-cluster endpoint is a private-address
+    # cache that only a pod can resolve, so a config that names one needs the other too.
+    # Empty falls back to object_storage_endpoint.
+    external_object_storage_endpoint: str = ""
 
 
 class PlatformConfig(_OneofConfig):
@@ -628,17 +633,16 @@ class EndpointSpec(_Config):
 
 
 # ---------------------------------------------------------------------------
-# Backends
+# Submitter allowlist
 # ---------------------------------------------------------------------------
 
 
 def user_admitted(allowed_users: Collection[str], user: str) -> bool:
-    """Whether an allow policy admits ``user``.
+    """Whether an allowlist admits ``user``.
 
     ``"*"`` admits anyone; ``"*@example.com"`` admits any email in that domain
     (case-insensitive on the domain part); every other entry is an exact match on
-    the full identity. The one matcher shared by backend routing policy and
-    per-peer federation policy, so both admit users the same way.
+    the full identity. An empty allowlist admits nobody.
     """
     if "*" in allowed_users or user in allowed_users:
         return True
@@ -648,16 +652,9 @@ def user_admitted(allowed_users: Collection[str], user: str) -> bool:
     return f"*@{domain}" in {entry.lower() for entry in allowed_users}
 
 
-class AllowPolicy(_Config):
-    """Which users an allow policy admits — to route tasks to a backend, or to
-    federate a job to a peer. ``"*"`` matches all users; ``"*@example.com"`` matches
-    any email in that domain; anything else is an exact identity match."""
-
-    users: list[str] = Field(default_factory=lambda: ["*"])
-
-    def admits(self, user: str) -> bool:
-        """Whether this policy admits ``user`` (see :func:`user_admitted`)."""
-        return user_admitted(self.users, user)
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
 
 
 class BackendConfig(_Config):
@@ -677,7 +674,6 @@ class BackendConfig(_Config):
     kind: Literal["worker_daemon", "k8s"]
     transport: Literal["in_process", "remote"] = "in_process"
     attributes: dict[str, str] = Field(default_factory=dict)
-    allow_policy: AllowPolicy = Field(default_factory=AllowPolicy)
     worker_provider: WorkerProviderConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
@@ -699,6 +695,9 @@ class PeerConfig(_Config):
     heartbeat), so a peer that loses a pool stops advertising it without a config
     edit here.
 
+    Which submitters a peer admits is the peer's own ``auth.allowed_submitters``,
+    enforced where the job lands and surfaced from the handoff.
+
     ``cluster`` names the peer's cluster manifest, from which the client
     credentials this controller presents to the peer are resolved (the same
     ``credentials_for`` path every cross-cluster client uses); no shared symmetric
@@ -707,34 +706,19 @@ class PeerConfig(_Config):
     """
 
     controller_address: str  # peer controller RPC address (reachability)
-    dashboard_url: str = ""  # peer public dashboard origin, for deep links
     cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
-    # Which submitting_users this cluster may federate to this peer. Gates on the
-    # authenticated principal (never the caller-chosen owner). Defaults to admit-all,
-    # so a peer must be narrowed in config (e.g. ["*@openathena.ai"]) to restrict it.
-    allow_policy: AllowPolicy = Field(default_factory=AllowPolicy)
 
 
 class ClusterFinelogConfig(_Config):
-    """This cluster's finelog: the local log store, and optionally a relay to a shared one.
+    """This cluster's finelog: the log store that serves it.
 
-    ``config`` names the finelog deployment that serves this cluster (iris derives
-    ``/system/log-server`` from it). Set ``relay_address`` to also run a durable relay
-    that forwards this cluster's logs to a shared global finelog; leave it empty and the
-    log plane stays single-cluster (no relay, local reads, byte-identical behavior).
-
-    The relay authenticates its pushes with a short-lived ``aud="finelog"`` delegation
-    JWT minted by THIS controller's signer (its per-cluster EdDSA key), under this
-    cluster's name. The shared finelog verifies it against this controller's public
-    key — no shared symmetric secret. The ``aud="finelog"`` binding means the same token
-    is rejected by this controller's own control-plane verifier, so it can never be
-    replayed at the RPC surface. With no signer (null-auth), no bearer is sent and the
-    global finelog must admit this controller by a ``cidr`` layer (a same-VPC/loopback
-    dev store).
+    ``config`` names the finelog deployment (iris derives ``/system/log-server`` from
+    it). Shipping this cluster's logs on to a shared hub finelog is the log server's
+    own job, configured in its deploy config's ``forwarding:`` block — iris neither
+    forwards nor holds a credential for it.
     """
 
     config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
-    relay_address: str = ""  # shared global finelog to forward logs to (empty = single-cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -767,9 +751,8 @@ class IrisClusterConfig(_OneofConfig):
     # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
     # a single-cluster deployment is unchanged.
     peers: dict[str, PeerConfig] = Field(default_factory=dict)
-    # This cluster's finelog: the local log store (`finelog.config` names the deploy
-    # config iris derives /system/log-server from) and an optional `finelog.relay_address`
-    # for a shared global finelog. Setting `finelog.relay_address` turns on the forwarder.
+    # This cluster's finelog: `finelog.config` names the deploy config iris derives
+    # /system/log-server from.
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
@@ -1024,18 +1007,36 @@ def _validate_backends(config: IrisClusterConfig) -> None:
                 raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
 
 
-def _validate_peers(config: IrisClusterConfig) -> None:
-    """Validate the ``peers:`` federation registry.
+def _validate_cluster_name(config: IrisClusterConfig) -> None:
+    """Require a cluster ``name``, distinct from the federation sentinel.
 
-    ``'local'`` is reserved as the federation sentinel for "this controller"; the
-    cluster's own ``name`` and every peer id must stay disjoint from it so the
-    sentinel and the real cluster-id namespace never collide.
+    ``name`` is the cluster's identity on the wire: it issues every token this
+    controller mints and it is the id a federation peer keys its trust on. An unnamed
+    cluster mints under a fallback issuer and sends an empty requester id, which fails
+    at the peer as an opaque untrusted-issuer error rather than here.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller", so a real
+    cluster's name must stay disjoint from it.
     """
+    if not config.name.strip():
+        raise ValueError(
+            "cluster name is required: it issues this controller's tokens and identifies "
+            "it to federation peers. Set a top-level `name:` in the cluster config."
+        )
     if config.name == LOCAL_CLUSTER:
         raise ValueError(
             f"cluster name may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
             "sentinel for this controller. Choose a distinct cluster name."
         )
+
+
+def _validate_peers(config: IrisClusterConfig) -> None:
+    """Validate the ``peers:`` federation registry.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller", so every
+    peer id must stay disjoint from it and the sentinel never collides with a real
+    cluster id.
+    """
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
@@ -1050,6 +1051,7 @@ def _validate_peers(config: IrisClusterConfig) -> None:
 
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
+    _validate_cluster_name(config)
     _validate_backends(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)

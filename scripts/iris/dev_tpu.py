@@ -30,6 +30,7 @@ from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -703,6 +704,12 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
 
 @cli.command("allocate")
 @click.option("--tpu-type", required=True, help="TPU type to reserve (for example, v5p-8).")
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Iris priority band for the holder job (default: interactive; production requires authorization).",
+)
 @click.option("--sync-path", default=".", show_default=True, help="Local path to sync to the remote host(s).")
 @click.option("--no-sync", is_flag=True, help="Skip the initial sync after allocation.")
 @click.option("--setup-env/--no-setup-env", default=True, help="Install/update the remote uv environment after sync.")
@@ -712,6 +719,7 @@ def cli(ctx, config: str | None, tpu_name: str | None, verbose: bool) -> None:
 def allocate(
     ctx,
     tpu_type: str,
+    priority: str | None,
     sync_path: str,
     no_sync: bool,
     setup_env: bool,
@@ -744,6 +752,7 @@ def allocate(
         client_cm = controller_client(ctx.obj.config_file)
         client = client_cm.__enter__()
         resources = ResourceSpec(cpu=0.5, memory="1GB", disk="5GB", device=tpu_device(tpu_type))
+        priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED if priority is None else priority_band_value(priority)
         constraints = []
         if zone:
             constraints.append(zone_constraint(zone))
@@ -753,6 +762,7 @@ def allocate(
                 name=f"dev-tpu-{session_name}",
                 resources=resources,
                 constraints=constraints or None,
+                priority_band=priority_band,
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc

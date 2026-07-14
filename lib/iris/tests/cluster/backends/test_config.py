@@ -45,7 +45,7 @@ from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
-from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType, CapacityType, GcpSliceMode
+from iris.cluster.types import DEFAULT_BACKEND_ID, LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import Duration, ExponentialBackoff
@@ -57,6 +57,8 @@ class TestConfigRoundTrip:
     def test_tpu_provider_survives_round_trip(self, tmp_path: Path):
         """TPU config survives proto→dict→yaml→dict→proto round-trip."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: my-project
@@ -109,6 +111,8 @@ scale_groups:
     def test_manual_provider_survives_round_trip(self, tmp_path: Path):
         """Manual config survives proto→dict→yaml→dict→proto round-trip."""
         config_content = """\
+name: test-cluster
+
 platform:
   manual: {}
 
@@ -169,6 +173,8 @@ scale_groups:
     def test_multiple_scale_groups_preserve_accelerator_types(self, tmp_path: Path):
         """Config with multiple TPU scale groups preserves accelerator types."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: my-project
@@ -269,6 +275,8 @@ scale_groups:
     def test_lowercase_accelerator_types_work(self, tmp_path: Path, accelerator_type: str, expected_enum):
         """Config accepts lowercase accelerator types in resources.device_type."""
         config_content = f"""\
+name: test-cluster
+
 platform:
   manual: {{}}
 
@@ -344,6 +352,8 @@ class TestCreateAutoscalerFromConfig:
     def test_creates_autoscaler_with_tpu_provider(self, tmp_path: Path):
         """create_autoscaler works with TPU config."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: my-project
@@ -395,6 +405,8 @@ scale_groups:
     def test_creates_autoscaler_with_manual_provider(self, tmp_path: Path):
         """create_autoscaler works with manual config."""
         config_content = """\
+name: test-cluster
+
 platform:
   manual: {}
 
@@ -443,6 +455,8 @@ scale_groups:
     def test_creates_autoscaler_after_round_trip(self, tmp_path: Path):
         """create_autoscaler works after config round-trip."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: my-project
@@ -561,6 +575,7 @@ class TestSshConfigMerging:
 
     def test_validate_config_requires_gcp_service_accounts(self):
         config = IrisClusterConfig(
+            name="test-cluster",
             platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test-project")),
             controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
         )
@@ -590,6 +605,8 @@ class TestLocalConfigTransformation:
         """make_local_config transforms GCP config to local mode."""
 
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test-project
@@ -654,6 +671,8 @@ scale_groups:
         """make_local_config preserves accelerator type and other scale group settings."""
 
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test-project
@@ -789,7 +808,7 @@ def _config_with(**overrides) -> IrisClusterConfig:
     sg = _valid_scale_group()
     for key, value in overrides.items():
         setattr(sg, key, value)
-    return IrisClusterConfig(scale_groups={"test": sg})
+    return IrisClusterConfig(name="test-cluster", scale_groups={"test": sg})
 
 
 class TestOneofExclusivity:
@@ -829,13 +848,24 @@ class TestConfigValidation:
     def test_valid_config_accepted(self):
         validate_config(_config_with())
 
+    def test_rejects_missing_cluster_name(self):
+        with pytest.raises(ValueError, match="cluster name is required"):
+            validate_config(IrisClusterConfig())
+
+    def test_rejects_the_federation_sentinel_as_a_cluster_name(self):
+        # 'local' means "this controller" to federation; a real cluster claiming it
+        # would collide with the sentinel in the cluster-id namespace.
+        with pytest.raises(ValueError, match="reserved as the federation"):
+            validate_config(IrisClusterConfig(name=LOCAL_CLUSTER))
+
     def test_rejects_missing_resources(self):
-        config = IrisClusterConfig(scale_groups={"test": ScaleGroupConfig(name="test", num_vms=1)})
+        config = IrisClusterConfig(name="test-cluster", scale_groups={"test": ScaleGroupConfig(name="test", num_vms=1)})
         with pytest.raises(ValueError, match="must set resources"):
             validate_config(config)
 
     def test_rejects_missing_num_vms(self):
         config = IrisClusterConfig(
+            name="test-cluster",
             scale_groups={
                 "test": ScaleGroupConfig(
                     name="test",
@@ -845,7 +875,7 @@ class TestConfigValidation:
                         device_type=AcceleratorType.CPU,
                     ),
                 )
-            }
+            },
         )
         with pytest.raises(ValueError, match="must set num_vms"):
             validate_config(config)
@@ -881,6 +911,7 @@ class TestConfigValidation:
     def test_rejects_gcp_zone_not_in_platform_zones(self):
         """Validation fails when scale group zone is not in platform.gcp.zones."""
         config = IrisClusterConfig(
+            name="test-cluster",
             platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test", zones=["zone-a"])),
             scale_groups={
                 "tpu": ScaleGroupConfig(
@@ -906,6 +937,7 @@ class TestConfigValidation:
     def test_accepts_gcp_zone_in_platform_zones(self):
         """Validation passes when scale group zone is in platform.gcp.zones."""
         config = IrisClusterConfig(
+            name="test-cluster",
             platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test", zones=["zone-a"])),
             defaults=DefaultsConfig(worker=WorkerConfig(docker_image="ghcr.io/marin/iris-worker:latest")),
             scale_groups={
@@ -949,6 +981,7 @@ class TestConfigValidation:
     )
     def test_rejects_invalid_gcp_vm_mode(self, num_vms, device_type, device_count, capacity_type, error_match):
         config = IrisClusterConfig(
+            name="test-cluster",
             scale_groups={
                 "test-vm": ScaleGroupConfig(
                     name="test-vm",
@@ -968,7 +1001,7 @@ class TestConfigValidation:
                         ),
                     ),
                 )
-            }
+            },
         )
 
         with pytest.raises(ValueError, match=error_match):
@@ -976,6 +1009,7 @@ class TestConfigValidation:
 
     def test_accepts_gcp_vm_mode_cpu_single_vm_on_demand(self):
         config = IrisClusterConfig(
+            name="test-cluster",
             scale_groups={
                 "cpu-vm": ScaleGroupConfig(
                     name="cpu-vm",
@@ -995,7 +1029,7 @@ class TestConfigValidation:
                         ),
                     ),
                 )
-            }
+            },
         )
 
         validate_config(config)
@@ -1033,7 +1067,7 @@ def _config_with_gcp_sg(
     sg = _gcp_scale_group(zone, capacity_type=capacity_type)
     if worker_attributes is not None:
         sg.worker = WorkerSettings(attributes=dict(worker_attributes))
-    return IrisClusterConfig(scale_groups={"test": sg})
+    return IrisClusterConfig(name="test-cluster", scale_groups={"test": sg})
 
 
 class TestWorkerSettingsValidation:
@@ -1071,6 +1105,8 @@ class TestMultiZoneExpansion:
 
     def test_expands_into_per_zone_groups(self, tmp_path: Path):
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1114,6 +1150,8 @@ scale_groups:
 
     def test_buffer_slices_preserved_when_explicit(self, tmp_path: Path):
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1147,6 +1185,8 @@ scale_groups:
 
     def test_groups_without_zones_unchanged(self, tmp_path: Path):
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1182,6 +1222,8 @@ scale_groups:
 
     def test_zones_auto_populated_in_platform(self, tmp_path: Path):
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1245,6 +1287,8 @@ scale_groups:
     def test_mixed_expanded_and_static_groups(self, tmp_path: Path):
         """Expanded and non-expanded groups coexist."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1456,6 +1500,8 @@ class TestTpuPoolExpansion:
     """Tests for tpu_pools-based scale group expansion."""
 
     _BASE = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1624,6 +1670,8 @@ dupes:
     def test_coexists_with_manual_scale_groups(self, tmp_path: Path):
         """TPU pools and manual scale_groups can coexist."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1666,6 +1714,8 @@ scale_groups:
     def test_multiple_pools_same_family(self, tmp_path: Path):
         """Multiple pools for the same TPU family with different configs."""
         config_content = """\
+name: test-cluster
+
 platform:
   gcp:
     project_id: test
@@ -1755,6 +1805,8 @@ class TestCapacityTypeNormalization:
     """Tests for capacity_type field parsing during config normalization."""
 
     _BASE_CONFIG = """\
+name: test-cluster
+
 scale_groups:
   test:
     num_vms: 1
@@ -1772,6 +1824,8 @@ scale_groups:
 """
 
     _BASE_CONFIG_NO_CAPACITY_TYPE = """\
+name: test-cluster
+
 scale_groups:
   test:
     num_vms: 1
@@ -1844,7 +1898,7 @@ def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) 
         ),
         worker=WorkerSettings(attributes=attributes),
     )
-    return IrisClusterConfig(scale_groups={"h100-16x": sg})
+    return IrisClusterConfig(name="test-cluster", scale_groups={"h100-16x": sg})
 
 
 def test_coreweave_gpu_multivm_requires_topology_label():
@@ -1860,6 +1914,7 @@ def test_coreweave_gpu_multivm_accepts_topology_label():
 
 def test_coreweave_worker_provider_rejected():
     config = IrisClusterConfig(
+        name="test-cluster",
         platform=PlatformConfig(coreweave=CoreweavePlatformConfig(region="US-WEST-04A")),
         worker_provider=WorkerProviderConfig(),
         scale_groups={
@@ -1929,18 +1984,19 @@ class TestBackendsConfig:
 
     def test_explicit_backends_map_validates_and_resolves(self):
         config = IrisClusterConfig(
+            name="test-cluster",
             backends={"cpu": _worker_daemon_backend(attributes={"device-type": "cpu"})},
         )
         validate_config(config)
 
         resolved = resolve_backends(config)
         assert set(resolved) == {"cpu"}
-        # Defaults fill in: in_process transport and the all-users allow policy.
+        # Defaults fill in: in_process transport.
         assert resolved["cpu"].transport == "in_process"
-        assert resolved["cpu"].allow_policy.users == ["*"]
 
     def test_mixing_backends_with_top_level_scale_groups_rejected(self):
         config = IrisClusterConfig(
+            name="test-cluster",
             backends={"cpu": _worker_daemon_backend()},
             scale_groups={"test": _valid_scale_group()},
         )
@@ -1952,6 +2008,7 @@ class TestBackendsConfig:
         # drives them from its single control thread, so more than one in_process
         # backend is allowed.
         config = IrisClusterConfig(
+            name="test-cluster",
             backends={
                 "cpu": _worker_daemon_backend(attributes={"device-type": "cpu"}),
                 "tpu": _worker_daemon_backend(attributes={"device-type": "tpu"}),
@@ -1964,13 +2021,14 @@ class TestBackendsConfig:
 
     def test_remote_transport_rejected(self):
         config = IrisClusterConfig(
+            name="test-cluster",
             backends={"cpu": _worker_daemon_backend(transport="remote")},
         )
         with pytest.raises(ValueError, match="remote transport lands in a later PR"):
             validate_config(config)
 
     def test_k8s_backend_requires_kubernetes_provider(self):
-        config = IrisClusterConfig(backends={"k8s": BackendConfig(kind="k8s")})
+        config = IrisClusterConfig(name="test-cluster", backends={"k8s": BackendConfig(kind="k8s")})
         with pytest.raises(ValueError, match="kind 'k8s' requires kubernetes_provider"):
             validate_config(config)
 

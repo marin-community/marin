@@ -10,7 +10,12 @@
  */
 import { ref, type Ref } from 'vue'
 
+const CONTROLLER_SERVICE_PATH = 'iris.cluster.ControllerService'
+const WORKER_SERVICE_PATH = 'iris.cluster.WorkerService'
 const LOG_SERVICE_PATH = 'proxy/system.log-server/finelog.logging.LogService'
+
+// Cap on how much of an error body is folded into an RpcError message.
+const MAX_ERROR_DETAIL_CHARS = 500
 
 export type RpcBody = Record<string, unknown> | (() => Record<string, unknown>)
 
@@ -21,6 +26,43 @@ export interface RpcState<T> {
   refresh: () => Promise<void>
 }
 
+/** Error thrown by RPC calls when the HTTP response is non-OK. Carries the HTTP
+ *  status so callers can branch on specific failures (e.g. 404 NOT_FOUND from
+ *  Connect RPC), and the server's own message as `detail`. */
+export class RpcError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly status: number,
+    public readonly statusText: string,
+    public readonly detail: string | null = null,
+  ) {
+    super(detail === null
+      ? `${method}: ${status} ${statusText}`
+      : `${method}: ${status} ${statusText} — ${detail}`)
+    this.name = 'RpcError'
+  }
+}
+
+/** Extract the server's message from a non-OK response body. The controller
+ *  answers with `{"error": ...}` and Connect RPC with `{"message": ...}`;
+ *  anything else surfaces as raw text. Null when the body carries nothing. */
+async function readErrorDetail(resp: Response): Promise<string | null> {
+  const text = (await resp.text()).trim()
+  if (!text) return null
+  let detail = text
+  try {
+    const body = JSON.parse(text) as { error?: unknown; message?: unknown }
+    const message = body.error ?? body.message
+    if (typeof message === 'string' && message) detail = message
+  } catch {
+    // Body is not JSON; surface it raw.
+  }
+  return detail.slice(0, MAX_ERROR_DETAIL_CHARS)
+}
+
+/** Send the browser to the iris login page on an iris auth challenge.
+ *  Only iris itself answers 401 here: the endpoint proxy reports a rejected
+ *  upstream as a 502, so a proxied service can never trigger this. */
 function handleUnauthorized(resp: Response): void {
   if (resp.status === 401) {
     window.dispatchEvent(new CustomEvent('iris-auth-required'))
@@ -33,24 +75,16 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
   const error = ref<string | null>(null)
   let generation = 0
 
+  // A superseded request still reports an auth challenge (rpcCall calls
+  // handleUnauthorized), but never writes data or error: only the newest
+  // generation owns the reactive state.
   async function refresh() {
     const gen = ++generation
     loading.value = true
     error.value = null
     try {
-      const resolvedBody = typeof body === 'function' ? body() : (body ?? {})
-      const resp = await fetch(`/${service}/${method}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(resolvedBody),
-      })
+      const payload = await rpcCall<T>(service, method, typeof body === 'function' ? body() : body)
       if (gen !== generation) return  // superseded by a newer refresh()
-      handleUnauthorized(resp)
-      if (!resp.ok) {
-        throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
-      }
-      const payload = await resp.json() as T
-      if (gen !== generation) return  // superseded while reading the response body
       data.value = payload
     } catch (e) {
       if (gen !== generation) return  // superseded by a newer refresh()
@@ -70,7 +104,7 @@ export function useControllerRpc<T>(
   method: string,
   body?: RpcBody,
 ): RpcState<T> {
-  return useRpc<T>('iris.cluster.ControllerService', method, body)
+  return useRpc<T>(CONTROLLER_SERVICE_PATH, method, body)
 }
 
 /** RPC composable for WorkerService endpoints. */
@@ -78,30 +112,26 @@ export function useWorkerRpc<T>(
   method: string,
   body?: RpcBody,
 ): RpcState<T> {
-  return useRpc<T>('iris.cluster.WorkerService', method, body)
+  return useRpc<T>(WORKER_SERVICE_PATH, method, body)
 }
 
-/** Error thrown by one-shot RPC calls when the HTTP response is non-OK.
- *  Carries the HTTP status so callers can branch on specific failures
- *  (e.g. 404 NOT_FOUND from Connect RPC). */
-export class RpcError extends Error {
-  constructor(public readonly method: string, public readonly status: number, public readonly statusText: string) {
-    super(`${method}: ${status} ${statusText}`)
-    this.name = 'RpcError'
-  }
-}
-
-/** One-shot RPC call returning a Promise. For use in async functions that
- *  need to call multiple RPCs or handle the response imperatively. */
-export async function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/iris.cluster.ControllerService/${method}`, {
+/** POST a Connect RPC to `/<service>/<method>` and decode its response.
+ *  Throws RpcError carrying the server's message on a non-OK response, and
+ *  sends the browser to the login page on an iris auth challenge. */
+async function rpcCall<T>(service: string, method: string, body?: Record<string, unknown>): Promise<T> {
+  const resp = await fetch(`/${service}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   })
   handleUnauthorized(resp)
-  if (!resp.ok) throw new RpcError(method, resp.status, resp.statusText)
+  if (!resp.ok) throw new RpcError(method, resp.status, resp.statusText, await readErrorDetail(resp))
   return resp.json() as Promise<T>
+}
+
+/** One-shot RPC call for ControllerService. */
+export function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  return rpcCall<T>(CONTROLLER_SERVICE_PATH, method, body)
 }
 
 /** RPC composable for LogService endpoints. */
@@ -132,24 +162,11 @@ export function useLogServerStatsRpc<T>(
 }
 
 /** One-shot RPC call for LogService. */
-export async function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/${LOG_SERVICE_PATH}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })
-  handleUnauthorized(resp)
-  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
-  return resp.json() as Promise<T>
+export function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  return rpcCall<T>(LOG_SERVICE_PATH, method, body)
 }
 
-export async function workerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/iris.cluster.WorkerService/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  })
-  handleUnauthorized(resp)
-  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
-  return resp.json() as Promise<T>
+/** One-shot RPC call for WorkerService. */
+export function workerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  return rpcCall<T>(WORKER_SERVICE_PATH, method, body)
 }

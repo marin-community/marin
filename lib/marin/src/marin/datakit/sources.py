@@ -27,6 +27,7 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
+from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
@@ -142,6 +143,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("coderforge", coderforge_normalize_steps, 10.29),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
+        ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
         ("finetranslations", finetranslations_normalize_steps, 3040.0),
         ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),

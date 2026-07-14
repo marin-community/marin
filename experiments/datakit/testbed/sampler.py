@@ -34,7 +34,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import read_artifact

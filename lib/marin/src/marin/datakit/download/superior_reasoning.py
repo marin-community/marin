@@ -7,8 +7,10 @@ GPT-OSS-120B reasoning rollouts with chain-of-thought in <think> tags.
 Each row has a math prompt and a model response with reasoning traces.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step

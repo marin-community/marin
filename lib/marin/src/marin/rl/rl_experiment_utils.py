@@ -13,7 +13,7 @@ from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig

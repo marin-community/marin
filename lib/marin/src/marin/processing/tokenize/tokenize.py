@@ -22,20 +22,19 @@ import time
 from collections.abc import Sequence
 
 from datasets import load_dataset_builder
-from fray import ResourceConfig
-from levanter.data.text import (
+from fray.types import ResourceConfig
+from levanter.data.text.datasets import (
     DatasetComponent,
     HfDatasetSourceConfig,
-    LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
-    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
 )
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
 from rigging.filesystem import StoragePath, prefix_join
-from zephyr import Dataset, ZephyrContext
-from zephyr.dataset import FileEntry
+from zephyr.dataset import Dataset, FileEntry
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
@@ -136,7 +135,7 @@ class TokenizeConfigBase(abc.ABC):
 
     max_workers: int = 4096
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
-    map_workers_per_actor: int | None = None
+    map_task_resources: ResourceConfig | None = None
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
     """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly."""
@@ -312,11 +311,10 @@ def _run_split(
 
     ctx = ZephyrContext(
         resources=config.worker_resources,
+        map_task_resources=config.map_task_resources,
         max_workers=min(config.max_workers, len(file_groups)),
         name=f"tokenize-{split_name}",
     )
-    if config.map_workers_per_actor is not None:
-        ctx.map_workers_per_actor = config.map_workers_per_actor
     # Broadcast tokenizer config to workers. We send name + backend rather than
     # the tokenizer object because not all backends support pickling.
     ctx.put("tokenizer_name", config.tokenizer)

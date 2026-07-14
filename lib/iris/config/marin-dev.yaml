@@ -2,6 +2,9 @@
 # Mirrors production marin.yaml with isolated state and smaller scale caps.
 # Usage: uv run iris --cluster=marin-dev cluster start
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: marin-dev
+
 finelog:
   config: marin-dev
 dashboard_url: https://iris-dev.oa.dev
@@ -48,6 +51,15 @@ auth:
   # Controller server-identity signing key (Ed25519), resolved from Secret Manager
   # at startup — provision with `iris cluster init-keys --gcp-secret …`.
   signing_key: gcp-secret://projects/hai-gcp-models/secrets/iris-marin-dev-signing-key/versions/1
+
+# Federation peers this cluster may hand whole jobs to. Same CoreWeave clusters marin
+# federates to: they trust this cluster's public key under the id `marin-dev`, and admit
+# its submitters by their own auth.allowed_submitters.
+peers:
+  cw-rno2a:
+    controller_address: https://iris-cw-rno2a.oa.dev
+  cw-us-east-02a:
+    controller_address: https://iris-cw-us-east-02a.oa.dev
 
 worker_provider: {}
 

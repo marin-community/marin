@@ -10,6 +10,9 @@
 # The controller creates only its own LocalQueue + NodePools (one CPU node for itself,
 # the H100 pool for the gang).
 
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: ci-coreweave-gpu-smoke
+
 platform:
   label_prefix: iris-gang
   coreweave:

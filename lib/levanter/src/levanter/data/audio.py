@@ -23,12 +23,12 @@ from typing_extensions import TypedDict
 
 
 from levanter.compat.hf_checkpoints import load_processor
-from levanter.data import AsyncDataset
+from levanter.data.dataset import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset, StopStrategy
 from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, datasource_from_hf_or_none
-from levanter.data.text import BatchTokenizer
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 
 # intercept the logging nonsense here

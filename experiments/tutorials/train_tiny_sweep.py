@@ -24,7 +24,7 @@ Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional
 """
 
 from fray.cluster import ResourceConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, run
 from marin.experiment.sweep import sweep
 from marin.experiment.train import EvalSuite, train_lm

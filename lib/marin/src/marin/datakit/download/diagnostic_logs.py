@@ -4,11 +4,13 @@
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
 import hashlib
+import http.client
 import json
 import logging
 import os.path
 import re
 import shutil
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Iterable, Iterator
@@ -16,14 +18,27 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from io import BytesIO
+from typing import NamedTuple
 
 import fsspec
 import requests
-from fray import ResourceConfig
+from fray.types import ResourceConfig
+from fsspec.implementations.local import LocalFileSystem
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import StoragePath, marin_prefix, open_url, prefix_join, url_to_fs
-from zephyr import Dataset, ZephyrContext, counters
+from rigging.filesystem import (
+    StoragePath,
+    atomic_rename,
+    marin_prefix,
+    marin_temp_bucket,
+    open_url,
+    prefix_join,
+    url_to_fs,
+)
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
     IngestionPolicy,
@@ -44,6 +59,7 @@ logger = logging.getLogger(__name__)
 GHALOGS_RECORD_URL = "https://zenodo.org/records/14796970"
 LOGCHUNKS_RECORD_URL = "https://zenodo.org/records/3632351"
 LOGHUB_REPO_URL = "https://github.com/logpai/loghub"
+GHALOGS_DOWNLOAD_URL = "https://zenodo.org/records/14796970/files/github_run_logs.zip?download=1"
 LOGCHUNKS_DOWNLOAD_URL = "https://zenodo.org/records/3632351/files/LogChunks.zip?download=1"
 LOGHUB_SNAPSHOT_URL = "https://github.com/logpai/loghub/archive/refs/heads/master.zip"
 GHALOGS_ZIP_FILENAME = "github_run_logs.zip"
@@ -61,6 +77,10 @@ GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH = os.path.join(
 )
 
 GHALOGS_TOTAL_BYTES = 143_425_404_506
+# Exact byte length of the published ``github_run_logs.zip`` on Zenodo. Used as
+# the skip-if-staged check; differs from ``GHALOGS_TOTAL_BYTES`` (the manifest's
+# advertised compressed size) because that figure is a rough catalog estimate.
+GHALOGS_ARCHIVE_BYTES = 142_292_965_496
 LOGCHUNKS_TOTAL_BYTES = 24_108_826
 LOGHUB_REPO_SIZE_BYTES = 7_513_088
 GHALOGS_ROUGH_TOKENS_B = 150.0
@@ -72,6 +92,31 @@ LONG_TAIL_PPL_EPIC_ISSUE = 5005
 PUBLIC_DIAGNOSTIC_LOGS_ISSUE = 5094
 _DOWNLOAD_CHUNK_BYTES = 1 << 20
 _DOWNLOAD_TIMEOUT = 300
+# GHALogs archive is ~142 GB; stream it in large chunks straight to the object
+# store without buffering the whole file locally.
+_GHALOGS_HTTP_CHUNK_BYTES = 64 * 1024 * 1024
+_GHALOGS_LOG_EVERY_BYTES = 4 * 1024 * 1024 * 1024  # progress line every ~4 GB
+_GHALOGS_DOWNLOAD_TIMEOUT = (30, 600)  # (connect, read) seconds
+# The archive is downloaded as independent byte-range shards (zephyr tasks)
+# and assembled server-side. 32 shards (~4.4 GB each) sits inside both concat
+# limits: GCS compose accepts at most 32 source objects per call, and S3
+# UploadPartCopy caps a copied part at 5 GiB.
+_GHALOGS_DOWNLOAD_SHARDS = 32
+# Concurrent connections to Zenodo. Per-connection throughput is throttled and
+# uneven (~1-17 MB/s observed), so parallel shards both add bandwidth and limit
+# the damage of an unlucky slow connection to a single shard.
+_GHALOGS_DOWNLOAD_MAX_WORKERS = 8
+# Lifecycle TTL on the parts prefix: long enough to cover realistic retry
+# windows after a failed staging run, bounded so an abandoned run cannot
+# strand ~142 GB of parts indefinitely.
+_GHALOGS_PARTS_TTL_DAYS = 7
+# A long stream reliably breaks mid-body (server-side idle/connection resets);
+# Zenodo serves the archive with Accept-Ranges: bytes, so each shard resumes
+# from its last written offset instead of restarting from zero. Give up only
+# after this many *consecutive* reconnects that make no forward progress.
+_GHALOGS_MAX_RESUME_STALLS = 8
+_GHALOGS_RESUME_BACKOFF_BASE = 5.0  # seconds; doubles per consecutive stall
+_GHALOGS_RESUME_BACKOFF_CAP = 120.0
 
 _PARTITION_BUCKETS = 10_000
 _ISSUE_5093_HOLDOUT_BUCKETS = 100
@@ -979,17 +1024,254 @@ def extract_ghalogs_step(
     )
 
 
+class _ShardRange(NamedTuple):
+    """One contiguous byte range ``[start, stop)`` of the archive, downloaded as its own zephyr task."""
+
+    start: int
+    stop: int
+
+
+def _ghalogs_shard_ranges(total_bytes: int, num_shards: int) -> list[_ShardRange]:
+    """Split ``[0, total_bytes)`` into up to ``num_shards`` contiguous ranges."""
+    bounds = [total_bytes * i // num_shards for i in range(num_shards + 1)]
+    return [_ShardRange(bounds[i], bounds[i + 1]) for i in range(num_shards) if bounds[i] < bounds[i + 1]]
+
+
+def _ghalogs_parts_prefix(archive_path: str) -> str:
+    """Return the prefix holding the range parts while staging ``archive_path``.
+
+    Parts go to the bucket's ``tmp/ttl=Nd/`` lifecycle prefix so a failed run
+    that is never retried cannot strand ~142 GB of parts; retries within the
+    TTL still reuse completed parts. The prefix must share the archive's bucket
+    (GCS compose cannot cross buckets), so when the temp helper cannot place it
+    there — local paths in tests, buckets outside the marin config — parts fall
+    back to a ``.parts`` sibling of the archive instead.
+    """
+    parsed = StoragePath.parse(archive_path)
+    if parsed.scheme in ("gs", "s3") and parsed.bucket:
+        temp_prefix = marin_temp_bucket(
+            _GHALOGS_PARTS_TTL_DAYS, prefix=f"ghalogs-parts/{parsed.key}", source_prefix=archive_path
+        )
+        if StoragePath.parse(temp_prefix).bucket == parsed.bucket:
+            return temp_prefix
+    return f"{archive_path}.parts"
+
+
+def _ghalogs_part_path(parts_prefix: str, shard: _ShardRange) -> str:
+    # Zero-padded starts keep lexicographic order equal to byte order, and the
+    # explicit range means a part left behind by a different shard layout has a
+    # different name — it can never be mistaken for a completed current part.
+    return prefix_join(parts_prefix, f"part-{shard.start:012d}-{shard.stop:012d}")
+
+
+def _iter_ghalogs_range(shard: _ShardRange) -> Iterator[bytes]:
+    """Yield bytes ``[shard.start, shard.stop)`` of ``GHALOGS_DOWNLOAD_URL``.
+
+    Resumes across mid-stream drops via HTTP Range: on any mid-body failure or
+    early EOF it re-requests ``Range: bytes={start + written}-{stop - 1}`` and
+    keeps yielding from there rather than restarting the range. Raises if the
+    download stalls without progress, if a reply ignores Range, or if the
+    server delivers fewer bytes than the range length (a ranged request past
+    the last byte returns 416).
+    """
+    start, stop = shard
+    length = stop - start
+    session = build_retrying_session()
+    written = 0
+    next_log = _GHALOGS_LOG_EVERY_BYTES
+    stalls = 0
+    while written < length:
+        attempt_start = written
+        headers = {"Range": f"bytes={start + written}-{stop - 1}"}
+        error: Exception | None = None
+        try:
+            with session.get(
+                GHALOGS_DOWNLOAD_URL, stream=True, headers=headers, timeout=_GHALOGS_DOWNLOAD_TIMEOUT
+            ) as response:
+                # A ranged request past the last byte returns 416: the server
+                # has nothing more to send, so the shortfall check below fires.
+                if response.status_code == http.client.REQUESTED_RANGE_NOT_SATISFIABLE:
+                    break
+                response.raise_for_status()
+                # If the server ignored Range (200 instead of 206), the body is
+                # the whole archive from byte 0; appending it would corrupt the
+                # range, so refuse rather than silently double-write.
+                if response.status_code != http.client.PARTIAL_CONTENT:
+                    raise RuntimeError(
+                        f"GHALogs range request for bytes {start + written}-{stop - 1} expected HTTP 206, "
+                        f"got {response.status_code}; server ignored Range — aborting to avoid corruption"
+                    )
+                for chunk in response.iter_content(chunk_size=_GHALOGS_HTTP_CHUNK_BYTES):
+                    if not chunk:
+                        continue
+                    yield chunk
+                    written += len(chunk)
+                    if written >= next_log:
+                        logger.info("range %d-%d: %.1f / %.1f GB", start, stop - 1, written / 1e9, length / 1e9)
+                        next_log += _GHALOGS_LOG_EVERY_BYTES
+        except (requests.exceptions.RequestException, http.client.IncompleteRead) as e:
+            error = e
+
+        # Gate on bytes yielded this attempt, not on whether an exception fired:
+        # a clean response that yields zero bytes at the current offset (empty
+        # body, early close) makes no progress either and must route through the
+        # stall budget, or the outer loop would re-request the same offset forever.
+        if written > attempt_start:
+            stalls = 0
+            continue
+        stalls += 1
+        if stalls > _GHALOGS_MAX_RESUME_STALLS:
+            raise RuntimeError(
+                f"GHALogs download stalled at {written}/{length} bytes of range {start}-{stop - 1} after "
+                f"{stalls} consecutive attempts without progress"
+            ) from error
+        backoff = min(_GHALOGS_RESUME_BACKOFF_CAP, _GHALOGS_RESUME_BACKOFF_BASE * 2 ** (stalls - 1))
+        logger.warning(
+            "GHALogs stream made no progress on range %d-%d at %.1f / %.1f GB (stall %d/%d), retrying in %.0fs: %s",
+            start,
+            stop - 1,
+            written / 1e9,
+            length / 1e9,
+            stalls,
+            _GHALOGS_MAX_RESUME_STALLS,
+            backoff,
+            error,
+        )
+        time.sleep(backoff)
+    # Raising here aborts the surrounding write before it publishes, so a short
+    # range never becomes a completed part.
+    if written != length:
+        raise RuntimeError(f"GHALogs range {start}-{stop - 1} size mismatch: got {written}, expected {length}")
+    counters.pipeline.update_counter("ghalogs_stage/bytes_downloaded", written)
+
+
+def _concat_archive_parts(fs: fsspec.AbstractFileSystem, target: str, parts: list[str]) -> None:
+    """Assemble ``target`` from ``parts`` in order.
+
+    ``target`` appears only once fully assembled; the source parts are left in place.
+    """
+    if isinstance(fs, LocalFileSystem):
+        # No server to concatenate on: byte-append, publish with an atomic rename.
+        with atomic_rename(target, fs=fs) as tmp:
+            with fs.open(tmp, "wb") as out:
+                for part in parts:
+                    with fs.open(part, "rb") as src:
+                        shutil.copyfileobj(src, out, _GHALOGS_HTTP_CHUNK_BYTES)
+        return
+    # Server-side concat — S3 UploadPartCopy on R2/CoreWeave, compose on GCS —
+    # which materializes the target atomically on completion.
+    fs.merge(target, parts)
+
+
+def stage_ghalogs_archive(
+    output_path: str,
+    *,
+    num_shards: int = _GHALOGS_DOWNLOAD_SHARDS,
+    max_workers: int = _GHALOGS_DOWNLOAD_MAX_WORKERS,
+    worker_resources: ResourceConfig | None = None,
+) -> None:
+    """Stage the ~142 GB GHALogs Zenodo archive under ``output_path`` (idempotent).
+
+    The archive is downloaded as ``num_shards`` byte-range shards (independent
+    zephyr tasks) and assembled server-side into
+    ``{output_path}/{GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH}``, the path
+    :func:`materialize_ghalogs_to_parquet` reads from. A worker/pod death costs
+    at most the shards in flight: re-runs reuse completed parts. Idempotent: a
+    correctly-sized copy is left untouched, and a partial download never
+    becomes the published archive.
+    """
+    # Enforced up front: a shard count the merge cannot handle would otherwise
+    # only fail after the full archive has been downloaded.
+    if not 0 < num_shards <= _GHALOGS_DOWNLOAD_SHARDS:
+        raise ValueError(f"num_shards must be in [1, {_GHALOGS_DOWNLOAD_SHARDS}] (GCS compose cap), got {num_shards}")
+    archive_path = prefix_join(output_path, GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH)
+    fs, path = url_to_fs(archive_path)
+
+    if fs.exists(path) and fs.size(path) == GHALOGS_ARCHIVE_BYTES:
+        logger.info("GHALogs archive already staged (%d bytes): %s", GHALOGS_ARCHIVE_BYTES, archive_path)
+        return
+
+    # Parts are removed after a successful merge; a failed run leaves them for
+    # the next run to reuse, and the temp prefix's TTL sweeps them if that run
+    # never comes (see _ghalogs_parts_prefix).
+    parts_prefix = _ghalogs_parts_prefix(archive_path)
+    shards = _ghalogs_shard_ranges(GHALOGS_ARCHIVE_BYTES, num_shards)
+    logger.info(
+        "Staging %s -> %s: %d bytes as %d range shards",
+        GHALOGS_DOWNLOAD_URL,
+        archive_path,
+        GHALOGS_ARCHIVE_BYTES,
+        len(shards),
+    )
+    # ``from_list`` puts item i in shard i, so each range is its own zephyr
+    # shard and ``shard_idx`` indexes straight back into ``shards``. The write
+    # stage skips a shard — the range request never starts — when its part
+    # already exists, which is sound because parts publish via atomic rename:
+    # existing implies complete, and short ranges raise before publishing.
+    pipeline = (
+        Dataset.from_list(shards)
+        .flat_map(_iter_ghalogs_range)
+        .write_binary(
+            lambda shard_idx, total_shards: _ghalogs_part_path(parts_prefix, shards[shard_idx]),
+            skip_existing=True,
+        )
+    )
+    resources = worker_resources or ResourceConfig(cpu=1, ram="4g", disk="10g")
+    outcome = ZephyrContext(name="stage-ghalogs", resources=resources, max_workers=max_workers).execute(pipeline)
+    part_paths = sorted(outcome.results)
+    _concat_archive_parts(fs, archive_path, part_paths)
+    fs.invalidate_cache(os.path.dirname(path))  # exists() above may have cached the target as absent
+    total = fs.size(path)
+    if total != GHALOGS_ARCHIVE_BYTES:
+        fs.rm(path)
+        raise RuntimeError(f"GHALogs archive size mismatch after merge: got {total}, expected {GHALOGS_ARCHIVE_BYTES}")
+    fs.rm(parts_prefix, recursive=True)
+    logger.info("Staged GHALogs archive: %d bytes -> %s", total, archive_path)
+
+
+def download_ghalogs_step(
+    *,
+    source_path: str = GHALOGS_STAGED_PREFIX,
+    output_path_prefix: str | None = None,
+) -> StepSpec:
+    """Return a StepSpec that stages the GHALogs Zenodo archive at ``source_path``.
+
+    The step's output path is pinned to ``source_path`` (via
+    ``override_output_path``) so the archive lands exactly where the paired
+    :func:`materialize_ghalogs_step` reads it. Idempotent: the step no-ops once
+    the ~142 GB archive is present.
+    """
+    source = SOURCE_MANIFESTS["ghalogs"]
+    return StepSpec(
+        name="raw/diagnostic_logs/ghalogs_public_archive",
+        output_path_prefix=output_path_prefix,
+        override_output_path=source_path,
+        fn=lambda output_path: stage_ghalogs_archive(output_path),
+        hash_attrs={
+            "version": "v1",
+            "download_url": GHALOGS_DOWNLOAD_URL,
+            "archive_bytes": GHALOGS_ARCHIVE_BYTES,
+            "archive_relative_path": GHALOGS_STAGED_ARCHIVE_RELATIVE_PATH,
+            "source_path": source_path,
+            "source_label": source.source_label,
+            "source_content_fingerprint": source.fingerprint(),
+        },
+    )
+
+
 def materialize_ghalogs_step(
     *,
     source_path: str = GHALOGS_STAGED_PREFIX,
     max_members: int | None = None,
     num_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    deps: list[StepSpec] | None = None,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that materializes GHALogs into reusable parquet shards."""
     source = SOURCE_MANIFESTS["ghalogs"]
     return StepSpec(
         name="processed/diagnostic_logs/ghalogs_public_parquet",
+        deps=deps or [],
         output_path_prefix=output_path_prefix,
         fn=lambda output_path: materialize_ghalogs_to_parquet(
             source_path,
@@ -1043,12 +1325,22 @@ def ghalogs_public_normalize_steps(
     max_members: int | None = None,
     num_materialize_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
     output_path_prefix: str | None = None,
-) -> tuple[StepSpec, StepSpec, StepSpec]:
-    """Return the Datakit ``(materialize, train-partition, normalize)`` chain for GHALogs."""
+) -> tuple[StepSpec, StepSpec, StepSpec, StepSpec]:
+    """Return the Datakit ``(download, materialize, train-partition, normalize)`` chain for GHALogs.
+
+    ``download`` streams the Zenodo archive to ``source_path`` and is wired as a
+    dependency of ``materialize`` so the ~142 GB archive is auto-staged before
+    materialization reads it (idempotent — a no-op when already staged).
+    ``materialize`` reads from the download step's resolved ``output_path`` so
+    the two always agree on the archive location, even when ``output_path_prefix``
+    differs from ``marin_prefix()``.
+    """
+    download = download_ghalogs_step(source_path=source_path, output_path_prefix=output_path_prefix)
     materialized = materialize_ghalogs_step(
-        source_path=source_path,
+        source_path=download.output_path,
         max_members=max_members,
         num_shards=num_materialize_shards,
+        deps=[download],
         output_path_prefix=output_path_prefix,
     )
     train_partition = materialize_ghalogs_partition_step(
@@ -1064,7 +1356,7 @@ def ghalogs_public_normalize_steps(
         file_extensions=(".parquet",),
         output_path_prefix=output_path_prefix,
     )
-    return (materialized, train_partition, normalized)
+    return (download, materialized, train_partition, normalized)
 
 
 def extract_logchunks_step(

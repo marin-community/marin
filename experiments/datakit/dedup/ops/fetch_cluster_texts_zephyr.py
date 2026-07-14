@@ -33,10 +33,12 @@ from collections.abc import Iterator
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 logger = logging.getLogger(__name__)
 

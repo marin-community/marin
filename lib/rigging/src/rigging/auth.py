@@ -16,8 +16,10 @@ from: ``IapRefreshTokenProvider`` re-mints from a cached desktop-OAuth refresh
 token (the human path; obtain the initial token once with
 ``run_iap_desktop_login``); ``IapServiceAccountTokenProvider`` mints from the
 ambient service-account credentials the standard resolver finds — a key file,
-GCE metadata, or an impersonated ADC from ``gcloud auth application-default
-login --impersonate-service-account`` (the unattended path). Both cache the token
+GCE metadata, an impersonated ADC from ``gcloud auth application-default login
+--impersonate-service-account``, or a Workload Identity Federation external-account
+ADC that impersonates a service account (e.g. GitHub Actions via
+``google-github-actions/auth``) (the unattended path). Both cache the token
 until shortly before expiry and only touch the network inside ``get_token``.
 
 A single ``BearerTokenInjector`` attaches the token to outgoing requests under a
@@ -35,7 +37,9 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 import google.auth
+import google.auth.credentials
 import google.auth.exceptions
+import google.auth.external_account
 import google.auth.impersonated_credentials
 import google.auth.jwt
 import google.auth.transport.requests
@@ -145,17 +149,51 @@ class GcpAccessTokenProvider:
         return self._cached_token
 
 
+def _impersonated_source(
+    source: google.auth.credentials.Credentials,
+) -> google.auth.impersonated_credentials.Credentials | None:
+    """The impersonated-service-account credential to mint an IAP ID token through.
+
+    Two ambient ADC shapes carry service-account impersonation and can produce an
+    IAP OIDC token, both reducing to an ``impersonated_credentials.Credentials``
+    that :class:`google.auth.impersonated_credentials.IDTokenCredentials` wraps:
+
+    - the impersonated ADC from ``gcloud auth application-default login
+      --impersonate-service-account``, which the resolver already returns as an
+      ``impersonated_credentials.Credentials``; and
+    - a Workload Identity Federation external-account ADC (e.g. GitHub Actions via
+      ``google-github-actions/auth``) whose config sets a
+      ``service_account_impersonation_url``. Its raw federated identity holds
+      ``roles/iam.serviceAccountTokenCreator`` on the target SA, so it — not the
+      impersonated SA — signs the ID-token request.
+
+    Returns ``None`` for anything else (a bare end-user login, or an external
+    account with no impersonation configured): neither carries a service-account
+    identity IAP would authorize, so the caller hard-fails.
+    """
+    if isinstance(source, google.auth.impersonated_credentials.Credentials):
+        return source
+    if isinstance(source, google.auth.external_account.Credentials) and source.service_account_email:
+        # No public accessor exposes the impersonated credential an external
+        # account builds internally; this is the same construction google-auth
+        # itself performs when the credential mints tokens, and it yields a
+        # non-impersonating source that does the signing (no double-impersonation).
+        return source._initialize_impersonated_credentials()
+    return None
+
+
 class IapServiceAccountTokenProvider:
     """Mints OIDC ID tokens for IAP from ambient *service-account* credentials.
 
     Works with any non-interactive service-account credential: a key file (via
-    ``GOOGLE_APPLICATION_CREDENTIALS``), GCE/Cloud Run metadata, or an impersonated
+    ``GOOGLE_APPLICATION_CREDENTIALS``), GCE/Cloud Run metadata, an impersonated
     ADC written by ``gcloud auth application-default login
-    --impersonate-service-account``. Bare end-user ``gcloud`` credentials cannot
-    produce an IAP token and raise :class:`IapCredentialsUnavailable`. The audience
-    is the OAuth client id of the IAP-protected resource. The token is cached until
-    five minutes before its ``exp`` claim; credential access happens only inside
-    ``get_token``.
+    --impersonate-service-account``, or a Workload Identity Federation
+    external-account ADC that impersonates a service account (e.g. GitHub Actions).
+    Bare end-user ``gcloud`` credentials cannot produce an IAP token and raise
+    :class:`IapCredentialsUnavailable`. The audience is the OAuth client id of the
+    IAP-protected resource. The token is cached until five minutes before its
+    ``exp`` claim; credential access happens only inside ``get_token``.
     """
 
     def __init__(self, audience: str):
@@ -181,17 +219,21 @@ class IapServiceAccountTokenProvider:
             return cast(str, google.oauth2.id_token.fetch_id_token(request, self._audience))
         except google.auth.exceptions.DefaultCredentialsError:
             pass
-        # fetch_id_token never reads the well-known ADC file, so an impersonated
-        # ADC (gcloud auth application-default login --impersonate-service-account)
-        # lands here. Mint through it; bare user creds or no ADC cannot.
+        # fetch_id_token never reads the well-known ADC file, so an impersonating
+        # ADC lands here: the `gcloud auth application-default login
+        # --impersonate-service-account` ADC, or a Workload Identity Federation
+        # external-account ADC (e.g. GitHub Actions) that impersonates a service
+        # account. Both reduce to an impersonated credential we mint through; bare
+        # user creds or no ADC cannot.
         try:
             source, _ = google.auth.default(scopes=_IMPERSONATION_SCOPES)
         except google.auth.exceptions.DefaultCredentialsError as exc:
             raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE) from exc
-        if not isinstance(source, google.auth.impersonated_credentials.Credentials):
+        signing_credentials = _impersonated_source(source)
+        if signing_credentials is None:
             raise IapCredentialsUnavailable(_NO_IAP_CREDENTIALS_MESSAGE)
         id_creds = google.auth.impersonated_credentials.IDTokenCredentials(
-            source, target_audience=self._audience, include_email=True
+            signing_credentials, target_audience=self._audience, include_email=True
         )
         id_creds.refresh(request)
         return cast(str, id_creds.token)

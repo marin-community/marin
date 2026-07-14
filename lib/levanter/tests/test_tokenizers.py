@@ -60,27 +60,26 @@ requires_model = pytest.mark.skipif(not _MODEL_AVAILABLE, reason="HF auth or net
 # ---------------------------------------------------------------------------
 
 
-# Pre-load available backends once at module import.  The loaded tokenizers are
-# cached in _BACKEND_TOKENIZERS so every fixture reuses the same instances
-# instead of hitting the network/disk on each test.
+# Backends are loaded lazily inside the fixture and cached here, one instance per module.
+# Loading must NOT happen at collection time: a network/auth failure there would make xdist
+# workers disagree on the parametrize ids and abort the run (issue #7076).
 _BACKEND_TOKENIZERS: dict[str, MarinTokenizer] = {}
-_AVAILABLE_BACKENDS: list[str] = []
-if _MODEL_AVAILABLE:
-    load_tokenizer.cache_clear()
-    _BACKEND_TOKENIZERS["hf"] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend.HF)
-    _AVAILABLE_BACKENDS.append("hf")
 
 
-@pytest.fixture(scope="module", params=_AVAILABLE_BACKENDS if _AVAILABLE_BACKENDS else ["_skip_all"])
+@pytest.fixture(scope="module", params=["hf"])
 def backend_tokenizer(request):
-    """Parameterized fixture yielding each available backend tokenizer.
+    """Parameterized fixture yielding each backend tokenizer, loaded once per module.
 
-    Module-scoped so each backend is loaded once per test module, not per test.
+    The param list is fixed so every xdist worker collects identical test ids; a backend that
+    cannot be loaded (gated model, offline) skips at call time rather than dropping its id.
     """
-    name = request.param
-    if name == "_skip_all":
-        pytest.skip("No tokenizer backends available")
-    return _BACKEND_TOKENIZERS[name]
+    backend = request.param
+    if backend not in _BACKEND_TOKENIZERS:
+        try:
+            _BACKEND_TOKENIZERS[backend] = load_tokenizer(MODEL_NAME, backend=TokenizerBackend(backend))
+        except Exception as exc:
+            pytest.skip(f"tokenizer backend {backend!r} unavailable: {exc}")
+    return _BACKEND_TOKENIZERS[backend]
 
 
 # ---------------------------------------------------------------------------
@@ -1263,23 +1262,25 @@ def test_chat_processor_with_marin_tokenizer():
     assert any(m == 1 for m in mask), "assistant_masks should mark assistant content"
 
 
+# Loaded lazily inside the fixture; see backend_tokenizer for why collection stays network-free.
 _GEMMA_TOKENIZERS: dict[str, MarinTokenizer] = {}
-_GEMMA_BACKENDS: list[str] = []
-try:
-    load_tokenizer.cache_clear()
-    for _b in [TokenizerBackend.HF]:
-        _GEMMA_TOKENIZERS[_b.value] = load_tokenizer("google/gemma-3-4b-it", backend=_b)
-        _GEMMA_BACKENDS.append(_b.value)
-except Exception:
-    pass
+_GEMMA_MODEL = "google/gemma-3-4b-it"
 
 
-@pytest.fixture(scope="module", params=_GEMMA_BACKENDS if _GEMMA_BACKENDS else ["_skip_all"])
+@pytest.fixture(scope="module", params=["hf"])
 def gemma_tokenizer(request):
-    name = request.param
-    if name == "_skip_all":
-        pytest.skip("Cannot load gemma-3-4b-it tokenizer")
-    return _GEMMA_TOKENIZERS[name]
+    """gemma-3-4b-it tokenizer per backend, loaded lazily so collection is deterministic.
+
+    Static params keep xdist workers' collection identical (issue #7076); a load failure (the
+    model is gated) skips at call time.
+    """
+    backend = request.param
+    if backend not in _GEMMA_TOKENIZERS:
+        try:
+            _GEMMA_TOKENIZERS[backend] = load_tokenizer(_GEMMA_MODEL, backend=TokenizerBackend(backend))
+        except Exception as exc:
+            pytest.skip(f"{_GEMMA_MODEL} tokenizer unavailable: {exc}")
+    return _GEMMA_TOKENIZERS[backend]
 
 
 # Correctness check for SentencePiece BPE merge-rank handling on gemma-3.

@@ -8,7 +8,7 @@ import pytest
 from rigging.filesystem import StoragePath
 
 import levanter.config
-from levanter.data.text import LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.datasets import LmDataConfig, UrlDatasetSourceConfig
 
 
 def test_main_wrapper_loads_from_fsspec():
