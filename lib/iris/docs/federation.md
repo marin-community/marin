@@ -150,10 +150,12 @@ uv run iris --cluster=marin query \
   "SELECT job_id, peer_id, owner_principal, handoff_state FROM federated_jobs"
 ```
 
-Each backend in the `list-peers` output carries an `availability` block — the free-capacity
-metric the queue gates on (`{"version": 1, "observation_epoch_ms": …, "amounts": {"h100": 504}}`).
-A backend with **no** `availability` block supplies no metric and is matched on shape alone,
-so jobs route to it without a capacity check.
+Each backend in the `list-peers` output carries an `availability` block — the capacity metric
+the queue gates on (`{"version": 1, "observation_epoch_ms": …, "amounts": {"h100": 504},
+"total_amounts": {"h100": 512}}`). `amounts` is the free count the gate evaluates;
+`total_amounts` is the matching denominator, shown on the dashboard's Backends page as
+free/total meters per device variant. A backend with **no** `availability` block supplies no
+metric and is matched on shape alone, so jobs route to it without a capacity check.
 
 A queued job and a delivered one are both `pending` on the parent, but they are waiting on
 different things, and `job list` says which:

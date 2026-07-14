@@ -5,8 +5,10 @@ import { useBackends } from '@/composables/useBackends'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { BackendSummary, PeerSummary, UnroutableJob, ListPeersResponse } from '@/types/rpc'
 import { formatRelativeTime } from '@/utils/formatting'
+import { aggregateCapacities, backendCapacities, type VariantCapacity } from '@/utils/capacity'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
+import CapacityMeter from '@/components/shared/CapacityMeter.vue'
 import ConstraintChip from '@/components/shared/ConstraintChip.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
@@ -175,6 +177,41 @@ function peerLastContact(p: PeerSummary): string {
   const ms = Number(p.lastContactMs ?? '0')
   return ms > 0 ? formatRelativeTime(ms) : 'never'
 }
+
+// -- Accelerator capacity: per-variant free/total chips from the availability
+// metric. A peer's capacity aggregates its forwarded backends; the fleet strip
+// aggregates local backends plus reachable peers (an unreachable peer's last
+// heartbeat is stale, so it is dimmed on its own card and excluded here). --
+
+function peerCapacities(p: PeerSummary): VariantCapacity[] {
+  return aggregateCapacities(peerBackends(p).flatMap(backendCapacities))
+}
+
+const fleetCapacities = computed<VariantCapacity[]>(() =>
+  aggregateCapacities([
+    ...backendSummaries.value.flatMap(backendCapacities),
+    ...peerSummaries.value.filter((p) => p.reachable).flatMap(peerCapacities),
+  ]),
+)
+
+/** Tooltip breakdown for one fleet-strip variant: each target's contribution. */
+function fleetSources(token: string): string {
+  const parts: string[] = []
+  for (const b of backendSummaries.value) {
+    const c = backendCapacities(b).find((v) => v.token === token)
+    if (c) parts.push(`${b.name || b.backendId}: ${c.free}${c.total != null ? `/${c.total}` : ''} free`)
+  }
+  for (const p of peerSummaries.value.filter((pp) => pp.reachable)) {
+    const c = peerCapacities(p).find((v) => v.token === token)
+    if (c) parts.push(`${p.peerId}: ${c.free}${c.total != null ? `/${c.total}` : ''} free`)
+  }
+  return parts.join(' · ')
+}
+
+/** Tooltip for a stale (unreachable) peer's meters. */
+function staleCapacityTitle(p: PeerSummary): string {
+  return `Peer unreachable — capacity as of last heartbeat (${peerLastContact(p)})`
+}
 </script>
 
 <template>
@@ -219,6 +256,26 @@ function peerLastContact(p: PeerSummary): string {
       {{ error }}
     </div>
 
+    <!-- Fleet accelerator capacity: per-variant free/total chips aggregated
+         across local backends and reachable peers. Hover a tile for the
+         per-target breakdown. -->
+    <div v-if="fleetCapacities.length" class="mb-4">
+      <div class="mb-1.5 flex items-baseline gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Accelerator capacity</span>
+        <span class="text-xs text-text-muted">local backends + reachable peers · hover for breakdown</span>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+        <div
+          v-for="c in fleetCapacities"
+          :key="c.token"
+          class="rounded-lg border border-surface-border bg-surface px-4 py-3"
+          :title="fleetSources(c.token)"
+        >
+          <CapacityMeter :label="c.token" :free="c.free" :total="c.total" size="lg" />
+        </div>
+      </div>
+    </div>
+
     <LoadingSpinner v-if="loading && isEmpty" />
 
     <EmptyState
@@ -235,6 +292,7 @@ function peerLastContact(p: PeerSummary): string {
             <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">ID</th>
             <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Kind</th>
             <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Capabilities</th>
+            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Capacity</th>
             <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Workers</th>
             <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
             <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Health</th>
@@ -277,6 +335,19 @@ function peerLastContact(p: PeerSummary): string {
                   </span>
                 </span>
               </td>
+              <td class="px-3 py-2">
+                <div v-if="backendCapacities(b).length" class="flex flex-col gap-1">
+                  <CapacityMeter
+                    v-for="c in backendCapacities(b)"
+                    :key="c.token"
+                    :label="c.token"
+                    :free="c.free"
+                    :total="c.total"
+                    size="sm"
+                  />
+                </div>
+                <span v-else class="text-xs text-text-muted">—</span>
+              </td>
               <td class="px-3 py-2 text-right font-mono tabular-nums" @click.stop>
                 <RouterLink
                   :to="`/fleet?backend=${b.backendId}`"
@@ -291,7 +362,7 @@ function peerLastContact(p: PeerSummary): string {
               <td class="px-3 py-2 text-xs text-text-secondary">{{ healthLabel(b) }}</td>
             </tr>
             <tr v-if="hasDetail(b) && expanded.has(b.backendId)">
-              <td colspan="6" class="p-0">
+              <td colspan="7" class="p-0">
                 <BackendDetailPanel :backend="b" />
               </td>
             </tr>
@@ -327,6 +398,24 @@ function peerLastContact(p: PeerSummary): string {
                 </span>
               </span>
             </td>
+            <td class="px-3 py-2">
+              <div
+                v-if="peerCapacities(p).length"
+                class="flex flex-col gap-1"
+                :title="p.reachable ? undefined : staleCapacityTitle(p)"
+              >
+                <CapacityMeter
+                  v-for="c in peerCapacities(p)"
+                  :key="c.token"
+                  :label="c.token"
+                  :free="c.free"
+                  :total="c.total"
+                  size="sm"
+                  :stale="!p.reachable"
+                />
+              </div>
+              <span v-else class="text-xs text-text-muted">—</span>
+            </td>
             <td class="px-3 py-2 text-right font-mono tabular-nums" @click.stop>
               <RouterLink :to="`/?cluster=${encodeURIComponent(p.peerId)}`" class="text-accent hover:underline">
                 {{ peerWorkerCount(p) }}
@@ -335,7 +424,10 @@ function peerLastContact(p: PeerSummary): string {
             <td class="px-3 py-2 text-right font-mono tabular-nums text-xs">
               {{ peerRunningCount(p) }} · {{ peerPendingCount(p) }}
             </td>
-            <td class="px-3 py-2 text-xs text-text-secondary">{{ peerHealthLabel(p) }}</td>
+            <td class="px-3 py-2 text-xs text-text-secondary">
+              {{ peerHealthLabel(p) }}
+              <span v-if="!peerNeverContacted(p)" class="text-text-muted">· hb {{ peerLastContact(p) }}</span>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -388,6 +480,17 @@ function peerLastContact(p: PeerSummary): string {
                 :constraint="chip"
               />
             </span>
+          </div>
+
+          <!-- Per-variant free/total accelerator capacity -->
+          <div v-if="backendCapacities(b).length" class="space-y-1.5 pt-1">
+            <CapacityMeter
+              v-for="c in backendCapacities(b)"
+              :key="c.token"
+              :label="c.token"
+              :free="c.free"
+              :total="c.total"
+            />
           </div>
 
           <div class="grid grid-cols-3 gap-2 pt-1">
@@ -482,6 +585,22 @@ function peerLastContact(p: PeerSummary): string {
                 :constraint="chip"
               />
             </span>
+          </div>
+
+          <!-- Per-variant free/total capacity, aggregated across the peer's backends -->
+          <div
+            v-if="peerCapacities(p).length"
+            class="space-y-1.5 pt-1"
+            :title="p.reachable ? undefined : staleCapacityTitle(p)"
+          >
+            <CapacityMeter
+              v-for="c in peerCapacities(p)"
+              :key="c.token"
+              :label="c.token"
+              :free="c.free"
+              :total="c.total"
+              :stale="!p.reachable"
+            />
           </div>
 
           <div class="grid grid-cols-3 gap-2 pt-1">

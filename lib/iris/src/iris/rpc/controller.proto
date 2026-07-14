@@ -679,6 +679,11 @@ message Controller {
     // Free amount per resource token, in the token's natural unit (accelerator
     // variant -> free chips, e.g. {"h100": 8}). Keys are lowercased device-variants.
     map<string, int64> amounts = 3;
+    // Total amount per resource token over the same capacity the free amounts were
+    // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
+    // keys as `amounts`; a token's free amount never exceeds its total. Display
+    // only — the federation availability gate reads `amounts` alone.
+    map<string, int64> total_amounts = 4;
   }
 
   message BackendSummary {
