@@ -116,6 +116,10 @@ def build_scale_model() -> GrugModelConfig:
     # deepseek_v3_16b default); >0 routes Q through a compressed latent. Defaults to d/2 (the
     # grug MLA prototype value) when unset.
     q_lora_rank = env_int("SCALE_Q_LORA_RANK", hidden_dim // 2)
+    # SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA=1 rescale the post-RMSNorm Q/KV latents
+    # by sqrt(hidden_dim / latent_dim) before the up-projection.
+    mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA") == "1"
+    mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA") == "1"
     # SCALE_NUM_KV_HEADS overrides the KV-head count (set == num_heads for full MHA, which
     # the gpu_fa4_cute flash kernel supports; GQA needs the THD kernel, which requires
     # packed segment metadata the JAX path doesn't provide). Default ~4:1 GQA.
@@ -159,6 +163,8 @@ def build_scale_model() -> GrugModelConfig:
         head_dim=HEAD_DIM,
         use_mla=use_mla,
         q_lora_rank=q_lora_rank,
+        mla_scale_q_lora=mla_scale_q_lora,
+        mla_scale_kv_lora=mla_scale_kv_lora,
         intermediate_dim=intermediate_dim,
         shared_expert_intermediate_dim=shared_intermediate_dim,
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),
