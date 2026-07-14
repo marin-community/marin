@@ -80,19 +80,14 @@ EndpointResolver = Callable[[str], str | None]
 
 PROXY_ROUTE = "/proxy/{endpoint_name:str}/{sub_path:path}"
 
-# Default upstream timeout when a registered endpoint does not specify its own.
-# Raised well past a typical web-dashboard round trip because the proxy also
-# fronts model-serving endpoints (``marin-serve``), where a single non-streaming
-# completion routinely runs for minutes: the upstream sends no response bytes
-# until the whole generation is done, so a short read timeout returns 504
-# mid-generation. Endpoints that expect even longer requests set a per-endpoint
-# override at registration (:data:`iris.cluster.types.PROXY_TIMEOUT_METADATA_KEY`,
-# resolved into ``ResolvedEndpoint.timeout_seconds``); this is only the fallback.
+# Fallback upstream timeout for an endpoint that registers no override. Well above
+# a web round trip because the proxy also fronts model servers, where a single
+# non-streaming completion sends no bytes until the whole generation is done and
+# runs for minutes. Endpoints override it via PROXY_TIMEOUT_METADATA_KEY.
 PROXY_TIMEOUT_SECONDS: float = 120.0
 
-# Connect timeout, held short regardless of the (possibly much larger) read
-# timeout so an unreachable upstream fails fast with a 502 instead of hanging for
-# the whole read budget. A live upstream on the cluster connects near-instantly.
+# Connect stays short whatever the read budget, so an unreachable upstream fails
+# fast with a 502 instead of hanging for the full read timeout.
 PROXY_CONNECT_TIMEOUT_SECONDS: float = 30.0
 
 # Methods exposed via the proxy. CONNECT and TRACE are intentionally absent —
@@ -144,13 +139,9 @@ _MAX_UPSTREAM_ERROR_DETAIL_BYTES = 2048
 
 
 def _build_timeout(seconds: float) -> httpx.Timeout:
-    """Proxy timeout giving reads/writes/pool the full ``seconds`` budget.
-
-    Connect is capped at :data:`PROXY_CONNECT_TIMEOUT_SECONDS` (or ``seconds``
-    when that is smaller, so a deliberately tiny per-endpoint timeout is honored
-    end to end) so an unreachable upstream fails fast rather than hanging for the
-    whole read budget.
-    """
+    """Give reads/writes/pool the full ``seconds`` budget but cap connect (see
+    :data:`PROXY_CONNECT_TIMEOUT_SECONDS`), honoring a per-endpoint budget smaller
+    than the cap."""
     return httpx.Timeout(seconds, connect=min(seconds, PROXY_CONNECT_TIMEOUT_SECONDS))
 
 
@@ -493,9 +484,8 @@ class FederatedEndpointProxy:
         ``proxy_prefix`` is this hop's browser-facing prefix, forwarded so the child
         (and pod) build URLs the browser can follow back through this controller.
 
-        ``timeout_seconds`` is the federated endpoint's per-endpoint override (carried
-        on the mirror row's metadata) so this parent hop waits as long as the child hop
-        will for the pod; ``None`` uses the proxy default.
+        ``timeout_seconds`` is the endpoint's override (carried on the mirror row) so
+        this parent hop waits as long as the child hop will; ``None`` uses the default.
         """
         base = self._peer_address(peer_id)
         if base is None:

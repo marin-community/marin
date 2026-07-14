@@ -87,10 +87,8 @@ class QuickServeConfig:
     serves skip the HuggingFace download. ``0`` disables caching; ignored for gs:// paths."""
     timeout_hours: float = 24.0
     proxy_timeout_seconds: float = 600.0
-    """Seconds the controller proxy waits for a single upstream response before
-    returning 504. Registered as endpoint metadata so the proxy applies it in
-    place of its default; sized for long (e.g. reasoning) generations that the
-    proxy's shorter default would cut off. Raise for even longer completions."""
+    """Registered as endpoint metadata so the controller proxy waits this long for a
+    single completion before returning 504; sized for long (e.g. reasoning) generations."""
 
     @property
     def accelerator_label(self) -> str:

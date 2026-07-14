@@ -850,14 +850,11 @@ JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
 EndpointAccess = controller_pb2.Controller.EndpointAccess
 
-# Endpoint-metadata key carrying a per-endpoint controller-proxy timeout, in
-# seconds. Registered clients that expect long-running upstream requests (e.g.
-# ``marin-serve`` for model generations) set it so the proxy waits that long for
-# a single upstream response instead of its shorter default. Endpoint metadata is
-# a ``dict[str, str]``, so the value is stored as a stringified number. Lives here
-# in the shared types module so both the endpoint registry client and the
-# controller proxy resolve the same key without a client depending on
-# controller-side code.
+# Endpoint-metadata key a registrant sets (as a stringified number of seconds) to
+# override the controller proxy's per-request upstream timeout for that endpoint —
+# e.g. ``marin-serve`` sizing it to long model generations. In the shared types
+# module so registry client and controller proxy agree on the key with no client
+# dependency on controller code.
 PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
 
 

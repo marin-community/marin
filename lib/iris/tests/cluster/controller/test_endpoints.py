@@ -286,17 +286,15 @@ def test_resolve_proxy_target_system_endpoint_is_private(state):
 @pytest.mark.parametrize(
     ("metadata_value", "expected"),
     [
-        ({PROXY_TIMEOUT_METADATA_KEY: "600"}, 600.0),
-        ({PROXY_TIMEOUT_METADATA_KEY: "12.5"}, 12.5),
+        ({PROXY_TIMEOUT_METADATA_KEY: "600"}, 600.0),  # registered override surfaces
         ({}, None),  # unset -> proxy default
-        ({PROXY_TIMEOUT_METADATA_KEY: "nope"}, None),  # malformed -> ignored
+        ({PROXY_TIMEOUT_METADATA_KEY: "nope"}, None),  # non-numeric -> ignored
         ({PROXY_TIMEOUT_METADATA_KEY: "0"}, None),  # non-positive -> ignored
-        ({PROXY_TIMEOUT_METADATA_KEY: "-5"}, None),
     ],
 )
 def test_resolve_proxy_target_reads_timeout_metadata(state, metadata_value, expected):
     """A per-endpoint proxy timeout registered in metadata surfaces on the resolved
-    endpoint; absent or malformed values fall back to the proxy default (None)."""
+    endpoint; absent or invalid values fall back to the proxy default (None)."""
     task, attempt = _live_task(state)
     svc = _service(state)
     svc.register_endpoint(

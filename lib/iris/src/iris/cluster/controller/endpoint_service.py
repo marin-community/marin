@@ -57,11 +57,10 @@ def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
 
 
 def parse_proxy_timeout(metadata: dict[str, str]) -> float | None:
-    """Read the per-endpoint proxy timeout (seconds) from endpoint metadata, or None.
+    """Per-endpoint proxy timeout (seconds) from endpoint metadata, or None.
 
-    Returns None when the key is absent or the value is not a positive number, so
-    a malformed override falls back to the proxy's default rather than breaking
-    resolution. See :data:`iris.cluster.types.PROXY_TIMEOUT_METADATA_KEY`.
+    None when the key is absent or the value is not a positive number: a malformed
+    override falls back to the proxy default rather than breaking resolution.
     """
     raw = metadata.get(PROXY_TIMEOUT_METADATA_KEY)
     if raw is None:
@@ -69,10 +68,9 @@ def parse_proxy_timeout(metadata: dict[str, str]) -> float | None:
     try:
         seconds = float(raw)
     except ValueError:
-        logger.warning("Ignoring non-numeric %s=%r on endpoint metadata", PROXY_TIMEOUT_METADATA_KEY, raw)
-        return None
+        seconds = 0.0
     if seconds <= 0:
-        logger.warning("Ignoring non-positive %s=%r on endpoint metadata", PROXY_TIMEOUT_METADATA_KEY, raw)
+        logger.warning("Ignoring invalid %s=%r on endpoint metadata", PROXY_TIMEOUT_METADATA_KEY, raw)
         return None
     return seconds
 
