@@ -69,7 +69,7 @@ from typing import TypeVar
 from fray.cluster import ResourceConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import tokenized
@@ -421,8 +421,9 @@ def _apply_recipe_overrides(
     """Apply the #117 knobs :func:`train_lm` does not expose.
 
     Identity-bearing (always applied, so they enter the fingerprint): a permanent checkpoint
-    every ``checkpoint_every`` steps alongside the 10-minute rolling resumption checkpoint, and
-    pack-prefix-only components (documents are never concat-and-split). Execution-only (run time
+    every ``checkpoint_every`` steps alongside the 10-minute rolling resumption checkpoint,
+    pack-prefix-only components (documents are never concat-and-split), and full-eval with no
+    downsampling (``max_eval_batches=None``, per #117). Execution-only (run time
     only, so run identity stays TPU-independent): fit the global batch to the actual TPU via
     per-device parallelism.
     """
@@ -432,6 +433,10 @@ def _apply_recipe_overrides(
         pod = base_build_config(ctx)
         trainer = replace(
             pod.train_config.trainer,
+            # #117 requires the full held-out val split with NO downsampling. This is levanter's
+            # default (None = evaluate every batch), but pin it explicitly so the guarantee is
+            # part of the run identity and can't be silently capped by an upstream default change.
+            max_eval_batches=None,
             checkpointer=replace(
                 pod.train_config.trainer.checkpointer,
                 # levanter's CheckpointerConfig.keep is a list of dicts (it builds
