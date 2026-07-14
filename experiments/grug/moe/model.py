@@ -72,7 +72,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe", "none"]
+RematMode = Literal["recompute_all", "save_moe", "attn_only", "none"]
 
 
 def _batch_spec() -> P:
@@ -141,7 +141,10 @@ class GrugModelConfig:
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    backward skips re-running expert dispatch and its EP collectives; "attn_only"
+    checkpoints just the attention sub-block, so the MoE forward — including its
+    custom_vjp residuals, which name-based save policies cannot reach — is never
+    re-executed in backward; "none" disables checkpointing entirely."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -674,17 +677,28 @@ class Block(eqx.Module):
         use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
         disable_long_rope: bool = False,
+        remat_attention: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        # lax.cond so the body has a uniform shape across scan iterations: long layers use
-        # the full causal mask (and may PKO / drop RoPE); short layers use the sliding-window
-        # mask, never PKO, and always RoPE.
-        attn_out = jax.lax.cond(
-            jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
-            operand=None,
-        )
+        def _attn_block(attn_mods, h, use_long, s_mask, l_mask):
+            rms_attn, attn_gated_norm, attn = attn_mods
+            attn_in = attn_gated_norm(rms_attn(h))
+            # lax.cond so the body has a uniform shape across scan iterations: long layers use
+            # the full causal mask (and may PKO / drop RoPE); short layers use the sliding-window
+            # mask, never PKO, and always RoPE.
+            return jax.lax.cond(
+                jnp.asarray(use_long, dtype=jnp.bool_),
+                lambda _: attn(attn_in, l_mask, use_pko=use_pko, disable_rope=disable_long_rope),
+                lambda _: attn(attn_in, s_mask, use_pko=False, disable_rope=False),
+                operand=None,
+            )
+
+        # Modules and traced values enter _attn_block as explicit arguments (not via
+        # closure) so eqx.filter_checkpoint sees them as differentiable/dynamic inputs.
+        attn_mods = (self.rms_attn, self.attn_gated_norm, self.attn)
+        if remat_attention:
+            attn_out = eqx.filter_checkpoint(_attn_block)(attn_mods, x, use_long_mask, short_mask, long_mask)
+        else:
+            attn_out = _attn_block(attn_mods, x, use_long_mask, short_mask, long_mask)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
@@ -790,6 +804,15 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
+        def _apply_block(block: Block, *args) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+            if cfg.remat_mode == "none":
+                return block(*args)
+            if cfg.remat_mode == "attn_only":
+                # Checkpoint only the attention sub-block; the MoE forward and its
+                # residuals stay live so backward never re-executes expert dispatch.
+                return block(*args, remat_attention=True)
+            return eqx.filter_checkpoint(block, policy=remat_policy)(*args)
+
         if self.blocks is not None:
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
@@ -797,8 +820,8 @@ class Transformer(eqx.Module):
                 is_last = i == num_blocks - 1
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
-                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
+                hidden, router_stats = _apply_block(
+                    block, hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -820,8 +843,8 @@ class Transformer(eqx.Module):
                 scan_inputs: tuple[Block, Bool[Array, ""]],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
+                return _apply_block(
+                    layer, carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
                 )
 
             hidden, stacked_router_stats = jax.lax.scan(
