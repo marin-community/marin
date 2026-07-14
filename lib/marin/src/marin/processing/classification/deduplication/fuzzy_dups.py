@@ -33,6 +33,7 @@ artifacts produces fresh markers without re-reading any source text.
 
 import logging
 import os
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -181,8 +182,12 @@ def _cc_records_to_attrs(batch: pa.RecordBatch) -> pl.DataFrame:
       id_norm`` iff this record is the cluster's natural canonical.
     - ``is_singleton``: true iff the node's only adjacency link is itself.
     """
+    t0 = time.perf_counter()
     df = pl.from_arrow(batch)
-    return df.select(
+    from_arrow_seconds = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    result = df.select(
         pl.col("record_id").str.splitn(_CC_ID_SEP, 2).struct.field("field_1").alias("id"),
         pl.col("component_id"),
         (pl.col("component_id") == pl.col("id_norm")).alias("is_canonical"),
@@ -191,6 +196,23 @@ def _cc_records_to_attrs(batch: pa.RecordBatch) -> pl.DataFrame:
         ).alias("is_singleton"),
         pl.col("file_idx"),
     )
+    select_seconds = time.perf_counter() - t0
+
+    stage_counters = counters.current_stage()
+    stage_counters.update_counter("map/cc_records_from_arrow_seconds", from_arrow_seconds)
+    stage_counters.update_counter("map/cc_records_select_seconds", select_seconds)
+    stage_counters.update_counter("map/cc_records_batch_count", 1)
+    stage_counters.update_counter("map/cc_records_row_count", len(result))
+    # Stage counters aren't shipped to finelog after the job ends (ZephyrStageStat
+    # has a fixed schema), so also log per-batch — durable and queryable via
+    # `finelog query` for post-run analysis.
+    logger.info(
+        "cc_records_to_attrs timers: from_arrow=%.4f select=%.4f rows=%d",
+        from_arrow_seconds,
+        select_seconds,
+        len(result),
+    )
+    return result
 
 
 def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:

@@ -43,8 +43,9 @@ import gc
 import io
 import logging
 import math
+import time
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,6 +59,7 @@ from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
+from zephyr import counters
 from zephyr.expr import ColumnExpr, Expr
 from zephyr.external_sort import external_sort_merge
 from zephyr.shard_keys import deterministic_hash
@@ -167,7 +169,7 @@ def _read_cgroup_memory_bytes() -> int:
     return int(psutil.Process().memory_info().rss)
 
 
-def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
+def _dataframe_to_items(df: pl.DataFrame, timers: MutableMapping[str, float] | None = None) -> Iterator[Any]:
     """Yield Python items from a DataFrame, stripping routing columns.
 
     Payload-bearing chunks (Python-item writes) deserialize ``_PAYLOAD_COL``
@@ -176,10 +178,26 @@ def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
     already are the item, so rows are reconstructed directly.
     """
     if _PAYLOAD_COL in df.columns:
-        for p in df[_PAYLOAD_COL].to_list():
-            yield cloudpickle.loads(p)
+        t0 = time.perf_counter()
+        payloads = df[_PAYLOAD_COL].to_list()
+        if timers is not None:
+            timers["reduce/payload_tolist_seconds"] += time.perf_counter() - t0
+        for p in payloads:
+            t0 = time.perf_counter()
+            item = cloudpickle.loads(p)
+            if timers is not None:
+                timers["reduce/deserialize_payload_seconds"] += time.perf_counter() - t0
+            yield item
     else:
-        yield from df.drop(_SORT_KEY_COL).to_dicts()
+        t0 = time.perf_counter()
+        dropped = df.drop(_SORT_KEY_COL)
+        if timers is not None:
+            timers["reduce/drop_sort_key_seconds"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        rows = dropped.to_dicts()
+        if timers is not None:
+            timers["reduce/to_dicts_seconds"] += time.perf_counter() - t0
+        yield from rows
 
 
 def _columns_to_dataframe(
@@ -380,6 +398,7 @@ class ScatterReader:
         total_chunks = 0
         shard_payload_bytes = 0.0
 
+        t0 = time.perf_counter()
         with log_time(
             f"Building ScatterReader for target shard {target_shard} "
             f"from {len(scatter_paths)} sidecars (concurrency={_SIDECAR_READ_CONCURRENCY})"
@@ -389,6 +408,7 @@ class ScatterReader:
                 weighted_bytes += slice_.avg_item_bytes * len(slice_.chunk_paths)
                 total_chunks += len(slice_.chunk_paths)
                 shard_payload_bytes += slice_.target_bytes
+        counters.current_stage().update_counter("reduce/sidecar_seconds", time.perf_counter() - t0)
 
         avg_item_bytes = weighted_bytes / total_chunks if total_chunks > 0 else 0.0
 
@@ -432,61 +452,82 @@ class ScatterReader:
             Deserialized Python items in merged sort order.
         """
 
-        with pl.Config() as polars_config:
-            polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
+        timers: defaultdict[str, float] = defaultdict(float)
+        try:
+            with pl.Config() as polars_config:
+                polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
 
-            if self.total_chunks == 0:
-                return
+                if self.total_chunks == 0:
+                    return
 
-            # Upper bound on merge memory: the target shard's entire data
-            # resident at once (the streaming merge holds strictly less in
-            # flight), using the exact per-shard payload bytes recorded in the
-            # sidecars — no row-count estimation.
-            estimated_merge_memory_bytes = self.shard_payload_bytes
-            # Overhead per row in the Polars DataFrame plus the deserialized Python object.
-            # Future Polars-only processing would remove the Python overhead.
-            overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
-            ctx = _worker_ctx_var.get()
-            if ctx is not None and ctx.task_memory_bytes > 0:
-                memory_bytes = ctx.task_memory_bytes
-            else:
-                memory_bytes = TaskResources.from_environment().memory_bytes
-                if memory_bytes <= 0:
-                    memory_bytes = 1024 * 1024 * 1024
+                # Upper bound on merge memory: the target shard's entire data
+                # resident at once (the streaming merge holds strictly less in
+                # flight), using the exact per-shard payload bytes recorded in the
+                # sidecars — no row-count estimation.
+                estimated_merge_memory_bytes = self.shard_payload_bytes
+                # Overhead per row in the Polars DataFrame plus the deserialized Python object.
+                # Future Polars-only processing would remove the Python overhead.
+                overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
+                ctx = _worker_ctx_var.get()
+                if ctx is not None and ctx.task_memory_bytes > 0:
+                    memory_bytes = ctx.task_memory_bytes
+                else:
+                    memory_bytes = TaskResources.from_environment().memory_bytes
+                    if memory_bytes <= 0:
+                        memory_bytes = 1024 * 1024 * 1024
 
-            if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
-                fan_in = math.ceil(math.sqrt(self.total_chunks))
+                if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
+                    fan_in = math.ceil(math.sqrt(self.total_chunks))
 
-                logger.info(
-                    "[shard %d] Merging %d chunks via external sort "
-                    "(%s memory needed > %s memory available); fan_in=%d",
-                    self._target_shard,
-                    self.total_chunks,
-                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                    fan_in,
-                )
+                    logger.info(
+                        "[shard %d] Merging %d chunks via external sort "
+                        "(%s memory needed > %s memory available); fan_in=%d",
+                        self._target_shard,
+                        self.total_chunks,
+                        humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                        humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                        fan_in,
+                    )
+                    timers["reduce/external_sort_count"] = 1
 
-                batches = external_sort_merge(
-                    input_frames=self.get_frames(),
-                    sort_key=_SORT_KEY_COL,
-                    external_sort_dir=external_sort_dir,
-                    fan_in=fan_in,
-                    shard=self._target_shard,
-                )
+                    batches = external_sort_merge(
+                        input_frames=self.get_frames(),
+                        sort_key=_SORT_KEY_COL,
+                        external_sort_dir=external_sort_dir,
+                        fan_in=fan_in,
+                        shard=self._target_shard,
+                    )
 
-            else:
-                logger.info(
-                    "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
-                    self._target_shard,
-                    self.total_chunks,
-                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                )
-                batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
+                else:
+                    logger.info(
+                        "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
+                        self._target_shard,
+                        self.total_chunks,
+                        humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                        humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                    )
+                    timers["reduce/external_sort_count"] = 0
+                    batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
 
-            for batch in batches:
-                yield from _dataframe_to_items(batch)
+                batches_iter = iter(batches)
+                while True:
+                    t0 = time.perf_counter()
+                    try:
+                        batch = next(batches_iter)
+                    except StopIteration:
+                        timers["reduce/merge_batch_pull_seconds"] += time.perf_counter() - t0
+                        break
+                    timers["reduce/merge_batch_pull_seconds"] += time.perf_counter() - t0
+                    yield from _dataframe_to_items(batch, timers)
+        finally:
+            stage_counters = counters.current_stage()
+            for name, value in sorted(timers.items()):
+                stage_counters.update_counter(name, value)
+            logger.info(
+                "[shard %d] reduce timers: %s",
+                self._target_shard,
+                {k: round(v, 3) for k, v in sorted(timers.items())},
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -570,18 +611,26 @@ class ScatterWriter:
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
         self._peak_rss_bytes: int = 0
         self._write_calls: int = 0
+        # Perf instrumentation: accumulated phase timings, emitted as stage
+        # counters and a summary log line in close().
+        self.timers: defaultdict[str, float] = defaultdict(float)
 
         ensure_parent_dir(self._data_path)
         self._result: ListShard | None = None
 
     def _flush(self) -> None:
         """Flush the accumulated buffer into one combined Parquet file sorted by [_SHARD_COL, _SORT_KEY_COL]."""
+        flush_start = time.perf_counter()
         if not self._frames:
+            t0 = time.perf_counter()
             gc.collect()
+            self.timers["scatter/flush_gc_seconds"] += time.perf_counter() - t0
             return
 
+        t0 = time.perf_counter()
         buffer = pl.concat(self._frames, rechunk=False)
         self._frames = []
+        self.timers["scatter/flush_concat_seconds"] += time.perf_counter() - t0
 
         if self._combiner_fn is not None:
             # combiner_fn re-groups and reduces individual Python items, so it
@@ -593,34 +642,42 @@ class ScatterWriter:
                 "combiner_fn is not supported for DataFrame/RecordBatch-sourced scatter items "
                 "(no per-row payload to combine over)"
             )
+            t0 = time.perf_counter()
             frames: list[pl.DataFrame] = []
             for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
-                rows = list(_dataframe_to_items(group))
+                rows = list(_dataframe_to_items(group, self.timers))
                 rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
                 if not rows:
                     continue
                 df = _items_to_dataframe(rows, self._key_fn, self._sort_fn, num_output_shards=0)
                 frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
+            self.timers["scatter/flush_combine_seconds"] += time.perf_counter() - t0
             if not frames:
                 gc.collect()
                 return
             buffer = pl.concat(frames, rechunk=True)
 
+        t0 = time.perf_counter()
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
+        self.timers["scatter/flush_sort_seconds"] += time.perf_counter() - t0
         del buffer
 
         self._total_bytes_written += int(buffer_sorted.estimated_size())
         self._total_rows_written += len(buffer_sorted)
+        t0 = time.perf_counter()
         if _PAYLOAD_COL in buffer_sorted.columns:
             shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
             for shard_val, nbytes in shard_sizes.iter_rows():
                 self._shard_bytes[shard_val] += int(nbytes)
+            self.timers["scatter/flush_shard_bytes_payload_seconds"] += time.perf_counter() - t0
         else:
             # No per-row payload to measure exactly; Polars' own per-shard
             # memory estimate is the same kind of estimate already used for
-            # _total_bytes_written above.
+            # _total_bytes_written above. Timed separately from the payload
+            # path above since this is new, DataFrame-native-only code.
             for (shard_val,), group in buffer_sorted.partition_by(_SHARD_COL, as_dict=True).items():
                 self._shard_bytes[shard_val] += int(group.estimated_size())
+            self.timers["scatter/flush_shard_bytes_estimate_seconds"] += time.perf_counter() - t0
 
         # Size row groups so each target shard fits in roughly one row group,
         # enabling Polars predicate pushdown to skip non-matching groups.
@@ -628,10 +685,14 @@ class ScatterWriter:
         row_group_size = max(1, len(buffer_sorted) // num_targets)
         chunk_path = f"{self._data_path}c{self._n_chunks_written:04d}.parquet"
         # Ideally we'd call write_parquet directly with the GCS path, but it occationally fails with a generic error.
+        t0 = time.perf_counter()
         buf = io.BytesIO()
         buffer_sorted.write_parquet(buf, compression="zstd", row_group_size=row_group_size)
+        self.timers["scatter/flush_encode_seconds"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
         with open_url(chunk_path, "wb") as f:
             f.write(buf.getvalue())
+        self.timers["scatter/flush_upload_seconds"] += time.perf_counter() - t0
 
         self._chunk_paths.append(chunk_path)
         self._n_chunks_written += 1
@@ -646,7 +707,10 @@ class ScatterWriter:
             )
 
         del buffer_sorted
+        t0 = time.perf_counter()
         gc.collect()
+        self.timers["scatter/flush_gc_seconds"] += time.perf_counter() - t0
+        self.timers["scatter/flush_seconds"] += time.perf_counter() - flush_start
 
     def write(self, df: pl.DataFrame) -> None:
         """Buffer a DataFrame, flushing on memory pressure.
@@ -657,11 +721,15 @@ class ScatterWriter:
         if len(df) == 0:
             return
 
+        t0 = time.perf_counter()
         self._frames.append(df)
+        self.timers["scatter/write_append_seconds"] += time.perf_counter() - t0
         self._write_calls += 1
 
         if self._write_calls % _MEMORY_CHECK_INTERVAL == 0:
+            t0 = time.perf_counter()
             mem = _read_cgroup_memory_bytes()
+            self.timers["scatter/write_memcheck_seconds"] += time.perf_counter() - t0
             if mem > self._peak_rss_bytes:
                 self._peak_rss_bytes = mem
 
@@ -695,6 +763,8 @@ class ScatterWriter:
         route a given key to the same shard, which holds since they all run
         this same method with the same hash function.
         """
+        write_batch_start = time.perf_counter()
+        t0 = time.perf_counter()
         assert self._combiner_fn is None, "combiner_fn is not supported for DataFrame/RecordBatch-sourced scatter items"
         assert isinstance(
             self._key, ColumnExpr
@@ -703,12 +773,25 @@ class ScatterWriter:
             assert isinstance(
                 self._sort_by, ColumnExpr
             ), f"DataFrame/RecordBatch scatter items require sort_by=zephyr.expr.col(...), got {self._sort_by!r}"
+        self.timers["scatter/write_batch_assert_seconds"] += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         key_expr = pl.col(self._key.name)
         sort_value_expr = pl.col(self._sort_by.name) if self._sort_by is not None else pl.lit(None)
         shard_expr = (key_expr.hash(seed=_SCATTER_HASH_SEED) % self._num_output_shards).cast(pl.Int32)
         sort_key_expr = pl.struct(key_expr.alias("key"), sort_value_expr.alias("sort_value"))
-        self.write(df.with_columns(shard_expr.alias(_SHARD_COL), sort_key_expr.alias(_SORT_KEY_COL)))
+        self.timers["scatter/write_batch_expr_build_seconds"] += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        routed = df.with_columns(shard_expr.alias(_SHARD_COL), sort_key_expr.alias(_SORT_KEY_COL))
+        self.timers["scatter/write_batch_with_columns_seconds"] += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        self.write(routed)
+        self.timers["scatter/write_batch_write_call_seconds"] += time.perf_counter() - t0
+        self.timers["scatter/write_batch_seconds"] += time.perf_counter() - write_batch_start
+        self.timers["scatter/write_batch_count"] += 1
+        self.timers["scatter/write_batch_rows"] += len(df)
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar, return ListShard.
@@ -745,6 +828,23 @@ class ScatterWriter:
 
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _write_scatter_meta(self._data_path, sidecar)
+
+        stage_counters = counters.current_stage()
+        for name, value in sorted(self.timers.items()):
+            stage_counters.update_counter(name, value)
+        stage_counters.update_counter("scatter/flush_count", self._n_chunks_written)
+        stage_counters.update_counter("scatter/rows_written", self._total_rows_written)
+        stage_counters.update_counter("scatter/bytes_written", self._total_bytes_written)
+        logger.info(
+            "[shard %d] scatter timers: %s",
+            self._source_shard,
+            {k: round(v, 3) for k, v in sorted(self.timers.items())}
+            | {
+                "scatter/flush_count": self._n_chunks_written,
+                "scatter/rows_written": self._total_rows_written,
+                "scatter/bytes_written": self._total_bytes_written,
+            },
+        )
 
         self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
         return self._result
@@ -812,16 +912,35 @@ def _write_scatter(
         combiner_fn=combiner_fn,
     ) as writer:
         pending: list[Any] = []
-        for item in items:
+        items_iter = iter(items)
+        while True:
+            t0 = time.perf_counter()
+            try:
+                item = next(items_iter)
+            except StopIteration:
+                # Time spent producing this StopIteration still counts as
+                # "waiting on upstream" (e.g. closing the upstream Map).
+                writer.timers["scatter/input_pull_seconds"] += time.perf_counter() - t0
+                break
+            writer.timers["scatter/input_pull_seconds"] += time.perf_counter() - t0
+
             if isinstance(item, pa.RecordBatch):
+                t0 = time.perf_counter()
                 item = pl.from_arrow(item)
+                writer.timers["scatter/recordbatch_convert_seconds"] += time.perf_counter() - t0
             if isinstance(item, pl.DataFrame):
                 writer.write_batch(item)
                 continue
             pending.append(item)
             if len(pending) >= _DATAFRAME_ROW_COUNT:
-                writer.write(_items_to_dataframe(pending, row_key_fn, row_sort_fn, num_output_shards))
+                t0 = time.perf_counter()
+                df = _items_to_dataframe(pending, row_key_fn, row_sort_fn, num_output_shards)
+                writer.timers["scatter/items_to_dataframe_seconds"] += time.perf_counter() - t0
+                writer.write(df)
                 pending.clear()
         if pending:
-            writer.write(_items_to_dataframe(pending, row_key_fn, row_sort_fn, num_output_shards))
+            t0 = time.perf_counter()
+            df = _items_to_dataframe(pending, row_key_fn, row_sort_fn, num_output_shards)
+            writer.timers["scatter/items_to_dataframe_seconds"] += time.perf_counter() - t0
+            writer.write(df)
         return writer.close()
