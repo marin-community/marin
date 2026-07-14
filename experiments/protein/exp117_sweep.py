@@ -49,14 +49,17 @@ Launch one run (secrets come from the iris command, never baked into the config)
 Smoke test one slice/region (a real but tiny end-to-end run: ~20 steps, one eval, one
 permanent checkpoint, under an isolated ``exp117-smoke`` identity that never touches a real
 point). EPOCHS/LR/WD are optional in smoke mode but honored if given; ``SMOKE_STEPS``
-overrides the step budget::
+overrides the step budget. ``HBM_OVERHEAD`` (default 1.0) overrides the batch-fit overhead
+multiplier -- a smaller value packs a larger per-device batch (more HBM pressure); the smoke
+campaign sweeps it to find the OOM floor per slice. In smoke mode the slice and overhead are
+folded into the run identity, so each ``(slice, region, overhead)`` is a distinct W&B run::
 
     source ~/marin.env && uv run iris --cluster marin job run \\
         --user "$USERNAME" --no-wait --region us-east5 --memory=1GB \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -e HUGGING_FACE_HUB_TOKEN "$HUGGING_FACE_HUB_TOKEN" \\
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
-        -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 \\
+        -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 -e HBM_OVERHEAD 0 \\
         -- python -m experiments.protein.exp117_sweep
 """
 
@@ -168,10 +171,12 @@ TOKENS_PER_STEP: int = BATCH_SIZE * SEQ_LEN
 STEPS_PER_EPOCH: int = round(TRAIN_TOKENS / TOKENS_PER_STEP)
 STEPS_PER_EVAL: int = max(1, round(STEPS_PER_EPOCH / NUM_EVALS_PER_EPOCH))
 
-# HBM overhead multiplier for the batch-fit estimate (experiments.coral.batch_config).
+# Default HBM overhead multiplier for the batch-fit estimate (experiments.coral.batch_config).
 # 1.0 matches the coral calibration-study default and is conservative for this model: it
 # predicts at least as much microbatching as #75's hand-verified per-slice configs, so it
-# fits. Calibrate against the coral batch-config study if throughput headroom matters.
+# fits. Overridable per launch via the ``HBM_OVERHEAD`` env var (:func:`parse_overhead_factor`)
+# so the smoke campaign can probe how low it goes before OOM; a smaller value packs more per
+# device. Execution-only -- it never enters run identity.
 HBM_OVERHEAD_FACTOR: float = 1.0
 
 
@@ -265,6 +270,18 @@ def smoke_steps() -> int:
     return steps
 
 
+def parse_overhead_factor() -> float:
+    """HBM overhead multiplier for the batch-fit estimate; ``HBM_OVERHEAD`` env, default 1.0.
+
+    A smaller value shrinks the estimated per-batch HBM and so admits a larger per-device batch
+    (less gradient accumulation) -- the setting the smoke campaign sweeps to find the OOM floor.
+    """
+    factor = _env_value("HBM_OVERHEAD", float, HBM_OVERHEAD_FACTOR)
+    if factor < 0:
+        raise SystemExit(f"HBM_OVERHEAD must be >= 0, got {factor}")
+    return factor
+
+
 # --- Helpers -----------------------------------------------------------------
 
 
@@ -280,7 +297,12 @@ def _fmt_wd(wd: float) -> str:
     return f"{wd:g}".replace(".", "p")
 
 
-def _batch_bytes() -> int:
+def _fmt_overhead(overhead_factor: float) -> str:
+    """Path-safe HBM-overhead tag, e.g. ``0.0`` -> ``0``, ``1.5`` -> ``1p5``."""
+    return f"{overhead_factor:g}".replace(".", "p")
+
+
+def _batch_bytes(overhead_factor: float) -> int:
     """Estimated HBM to place the full global batch (params + Adam state + activations)."""
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     param_bytes, activation_bytes = dense_transformer_bytes(
@@ -295,17 +317,19 @@ def _batch_bytes() -> int:
         param_bytes=param_bytes,
         optimizer_bytes=adam_optimizer_bytes(params),
         activation_bytes=activation_bytes,
-        overhead_factor=HBM_OVERHEAD_FACTOR,
+        overhead_factor=overhead_factor,
     )
 
 
-def batch_fit(tpu: str) -> tuple[int, int]:
+def batch_fit(tpu: str, overhead_factor: float) -> tuple[int, int]:
     """``(per_device_parallelism, gradient_accumulation)`` that fits global batch 128 on ``tpu``.
 
     ``per_device_parallelism == -1`` means the full per-chip batch fits with no accumulation.
-    The global batch is always 128, so the objective is comparable across every slice.
+    The global batch is always 128, so the objective is comparable across every slice. A smaller
+    ``overhead_factor`` shrinks the estimate, admitting a larger per-device batch (less
+    accumulation) and thus more HBM pressure -- the knob calibrated by the smoke campaign.
     """
-    return tpu_batch_config(tpu, BATCH_SIZE, _batch_bytes())
+    return tpu_batch_config(tpu, BATCH_SIZE, _batch_bytes(overhead_factor))
 
 
 def _tokenize_cache(name: str, docs: str, *, validation: bool) -> ArtifactStep[TokenizedCache]:
@@ -397,26 +421,31 @@ def production_shape(point: Point, region: str) -> RunShape:
     )
 
 
-def smoke_shape(point: Point, region: str, steps: int) -> RunShape:
+def smoke_shape(point: Point, region: str, steps: int, tpu: str, overhead_factor: float) -> RunShape:
     """Tiny, identity-isolated end-to-end run: ``SMOKE_NUM_EVALS`` evals + permanent ckpts.
 
     Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path,
     but under a smoke-only identity and with an eval/checkpoint every ``steps //
-    SMOKE_NUM_EVALS`` so at least one of each fires within the short run.
+    SMOKE_NUM_EVALS`` so at least one of each fires within the short run. Unlike a sweep point,
+    the slice and ``overhead_factor`` are folded into the run id (and tagged): the HBM-calibration
+    campaign runs many ``(slice, region, overhead)`` combinations that share ``point`` + region,
+    and each must be its own W&B run rather than colliding/resuming.
     """
     every = max(1, steps // SMOKE_NUM_EVALS)
+    base = run_id(point, region, SMOKE_RUN_PREFIX)
+    identity = f"{base}-{tpu}-oh{_fmt_overhead(overhead_factor)}"
     return RunShape(
-        run_id=run_id(point, region, SMOKE_RUN_PREFIX),
+        run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
         num_train_steps=steps,
         steps_per_eval=every,
         checkpoint_every=every,
-        tags=[*_tags(point, region), "smoke"],
+        tags=[*_tags(point, region), "smoke", "hbm-calib", f"tpu={tpu}", f"hbm_overhead={overhead_factor:g}"],
     )
 
 
 def _apply_recipe_overrides(
-    step: ArtifactStep[LevanterCheckpoint], tpu: str, checkpoint_every: int
+    step: ArtifactStep[LevanterCheckpoint], tpu: str, checkpoint_every: int, overhead_factor: float
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Apply the #117 knobs :func:`train_lm` does not expose.
 
@@ -447,7 +476,7 @@ def _apply_recipe_overrides(
         data = pod.train_config.data
         data = replace(data, components={key: replace(c, pack=True) for key, c in data.components.items()})
         if not ctx.is_fingerprint:
-            per_device_parallelism, _ = batch_fit(tpu)
+            per_device_parallelism, _ = batch_fit(tpu, overhead_factor)
             eval_parallelism = (
                 trainer.per_device_eval_parallelism if per_device_parallelism == -1 else per_device_parallelism
             )
@@ -462,12 +491,14 @@ def _apply_recipe_overrides(
     return replace(step, build_config=build_config)
 
 
-def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactStep[LevanterCheckpoint]:
+def build_run(
+    point: Point, shape: RunShape, tpu: str, region: str, overhead_factor: float
+) -> ArtifactStep[LevanterCheckpoint]:
     """Assemble one training run as an ``ArtifactStep``.
 
     ``point`` supplies only the optimizer hyperparameters; ``shape`` supplies identity and
-    step/eval/checkpoint cadence (production vs. smoke). ``tpu`` drives the per-device batch
-    fit at run time; ``region`` scopes storage and cache locality.
+    step/eval/checkpoint cadence (production vs. smoke). ``tpu`` and ``overhead_factor`` drive the
+    per-device batch fit at run time; ``region`` scopes storage and cache locality.
     """
     name = shape.run_id
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
@@ -497,14 +528,14 @@ def build_run(point: Point, shape: RunShape, tpu: str, region: str) -> ArtifactS
         tags=shape.tags,
         env_vars=_training_env(region),
     )
-    return _apply_recipe_overrides(step, tpu, shape.checkpoint_every)
+    return _apply_recipe_overrides(step, tpu, shape.checkpoint_every, overhead_factor)
 
 
 # --- Preview + entry point ---------------------------------------------------
 
 
-def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: str) -> None:
-    per_device_parallelism, grad_accum = batch_fit(tpu)
+def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: str, overhead_factor: float) -> None:
+    per_device_parallelism, grad_accum = batch_fit(tpu, overhead_factor)
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = TOKENS_PER_STEP * shape.num_train_steps
     print(
@@ -515,17 +546,18 @@ def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: s
         f"permanent ckpt every {shape.checkpoint_every} steps)\n"
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B schedule={LR_SCHEDULE} warmup={WARMUP}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
-        f"  per_device_parallelism={per_device_parallelism} grad_accum={grad_accum} (global batch {BATCH_SIZE})\n"
+        f"  hbm_overhead={overhead_factor:g} per_device_parallelism={per_device_parallelism} "
+        f"grad_accum={grad_accum} (global batch {BATCH_SIZE})\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
 
 
-def _resolve_run(region: str) -> tuple[Point, RunShape, str]:
+def _resolve_run(region: str, tpu: str, overhead_factor: float) -> tuple[Point, RunShape, str]:
     """Resolve the ``(point, shape, mode)`` for this invocation from the environment."""
     if smoke():
         point = parse_point(defaults=Point(*SMOKE_POINT_DEFAULTS))
-        return point, smoke_shape(point, region, smoke_steps()), "smoke"
+        return point, smoke_shape(point, region, smoke_steps(), tpu, overhead_factor), "smoke"
     point = parse_point()
     return point, production_shape(point, region), "sweep"
 
@@ -534,17 +566,18 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     tpu = parse_tpu()
     region = parse_region()
+    overhead_factor = parse_overhead_factor()
 
     # No MARIN_PREFIX is set: the driver resolves marin_prefix() from its own region (it is
     # submitted with --region), and the worker resolves it from its (pinned) region, where the
     # mirror:// caches and the checkpoint output land region-local.
-    point, shape, mode = _resolve_run(region)
+    point, shape, mode = _resolve_run(region, tpu, overhead_factor)
 
     if preview():
-        _print_preview(point, shape, tpu, region, mode)
+        _print_preview(point, shape, tpu, region, mode, overhead_factor)
         return
 
-    StepRunner().run([lower(build_run(point, shape, tpu, region))])
+    StepRunner().run([lower(build_run(point, shape, tpu, region, overhead_factor))])
 
 
 if __name__ == "__main__":
