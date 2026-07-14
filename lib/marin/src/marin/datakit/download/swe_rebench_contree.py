@@ -14,8 +14,10 @@ Trace data lives under ``data/*.parquet``; the ``metadata/licenses.parquet``
 sidecar is excluded by the download glob.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document
