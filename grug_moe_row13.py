@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -80,7 +81,7 @@ def build_model(args) -> GrugModelConfig:
         moe_implementation=args.moe_implementation,
         use_array_stacked_blocks=True,  # stacked-blocks lax.scan (needs disable_pko)
         disable_pko=True,
-        remat_mode="recompute_all",
+        remat_mode=os.environ.get("REMAT_MODE", "recompute_all"),
     )
 
 
@@ -129,13 +130,18 @@ def main() -> None:
 
         state = init(jax.random.PRNGKey(args.seed))
 
+        profile_dir = os.environ.get("PROFILE_DIR")
         loss = jnp.array(0.0)
-        for _ in range(args.steps):
+        for i in range(args.steps):
+            if profile_dir and i == args.warmup_steps + 2:
+                jax.profiler.start_trace(profile_dir)
             t0 = time.perf_counter()
             state, step_metrics, _w = train_step(state, batch, compute_watch=False)
             loss = step_metrics["train/loss"]
             jax.block_until_ready(loss)
             dur = time.perf_counter() - t0
+            if profile_dir and i == args.warmup_steps + 4:
+                jax.profiler.stop_trace()
             step = int(state.step) - 1
             eps = args.batch_size / dur
             achieved = flops_per_example * eps
