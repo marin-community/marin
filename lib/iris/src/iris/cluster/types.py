@@ -850,6 +850,16 @@ JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
 EndpointAccess = controller_pb2.Controller.EndpointAccess
 
+# Endpoint-metadata key carrying a per-endpoint controller-proxy timeout, in
+# seconds. Registered clients that expect long-running upstream requests (e.g.
+# ``marin-serve`` for model generations) set it so the proxy waits that long for
+# a single upstream response instead of its shorter default. Endpoint metadata is
+# a ``dict[str, str]``, so the value is stored as a stringified number. Lives here
+# in the shared types module so both the endpoint registry client and the
+# controller proxy resolve the same key without a client depending on
+# controller-side code.
+PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
+
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so
 # both this module and iris.cluster.constraints can reference them without an

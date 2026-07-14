@@ -22,7 +22,7 @@ import requests
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.cluster.types import EndpointAccess
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess
 from levanter.model_cache import resolve_cached_model_path
 from rigging.connect import proxy_path
 from rigging.filesystem import StoragePath
@@ -86,6 +86,11 @@ class QuickServeConfig:
     """Mirror HF models to a region-local GCS cache with this lifecycle TTL so repeat
     serves skip the HuggingFace download. ``0`` disables caching; ignored for gs:// paths."""
     timeout_hours: float = 24.0
+    proxy_timeout_seconds: float = 600.0
+    """Seconds the controller proxy waits for a single upstream response before
+    returning 504. Registered as endpoint metadata so the proxy applies it in
+    place of its default; sized for long (e.g. reasoning) generations that the
+    proxy's shorter default would cut off. Raise for even longer completions."""
 
     @property
     def accelerator_label(self) -> str:
@@ -277,6 +282,7 @@ def serve_in_job(config: QuickServeConfig) -> None:
                 "backend": config.backend.name,
                 "accelerator": accelerator,
                 "tensor_parallel_size": str(spec.tensor_parallel_size),
+                PROXY_TIMEOUT_METADATA_KEY: str(config.proxy_timeout_seconds),
             }
             endpoint_id = ctx.registry.register(config.endpoint_name, address, metadata, access=config.access)
             logger.info(

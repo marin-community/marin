@@ -328,6 +328,13 @@ def _mint_and_print_capability_url(
 )
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
 @click.option(
+    "--proxy-timeout",
+    type=float,
+    default=600.0,
+    help="Seconds the controller proxy waits for a single completion before returning 504. "
+    "Raise for long reasoning generations; the shorter proxy default cuts those off.",
+)
+@click.option(
     "--access",
     type=click.Choice(["private", "link"]),
     default="private",
@@ -388,6 +395,7 @@ def main(
     cache_ttl_days: int,
     no_cache: bool,
     timeout_hours: float,
+    proxy_timeout: float,
     access: str,
     region: str | None,
     cpu: float,
@@ -423,6 +431,8 @@ def main(
         raise click.ClickException("--endpoint-name must be absolute (start with '/'), e.g. /serve/my-model.")
     if "." in endpoint:
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
+    if proxy_timeout <= 0:
+        raise click.ClickException("--proxy-timeout must be positive.")
 
     endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
@@ -459,6 +469,7 @@ def main(
         chat_template_content=_resolve_chat_template(chat_template),
         cache_ttl_days=0 if no_cache else cache_ttl_days,
         timeout_hours=timeout_hours,
+        proxy_timeout_seconds=proxy_timeout,
     )
 
     # No checkout to bundle → install marin-core from PyPI on the worker (checkout-free
@@ -512,6 +523,7 @@ def main(
             else:
                 click.echo(f"  proxy path   {proxy_path(endpoint)}/")
             click.echo(f"  timeout      {timeout_hours:g}h")
+            click.echo(f"  req timeout  {proxy_timeout:g}s  (per-request proxy budget)")
             if controller is None and cluster:
                 click.echo(f"  stop with    iris --cluster {cluster} job stop {job}")
             else:
