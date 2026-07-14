@@ -249,3 +249,19 @@ H3 margins: proposal−olmix 0.0085 ≈ **8.1σ_diff**; proposal−anchor 0.0145
 come from starcoder-DOMINATED anchors in the starcoder-stress swarm; our proposal holds ~5%
 starcoder — even a paranoid 3× inflation leaves 2.7σ/4.6σ. Replicates skipped (would cost ~24
 TPU-hours to confirm an ~8σ result).
+
+## 2026-07-14 grug-moe-mix-swarm campaign start (independent of qsplit240)
+
+- New sweep: HF `marin-community/grug-moe-mix-swarm` — 840 MoE runs (d512), two-phase mixtures
+  over 168 datakit buckets (= store_8ac06c74 partitions ≥ ~100-200M tokens; 33 tiny partitions
+  coalesced as `tail`; mapping documented on issue #7067). Real dose coverage (max 0.95),
+  quality tiers as metadata, computable epoching.
+- **Treated independently of qsplit240** (rav's directive): no pooled fits.
+- **Holdout locked before any fitting**: 800 train / 40 test (seed 0); test labels quarantined
+  (sha 68a90838…), coverage verified on features only; **test protocol pre-registered** on
+  issue #7067 (R1 permutation p<0.001, R2 paired Δ≥0 vs weights incumbent, R3 no-overfit
+  −0.15, R4 matched-random decomposition; PASS = R1∧R2∧R3; one-shot label opening with
+  predictions SHA published first). Protocol: scratch/mixture_features/grug/test_protocol.md
+  (+ GCS mirror).
+- Phase 1 running: 168-bucket histograms in the SAME frozen basis (bandwidth reuse mandatory)
+  for feature comparability — fits stay per-sweep.
