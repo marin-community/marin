@@ -176,7 +176,7 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "912fb118c18c2eb8143a188ddb31838202bd8521" }
 # https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
 tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
-thalas = { git = "https://github.com/marin-community/thalas.git", rev = "5a7b66dde13fe8b8e5fa47a2b311d8f747a96383" }
+thalas = { git = "https://github.com/marin-community/thalas.git", rev = "200794797c729d58303b245ee1da111dd5b6f55e" }
 joint-decode = { git = "https://github.com/RohithKuditipudi/joint-decode.git", rev = "c3ab40cfcd51c628df84c53e5442dc4e18195473" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
