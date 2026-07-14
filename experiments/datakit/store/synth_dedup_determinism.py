@@ -31,6 +31,7 @@ import logging
 import random
 
 import pyarrow.parquet as pq
+from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_to_parquet
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
@@ -41,6 +42,10 @@ from zephyr.writers import write_jsonl_file
 logger = logging.getLogger(__name__)
 
 _VOCAB = [f"w{n:04d}" for n in range(2000)]
+
+# Modest per-worker footprint that fits cw-rno2a's shared CPU node (matches the
+# reference-pipeline SMOKE fleet); the synthetic docs are tiny.
+_WORKER = ResourceConfig(cpu=2, ram="8g", disk="8g")
 
 
 def _core(rng: random.Random, n_words: int) -> str:
@@ -81,7 +86,13 @@ def _build_sources(
         for k in range(n_raw):
             write_jsonl_file(docs[k::n_raw], prefix_join(raw_dir, f"shard_{k:03d}.jsonl.gz"))
         out = prefix_join(prefix, name)
-        nd = normalize_to_parquet(input_path=raw_dir, output_path=out, target_partition_bytes=shard_bytes)
+        nd = normalize_to_parquet(
+            input_path=raw_dir,
+            output_path=out,
+            target_partition_bytes=shard_bytes,
+            worker_resources=_WORKER,
+            max_workers=16,
+        )
         sources[name] = nd
         logger.info("built source %s: %d docs -> %s", name, len(docs), nd.main_output_dir)
     return sources
@@ -92,12 +103,20 @@ def _run_dedup(sources: dict[str, NormalizedData], out_root: str, max_parallelis
     minhashes: list[MinHashAttrData] = []
     src_by_main = {}
     for name, nd in sources.items():
-        mh = compute_minhash_attrs(source=nd, output_path=prefix_join(out_root, f"minhash/{name}"))
+        mh = compute_minhash_attrs(
+            source=nd,
+            output_path=prefix_join(out_root, f"minhash/{name}"),
+            worker_resources=_WORKER,
+            max_workers=max_parallelism,
+        )
         minhashes.append(mh)
         src_by_main[nd.main_output_dir] = name
 
     dups = compute_fuzzy_dups_attrs(
-        inputs=minhashes, output_path=prefix_join(out_root, "dups"), max_parallelism=max_parallelism
+        inputs=minhashes,
+        output_path=prefix_join(out_root, "dups"),
+        max_parallelism=max_parallelism,
+        worker_resources=_WORKER,
     )
     result: dict[str, dict] = {}
     for main_dir, per in dups.sources.items():
