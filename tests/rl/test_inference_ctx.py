@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 import pytest
-from levanter.inference.openai import ChatMessage
+from levanter.inference.openai import ChatMessage, _compute_tokens
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
@@ -149,7 +149,7 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, llama3_tokenizer):
 
 
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
-    """Test fallback when tokenizer has no chat template."""
+    """A tokenizer with no chat template gets the plain 'role: content' transcript."""
     ctx = LevanterInferenceContext(
         LevanterInferenceContextConfig(
             inference_server_config=None,
@@ -164,10 +164,31 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     prompt = "Test prompt"
     tokens = ctx.tokenize_prompt(prompt)
 
-    # Should fallback to "user: Test prompt" format
     decoded = gpt2_tokenizer.decode(tokens)
-    assert "user:" in decoded
-    assert prompt in decoded
+    assert decoded == "user: Test prompt"
+
+
+def test_prompt_tokens_match_what_the_server_builds(gpt2_tokenizer, dummy_server):
+    """Rollout prompt tokens must equal the ones the Levanter server generates from.
+
+    The context and the server share a tokenizer, so a base checkpoint's missing chat template has to
+    be filled in on both sides or the recorded prompt drifts from the generated one.
+    """
+    ctx = LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
+
+    prompt = "Test prompt"
+    server_tokens = _compute_tokens([ChatMessage(role="user", content=prompt)], ctx.tokenizer)
+
+    assert list(ctx.tokenize_prompt(prompt)) == server_tokens
 
 
 def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
