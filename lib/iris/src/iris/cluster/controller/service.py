@@ -3186,7 +3186,7 @@ class ControllerServiceImpl:
             # zero); one that returns None leaves it UNSET so a peer falls back to
             # shape-only federation. observation_epoch_ms is the generation the
             # parent's reservation ledger keys on.
-            capacity = backend.available_resources()
+            capacity = backend.resource_capacity()
             if capacity is not None:
                 summary.availability.version = AVAILABILITY_METRIC_VERSION
                 summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()

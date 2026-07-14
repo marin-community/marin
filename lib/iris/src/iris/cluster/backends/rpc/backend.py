@@ -246,7 +246,7 @@ class RpcTaskBackend:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
-    def available_resources(self) -> dict[str, DeviceCapacity] | None:
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total GPU chips a peer could schedule onto, keyed by lowercased device-variant.
 
         Counts only capacity the scheduler would actually place onto — chips on
@@ -254,7 +254,7 @@ class RpcTaskBackend:
         can use. v1 is GPU-only; TPU-slice availability is a documented follow-up.
         Always a dict (empty = authoritative "nothing free"), never ``None``: a
         worker-daemon backend always supplies the metric."""
-        assert self._store is not None, "RpcTaskBackend.available_resources called before worker store attached"
+        assert self._store is not None, "RpcTaskBackend.resource_capacity called before worker store attached"
         capacity: dict[str, DeviceCapacity] = {}
         for worker in self._store.scheduling_inputs().workers:
             device_type = worker.attributes.get(WellKnownAttribute.DEVICE_TYPE)

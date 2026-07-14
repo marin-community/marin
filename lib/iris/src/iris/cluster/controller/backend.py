@@ -501,7 +501,7 @@ class TaskBackend(Protocol):
         the (comma-expanded) attribute sets."""
         ...
 
-    def available_resources(self) -> dict[str, DeviceCapacity] | None:
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total consumable capacity right now, per resource token.
 
         A federation parent advertises this to peers so a queued federated job can

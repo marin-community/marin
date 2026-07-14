@@ -1713,7 +1713,7 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
     # Default: this backend supplies no federation availability metric (UNSET). Tests
     # exercising the metric override the return value explicitly.
-    backend.available_resources.return_value = None
+    backend.resource_capacity.return_value = None
     # status() authors the BackendStatus variant the backend's capability selects:
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
@@ -1955,7 +1955,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    gcp_backend.available_resources.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
+    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}

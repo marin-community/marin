@@ -1541,7 +1541,7 @@ class K8sTaskProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
-    def available_resources(self) -> dict[str, DeviceCapacity] | None:
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
         """Free and total GPUs inferred from the periodic kubectl cluster sync.
 
         Kueue owns placement, so there is no per-worker Iris capacity view here; instead

@@ -3,7 +3,7 @@
 
 """Federation availability inferred from the cached kubectl cluster sync: GPU
 free/total counting on :class:`ClusterState` and its attribution to a backend's
-advertised device variant in ``K8sTaskProvider.available_resources``."""
+advertised device variant in ``K8sTaskProvider.resource_capacity``."""
 
 from iris.cluster.backends.k8s.tasks import ClusterState, K8sTaskProvider
 from iris.cluster.controller.backend import DeviceCapacity
@@ -68,15 +68,15 @@ def _provider(advertised: dict[str, set[str]]) -> K8sTaskProvider:
     return provider
 
 
-def test_available_resources_attributes_gpus_to_the_sole_variant():
+def test_resource_capacity_attributes_gpus_to_the_sole_variant():
     provider = _provider({WellKnownAttribute.DEVICE_VARIANT: {"H100"}})
-    assert provider.available_resources() == {"h100": DeviceCapacity(free=6, total=8)}  # lowercased, 8 - 2
+    assert provider.resource_capacity() == {"h100": DeviceCapacity(free=6, total=8)}  # lowercased, 8 - 2
 
 
-def test_available_resources_is_unset_when_the_variant_is_ambiguous():
+def test_resource_capacity_is_unset_when_the_variant_is_ambiguous():
     # Two variants: free GPUs cannot be attributed to one, so fall back to shape-only.
-    assert _provider({WellKnownAttribute.DEVICE_VARIANT: {"h100", "a100"}}).available_resources() is None
+    assert _provider({WellKnownAttribute.DEVICE_VARIANT: {"h100", "a100"}}).resource_capacity() is None
 
 
-def test_available_resources_is_unset_without_an_advertised_variant():
-    assert _provider({}).available_resources() is None
+def test_resource_capacity_is_unset_without_an_advertised_variant():
+    assert _provider({}).resource_capacity() is None
