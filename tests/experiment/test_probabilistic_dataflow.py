@@ -6,28 +6,30 @@ import pytest
 
 from experiments.probabilistic_dataflow.compiler import (
     AttentionLayout,
-    Autoregressive,
-    AvailabilityError,
-    FactorizationError,
-    ParallelQuery,
-    Refine,
+    ConcreteExample,
     TokenCodec,
-    compile_query,
+    inference_plan_ir,
     lower_to_transformer,
 )
 from experiments.probabilistic_dataflow.debug_render import check_example_outputs, render_example_outputs
 from experiments.probabilistic_dataflow.dsl import (
-    QueryRoleDifference,
+    AttentionPattern,
+    Budget,
+    DocumentSpec,
+    FieldType,
+    InferenceProgram,
+    InferenceRoleDifference,
+    PositionMode,
     UnorderedPairAxis,
     training_deployment_differences,
 )
 from experiments.probabilistic_dataflow.synthetic import (
     advection_example,
-    advection_problem,
-    factorized_structure_problem,
-    leaky_normalization_problem,
+    advection_program,
+    refined_advection_program,
     scalar_forecast_example,
-    scalar_forecast_problem,
+    scalar_forecast_program,
+    structure_program,
 )
 from experiments.probabilistic_dataflow.training import (
     build_mixed_synthetic_batch,
@@ -39,30 +41,24 @@ from experiments.probabilistic_dataflow.training import (
 )
 
 
-def test_indirect_environment_leakage_is_rejected_with_provenance() -> None:
-    problem = leaky_normalization_problem()
-
-    with pytest.raises(AvailabilityError, match=r"synthetic\.future_statistics"):
-        compile_query(problem.query)
-
-
 def test_scalar_tutorial_lowers_to_one_context_and_one_target_record() -> None:
-    problem = scalar_forecast_problem()
-    plan = compile_query(problem.query)
+    program = scalar_forecast_program()
+    plan = inference_plan_ir(program)
     codec = TokenCodec()
     execution = lower_to_transformer(
-        problem.program,
-        plan,
-        scalar_forecast_example(problem),
+        program,
+        scalar_forecast_example(program),
         codec,
     )
 
-    current = problem.program.value("current")
-    assert problem.query.given == (current,)
-    assert problem.query.environment == "deployment"
+    current = program.value("current")
+    assert program.external_inputs == (current,)
+    assert program.outputs == (program.value("future"),)
     assert plan.calls[0].context_ids == (current.node_id,)
-    assert plan.calls[0].target_ids == (problem.program.value("future").node_id,)
+    assert plan.calls[0].target_ids == (program.value("future").node_id,)
     assert plan.calls[0].approximation_notes == ()
+    assert plan.calls[0].attention_layout == AttentionLayout.FULL
+    assert plan.calls[0].position_mode == PositionMode.SCIENTIFIC
 
     sequence = execution.calls[0].sequences[0]
     assert sequence.token_ids == (codec.data(3), codec.QUERY_ID)
@@ -71,46 +67,71 @@ def test_scalar_tutorial_lowers_to_one_context_and_one_target_record() -> None:
     assert sequence.rotary_position_ids == (0, 0)
 
 
-def test_dependent_factors_require_an_ordered_plan() -> None:
-    problem, _sequence, contacts, distances = factorized_structure_problem()
+def test_document_policy_selects_causal_attention_and_sequence_positions() -> None:
+    scalar = FieldType("scalar", bins=4)
+    program = InferenceProgram(
+        "ordered_scalar",
+        budget=Budget(model_calls=1, generated_tokens=1),
+    )
+    context = program.input_value("context", scalar)
+    target = program.generate(
+        "target",
+        scalar,
+        context=(context,),
+        document=DocumentSpec(attention=AttentionPattern.CAUSAL, positions=PositionMode.SEQUENCE),
+        factor_name="ordered_transition",
+    )
+    program.finish(target)
 
-    with pytest.raises(FactorizationError, match="depends on the former"):
-        compile_query(problem.query, ParallelQuery((contacts, distances)))
+    execution = lower_to_transformer(
+        program,
+        ConcreteExample("ordered-0", program.name, {"context": (1,), "target": (2,)}),
+        TokenCodec(),
+    )
+    call = execution.calls[0]
+    sequence = call.sequences[0]
 
-    compiled = compile_query(problem.query, Autoregressive((contacts, distances)))
+    assert call.attention_layout == AttentionLayout.CAUSAL
+    assert call.position_mode == PositionMode.SEQUENCE
+    assert sequence.scientific_position_ids == (-1, -1)
+    assert sequence.rotary_position_ids == (0, 1)
+
+
+def test_generated_value_flow_preserves_factor_order() -> None:
+    program = structure_program()
+    contacts = program.value("contacts")
+    distances = program.value("distances")
+    compiled = inference_plan_ir(program)
     assert [call.target_ids for call in compiled.calls] == [(contacts.node_id,), (distances.node_id,)]
     assert compiled.calls[1].dependency_call_ids == (compiled.calls[0].id,)
     assert contacts.node_id in compiled.calls[1].context_ids
+    assert compiled.output_ids == (contacts.node_id, distances.node_id)
 
 
 def test_refinement_feedback_is_an_explicit_call_dependency() -> None:
-    problem = advection_problem()
-    compiled = compile_query(
-        problem.query,
-        Refine(ParallelQuery(problem.targets), steps=3, resample_fraction=0.25),
-    )
+    program = refined_advection_program()
+    compiled = inference_plan_ir(program)
 
-    assert [call.operator for call in compiled.calls] == ["parallel", "refine", "refine"]
+    assert [call.operator for call in compiled.calls] == ["generate", "refine", "refine"]
     assert [call.dependency_call_ids for call in compiled.calls] == [(), (0,), (1,)]
-    assert problem.targets[0].node_id in compiled.calls[1].context_ids
+    assert program.value("future").node_id in compiled.calls[1].context_ids
 
 
 def test_training_deployment_report_identifies_teacher_forced_target() -> None:
-    problem = advection_problem()
-    initial = problem.program.value("initial")
-    forcing = problem.program.value("forcing")
-    future = problem.program.value("future")
+    program = advection_program()
+    initial = program.value("initial")
+    forcing = program.value("forcing")
+    future = program.value("future")
     differences = training_deployment_differences(
-        problem.program,
+        program,
         training_given=(initial, forcing, future),
-        deployment_given=problem.query.given,
     )
-    assert differences == (QueryRoleDifference("future", training_role="given", deployment_role="generated"),)
+    assert differences == (InferenceRoleDifference("future", training_role="given", deployment_role="generated"),)
 
 
 def test_parallel_field_lowering_records_approximation_and_target_alignment() -> None:
-    problem = advection_problem()
-    compiled = compile_query(problem.query, ParallelQuery(problem.targets))
+    program = advection_program()
+    compiled = inference_plan_ir(program)
 
     assert compiled.calls[0].approximation_notes == (
         "factor synthetic_advection:future:2 is approximated as 12 parallel token marginals",
@@ -126,9 +147,8 @@ def test_parallel_field_lowering_records_approximation_and_target_alignment() ->
 
 
 def test_target_values_are_aligned_labels_and_not_model_inputs() -> None:
-    problem = advection_problem()
-    plan = compile_query(problem.query, ParallelQuery(problem.targets))
-    original = advection_example(problem, seed=0)
+    program = advection_program()
+    original = advection_example(program, seed=0)
     changed = type(original)(
         id=original.id,
         program_name=original.program_name,
@@ -139,8 +159,8 @@ def test_target_values_are_aligned_labels_and_not_model_inputs() -> None:
     )
     codec = TokenCodec()
 
-    original_sequence = lower_to_transformer(problem.program, plan, original, codec).calls[0].sequences[0]
-    changed_sequence = lower_to_transformer(problem.program, plan, changed, codec).calls[0].sequences[0]
+    original_sequence = lower_to_transformer(program, original, codec).calls[0].sequences[0]
+    changed_sequence = lower_to_transformer(program, changed, codec).calls[0].sequences[0]
 
     assert original_sequence.token_ids == changed_sequence.token_ids
     assert original_sequence.scientific_position_ids == changed_sequence.scientific_position_ids
@@ -171,8 +191,8 @@ def test_text_and_science_calls_share_vocabulary_with_data_dependent_execution()
 
 
 def test_unordered_pair_program_is_invariant_to_identity_permutation() -> None:
-    problem, *_ = factorized_structure_problem()
-    pair_axis = problem.program.value("contacts").value_type.axes[0]
+    program = structure_program()
+    pair_axis = program.value("contacts").value_type.axes[0]
     assert isinstance(pair_axis, UnorderedPairAxis)
     pairs = pair_axis.canonical_pairs()
     assert pairs == ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
@@ -188,16 +208,15 @@ def test_debug_rendering_explains_ir_and_document_treatment() -> None:
     scalar = outputs["scalar.md"]
     assert "scalar_forecast.current[scalar]" in scalar
     assert "scalar_forecast.future[scalar]" in scalar
-    assert "| given | %0 current |" in scalar
-    assert "| environment | deployment |" in scalar
+    assert "| external inputs | %0 current |" in scalar
     assert "available_at" not in scalar
-    assert "| 0 | parallel | 0 | %0 current | %1 future | - | - |" in scalar
+    assert "| 0 | generate | 0 | %0 current | %1 future | - | full_segment | scientific | - |" in scalar
 
     advection = outputs["advection.md"]
-    assert "## 1. Probabilistic Dataflow IR" in advection
-    assert "## 2. Conditional Query IR" in advection
-    assert "## 3. Inference Plan IR" in advection
-    assert "## 4. Transformer Execution IR" in advection
+    assert "## 1. Inference Program Values" in advection
+    assert "Conditional Query IR" not in advection
+    assert "## 2. Inference Plan IR" in advection
+    assert "## 3. Transformer Execution IR" in advection
     assert "target record | synthetic_advection.future[time=0,cell=(0.0,)]" in advection
     assert "Physical rotary positions: all 0; RoPE is the identity" in advection
     assert "target value is a label, not an input" in advection

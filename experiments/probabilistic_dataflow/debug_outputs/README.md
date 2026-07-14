@@ -1,6 +1,6 @@
 # Generated debug renderings
 
-These files are deterministic outputs of `python -m experiments.probabilistic_dataflow.debug_render`. Each domain report shows the dataflow, conditional query, inference plan, transformer execution, and compiler-generated document treatment. The guided walkthrough is [TUTORIAL.md](../TUTORIAL.md).
+These files are deterministic outputs of `python -m experiments.probabilistic_dataflow.debug_render`. Each domain report shows the staged values, inference plan, transformer execution, and compiler-generated document treatment. The guided walkthrough is [TUTORIAL.md](../TUTORIAL.md).
 
 - [Scalar forecast](scalar.md)
 - [Advection](advection.md)

@@ -3,185 +3,159 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 
 from experiments.probabilistic_dataflow.compiler import ConcreteExample
 from experiments.probabilistic_dataflow.dsl import (
+    AttentionPattern,
     Budget,
+    DocumentSpec,
     FieldType,
+    InferenceProgram,
     MeshAxis,
     OrderedAxis,
-    Program,
-    Query,
+    PositionMode,
     SetAxis,
     Source,
     UnorderedPairAxis,
     Value,
-    learned_joint,
 )
 
-DEPLOYMENT = "deployment"
-TRAINING = "training"
 SYNTHETIC_SPLIT = frozenset({"synthetic-train"})
-ALL_ENVIRONMENTS = frozenset({DEPLOYMENT, TRAINING})
+SCIENTIFIC_FULL = DocumentSpec(attention=AttentionPattern.FULL, positions=PositionMode.SCIENTIFIC)
+SMALL_BUDGET = Budget(model_calls=8, generated_tokens=64)
+STRUCTURE_BUDGET = Budget(model_calls=16, generated_tokens=128)
 
 
-@dataclass(frozen=True)
-class SyntheticProblem:
-    program: Program
-    query: Query
-    targets: tuple[Value, ...]
-
-
-def scalar_forecast_problem() -> SyntheticProblem:
+def scalar_forecast_program() -> InferenceProgram:
     measurement = FieldType("measurement", bins=16)
+    program = InferenceProgram("scalar_forecast", budget=SMALL_BUDGET)
+    current = program.input_value(
+        "current",
+        measurement,
+        source=Source(
+            name="synthetic.scalar_current",
+            split_keys=SYNTHETIC_SPLIT,
+        ),
+    )
+    future = program.generate(
+        "future",
+        measurement,
+        context=(current,),
+        document=SCIENTIFIC_FULL,
+        factor_name="scalar_transition",
+    )
+    return program.finish(future)
 
-    with Program("scalar_forecast") as program:
-        current = program.variable(
-            "current",
-            measurement,
-            source=Source(
-                name="synthetic.scalar_current",
-                environments=ALL_ENVIRONMENTS,
-                split_keys=SYNTHETIC_SPLIT,
-            ),
-        )
-        future = program.sample("future", measurement, learned_joint(current, name="scalar_transition"))
 
-    query = Query(program, given=(current,), targets=(future,), environment=DEPLOYMENT)
-    return SyntheticProblem(program, query, (future,))
+def advection_program() -> InferenceProgram:
+    program, _initial, _forcing, future = _advection_program("synthetic_advection")
+    return program.finish(future)
 
 
-def advection_problem() -> SyntheticProblem:
+def refined_advection_program() -> InferenceProgram:
+    program, initial, forcing, future = _advection_program("synthetic_advection")
+    program.refine(
+        future,
+        context=(initial, forcing),
+        document=SCIENTIFIC_FULL,
+        resample_fraction=0.25,
+    )
+    program.refine(
+        future,
+        context=(initial, forcing),
+        document=SCIENTIFIC_FULL,
+        resample_fraction=0.25,
+    )
+    return program.finish(future)
+
+
+def _advection_program(name: str) -> tuple[InferenceProgram, Value, Value, Value]:
     cell = MeshAxis("cell", 4, coordinates=((0.0,), (0.25,), (0.5,), (0.75,)))
     time = OrderedAxis("time", 3)
     state = FieldType("state", (cell,), bins=16)
     forcing_type = FieldType("forcing", (time, cell), bins=16)
     trajectory = FieldType("state_trajectory", (time, cell), bins=16)
-
-    with Program("synthetic_advection") as program:
-        initial = program.variable(
-            "initial",
-            state,
-            source=Source(name="synthetic.initial", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
-        )
-        forcing = program.variable(
-            "forcing",
-            forcing_type,
-            source=Source(name="synthetic.forcing", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
-        )
-        future = program.sample("future", trajectory, learned_joint(initial, forcing, name="advection_transition"))
-
-    query = Query(
-        program=program,
-        given=(initial, forcing),
-        targets=(future,),
-        environment=DEPLOYMENT,
-        budget=Budget(model_calls=8, generated_tokens=64),
+    program = InferenceProgram(name, budget=SMALL_BUDGET)
+    initial = program.input_value(
+        "initial",
+        state,
+        source=Source(name="synthetic.initial", split_keys=SYNTHETIC_SPLIT),
     )
-    return SyntheticProblem(program, query, (future,))
+    forcing = program.input_value(
+        "forcing",
+        forcing_type,
+        source=Source(name="synthetic.forcing", split_keys=SYNTHETIC_SPLIT),
+    )
+    future = program.generate(
+        "future",
+        trajectory,
+        context=(initial, forcing),
+        document=SCIENTIFIC_FULL,
+        factor_name="advection_transition",
+    )
+    return program, initial, forcing, future
 
 
-def symmetric_pairs_problem() -> SyntheticProblem:
+def contacts_program() -> InferenceProgram:
     residue = SetAxis("residue", 4)
     pair = UnorderedPairAxis.of(residue)
     sequence_type = FieldType("residue_class", (residue,), bins=8)
     contacts_type = FieldType("contact", (pair,), bins=2)
-
-    with Program("synthetic_contacts") as program:
-        sequence = program.variable(
-            "sequence",
-            sequence_type,
-            source=Source(name="synthetic.sequence", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
-        )
-        contacts = program.sample("contacts", contacts_type, learned_joint(sequence, name="contact_map"))
-
-    query = Query(
-        program=program,
-        given=(sequence,),
-        targets=(contacts,),
-        environment=DEPLOYMENT,
-        budget=Budget(model_calls=8, generated_tokens=64),
+    program = InferenceProgram("synthetic_contacts", budget=SMALL_BUDGET)
+    sequence = program.input_value(
+        "sequence",
+        sequence_type,
+        source=Source(name="synthetic.sequence", split_keys=SYNTHETIC_SPLIT),
     )
-    return SyntheticProblem(program, query, (contacts,))
+    contacts = program.generate(
+        "contacts",
+        contacts_type,
+        context=(sequence,),
+        document=SCIENTIFIC_FULL,
+        factor_name="contact_map",
+    )
+    return program.finish(contacts)
 
 
-def factorized_structure_problem() -> tuple[SyntheticProblem, Value, Value, Value]:
+def structure_program() -> InferenceProgram:
     residue = SetAxis("residue", 4)
     pair = UnorderedPairAxis.of(residue)
     sequence_type = FieldType("residue_class", (residue,), bins=8)
     contacts_type = FieldType("contact", (pair,), bins=2)
     distance_type = FieldType("distance", (pair,), bins=8)
-
-    with Program("synthetic_structure") as program:
-        sequence = program.variable(
-            "sequence",
-            sequence_type,
-            source=Source(name="synthetic.sequence", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
-        )
-        contacts = program.sample("contacts", contacts_type, learned_joint(sequence, name="contact_map"))
-        distances = program.sample(
-            "distances",
-            distance_type,
-            learned_joint(sequence, contacts, name="distance_given_contacts"),
-        )
-
-    query = Query(
-        program=program,
-        given=(sequence,),
-        targets=(contacts, distances),
-        environment=DEPLOYMENT,
-        budget=Budget(model_calls=16, generated_tokens=128),
+    program = InferenceProgram("synthetic_structure", budget=STRUCTURE_BUDGET)
+    sequence = program.input_value(
+        "sequence",
+        sequence_type,
+        source=Source(name="synthetic.sequence", split_keys=SYNTHETIC_SPLIT),
     )
-    return SyntheticProblem(program, query, (contacts, distances)), sequence, contacts, distances
-
-
-def leaky_normalization_problem() -> SyntheticProblem:
-    cell = MeshAxis("cell", 4)
-    state = FieldType("state", (cell,), bins=16)
-
-    with Program("leaky_normalization") as program:
-        initial = program.variable(
-            "initial",
-            state,
-            source=Source(name="synthetic.initial", environments=ALL_ENVIRONMENTS, split_keys=SYNTHETIC_SPLIT),
-        )
-        future_statistics = program.variable(
-            "future_statistics",
-            state,
-            source=Source(
-                name="synthetic.future_statistics",
-                environments=frozenset({TRAINING}),
-                split_keys=SYNTHETIC_SPLIT,
-            ),
-        )
-        normalization = program.map("normalization", future_statistics, operation="mean_and_variance")
-        forecast = program.sample(
-            "forecast",
-            state,
-            learned_joint(initial, normalization, name="normalized_forecast"),
-        )
-
-    query = Query(
-        program=program,
-        given=(initial, normalization),
-        targets=(forecast,),
-        environment=DEPLOYMENT,
+    contacts = program.generate(
+        "contacts",
+        contacts_type,
+        context=(sequence,),
+        document=SCIENTIFIC_FULL,
+        factor_name="contact_map",
     )
-    return SyntheticProblem(program, query, (forecast,))
+    distances = program.generate(
+        "distances",
+        distance_type,
+        context=(sequence, contacts),
+        document=SCIENTIFIC_FULL,
+        factor_name="distance_given_contacts",
+    )
+    return program.finish(contacts, distances)
 
 
-def scalar_forecast_example(problem: SyntheticProblem) -> ConcreteExample:
+def scalar_forecast_example(program: InferenceProgram) -> ConcreteExample:
     return ConcreteExample(
         id="scalar-0",
-        program_name=problem.program.name,
+        program_name=program.name,
         values={"current": (3,), "future": (5,)},
     )
 
 
-def advection_example(problem: SyntheticProblem, *, seed: int) -> ConcreteExample:
+def advection_example(program: InferenceProgram, *, seed: int) -> ConcreteExample:
     rng = np.random.default_rng(seed)
     initial = rng.integers(0, 16, size=4, dtype=np.int32)
     forcing = rng.integers(0, 4, size=(3, 4), dtype=np.int32)
@@ -193,7 +167,7 @@ def advection_example(problem: SyntheticProblem, *, seed: int) -> ConcreteExampl
     future = np.stack(future_steps)
     return ConcreteExample(
         id=f"advection-{seed}",
-        program_name=problem.program.name,
+        program_name=program.name,
         values={
             "initial": tuple(int(value) for value in initial),
             "forcing": tuple(int(value) for value in forcing.flat),
@@ -202,16 +176,16 @@ def advection_example(problem: SyntheticProblem, *, seed: int) -> ConcreteExampl
     )
 
 
-def symmetric_pairs_example(problem: SyntheticProblem, *, seed: int) -> ConcreteExample:
+def contacts_example(program: InferenceProgram, *, seed: int) -> ConcreteExample:
     rng = np.random.default_rng(seed)
     sequence = rng.integers(0, 4, size=4, dtype=np.int32)
-    pair_axis = problem.targets[0].value_type.axes[0]
+    pair_axis = program.value("contacts").value_type.axes[0]
     if not isinstance(pair_axis, UnorderedPairAxis):
         raise TypeError(f"Expected UnorderedPairAxis, got {type(pair_axis).__name__}")
     contacts = tuple(int(sequence[left] == sequence[right]) for left, right in pair_axis.canonical_pairs())
     return ConcreteExample(
         id=f"contacts-{seed}",
-        program_name=problem.program.name,
+        program_name=program.name,
         values={
             "sequence": tuple(int(value) for value in sequence),
             "contacts": contacts,
@@ -219,10 +193,10 @@ def symmetric_pairs_example(problem: SyntheticProblem, *, seed: int) -> Concrete
     )
 
 
-def factorized_structure_example(problem: SyntheticProblem, *, seed: int) -> ConcreteExample:
+def structure_example(program: InferenceProgram, *, seed: int) -> ConcreteExample:
     rng = np.random.default_rng(seed)
     sequence = rng.integers(0, 4, size=4, dtype=np.int32)
-    pair_axis = problem.program.value("contacts").value_type.axes[0]
+    pair_axis = program.value("contacts").value_type.axes[0]
     if not isinstance(pair_axis, UnorderedPairAxis):
         raise TypeError(f"Expected UnorderedPairAxis, got {type(pair_axis).__name__}")
     pairs = pair_axis.canonical_pairs()
@@ -233,7 +207,7 @@ def factorized_structure_example(problem: SyntheticProblem, *, seed: int) -> Con
     )
     return ConcreteExample(
         id=f"structure-{seed}",
-        program_name=problem.program.name,
+        program_name=program.name,
         values={
             "sequence": tuple(int(value) for value in sequence),
             "contacts": contacts,

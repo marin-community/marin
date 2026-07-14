@@ -8,29 +8,27 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from experiments.probabilistic_dataflow.compiler import (
-    Autoregressive,
-    ConditionalQueryIR,
+    AttentionLayout,
     ExecutionSequenceIR,
     InferencePlanIR,
     PackedBatch,
-    ParallelQuery,
-    Refine,
     TokenCodec,
     TransformerExecutionIR,
-    compile_query,
+    inference_plan_ir,
     lower_to_transformer,
     pack_transformer_calls,
 )
-from experiments.probabilistic_dataflow.dsl import Axis, FieldType, FlowInfo, Program
+from experiments.probabilistic_dataflow.dsl import Axis, FieldType, FlowInfo, InferenceProgram, PositionMode
 from experiments.probabilistic_dataflow.synthetic import (
     advection_example,
-    advection_problem,
-    factorized_structure_example,
-    factorized_structure_problem,
+    advection_program,
+    contacts_example,
+    contacts_program,
+    refined_advection_program,
     scalar_forecast_example,
-    scalar_forecast_problem,
-    symmetric_pairs_example,
-    symmetric_pairs_problem,
+    scalar_forecast_program,
+    structure_example,
+    structure_program,
 )
 from experiments.probabilistic_dataflow.training import (
     TaskBatch,
@@ -41,7 +39,7 @@ from experiments.probabilistic_dataflow.training import (
 DEBUG_OUTPUT_DIR = Path(__file__).with_name("debug_outputs")
 
 
-def render_program_ir(program: Program, *, heading: str = "## 1. Probabilistic Dataflow IR") -> str:
+def render_program_ir(program: InferenceProgram, *, heading: str = "## 1. Inference Program Values") -> str:
     graph = ["```mermaid", "flowchart LR"]
     for node in program.nodes:
         label = f"%{node.id} {node.name}<br/>{node.kind}<br/>{_field_type(node.value_type)}"
@@ -74,29 +72,22 @@ def render_program_ir(program: Program, *, heading: str = "## 1. Probabilistic D
     return "\n\n".join((heading, "\n".join(graph), table))
 
 
-def render_conditional_query_ir(
-    query: ConditionalQueryIR,
-    program: Program,
-    *,
-    heading: str = "## 2. Conditional Query IR",
-) -> str:
-    rows = (
-        ("program", query.program_name),
-        ("given", _node_names(program, query.given_ids)),
-        ("targets", _node_names(program, query.target_ids)),
-        ("required factors", "<br>".join(query.required_factor_ids) or "-"),
-        ("environment", query.environment),
-        ("budget", f"model_calls={query.model_call_budget}, generated_tokens={query.generated_token_budget}"),
-    )
-    return "\n\n".join((heading, _markdown_table(("Property", "Value"), rows)))
-
-
 def render_inference_plan_ir(
     plan: InferencePlanIR,
-    program: Program,
+    program: InferenceProgram,
     *,
-    heading: str = "## 3. Inference Plan IR",
+    heading: str = "## 2. Inference Plan IR",
 ) -> str:
+    properties = _markdown_table(
+        ("Property", "Value"),
+        (
+            ("program", plan.program_name),
+            ("external inputs", _node_names(program, plan.input_ids)),
+            ("outputs", _node_names(program, plan.output_ids)),
+            ("factors", "<br>".join(plan.factor_ids) or "-"),
+            ("budget", f"model_calls={plan.model_call_budget}, generated_tokens={plan.generated_token_budget}"),
+        ),
+    )
     graph = ["```mermaid", "flowchart LR"]
     for call in plan.calls:
         targets = ", ".join(program.node(node_id).name for node_id in call.target_ids)
@@ -116,21 +107,33 @@ def render_inference_plan_ir(
                 _node_names(program, call.context_ids),
                 _node_names(program, call.target_ids),
                 ", ".join(str(value) for value in call.dependency_call_ids) or "-",
+                str(call.attention_layout),
+                str(call.position_mode),
                 "<br>".join(call.approximation_notes) or "-",
             )
         )
     table = _markdown_table(
-        ("Call", "Operator", "Iteration", "Context", "Targets", "Depends on", "Approximation/notes"),
+        (
+            "Call",
+            "Operator",
+            "Iteration",
+            "Context",
+            "Targets",
+            "Depends on",
+            "Attention",
+            "Positions",
+            "Approximation/notes",
+        ),
         rows,
     )
-    return "\n\n".join((heading, "\n".join(graph), table))
+    return "\n\n".join((heading, properties, "\n".join(graph), table))
 
 
 def render_execution_ir(
     execution: TransformerExecutionIR,
     codec: TokenCodec,
     *,
-    heading: str = "## 4. Transformer Execution IR",
+    heading: str = "## 3. Transformer Execution IR",
     detailed_documents_per_call: int = 1,
 ) -> str:
     call_rows = []
@@ -144,12 +147,21 @@ def render_execution_ir(
                 str(len(call.sequences)),
                 str(supervised_tokens),
                 call.attention_layout,
+                call.position_mode,
             )
         )
     parts = [
         heading,
         _markdown_table(
-            ("Call", "Operator", "Depends on", "Documents", "Supervised tokens", "Attention layout"),
+            (
+                "Call",
+                "Operator",
+                "Depends on",
+                "Documents",
+                "Supervised tokens",
+                "Attention layout",
+                "Position mode",
+            ),
             call_rows,
         ),
     ]
@@ -174,7 +186,7 @@ def render_execution_ir(
             parts.extend(
                 (
                     f"### Call {call.call_id}, document {sequence.sequence_id}",
-                    _render_document(sequence, codec),
+                    _render_document(sequence, codec, call.attention_layout, call.position_mode),
                 )
             )
         omitted = len(call.sequences) - detailed_documents_per_call
@@ -197,7 +209,7 @@ def render_packed_batch(
             ("documents", str(len(batch.locations))),
             ("supervised tokens", str(int(batch.loss_weights.sum()))),
             ("rotary positions", "all 0; RoPE is the identity"),
-            ("attention", "full within each segment"),
+            ("attention", f"{batch.attention_layout} within each segment"),
             ("attention boundary", "segment_id; records cannot attend across documents"),
             ("padding", "segment_id=-1 and loss_weight=0"),
         ),
@@ -235,63 +247,44 @@ def render_packed_batch(
 def render_example_outputs() -> dict[str, str]:
     outputs: dict[str, str] = {}
 
-    scalar = scalar_forecast_problem()
+    scalar = scalar_forecast_program()
     scalar_data = scalar_forecast_example(scalar)
     scalar_codec = TokenCodec()
-    scalar_plan = compile_query(scalar.query)
-    scalar_execution = lower_to_transformer(
-        scalar.program,
-        scalar_plan,
-        scalar_data,
-        scalar_codec,
-    )
+    scalar_plan = inference_plan_ir(scalar)
+    scalar_execution = lower_to_transformer(scalar, scalar_data, scalar_codec)
     outputs["scalar.md"] = _report(
         "Scalar forecast debug rendering",
         (
             "The smallest program conditions on one scalar measurement and predicts one scalar measurement. "
-            "Neither field has an axis, so lowering creates one context record and one target-query record. The "
-            "default planner emits one full-attention model call.",
-            render_program_ir(scalar.program),
-            render_conditional_query_ir(scalar_plan.query, scalar.program),
-            render_inference_plan_ir(scalar_plan, scalar.program),
+            "Neither field has an axis, so the staged function creates one context record and one target-query "
+            "record in a full-attention model call.",
+            render_program_ir(scalar),
+            render_inference_plan_ir(scalar_plan, scalar),
             render_execution_ir(scalar_execution, scalar_codec),
         ),
     )
 
-    advection = advection_problem()
+    advection = advection_program()
     advection_data = advection_example(advection, seed=0)
     advection_codec = TokenCodec()
-    advection_plan = compile_query(advection.query, ParallelQuery(advection.targets))
-    advection_execution = lower_to_transformer(
-        advection.program,
-        advection_plan,
-        advection_data,
-        advection_codec,
-    )
-    refinement_plan = compile_query(
-        advection.query,
-        Refine(ParallelQuery(advection.targets), steps=3, resample_fraction=0.25),
-    )
-    refinement_execution = lower_to_transformer(
-        advection.program,
-        refinement_plan,
-        advection_data,
-        advection_codec,
-    )
+    advection_plan = inference_plan_ir(advection)
+    advection_execution = lower_to_transformer(advection, advection_data, advection_codec)
+    refinement = refined_advection_program()
+    refinement_plan = inference_plan_ir(refinement)
+    refinement_execution = lower_to_transformer(refinement, advection_data, advection_codec)
     outputs["advection.md"] = _report(
         "Synthetic advection debug rendering",
         (
-            "The logical field has a four-cell mesh and three ordered future times. The parallel plan creates one "
-            "unordered execution document containing 16 observed records and 12 target-query records. Scientific "
-            "position embeddings identify mesh and time coordinates. The refinement plan feeds the current "
-            "trajectory into two later calls.",
-            render_program_ir(advection.program),
-            render_conditional_query_ir(advection_plan.query, advection.program),
-            render_inference_plan_ir(advection_plan, advection.program),
+            "The logical field has a four-cell mesh and three ordered future times. "
+            "`advection_program()` creates one unordered execution document containing 16 observed records "
+            "and 12 target-query records. Scientific position embeddings identify mesh and time coordinates. "
+            "`refined_advection_program()` feeds the current trajectory into two later calls.",
+            render_program_ir(advection),
+            render_inference_plan_ir(advection_plan, advection),
             render_execution_ir(advection_execution, advection_codec),
             render_inference_plan_ir(
                 refinement_plan,
-                advection.program,
+                refinement,
                 heading="## Alternate Inference Plan IR: fixed-step refinement",
             ),
             "The synthetic execution uses realized `future` values for feedback context. A sampling runtime would "
@@ -304,66 +297,50 @@ def render_example_outputs() -> dict[str, str]:
         ),
     )
 
-    contacts = symmetric_pairs_problem()
-    contacts_data = symmetric_pairs_example(contacts, seed=0)
+    contacts = contacts_program()
+    contacts_data = contacts_example(contacts, seed=0)
     contacts_codec = TokenCodec()
-    contacts_plan = compile_query(contacts.query, ParallelQuery(contacts.targets))
-    contacts_execution = lower_to_transformer(
-        contacts.program,
-        contacts_plan,
-        contacts_data,
-        contacts_codec,
-    )
+    contacts_plan = inference_plan_ir(contacts)
+    contacts_execution = lower_to_transformer(contacts, contacts_data, contacts_codec)
     outputs["contacts.md"] = _report(
         "Synthetic contacts debug rendering",
         (
             "The set axis has four residues. Its unordered-pair axis identifies the six `{left, right}` pairs. The "
-            "parallel plan creates one unordered document with four observed residue records and six target-query "
-            "records.",
-            render_program_ir(contacts.program),
-            render_conditional_query_ir(contacts_plan.query, contacts.program),
-            render_inference_plan_ir(contacts_plan, contacts.program),
+            "`contacts_program()` creates one unordered document with four observed residue records and six "
+            "target-query records.",
+            render_program_ir(contacts),
+            render_inference_plan_ir(contacts_plan, contacts),
             render_execution_ir(contacts_execution, contacts_codec),
         ),
     )
 
-    structure, _sequence, structure_contacts, structure_distances = factorized_structure_problem()
-    structure_data = factorized_structure_example(structure, seed=0)
+    structure = structure_program()
+    structure_data = structure_example(structure, seed=0)
     structure_codec = TokenCodec()
-    structure_plan = compile_query(
-        structure.query,
-        Autoregressive((structure_contacts, structure_distances)),
-    )
-    structure_execution = lower_to_transformer(
-        structure.program,
-        structure_plan,
-        structure_data,
-        structure_codec,
-    )
+    structure_plan = inference_plan_ir(structure)
+    structure_execution = lower_to_transformer(structure, structure_data, structure_codec)
     outputs["structure.md"] = _report(
         "Factorized structure debug rendering",
         (
-            "Call 0 generates contacts from sequence. Call 1 receives both sequence and generated contacts before "
-            "generating distances. The call dependency preserves "
+            "`structure_program()` generates contacts and then distances. Call 0 generates contacts from "
+            "sequence. Call 1 receives both sequence and generated contacts before generating distances. The call "
+            "dependency preserves "
             "`p(contacts | sequence) p(distances | sequence, contacts)`. Autoregression is between calls; each call "
             "uses full attention over its scientific records.",
-            render_program_ir(structure.program),
-            render_conditional_query_ir(structure_plan.query, structure.program),
-            render_inference_plan_ir(structure_plan, structure.program),
+            render_program_ir(structure),
+            render_inference_plan_ir(structure_plan, structure),
             render_execution_ir(structure_execution, structure_codec),
         ),
     )
 
     mixed_codec = TokenCodec()
     mixed_advection_execution = lower_to_transformer(
-        advection.program,
-        advection_plan,
+        advection,
         advection_data,
         mixed_codec,
     )
     mixed_contacts_execution = lower_to_transformer(
-        contacts.program,
-        contacts_plan,
+        contacts,
         contacts_data,
         mixed_codec,
     )
@@ -399,7 +376,7 @@ def render_example_outputs() -> dict[str, str]:
         "Generated debug renderings",
         (
             "These files are deterministic outputs of `python -m experiments.probabilistic_dataflow.debug_render`. "
-            "Each domain report shows the dataflow, conditional query, inference plan, transformer execution, and "
+            "Each domain report shows the staged values, inference plan, transformer execution, and "
             "compiler-generated document treatment. The guided walkthrough is [TUTORIAL.md](../TUTORIAL.md).",
             "\n".join(
                 (
@@ -506,12 +483,25 @@ def _render_task_records(batch: TaskBatch, codec: TokenCodec, *, row: int, max_r
     )
 
 
-def _render_document(sequence: ExecutionSequenceIR, codec: TokenCodec) -> str:
+def _render_document(
+    sequence: ExecutionSequenceIR,
+    codec: TokenCodec,
+    attention_layout: AttentionLayout,
+    position_mode: PositionMode,
+) -> str:
+    rotary_treatment = (
+        "all 0; RoPE is the identity" if position_mode == PositionMode.SCIENTIFIC else "physical record indices"
+    )
+    serialization = (
+        "complete records may be permuted; outputs follow the same permutation"
+        if position_mode == PositionMode.SCIENTIFIC and attention_layout == AttentionLayout.FULL
+        else "physical record order participates in model semantics"
+    )
     metadata = (
         f"- Example: `{sequence.example_id}`\n"
-        f"- Physical rotary positions: all 0; RoPE is the identity\n"
-        f"- Attention: full within this document's segment; no cross-document attention\n"
-        f"- Serialization: complete records may be permuted; outputs follow the same permutation\n"
+        f"- Physical rotary positions: {rotary_treatment}\n"
+        f"- Attention: {attention_layout} within this document's segment; no cross-document attention\n"
+        f"- Serialization: {serialization}\n"
         f"- Loss: {int(sum(sequence.loss_weights))} aligned target records"
     )
     rows = []
@@ -519,20 +509,23 @@ def _render_document(sequence: ExecutionSequenceIR, codec: TokenCodec) -> str:
         zip(sequence.token_ids, sequence.scientific_position_ids, strict=True)
     ):
         target_id = sequence.target_ids[position]
+        scientific_position = (
+            codec.scientific_position_name(scientific_position_id) if scientific_position_id >= 0 else "-"
+        )
         if target_id >= 0:
             component = "target record"
-            treatment = "query token + scientific position embedding; target value is a label, not an input"
+            treatment = "query token + position policy; target value is a label, not an input"
             target = codec.token_label(target_id)
         else:
             component = "context record"
-            treatment = "value token + scientific position embedding; no direct loss"
+            treatment = "value token + position policy; no direct loss"
             target = "-"
         rows.append(
             (
                 str(position),
                 str(sequence.rotary_position_ids[position]),
                 component,
-                codec.scientific_position_name(scientific_position_id),
+                scientific_position,
                 f"{token_id} {codec.token_label(token_id)}",
                 treatment,
                 target,
@@ -612,13 +605,12 @@ def _axis(axis: Axis) -> str:
 def _flow(flow: FlowInfo) -> str:
     return (
         f"provenance={_set(flow.provenance)}<br>"
-        f"environments={_set(flow.environments)}<br>"
         f"split_keys={_set(flow.split_keys)}<br>"
         f"random_ancestors={_set(flow.random_ancestors)}"
     )
 
 
-def _node_names(program: Program, node_ids: Iterable[int]) -> str:
+def _node_names(program: InferenceProgram, node_ids: Iterable[int]) -> str:
     names = [f"%{node_id} {program.node(node_id).name}" for node_id in node_ids]
     return "<br>".join(names) or "-"
 

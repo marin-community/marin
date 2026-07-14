@@ -8,15 +8,15 @@ author: jder
 
 ## Scope
 
-- Goal: Test whether a scientist-facing probabilistic dataflow abstraction can express heterogeneous conditional queries while lowering to standard Marin transformer training and inference artifacts.
-- Primary metrics: end-to-end compilation for two unrelated synthetic scientific programs; correct rejection or diagnosis of leakage and factorization violations; packed calls accepted by a Marin Grug transformer; training loss reduction on the mixed synthetic workload.
+- Goal: Test whether a scientist-facing staged inference abstraction can express heterogeneous scientific model-call graphs while lowering to standard Marin transformer training and inference artifacts.
+- Primary metrics: end-to-end compilation for unrelated synthetic scientific programs; preservation of factorization and split metadata; packed calls accepted by a Marin Grug transformer; training loss reduction on the mixed synthetic workload.
 - Constraints: avoid dataset ingestion work; keep the spike under `experiments/`; preserve standard token embeddings, dense transformer layers, cross-entropy, and packed attention boundaries; do not claim production-ready probabilistic semantics.
 - Coordinating issue/PR: none; public visibility was not implied by the request.
 - Experiment prefix: `PSD`.
 
 ## Current TL;DR
 
-`PSD-007` preserves one ordinary Grug parameter set while selecting position IDs, attention, and label alignment from each compiled call. Synthetic text uses rotary positions `0..S-1`, causal attention, and shifted labels; scientific records use zero rotary positions, full segmented attention, scientific-position embeddings, and aligned labels. An 80-step equal-weight CPU smoke reduced combined loss from 4.1909 to 0.2022; text accuracy rose from 0% to 75% and scientific accuracy from 0% to 100%. A scientific-record permutation changed restored logits by `5.96e-08`. `Query.given`, `Query.targets`, and `Query.environment` now directly describe a conditional query; the unused `Evidence`, `Environment`, and integer availability-time abstractions were removed. Held-out generalization, symbolic indexed availability, compositional position encoders, real text tokenization, and sampled refinement remain untested.
+`PSD-008` collapses scientific values, requested outputs, model calls, and document policy into one staged `InferenceProgram`. `generate` creates a scientific random value and its transformer call; passing that value as later context records the call dependency. `refine` adds explicit feedback calls. `Query`, `QueryLowering`, generic strategy dispatch, and environment allowlists are gone. The compiler now mechanically validates and projects the staged program into inference-plan and transformer-execution IRs. Each call selects full or causal attention and scientific or sequence positions while retaining one ordinary Grug parameter set. Existing smoke evidence remains: an 80-step equal-weight text/science run reduced combined loss from 4.1909 to 0.2022, and a scientific-record permutation changed restored logits by `5.96e-08`. Held-out generalization, LM-authored program generation, dataset availability analysis, compositional position encoders, real text tokenization, and sampled refinement remain untested.
 
 ## Baseline
 
@@ -41,11 +41,12 @@ None.
 
 ### Promoted
 
-- `PSD-001`: The dataflow graph retained axes, provenance, environment allowlists, split keys, random ancestry, and factor IDs through query compilation. Evidence: `tests/experiment/test_probabilistic_dataflow.py`, the 2026-07-13 completion entry, and the 2026-07-14 query simplification entry.
+- `PSD-001`: The staged dataflow graph retains axes, provenance, split keys, random ancestry, and factor IDs through compilation. Evidence: `tests/experiment/test_probabilistic_dataflow.py` and the completion entries below.
 - `PSD-002`: Parallel, autoregressive, and three-step refinement plans lowered to explicit model-call dependencies. Evidence: compiler demo output and behavior tests.
 - `PSD-003`: One unchanged Grug transformer learned packed calls from both synthetic program families with standard weighted cross-entropy. Evidence: 80-step smoke result below.
 - `PSD-006` (exploratory): Grug calls with zero runtime rotary positions and full segmented attention are equivariant to serialization of complete scientific records. Evidence: the 2026-07-13 semantic-record entry and `test_scientific_record_logits_are_equivariant_to_serialization_order`.
 - `PSD-007` (exploratory): One Grug parameter set can train causal, physically positioned text calls and unordered, scientifically positioned calls when execution data selects positions, masks, and target alignment. Evidence: the 2026-07-13 cross-domain entry and `test_one_grug_model_learns_causal_text_and_full_attention_science`.
+- `PSD-008` (exploratory): One staged Python function can define scientific values, factorization, model-call dependencies, and per-document execution policy without an intermediate query or lowering-strategy API. Evidence: the 2026-07-14 unified inference-program entry and focused behavior tests.
 
 ## Background Research Brief
 
@@ -245,3 +246,23 @@ Can the execution IR treat serialization as a packing choice while retaining sci
 - Result: `Environment`, `Evidence`, `EvidenceBinding`, `Source.available_at`, and `FlowInfo.available_at` were removed. The indirect leakage example now rejects a training-only normalization supplied to a deployment query. Time-indexed future leakage is explicitly out of scope until availability can be expressed symbolically over named example indices.
 - Interpretation: the reduced query surface matches what the compiler actually uses. A future availability design should bind symbolic index expressions when selecting a concrete example instead of comparing hard-coded integers before example selection.
 - Next action: keep time availability out of the tutorial and DSL until the symbolic indexed design is implemented.
+
+### 2026-07-14 12:40 EDT - Query-specific lowering functions
+
+- Hypothesis: inference plans can be expressed as ordinary Python functions that name query nodes and add concrete calls, leaving the compiler to validate and lower the result without choosing a strategy.
+- Commit Hash: working tree based on `caffa97ffc7fbf605c01f5f3628f7a07322ac4abf`
+- Command: focused scientific-dataflow tests; zero-step demo; debug report regeneration and freshness check; Ruff and Pyrefly over the experiment.
+- Config: `QueryLowering` exposes named `parallel`, `autoregressive`, and `refine` operations plus `finish`; scalar, advection, contacts, and structure each define a separate lowering function in `synthetic.py`.
+- Result: the `ParallelQuery`, `Autoregressive`, `Refine`, `InferenceOperator`, and `compile_query` strategy-dispatch API was removed. Fifteen behavior tests passed. An incomplete structure lowering is rejected instead of having its missing `distances` call inferred; a one-call `contacts` plus `distances` lowering is rejected for violating the factor dependency.
+- Interpretation: the Python function is now the planning artifact an LM could write. `QueryLowering` performs name resolution, factor-order checks, environment and split checks, budget checks, and mechanical IR construction. It does not search for or guess a plan.
+- Next action: evaluate LM generation of these functions separately; this spike currently uses hand-written lowering functions.
+
+### 2026-07-14 13:45 EDT - PSD-008 unified inference programs
+
+- Hypothesis: the scientist-facing artifact can be the inference program itself; a separate probabilistic `Query` and lowering builder duplicate the values, outputs, dependencies, and budgets already stated by staged model calls.
+- Commit Hash: working tree based on `caffa97ffc7fbf605c01f5f3628f7a07322ac4abf`
+- Command: focused scientific-dataflow tests; zero-step demo; debug report regeneration and freshness check; Ruff and Pyrefly over the experiment.
+- Config: `InferenceProgram.input_value`, `generate`, `refine`, and `finish`; each call carries an explicit `DocumentSpec` selecting full or causal attention and scientific or sequence positions; scalar, advection, contacts, factorized structure, and refined advection are ordinary Python functions.
+- Result: `Query`, `QueryLowering`, conditional-query IR, default planning, and environment allowlists were removed. Generated values passed as context now create call dependencies directly. The structure example produces `sequence -> contacts -> distances`; the refinement example produces three dependent calls. Debug reports now show staged values, inference-plan IR, transformer-execution IR, and record treatment. Twelve focused behavior tests and both slow training smoke tests passed; generated reports matched; Marin pre-commit and Pyrefly passed.
+- Interpretation: the DSL is now a typed builder for an inference call DAG and its documents, matching the intended LM-authored workflow. The lower compiler layers remain useful as validated runtime projections, but no second user-authored query representation remains. Dataset availability is intentionally outside this spike rather than represented by an unevaluated environment string.
+- Next action: evaluate whether an LM can reliably author these functions and repair them from compiler diagnostics; do not add a generic planner unless repeated programs demonstrate shared planning pressure.

@@ -9,14 +9,14 @@ from enum import StrEnum
 import numpy as np
 
 from experiments.probabilistic_dataflow.dsl import (
+    AttentionPattern,
     CategoricalAxis,
+    InferenceProgram,
     MeshAxis,
     Node,
     NodeKind,
-    Program,
-    Query,
+    PositionMode,
     UnorderedPairAxis,
-    Value,
 )
 
 
@@ -24,53 +24,8 @@ class CompilationError(ValueError):
     pass
 
 
-class AvailabilityError(CompilationError):
-    pass
-
-
 class SplitLeakageError(CompilationError):
     pass
-
-
-class FactorizationError(CompilationError):
-    pass
-
-
-@dataclass(frozen=True)
-class ParallelQuery:
-    targets: tuple[Value, ...] = ()
-
-
-@dataclass(frozen=True)
-class Autoregressive:
-    order: tuple[Value, ...] = ()
-
-
-@dataclass(frozen=True)
-class Refine:
-    proposal: ParallelQuery | Autoregressive
-    steps: int
-    resample_fraction: float
-
-    def __post_init__(self) -> None:
-        if self.steps <= 0:
-            raise ValueError(f"Refinement steps must be positive, got {self.steps}")
-        if not 0 < self.resample_fraction <= 1:
-            raise ValueError(f"resample_fraction must be in (0, 1], got {self.resample_fraction}")
-
-
-InferenceOperator = ParallelQuery | Autoregressive | Refine
-
-
-@dataclass(frozen=True)
-class ConditionalQueryIR:
-    program_name: str
-    given_ids: tuple[int, ...]
-    target_ids: tuple[int, ...]
-    required_factor_ids: tuple[str, ...]
-    environment: str
-    model_call_budget: int
-    generated_token_budget: int
 
 
 @dataclass(frozen=True)
@@ -80,67 +35,68 @@ class ModelCallIR:
     context_ids: tuple[int, ...]
     dependency_call_ids: tuple[int, ...]
     operator: str
+    attention_layout: AttentionLayout
+    position_mode: PositionMode
     iteration: int = 0
     approximation_notes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class InferencePlanIR:
-    query: ConditionalQueryIR
+    program_name: str
+    input_ids: tuple[int, ...]
+    output_ids: tuple[int, ...]
+    factor_ids: tuple[str, ...]
+    model_call_budget: int
+    generated_token_budget: int
     calls: tuple[ModelCallIR, ...]
 
 
-def compile_query(query: Query, plan: InferenceOperator | None = None) -> InferencePlanIR:
-    _check_environment(query)
-    _check_split_isolation(query.program)
-    _check_plan_values(query, plan)
-    conditional_ir = _conditional_query_ir(query)
-    required_nodes = _required_generated_nodes(query)
-
-    if plan is None:
-        calls = _default_calls(query, required_nodes)
-    elif isinstance(plan, ParallelQuery):
-        calls = _parallel_calls(query, required_nodes, plan)
-    elif isinstance(plan, Autoregressive):
-        calls = _autoregressive_calls(query, required_nodes, plan)
-    else:
-        calls = _refinement_calls(query, required_nodes, plan)
-
-    generated_tokens = sum(
-        query.program.node(node_id).value_type.token_count for call in calls for node_id in call.target_ids
-    )
-    if len(calls) > query.budget.model_calls:
-        raise CompilationError(f"Plan requires {len(calls)} model calls but budget allows {query.budget.model_calls}")
-    if generated_tokens > query.budget.generated_tokens:
-        raise CompilationError(
-            f"Plan generates {generated_tokens} tokens but budget allows {query.budget.generated_tokens}"
+def inference_plan_ir(program: InferenceProgram) -> InferencePlanIR:
+    """Validate and expose the model-call plan recorded by an inference program."""
+    if not program.outputs:
+        raise CompilationError(f"Inference program {program.name!r} has not been finished")
+    _check_split_isolation(program)
+    calls = []
+    for call in program.calls:
+        notes = []
+        if call.operator == "generate":
+            for target_id in call.target_ids:
+                node = program.node(target_id)
+                if node.value_type.token_count > 1:
+                    notes.append(
+                        f"factor {node.factor_id} is approximated as "
+                        f"{node.value_type.token_count} parallel token marginals"
+                    )
+        if call.resample_fraction is not None:
+            notes.append(f"resample_low_confidence_fraction={call.resample_fraction}")
+        calls.append(
+            ModelCallIR(
+                id=call.id,
+                target_ids=call.target_ids,
+                context_ids=call.context_ids,
+                dependency_call_ids=call.dependency_call_ids,
+                operator=call.operator,
+                attention_layout=(
+                    AttentionLayout.FULL if call.document.attention == AttentionPattern.FULL else AttentionLayout.CAUSAL
+                ),
+                position_mode=call.document.positions,
+                iteration=call.iteration,
+                approximation_notes=tuple(notes),
+            )
         )
-    return InferencePlanIR(conditional_ir, tuple(calls))
+    return InferencePlanIR(
+        program_name=program.name,
+        input_ids=tuple(value.node_id for value in program.external_inputs),
+        output_ids=tuple(value.node_id for value in program.outputs),
+        factor_ids=tuple(node.factor_id for node in program.nodes if node.factor_id is not None),
+        model_call_budget=program.budget.model_calls,
+        generated_token_budget=program.budget.generated_tokens,
+        calls=tuple(calls),
+    )
 
 
-def _check_plan_values(query: Query, plan: InferenceOperator | None) -> None:
-    if plan is None:
-        return
-    proposal = plan.proposal if isinstance(plan, Refine) else plan
-    values = proposal.targets if isinstance(proposal, ParallelQuery) else proposal.order
-    for value in values:
-        if value._program is not query.program:
-            raise FactorizationError(
-                f"Inference plan value {value.name!r} belongs to {value.program_name!r}, not {query.program.name!r}"
-            )
-
-
-def _check_environment(query: Query) -> None:
-    for value in query.given:
-        allowed_environments = value.flow.environments
-        if allowed_environments and query.environment not in allowed_environments:
-            raise AvailabilityError(
-                f"Given input {value.name!r} is unavailable in environment {query.environment!r}; "
-                f"allowed={sorted(allowed_environments)}; provenance={sorted(value.flow.provenance)}"
-            )
-
-
-def _check_split_isolation(program: Program) -> None:
+def _check_split_isolation(program: InferenceProgram) -> None:
     for node in program.nodes:
         if node.kind != NodeKind.DETERMINISTIC or not node.operation or not node.operation.startswith("reduce:"):
             continue
@@ -148,199 +104,6 @@ def _check_split_isolation(program: Program) -> None:
             raise SplitLeakageError(
                 f"Reduction {node.name!r} combines split keys {sorted(node.flow.split_keys)} without explicit permission"
             )
-
-
-def _conditional_query_ir(query: Query) -> ConditionalQueryIR:
-    factor_ids = []
-    for node in query.program.nodes:
-        if node.factor_id is not None and _is_ancestor_of_any(query.program, node.id, query.targets):
-            factor_ids.append(node.factor_id)
-    return ConditionalQueryIR(
-        program_name=query.program.name,
-        given_ids=tuple(value.node_id for value in query.given),
-        target_ids=tuple(value.node_id for value in query.targets),
-        required_factor_ids=tuple(factor_ids),
-        environment=query.environment,
-        model_call_budget=query.budget.model_calls,
-        generated_token_budget=query.budget.generated_tokens,
-    )
-
-
-def _required_generated_nodes(query: Query) -> tuple[int, ...]:
-    given = {value.node_id for value in query.given}
-    required: set[int] = set()
-
-    def visit(node_id: int) -> None:
-        if node_id in given:
-            return
-        node = query.program.node(node_id)
-        if node.kind == NodeKind.VARIABLE:
-            raise CompilationError(f"Required input {node.name!r} is not listed in query.given")
-        for input_id in node.inputs:
-            visit(input_id)
-        if node.kind == NodeKind.SAMPLE:
-            required.add(node_id)
-
-    for target in query.targets:
-        visit(target.node_id)
-        if target.node_id not in given and query.program.node(target).kind == NodeKind.SAMPLE:
-            required.add(target.node_id)
-    return tuple(node.id for node in query.program.nodes if node.id in required)
-
-
-def _default_calls(query: Query, required_nodes: tuple[int, ...]) -> list[ModelCallIR]:
-    remaining = set(required_nodes)
-    produced: dict[int, int] = {}
-    calls: list[ModelCallIR] = []
-    given = {value.node_id for value in query.given}
-    while remaining:
-        ready = tuple(
-            node_id
-            for node_id in required_nodes
-            if node_id in remaining
-            and all(ancestor not in remaining for ancestor in _sample_ancestors(query.program, node_id))
-        )
-        if not ready:
-            raise FactorizationError("Probabilistic factor graph contains a cycle")
-        call = _make_call(query, len(calls), ready, given, produced, operator="parallel")
-        calls.append(call)
-        for node_id in ready:
-            remaining.remove(node_id)
-            produced[node_id] = call.id
-    return calls
-
-
-def _parallel_calls(
-    query: Query,
-    required_nodes: tuple[int, ...],
-    plan: ParallelQuery,
-) -> list[ModelCallIR]:
-    requested = tuple(value.node_id for value in plan.targets) or tuple(value.node_id for value in query.targets)
-    missing_latents = set(required_nodes) - set(requested)
-    if missing_latents:
-        names = [query.program.node(node_id).name for node_id in sorted(missing_latents)]
-        raise FactorizationError(
-            f"ParallelQuery would skip required latent factors {names}; use the default planner or Autoregressive"
-        )
-    for left in requested:
-        for right in requested:
-            if left != right and left in _sample_ancestors(query.program, right):
-                raise FactorizationError(
-                    f"ParallelQuery cannot generate {query.program.node(left).name!r} and "
-                    f"{query.program.node(right).name!r} together because the latter factor depends on the former"
-                )
-    return [_make_call(query, 0, requested, {value.node_id for value in query.given}, {}, "parallel")]
-
-
-def _autoregressive_calls(
-    query: Query,
-    required_nodes: tuple[int, ...],
-    plan: Autoregressive,
-) -> list[ModelCallIR]:
-    order = tuple(value.node_id for value in plan.order) or required_nodes
-    if set(order) != set(required_nodes) or len(order) != len(required_nodes):
-        required_names = [query.program.node(node_id).name for node_id in required_nodes]
-        raise FactorizationError(
-            f"Autoregressive order must contain each required generated value once: {required_names}"
-        )
-
-    produced: dict[int, int] = {}
-    given = {value.node_id for value in query.given}
-    calls = []
-    for node_id in order:
-        unresolved = _sample_ancestors(query.program, node_id) - produced.keys() - given
-        if unresolved:
-            names = [query.program.node(ancestor).name for ancestor in sorted(unresolved)]
-            raise FactorizationError(
-                f"Autoregressive order generates {query.program.node(node_id).name!r} before ancestors {names}"
-            )
-        call = _make_call(query, len(calls), (node_id,), given, produced, "autoregressive")
-        calls.append(call)
-        produced[node_id] = call.id
-    return calls
-
-
-def _refinement_calls(
-    query: Query,
-    required_nodes: tuple[int, ...],
-    plan: Refine,
-) -> list[ModelCallIR]:
-    if isinstance(plan.proposal, ParallelQuery):
-        calls = _parallel_calls(query, required_nodes, plan.proposal)
-    else:
-        calls = _autoregressive_calls(query, required_nodes, plan.proposal)
-
-    target_ids = tuple(value.node_id for value in query.targets)
-    latest_call_by_target = {target_id: call.id for call in calls for target_id in call.target_ids}
-    base_context = {value.node_id for value in query.given}
-    for iteration in range(1, plan.steps):
-        call_id = len(calls)
-        dependencies = tuple(sorted(set(latest_call_by_target.values())))
-        context = tuple(sorted(base_context | set(target_ids)))
-        notes = (f"resample_low_confidence_fraction={plan.resample_fraction}",)
-        calls.append(ModelCallIR(call_id, target_ids, context, dependencies, "refine", iteration, notes))
-        latest_call_by_target = dict.fromkeys(target_ids, call_id)
-    return calls
-
-
-def _make_call(
-    query: Query,
-    call_id: int,
-    target_ids: tuple[int, ...],
-    given: set[int],
-    produced: dict[int, int],
-    operator: str,
-) -> ModelCallIR:
-    context = set(given)
-    dependencies = set()
-    notes = []
-    for target_id in target_ids:
-        node = query.program.node(target_id)
-        for input_id in node.inputs:
-            if input_id in produced:
-                context.add(input_id)
-                dependencies.add(produced[input_id])
-            elif query.program.node(input_id).kind == NodeKind.SAMPLE:
-                raise FactorizationError(
-                    f"Factor for {node.name!r} consumes ungenerated sample {query.program.node(input_id).name!r}"
-                )
-            else:
-                context.add(input_id)
-        if operator == "parallel" and node.value_type.token_count > 1:
-            notes.append(
-                f"factor {node.factor_id} is approximated as {node.value_type.token_count} parallel token marginals"
-            )
-    return ModelCallIR(
-        id=call_id,
-        target_ids=target_ids,
-        context_ids=tuple(sorted(context)),
-        dependency_call_ids=tuple(sorted(dependencies)),
-        operator=operator,
-        approximation_notes=tuple(notes),
-    )
-
-
-def _sample_ancestors(program: Program, node_id: int) -> set[int]:
-    ancestors: set[int] = set()
-
-    def visit(current: int) -> None:
-        for input_id in program.node(current).inputs:
-            input_node = program.node(input_id)
-            if input_node.kind == NodeKind.SAMPLE:
-                ancestors.add(input_id)
-            visit(input_id)
-
-    visit(node_id)
-    return ancestors
-
-
-def _is_ancestor_of_any(program: Program, candidate: int, values: tuple[Value, ...]) -> bool:
-    def contains(node_id: int) -> bool:
-        if node_id == candidate:
-            return True
-        return any(contains(input_id) for input_id in program.node(node_id).inputs)
-
-    return any(contains(value.node_id) for value in values)
 
 
 @dataclass(frozen=True)
@@ -464,7 +227,8 @@ class TransformerCallExecutionIR:
     operator: str
     dependency_call_ids: tuple[int, ...]
     sequences: tuple[ExecutionSequenceIR, ...]
-    attention_layout: AttentionLayout = AttentionLayout.FULL
+    attention_layout: AttentionLayout
+    position_mode: PositionMode
 
 
 @dataclass(frozen=True)
@@ -474,16 +238,13 @@ class TransformerExecutionIR:
 
 
 def lower_to_transformer(
-    program: Program,
-    plan: InferencePlanIR,
+    program: InferenceProgram,
     example: ConcreteExample,
     codec: TokenCodec,
 ) -> TransformerExecutionIR:
-    if example.program_name != program.name or plan.query.program_name != program.name:
-        raise CompilationError(
-            f"Program mismatch: program={program.name!r}, plan={plan.query.program_name!r}, "
-            f"example={example.program_name!r}"
-        )
+    if example.program_name != program.name:
+        raise CompilationError(f"Program mismatch: program={program.name!r}, example={example.program_name!r}")
+    plan = inference_plan_ir(program)
     calls = []
     for call in plan.calls:
         sequence = _scientific_record_sequence(program, call, example, codec)
@@ -493,13 +254,15 @@ def lower_to_transformer(
                 operator=call.operator,
                 dependency_call_ids=call.dependency_call_ids,
                 sequences=(sequence,),
+                attention_layout=call.attention_layout,
+                position_mode=call.position_mode,
             )
         )
     return TransformerExecutionIR(example.id, tuple(calls))
 
 
 def _scientific_record_sequence(
-    program: Program,
+    program: InferenceProgram,
     call: ModelCallIR,
     example: ConcreteExample,
     codec: TokenCodec,
@@ -512,14 +275,14 @@ def _scientific_record_sequence(
         node = program.node(node_id)
         for index, value in enumerate(example.value(node)):
             tokens.append(codec.data(value))
-            scientific_positions.append(codec.scientific_position(_scientific_position_key(program, node, index)))
+            scientific_positions.append(_position_id(program, node, index, call.position_mode, codec))
             target_ids.append(-1)
             weights.append(0.0)
     for target_id in call.target_ids:
         node = program.node(target_id)
         for index, value in enumerate(example.value(node)):
             tokens.append(codec.QUERY_ID)
-            scientific_positions.append(codec.scientific_position(_scientific_position_key(program, node, index)))
+            scientific_positions.append(_position_id(program, node, index, call.position_mode, codec))
             target_ids.append(codec.data(value))
             weights.append(1.0)
     return ExecutionSequenceIR(
@@ -528,13 +291,25 @@ def _scientific_record_sequence(
         0,
         tuple(tokens),
         tuple(scientific_positions),
-        (0,) * len(tokens),
+        (0,) * len(tokens) if call.position_mode == PositionMode.SCIENTIFIC else tuple(range(len(tokens))),
         tuple(target_ids),
         tuple(weights),
     )
 
 
-def _scientific_position_key(program: Program, node: Node, index: int) -> str:
+def _position_id(
+    program: InferenceProgram,
+    node: Node,
+    index: int,
+    mode: PositionMode,
+    codec: TokenCodec,
+) -> int:
+    if mode == PositionMode.SEQUENCE:
+        return -1
+    return codec.scientific_position(_scientific_position_key(program, node, index))
+
+
+def _scientific_position_key(program: InferenceProgram, node: Node, index: int) -> str:
     axes = node.value_type.axes
     if not axes:
         return f"{program.name}.{node.name}[scalar]"
@@ -572,10 +347,15 @@ class PackedBatch:
     target_ids: np.ndarray
     loss_weights: np.ndarray
     segment_ids: np.ndarray
+    attention_layout: AttentionLayout
     locations: tuple[PackedSequenceLocation, ...]
 
 
 def pack_transformer_calls(executions: tuple[TransformerExecutionIR, ...], *, max_seq_len: int) -> PackedBatch:
+    attention_layouts = {call.attention_layout for execution in executions for call in execution.calls}
+    if len(attention_layouts) != 1:
+        raise CompilationError(f"Packed calls must share one attention layout, got {sorted(attention_layouts)}")
+    attention_layout = attention_layouts.pop()
     sequences = [sequence for execution in executions for call in execution.calls for sequence in call.sequences]
     if not sequences:
         raise CompilationError("Cannot pack an empty execution")
@@ -628,5 +408,6 @@ def pack_transformer_calls(executions: tuple[TransformerExecutionIR, ...], *, ma
         target_ids,
         loss_weights,
         segment_ids,
+        attention_layout,
         tuple(locations),
     )

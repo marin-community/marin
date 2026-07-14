@@ -17,18 +17,16 @@ from experiments.grug.base.model import GrugModelConfig
 from experiments.probabilistic_dataflow.compiler import (
     AttentionLayout,
     PackedBatch,
-    ParallelQuery,
     TokenCodec,
-    compile_query,
     lower_to_transformer,
     pack_transformer_calls,
 )
 from experiments.probabilistic_dataflow.scientific_model import CrossDomainTransformer
 from experiments.probabilistic_dataflow.synthetic import (
     advection_example,
-    advection_problem,
-    symmetric_pairs_example,
-    symmetric_pairs_problem,
+    advection_program,
+    contacts_example,
+    contacts_program,
 )
 
 
@@ -84,14 +82,12 @@ TEXT_SENTENCES = (
 
 def record_order_equivariance_error(*, seed: int = 0) -> float:
     """Measure the maximum logit change after permuting and restoring scientific records."""
-    problem = advection_problem()
-    plan = compile_query(problem.query, ParallelQuery(problem.targets))
+    program = advection_program()
     codec = TokenCodec()
     sequence = (
         lower_to_transformer(
-            problem.program,
-            plan,
-            advection_example(problem, seed=seed),
+            program,
+            advection_example(program, seed=seed),
             codec,
         )
         .calls[0]
@@ -139,26 +135,22 @@ def build_mixed_synthetic_batch(
     if examples_per_problem <= 0:
         raise ValueError(f"examples_per_problem must be positive, got {examples_per_problem}")
     codec = TokenCodec()
-    advection = advection_problem()
-    contacts = symmetric_pairs_problem()
-    advection_plan = compile_query(advection.query, ParallelQuery(advection.targets))
-    contacts_plan = compile_query(contacts.query, ParallelQuery(contacts.targets))
+    advection = advection_program()
+    contacts = contacts_program()
 
     executions = []
     for seed in range(examples_per_problem):
         executions.append(
             lower_to_transformer(
-                advection.program,
-                advection_plan,
+                advection,
                 advection_example(advection, seed=seed),
                 codec,
             )
         )
         executions.append(
             lower_to_transformer(
-                contacts.program,
-                contacts_plan,
-                symmetric_pairs_example(contacts, seed=10_000 + seed),
+                contacts,
+                contacts_example(contacts, seed=10_000 + seed),
                 codec,
             )
         )
@@ -200,13 +192,11 @@ def build_synthetic_advection_batch(
     """Build a full-attention scientific workload in the shared token vocabulary."""
     if examples <= 0:
         raise ValueError(f"examples must be positive, got {examples}")
-    problem = advection_problem()
-    plan = compile_query(problem.query, ParallelQuery(problem.targets))
+    program = advection_program()
     executions = tuple(
         lower_to_transformer(
-            problem.program,
-            plan,
-            advection_example(problem, seed=seed),
+            program,
+            advection_example(program, seed=seed),
             codec,
         )
         for seed in range(examples)
@@ -220,7 +210,7 @@ def build_synthetic_advection_batch(
         target_ids=packed.target_ids,
         loss_weights=packed.loss_weights,
         segment_ids=packed.segment_ids,
-        attention_layout=AttentionLayout.FULL,
+        attention_layout=packed.attention_layout,
     )
 
 
