@@ -469,7 +469,7 @@ class Checkpointer:
         self.keep_params = keep_params
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
-        self._last_save_step = 0
+        self._last_save_step: Optional[int] = None
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self._temporary_checkpoints = []
@@ -556,6 +556,8 @@ class Checkpointer:
             # force-save). Skip — re-saving would overwrite an identical artifact, and
             # the end-of-training force-save is meant to capture the FINAL state, which
             # is already captured if a periodic save just fired at this same step.
+            # `_last_save_step` is None until the first save, so a forced save at step 0
+            # (before anything has been written) is not swallowed here.
             return
 
         # two reasons we can save: time or step

@@ -179,6 +179,21 @@ def test_state_step_zero_no_save_without_force():
         assert _checkpoint_steps(tmpdir) == []
 
 
+def test_state_step_zero_saves_when_forced():
+    """A forced save at ``state.step == 0`` must still write.
+
+    Regression: ``_last_save_step`` is None until the first save, so the dedup
+    guard must not treat an as-yet-unsaved step 0 as "already saved" (which a
+    0-initialized sentinel did, swallowing e.g. a save-initial-checkpoint hook).
+    """
+    with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
+        checkpointer = Checkpointer(tmpdir, None, [CheckpointInterval(every=10)])
+        _on_step_new_semantics(checkpointer, 0, force=True)
+        checkpointer.wait_until_finished()
+        assert _checkpoint_steps(tmpdir) == [0]
+        assert _checkpoint_names(tmpdir) == ["step-0"]
+
+
 def test_final_step_naming_matches_count_of_completed_steps():
     """End-of-training: a 50-step run with every=10 should end at step-50 (not step-49)."""
     with tempfile.TemporaryDirectory(prefix="checkpoints") as tmpdir:
