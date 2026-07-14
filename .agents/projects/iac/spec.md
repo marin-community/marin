@@ -435,11 +435,13 @@ Two phases; phase 1 is what this design builds.
 
 ### Secrets model
 
-State is encrypted with the GCP **KMS** key that is the Pulumi `secretsprovider` — Secret Manager
-cannot serve this role. Secret *inputs* the program reads (object-storage keys, etc.) live in GCP
-**Secret Manager**, referenced via `gcp-secret://…` (`ObjectStorageSpec.access_key_secret_ref`).
-The self-managed GCS backend does per-stack locking, so a concurrent CI preview and operator
-apply cannot corrupt state.
+For configuration values specific to a stack/deployment, we use Pulumi's native secrets system:
+- Secrets are set locally using the CLI: `pulumi config set --secret <key> <value>`.
+- Pulumi encrypts these values using the GCP **KMS** key specified as the `secretsprovider` in `Pulumi.<stack>.yaml`.
+- The encrypted ciphertext is stored directly in the `Pulumi.<stack>.yaml` file, which is safe to check into git.
+- At runtime, `pulumi up` and `pulumi preview` decrypt these values using the KMS key (requiring `roles/cloudkms.cryptoKeyDecrypter` on the key).
+
+The self-managed GCS backend does per-stack locking, so a concurrent CI preview and operator apply cannot corrupt state.
 
 ### Phase 2 — full CD (later, not built now)
 
