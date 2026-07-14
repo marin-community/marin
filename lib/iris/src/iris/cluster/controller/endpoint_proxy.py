@@ -289,7 +289,12 @@ async def _send_upstream(
     )
     try:
         upstream_resp = await client.send(upstream_req, stream=True)
-    except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+    except httpx.ConnectTimeout as exc:
+        # Connect has its own (shorter) budget, so name that one, not the read budget.
+        connect_budget = min(timeout_seconds, PROXY_CONNECT_TIMEOUT_SECONDS)
+        logger.warning("Proxy connect timeout for %s: %s", name, exc)
+        raise _UpstreamError(f"{kind} connect timeout after {connect_budget:g}s", status_code=504) from exc
+    except httpx.ReadTimeout as exc:
         logger.warning("Proxy timeout for %s: %s", name, exc)
         raise _UpstreamError(f"{kind} timeout after {timeout_seconds:g}s", status_code=504) from exc
     except httpx.HTTPError as exc:
