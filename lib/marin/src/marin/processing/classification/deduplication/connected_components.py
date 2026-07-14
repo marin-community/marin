@@ -160,9 +160,18 @@ def connected_components(
     resumed = _find_last_complete_iteration(output_dir, max_iterations, num_reduce_shards) if resume else None
     if resumed is not None:
         last_it, last_paths = resumed
-        logger.info("CC resume: skipping through it_%d (%d parquets present)", last_it, len(last_paths))
         curr_it = last_paths
         start_iteration = last_it + 1
+        if start_iteration > max_iterations and last_it >= 1:
+            # The prior run stopped exactly at the iteration cap, so the loop
+            # below would not execute and convergence could not be observed --
+            # a resumed-at-cap run would always report converged=False even if
+            # it had actually converged. Replay the final iteration (a pure,
+            # idempotent function of it_{last_it-1}) so its num_changes is read
+            # and convergence reported accurately (see marin#6798).
+            curr_it = sorted(str(m) for m in StoragePath(f"{output_dir}/it_{last_it - 1}/*.parquet").glob())
+            start_iteration = last_it
+        logger.info("CC resume: through it_%d, starting at it_%d", last_it, start_iteration)
     else:
         curr_it = ctx.execute(
             ds
