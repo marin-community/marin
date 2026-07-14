@@ -24,6 +24,17 @@ together into one combined file and usage drops to ``_SCATTER_FLUSH_TARGET``.
 Routing columns (``__zephyr_shard__``, ``__zephyr_sort_key__``) are added
 in ``_items_to_dataframe``; ``__zephyr_shard__`` is stripped on read,
 ``__zephyr_sort_key__`` is consumed by the merge and stripped after.
+
+``_write_scatter`` accepts plain Python items (one row each) as well as
+``pl.DataFrame``/``pa.RecordBatch`` items (one full batch of rows each, as
+produced by a ``.map()`` step chained after ``load_parquet(batch_mode=True)``).
+A batch item is ingested directly — no per-row Python conversion, no
+``_PAYLOAD_COL``: the batch's own columns become the chunk file's schema, and
+``_SHARD_COL``/``_SORT_KEY_COL`` are computed as vectorized Polars
+expressions from ``key``/``sort_by`` (which must be a ``zephyr.expr.col(...)``
+for batch items, since an arbitrary Python callable can't be vectorized).
+On read, ``_dataframe_to_items`` reconstructs dict rows from the batch's own
+columns when ``_PAYLOAD_COL`` is absent. See ``ScatterWriter.write_batch``.
 """
 
 import concurrent.futures
@@ -42,12 +53,14 @@ import humanfriendly
 import msgspec
 import polars as pl
 import psutil
+import pyarrow as pa
 from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
+from zephyr.expr import ColumnExpr, Expr
 from zephyr.external_sort import external_sort_merge
-from zephyr.shard_keys import composite_sort_key, deterministic_hash
+from zephyr.shard_keys import deterministic_hash
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
 
@@ -107,6 +120,10 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 _LOCAL_DISK_SHUFFLE_UTILIZATION = 0.9
 # Polars streaming chunk size, important to avoid excessive memory usage during merge.
 _POLARS_STREAMING_CHUNK_SIZE = 10000
+# Seed for the vectorized shard-routing hash used by ScatterWriter.write_batch.
+# Deterministic across processes for a fixed Polars version (verified); does
+# not need to match deterministic_hash's algorithm — see write_batch's docstring.
+_SCATTER_HASH_SEED = 0
 
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
@@ -151,9 +168,18 @@ def _read_cgroup_memory_bytes() -> int:
 
 
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
-    """Yield Python items from a DataFrame, stripping routing columns and deserializing payloads."""
-    for p in df[_PAYLOAD_COL].to_list():
-        yield cloudpickle.loads(p)
+    """Yield Python items from a DataFrame, stripping routing columns.
+
+    Payload-bearing chunks (Python-item writes) deserialize ``_PAYLOAD_COL``
+    via cloudpickle. Batch-ingested chunks (``ScatterWriter.write_batch``, no
+    ``_PAYLOAD_COL``) have no payload to deserialize — their own columns
+    already are the item, so rows are reconstructed directly.
+    """
+    if _PAYLOAD_COL in df.columns:
+        for p in df[_PAYLOAD_COL].to_list():
+            yield cloudpickle.loads(p)
+    else:
+        yield from df.drop(_SORT_KEY_COL).to_dicts()
 
 
 def _columns_to_dataframe(
@@ -190,6 +216,20 @@ def _columns_to_dataframe(
         # or InvalidOperationError ("nested objects are not allowed") when the
         # key column lands as Object dtype and pl.struct rejects it.
         raise ValueError("key_fn must return an Arrow-serializable object.") from err
+
+
+def _as_row_fn(value: Callable | Expr | None) -> Callable | None:
+    """Normalize a ``key``/``sort_by`` value to a plain row-wise callable.
+
+    ``key``/``sort_by`` may be a ``zephyr.expr.col(...)`` (for the vectorized
+    batch-ingestion path) or a plain ``Callable`` (row-wise, as before).
+    Everywhere a single Python item must be evaluated against it — the
+    Python-item write path, the combiner, and the reduce-side ``groupby`` —
+    this reduces both forms to one calling convention.
+    """
+    if isinstance(value, Expr):
+        return value.evaluate
+    return value
 
 
 def _items_to_dataframe(
@@ -469,10 +509,12 @@ def _apply_combiner(buffer: list, key_fn: Callable, combiner_fn: Callable) -> li
 class ScatterWriter:
     """Writes scatter chunk files as zstd-compressed Parquet, one combined file per flush.
 
-    Accepts routing-column DataFrames (see ``_items_to_dataframe`` for the
-    Python-items adapter) and buffers them as a frame list — appends are free,
-    and the frames are combined with one concat per flush. Buffering frames
-    keeps the interface ready for DataFrame/RecordBatch-native pipelines.
+    Accepts routing-column DataFrames via :meth:`write` (see
+    ``_items_to_dataframe`` for the Python-items adapter) as well as raw
+    batch DataFrames via :meth:`write_batch`, which computes the routing
+    columns directly in Polars and ingests the batch's own columns with no
+    Python-object round trip. Frames are buffered as a list — appends are
+    free — and combined with one concat per flush.
 
     Each flush writes a single ``c{chunk:04d}.parquet`` file sorted by
     ``[_SHARD_COL, _SORT_KEY_COL]`` with row groups sized so Polars predicate
@@ -486,15 +528,21 @@ class ScatterWriter:
     def __init__(
         self,
         data_path: str,
-        key_fn: Callable,
+        key: Callable | Expr,
         source_shard: int,
-        sort_fn: Callable | None = None,
+        num_output_shards: int,
+        sort_by: Callable | Expr | None = None,
         combiner_fn: Callable | None = None,
     ) -> None:
         self._data_path = data_path if data_path.endswith("/") else f"{data_path}/"
-        self._key_fn = key_fn
-        self._sort_fn = sort_fn
-        self._sort_key = composite_sort_key(key_fn, sort_fn)
+        # Raw key/sort_by, used by write_batch's vectorized Polars path.
+        self._key = key
+        self._sort_by = sort_by
+        # Row-wise callable form (Expr.evaluate if an Expr, else unchanged),
+        # used by the combiner path, which operates on individual Python items.
+        self._key_fn = _as_row_fn(key)
+        self._sort_fn = _as_row_fn(sort_by)
+        self._num_output_shards = num_output_shards
 
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
@@ -536,6 +584,15 @@ class ScatterWriter:
         self._frames = []
 
         if self._combiner_fn is not None:
+            # combiner_fn re-groups and reduces individual Python items, so it
+            # requires a per-row payload to operate on. write_batch() asserts
+            # this case can't arise for batch-ingested frames; this is a
+            # defensive second check in case some other path buffers a
+            # payload-less frame while a combiner is configured.
+            assert _PAYLOAD_COL in buffer.columns, (
+                "combiner_fn is not supported for DataFrame/RecordBatch-sourced scatter items "
+                "(no per-row payload to combine over)"
+            )
             frames: list[pl.DataFrame] = []
             for (shard_val,), group in buffer.partition_by(_SHARD_COL, as_dict=True).items():
                 rows = list(_dataframe_to_items(group))
@@ -554,9 +611,16 @@ class ScatterWriter:
 
         self._total_bytes_written += int(buffer_sorted.estimated_size())
         self._total_rows_written += len(buffer_sorted)
-        shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
-        for shard_val, nbytes in shard_sizes.iter_rows():
-            self._shard_bytes[shard_val] += int(nbytes)
+        if _PAYLOAD_COL in buffer_sorted.columns:
+            shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
+            for shard_val, nbytes in shard_sizes.iter_rows():
+                self._shard_bytes[shard_val] += int(nbytes)
+        else:
+            # No per-row payload to measure exactly; Polars' own per-shard
+            # memory estimate is the same kind of estimate already used for
+            # _total_bytes_written above.
+            for (shard_val,), group in buffer_sorted.partition_by(_SHARD_COL, as_dict=True).items():
+                self._shard_bytes[shard_val] += int(group.estimated_size())
 
         # Size row groups so each target shard fits in roughly one row group,
         # enabling Polars predicate pushdown to skip non-matching groups.
@@ -611,6 +675,40 @@ class ScatterWriter:
                     100.0 * _SCATTER_FLUSH_TARGET,
                 )
                 self._flush()
+
+    def write_batch(self, df: pl.DataFrame) -> None:
+        """Ingest a raw batch DataFrame directly — no per-row Python conversion.
+
+        ``key``/``sort_by`` must be a ``zephyr.expr.col(...)`` (a
+        ``ColumnExpr``): an arbitrary Python callable can't be turned into a
+        vectorized Polars expression, which is the whole point of this path.
+        ``_SHARD_COL``/``_SORT_KEY_COL`` are computed directly from *df*'s own
+        columns via Polars expressions and appended; *df*'s remaining columns
+        are buffered as-is (no ``_PAYLOAD_COL``, no cloudpickle) and become
+        the written chunk file's schema.
+
+        The shard hash uses Polars' native ``Expr.hash()`` rather than
+        ``deterministic_hash`` (no vectorized equivalent of the latter
+        exists). This is safe because ``_SHARD_COL`` is computed once here
+        and only ever read back (never recomputed) on the reduce side — the
+        only requirement is that every mapper task in this Scatter stage
+        route a given key to the same shard, which holds since they all run
+        this same method with the same hash function.
+        """
+        assert self._combiner_fn is None, "combiner_fn is not supported for DataFrame/RecordBatch-sourced scatter items"
+        assert isinstance(
+            self._key, ColumnExpr
+        ), f"DataFrame/RecordBatch scatter items require key=zephyr.expr.col(...), got {self._key!r}"
+        if self._sort_by is not None:
+            assert isinstance(
+                self._sort_by, ColumnExpr
+            ), f"DataFrame/RecordBatch scatter items require sort_by=zephyr.expr.col(...), got {self._sort_by!r}"
+
+        key_expr = pl.col(self._key.name)
+        sort_value_expr = pl.col(self._sort_by.name) if self._sort_by is not None else pl.lit(None)
+        shard_expr = (key_expr.hash(seed=_SCATTER_HASH_SEED) % self._num_output_shards).cast(pl.Int32)
+        sort_key_expr = pl.struct(key_expr.alias("key"), sort_value_expr.alias("sort_value"))
+        self.write(df.with_columns(shard_expr.alias(_SHARD_COL), sort_key_expr.alias(_SORT_KEY_COL)))
 
     def close(self) -> ListShard:
         """Flush remaining buffers, write sidecar, return ListShard.
@@ -680,35 +778,50 @@ def _write_scatter(
     items: Iterator,
     source_shard: int,
     data_path: str,
-    key_fn: Callable,
+    key_fn: Callable | Expr,
     num_output_shards: int,
-    sort_fn: Callable | None = None,
+    sort_fn: Callable | Expr | None = None,
     combiner_fn: Callable | None = None,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and flush as Parquet chunk files.
 
-    Routing and sort keys are computed here (in Python, since ``key_fn`` and
-    ``sort_fn`` are arbitrary callables) and embedded as helper columns in the DataFrame.
-    Items are batched into DataFrames.
+    Plain Python items are routed by calling ``key_fn``/``sort_fn`` per item
+    (in Python, since arbitrary callables can't be vectorized) and batched
+    into DataFrames up to ``_DATAFRAME_ROW_COUNT`` at a time. A
+    ``pl.DataFrame`` or ``pa.RecordBatch`` item (e.g. from an upstream
+    ``.map()`` over ``load_parquet(batch_mode=True)``) already represents a
+    full batch of rows and is ingested directly via
+    ``ScatterWriter.write_batch`` — no per-row Python conversion — which
+    requires ``key_fn``/``sort_fn`` to be a ``zephyr.expr.col(...)``.
     Writes Parquet chunk files plus one ``metadata.msgpack`` sidecar.
 
     Returns:
         A ListShard wrapping the data file path (as the existing scatter
         plumbing expects a list of paths).
     """
+    # Row-wise form for the plain-Python-item path below; write_batch (used
+    # for DataFrame/RecordBatch items) uses the raw key_fn/sort_fn directly.
+    row_key_fn = _as_row_fn(key_fn)
+    row_sort_fn = _as_row_fn(sort_fn)
     with ScatterWriter(
         data_path=data_path,
-        key_fn=key_fn,
+        key=key_fn,
         source_shard=source_shard,
-        sort_fn=sort_fn,
+        num_output_shards=num_output_shards,
+        sort_by=sort_fn,
         combiner_fn=combiner_fn,
     ) as writer:
         pending: list[Any] = []
         for item in items:
+            if isinstance(item, pa.RecordBatch):
+                item = pl.from_arrow(item)
+            if isinstance(item, pl.DataFrame):
+                writer.write_batch(item)
+                continue
             pending.append(item)
             if len(pending) >= _DATAFRAME_ROW_COUNT:
-                writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
+                writer.write(_items_to_dataframe(pending, row_key_fn, row_sort_fn, num_output_shards))
                 pending.clear()
         if pending:
-            writer.write(_items_to_dataframe(pending, key_fn, sort_fn, num_output_shards))
+            writer.write(_items_to_dataframe(pending, row_key_fn, row_sort_fn, num_output_shards))
         return writer.close()

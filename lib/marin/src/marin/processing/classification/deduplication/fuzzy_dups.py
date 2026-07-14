@@ -36,12 +36,15 @@ import os
 from collections.abc import Iterator
 from typing import Any
 
+import polars as pl
+import pyarrow as pa
 from fray.types import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
+from zephyr.expr import col
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -159,15 +162,35 @@ def _cc_id(source_tag: str, doc_id: str) -> str:
     inputs can carry byte-identical normalized ids (e.g. exact text overlap
     across datasets), and without this prefix they collapse to a single
     node — under-reporting dups and potentially clobbering co-partitioned
-    attr files. The prefix is stripped in :func:`_strip_cc_prefix` before
-    the final attr parquet is written.
+    attr files. The prefix is split back off (on the first ``_CC_ID_SEP``) in
+    :func:`_cc_records_to_attrs` before the final attr parquet is written.
     """
     return f"{source_tag}{_CC_ID_SEP}{doc_id}"
 
 
-def _strip_cc_prefix(record_id: str) -> str:
-    """Reverse :func:`_cc_id`, returning the original ``doc_id``."""
-    return record_id.split(_CC_ID_SEP, 1)[1]
+def _cc_records_to_attrs(batch: pa.RecordBatch) -> pl.DataFrame:
+    """Vectorized per-batch equivalent of the per-row CC-node -> attr-row transform.
+
+    Reads a ``CCNode``-shaped RecordBatch (``record_id``, ``component_id``,
+    ``id_norm``, ``adjacency_list``, ``file_idx``; see
+    ``connected_components.CCNode``) and computes, entirely in Polars:
+
+    - ``id``: reverses :func:`_cc_id` — ``record_id`` split on the first
+      ``_CC_ID_SEP``, keeping the original ``doc_id``.
+    - ``is_canonical``: CC's Hash-to-Min guarantees ``component_id ==
+      id_norm`` iff this record is the cluster's natural canonical.
+    - ``is_singleton``: true iff the node's only adjacency link is itself.
+    """
+    df = pl.from_arrow(batch)
+    return df.select(
+        pl.col("record_id").str.splitn(_CC_ID_SEP, 2).struct.field("field_1").alias("id"),
+        pl.col("component_id"),
+        (pl.col("component_id") == pl.col("id_norm")).alias("is_canonical"),
+        (
+            (pl.col("adjacency_list").list.len() == 1) & (pl.col("adjacency_list").list.first() == pl.col("id_norm"))
+        ).alias("is_singleton"),
+        pl.col("file_idx"),
+    )
 
 
 def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
@@ -343,21 +366,18 @@ def compute_fuzzy_dups_attrs(
     # so `component_id == id_norm` cheaply identifies the natural canonical.
     # `preserve_singletons=True` wires singletons as self-links, so a node is a
     # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
+    # load_parquet(batch_mode=True) + a batch-to-DataFrame map keeps this
+    # transform vectorized in Polars instead of a per-row Python lambda.
+    # col(...) (rather than a lambda) lets Scatter ingest each DataFrame
+    # batch directly, computing routing columns in Polars with no per-row
+    # Python conversion.
     shard_pipeline = (
         Dataset.from_list(cc_files)
-        .load_parquet()
-        .map(
-            lambda r: {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
-        )
+        .load_parquet(batch_mode=True)
+        .map(_cc_records_to_attrs)
         .group_by(
-            lambda r: r["file_idx"],
-            sort_by=lambda r: r["id"],
+            col("file_idx"),
+            sort_by=col("id"),
             reducer=aggregator,
         )
     )
