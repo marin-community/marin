@@ -27,7 +27,11 @@ from levanter.callbacks.labeled_eval import LabeledLmEvalConfig, add_labeled_lm_
 from levanter.adaptor import AdaptorConfig, AdaptorExportConfig, NoAdaptorConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
+from levanter.compat.hf_checkpoints import (
+    HFCompatConfig,
+    build_generation_config,
+    converter_from_hf_compat_config,
+)
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -158,8 +162,7 @@ def main(config: TrainLmConfig):
             # NB: gross mutability
             config.model = converter.config_from_hf_config(converter.default_hf_config)
     elif isinstance(config.model, HFCompatConfig):
-        converter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(tokenizer=tokenizer)
+        converter = converter_from_hf_compat_config(config.model, tokenizer=tokenizer)
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
     else:

@@ -286,7 +286,7 @@ def converter_from_hf_compat_config(
     """Build a converter without forcing tokenizer inference from the reference checkpoint."""
     converter_config = config
     if tokenizer is not None and hasattr(config, "tokenizer"):
-        converter_config = dataclasses.replace(config, tokenizer=tokenizer)
+        converter_config = dataclasses.replace(cast(Any, config), tokenizer=tokenizer)
 
     converter = converter_config.hf_checkpoint_converter()
     return converter.replaced(

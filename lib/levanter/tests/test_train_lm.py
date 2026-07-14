@@ -18,10 +18,12 @@ from haliax.quantization import QuantizationConfig
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.adaptor import LoraAdaptorConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
 from test_utils import arrays_only
@@ -64,6 +66,40 @@ def test_train_lm():
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        train_lm.main(config)
+        _assert_training_recorded(tmpdir)
+
+
+def test_train_lm_scratch_hf_model_uses_resolved_data_tokenizer(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+
+        def fail_remote_tokenizer_load(*args, **kwargs):
+            raise AssertionError("scratch training must not load the model's remote reference tokenizer")
+
+        monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", fail_remote_tokenizer_load)
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=Qwen3Config(
+                num_layers=2,
+                num_heads=2,
+                num_kv_heads=2,
+                max_seq_len=64,
+                hidden_dim=32,
+                intermediate_dim=64,
+                attn_backend=None,
+            ),
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=1,
+                train_batch_size=len(jax.devices()),
+                max_eval_batches=1,
+                tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
                 require_accelerator=False,
                 distributed=DistributedConfig(initialize_jax_distributed=False),
             ),

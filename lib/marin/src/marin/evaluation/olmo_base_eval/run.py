@@ -21,17 +21,18 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import jmp
-import levanter
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.compat.hf_checkpoints import load_tokenizer as hf_load_tokenizer
 from levanter.data.loader import stack_tree
 from levanter.model_loading import load_hf_checkpoint
 from levanter.models.lm_model import LmConfig, LmExample
+from levanter.tracker import current_tracker, log
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
-from levanter.trainer import TrainerConfig
+from levanter.trainer import TrainerConfig, initialize
 from levanter.utils.tree_utils import inference_mode
+from transformers import AutoConfig
 
 from marin.evaluation.olmo_base_eval.aggregate import assemble_table9, table9_macro
 from marin.evaluation.olmo_base_eval.bpb import EncodedInstance, encode_context_continuation, task_bpb
@@ -87,19 +88,18 @@ def _bucket_length(length: int, max_length: int) -> int:
 def _model_config_from_checkpoint(checkpoint: str) -> LmConfig:
     """Derive the Levanter model config from the checkpoint's ``model_type``.
 
-    Selects the Levanter config class by ``config.json``'s ``model_type`` instead
-    of ``HFCheckpointConverter.from_hf``, whose probe constructs every registered
-    config's converter and would try to load gated reference repos (e.g.
-    ``google/gemma-2b``) — which fails for non-Llama checkpoints when the matching
-    architecture is registered after a gated one.
+    The config is parsed locally rather than through a checkpoint converter.
+    Converter construction may infer a tokenizer from the architecture's public
+    reference checkpoint even though model-config conversion does not need one.
     """
     with fsspec.open(f"{checkpoint.rstrip('/')}/config.json", "r") as handle:
-        model_type = json.load(handle)["model_type"]
+        hf_config_dict = json.load(handle)
+    model_type = hf_config_dict.pop("model_type")
     choices = LmConfig.get_known_choices()
     if model_type not in choices:
         raise ValueError(f"unsupported model_type {model_type!r}; known: {sorted(choices)}")
-    converter = choices[model_type]().hf_checkpoint_converter()
-    return converter.config_from_hf_checkpoint(checkpoint)
+    hf_config = AutoConfig.for_model(model_type, **hf_config_dict)
+    return choices[model_type].from_hf_config(hf_config)
 
 
 def _resolve_bos_token_id(hf_tokenizer, prepend_bos: bool | None) -> int | None:
@@ -264,7 +264,7 @@ def olmo_base_eval(config: OlmoBaseEvalConfig) -> None:
     if not config.checkpoint_is_hf:
         raise NotImplementedError("native Levanter checkpoints are not yet supported; export to HF first")
 
-    levanter.initialize(config)
+    initialize(config)
     # Parity eval: use full-precision matmuls so TPU fp32 reproduces the reference
     # to ~1e-7 rather than the ~1e-4 of the default bf16x3-pass fp32 matmul.
     jax.config.update("jax_default_matmul_precision", "highest")
@@ -297,11 +297,11 @@ def olmo_base_eval(config: OlmoBaseEvalConfig) -> None:
         if jax.process_index() == 0:
             _write_results(config.output_path, results)
         if metrics:
-            levanter.tracker.log(metrics, step=0)
+            log(metrics, step=0)
             if results["table9_macro_bpb"] is not None:
                 logger.info("table9_macro_bpb = %.6f", results["table9_macro_bpb"])
     finally:
-        levanter.tracker.current_tracker().finish()
+        current_tracker().finish()
 
 
 def _write_results(output_path: str, results: dict) -> None:

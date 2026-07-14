@@ -464,6 +464,7 @@ class HfMarinTokenizer:
 
     _tokenizer: HfBaseTokenizer
     _name_or_path: str
+    _local_files_path: str
     _bos_id: int | None
     _eos_id: int | None
     _pad_id: int | None
@@ -608,7 +609,12 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer  # noqa: PLC0415  # guarded: avoid eager torch
 
-        tokenizer = AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        # Preserve the source tokenizer's HF metadata without re-fetching its public repository.
+        tokenizer = AutoTokenizer.from_pretrained(
+            self._local_files_path,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
         if self._chat_template is not None and getattr(tokenizer, "chat_template", None) != self._chat_template:
             tokenizer.chat_template = self._chat_template
         return tokenizer
@@ -903,6 +909,7 @@ def _load_hf_tokenizer(name_or_path: str) -> HfMarinTokenizer:
     return HfMarinTokenizer(
         _tokenizer=tok,
         _name_or_path=name_or_path,
+        _local_files_path=name_or_path,
         _bos_id=bos_id,
         _eos_id=eos_id,
         _pad_id=pad_id,

@@ -63,6 +63,7 @@ def local_gpt2_marin_tokenizer(tmp_path_factory) -> HfMarinTokenizer:
     return HfMarinTokenizer(
         _tokenizer=tok,
         _name_or_path=str(tmpdir),
+        _local_files_path=str(tmpdir),
         _bos_id=None,
         _eos_id=eos_id,
         _pad_id=None,

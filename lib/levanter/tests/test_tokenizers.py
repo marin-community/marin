@@ -1025,6 +1025,7 @@ def test_chat_template_blocks_python_internal_attribute_access():
     tokenizer = HfMarinTokenizer(
         _tokenizer=cast(HfBaseTokenizer, object()),
         _name_or_path="malicious-tokenizer",
+        _local_files_path="malicious-tokenizer",
         _bos_id=None,
         _eos_id=None,
         _pad_id=None,

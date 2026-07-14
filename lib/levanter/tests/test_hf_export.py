@@ -3,11 +3,14 @@
 
 """Tests for generation config validation and normalization."""
 
+import dataclasses
 import json
+import os
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from transformers import AutoTokenizer
 
 from levanter.compat.hf_checkpoints import (
     _save_tokenizer_pretrained,
@@ -153,3 +156,27 @@ def test_save_tokenizer_pretrained_embeds_chat_template(tmp_path):
 
     tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text())
     assert tokenizer_config["chat_template"] == tokenizer.chat_template
+
+
+def test_save_marin_tokenizer_uses_staged_files_offline(
+    tmp_path,
+    local_gpt2_tokenizer,
+    monkeypatch,
+):
+    tokenizer = dataclasses.replace(local_gpt2_tokenizer, _name_or_path="remote/tokenizer")
+    original_from_pretrained = AutoTokenizer.from_pretrained
+
+    def local_from_pretrained(name_or_path, *args, **kwargs):
+        assert os.path.isdir(name_or_path)
+        assert kwargs.get("local_files_only") is True
+        return original_from_pretrained(name_or_path, *args, **kwargs)
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", local_from_pretrained)
+
+    _save_tokenizer_pretrained(tokenizer, str(tmp_path))
+
+    exported = original_from_pretrained(str(tmp_path), local_files_only=True)
+    text = "hello world"
+    assert exported.encode(text, add_special_tokens=False) == tokenizer.encode(text, add_special_tokens=False)
+    assert (tmp_path / "tokenizer.json").is_file()
+    assert (tmp_path / "tokenizer_config.json").is_file()
