@@ -69,7 +69,7 @@ def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clu
 
 
 def quack_gated_grouped_gemm(x_sort, w_gate_up, cu_seqlens, *, activation="swiglu",
-                             tile_mn=(256, 128), cluster_mnk=(2, 1, 1), max_swizzle=8, return_preact=False):
+                             tile_mn=(256, 256), cluster_mnk=(2, 1, 1), max_swizzle=8, return_preact=False):
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
 
     x_sort: [M, K] tokens sorted by expert. w_gate_up: [E, K, 2N]. cu_seqlens: [E+1] int32.
@@ -128,7 +128,7 @@ def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters,
     return launcher
 
 
-def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), cluster_mnk=(2, 1, 1), max_swizzle=8):
+def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 256), cluster_mnk=(2, 1, 1), max_swizzle=8):
     """Plain grouped GEMM a[M,K] @ w -> [M,N], grouped by cu_seqlens (varlen_m).
 
     b_major='n': w is [E,K,N] (n-major, mode (2,1,0)).  b_major='k': w is [E,N,K]
@@ -190,7 +190,7 @@ def _build_wgrad_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters,
 
 
 def quack_grouped_wgrad_gemm(acts, grads, cu_seqlens, num_experts, *,
-                             tile_mn=(256, 128), cluster_mnk=(2, 1, 1), max_swizzle=8):
+                             tile_mn=(256, 256), cluster_mnk=(2, 1, 1), max_swizzle=8):
     """dw[e] = acts_e^T @ grads_e with ragged token contraction (QuACK varlen_k).
 
     acts: [total_K, M] tokens sorted by expert (x_dispatch for dw13, h for dw2).
