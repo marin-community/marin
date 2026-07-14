@@ -4708,7 +4708,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=5.5.3,<6.0" },
     { name = "triton", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=3.6.0,<3.7" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=912fb118c18c2eb8143a188ddb31838202bd8521" },
+    { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=a0b205f2afd5b33d01703a4cd9b18453d5286f39" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
 provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
@@ -4899,6 +4899,7 @@ version = "0.2.0"
 source = { editable = "lib/fray" }
 dependencies = [
     { name = "cloudpickle" },
+    { name = "humanfriendly" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
 ]
@@ -4926,6 +4927,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "humanfriendly", specifier = ">=10.0" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
 ]
@@ -11320,8 +11322,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.20.1rc1.dev1460+g912fb118c.tpu"
-source = { git = "https://github.com/marin-community/vllm.git?rev=912fb118c18c2eb8143a188ddb31838202bd8521#912fb118c18c2eb8143a188ddb31838202bd8521" }
+version = "0.20.1rc1.dev1462+ga0b205f2a.tpu"
+source = { git = "https://github.com/marin-community/vllm.git?rev=a0b205f2afd5b33d01703a4cd9b18453d5286f39#a0b205f2afd5b33d01703a4cd9b18453d5286f39" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },

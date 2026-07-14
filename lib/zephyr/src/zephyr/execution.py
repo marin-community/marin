@@ -13,6 +13,7 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 import enum
 import logging
+import math
 import os
 import sys
 import threading
@@ -86,6 +87,8 @@ MAX_SHARD_INFRA_FAILURES = 20
 
 # Typical status text for a 6-stage pipeline is ~300 chars.
 MAX_STATUS_TEXT_LENGTH = 1000
+
+MAX_WORKERS_PER_JOB = 1_024
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -1493,8 +1496,8 @@ class _CoordinatorJobConfig:
     # Cloudpickled and re-invoked per worker slot, so per-runner mutable
     # state is per-slot.
     stage_runner_factory: Callable[[], StageRunner]
-    map_workers_per_actor: int = 1
-    reduce_workers_per_actor: int = 1
+    map_task_resources: ResourceConfig
+    reduce_task_resources: ResourceConfig
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
@@ -1524,19 +1527,10 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
     client = current_client()
 
-    # Compute per-task resource costs from worker spec and concurrency limits.
-    total = ZephyrTaskResources(
-        cpu=config.worker_resources.cpu,
-        memory=int(humanfriendly.parse_size(config.worker_resources.ram, binary=True)),
-    )
-    map_cost = ZephyrTaskResources(
-        cpu=total.cpu / max(1, config.map_workers_per_actor),
-        memory=total.memory // max(1, config.map_workers_per_actor),
-    )
-    reduce_cost = ZephyrTaskResources(
-        cpu=total.cpu / max(1, config.reduce_workers_per_actor),
-        memory=total.memory // max(1, config.reduce_workers_per_actor),
-    )
+    # Compute per-task resource costs.
+    total = ZephyrTaskResources.from_resource_config(config.worker_resources)
+    map_cost = ZephyrTaskResources.from_resource_config(config.map_task_resources)
+    reduce_cost = ZephyrTaskResources.from_resource_config(config.reduce_task_resources)
 
     # Host coordinator actor in this process (no child job needed)
     coord_name = f"zephyr-{config.name}-p{config.pipeline_id}-coord"
@@ -1559,22 +1553,20 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     # body raises and the Iris task will be stuck RUNNING.
     try:
         # Create workers (child jobs)
-        num_shards = config.plan.num_shards
-        actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
 
-        if actual_workers > 0:
+        if config.max_workers > 0:
             # Worker name includes attempt ID so that if a stale coordinator
             # process from a previous attempt is still running, its shutdown
             # targets the old name and cannot kill this attempt's workers.
             worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
-            logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
+            logger.info("Starting %d workers (shards=%d)", config.max_workers, config.plan.num_shards)
             worker_group = client.create_actor_group(
                 ZephyrWorker,
                 coordinator,
                 config.stage_runner_factory,
                 total,
                 name=worker_name,
-                count=actual_workers,
+                count=config.max_workers,
                 resources=config.worker_resources,
                 actor_config=ActorConfig(max_task_retries=10),
             )
@@ -1655,6 +1647,46 @@ def _try_read_coordinator_result(result_path: str) -> Any:
         return None
 
 
+def _tasks_per_worker(worker_resources: ResourceConfig, task_resources: ResourceConfig) -> int:
+    """Return how many concurrent copies of *task_resources* fit in *worker_resources*.
+
+    Packing uses cpu and ram only. Zephyr does not track disk in runtime
+    admission (``ZephyrTaskResources`` is cpu+memory), so disk is ignored here
+    even though it still applies to Iris worker sizing.
+    """
+    ratios = [worker_resources.cpu / task_resources.cpu]
+    worker_ram = humanfriendly.parse_size(worker_resources.ram, binary=True)
+    task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
+    if task_ram > 0:
+        ratios.append(worker_ram / task_ram)
+    return max(1, math.floor(min(ratios)))
+
+
+def _compute_min_tasks_per_worker(
+    worker_resources: ResourceConfig,
+    map_resources: ResourceConfig,
+    reduce_resources: ResourceConfig,
+) -> int:
+    """Compute how many concurrent tasks fit on one worker given map/reduce task costs.
+
+    Uses the tighter of the map and reduce packing densities so workers sized for
+    both stage types can keep enough tasks in flight for either.
+    """
+    for field_name in ["device", "preemptible", "regions", "zone", "replicas", "image", "device_alternatives"]:
+        map_val = getattr(map_resources, field_name)
+        reduce_val = getattr(reduce_resources, field_name)
+        if map_val != reduce_val:
+            raise ValueError(
+                f"Field '{field_name}' cannot differ between map_task_resources ({map_val}) "
+                f"and reduce_task_resources ({reduce_val}). Set the same value on both."
+            )
+
+    return min(
+        _tasks_per_worker(worker_resources, map_resources),
+        _tasks_per_worker(worker_resources, reduce_resources),
+    )
+
+
 @dataclass
 class ZephyrContext:
     """Execution context for Zephyr pipelines.
@@ -1669,7 +1701,8 @@ class ZephyrContext:
         client: The fray client to use. If None, auto-detects using current_client().
         max_workers: Upper bound on worker count. The actual count is
             min(max_workers, num_shards), computed at first execute(). If None,
-            defaults to os.cpu_count() for LocalClient, or 128 for distributed clients.
+            defaults to os.cpu_count() for LocalClient, or ``MAX_WORKERS_PER_JOB``
+            (1024) for distributed clients.
         resources: Resource config per worker.
         coordinator_resources: Resource config for the coordinator job. Defaults to 2 GB.
         chunk_storage_prefix: Storage prefix for intermediate chunks. If None, defaults
@@ -1684,13 +1717,10 @@ class ZephyrContext:
         stage_runner_factory: Callable ``() -> StageRunner``.
             Defaults to ``InlineRunner`` for ``LocalClient`` and ``SubprocessRunner``
             for distributed clients.
-        map_workers_per_actor: Maximum number of concurrent map tasks per actor.
-            Each accepted task deducts ``total_resources / map_workers_per_actor``
-            from the worker's available resource pool, so N tasks can run in
-            parallel before the pool is exhausted. Defaults to 1.
-        reduce_workers_per_actor: Maximum number of concurrent reduce tasks per actor.
-            Same resource-cost model as map_workers_per_actor applied to reduce-type
-            stages (Scatter, Reduce, Fold, Join). Defaults to 1.
+        map_task_resources: ResourceConfig specifying resources required by a single map task.
+            Defaults to ``resources``. Requires ``resources`` to be set explicitly.
+        reduce_task_resources: ResourceConfig specifying resources required by a single reduce task.
+            Defaults to ``map_task_resources``.
         heartbeat_timeout: Seconds without a worker heartbeat before the coordinator
             marks the worker FAILED and requeues its in-flight shard. Defaults to 120.
             Long-running stages (e.g. vLLM inference with cold XLA compile) may need
@@ -1705,7 +1735,7 @@ class ZephyrContext:
 
     client: Client | None = None
     max_workers: int | None = None
-    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
+    resources: ResourceConfig | None = None
     coordinator_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
     )
@@ -1715,8 +1745,8 @@ class ZephyrContext:
     # NOTE: 100 is fairly aggressive but it fits the preemptible env better
     max_execution_retries: int = 100
     stage_runner_factory: Callable[[], StageRunner] | None = None
-    map_workers_per_actor: int = 1
-    reduce_workers_per_actor: int = 1
+    map_task_resources: ResourceConfig | None = None
+    reduce_task_resources: ResourceConfig | None = None
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
@@ -1727,18 +1757,51 @@ class ZephyrContext:
     _coordinator_job: JobHandle | None = field(default=None, repr=False)
     # NOTE: execute calls increment this at the very beginning
     _pipeline_id: int = field(default=-1, repr=False)
+    min_tasks_per_worker: int = field(init=False, default=1, repr=False)
 
     def __post_init__(self):
         if self.client is None:
             self.client = current_client()
 
-        if self.max_workers is None:
-            if isinstance(self.client, LocalClient):
-                self.max_workers = os.cpu_count() or 1
+        if env_val := os.environ.get("ZEPHYR_MAX_WORKERS"):
+            if self.max_workers is None:
+                try:
+                    self.max_workers = int(env_val)
+                except ValueError as e:
+                    raise ValueError(f"Invalid ZEPHYR_MAX_WORKERS environment variable value: {env_val}") from e
             else:
-                # Default to 128 for distributed, but allow override
-                env_val = os.environ.get("ZEPHYR_MAX_WORKERS")
-                self.max_workers = int(env_val) if env_val else 128
+                logger.info("Ignoring ZEPHYR_MAX_WORKERS environment variable in favor of max_workers variable.")
+
+        if self.map_task_resources is not None and self.resources is None:
+            raise ValueError("Setting map_task_resources without setting resources is an error.")
+        if self.reduce_task_resources is not None and self.map_task_resources is None:
+            raise ValueError("Setting reduce_task_resources without setting map_task_resources is an error.")
+
+        if self.resources is None:
+            self.resources = ResourceConfig(cpu=1, ram="1g")
+        if self.map_task_resources is None:
+            self.map_task_resources = self.resources
+        if self.reduce_task_resources is None:
+            self.reduce_task_resources = self.map_task_resources
+
+        # Sizing checks
+        resources_ram = humanfriendly.parse_size(self.resources.ram, binary=True)
+        resources_disk = humanfriendly.parse_size(self.resources.disk, binary=True)
+        for task_resources, name in [
+            (self.map_task_resources, "map_task"),
+            (self.reduce_task_resources, "reduce_task"),
+        ]:
+            task_ram = humanfriendly.parse_size(task_resources.ram, binary=True)
+            task_disk = humanfriendly.parse_size(task_resources.disk, binary=True)
+            if self.resources.cpu < task_resources.cpu or resources_ram < task_ram or resources_disk < task_disk:
+                raise ValueError(
+                    f"Overall resources ({self.resources}) must be larger than or equal to "
+                    f"{name} resources ({task_resources}) on all dimensions (cpu, ram, disk)."
+                )
+
+        self.min_tasks_per_worker = _compute_min_tasks_per_worker(
+            self.resources, self.map_task_resources, self.reduce_task_resources
+        )
 
         if self.no_workers_timeout is None:
             self.no_workers_timeout = 6 * 60 * 60  # 6 hours
@@ -1809,6 +1872,10 @@ class ZephyrContext:
         if dry_run:
             return ZephyrExecutionResult(results=[], counters={})
 
+        if plan.num_shards <= 0:
+            logger.warning("No shards in plan, returning empty results.")
+            return ZephyrExecutionResult(results=[], counters={})
+
         # NOTE: pipeline ID incremented on clean completion only
         self._pipeline_id += 1
         last_exception: Exception | None = None
@@ -1827,17 +1894,26 @@ class ZephyrContext:
             try:
                 self._upload_shared_data(execution_id)
 
+                assert self.resources is not None
+
+                limit = self.max_workers
+                if limit is None and isinstance(self.client, LocalClient):
+                    limit = os.cpu_count() or 1
+
+                needed_workers = math.ceil(plan.num_shards / self.min_tasks_per_worker)
+                actual_workers = min((limit or MAX_WORKERS_PER_JOB), needed_workers)
+
                 config = _CoordinatorJobConfig(
                     plan=plan,
                     execution_id=execution_id,
                     chunk_storage_prefix=self.chunk_storage_prefix,
                     no_workers_timeout=self.no_workers_timeout,
-                    max_workers=self.max_workers,
+                    max_workers=actual_workers,
                     worker_resources=self.resources,
                     name=self.name,
                     pipeline_id=self._pipeline_id,
-                    map_workers_per_actor=self.map_workers_per_actor,
-                    reduce_workers_per_actor=self.reduce_workers_per_actor,
+                    map_task_resources=self.map_task_resources,
+                    reduce_task_resources=self.reduce_task_resources,
                     stage_runner_factory=self.stage_runner_factory,
                     heartbeat_timeout=self.heartbeat_timeout,
                     max_shard_failures=self.max_shard_failures,

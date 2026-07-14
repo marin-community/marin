@@ -166,6 +166,13 @@ pub struct Namespace {
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
+/// A namespace's sealed local segments as one consistent observation: the files a
+/// scan may read, and the lowest `seq` any of them holds.
+pub struct SegmentSnapshot {
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
+}
+
 impl Namespace {
     /// Build a namespace over `data_dir` (disk-backed when `Some`).
     ///
@@ -324,20 +331,32 @@ impl Namespace {
         &self.arrow_schema
     }
 
-    /// Snapshot the SEALED local segment file paths under the insertion lock.
+    /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
+    /// one hold of the insertion lock so the two describe the same segment set.
+    /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
+    /// whose segments have all been evicted to remote).
     ///
-    /// Queries see only flushed data; the in-RAM buffer is NOT exposed.
-    /// Snapshotting the paths under the lock is the read side of the
-    /// query-visibility seam — compaction takes the write side before unlinking
-    /// a file, so a query that captured the pre-compaction paths keeps scanning
-    /// the files it snapshotted.
-    pub fn query_snapshot(&self) -> Vec<String> {
+    /// Snapshotting under the lock is the read side of the query-visibility seam —
+    /// compaction takes the write side before unlinking a file, so a query that
+    /// captured the pre-compaction paths keeps scanning the files it snapshotted.
+    ///
+    /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
+    pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
-        inner
-            .local_segments
-            .iter()
-            .map(|s| s.path.clone())
-            .collect()
+        SegmentSnapshot {
+            paths: inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.clone())
+                .collect(),
+            min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
+        }
+    }
+
+    /// Subscribe to the durability high-water mark. The current value is already
+    /// marked seen, so a caller must read `borrow()` before awaiting `changed()`.
+    pub fn watch_persisted_seq(&self) -> watch::Receiver<i64> {
+        self.persisted_seq.subscribe()
     }
 
     /// Wake the flush task after an append. Nudges the rate-limited flush loop;

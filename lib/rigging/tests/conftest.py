@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import rigging.filesystem as fs
+import rigging.filesystem.cluster_config as cluster_config
 from rigging.config_discovery import find_project_root
 
 
@@ -19,12 +19,12 @@ def _hermetic_cluster_config(monkeypatch):
     only the repo-committed and bundled config dirs.
     """
     monkeypatch.setattr(
-        fs,
+        cluster_config,
         "MARIN_CLUSTER_CONFIG_DIRS",
-        tuple(p for p in fs.MARIN_CLUSTER_CONFIG_DIRS if p != fs.PER_USER_CLUSTER_CONFIG_DIR),
+        tuple(p for p in cluster_config.MARIN_CLUSTER_CONFIG_DIRS if p != cluster_config.PER_USER_CLUSTER_CONFIG_DIR),
     )
     find_project_root.cache_clear()
-    fs.reset_data_config_cache()
+    cluster_config.reset_data_config_cache()
     yield
     find_project_root.cache_clear()
-    fs.reset_data_config_cache()
+    cluster_config.reset_data_config_cache()

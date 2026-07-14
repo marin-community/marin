@@ -510,9 +510,15 @@ endpoints_table = Table(
     # existing DB without a backfill; a NULL is read as PRIVATE (today's
     # cluster-identity-required behavior), so pre-migration rows are unchanged.
     Column("access", Integer, nullable=True),
+    # Owning peer cluster id for an endpoint mirrored from a federated child; NULL
+    # for a locally-registered endpoint. The /proxy route forwards a remote row to
+    # this peer's controller instead of dialing `address` directly. Set-replaced by
+    # the federation sync loop, keyed to the mirrored (cluster=peer) job/task rows.
+    Column("peer_id", String, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
+    Index("idx_endpoints_peer_id", "peer_id"),
 )
 
 

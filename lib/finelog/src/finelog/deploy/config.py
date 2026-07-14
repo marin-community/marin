@@ -8,6 +8,12 @@ name, port, image, optional remote-archive directory, and a deployment
 backend (exactly one of `gcp` or `k8s`).  The schema is intentionally small
 and explicit; finelog owns its deployment knobs so iris's cluster yaml only
 has to reference the config by name.
+
+Two blocks describe the two ends of cross-cluster log shipping. `auth:` names
+the senders a hub server admits, by public key. `forwarding:` names the hub a
+per-cluster server ships its rows to, and the private key it signs its bearer
+with. A server's own key pair is its identity: the hub records rows under the
+`cluster` the sender's key authenticates, never a value the sender asserts.
 """
 
 import json
@@ -16,6 +22,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import yaml
+from rigging.secrets import SecretSpec, as_secret_spec
 from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
@@ -155,6 +162,41 @@ def auth_policy_json(layers: tuple[AuthLayer, ...]) -> str:
 
 
 @dataclass(frozen=True)
+class ForwardingConfig:
+    """Ship this server's rows to a hub finelog, best-effort.
+
+    The server tails its own durable rows and pushes them to ``target``, signing an
+    ``aud="finelog"`` bearer with the Ed25519 private key at ``signing_key``. The hub
+    admits it through a `JwtAuthLayer` entry naming ``cluster`` and the matching public
+    key, and stamps every forwarded row with that cluster.
+
+    ``signing_key`` is a `rigging.secrets` reference (``gcp-secret://…``, ``env:…``,
+    ``file:…``), never the key itself: a deploy backend that can only reach the server
+    through world-readable plaintext (GCE instance metadata) cannot carry it at all.
+    """
+
+    target: str
+    cluster: str
+    signing_key: SecretSpec
+
+    def __post_init__(self) -> None:
+        if not self.target.startswith("https://"):
+            raise ValueError(f"forwarding.target must be an https:// url; got {self.target!r}")
+        if not self.cluster:
+            raise ValueError("forwarding.cluster must name the origin cluster")
+        if not self.signing_key:
+            raise ValueError("forwarding.signing_key must name at least one secret source")
+
+    def to_env_json(self) -> str:
+        """Serialize to the `FINELOG_FORWARDING` JSON the server parses.
+
+        Carries no key material: the private key travels separately as
+        `FINELOG_SIGNING_KEY`, so this value inlines safely into a plaintext manifest.
+        """
+        return json.dumps({"target": self.target, "cluster": self.cluster}, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
 class Deployment:
     """Backend selector. Exactly one of `gcp` or `k8s` must be set."""
 
@@ -184,6 +226,8 @@ class FinelogConfig:
     # Ordered authenticated-ingress layer stack. Empty leaves the server on its
     # allow-localhost default (loopback only, never open).
     auth: tuple[AuthLayer, ...] = ()
+    # Cross-cluster log shipping to a hub finelog. Unset forwards nothing.
+    forwarding: ForwardingConfig | None = None
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -234,6 +278,17 @@ def _build_auth_layers(raw: list, path: Path) -> tuple[AuthLayer, ...]:
     return tuple(layers)
 
 
+def _build_forwarding(raw: dict, path: Path) -> ForwardingConfig:
+    missing = [k for k in ("target", "cluster", "signing_key") if k not in raw]
+    if missing:
+        raise ValueError(f"{path}: forwarding is missing {', '.join(missing)}")
+    return ForwardingConfig(
+        target=raw["target"],
+        cluster=raw["cluster"],
+        signing_key=as_secret_spec(raw["signing_key"]),
+    )
+
+
 def _build_k8s(raw: dict) -> K8sDeployment:
     priority_class_value = raw.get("priority_class_value")
     return K8sDeployment(
@@ -282,6 +337,11 @@ def _load_from_path(path: Path) -> FinelogConfig:
         raise ValueError(f"{path}: `auth` must be a list of layers")
     auth = _build_auth_layers(auth_raw, path) if auth_raw else ()
 
+    forwarding_raw = raw.get("forwarding")
+    if forwarding_raw is not None and not isinstance(forwarding_raw, dict):
+        raise ValueError(f"{path}: `forwarding` must be a mapping")
+    forwarding = _build_forwarding(forwarding_raw, path) if forwarding_raw else None
+
     return FinelogConfig(
         name=raw["name"],
         port=int(raw["port"]),
@@ -290,6 +350,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         deployment=deployment,
         client_url=raw.get("client_url"),
         auth=auth,
+        forwarding=forwarding,
     )
 
 

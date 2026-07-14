@@ -492,6 +492,22 @@ class TaskBackend(Protocol):
         the (comma-expanded) attribute sets."""
         ...
 
+    def available_resources(self) -> dict[str, int] | None:
+        """Free consumable capacity right now, per resource token, for federation.
+
+        A federation parent advertises this to peers so a queued federated job can
+        wait for a peer that actually has room (see ``federation.availability``).
+        v1 reports free accelerator chips keyed by lowercased ``device-variant``
+        (e.g. ``{"h100": 8}``), computed from the same live-worker ``WorkerCapacity``
+        (``total - committed``) the scheduler uses.
+
+        Returns ``None`` when this backend does not supply the metric (a placement-
+        owning ``CLUSTER_VIEW`` backend that does not track per-worker capacity); the
+        controller then leaves ``BackendSummary.availability`` UNSET so a peer reading
+        it falls back to shape-only federation. An empty dict is an authoritative
+        "nothing free"."""
+        ...
+
     def status(self) -> controller_pb2.Controller.BackendStatus:
         """Author this backend's expanded status for the dashboard Backends tab.
 

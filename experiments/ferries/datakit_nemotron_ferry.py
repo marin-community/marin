@@ -108,9 +108,9 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_minhash_attrs(
             source=read_artifact(normalized.output_path, NormalizedData),
             output_path=output_path,
-            worker_resources=ResourceConfig(cpu=3.5, ram="12g", disk="5g"),
-            max_workers=460,
-            map_workers_per_actor=3,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="64g", disk="32g")),
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
         ),
         override_output_path=f"{base}/minhash",
     )  # ~1,380 output shards
@@ -122,10 +122,10 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
-            max_parallelism=690,
             cc_max_iterations=3,
-            worker_resources=ResourceConfig(cpu=2.5, ram="20g", disk="5g"),
-            map_workers_per_actor=2,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="160g", disk="32g")),
+            map_task_resources=resources.scale(1 / 16),
+            reduce_task_resources=resources.scale(3 / 16),
         ),
         override_output_path=f"{base}/fuzzy_dups",
     )  # ~1,380 output shards
@@ -148,9 +148,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
                     keep_if_missing=True,
                 ),
             ],
-            worker_resources=ResourceConfig(cpu=8.5, ram="16g", disk="5g"),
-            max_workers=173,
-            map_workers_per_actor=8,
+            worker_resources=(resources := ResourceConfig(cpu=16, ram="32g", disk="16g")),
+            map_task_resources=resources.scale(1 / 16),
         ),
         override_output_path=f"{base}/consolidate",
     )  # ~1,380 output shards
@@ -165,9 +164,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 validation_paths=[],
                 cache_path=output_path,
                 tokenizer="gpt2",
-                max_workers=460,
-                worker_resources=ResourceConfig(cpu=3.5, ram="15g", disk="5g"),
-                map_workers_per_actor=3,
+                worker_resources=(resources := ResourceConfig(cpu=16, ram="80g", disk="16g")),
+                map_task_resources=resources.scale(1 / 16),
             )
         ),
         override_output_path=f"{base}/tokens",

@@ -34,7 +34,7 @@ import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
-from rigging.filesystem import StoragePath, filesystem, open_url
+from rigging.filesystem import fetch_file_atomic, filesystem, open_url
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 logger = logging.getLogger(__name__)
@@ -675,27 +675,6 @@ _TOKENIZER_ALLOW_PATTERNS = [
 ]
 
 
-def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
-    """Atomically fetch src_url to dest_path via a .tmp sibling.
-
-    Returns False if the source does not exist; re-raises all other errors.
-    Prevents partial writes from poisoning the local cache on any failure.
-    """
-    tmp = dest_path + ".tmp"
-    try:
-        data = StoragePath(src_url).read_bytes()
-        with open(tmp, "wb") as dst:
-            dst.write(data)
-        os.replace(tmp, dest_path)
-        return True
-    except FileNotFoundError:
-        return False
-    except Exception:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
-
-
 def _copy_file_atomic(src_path: str, dest_path: str) -> None:
     """Atomically copy a local file via a .tmp sibling."""
     tmp = dest_path + ".tmp"
@@ -752,7 +731,7 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
                 filename = os.path.basename(entry.rstrip("/"))
                 if not filename:
                     continue
-                if _fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename)):
+                if fetch_file_atomic(f"{mirror_base}/{filename}", os.path.join(local_dir, filename)):
                     copied = True
             if copied:
                 logger.info(

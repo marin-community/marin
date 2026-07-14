@@ -7,19 +7,59 @@ every job to `marin` and GPU work lands on CoreWeave.
 This page is the job model. For the auth, networking, and DNS that carry a handoff, see
 [`coreweave.md`](coreweave.md).
 
-## Routing: one decision, at submit
+## Routing: classify at submit, place on the tick
 
-`PeerRouter.decide` (`cluster/federation/router.py`) runs once per submission, in order:
+Peer placement is not decided at submit. Submit only *classifies* a job; the controller's
+single scheduling tick decides which peer a queued job lands on, alongside every local
+scheduling decision. This keeps one thread of control for all placement and lets a job wait
+for a peer to report free capacity instead of piling onto the first peer that merely *could*
+host it.
 
-1. **A `cluster=<peer>` pin wins.** `iris job run --target-cluster <peer>` sets it. The job
-   goes to that peer even when it could run locally.
-2. **Otherwise local, if the shape is locally feasible.** `job_feasibility` asks whether any
-   local scaling group could in principle host the job.
-3. **Otherwise the first peer that can host it**, by peer id, ascending.
-4. **Otherwise local**, so the job fails as locally unschedulable rather than wedging.
+`PeerRouter.classify` (`cluster/federation/router.py`) runs once per submission and returns one
+of three dispositions:
 
-A peer "can host" a job when its last capability heartbeat (a 30s `ListBackends` probe) shows
-a backend whose advertised attributes satisfy **every routing constraint** on the job.
+1. **`QUEUE` on a `cluster=<peer>` pin.** `iris job run --target-cluster <peer>` sets it. The
+   job queues for that peer even when it could run locally.
+2. **`LOCAL` if the shape is locally feasible.** `job_feasibility` asks whether any local
+   scaling group could in principle host the job.
+3. **`QUEUE` if some reachable peer could host it** — its last capability heartbeat shows a
+   backend whose advertised attributes satisfy **every routing constraint** on the job.
+4. **`REJECT` otherwise**, so the job fails fast as unschedulable rather than wedging.
+
+A `QUEUE` disposition parks the job in the parent's `federated_jobs` table in the
+`QUEUED_HANDOFF` state. It is *not* yet assigned to a peer.
+
+## Placement: the control tick drains the queue against availability
+
+Each control tick, `FederationManager.plan_federation` (`cluster/federation/manager.py`) runs
+the pure pass in `cluster/federation/availability.py` over the queued jobs and the peers' most
+recent availability, and emits `(job → peer, backend)` promotions. A promotion is applied as a
+conditional CAS (`promote_queued_handoff`): it advances the job to a pending handoff only if the
+job is still queued, not cancelled, and non-terminal — so a cancel or terminalize racing the
+tick can never be overtaken by a promotion. A confirmed promotion then delivers over the same
+handoff machinery as before.
+
+Placement translates a job's device request into an **availability gate**: N replicas of an
+8×`h100` job becomes `ge(available:h100, N*8)`, and a peer backend hosts the job only when its
+advertised free capacity meets the gate. This mirrors the `availability:<variant>` *EXISTS*
+constraints the scheduler already uses for reservations, but the `available:<token>` metric is
+*numeric* (a count), not a boolean.
+
+Two properties keep placement honest without pretending to be exact:
+
+- **Never summed across backends.** A job pins to one backend, so 6 free on one backend plus 4
+  on another does not host an 8-GPU job. Availability is evaluated per backend.
+- **A reservation ledger bounds cross-tick over-assignment.** The tick runs on every submit
+  wake — far more often than the 30s heartbeat — so a naive per-tick read would re-spend the
+  same advertised number every tick. The ledger records capacity already promoted against a
+  peer backend *since its last heartbeat* (keyed on the heartbeat's `observation_epoch_ms`), and
+  effective availability is `advertised − reserved`. A strictly newer heartbeat — whose number
+  already reflects the delivered jobs — resets the ledger. Over-assignment is thus bounded to a
+  peer's advertised free capacity per observation, which the issue explicitly tolerates; the
+  peer's own scheduler (and a requeue) is the backstop.
+
+`max_federation_handoffs_per_cycle` (controller config) caps promotions per tick, a second
+bound on a burst against stale metrics.
 
 ## What the router matches on
 
@@ -58,6 +98,20 @@ identity is refused before the handoff. In-cluster workers authenticate by netwo
 so a job submitted by a worker is `local_admin` — a root submitted by a logged-in user is the
 only thing that federates.
 
+## What the peer checks when a handoff arrives
+
+A handoff is authorized as a peer-to-peer delivery, not as a user submission. The peer
+verifies the requesting cluster's signed identity and its own `allowed_submitters` against the
+principal the parent asserts, then admits the job under the parent's job id.
+
+What it does *not* re-run is the client-freshness gate. That gate makes humans upgrade a stale
+`marin-iris` CLI, and the wire client here is the parent controller, which re-encodes the
+request from its own stored job state — the submitter's `client_revision_date` is not part of
+that state and does not survive the round-trip. The parent already gated the submitter's client
+when it accepted the job, and a queued job may wait longer than the freshness window before it
+is delivered, so gating on arrival would reject handoffs for a staleness the peer cannot
+actually observe.
+
 ## What travels with the job
 
 `FederationManager._inline_blobs` (`cluster/federation/manager.py`) carries the workspace
@@ -84,17 +138,36 @@ Every artifact a federated job touches must live in the peer's object store.
 
 ## Observing federation
 
-There is no `iris peers` command. Reachability and advertised shapes come from the
-`ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.
+There is no `iris peers` command. Reachability, advertised shapes, and free capacity come
+from the `ListPeers` RPC; handoff state lives in the parent's `federated_jobs` table.
 
 ```bash
-# Which peers are reachable, and what each advertises
+# Which peers are reachable, what each advertises, and how much is free
 uv run iris --cluster=marin rpc controller list-peers
 
 # Where a job was handed off, to whom, and under which principal
 uv run iris --cluster=marin query \
   "SELECT job_id, peer_id, owner_principal, handoff_state FROM federated_jobs"
 ```
+
+Each backend in the `list-peers` output carries an `availability` block — the free-capacity
+metric the queue gates on (`{"version": 1, "observation_epoch_ms": …, "amounts": {"h100": 504}}`).
+A backend with **no** `availability` block supplies no metric and is matched on shape alone,
+so jobs route to it without a capacity check.
+
+A queued job and a delivered one are both `pending` on the parent, but they are waiting on
+different things, and `job list` says which:
+
+| Pending reason | Meaning |
+| --- | --- |
+| `Queued for a federation peer to report free capacity` | In the queue, no peer chosen yet |
+| `Queued for peer X to report free capacity` | In the queue, pinned to `X` (`--target-cluster`) |
+| `Awaiting acceptance by peer X` | Promoted and delivered; awaiting the peer's admission |
+| `Handed off to peer X; awaiting first status report` | Admitted; the first sync has not landed |
+
+A job that sits on the first two lines is waiting for capacity, not stuck: compare its device
+request against the peer's advertised `amounts`. A job cancelled while queued never reaches the
+peer and terminates as `Cancelled before handoff`.
 
 A federated job's tasks live on the peer and are mirrored back, so `iris job summary` reports
 its state from `marin`. Its logs are relayed asynchronously into `marin`'s finelog and lag

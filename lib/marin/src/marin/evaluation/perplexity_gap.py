@@ -36,6 +36,12 @@ WANDB_PROJECT = "marin-eval"
 
 @dataclass(frozen=True)
 class GapFinderModelConfig:
+    """A model to score: a checkpoint plus how to load and tokenize it.
+
+    Set ``checkpoint_is_hf`` for a Hugging Face checkpoint; leave it false for a
+    Levanter checkpoint, in which case ``model`` must describe the architecture.
+    """
+
     checkpoint_path: str
     model: LmConfig | None = None
     checkpoint_is_hf: bool = False
@@ -46,6 +52,13 @@ class GapFinderModelConfig:
 
 @dataclass(frozen=True)
 class RawTextEvaluationDataset:
+    """One perplexity-gap evaluation dataset.
+
+    Sourced from a GCS/URL path (``input_path``) or a Hugging Face dataset
+    (``hf_dataset_id``). Prefer the :func:`raw_text_dataset` and
+    :func:`supervised_text_dataset` constructors over building this directly.
+    """
+
     input_path: str | None = None
     hf_dataset_id: str | None = None
     hf_dataset_name: str | None = None
@@ -59,6 +72,12 @@ class RawTextEvaluationDataset:
 
 @dataclass
 class ModelPerplexityScoreConfig:
+    """Inputs for scoring one model against a set of datasets on TPU.
+
+    ``resource_config`` must request TPU resources. ``output_path`` is where the
+    score artifacts are written; leave it empty to use the run default.
+    """
+
     name: str
     model: GapFinderModelConfig
     datasets: dict[str, RawTextEvaluationDataset]
@@ -73,6 +92,12 @@ class ModelPerplexityScoreConfig:
 
 @dataclass
 class ModelPerplexityGapConfig:
+    """Inputs for comparing two models' score outputs into a pairwise gap report.
+
+    ``model_a_scores_path`` and ``model_b_scores_path`` point at the output
+    directories written by two :func:`find_model_perplexity_scores` runs.
+    """
+
     name: str
     model_a_name: str
     model_b_name: str
@@ -89,6 +114,11 @@ def raw_text_dataset(
     split: str = "validation",
     tags: tuple[str, ...] = (),
 ) -> RawTextEvaluationDataset:
+    """Build a raw language-modeling dataset that scores every byte of ``text_key``.
+
+    ``source`` is either a GCS/URL path to JSONL(.gz) rows or an
+    :class:`~marin.processing.tokenize.HfDatasetSpec` (which may pin a revision).
+    """
     if isinstance(source, HfDatasetSpec):
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
@@ -111,6 +141,11 @@ def supervised_text_dataset(
     split: str = "validation",
     tags: tuple[str, ...] = (),
 ) -> RawTextEvaluationDataset:
+    """Build a target-only supervised dataset.
+
+    Only the ``target_key`` bytes are scored, while the ``input_key`` bytes still
+    condition the model. ``source`` matches :func:`raw_text_dataset`.
+    """
     if isinstance(source, HfDatasetSpec):
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
@@ -133,6 +168,13 @@ def supervised_text_dataset(
 
 
 def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
+    """Score one model on each dataset as a TPU job and write the score artifacts.
+
+    Submits a Fray job from the ambient ``current_client()`` and blocks until it
+    finishes. Requires TPU resources. Writes ``scored_documents.parquet``,
+    ``summary.json``, ``token_counts.parquet``, and ``token_counts_summary.json``
+    under ``config.output_path``.
+    """
     datasets = {name: _to_dataset_component(dataset) for name, dataset in config.datasets.items()}
 
     run_name = config.name.replace("/", "-")
@@ -165,6 +207,13 @@ def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
 
 
 def find_model_perplexity_gap(config: ModelPerplexityGapConfig) -> None:
+    """Compare two score outputs into a pairwise gap report and log it to W&B.
+
+    Reads the score directories from two :func:`find_model_perplexity_scores`
+    runs and writes ``summary.json``, ``report.md``, and ``worst_documents.jsonl``
+    under ``config.output_path``. Positive ``gap_bpb`` means model A has higher
+    bits-per-byte (higher loss) than model B on that slice.
+    """
     summary = compare_scored_outputs(
         model_a_name=config.model_a_name,
         model_b_name=config.model_b_name,

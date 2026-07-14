@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
-from typing import Sequence, TypeVar, cast
-
-import jax.numpy as jnp
+from typing import Sequence, TypeVar
 
 import equinox as eqx
 import jax
@@ -142,61 +139,3 @@ def key_path_to_str(path: Sequence) -> str:
         out = out[1:]
 
     return out
-
-
-@jax.tree_util.register_dataclass
-@dataclasses.dataclass
-class PackedLeaf:
-    """Metadata describing the location and shape of a packed leaf."""
-
-    offset: int = dataclasses.field(metadata={"static": True})
-    shape: tuple[int, ...] = dataclasses.field(metadata={"static": True})
-
-
-def pack_pytree(tree: PyTree, dtype=jnp.float32) -> tuple[PyTree, jnp.ndarray]:
-    """Pack all leaves of ``tree`` into a single 1-D array.
-
-    Args:
-        tree: Pytree of array-like objects.
-        dtype: Desired dtype of the packed array.
-
-    Returns:
-        A pair ``(offset_tree, flat_array)`` where ``offset_tree`` mirrors the
-        structure of ``tree`` but each leaf contains a :class:`PackedLeaf`
-        indicating where that leaf's data is stored in ``flat_array``.
-    """
-
-    leaves, treedef = jax.tree_util.tree_flatten(tree)
-
-    flat_leaves = []
-    offset_leaves = []
-    current = 0
-    for leaf in leaves:
-        arr = jnp.asarray(leaf, dtype=dtype)
-        flat = arr.reshape(-1)
-        flat_leaves.append(flat)
-        offset_leaves.append(PackedLeaf(offset=current, shape=arr.shape))  # type: ignore[call-arg]
-        current += flat.size
-
-    if flat_leaves:
-        packed = jnp.concatenate(flat_leaves)
-    else:
-        packed = jnp.array([], dtype=dtype)
-
-    offset_tree = jax.tree_util.tree_unflatten(treedef, offset_leaves)
-    return offset_tree, packed
-
-
-def unpack_pytree(offset_tree: PyTree, packed: jnp.ndarray) -> PyTree:
-    """Reconstruct a pytree packed with :func:`pack_pytree`."""
-
-    offset_leaves, treedef = jax.tree_util.tree_flatten(offset_tree)
-    offset_leaves = [cast(PackedLeaf, x) for x in offset_leaves]
-
-    leaves = []
-    for off in offset_leaves:
-        size = functools.reduce(int.__mul__, off.shape, 1)
-        leaf = packed[off.offset : off.offset + size].reshape(off.shape)
-        leaves.append(leaf)
-
-    return jax.tree_util.tree_unflatten(treedef, leaves)

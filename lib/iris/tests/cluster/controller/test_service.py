@@ -1810,6 +1810,24 @@ def test_launch_job_root_with_stale_client_date(service):
     assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 
+def test_launch_job_received_handoff_is_exempt_from_client_freshness(service):
+    """A federated handoff carries no client date and must still be admitted.
+
+    The parent rebuilds a handoff from its stored job state, which does not carry the
+    submitter's ``client_revision_date`` — so every delivered handoff arrives with the
+    field empty, which the freshness check would otherwise read as the (long past)
+    feature-introduction date and reject. The parent already gated the submitter's
+    client at its own LaunchJob.
+    """
+    request = make_job_request("received-handoff")
+    request.federation.requester_id = "parent-cluster"
+    request.federation.owner_principal = "test-user"
+    assert not request.client_revision_date
+
+    response = service.launch_job(request, object())
+    assert response.job_id == JobName.root("test-user", "received-handoff").to_wire()
+
+
 def test_launch_job_nested_with_stale_client_date_is_exempt(service):
     """Nested submissions bypass the freshness check (parent already running)."""
     service.launch_job(make_job_request("parent-job"), None)

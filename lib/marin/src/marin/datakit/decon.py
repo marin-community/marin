@@ -22,7 +22,10 @@ Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 Join ``attributes.matched_hashes`` against this sidecar to attribute
 contamination back to specific eval records.
 
-Output is co-partitioned with the source: one ``part-NNNNN-of-MMMMM.parquet``
+Output follows the normalize job's layout: main attributes land in
+``<output>/outputs/main/`` and (when ``flagged_sample_size`` > 0) a sample of
+flagged docs with text lands in ``<output>/outputs/flagged_sample/``. The main
+output is co-partitioned with the source — one ``part-NNNNN-of-MMMMM.parquet``
 per input partition, preserving the source filenames so consolidate can
 sorted-merge-join without a shuffle.
 
@@ -35,15 +38,19 @@ The bloom can also be built once and shared across many corpus marks via
 import hashlib
 import logging
 import os
+import random
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 
 import dupekit
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
@@ -56,6 +63,12 @@ from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
+# Bump when the ngram feature-extraction policy changes. Both the bloom build and
+# the corpus mark fold this into their step hash_attrs, so a policy change
+# re-addresses cached blooms/marks instead of silently reusing incompatible
+# features. v2 added the no-alphabetic-character ngram filter (marin#6852 cluster D).
+FEATURE_FILTER_VERSION = 2
+
 
 @dataclass(frozen=True)
 class NGramConfig:
@@ -66,11 +79,18 @@ class NGramConfig:
         stride: Step between successive ngrams. 0 = contiguous (every position).
         overlap_threshold: Minimum fraction of paragraph ngrams that must hit
             the filter for the paragraph to count as contaminated.
+        paragraph_delimiter: String the text is split on to form paragraphs (the
+            unit the overlap fraction is computed over). Defaults to ``"\n\n"``, a
+            blank-line-delimited block, so ngrams span single line breaks — this
+            both dilutes isolated-line coincidences (precision) and lets short-line
+            / inline-embedded eval text be matched (recall). ``"\n"`` instead treats
+            each line as its own paragraph. See marin#6852.
     """
 
     ngram_length: int = 13
     stride: int = 0
     overlap_threshold: float = 0.5
+    paragraph_delimiter: str = "\n\n"
 
 
 class DeconAttributes(BaseModel):
@@ -80,7 +100,10 @@ class DeconAttributes(BaseModel):
     the output without re-running the pipeline.
 
     Attributes:
-        output_dir: Directory containing ``part-NNNNN-of-MMMMM.parquet`` files.
+        main_output_dir: Directory of ``part-NNNNN-of-MMMMM.parquet`` attribute
+            files (``<output>/outputs/main``, mirroring the normalize job).
+        flagged_output_dir: Directory of the mark-time flagged-doc sample sidecar
+            (``<output>/outputs/flagged_sample``); empty when no sample was taken.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
             Join the per-record ``attributes.matched_hashes`` column against
@@ -88,8 +111,9 @@ class DeconAttributes(BaseModel):
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
-    version: str = "v2"
-    output_dir: str
+    version: str = "v3"
+    main_output_dir: str
+    flagged_output_dir: str
     num_partitions: int
     eval_hash_index_path: str
     counters: dict[str, int | float]
@@ -148,10 +172,27 @@ def _bloom_hash(x: str) -> int:
     return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
+def _has_alpha(ngram: str) -> bool:
+    """True if *ngram* contains any alphabetic character.
+
+    Cluster-D filter (marin#6852): a 13-gram with no letters — pure numeric
+    sequences (``1 , 2 , 3 …``), punctuation runs, form-field/index boilerplate —
+    carries no distinctive contamination signal but collides with number-list
+    eval items (HLE / MMLU-Pro math). Skipping these on *both* the bloom and the
+    mark side (both go through :func:`_extract_ngrams`) keeps the overlap
+    denominator consistent. Trade-off: drops recall on purely-numeric
+    contamination, which is acceptable — a bare number run is never a leak we can
+    attribute anyway.
+    """
+    return any(c.isalpha() for c in ngram)
+
+
 def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
     tokens = text.split()
     for i in range(0, len(tokens) - n + 1, stride + 1):
-        yield " ".join(tokens[i : i + n])
+        ngram = " ".join(tokens[i : i + n])
+        if _has_alpha(ngram):
+            yield ngram
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
@@ -165,7 +206,8 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
     smoke-test finding (~18% phantom contamination on MMLU vs nemotron-math
     came from the literal ``"..."`` short-paragraph artifact).
     """
-    for para in text.split("\n"):
+    delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
+    for para in text.split(delimiter):
         if not para:
             continue
         if ngram is None:
@@ -175,7 +217,7 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
 
 
 def _paragraph_overlap_and_matches(
-    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None
+    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None, drop_hashes: frozenset[int] = frozenset()
 ) -> tuple[float, list[int]]:
     """Return ``(overlap_score, matched_hashes)`` for a single paragraph.
 
@@ -183,17 +225,30 @@ def _paragraph_overlap_and_matches(
     ngrams otherwise. *matched_hashes* is the list of ngram hashes that hit
     the bloom (in iteration order, with duplicates if the same ngram repeats).
 
+    *drop_hashes* are removed from *both* the numerator and denominator — the
+    per-source common-ngram filter (marin#6852). Boilerplate ubiquitous in a
+    source (a legal enacting clause, a license header) carries no contamination
+    signal, so an all-boilerplate paragraph collapses to zero ngrams and scores
+    0, while a paragraph with a distinctive leak keeps its remaining ngrams and
+    still scores ~1.0 — precision without a recall cost.
+
     Paragraphs with fewer than ``ngram_length`` tokens in n-gram mode return
     ``(0.0, [])`` — see :func:`_extract_features` for why we don't fall back
     to whole-paragraph hashing.
     """
     if ngram is None:
         h = _bloom_hash(paragraph)
+        if h in drop_hashes:
+            return 0.0, []
         return (1.0, [h]) if h in bf else (0.0, [])
     ngrams = list(_extract_ngrams(paragraph, ngram.ngram_length, ngram.stride))
     if not ngrams:
         return 0.0, []
     hashes = [_bloom_hash(ng) for ng in ngrams]
+    if drop_hashes:
+        hashes = [h for h in hashes if h not in drop_hashes]
+        if not hashes:
+            return 0.0, []
     matched = [h for h in hashes if h in bf]
     return len(matched) / len(hashes), matched
 
@@ -335,38 +390,77 @@ _OUTPUT_SCHEMA = pa.schema(
 )
 
 
+_FLAGGED_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string()),
+        pa.field("text", pa.string()),
+        pa.field("max_overlap", pa.float64()),
+        pa.field("matched_hashes", pa.list_(pa.uint64())),
+    ]
+)
+
+
 def _make_marker(
     bloom_path: str,
     output_dir: str,
     text_field: str,
     ngram: NGramConfig | None,
+    drop_hashes: frozenset[int] = frozenset(),
+    flagged_sample_size: int = 0,
 ) -> Callable[[Iterator[str], ShardInfo], Iterator[dict[str, Any]]]:
-    """Return a ``map_shard`` function that processes one input parquet → one output parquet."""
+    """Return a ``map_shard`` function that processes one input parquet → one output parquet.
+
+    *drop_hashes* is the source's common-ngram set, excluded from every
+    paragraph's overlap (see :func:`_paragraph_overlap_and_matches`).
+
+    *flagged_sample_size* > 0 reservoir-samples that many contaminated docs per
+    shard — with their text and matched hashes — into
+    ``<output_dir>/_flagged/part-<shard>.parquet``. The mark already reads every
+    doc, so this makes reports O(sample) instead of O(corpus): a viewer reads the
+    small sidecar rather than rescanning the full attributes to find flags.
+    """
 
     # Threshold is only meaningful for n-gram mode; in exact-paragraph mode score is 0 or 1
     # so any non-zero match is always recorded.
     threshold = ngram.overlap_threshold if ngram is not None else 0.0
+    delimiter = ngram.paragraph_delimiter if ngram is not None else "\n"
 
     def mark_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
         # Load bloom once per shard.
         bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+        reservoir: list[dict[str, Any]] = []
+        n_flagged = 0
+        rng = random.Random(shard.shard_idx)
 
         for input_path in paths:
 
             def rows_for(p: str) -> Iterator[dict[str, Any]]:
+                nonlocal n_flagged
                 for record in load_file(p):
                     text = str(record.get(text_field, "") or "")
                     max_score = 0.0
                     matched: set[int] = set()
-                    for para in text.split("\n"):
+                    for para in text.split(delimiter):
                         if not para:
                             continue
-                        score, hits = _paragraph_overlap_and_matches(para, bf, ngram)
+                        score, hits = _paragraph_overlap_and_matches(para, bf, ngram, drop_hashes)
                         if score > max_score:
                             max_score = score
                         matched.update(hits)
                     contaminated = max_score > 0 and max_score >= threshold
                     counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
+                    if contaminated and flagged_sample_size:
+                        n_flagged += 1
+                        row = {
+                            "id": record["id"],
+                            "text": text,
+                            "max_overlap": max_score,
+                            "matched_hashes": list(matched),
+                        }
+                        if len(reservoir) < flagged_sample_size:
+                            reservoir.append(row)
+                        elif (j := rng.randint(0, n_flagged - 1)) < flagged_sample_size:
+                            reservoir[j] = row
                     # Dataset.from_list yields one shard per item in input order, so shard.shard_idx
                     # matches the input's "part-NNNNN-of-NNNNN" partition number on a sorted file list.
                     yield {
@@ -379,10 +473,17 @@ def _make_marker(
                         },
                     }
 
-            out_filename = os.path.basename(input_path)
-            out_path = f"{output_dir.rstrip('/')}/{out_filename}"
+            # Follow the normalize job's output layout: main attributes under
+            # outputs/main/, the flagged-doc sample under outputs/flagged_sample/,
+            # co-partitioned by the source filename.
+            shard_filename = os.path.basename(input_path)
+            out_path = prefix_join(output_dir, f"outputs/main/{shard_filename}")
             result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=_OUTPUT_SCHEMA)
             yield result
+
+        if flagged_sample_size and reservoir:
+            flagged_path = prefix_join(output_dir, f"outputs/flagged_sample/{shard_filename}")
+            write_parquet_file(iter(reservoir), output_path=flagged_path, schema=_FLAGGED_SCHEMA)
 
     return mark_shard
 
@@ -395,6 +496,8 @@ def decon_to_parquet(
     output_path: str,
     text_field: str = "text",
     ngram: NGramConfig | None = None,
+    drop_set_dir: str | None = None,
+    flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
@@ -438,6 +541,9 @@ def decon_to_parquet(
         ngram: Word-ngram matching config. ``None`` = exact whole-paragraph match.
             ``ngram.overlap_threshold`` gates which paragraphs are marked
             contaminated; exact-paragraph mode records any non-zero match.
+        drop_set_dir: Optional directory of per-source common-ngram hashes
+            (:func:`build_source_drop_set`). Those ngrams are excluded from every
+            paragraph overlap — the per-source boilerplate filter (marin#6852).
         estimated_doc_count, false_positive_rate: Bloom sizing parameters; size
             for expected total *ngram* count across the eval suite (not record
             count). Defaults handle ~1M unique ngrams cleanly. Ignored when
@@ -477,7 +583,12 @@ def decon_to_parquet(
             false_positive_rate=false_positive_rate,
         )
 
-    pipeline = Dataset.from_list(files).map_shard(_make_marker(bloom_path, output_path, text_field, ngram))
+    drop_hashes = _load_drop_set(drop_set_dir) if drop_set_dir else frozenset()
+    if drop_hashes:
+        logger.info("decon: filtering %d source-common ngrams from %s", len(drop_hashes), drop_set_dir)
+    pipeline = Dataset.from_list(files).map_shard(
+        _make_marker(bloom_path, output_path, text_field, ngram, drop_hashes, flagged_sample_size)
+    )
 
     resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
@@ -487,7 +598,8 @@ def decon_to_parquet(
     outcome = ctx.execute(pipeline)
 
     return DeconAttributes(
-        output_dir=output_path,
+        main_output_dir=prefix_join(output_path, "outputs/main"),
+        flagged_output_dir=prefix_join(output_path, "outputs/flagged_sample"),
         num_partitions=num_partitions,
         eval_hash_index_path=index_path,
         counters=dict(outcome.counters),
@@ -646,6 +758,7 @@ def build_eval_bloom_step(
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
+    paragraph_delimiter: str = "\n\n",
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     exclude_eval_dirs: frozenset[str] = frozenset(),
@@ -659,7 +772,9 @@ def build_eval_bloom_step(
         eval_data_sources: Mix of raw paths (str) and upstream StepSpecs. Raw
             paths go into ``hash_attrs`` (so changing them invalidates the
             cache); StepSpec entries become DAG deps.
-        text_field, ngram_length, overlap_threshold: ngram config.
+        text_field, ngram_length, overlap_threshold, paragraph_delimiter: ngram
+            config (see :class:`NGramConfig`). ``paragraph_delimiter`` MUST match
+            the consuming :func:`decon_step` for the bloom to be reusable.
         estimated_doc_count, false_positive_rate: bloom sizing.
         exclude_eval_dirs: Eval task directory names to drop from the bloom
             (see :func:`build_eval_bloom`). Folded into ``hash_attrs`` so
@@ -676,13 +791,19 @@ def build_eval_bloom_step(
             raw_paths.append(s)
 
     ngram: NGramConfig | None = (
-        NGramConfig(ngram_length=ngram_length, overlap_threshold=overlap_threshold) if ngram_length is not None else None
+        NGramConfig(
+            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+        )
+        if ngram_length is not None
+        else None
     )
 
     hash_attrs: dict[str, Any] = {
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "paragraph_delimiter": paragraph_delimiter,
+        "feature_filter_version": FEATURE_FILTER_VERSION,
         "estimated_doc_count": estimated_doc_count,
         "false_positive_rate": false_positive_rate,
         # Raw paths aren't deps — fingerprint them so swapping a path
@@ -729,15 +850,233 @@ def merge_eval_blooms_step(
     )
 
 
+# ---------------------------------------------------------------------------
+# Per-source common-ngram filter (marin#6852): drop eval ngrams that are
+# ubiquitous within a source (legal enacting clauses, license headers) so they
+# stop producing boilerplate false positives, without a recall cost.
+# ---------------------------------------------------------------------------
+
+
+class SourceDropSet(BaseModel):
+    """Outcome of :func:`build_source_drop_set`: a source's common-ngram hashes.
+
+    Consumers read the drop hashes from ``output_dir`` (via :func:`_load_drop_set`);
+    the counts are informational.
+    """
+
+    output_dir: str
+    n_sampled: int
+    n_dropped: int
+
+
+def _iter_normalized_texts(main_output_dir: str, text_field: str) -> Iterator[str]:
+    files = sorted(str(m) for m in StoragePath(f"{main_output_dir.rstrip('/')}/**/*.parquet").glob())
+    for path in files:
+        for record in load_file(path):
+            text = record.get(text_field)
+            if text:
+                yield str(text)
+
+
+def _load_drop_set(drop_set_dir: str) -> frozenset[int]:
+    files = sorted(str(m) for m in StoragePath(f"{drop_set_dir.rstrip('/')}/**/*.parquet").glob())
+    out: set[int] = set()
+    for f in files:
+        with StoragePath(f).open("rb") as fh:
+            out.update(pq.read_table(fh, columns=["hash"]).column("hash").to_pylist())
+    return frozenset(out)
+
+
+def _drop_set_for_source(
+    df_sample_dir: str,
+    bf: dupekit.Bloom,
+    text_field: str,
+    ngram: NGramConfig | None,
+    sample_docs: int,
+    common_frac: float,
+    common_min_abs: int,
+) -> tuple[list[int], int, int]:
+    """Core DF count for one source given a *loaded* bloom → (drop_hashes, n_sampled, threshold).
+
+    Reads a prefix of *sample_docs* docs from *df_sample_dir* (shuffled upstream,
+    so a prefix is representative), counts how many contain each eval ngram
+    (membership via the bloom — the only ngrams a drop-set can hold), and keeps
+    those in at least ``max(common_min_abs, common_frac * n_sampled)`` docs."""
+    counts: Counter[int] = Counter()
+    n = 0
+    for text in islice(_iter_normalized_texts(df_sample_dir, text_field), sample_docs):
+        n += 1
+        counts.update({h for feat in _extract_features(text, ngram) if (h := _bloom_hash(feat)) in bf})
+    threshold = max(common_min_abs, int(common_frac * n))
+    return [h for h, c in counts.items() if c >= threshold], n, threshold
+
+
+def _write_drop_set(output_dir: str, drop: list[int]) -> str:
+    StoragePath(output_dir).mkdirs()
+    out_file = f"{output_dir.rstrip('/')}/drop.parquet"
+    with StoragePath(out_file).open("wb") as fh:
+        pq.write_table(pa.table({"hash": pa.array(drop, pa.uint64())}), fh, compression="zstd")
+    return out_file
+
+
+def build_source_drop_set(
+    *,
+    df_sample_dir: str,
+    prebuilt_bloom_dir: str,
+    output_path: str,
+    text_field: str = "text",
+    ngram: NGramConfig | None,
+    sample_docs: int,
+    common_frac: float,
+    common_min_abs: int,
+) -> SourceDropSet:
+    """Single-source drop-set (loads the bloom, counts DF, writes ``drop.parquet``).
+
+    The building block; :func:`build_all_source_drop_sets` distributes this over
+    many sources. *df_sample_dir* should point at a pool large enough to estimate
+    DF (~5k docs); it need not be the sample being deconned (DF is a source
+    property, so a 100M mark can reuse a drop-set estimated from a 1T sample).
+    """
+    bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
+    bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+    drop, n, threshold = _drop_set_for_source(
+        df_sample_dir, bf, text_field, ngram, sample_docs, common_frac, common_min_abs
+    )
+    out_file = _write_drop_set(output_path, drop)
+    logger.info("decon drop-set: sampled %d docs, %d common ngrams (df>=%d) → %s", n, len(drop), threshold, out_file)
+    return SourceDropSet(output_dir=output_path, n_sampled=n, n_dropped=len(drop))
+
+
+class AllSourceDropSets(BaseModel):
+    """Outcome of :func:`build_all_source_drop_sets`: per-source drop-sets under one root.
+
+    Each source's hashes live at ``<output_dir>/<source>/drop.parquet``; a
+    :func:`decon_step` reads its own source's subdir.
+    """
+
+    output_dir: str
+    num_sources: int
+    counters: dict[str, int | float]
+
+
+def build_all_source_drop_sets(
+    *,
+    sources: list[tuple[str, str]],
+    prebuilt_bloom_dir: str,
+    output_path: str,
+    text_field: str = "text",
+    ngram: NGramConfig | None,
+    sample_docs: int,
+    common_frac: float,
+    common_min_abs: int,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+) -> AllSourceDropSets:
+    """Distributed per-source drop-set build — one zephyr shard per source.
+
+    *sources* is a list of ``(source_name, df_sample_dir)``. Each shard writes
+    ``<output_path>/<source_name>/drop.parquet``; consume with
+    ``decon_step(drop_sets=..., drop_set_source=<source_name>)``.
+    """
+    bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
+
+    def build_shard(items: Iterator[tuple[str, str]], _shard: ShardInfo) -> Iterator[dict[str, Any]]:
+        bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
+        for source_name, df_sample_dir in items:
+            drop, n, threshold = _drop_set_for_source(
+                df_sample_dir, bf, text_field, ngram, sample_docs, common_frac, common_min_abs
+            )
+            _write_drop_set(f"{output_path.rstrip('/')}/{source_name}", drop)
+            counters.pipeline.update_counter("decon_drop/sources", 1)
+            counters.pipeline.update_counter("decon_drop/ngrams_dropped", len(drop))
+            logger.info("decon drop-set %s: %d docs, %d common ngrams (df>=%d)", source_name, n, len(drop), threshold)
+            yield {"source": source_name, "n_sampled": n, "n_dropped": len(drop)}
+
+    pipeline = Dataset.from_list(sources).map_shard(build_shard)
+    resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    outcome = ZephyrContext(**ctx_kwargs).execute(pipeline)
+    return AllSourceDropSets(output_dir=output_path, num_sources=len(sources), counters=dict(outcome.counters))
+
+
+def all_source_drop_sets_step(
+    *,
+    name: str,
+    sources: list[tuple[str, str]],
+    prebuilt_bloom: StepSpec,
+    text_field: str = "text",
+    ngram_length: int | None = 13,
+    paragraph_delimiter: str = "\n\n",
+    sample_docs: int = 5000,
+    common_frac: float = 0.005,
+    common_min_abs: int = 5,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """StepSpec for :func:`build_all_source_drop_sets` — every source's common-ngram filter.
+
+    *sources* is a list of ``(source_name, df_sample_dir)``; each ``df_sample_dir``
+    is a raw directory of that source's normalized parquet used to estimate DF
+    (folded into ``hash_attrs``, not deps — like the eval paths of
+    :func:`build_eval_bloom_step`). Point each at a pool large enough to be stable
+    (~5k docs), independent of the sample being deconned. ``ngram_length`` /
+    ``paragraph_delimiter`` MUST match the consuming :func:`decon_step`. Each
+    ``decon_step`` reads its source's subdir via ``drop_sets=`` + ``drop_set_source=``.
+    """
+    ngram: NGramConfig | None = (
+        NGramConfig(ngram_length=ngram_length, paragraph_delimiter=paragraph_delimiter)
+        if ngram_length is not None
+        else None
+    )
+    hash_attrs: dict[str, Any] = {
+        "sources": tuple(sorted(sources)),
+        "text_field": text_field,
+        "ngram_length": ngram_length,
+        "paragraph_delimiter": paragraph_delimiter,
+        "feature_filter_version": FEATURE_FILTER_VERSION,
+        "sample_docs": sample_docs,
+        "common_frac": common_frac,
+        "common_min_abs": common_min_abs,
+    }
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: build_all_source_drop_sets(
+            sources=sources,
+            prebuilt_bloom_dir=prebuilt_bloom.output_path,
+            output_path=output_path,
+            text_field=text_field,
+            ngram=ngram,
+            sample_docs=sample_docs,
+            common_frac=common_frac,
+            common_min_abs=common_min_abs,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+        ),
+        deps=[prebuilt_bloom],
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
+
+
 def decon_step(
     *,
     name: str,
-    normalized: StepSpec,
+    normalized: StepSpec | None = None,
+    input_dir: str | None = None,
     eval_data_sources: list[StepSpec] | None = None,
     prebuilt_bloom: StepSpec | None = None,
+    drop_sets: StepSpec | None = None,
+    drop_set_source: str | None = None,
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
+    paragraph_delimiter: str = "\n\n",
+    flagged_sample_size: int = 0,
     estimated_doc_count: int = 1_000_000,
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
@@ -755,6 +1094,11 @@ def decon_step(
     Args:
         name: Step name (e.g. ``"fineweb/decon"``).
         normalized: Upstream datakit normalize step whose output is the input.
+            Provide exactly one of *normalized* or *input_dir*.
+        input_dir: Directory of pre-materialized normalized parquet (``id``,
+            ``text``) to mark directly — for deconning an already-built sample
+            that isn't a step in this DAG (e.g. the fixed 1T testbed root). Folded
+            into ``hash_attrs`` (not a dep). Mutually exclusive with *normalized*.
         eval_data_sources: List of eval source steps (any zephyr-readable
             format) to build the bloom filter from. All eval sources are
             merged into one bloom; per-eval attribution is preserved in the
@@ -762,10 +1106,20 @@ def decon_step(
         prebuilt_bloom: Pre-built bloom StepSpec (output of
             :func:`build_eval_bloom_step` or :func:`merge_eval_blooms_step`).
             Mutually exclusive with ``eval_data_sources``.
+        drop_sets: Optional :func:`all_source_drop_sets_step` output — the
+            per-source common-ngram filters (marin#6852). Combined with
+            *drop_set_source*, the hashes under ``<drop_sets>/<drop_set_source>``
+            are excluded from every paragraph overlap. Feature policy
+            (ngram/delimiter) must match this step's.
+        drop_set_source: This source's subdir name under *drop_sets* (e.g.
+            ``"cp/usgpo"``). Required when *drop_sets* is set.
         text_field: Text column name in both input and eval records.
         ngram_length: Word ngram length. ``None`` = exact whole-paragraph match.
         overlap_threshold: Per-paragraph overlap fraction needed to mark a record
             contaminated. Ignored in exact-paragraph mode.
+        paragraph_delimiter: Paragraph split string (see :class:`NGramConfig`).
+            When reusing a ``prebuilt_bloom``, MUST match the delimiter the bloom
+            was built with, or the two feature sets won't line up.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters.
             Ignored when ``prebuilt_bloom`` is set.
         worker_resources, max_workers: Zephyr execution knobs.
@@ -773,9 +1127,15 @@ def decon_step(
     """
     if (eval_data_sources is None) == (prebuilt_bloom is None):
         raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom")
+    if (normalized is None) == (input_dir is None):
+        raise ValueError("provide exactly one of normalized or input_dir")
 
     ngram: NGramConfig | None = (
-        NGramConfig(ngram_length=ngram_length, overlap_threshold=overlap_threshold) if ngram_length is not None else None
+        NGramConfig(
+            ngram_length=ngram_length, overlap_threshold=overlap_threshold, paragraph_delimiter=paragraph_delimiter
+        )
+        if ngram_length is not None
+        else None
     )
 
     # Mark stage hash_attrs: only what actually affects per-record marking
@@ -786,22 +1146,42 @@ def decon_step(
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
+        "paragraph_delimiter": paragraph_delimiter,
+        "feature_filter_version": FEATURE_FILTER_VERSION,
+        "input_dir": input_dir,
     }
+    # Only fold in when enabled: the flagged sidecar is *additional* output, so a
+    # run with sampling off keeps the same address as before this feature landed.
+    if flagged_sample_size:
+        hash_attrs["flagged_sample_size"] = flagged_sample_size
+
+    if drop_sets is not None and drop_set_source is None:
+        raise ValueError("drop_set_source is required when drop_sets is set")
+    drop_deps = [drop_sets] if drop_sets is not None else []
+    drop_dir = f"{drop_sets.output_path.rstrip('/')}/{drop_set_source}" if drop_sets is not None else None
+    norm_deps = [normalized] if normalized is not None else []
+
+    def _read_norm() -> NormalizedData:
+        if input_dir is not None:
+            return NormalizedData(main_output_dir=input_dir, dup_output_dir="", counters={})
+        return read_artifact(normalized.output_path, NormalizedData)
 
     if prebuilt_bloom is not None:
         bloom_step = prebuilt_bloom
         return StepSpec(
             name=name,
             fn=lambda output_path: decon_to_parquet(
-                normalized_data=read_artifact(normalized.output_path, NormalizedData),
+                normalized_data=_read_norm(),
                 prebuilt_bloom_dir=bloom_step.output_path,
                 output_path=output_path,
                 text_field=text_field,
                 ngram=ngram,
+                drop_set_dir=drop_dir,
+                flagged_sample_size=flagged_sample_size,
                 worker_resources=worker_resources,
                 max_workers=max_workers,
             ),
-            deps=[normalized, bloom_step],
+            deps=[*norm_deps, bloom_step, *drop_deps],
             hash_attrs=hash_attrs,
             output_path_prefix=output_path_prefix,
             override_output_path=override_output_path,
@@ -819,17 +1199,19 @@ def decon_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
-            normalized_data=read_artifact(normalized.output_path, NormalizedData),
+            normalized_data=_read_norm(),
             eval_data_sources=[s.output_path for s in eval_steps],
             output_path=output_path,
             text_field=text_field,
             ngram=ngram,
+            drop_set_dir=drop_dir,
+            flagged_sample_size=flagged_sample_size,
             estimated_doc_count=estimated_doc_count,
             false_positive_rate=false_positive_rate,
             worker_resources=worker_resources,
             max_workers=max_workers,
         ),
-        deps=[normalized, *eval_steps],
+        deps=[*norm_deps, *eval_steps, *drop_deps],
         hash_attrs=inline_hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
