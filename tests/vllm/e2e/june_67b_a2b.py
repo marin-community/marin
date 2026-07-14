@@ -12,6 +12,7 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax.typing import DTypeLike
 from levanter.checkpoint import load_checkpoint as load_levanter_checkpoint
 from rigging.filesystem import StoragePath
 
@@ -28,6 +29,8 @@ class ModelIdentity:
     export_sha256: str
     export_uri: str
     inference_golden_path: Path
+    tpu_run_root: str
+    tpu_inference_golden_path: Path
 
     @property
     def executor_info_path(self) -> str:
@@ -36,6 +39,14 @@ class ModelIdentity:
     @property
     def checkpoint_path(self) -> str:
         return f"{self.run_root}/checkpoints/step-{self.checkpoint_step}"
+
+    @property
+    def tpu_executor_info_path(self) -> str:
+        return f"{self.tpu_run_root}/.executor_info"
+
+    @property
+    def tpu_checkpoint_path(self) -> str:
+        return f"{self.tpu_run_root}/checkpoints/step-{self.checkpoint_step}"
 
     @property
     def vllm_model_name(self) -> str:
@@ -51,6 +62,11 @@ JUNE_67B_A2B = ModelIdentity(
     export_sha256="781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
     export_uri="s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/",
     inference_golden_path=Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_logprobs.json",
+    tpu_run_root=(
+        "gs://marin-us-east5/grug/"
+        "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3"
+    ),
+    tpu_inference_golden_path=Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_tpu_logprobs.json",
 )
 
 
@@ -75,8 +91,8 @@ def read_inference_golden(path: Path) -> InferenceGolden:
     return draccus.decode(InferenceGolden, json.loads(path.read_text()))
 
 
-def read_executor_info() -> dict[str, Any]:
-    return json.loads(StoragePath(JUNE_67B_A2B.executor_info_path).read_text())
+def read_executor_info(path: str = JUNE_67B_A2B.executor_info_path) -> dict[str, Any]:
+    return json.loads(StoragePath(path).read_text())
 
 
 def decode_vendored_config(executor_info: dict[str, Any]) -> VendoredGrugModelConfig:
@@ -86,14 +102,31 @@ def decode_vendored_config(executor_info: dict[str, Any]) -> VendoredGrugModelCo
 def load_checkpoint(
     config: VendoredGrugModelConfig,
     mesh: jax.sharding.Mesh,
+    *,
+    checkpoint_path: str = JUNE_67B_A2B.checkpoint_path,
+    parameter_dtype: DTypeLike | None = None,
 ) -> tuple[VendoredTransformer, jax.Array]:
     template = eqx.filter_eval_shape(VendoredTransformer.init, config, key=jax.random.PRNGKey(0))
+    if parameter_dtype is not None:
+
+        def cast_dtype(value):
+            dtype = getattr(value, "dtype", None)
+            if dtype is None or not jnp.issubdtype(dtype, jnp.inexact):
+                return value
+            return jax.ShapeDtypeStruct(
+                value.shape,
+                parameter_dtype,
+                sharding=getattr(value, "sharding", None),
+                weak_type=getattr(value, "weak_type", False),
+            )
+
+        template = jax.tree.map(cast_dtype, template)
     checkpoint_state = load_levanter_checkpoint(
         {
             "params": template,
             "pending_qb_betas": jax.ShapeDtypeStruct((config.num_layers, config.num_experts), jnp.float32),
         },
-        JUNE_67B_A2B.checkpoint_path,
+        checkpoint_path,
         mesh=mesh,
     )
     jax.block_until_ready(checkpoint_state)
