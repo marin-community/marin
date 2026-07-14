@@ -149,7 +149,7 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, llama3_tokenizer):
 
 
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
-    """A tokenizer with no chat template gets the plain 'role: content' transcript."""
+    """A tokenizer with no chat template gets a BOS token and the plain 'role: content' transcript."""
     ctx = LevanterInferenceContext(
         LevanterInferenceContextConfig(
             inference_server_config=None,
@@ -165,7 +165,7 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     tokens = ctx.tokenize_prompt(prompt)
 
     decoded = gpt2_tokenizer.decode(tokens)
-    assert decoded == "user: Test prompt"
+    assert decoded == f"{gpt2_tokenizer.bos_token}user: Test prompt"
 
 
 def test_prompt_tokens_match_what_the_server_builds(gpt2_tokenizer, dummy_server):

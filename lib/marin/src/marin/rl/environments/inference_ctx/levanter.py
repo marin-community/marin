@@ -33,8 +33,10 @@ logger = logging.getLogger(__name__)
 # /v1/chat/completions. This renders the plain "role: content" transcript that
 # `BaseInferenceContext.tokenize_prompt` falls back to, so the prompt the server generates from and
 # the prompt tokens recorded in the rollout stay identical.
+# A rendered template is tokenized without special tokens, so it opens with the BOS token the way
+# real chat templates do.
 FALLBACK_CHAT_TEMPLATE = (
-    "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}"
+    "{{ bos_token }}{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}"
     "{% if not loop.last %}\n{% endif %}{% endfor %}"
 )
 
