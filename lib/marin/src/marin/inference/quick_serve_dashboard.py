@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Browser dashboard and OpenAI-compatible reverse proxy for a quick-serve vLLM job.
+"""Browser dashboard and OpenAI-compatible reverse proxy for a quick-serve job.
 
 The dashboard is a single self-contained Vue page served at ``/``. It and every
 ``/v1/*`` request resolve through the Iris controller proxy's
@@ -9,8 +9,9 @@ The dashboard is a single self-contained Vue page served at ``/``. It and every
 (``new URL(path, location.href)``) — the proxy does not rewrite HTML bodies, so an
 absolute path like ``/v1/chat/completions`` would escape the prefix.
 
-``/v1/*`` requests are reverse-proxied to the local vLLM server with the response
-streamed back verbatim, so server-sent-event token streaming works end to end.
+``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
+slice (see :mod:`marin.inference.serving_backend`) with the response streamed back
+verbatim, so server-sent-event token streaming works end to end.
 """
 
 import dataclasses
@@ -32,7 +33,7 @@ from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
 
-# Request headers that must not be forwarded to the upstream vLLM server; httpx
+# Request headers that must not be forwarded to the upstream backend server; httpx
 # recomputes Host/Content-Length, and the rest are hop-by-hop per RFC 7230.
 _REQUEST_DROP_HEADERS = frozenset(
     {
@@ -58,6 +59,7 @@ class ServingInfo:
     """Static serving metadata surfaced at ``/info`` and rendered by the dashboard."""
 
     model: str
+    backend: str
     tensor_parallel_size: int
     max_model_len: int | None
     dtype: str
@@ -73,11 +75,11 @@ def build_dashboard_app(
     info: ServingInfo,
     request_timeout_seconds: float = 600.0,
 ) -> Starlette:
-    """Build the Starlette app fronting a local vLLM server.
+    """Build the Starlette app fronting a local serving backend.
 
     Args:
-        upstream_base_url: Root URL of the local vLLM server (without ``/v1``).
-        model_id: The model id vLLM reports; surfaced to the dashboard.
+        upstream_base_url: Root URL of the backend's OpenAI server (without ``/v1``).
+        model_id: The model id the backend reports; surfaced to the dashboard.
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
     """
@@ -126,7 +128,7 @@ def build_dashboard_app(
         try:
             upstream_response = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
-            return JSONResponse({"error": f"upstream vLLM request failed: {exc}"}, status_code=502)
+            return JSONResponse({"error": f"upstream request failed: {exc}"}, status_code=502)
 
         resp_headers = {k: v for k, v in upstream_response.headers.items() if k.lower() not in _RESPONSE_DROP_HEADERS}
 
@@ -161,8 +163,8 @@ def bind_serving_socket(host: str, port: int) -> socket.socket:
 
     Iris allocates the task's named port from a range (30000-40000) that overlaps
     the OS ephemeral range, so any ephemeral socket the task later opens — notably
-    vLLM's many internal sockets — can squat the port we need. Binding here, before
-    vLLM starts, removes the port from the ephemeral pool and reserves it for us.
+    vLLM's many internal sockets — can squat the port we need. Binding here, before the
+    backend starts, removes the port from the ephemeral pool and reserves it for us.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -170,8 +172,24 @@ def bind_serving_socket(host: str, port: int) -> socket.socket:
     return sock
 
 
+@dataclass(frozen=True)
+class BackgroundServer:
+    """A uvicorn server running on a daemon thread, for as long as the thread is up."""
+
+    thread: threading.Thread
+
+    def is_alive(self) -> bool:
+        return self.thread.is_alive()
+
+
 @contextmanager
-def serve_app_background(app: Starlette, sock: socket.socket, *, start_timeout_seconds: float = 30.0) -> Iterator[None]:
+def serve_app_background(
+    app: Starlette,
+    sock: socket.socket,
+    *,
+    name: str = "quick-serve-dashboard",
+    start_timeout_seconds: float = 30.0,
+) -> Iterator[BackgroundServer]:
     """Run ``app`` under uvicorn on an already-bound ``sock`` in a daemon thread.
 
     The caller owns the listening socket (see :func:`bind_serving_socket`) so it can
@@ -180,8 +198,8 @@ def serve_app_background(app: Starlette, sock: socket.socket, *, start_timeout_s
     host, port = sock.getsockname()[:2]
     config = uvicorn.Config(app, log_level="info", log_config=None, workers=1)
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name="quick-serve-dashboard", daemon=True)
-    logger.info("Starting quick-serve dashboard on %s:%d", host, port)
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, name=name, daemon=True)
+    logger.info("Starting %s on %s:%d", name, host, port)
     thread.start()
     started = ExponentialBackoff(initial=0.02, maximum=1, jitter=0).wait_until(
         lambda: server.started or not thread.is_alive(),
@@ -190,11 +208,11 @@ def serve_app_background(app: Starlette, sock: socket.socket, *, start_timeout_s
     if not started or not server.started:
         server.should_exit = True
         thread.join()
-        raise RuntimeError("quick-serve dashboard failed to start")
+        raise RuntimeError(f"{name} failed to start")
     try:
-        yield
+        yield BackgroundServer(thread=thread)
     finally:
-        logger.info("Stopping quick-serve dashboard on %s:%d", host, port)
+        logger.info("Stopping %s on %s:%d", name, host, port)
         server.should_exit = True
         thread.join()
 

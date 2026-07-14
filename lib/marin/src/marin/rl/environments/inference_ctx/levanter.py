@@ -157,7 +157,7 @@ class LevanterInferenceContext(BaseInferenceContext):
             # `request_kwargs` never sets `stream`, so spreading it as untyped kwargs prevents
             # the non-streaming overload from being selected; the result is always a ChatCompletion.
             completion = await client.chat.completions.create(
-                model=getattr(self._inference_server.config, "model_name", "test-model"),
+                model=self._inference_server.config.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 **request_kwargs,
                 timeout=30,
