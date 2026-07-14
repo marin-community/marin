@@ -92,15 +92,16 @@ flowchart TD
 
 Pre-built testbed samples live under `s3://marin-us-east-02a/marin/datakit/`
 (CoreWeave `us-east-02a`). Each is a tree of already-normalized sources named
-`sample_<tokens>_<hash>`, passable to `--sample-prefix`:
+`sample_<tokens>_<hash>`. Pass the full S3 root as `--sample-prefix` (it is used
+verbatim — the bucket prefix is not prepended):
 
-| Sample root | Approx. size |
+| `--sample-prefix` | Approx. size |
 | --- | --- |
-| `sample_0.1b_7d7d8fd7` | ~0.1B tokens (default `SAMPLE_PREFIX`) |
-| `sample_100b_8ae7a94f` | ~100B tokens |
-| `sample_100b_e273e96d` | ~100B tokens |
-| `sample_500b_32c52319` | ~500B tokens |
-| `sample_1t_733c8c5c` | ~1T tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7` | ~0.1B tokens (default `SAMPLE_PREFIX`) |
+| `s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f` | ~100B tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_100b_e273e96d` | ~100B tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_500b_32c52319` | ~500B tokens |
+| `s3://marin-us-east-02a/marin/datakit/sample_1t_733c8c5c` | ~1T tokens |
 
 List them with:
 
