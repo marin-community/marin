@@ -598,7 +598,11 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            # next_step (= state.step) is the 1-based count of completed steps; using
+            # it here makes ckpt names match natural expectations: after N steps
+            # complete, save lands at `step-N`. Don't use `info.step` (= state.step - 1),
+            # which would produce `step-{N-1}` and shift all periodic saves by +1.
+            checkpointer.on_step(tree=info.state.saveable_state, step=info.next_step, force=force)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 

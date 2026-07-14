@@ -532,6 +532,18 @@ class Checkpointer:
         return ret_dict["model"]
 
     def on_step(self, *, tree: PyTree, step: int, force: bool = False):
+        """Trigger a checkpoint save if the modulo schedule fires (or if ``force=True``).
+
+        Args:
+            tree: the pytree to serialize.
+            step: 1-based count of completed training steps (= ``state.step``). Disk
+                  destination will be ``step-{step}``. This matches the convention
+                  that "after the Nth step has completed, save as ``step-N``".
+            force: if True, save unconditionally — except when a save was already
+                   written at this same ``step`` (no point re-writing an identical
+                   artifact; this is what makes the end-of-training force-save a
+                   no-op when ``num_train_steps`` is a multiple of ``every``).
+        """
         step = int(step)
 
         if step == 0:
@@ -539,8 +551,11 @@ class Checkpointer:
             if not force:
                 return  # don't save checkpoint at step 0 unless forced
 
-        if step == self._last_save_step and not force:
-            # we've already saved a checkpoint at this step
+        if step == self._last_save_step:
+            # We've already saved a checkpoint at this step (periodic boundary or earlier
+            # force-save). Skip — re-saving would overwrite an identical artifact, and
+            # the end-of-training force-save is meant to capture the FINAL state, which
+            # is already captured if a periodic save just fired at this same step.
             return
 
         # two reasons we can save: time or step
