@@ -38,6 +38,8 @@ def hf_normalize_steps(
     id_field: str = "id",
     text_field: str = "text",
     file_extensions: tuple[str, ...] = (".parquet",),
+    zephyr_max_parallelism: int = 8,
+    bare: bool = False,
 ) -> tuple[StepSpec, StepSpec]:
     """Return ``(download, normalize)`` for a generic HF-backed source.
 
@@ -55,6 +57,11 @@ def hf_normalize_steps(
             actual data files (common for family dumps with per-subset subdirs).
         id_field, text_field, file_extensions: Schema hints forwarded to
             ``normalize_step``. Defaults match the Dolma convention.
+        zephyr_max_parallelism: Download parallelism. The default suits repos of a
+            few thousand files; raise it for repos with tens of thousands, where
+            per-file task dispatch, not bandwidth, is the bottleneck.
+        bare: Forwarded to ``normalize_step``. Set for sources whose extra columns
+            vary across shards -- the parquet writer cannot widen a column mid-write.
     """
     base = hf_dataset_id.replace("/", "__")
     # Same-repo-different-staging cases (e.g. bigcode/StarCoder2-Extras subsets)
@@ -72,6 +79,7 @@ def hf_normalize_steps(
         revision=revision,
         hf_urls_glob=list(hf_urls_glob) if hf_urls_glob else None,
         override_output_path=staged_path,
+        zephyr_max_parallelism=zephyr_max_parallelism,
     )
 
     normalize = _normalize_step(
@@ -81,5 +89,6 @@ def hf_normalize_steps(
         id_field=id_field,
         relative_input_path=data_subdir or None,
         file_extensions=file_extensions,
+        bare=bare,
     )
     return (download, normalize)

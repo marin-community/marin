@@ -27,7 +27,8 @@ from marin.datakit.download.davinci_dev import (
     davinci_dev_env_native_normalize_steps,
 )
 from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
-from marin.datakit.download.dolma3_5_pool import dolma3_5_pool_normalize_steps
+from marin.datakit.download.dolma3_5_code import dolma3_5_code_normalize_steps
+from marin.datakit.download.dolma4pdfs import dolma4pdfs_normalize_steps
 from marin.datakit.download.eai_taxonomy_code import eai_taxonomy_code_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.finetranslations import finetranslations_normalize_steps
@@ -251,21 +252,24 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
-    # dolma3.5_pool: 3 of the pool's ~15 components registered so far, each
-    # its own HF-directory-scoped download (see dolma3_5_pool.py for why).
-    # Token counts are estimated from the upstream jsonl.zst shards: for
-    # dolma4pdfs (whose records carry a `token_count` field on a subset of
-    # shards) the measured ~4.03 chars/token matches the standard chars/4
-    # heuristic, so chars/4 over a stratified byte-weighted file sample is
-    # used for all three (no `token_count` field elsewhere).
-    dolma3_5_pool = _rows_flat(
-        dolma3_5_pool_normalize_steps,
+    # Exact counts, measured with marin-community/marin-tokenizer over the
+    # normalized data: 1,221,318,442,892 tokens / 635,390,613 docs and
+    # 65,538,632,427 / 31,179,056. Both came in above their chars/4 estimates
+    # (by 11.7% and 6.0%), which is the bias to expect from the estimates below.
+    dolma3_5_code = _rows_flat(
+        dolma3_5_code_normalize_steps,
         {
-            "dolma4pdfs": 2300.61,
-            "dolma_code": 1093.15,
-            "dolma_code_prose": 61.84,
+            "dolma_code": 1221.32,
+            "dolma_code_prose": 65.54,
         },
     )
+
+    # dolma3.5_pool PDF subset, minus the finepdfs component we already ingest
+    # separately (see dolma4pdfs.py). The count is the whole-subset chars/4
+    # estimate (2300.61) scaled by the 0.7055 byte share of the two components
+    # we keep. Still an estimate, and likely low: chars/4 undercounted both code
+    # subsets above once measured. Tokenize to replace it with an exact count.
+    dolma4pdfs = _rows_flat(dolma4pdfs_normalize_steps, {"dolma4pdfs": 1623.12})
 
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
@@ -409,7 +413,8 @@ def all_sources() -> dict[str, DatakitSource]:
         *starcoder2_extras,
         *common_pile,
         *finepdfs,
-        *dolma3_5_pool,
+        *dolma3_5_code,
+        *dolma4pdfs,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,
         *nemotron_cc_code_v1,
