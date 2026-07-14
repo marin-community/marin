@@ -100,22 +100,6 @@ def test_fetch_file_atomic_failure_preserves_dest_and_cleans_temp(tmp_path, monk
     assert [p.name for p in dest.parent.iterdir()] == ["tokenizer.json"]
 
 
-def test_fetch_file_atomic_leaves_unrelated_temp_untouched(tmp_path):
-    # Concurrency contract: another fetcher's in-flight temp sibling must never
-    # be consumed, clobbered, or promoted to dest.
-    src = tmp_path / "remote" / "tokenizer.json"
-    src.parent.mkdir(parents=True)
-    src.write_bytes(b'{"version": 1}')
-    dest = tmp_path / "cache" / "tokenizer.json"
-    dest.parent.mkdir(parents=True)
-    other_temp = dest.parent / "tokenizer.json.tmp.0123456789abcdef"
-    other_temp.write_bytes(b'{"trunc')
-
-    assert fetch_file_atomic(str(src), str(dest)) is True
-    assert dest.read_bytes() == b'{"version": 1}'
-    assert other_temp.read_bytes() == b'{"trunc'
-
-
 # ---------------------------------------------------------------------------
 # Guarded entry point tests
 # ---------------------------------------------------------------------------

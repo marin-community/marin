@@ -207,12 +207,11 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
 def fetch_file_atomic(src_url: str, dest_path: str) -> bool:
     """Fetch ``src_url`` down to local ``dest_path`` atomically via a unique temp sibling.
 
-    Reads the source and writes it to a unique ``dest_path`` sibling temp file, then
-    ``os.replace``s it into place. ``dest_path`` therefore never holds a partial file —
-    a concurrent reader sees the previous complete file or the new one — and a fetch
-    killed midway leaves only an orphaned temp file instead of poisoning the destination
-    (e.g. a shared cache). The unique temp name keeps concurrent fetches of the same
-    destination from clobbering each other's in-flight files.
+    ``dest_path`` never holds a partial file — a concurrent reader sees the previous
+    complete file or the new one, and a fetch killed midway leaves only an orphaned temp
+    file instead of poisoning the destination (e.g. a shared cache). The unique temp name
+    keeps concurrent fetches of the same destination from clobbering each other's
+    in-flight files.
 
     Returns ``False`` if the source does not exist; re-raises all other errors.
     """
