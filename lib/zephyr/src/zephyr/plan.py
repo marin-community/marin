@@ -11,6 +11,7 @@ knowledge of logical operation types.
 import functools
 import heapq
 import logging
+import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -112,9 +113,9 @@ class Write:
 class Scatter:
     """Distribute items to output shards by key hash."""
 
-    key_fn: Callable[[Any], Any]  # item → key
+    key_fn: Callable[[Any], Any] | Expr  # item → key, or a zephyr.expr.col(...)
     num_output_shards: int
-    sort_fn: Callable[[Any], Any] | None = None  # Optional secondary sort within each group
+    sort_fn: Callable[[Any], Any] | Expr | None = None  # Optional secondary sort within each group
     combiner_fn: Callable | None = None  # Optional local pre-aggregation per key
 
 
@@ -122,9 +123,9 @@ class Scatter:
 class Reduce:
     """Merge sorted chunks and reduce per key."""
 
-    key_fn: Callable[[Any], Any]
+    key_fn: Callable[[Any], Any] | Expr
     reducer_fn: Callable[[Any, Iterator], Any]
-    sort_fn: Callable[[Any], Any] | None = None  # Must match Scatter's sort_fn
+    sort_fn: Callable[[Any], Any] | Expr | None = None  # Must match Scatter's sort_fn
 
 
 @dataclass
@@ -178,17 +179,49 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 def _reduce_gen(
     shard: ScatterReader,
-    key_fn: Callable,
+    key_fn: Callable | Expr,
     reducer_fn: Callable,
     external_sort_dir: str,
 ) -> Iterator:
+    # key_fn is the same Scatter.key_fn/Reduce.key_fn value used to route
+    # items on write; itertools.groupby needs a plain row-wise callable, so a
+    # zephyr.expr.col(...) is normalized via its dict-evaluating .evaluate.
+    t0 = time.perf_counter()
+    row_key_fn = key_fn.evaluate if isinstance(key_fn, Expr) else key_fn
+    expr_normalize_seconds = time.perf_counter() - t0
     merged = shard.merge_sorted_chunks(external_sort_dir)
-    for key, grouped in groupby(merged, key=key_fn):
-        result = reducer_fn(key, grouped)
-        if isinstance(result, Iterator):
-            yield from result
-        else:
-            yield result
+
+    stage_counters = counters.current_stage()
+    merged_pull_seconds = 0.0
+    reducer_seconds = 0.0
+    try:
+        grouped_iter = groupby(merged, key=row_key_fn)
+        while True:
+            t0 = time.perf_counter()
+            try:
+                key, grouped = next(grouped_iter)
+            except StopIteration:
+                merged_pull_seconds += time.perf_counter() - t0
+                break
+            merged_pull_seconds += time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            result = reducer_fn(key, grouped)
+            if isinstance(result, Iterator):
+                yield from result
+            else:
+                yield result
+            reducer_seconds += time.perf_counter() - t0
+    finally:
+        stage_counters.update_counter("reduce/expr_normalize_seconds", expr_normalize_seconds)
+        stage_counters.update_counter("reduce/merged_pull_seconds", merged_pull_seconds)
+        stage_counters.update_counter("reduce/reducer_fn_seconds", reducer_seconds)
+        logger.info(
+            "reduce_gen timers: expr_normalize=%.3f merged_pull=%.3f reducer_fn=%.3f",
+            expr_normalize_seconds,
+            merged_pull_seconds,
+            reducer_seconds,
+        )
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:

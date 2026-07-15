@@ -16,8 +16,10 @@ from unittest.mock import patch
 
 import cloudpickle
 import polars as pl
+import pyarrow as pa
 import pytest
 from iris.env_resources import TaskResources
+from zephyr.expr import col
 from zephyr.external_sort import external_sort_merge
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
@@ -104,6 +106,133 @@ def test_scatter_each_shard_gets_correct_items(tmp_path):
         assert recovered == expected, f"shard {shard_idx} mismatch"
 
 
+def _raw_columns(shard: ScatterReader) -> set[str]:
+    """Column names actually present in a shard's chunk files, before _dataframe_to_items strips anything."""
+    frames = shard.get_frames()
+    if not frames:
+        return set()
+    return set(pl.concat([f.collect() for f in frames], how="diagonal_relaxed").columns)
+
+
+def test_scatter_accepts_dataframe_items(tmp_path):
+    """A pl.DataFrame item is ingested directly: no _PAYLOAD_COL, no per-row Python conversion.
+
+    Exercises the path used by a `.map()` step chained after
+    `load_parquet(batch_mode=True)`, which yields whole batches (DataFrames
+    or RecordBatches) rather than one dict per item. Routing requires
+    key=col(...) so the shard/sort columns can be computed in Polars.
+    """
+    num_shards = 4
+    items = [{"k": i % 4, "v": i} for i in range(40)]
+    batch_df = pl.DataFrame(items)
+
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    scatter_paths = list(
+        _write_scatter(
+            iter([batch_df]),
+            source_shard=0,
+            data_path=data_path,
+            key_fn=col("k"),
+            num_output_shards=num_shards,
+        )
+    )
+
+    recovered = []
+    for shard_idx in range(num_shards):
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        assert _PAYLOAD_COL not in _raw_columns(shard), "DataFrame items must not be cloudpickled into _PAYLOAD_COL"
+        recovered.extend(_read_shard(shard))
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+
+def test_scatter_accepts_record_batch_items(tmp_path):
+    """A pa.RecordBatch item is converted to a DataFrame and ingested directly."""
+    num_shards = 4
+    items = [{"k": i % 4, "v": i} for i in range(40)]
+    batch = pa.RecordBatch.from_pylist(items)
+
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    scatter_paths = list(
+        _write_scatter(
+            iter([batch]),
+            source_shard=0,
+            data_path=data_path,
+            key_fn=col("k"),
+            num_output_shards=num_shards,
+        )
+    )
+
+    recovered = []
+    for shard_idx in range(num_shards):
+        shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
+        assert _PAYLOAD_COL not in _raw_columns(shard), "RecordBatch items must not be cloudpickled into _PAYLOAD_COL"
+        recovered.extend(_read_shard(shard))
+    assert sorted(recovered, key=lambda x: x["v"]) == sorted(items, key=lambda x: x["v"])
+
+
+def test_scatter_dataframe_items_with_sort_by(tmp_path):
+    """sort_by=col(...) orders items within each group on the reduce side, same as the Python-item path."""
+    num_shards = 2
+    items = [{"k": "a", "ts": 3, "v": 1}, {"k": "a", "ts": 1, "v": 2}, {"k": "a", "ts": 2, "v": 3}]
+    batch_df = pl.DataFrame(items)
+
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    scatter_paths = list(
+        _write_scatter(
+            iter([batch_df]),
+            source_shard=0,
+            data_path=data_path,
+            key_fn=col("k"),
+            sort_fn=col("ts"),
+            num_output_shards=num_shards,
+        )
+    )
+
+    # write_batch routes via Polars' native hash (not deterministic_hash), so
+    # unlike the Python-item path we don't know the target shard up front —
+    # find the one shard that actually got the "a" group.
+    merged_by_shard = {
+        shard_idx: list(ScatterReader.from_sidecars(scatter_paths, shard_idx).merge_sorted_chunks(str(tmp_path)))
+        for shard_idx in range(num_shards)
+    }
+    non_empty = [merged for merged in merged_by_shard.values() if merged]
+    assert len(non_empty) == 1, f"expected exactly one shard with data, got {merged_by_shard}"
+    assert [item["v"] for item in non_empty[0]] == [2, 3, 1]  # sorted by ts: 1, 2, 3
+
+
+def test_scatter_dataframe_items_reject_combiner(tmp_path):
+    """combiner_fn is not supported for DataFrame/RecordBatch-sourced scatter items."""
+    batch_df = pl.DataFrame([{"k": 0, "v": 1}])
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    with pytest.raises(AssertionError, match="combiner_fn is not supported"):
+        list(
+            _write_scatter(
+                iter([batch_df]),
+                source_shard=0,
+                data_path=data_path,
+                key_fn=col("k"),
+                num_output_shards=2,
+                combiner_fn=lambda key, items: items,
+            )
+        )
+
+
+def test_scatter_dataframe_items_require_column_expr_key(tmp_path):
+    """A plain lambda key can't be vectorized, so a DataFrame item must raise rather than misroute."""
+    batch_df = pl.DataFrame([{"k": 0, "v": 1}])
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    with pytest.raises(AssertionError, match=re.escape("zephyr.expr.col")):
+        list(
+            _write_scatter(
+                iter([batch_df]),
+                source_shard=0,
+                data_path=data_path,
+                key_fn=_key,
+                num_output_shards=2,
+            )
+        )
+
+
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
     items = [{"k": i % 2, "v": i} for i in range(20)]
     scatter_paths = _build_shard(tmp_path, items, num_output_shards=2)
@@ -133,7 +262,7 @@ def test_merge_sorted_chunks_basic(tmp_path):
     ]
     # Force two chunks by writing twice
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer = ScatterWriter(data_path=data_path, key=_key, source_shard=0, num_output_shards=1)
     writer.write(_items_to_dataframe(items[:2], _key, None, 1))
     writer.write(_items_to_dataframe(items[2:], _key, None, 1))
     scatter_paths = list(writer.close())
@@ -153,7 +282,7 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     ]
     # Write as two separate chunks
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, sort_fn=lambda x: x["ts"])
+    writer = ScatterWriter(data_path=data_path, key=_key, source_shard=0, num_output_shards=1, sort_by=lambda x: x["ts"])
     writer.write(_items_to_dataframe([items[0]], _key, lambda x: x["ts"], 1))
     writer.write(_items_to_dataframe([items[1]], _key, lambda x: x["ts"], 1))
     scatter_paths = list(writer.close())
@@ -176,7 +305,7 @@ def test_scatter_with_combiner(tmp_path):
         yield {"k": key, "v": sum(i["v"] for i in items)}
 
     data_path = str(tmp_path / "shard-0000/scatter/")
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0, combiner_fn=sum_combiner)
+    writer = ScatterWriter(data_path=data_path, key=_key, source_shard=0, num_output_shards=1, combiner_fn=sum_combiner)
     writer.write(_items_to_dataframe(items, _key, None, 1))
     scatter_paths = list(writer.close())
 
@@ -191,7 +320,7 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
     items = [{"k": i, "v": i} for i in range(10)]
     data_path = str(tmp_path / "shard-0000/scatter/")
     # Write many small chunks
-    writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=0)
+    writer = ScatterWriter(data_path=data_path, key=_key, source_shard=0, num_output_shards=1)
     for i in range(10):
         writer.write(_items_to_dataframe([items[i]], _key, None, 1))
     scatter_paths = list(writer.close())
@@ -386,7 +515,7 @@ def test_external_sort_merge_across_source_shards(tmp_path):
     for shard_idx, items in [(0, [{"k": 3, "v": "a"}, {"k": 1, "v": "b"}]), (1, [{"k": 2, "v": "c"}])]:
         data_path = f"{tmp_path}/shard-{shard_idx:04d}/scatter/"
         paths.append(data_path)
-        writer = ScatterWriter(data_path=data_path, key_fn=_key, source_shard=shard_idx)
+        writer = ScatterWriter(data_path=data_path, key=_key, source_shard=shard_idx, num_output_shards=1)
         writer.write(_items_to_dataframe(items, _key, None, 1))
         writer.close()
 
