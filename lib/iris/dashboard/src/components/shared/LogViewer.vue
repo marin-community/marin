@@ -548,11 +548,14 @@ function isoTimestamp(entry: LogEntry): string {
 // Serialize the currently loaded lines (respecting the active server-side
 // filter and any expanded context) as a JSON array, one object per line.
 function logsAsJson(): string {
+  // In EXACT scope the backend omits per-row keys (they all equal the queried
+  // source), so fall back to the query source for those rows.
+  const exactSource = matchScope.value === 'EXACT' ? sourceInput.value : ''
   const rows = logRows.value.map((row) => ({
     seq: row.seq,
     timestamp: isoTimestamp(row.entry),
     level: logLevelName(row.entry.level),
-    source: row.entry.key ?? '',
+    source: row.entry.key || exactSource,
     message: row.entry.data ?? '',
   }))
   return JSON.stringify(rows, null, 2)
