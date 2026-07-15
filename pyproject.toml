@@ -33,7 +33,6 @@ dependencies = [
     "marin-ducky",
     # top level deps. try to keep these small.
     "watchdog",
-    "tiktoken>=0.12.0",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
     # wheels (built by dupekit-release-wheels.yaml) rather than a workspace
     # member. A `>= X.Y.Z.dev0` floor opts uv into the daily nightly wheels

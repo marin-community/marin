@@ -35,7 +35,7 @@ def test_transform_mrcr_builds_paired_prompts_with_identical_targets(tmp_path):
     transform_mrcr(MrcrTransformConfig(input_path=str(tmp_path / "input"), output_path=str(output_path)))
 
     def read(condition: str) -> dict[str, str]:
-        with gzip.open(output_path / "2needle" / "4k-8k" / f"{condition}.jsonl.gz", "rt") as f:
+        with gzip.open(output_path / "2needle" / f"{condition}.jsonl.gz", "rt") as f:
             return json.loads(f.read())
 
     full_context = read("full_context")
