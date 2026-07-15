@@ -61,7 +61,7 @@ NEMOTRON_CODE_V2_CONTENT_TOKENS_B = 120.254379519
 def nemotron_code_v2_content() -> ArtifactStep[Artifact]:
     """Adopt reconstructed Nemotron Code v2 contents resolved through Software Heritage."""
     return ArtifactStep.adopt(
-        "raw/nemotron-code-v2-content",
+        NEMOTRON_CODE_V2_CONTENT_SOURCE,
         "2026.07.14",
         NEMOTRON_CODE_V2_CONTENT_SOURCE,
         kind=Artifact,
