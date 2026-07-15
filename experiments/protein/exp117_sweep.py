@@ -160,6 +160,7 @@ MODEL_CONFIG = Qwen3Config(
     num_layers=24,
     rope=Llama3RotaryEmbeddingsConfig(),
 )
+MODEL_SIZE: str = "1_5b"  # size label for the run id and tags; matches MODEL_CONFIG
 
 
 # --- Fixed training recipe (mirrors #70/#75; only LR/WD/epochs vary per launch) ---
@@ -208,7 +209,7 @@ def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
     selects the identity namespace (``SMOKE_RUN_PREFIX`` isolates smoke runs from real ones).
     Run outputs (checkpoints, W&B mirror) land at ``gs://marin-<region>/{run_id}/{SWEEP_VERSION}/``.
     """
-    return f"{prefix}-cv1-1_5b-{point.point_id}-{region}"
+    return f"{prefix}-cv1-{MODEL_SIZE}-{point.point_id}-{region}"
 
 
 # --- Env inputs (one point per launch) ---------------------------------------
@@ -396,20 +397,23 @@ def _tags(point: Point, region: str) -> list[str]:
     # Stable, identity-bearing facts only. TPU / per-device parallelism are deliberately
     # omitted: a run may migrate slices over its life, so they are neither stable tags nor
     # part of run identity -- keeping them out also leaves the fingerprint TPU-independent.
+    params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = TOKENS_PER_STEP * point.num_train_steps
     return [
         "protein",
         "exp117",
         "contacts-v1",
-        "1_5b",
         "qwen3",
         "unmasked",
+        f"model_size={MODEL_SIZE}",
+        f"global_batch={BATCH_SIZE}",
+        f"params={params}",
         f"epochs={point.epochs}",
         f"lr={point.learning_rate:g}",
         f"wd={point.weight_decay:g}",
         f"region={region}",
         f"steps={point.num_train_steps}",
-        f"tokens_exact={tokens}",
+        f"tokens={tokens}",
         f"sweep_version={SWEEP_VERSION}",
         f"cache_version={CACHE_VERSION}",
     ]
