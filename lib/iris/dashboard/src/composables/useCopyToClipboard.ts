@@ -13,7 +13,7 @@ export function useCopyToClipboard() {
   const error = ref(false)
   let timer: ReturnType<typeof setTimeout> | undefined
 
-  async function copy(text: string): Promise<boolean> {
+  async function copy(text: string): Promise<void> {
     error.value = false
     try {
       await navigator.clipboard.writeText(text)
@@ -23,7 +23,6 @@ export function useCopyToClipboard() {
     }
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => { copied.value = false; error.value = false }, RESET_DELAY_MS)
-    return copied.value
   }
 
   return { copied, error, copy }
