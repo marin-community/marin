@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 run is submitted as Iris job `/held/moe-mrcr-001-d512` in `us-east5-a`. No experiment result is available yet.
+The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-001-d512-r1` in `us-east5-a`. No experiment result is available yet.
 
 ## Scope
 
@@ -35,7 +35,7 @@ The `MOE-MRCR-001` d512 run is submitted as Iris job `/held/moe-mrcr-001-d512` i
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted `/held/moe-mrcr-001-d512`. Next test: monitor training and collect final MRCR metrics.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted recovery job `/held/moe-mrcr-001-d512-r1`. Next test: monitor training and collect final MRCR metrics.
 
 ### Blocked
 
@@ -80,3 +80,13 @@ The `MOE-MRCR-001` d512 run is submitted as Iris job `/held/moe-mrcr-001-d512` i
 - Result: Iris accepted job `/held/moe-mrcr-001-d512`; dashboard https://iris.oa.dev/#/job/%2Fheld%2Fmoe-mrcr-001-d512.
 - Interpretation: the required W&B authentication is now available. The first submission with the additional `--reserve v5p-8` constraint was rejected because no non-preemptible CPU coordinator group matched that live preemptible availability constraint in `us-east5-a`; the retry retained the explicit zone pin, while the launcher independently pins its v5p-8 child resource to the same zone.
 - Next action: monitor Iris logs and W&B until terminal, recovering the self-submitted job if necessary.
+
+### 2026-07-14 17:33 - MOE-MRCR-001 recovered missing runtime dependency
+
+- Hypothesis: declaring the transform's existing `tiktoken` lockfile dependency at the root will make it available in the Iris coordinator environment.
+- Commit Hash: `32003287679aa042cc1ccb68ee0f728b84e58ecc`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r1 --zone us-east5-a -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r1 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: unchanged d512 experiment; recovery run ID `MOE-MRCR-001-d512-r1`.
+- Result: original job `/held/moe-mrcr-001-d512` failed during coordinator import with `ModuleNotFoundError: No module named 'tiktoken'`, before TPU dispatch. The root dependency was declared, checks passed, and Iris accepted `/held/moe-mrcr-001-d512-r1`.
+- Interpretation: this was packaging-only and does not alter the dataset transform or experiment configuration.
+- Next action: verify that the recovery coordinator reaches MRCR preprocessing, TPU dispatch, and W&B registration.
