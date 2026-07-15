@@ -156,9 +156,7 @@ class ControllerFederationStore:
                 peer_id=spec.peer_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.QUEUED_HANDOFF),
-                # Mint this handle's incarnation. Every (re-)drive delivers the same
-                # nonce; a later resubmission replaces the job row and this handle,
-                # minting a new one — how the peer tells a replay from a new run.
+                # Each admission is a new incarnation; every re-drive repeats its nonce.
                 handoff_nonce=uuid.uuid4().hex,
             )
         return HandoffAdmission.ADMITTED

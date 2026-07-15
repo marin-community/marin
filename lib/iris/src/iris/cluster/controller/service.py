@@ -1248,16 +1248,14 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.LaunchJobResponse | None:
         """Federation-aware admission for a handoff whose job id already exists.
 
-        A delivery repeating the stored handoff nonce from the *same* requester is
-        an idempotent replay of the same incarnation — return the existing job, and
-        re-report its current state so a parent whose sync cursor has already
-        consumed this job's deltas still converges. The same requester with a *new*
-        nonce is a genuinely new incarnation (the parent replaced its finished job
-        and resubmitted): return ``None`` so the caller falls through to the generic
-        ``existing_job_policy`` switch, which replaces a finished previous run. Any
-        other existing row — a local job, a job received from a different requester,
-        or a SENT handle — is a genuine collision the parent must see, so reject
-        with ``ALREADY_EXISTS``.
+        A delivery repeating the stored nonce from the same requester is an
+        idempotent replay: return the existing job and re-report its state, so a
+        parent whose sync cursor already consumed this job's deltas still
+        converges. The same requester with a new nonce is a fresh incarnation
+        (the parent replaced its finished job and resubmitted): return ``None``
+        and the caller applies the generic ``existing_job_policy``. Anything
+        else — a local job, a different requester's job, or a SENT handle — is a
+        collision: raise ``ALREADY_EXISTS``.
         """
         handoff = reads.received_handoff(cur, job_id)
         if handoff is None or handoff.requester_id != request.federation.requester_id:
@@ -1500,18 +1498,15 @@ class ControllerServiceImpl:
         # the second ``with self._db.transaction()`` below.
         needs_drain = False
         # A federated replacement (same requester, new handoff nonce) deletes the
-        # previous run's rows without a tombstone: the job id continues under the
-        # same requester, so the parent must see the fresh submission's changelog
-        # row, not an instruction to drop its live handle.
+        # previous run's rows without a tombstone: the job id lives on, so the
+        # parent must mirror the fresh run, not drop its handle.
         record_tombstone = not is_received_handoff
         with self._db.transaction() as cur:
             existing_state = reads.get_job_state(cur, job_id)
             if existing_state is not None:
-                # A received handoff whose id already exists takes the federation
-                # admission path first: an idempotent replay returns the existing
-                # job, a collision raises. A genuinely new incarnation of the same
-                # requester's job id falls through (``None``) to the generic
-                # replace/keep policy switch below, like any local resubmission.
+                # Federation admission first: a replay returns the existing job,
+                # a collision raises, and a new incarnation (``None``) falls
+                # through to the policy switch like any local resubmission.
                 if is_received_handoff:
                     replay = self._admit_federated_resubmit(cur, job_id, request)
                     if replay is not None:
@@ -1905,10 +1900,10 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 reason="Terminated by user",
             )
-            # Re-report the job's state to its requester (a no-op unless this root
-            # was received via handoff). A routed cancel for an already-terminal
-            # job changes nothing, so without this the parent's stale mirror would
-            # never converge and it would re-drive the cancel forever.
+            # Re-report the job's state to its requester (a no-op unless this
+            # root was received via handoff). A routed cancel of an already-
+            # terminal job changes nothing, and this re-report is what converges
+            # the parent's stale mirror and stops its cancel re-drive.
             writes.record_federation_change(cur, job_id)
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
@@ -3405,11 +3400,10 @@ class ControllerServiceImpl:
                 if row.tombstone:
                     tombstoned[row.job_id] = True
                 elif tombstoned[row.job_id]:
-                    # The job was re-created after a delete within this window (a
-                    # prune racing a fresh handoff of the same id). Rows are in seq
-                    # order, so the later creation supersedes the tombstone: report
-                    # the job's full current state rather than telling the parent
-                    # to drop its live handle.
+                    # Re-created after a delete within this window (a prune racing
+                    # a fresh handoff of the same id): rows are in seq order, so
+                    # the later creation supersedes the tombstone — report full
+                    # current state, not an instruction to drop the handle.
                     tombstoned[row.job_id] = False
                     all_tasks[row.job_id] = True
                 elif row.task_index is None:

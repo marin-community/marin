@@ -2012,13 +2012,8 @@ class ReceivedHandoff:
 
 
 def received_handoff(tx: Tx, job_id: JobName) -> ReceivedHandoff | None:
-    """The RECEIVED handoff record for ``job_id``, or ``None`` if it is not one.
-
-    Drives peer-side handoff admission: a delivery repeating the stored nonce from
-    the same requester is an idempotent replay; the same requester with a new nonce
-    is a genuinely new incarnation of the job id; any other existing row is a
-    collision.
-    """
+    """The RECEIVED handoff record for ``job_id``, or ``None`` if this cluster
+    did not receive the job via handoff."""
     row = tx.execute(
         select(federated_jobs_table.c.peer_id, federated_jobs_table.c.handoff_nonce).where(
             federated_jobs_table.c.job_id == job_id,

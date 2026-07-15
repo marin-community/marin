@@ -1051,11 +1051,10 @@ def test_resubmit_of_a_failed_federated_job_replaces_and_reruns_on_the_peer(tmp_
     """Resubmitting a job id whose previous handoff already failed on the peer must
     re-run it there, exactly like a local resubmission replaces a finished job.
 
-    Regression for the production hang: the peer's admission used to answer the
-    fresh incarnation's delivery with the OLD terminal job as an "idempotent
-    replay", emitting no changelog row — so the parent's new handle sat in
-    "Handed off; awaiting first status report" forever (the old deltas were
-    already behind its sync cursor).
+    Regression: a peer that answers the fresh delivery with the old terminal job
+    as an "idempotent replay" emits no changelog row, and the parent's new handle
+    sits in "Handed off; awaiting first status report" forever (the old deltas
+    are already behind its sync cursor).
     """
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
@@ -1140,9 +1139,9 @@ def test_routed_cancel_of_an_already_terminal_job_converges_the_parent(tmp_path,
     there, but must still converge the parent: the peer re-reports the job's
     state, the mirror terminalizes, and the cancel re-drive stops.
 
-    Regression for the production wedge: a parent whose cursor had already
-    consumed the job's terminal deltas re-drove TerminateJob every sync tick
-    forever while its mirror sat in PENDING.
+    Regression: without the re-report, a parent whose cursor already consumed
+    the job's terminal deltas re-drives TerminateJob every sync tick forever
+    while its mirror sits in PENDING.
     """
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)

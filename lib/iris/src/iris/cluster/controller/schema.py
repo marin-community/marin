@@ -589,9 +589,8 @@ federated_jobs_table = Table(
     Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF | HANDOFF_REJECTED
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
     # One handoff incarnation: minted per SENT handle, carried on the delivered
-    # request, and stored on the peer's RECEIVED row. A re-drive repeats it; a
-    # resubmission that replaced the parent's job mints a new one, which is how
-    # the peer tells a replay apart from a genuinely new submission.
+    # request, stored on the peer's RECEIVED row. A re-drive repeats it; a
+    # resubmission mints a new one — how the peer tells a replay from a new run.
     Column("handoff_nonce", String, nullable=False, server_default=""),
     Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )

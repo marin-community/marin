@@ -67,10 +67,9 @@ class HandoffSpec:
     owner_principal: str  # end-user friendly owner asserted to the peer (attribution)
     submitting_user: str  # authenticated principal the peer's allowlist gates on
     request: controller_pb2.Controller.LaunchJobRequest  # normalized request, for job_config
-    # This handle's incarnation, delivered on every (re-)drive so the peer can tell
-    # a replay from a new submission reusing the id. Minted by the store at
-    # admission ("" on the admission-time spec); :meth:`FederationStore.pending_handoffs`
-    # always fills it from the persisted handle.
+    # This handle's incarnation, letting the peer tell a replay from a new
+    # submission reusing the id. "" only at admission time, before the store
+    # mints one; every delivered spec carries the persisted handle's nonce.
     handoff_nonce: str = ""
 
 

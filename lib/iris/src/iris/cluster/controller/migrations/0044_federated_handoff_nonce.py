@@ -3,11 +3,9 @@
 
 """Add ``handoff_nonce`` to ``federated_jobs``.
 
-Identifies one handoff incarnation: minted per SENT handle, carried on the
-delivered request, and stored on the peer's RECEIVED row. Pre-migration rows get
-'' on both sides, which compares equal — an in-flight handoff keeps deduping as
-an idempotent replay across the migration. Idempotent: safe to re-run after a
-mid-migration crash.
+Existing rows get ``''`` on both the SENT and RECEIVED sides, which compares
+equal, so a handoff in flight across the migration keeps deduping as an
+idempotent replay. Safe to re-run after a mid-migration crash.
 """
 
 

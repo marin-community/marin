@@ -306,8 +306,7 @@ def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> Non
 
     ``record_tombstone=False`` is for a deletion that immediately re-creates the
     job id for the same requester (a federated resubmission replacing a finished
-    run): a tombstone would tell the parent to drop its live handle, when the
-    fresh submission's own changelog row is what it should see.
+    run): the parent must mirror the fresh submission, not drop its live handle.
     """
     # Record the tombstone BEFORE the delete so a parent federating with this peer
     # learns the job was pruned. The event resolves and stamps its requester from
