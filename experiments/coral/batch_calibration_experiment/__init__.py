@@ -1,16 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Empirical runs for comparing Coral batch memory estimates to TPU HBM use.
+"""Launcher for the batch-calibration experiment: runs that compare the ``batch_calibration``
+memory estimate to measured TPU HBM use, to calibrate its ``correction_factor``.
 
-The study uses a pretokenized DCLM cache already present in ``europe-west4``.
-Each training run computes ``per_device_parallelism`` from
-``experiments.coral.batch_config`` and leaves gradient accumulation to Levanter's
-standard ``train_batch_size / (per_device_parallelism * data_axis_size)`` rule.
+Uses a pretokenized DCLM cache already present in ``europe-west4``. Each run computes
+``per_device_parallelism`` from ``experiments.coral.batch_calibration`` and leaves gradient
+accumulation to Levanter's ``train_batch_size / (per_device_parallelism * data_axis_size)`` rule.
+Analysis (fetch W&B HBM, tabulate, plot) lives in ``analysis.py``.
 
 Preview the plan without submitting TPU work:
 
-    python -m experiments.coral.batch_config_study --plan
+    python -m experiments.coral.batch_calibration_experiment --plan
 """
 
 import argparse
@@ -20,14 +21,14 @@ from dataclasses import dataclass, replace
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.coral.batch_config import (
+from experiments.coral.batch_calibration import (
     BYTES_PER_GIB,
     adam_optimizer_bytes,
     batch_memory_bytes,
@@ -42,7 +43,7 @@ REGION_PREFIX = "gs://marin-eu-west4"
 DCLM_BASELINE_100M_CACHE = f"{REGION_PREFIX}/tokenized/dclm_baseline_100m_llama3-f42a23"
 DEFAULT_VERSION = "2026.07.09"
 DEFAULT_NUM_TRAIN_STEPS = 20
-DEFAULT_OVERHEAD_FACTOR = 1.0
+DEFAULT_CORRECTION_FACTOR = 1.0
 STUDY_ID = "reps80g-nohf"
 WANDB_GROUP_PREFIX = "coral-batch-config-study"
 TPU_HOST_RAM = "80g"
@@ -135,7 +136,7 @@ def dclm_baseline_100m_europe_west4() -> ArtifactStep[TokenizedCache]:
 def estimate_case(
     case: StudyCase,
     *,
-    overhead_factor: float = DEFAULT_OVERHEAD_FACTOR,
+    correction_factor: float = DEFAULT_CORRECTION_FACTOR,
 ) -> CaseEstimate:
     """Estimate memory and Levanter batch settings for one study case."""
     parameter_count = case.model.total_trainable_params(llama3_tokenizer_vocab_size)
@@ -152,7 +153,7 @@ def estimate_case(
         param_bytes=param_bytes,
         optimizer_bytes=optimizer_bytes,
         activation_bytes=activation_bytes,
-        overhead_factor=overhead_factor,
+        correction_factor=correction_factor,
     )
     per_device_parallelism, gradient_accumulation = tpu_batch_config(
         case.tpu,
@@ -177,10 +178,10 @@ def build_case(
     version: str = DEFAULT_VERSION,
     num_train_steps: int = DEFAULT_NUM_TRAIN_STEPS,
     wandb_project: str = "marin",
-    overhead_factor: float = DEFAULT_OVERHEAD_FACTOR,
+    correction_factor: float = DEFAULT_CORRECTION_FACTOR,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Build one training artifact with estimated batch settings applied."""
-    estimate = estimate_case(case, overhead_factor=overhead_factor)
+    estimate = estimate_case(case, correction_factor=correction_factor)
     run_id = f"coral-batch-config-{STUDY_ID}-{case.name}-{version}"
     dataset = dclm_baseline_100m_europe_west4()
     base = train_lm(
@@ -222,7 +223,7 @@ def build(
     version: str = DEFAULT_VERSION,
     num_train_steps: int = DEFAULT_NUM_TRAIN_STEPS,
     wandb_project: str = "marin",
-    overhead_factor: float = DEFAULT_OVERHEAD_FACTOR,
+    correction_factor: float = DEFAULT_CORRECTION_FACTOR,
 ) -> list[ArtifactStep[LevanterCheckpoint]]:
     """Build the selected study cases."""
     return [
@@ -231,7 +232,7 @@ def build(
             version=version,
             num_train_steps=num_train_steps,
             wandb_project=wandb_project,
-            overhead_factor=overhead_factor,
+            correction_factor=correction_factor,
         )
         for case in _selected_cases(case_names)
     ]
@@ -290,7 +291,7 @@ def _selected_cases(case_names: Sequence[str]) -> list[StudyCase]:
 def _print_plan(
     case_names: Sequence[str],
     *,
-    overhead_factor: float,
+    correction_factor: float,
     version: str,
     num_train_steps: int,
 ) -> None:
@@ -298,7 +299,7 @@ def _print_plan(
     print(f"region: {REGION}")
     print(f"data: {DCLM_BASELINE_100M_CACHE}")
     print(f"steps: {num_train_steps}")
-    print(f"overhead_factor: {overhead_factor}")
+    print(f"correction_factor: {correction_factor}")
     print()
     print(
         "| case | tpu | model | batch | params | estimate GiB | capacity GiB | "
@@ -306,7 +307,7 @@ def _print_plan(
     )
     print("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for case in _selected_cases(case_names):
-        estimate = estimate_case(case, overhead_factor=overhead_factor)
+        estimate = estimate_case(case, correction_factor=correction_factor)
         run_id = f"coral-batch-config-{STUDY_ID}-{case.name}-{version}"
         print(
             f"| {case.name} | {case.tpu} | {case.model_name} | {case.batch_size} | "
@@ -327,7 +328,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--version", default=DEFAULT_VERSION)
     parser.add_argument("--num-train-steps", type=int, default=DEFAULT_NUM_TRAIN_STEPS)
     parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "marin"))
-    parser.add_argument("--overhead-factor", type=float, default=DEFAULT_OVERHEAD_FACTOR)
+    parser.add_argument("--correction-factor", type=float, default=DEFAULT_CORRECTION_FACTOR)
     return parser.parse_args()
 
 
@@ -338,7 +339,7 @@ def main() -> None:
             args.case,
             version=args.version,
             num_train_steps=args.num_train_steps,
-            overhead_factor=args.overhead_factor,
+            correction_factor=args.correction_factor,
         )
         return
 
@@ -350,7 +351,7 @@ def main() -> None:
                 version=args.version,
                 num_train_steps=args.num_train_steps,
                 wandb_project=args.wandb_project,
-                overhead_factor=args.overhead_factor,
+                correction_factor=args.correction_factor,
             )
         ]
     )

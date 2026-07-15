@@ -45,17 +45,17 @@ Launch one run (secrets come from the iris command, never baked into the config)
 Smoke test one slice/region (a real but tiny end-to-end run: ~20 steps, one eval, one
 permanent checkpoint, under an isolated ``exp117-smoke`` identity that never touches a real
 point). EPOCHS/LR/WD are optional in smoke mode but honored if given; ``SMOKE_STEPS``
-overrides the step budget. ``HBM_OVERHEAD`` (default 1.0) overrides the batch-fit overhead
-multiplier -- a smaller value packs a larger per-device batch (more HBM pressure); the smoke
-campaign sweeps it to find the OOM floor per slice. In smoke mode the slice and overhead are
-folded into the run identity, so each ``(slice, region, overhead)`` is a distinct W&B run::
+overrides the step budget. ``CORRECTION_FACTOR`` overrides the batch-fit correction factor (else the
+slice's calibrated per-family default) -- a smaller value packs a larger per-device batch. In smoke
+mode the slice and effective correction factor are folded into the run identity, so each
+``(slice, region, correction_factor)`` is a distinct W&B run::
 
     source ~/marin.env && uv run iris --cluster marin job run \\
         --user "$USERNAME" --no-wait --region us-east5 --memory=1GB \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
-        -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 -e HBM_OVERHEAD 0 \\
+        -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 -e SMOKE_BATCH 64 \\
         -- python -m experiments.protein.exp117_sweep
 """
 
@@ -66,6 +66,7 @@ from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
+from fray.types import tpu_family
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
@@ -77,7 +78,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.placement import marin_prefix_for_region, singleton_region_list
 from marin.training.training import LevanterCheckpoint
 
-from experiments.coral.batch_config import (
+from experiments.coral.batch_calibration import (
     adam_optimizer_bytes,
     batch_memory_bytes,
     dense_transformer_bytes,
@@ -110,9 +111,9 @@ SMOKE_RUN_PREFIX: str = "prot-exp117-smoke"
 SMOKE_WANDB_GROUP: str = "exp117-smoke"
 # Manual smoke identity token (not dated). Folded into the smoke run id so a re-run after a code
 # or recipe change gets a FRESH run + checkpoint path instead of resuming/merging the prior smoke
-# run of the same (point, region, tpu, overhead). Bump ("v2", ...) to fork a clean smoke run; the
-# old run and its checkpoints are left in place untouched.
-SMOKE_VERSION: str = "v2"  # v2: multi-host HF-checkpoint save fixed (levanter process_allgather)
+# run of the same (point, region, tpu, correction_factor). Bump to fork a clean smoke run; the old
+# run and its checkpoints are left in place untouched.
+SMOKE_VERSION: str = "v3"  # v3: overhead_factor -> per-family correction_factor (identity token oh->cf)
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Nominal point used when EPOCHS/LR/WD are omitted in smoke mode; overridden by any that are
@@ -173,10 +174,10 @@ TOKENS_PER_STEP: int = BATCH_SIZE * SEQ_LEN
 STEPS_PER_EPOCH: int = round(TRAIN_TOKENS / TOKENS_PER_STEP)
 STEPS_PER_EVAL: int = max(1, round(STEPS_PER_EPOCH / NUM_EVALS_PER_EPOCH))
 
-# Default HBM overhead multiplier for the batch-fit estimate. 1.0 is conservative (matches #75's
-# hand-verified per-slice microbatching). Overridable per launch via HBM_OVERHEAD to probe the
-# OOM floor; smaller packs more per device. Execution-only -- never enters run identity.
-HBM_OVERHEAD_FACTOR: float = 1.0
+# Per-family correction factor for the batch-fit estimate, calibrated against measured per-chip
+# ceilings (see exp117_batch_calibration.md): each value sits inside its family's measured range with
+# margin. batch_fit uses the slice's family value by default; a launch may override via CORRECTION_FACTOR.
+CORRECTION_FACTORS: dict[str, float] = {"v5e": 0.5, "v6e": 0.3, "v5p": 0.45}
 
 
 # --- A single trial point ----------------------------------------------------
@@ -270,23 +271,36 @@ def smoke_steps() -> int:
     return steps
 
 
-def parse_overhead_factor() -> float:
-    """HBM overhead multiplier for the batch-fit estimate; ``HBM_OVERHEAD`` env, default 1.0.
+def parse_correction_factor() -> float | None:
+    """Optional per-launch override of the batch-fit correction factor via the ``CORRECTION_FACTOR`` env.
 
-    A smaller value shrinks the estimated per-batch HBM and so admits a larger per-device batch
-    (less gradient accumulation) -- the setting the smoke campaign sweeps to find the OOM floor.
+    ``None`` (env unset) means use the slice's calibrated per-family default. A smaller value shrinks
+    the estimate, admitting a larger per-device batch (less gradient accumulation).
     """
-    factor = _env_value("HBM_OVERHEAD", float, HBM_OVERHEAD_FACTOR)
+    raw = os.environ.get("CORRECTION_FACTOR")
+    if raw is None or not raw.strip():
+        return None
+    factor = float(raw)
     if factor < 0:
-        raise SystemExit(f"HBM_OVERHEAD must be >= 0, got {factor}")
+        raise SystemExit(f"CORRECTION_FACTOR must be >= 0, got {factor}")
     return factor
+
+
+def correction_factor_for(tpu: str, override: float | None) -> float:
+    """Effective correction factor: the per-launch ``override`` if set, else the slice's family default."""
+    if override is not None:
+        return override
+    family = tpu_family(tpu)
+    if family not in CORRECTION_FACTORS:
+        raise SystemExit(f"no calibrated correction_factor for TPU family {family!r}; set CORRECTION_FACTOR")
+    return CORRECTION_FACTORS[family]
 
 
 def parse_smoke_batch() -> int | None:
     """Global-batch override for the direct max-batch probe (``SMOKE_BATCH``); smoke mode only.
 
     When set, the run trains at exactly this global batch with ``per_device_parallelism=-1``
-    (full per-chip batch, NO gradient accumulation), bypassing the HBM estimate and ``HBM_OVERHEAD``
+    (full per-chip batch, NO gradient accumulation), bypassing the HBM estimate and correction factor
     entirely. The job then either fits (succeeds) or OOMs, so a binary search over powers of 2 finds
     each slice's true batch ceiling -- the empirical ground truth the estimate is calibrated against.
     Folded into the run identity so every probe is a distinct W&B run.
@@ -315,12 +329,12 @@ def _fmt_wd(wd: float) -> str:
     return f"{wd:g}".replace(".", "p")
 
 
-def _fmt_overhead(overhead_factor: float) -> str:
-    """Path-safe HBM-overhead tag, e.g. ``0.0`` -> ``0``, ``1.5`` -> ``1p5``."""
-    return f"{overhead_factor:g}".replace(".", "p")
+def _fmt_correction(correction_factor: float) -> str:
+    """Path-safe correction-factor tag, e.g. ``0.3`` -> ``0p3``, ``1.0`` -> ``1``."""
+    return f"{correction_factor:g}".replace(".", "p")
 
 
-def _batch_bytes(overhead_factor: float) -> int:
+def _batch_bytes(correction_factor: float) -> int:
     """Estimated HBM to place the full global batch (params + Adam state + activations)."""
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     param_bytes, activation_bytes = dense_transformer_bytes(
@@ -335,19 +349,18 @@ def _batch_bytes(overhead_factor: float) -> int:
         param_bytes=param_bytes,
         optimizer_bytes=adam_optimizer_bytes(params),
         activation_bytes=activation_bytes,
-        overhead_factor=overhead_factor,
+        correction_factor=correction_factor,
     )
 
 
-def batch_fit(tpu: str, overhead_factor: float) -> tuple[int, int]:
+def batch_fit(tpu: str, correction_factor: float | None) -> tuple[int, int]:
     """``(per_device_parallelism, gradient_accumulation)`` that fits global batch 128 on ``tpu``.
 
-    ``per_device_parallelism == -1`` means the full per-chip batch fits with no accumulation.
-    The global batch is always 128, so the objective is comparable across every slice. A smaller
-    ``overhead_factor`` shrinks the estimate, admitting a larger per-device batch (less
-    accumulation) and thus more HBM pressure -- the knob calibrated by the smoke campaign.
+    ``per_device_parallelism == -1`` means the full per-chip batch fits with no accumulation. The
+    global batch is always 128, so the objective is comparable across every slice. ``correction_factor``
+    is the per-launch override, or ``None`` to use the slice's calibrated per-family default.
     """
-    return tpu_batch_config(tpu, BATCH_SIZE, _batch_bytes(overhead_factor))
+    return tpu_batch_config(tpu, BATCH_SIZE, _batch_bytes(correction_factor_for(tpu, correction_factor)))
 
 
 def _tokenize_cache(name: str, docs: str, *, validation: bool) -> ArtifactStep[TokenizedCache]:
@@ -437,27 +450,26 @@ def production_shape(point: Point, region: str) -> RunShape:
 
 
 def smoke_shape(
-    point: Point, region: str, steps: int, tpu: str, overhead_factor: float, batch_override: int | None
+    point: Point, region: str, steps: int, tpu: str, correction_factor: float | None, batch_override: int | None
 ) -> RunShape:
     """Tiny, identity-isolated end-to-end run: ``SMOKE_NUM_EVALS`` evals + permanent ckpts.
 
-    Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path,
-    but under a smoke-only identity and with an eval/checkpoint every ``steps //
-    SMOKE_NUM_EVALS`` so at least one of each fires within the short run. The slice,
-    ``overhead_factor``, and ``SMOKE_VERSION`` are folded into the run id (and tagged): the
-    HBM-calibration campaign runs many ``(slice, region, overhead)`` combinations that share
-    ``point`` + region, and ``SMOKE_VERSION`` forks a fresh identity after a recipe change so a
-    re-run never resumes/merges a prior smoke run rather than colliding.
+    Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path, but under
+    a smoke-only identity and with an eval/checkpoint every ``steps // SMOKE_NUM_EVALS`` so at least one
+    of each fires within the short run. The slice, effective ``correction_factor``, and ``SMOKE_VERSION``
+    are folded into the run id (and tagged), and ``SMOKE_VERSION`` forks a fresh identity after a
+    recipe/library change so a re-run never resumes/merges a prior smoke run rather than colliding.
     """
     every = max(1, steps // SMOKE_NUM_EVALS)
     base = run_id(point, region, SMOKE_RUN_PREFIX)
-    identity = f"{base}-{tpu}-oh{_fmt_overhead(overhead_factor)}-{SMOKE_VERSION}"
+    cf = correction_factor_for(tpu, correction_factor)
+    identity = f"{base}-{tpu}-cf{_fmt_correction(cf)}-{SMOKE_VERSION}"
     tags = [
         *_tags(point, region),
         "smoke",
-        "hbm-calib",
+        "batch-calib",
         f"tpu={tpu}",
-        f"hbm_overhead={overhead_factor:g}",
+        f"correction_factor={cf:g}",
         f"smoke_version={SMOKE_VERSION}",
     ]
     if batch_override is not None:
@@ -478,7 +490,7 @@ def _apply_recipe_overrides(
     step: ArtifactStep[LevanterCheckpoint],
     tpu: str,
     checkpoint_every: int,
-    overhead_factor: float,
+    correction_factor: float | None,
     force_full_batch: bool,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Apply the #117 knobs :func:`train_lm` does not expose.
@@ -513,7 +525,7 @@ def _apply_recipe_overrides(
             # force_full_batch (SMOKE_BATCH probe): place the whole per-chip batch with no
             # accumulation and skip the estimate, so the run directly tests whether this global
             # batch fits the slice's HBM.
-            per_device_parallelism = -1 if force_full_batch else batch_fit(tpu, overhead_factor)[0]
+            per_device_parallelism = -1 if force_full_batch else batch_fit(tpu, correction_factor)[0]
             eval_parallelism = (
                 trainer.per_device_eval_parallelism if per_device_parallelism == -1 else per_device_parallelism
             )
@@ -529,12 +541,12 @@ def _apply_recipe_overrides(
 
 
 def build_run(
-    point: Point, shape: RunShape, tpu: str, region: str, overhead_factor: float
+    point: Point, shape: RunShape, tpu: str, region: str, correction_factor: float | None
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Assemble one training run as an ``ArtifactStep``.
 
     ``point`` supplies only the optimizer hyperparameters; ``shape`` supplies identity and
-    step/eval/checkpoint cadence (production vs. smoke). ``tpu`` and ``overhead_factor`` drive the
+    step/eval/checkpoint cadence (production vs. smoke). ``tpu`` and ``correction_factor`` drive the
     per-device batch fit at run time; ``region`` scopes storage and cache locality.
     """
     name = shape.run_id
@@ -567,18 +579,20 @@ def build_run(
         env_vars=_training_env(region),
     )
     return _apply_recipe_overrides(
-        step, tpu, shape.checkpoint_every, overhead_factor, force_full_batch=shape.batch_override is not None
+        step, tpu, shape.checkpoint_every, correction_factor, force_full_batch=shape.batch_override is not None
     )
 
 
 # --- Preview + entry point ---------------------------------------------------
 
 
-def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: str, overhead_factor: float) -> None:
+def _print_preview(
+    point: Point, shape: RunShape, tpu: str, region: str, mode: str, correction_factor: float | None
+) -> None:
     if shape.batch_override is not None:
         per_device_parallelism, grad_accum, batch = -1, 1, shape.batch_override
     else:
-        per_device_parallelism, grad_accum = batch_fit(tpu, overhead_factor)
+        per_device_parallelism, grad_accum = batch_fit(tpu, correction_factor)
         batch = BATCH_SIZE
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = batch * SEQ_LEN * shape.num_train_steps
@@ -590,18 +604,18 @@ def _print_preview(point: Point, shape: RunShape, tpu: str, region: str, mode: s
         f"permanent ckpt every {shape.checkpoint_every} steps)\n"
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B schedule={LR_SCHEDULE} warmup={WARMUP}\n"
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
-        f"  hbm_overhead={overhead_factor:g} per_device_parallelism={per_device_parallelism} "
-        f"grad_accum={grad_accum} (global batch {batch})\n"
+        f"  correction_factor={correction_factor_for(tpu, correction_factor):g} "
+        f"per_device_parallelism={per_device_parallelism} grad_accum={grad_accum} (global batch {batch})\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )
 
 
-def _resolve_run(region: str, tpu: str, overhead_factor: float) -> tuple[Point, RunShape, str]:
+def _resolve_run(region: str, tpu: str, correction_factor: float | None) -> tuple[Point, RunShape, str]:
     """Resolve the ``(point, shape, mode)`` for this invocation from the environment."""
     if smoke():
         point = parse_point(defaults=Point(*SMOKE_POINT_DEFAULTS))
-        shape = smoke_shape(point, region, smoke_steps(), tpu, overhead_factor, parse_smoke_batch())
+        shape = smoke_shape(point, region, smoke_steps(), tpu, correction_factor, parse_smoke_batch())
         return point, shape, "smoke"
     point = parse_point()
     return point, production_shape(point, region), "sweep"
@@ -611,17 +625,17 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     tpu = parse_tpu()
     region = parse_region()
-    overhead_factor = parse_overhead_factor()
+    correction_factor = parse_correction_factor()
 
     # No MARIN_PREFIX: driver and worker each resolve marin_prefix() from their own region (both
     # pinned via --region / ResourceConfig), so caches and outputs land region-local.
-    point, shape, mode = _resolve_run(region, tpu, overhead_factor)
+    point, shape, mode = _resolve_run(region, tpu, correction_factor)
 
     if preview():
-        _print_preview(point, shape, tpu, region, mode, overhead_factor)
+        _print_preview(point, shape, tpu, region, mode, correction_factor)
         return
 
-    StepRunner().run([lower(build_run(point, shape, tpu, region, overhead_factor))])
+    StepRunner().run([lower(build_run(point, shape, tpu, region, correction_factor))])
 
 
 if __name__ == "__main__":

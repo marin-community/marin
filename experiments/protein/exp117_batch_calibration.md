@@ -1,12 +1,12 @@
 # TPU batch calibration
 
 `tpu_batch_config` predicts, for a slice and target global batch, the per-device microbatch (`pdp`)
-and gradient accumulation that fit HBM. Its one free parameter is `overhead_factor` — a scalar on the
-byte estimate. **Goal: calibrate that single knob** — one value, tuned against direct measurement on a
+and gradient accumulation that fit HBM. Its one free parameter is `correction_factor` — a scalar on the
+byte estimate. **Goal: calibrate that single knob** — a value, tuned against direct measurement on a
 small set of slices, that lets the heuristic predict accumulation for any slice.
 
 Ground truth is the measured per-chip microbatch ceiling: the largest global batch that trains with no
-accumulation, ÷ chips. Measure it on the smaller slices, tune `overhead_factor` so the estimator
+accumulation, ÷ chips. Measure it on the smaller slices, tune `correction_factor` so the estimator
 reproduces it, and confirm it generalizes to larger slices in the same family.
 
 Workload: 1.5B dense transformer, `seq_len 8192`, bf16 params, Adam. Code:
@@ -55,19 +55,19 @@ Each probe:
 
 ## Calibrating the knob
 
-`batch_memory_bytes = ⌈(params + Adam state + activations) × overhead⌉`; `tpu_batch_config` returns the
-largest microbatch whose scaled estimate fits capacity. Higher overhead → smaller predicted microbatch
-→ more accumulation.
+`batch_memory_bytes = ⌈(params + Adam state + activations) × correction_factor⌉`; `tpu_batch_config`
+returns the largest microbatch whose scaled estimate fits capacity. Higher correction factor → smaller
+predicted microbatch → more accumulation.
 
 - Evaluate the prediction at a **target ≥ 512** so `pdp` is not capped by a small batch basis — below
   that it saturates at `128/chips` for many-chip slices (see Nuances). The per-chip prediction is
   stable for any target in that range.
-- Per family, take the overhead interval that reproduces the measured per-chip ceiling (per-chip is
-  constant within a family, so the family's smallest slice suffices — this is the calibrate-on-small
+- Per family, take the correction-factor interval that reproduces the measured per-chip ceiling
+  (per-chip is constant within a family, so the family's smallest slice suffices — the calibrate-on-small
   step).
-- **Recommended single value = the smallest overhead that never over-predicts on any slice** (predicted
-  per-chip ≤ measured, so the heuristic never under-accumulates into an OOM), which also minimizes
-  wasted accumulation subject to that safety constraint.
+- **Recommended single value = the smallest correction factor that never over-predicts on any slice**
+  (predicted per-chip ≤ measured, so the heuristic never under-accumulates into an OOM), which also
+  minimizes wasted accumulation subject to that safety constraint.
 
 ## Nuances (Marin)
 
@@ -75,8 +75,9 @@ largest microbatch whose scaled estimate fits capacity. Higher overhead → smal
   (the sweep's default 128) saturates the per-chip prediction at `128/chips` for many-chip slices,
   masking the knob. Calibrate and predict against a target ≥ 512.
 - **One scalar, multi-slice.** The knob lumps replicated params/optimizer and batch-scaled activations
-  into a single factor. HBM-to-activation ratio differs per family, so one overhead can be exact for at
-  most a subset — the residual is cross-family, not cross-size.
+  into a single factor. HBM-to-activation ratio differs per family, so one correction factor can be exact
+  for at most a subset — the residual is cross-family, not cross-size. The sweep therefore keys the
+  correction factor by family (`CORRECTION_FACTORS` in `exp117_sweep.py`).
 - **Region-local data.** Tokenized caches and checkpoints are region-scoped; cross-region reads are
   disallowed (cost). Raw docs are staged per region; the cache builds once per region on first probe.
   A family confined to a region without staged docs is unmeasurable (v4).
@@ -91,11 +92,11 @@ largest microbatch whose scaled estimate fits capacity. Higher overhead → smal
 ## Results
 
 Measured ceilings (ground truth). Per-chip is constant within a family and scales with chip count — an
-internal consistency check. **overhead range** = the `overhead_factor` interval (per family) that makes
-`tpu_batch_config` reproduce that per-chip ceiling. Peak HBM is the max `hbmMemoryUsage` over all chips
-and steps of the completed run.
+internal consistency check. **correction range** = the `correction_factor` interval (per family) that
+makes `tpu_batch_config` reproduce that per-chip ceiling. Peak HBM is the max `hbmMemoryUsage` over all
+chips and steps of the completed run.
 
-| slice | chips | GiB/chip | max batch | per-chip | overhead range | peak HBM % |
+| slice | chips | GiB/chip | max batch | per-chip | correction range | peak HBM % |
 |---|---|---|---|---|---|---|
 | v5litepod-4 | 4 | 16 | 16 | 4 | 0.40 – 0.78 | 87.0 |
 | v5litepod-8 | 8 | 16 | 32 | 4 | 0.40 – 0.78 | 72.1 |
@@ -107,15 +108,16 @@ and steps of the completed run.
 | v5p-16 | 8 | 95 | 256 | 32 | 0.30 – 0.58 | 65.6 |
 | v5p-32 | 16 | 95 | 512 | 32 | 0.30 – 0.58 | 64.0 |
 
-The ranges are disjoint — v5e needs ≥0.40, v6e ≤0.39 — so no single value fits all three.
-**Recommended single overhead = 0.40** (smallest that never over-predicts): exact on v5e and v5p, 2×
-conservative on v6e, safe everywhere. The shipped default `overhead_factor = 1.0` is far too
-conservative.
+The ranges are disjoint — v5e needs ≥0.40, v6e ≤0.39 — so no single value fits all three. Two ways to
+use this: a **single safe value = 0.40** (smallest that never over-predicts: exact on v5e/v5p, 2×
+conservative on v6e), or **per-family factors**, which the sweep ships — `CORRECTION_FACTORS = {v5e:
+0.5, v6e: 0.3, v5p: 0.45}`, each inside its family's range with margin. The uncorrected estimate
+(`correction_factor = 1.0`) is far too conservative.
 
-Accumulation to reach a global batch of 512 — measured vs. the estimator at the default and calibrated
-overhead:
+Accumulation to reach a global batch of 512 — measured vs. the estimator uncorrected and at the single
+safe factor:
 
-| slice | chips | per-chip | accum (measured) | accum @1.0 (default) | accum @0.40 (calibrated) |
+| slice | chips | per-chip | accum (measured) | accum @1.0 (uncorrected) | accum @0.40 (calibrated) |
 |---|---|---|---|---|---|
 | v5litepod-4 | 4 | 4 | 32 | 64 | 32 |
 | v5litepod-8 | 8 | 4 | 16 | 32 | 16 |
@@ -127,6 +129,6 @@ overhead:
 | v5p-16 | 8 | 32 | 2 | 4 | 2 |
 | v5p-32 | 16 | 32 | 1 | 2 | 1 |
 
-Calibrating `1.0 → 0.40` halves over-accumulation everywhere: exact on v5e and v5p, and v6e drops from
-4× to 2× the necessary accumulation. Full accuracy on v6e would need overhead ≤0.39, which over-predicts
-(OOMs) v5e — the limit of a single scalar.
+Correcting `1.0 → 0.40` halves over-accumulation everywhere: exact on v5e and v5p, and v6e drops from
+4× to 2× the necessary accumulation. Full accuracy on v6e would need a correction factor ≤0.39, which
+over-predicts (OOMs) v5e — the limit of a single scalar, hence the per-family factors above.

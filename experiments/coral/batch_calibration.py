@@ -67,10 +67,18 @@ def batch_memory_bytes(
     param_bytes: int,
     optimizer_bytes: int,
     activation_bytes: int,
-    overhead_factor: float = 2.0,
+    correction_factor: float = 1.0,
 ) -> int:
-    """Combine caller-provided HBM byte buckets for one global training batch."""
-    return math.ceil((param_bytes + optimizer_bytes + activation_bytes) * overhead_factor)
+    """Total HBM for one global training batch: the sum of the byte buckets scaled by a correction
+    factor.
+
+    The buckets are first-order estimates (parameters, optimizer state, activations); ``correction_factor``
+    absorbs everything the buckets do not model directly — runtime/framework overhead, allocator
+    fragmentation, and the gap between the activation heuristic and reality. It is the single knob
+    calibrated against measured per-chip ceilings (see experiments/protein/exp117_batch_calibration.md);
+    ``1.0`` applies the raw bucket sum with no correction.
+    """
+    return math.ceil((param_bytes + optimizer_bytes + activation_bytes) * correction_factor)
 
 
 def tpu_batch_config(

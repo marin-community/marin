@@ -3,7 +3,7 @@
 
 import pytest
 
-from experiments.coral.batch_config import (
+from experiments.coral.batch_calibration import (
     BYTES_PER_GIB,
     adam_optimizer_bytes,
     batch_memory_bytes,
