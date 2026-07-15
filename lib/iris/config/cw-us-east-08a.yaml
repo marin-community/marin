@@ -35,13 +35,13 @@
 # This cluster's identity. Used for token minting and for authenticating to peers.
 name: cw-us-east-08a
 
-# External finelog log server (in-cluster k8s Deployment, namespace `iris`).
-# Resolves to k8s://finelog-cw-use08a.iris; see lib/finelog/config/cw-us-east-08a.yaml.
-# Without this the controller falls back to an in-process MemStore (logs lost on
-# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-08a`. Forwarding
-# to the hub lives in that server's own `forwarding:` block.
-finelog:
-  config: cw-us-east-08a
+# finelog is intentionally omitted until this cluster is provisioned: the controller
+# falls back to an in-process MemStore (logs lost on restart) meanwhile. A forwarding
+# finelog server can't be wired yet — it needs finelog-cw-us-east-08a-signing-key minted
+# and this cluster's public half registered in the hub's jwt layer (lib/finelog/config/
+# marin.yaml), which the finelog config tests enforce. Add the finelog deploy config +
+# `finelog: { config: cw-us-east-08a }` here once the key exists. See gaps.md ("finelog
+# auth secrets").
 
 # Public host of this controller. The whole surface is IP-locked to the marin
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
