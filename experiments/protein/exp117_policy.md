@@ -86,7 +86,7 @@ Targets are the issue's region/slice plan, confirmed against ground truth: the c
 must be present **region-local** (the trainer tokenizes in-pipeline region-local) and a
 `gs://marin-<region>` bucket must exist. Verified 2026-07-14 — docs present in all five regions:
 us-east5, us-east1, us-central1, us-west4, and europe-west4 (bucket `gs://marin-eu-west4`, note the
-`eu-` abbreviation). The trainer docstring's claim that the docs live only in us-east5 is stale.
+`eu-` abbreviation).
 
 ```yaml
 targets:
@@ -108,36 +108,3 @@ targets:
 
 - Append `--user "$USERNAME"` to every Iris job submission and resubmission.
 - Show me the assembled Iris job-run command and ask for review before the first submission.
-- Never move checkpoint data across regions; a cross-region placement restarts the logical trial
-  from initial state under a new regional identity.
-- Do not re-run a `(configuration, rung)` to estimate noise; training is treated as deterministic
-  enough that one objective per logical trial suffices.
-- **Data locations (GCS, region-local):** raw docs at
-  `gs://marin-<region>/protein-structure/MarinFold/exp53_contacts_v1_5x/documents/{train,val}/`;
-  tokenized caches under `tokenized/` at `gs://marin-<region>/tokenized/contacts-v1{,-val}/<CACHE_VERSION>/`.
-  Never write datasets to the bucket root.
-- **W&B objective key** is `eval/tokenized/contacts-v1-val/loss` (the component key carries the `tokenized/` prefix).
-
-## Reviewed Assumptions
-
-- **Objective** `eval/tokenized/contacts-v1-val/loss` at the final step (minimize) is the sole
-  comparison metric, confirmed against the trainer's `COMPONENT_VAL` series and validated via PREVIEW.
-- **Grid** LR `[1e-3, 3.16e-3, 1e-2]` (half-decade, log10) and WD `[0.1..1.6]` (x2, log10) are the
-  initial resolutions and the default spacing for any edge extension. Domains are **wide**
-  (LR `[3.16e-5, 1e-1]`, WD `[0.025, 6.4]`) per operator choice, to give the #117 LR-boundary
-  analysis room to chase a moving optimum; an edge short of its hard bound cannot pass convergence.
-- **Resource ladder** epochs `[8, 16, 32]` with ratios `[1, 2, 4]`: steps (and thus cost) scale
-  linearly with epochs at a fixed 4460 steps/epoch and fixed per-step cost.
-- **Batch** global batch stays 128 on every slice (TPU only changes per-device parallelism /
-  grad-accum), so objectives are comparable across all targets. Batch-fit verified 2026-07-14 for
-  every listed slice: v5p-{16..256}, v6e-{32,64,128}, v5litepod-{64,128} fit with no accumulation;
-  v6e-8 (ga=4), v6e-16 (ga=2), v5litepod-32 (ga=2) microbatch to 128.
-- **Capacity** is all preemptible (TRC batch); there is no reserved TPU tier. Stagnation timeouts
-  (3h / 24h / 96h) are loosened accordingly so routine preemption does not trigger relocation.
-- **Envelope** `max_inflight_chips=128`, `wall_time=8 weeks`, `full_exploitation_level=32`. The
-  initial grid is 15 configs/rung x 3 rungs = 45 logical trials max; exhaustive relative work
-  `15 x (1+2+4) = 105` 8-epoch-equivalents (~3.9T tokens) if nothing is pruned. Adaptive execution
-  aims to cut upper-rung sampling and wall time but is not guaranteed to beat exhaustive evaluation.
-- **Duration** per trial is initially unknown and revised from early `run_progress` throughput.
-- **Scope** 1.5B / batch-128 only; the #117 3B-model and global-batch follow-ups are excluded.
-```
