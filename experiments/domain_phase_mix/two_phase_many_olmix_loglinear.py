@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.nextgen.import_sources import NamedWandbRunImportSource
+from experiments.domain_phase_mix.olmix_loglinear_fit import DEFAULT_HUBER_DELTA
 
 OLMIX_LOGLINEAR_RUN_ID = 2
 OLMIX_LOGLINEAR_RUN_NAME = "baseline_olmix_loglinear"
 OLMIX_LOGLINEAR_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_olmix_bpb"
 OLMIX_LOGLINEAR_OBJECTIVE_METRIC = "lm_eval/mmlu_5shot/bpb"
 OLMIX_LOGLINEAR_KL_LAMBDA = 0.05
-OLMIX_LOGLINEAR_HUBER_DELTA = 0.02
+OLMIX_LOGLINEAR_HUBER_DELTA = DEFAULT_HUBER_DELTA
 OLMIX_LOGLINEAR_PREDICTED_BPB = 2.106809784018966
 OLMIX_LOGLINEAR_REGULARIZED_OBJECTIVE = 2.113417080125139
 

@@ -15,9 +15,12 @@ import pandas as pd
 from scipy.optimize import minimize
 
 from experiments.domain_phase_mix.nextgen.utils import normalize_phase_weights
+from experiments.domain_phase_mix.olmix_loglinear_fit import (
+    OlmixLoglinearFit,
+    fit_olmix_loglinear_model,
+)
 from experiments.domain_phase_mix.static_batch_selection import build_dataset_spec_from_frame
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
-    OLMIX_LOGLINEAR_HUBER_DELTA,
     OLMIX_LOGLINEAR_KL_LAMBDA,
     OLMIX_LOGLINEAR_PHASE_WEIGHTS,
 )
@@ -30,26 +33,10 @@ OBJECTIVE_METRIC = "lm_eval/mmlu_sl_verb_5shot/choice_logprob_norm"
 NEGATED_OBJECTIVE_METRIC = f"negated/{OBJECTIVE_METRIC}"
 DEFAULT_RESULTS_ROOT = "gs://marin-us-east5"
 FIT_SUMMARY_JSON = "olmix_sl_verb_fit_summary.json"
-FIT_START_SEED = 0
-FIT_N_STARTS = 48
 SOLVE_SEED = 0
 SOLVE_RANDOM_STARTS = 8
 OLMIX_SOLVE_METHODS = ("lbfgsb", "cvxpy")
 OlmixSolveMethod = Literal["lbfgsb", "cvxpy"]
-
-
-@dataclass(frozen=True)
-class OlmixLoglinearFit:
-    """Fitted Olmix log-linear surrogate in flattened phase-weight space."""
-
-    log_c: float
-    coefficients: tuple[float, ...]
-    huber_loss: float
-
-    def predict(self, weights: np.ndarray) -> np.ndarray:
-        matrix = np.asarray(weights, dtype=float).reshape(len(weights), -1)
-        logits = np.clip(matrix @ np.asarray(self.coefficients, dtype=float), -50.0, 50.0)
-        return np.exp(self.log_c) + np.exp(logits)
 
 
 @dataclass(frozen=True)
@@ -128,60 +115,6 @@ def _negated_objective_frame(frame: pd.DataFrame, *, objective_metric: str = OBJ
     result = result[result[objective_metric].notna()].reset_index(drop=True)
     result[NEGATED_OBJECTIVE_METRIC] = -result[objective_metric].astype(float)
     return result
-
-
-def _huber_sum(residuals: np.ndarray, *, delta: float) -> float:
-    abs_residuals = np.abs(residuals)
-    quadratic = 0.5 * residuals * residuals
-    linear = delta * (abs_residuals - 0.5 * delta)
-    return float(np.where(abs_residuals <= delta, quadratic, linear).sum())
-
-
-def fit_olmix_loglinear_model(
-    weights: np.ndarray,
-    targets: np.ndarray,
-    *,
-    delta: float = OLMIX_LOGLINEAR_HUBER_DELTA,
-    seed: int = FIT_START_SEED,
-    n_starts: int = FIT_N_STARTS,
-) -> OlmixLoglinearFit:
-    """Fit the Olmix log-linear surrogate on positive targets."""
-    x = np.asarray(weights, dtype=float).reshape(len(weights), -1)
-    y = np.asarray(targets, dtype=float)
-    rng = np.random.default_rng(seed)
-
-    def objective(params: np.ndarray) -> float:
-        log_c = float(params[0])
-        coefficients = params[1:]
-        logits = np.clip(x @ coefficients, -50.0, 50.0)
-        predictions = np.exp(log_c) + np.exp(logits)
-        return _huber_sum(predictions - y, delta=delta)
-
-    best_params = None
-    best_loss = float("inf")
-    log_c_candidates = np.linspace(np.log(max(np.min(y) * 0.25, 1e-3)), np.log(max(np.median(y), 1e-3)), 6)
-    starts: list[np.ndarray] = []
-    for log_c in log_c_candidates:
-        starts.append(np.concatenate([[log_c], np.zeros(x.shape[1], dtype=float)]))
-        for _ in range(max(n_starts // len(log_c_candidates) - 1, 0)):
-            starts.append(np.concatenate([[log_c], rng.normal(0.0, 1.0, size=x.shape[1])]))
-
-    for start in starts:
-        result = minimize(objective, start, method="L-BFGS-B")
-        if not result.success and best_params is not None:
-            continue
-        if float(result.fun) < best_loss:
-            best_loss = float(result.fun)
-            best_params = np.asarray(result.x, dtype=float)
-
-    if best_params is None:
-        raise RuntimeError("Olmix loglinear fit failed")
-
-    return OlmixLoglinearFit(
-        log_c=float(best_params[0]),
-        coefficients=tuple(float(value) for value in best_params[1:]),
-        huber_loss=best_loss,
-    )
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -285,7 +218,7 @@ def _solve_olmix_loglinear_schedule_cvxpy(
 ) -> tuple[dict[str, dict[str, float]], float, float]:
     """Solve the KL-regularized Olmix schedule directly on the phase simplices."""
     try:
-        import cvxpy as cp
+        import cvxpy as cp  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError("cvxpy is required for solver='cvxpy'. Run with `uv run --with cvxpy ...`.") from exc
 
