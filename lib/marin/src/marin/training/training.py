@@ -18,7 +18,7 @@ from fray.types import CpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig
-from levanter.main.train_lm import TrainLmConfig, num_train_steps_for_epochs
+from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from pydantic import BaseModel
@@ -101,15 +101,6 @@ class TrainLmOnPodConfig:
     Defaults to False so Marin jobs fail fast when a cache is missing instead of
     spending time (and money) building it during training. Override to True if
     you explicitly want cache construction.
-    """
-    auto_num_epochs: int | None = None
-    """When set, resolve num_train_steps from the packed SFT train cache at launch and cap the run
-    at this many epochs.
-
-    The step count is derived from the post-packing sequence count — the number of examples the
-    trainer actually steps over — so short chat/SFT documents that pack together are counted once
-    per pack, not once per document. The inner ``num_train_epochs`` is also set so the training data
-    is made finite and the run stops after this many epochs even if ``num_train_steps`` drifts.
     """
 
 
@@ -349,32 +340,6 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
     )
 
 
-def _maybe_auto_resolve_lm_schedule(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
-    """Resolve ``num_train_steps`` from ``auto_num_epochs`` against the packed training cache.
-
-    When ``auto_num_epochs`` is set, set the inner ``num_train_epochs`` (so Levanter makes the
-    training data finite as a hard cap) and set ``num_train_steps`` to the step count for that many
-    passes over the post-packing sequence count. Returns the config unchanged when
-    ``auto_num_epochs`` is None.
-    """
-    if config.auto_num_epochs is None:
-        return config
-
-    train_config = replace(cast(DataclassInstance, config.train_config), num_train_epochs=config.auto_num_epochs)
-    num_train_steps = num_train_steps_for_epochs(train_config)
-    logger.info(
-        "Resolved SFT steps from %d epoch(s): %d steps at batch schedule %s",
-        config.auto_num_epochs,
-        num_train_steps,
-        train_config.trainer.train_batch_size,
-    )
-    train_config = replace(
-        cast(DataclassInstance, train_config),
-        trainer=replace(train_config.trainer, num_train_steps=num_train_steps),
-    )
-    return replace(config, train_config=train_config, auto_num_epochs=None)
-
-
 def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
     data = config.data
     if data.auto_build_caches != auto_build:
@@ -471,10 +436,7 @@ def _prepare_training_run(
     logger.info(f"Using run ID: {run_id}")
     config = replace(config, train_config=train_config)
 
-    if isinstance(config, TrainLmOnPodConfig):
-        config = cast(TrainOnPodConfigT, _maybe_auto_resolve_lm_schedule(config))
-        train_config = config.train_config
-    elif isinstance(config, TrainDpoOnPodConfig):
+    if isinstance(config, TrainDpoOnPodConfig):
         config = cast(TrainOnPodConfigT, _maybe_auto_resolve_dpo_schedule(config))
         train_config = config.train_config
 

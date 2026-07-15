@@ -33,7 +33,6 @@ from levanter.data.text.formats import (
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
-import tiny_test_corpus
 from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -905,60 +904,3 @@ def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
         component, Pos, rebuilt, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
     ).as_sync_dataset()
     np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))
-
-
-def test_num_train_sequences_counts_packed_examples_not_documents(tmp_path):
-    config, component = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=8)
-    Pos = hax.Axis("position", 16)
-
-    cache = config.build_caches("train")["sup"]
-    raw_doc_count = len(cache.as_sync_dataset())
-    packed_count = len(
-        dataset_for_component(
-            component, Pos, cache, eos_id=None, block_cross_document_attention=config.block_cross_document_attention
-        ).as_sync_dataset()
-    )
-
-    # Packing must actually collapse documents, otherwise this would not distinguish the two counts.
-    assert packed_count < raw_doc_count
-    assert config.num_train_sequences(Pos) == packed_count
-
-
-def test_train_set_epochs_is_finite_with_length_scaled_by_epochs(tmp_path):
-    config, _ = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=8)
-    Pos = hax.Axis("position", 16)
-    per_epoch = config.num_train_sequences(Pos)
-    schedule = BatchSchedule(2)
-
-    one_epoch = config.train_set(Pos, schedule, key=jax.random.PRNGKey(0), epochs=1)
-    two_epochs = config.train_set(Pos, schedule, key=jax.random.PRNGKey(0), epochs=2)
-
-    assert one_epoch.is_finite()
-    assert len(one_epoch.as_sync_dataset()) == per_epoch
-    assert two_epochs.is_finite()
-    assert len(two_epochs.as_sync_dataset()) == 2 * per_epoch
-
-
-def test_default_train_set_is_infinite_mixture(tmp_path):
-    config, _ = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=8)
-    Pos = hax.Axis("position", 16)
-    train_set = config.train_set(Pos, BatchSchedule(2), key=jax.random.PRNGKey(0))
-    # The default restart mixture reports itself infinite; that is exactly why epoch capping is needed.
-    assert not train_set.is_finite()
-
-
-def test_epoch_length_rejects_multiple_training_components(tmp_path):
-    config_a, comp_a = tiny_test_corpus.construct_packed_supervised_config(tmp_path / "a", num_docs=8)
-    config_b, comp_b = tiny_test_corpus.construct_packed_supervised_config(tmp_path / "b", num_docs=8)
-    config = LmDataConfig(
-        components={"a": comp_a, "b": comp_b},
-        train_weights={"a": 1.0, "b": 1.0},
-        tokenizer="passthrough",
-        vocab_size=32,
-    )
-    Pos = hax.Axis("position", 16)
-
-    with pytest.raises(ValueError, match="single training component"):
-        config.num_train_sequences(Pos)
-    with pytest.raises(ValueError, match="single training component"):
-        config.train_set(Pos, BatchSchedule(2), key=jax.random.PRNGKey(0), epochs=1)

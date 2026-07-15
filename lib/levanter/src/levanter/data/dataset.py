@@ -360,57 +360,84 @@ def _fold_in_key_vmap(key, indices):
 
 
 class EpochDataset(AsyncDataset[T_co]):
-    """Repeats a finite dataset for a fixed number of epochs by cycling indices.
+    """
+    A dataset that wraps another dataset, providing infinite epochs by recycling indices.
+    If `max_epochs` is specified, it limits the number of cycles before raising StopIteration.
 
-    Index ``i`` maps to ``base[i % len(base)]``, so the whole base dataset is repeated in
-    order ``max_epochs`` times. With ``max_epochs`` set the wrapper is finite with length
-    ``max_epochs * len(base)``, so a :class:`~levanter.data.loader.DataLoader` stops after
-    exactly that many examples; with ``max_epochs`` None it cycles forever.
-
-    The base dataset must be finite (have a known ``async_len``); the repeat count is fixed
-    at construction from that length.
-
-    Args:
-        dataset: The finite dataset to repeat.
-        max_epochs: Number of full passes over ``dataset``. ``None`` cycles indefinitely.
+    :param dataset: The dataset to wrap.
+    :param max_epochs: The maximum number of epochs to cycle through. If None, cycle indefinitely.
     """
 
     def __init__(self, dataset: AsyncDataset[T_co], max_epochs: Optional[int] = None):
         super().__init__()
-        if not dataset.is_finite():
-            raise ValueError("EpochDataset requires a finite base dataset to repeat.")
-        if max_epochs is not None and max_epochs < 1:
-            raise ValueError(f"max_epochs must be >= 1, got {max_epochs}")
         self.dataset = dataset
         self.max_epochs = max_epochs
 
-    def is_finite(self) -> bool:
-        return self.max_epochs is not None
-
     async def async_len(self) -> int:
         if self.max_epochs is None:
-            raise ValueError("Cannot determine length of an infinite EpochDataset (max_epochs is None).")
+            raise ValueError("Cannot determine length of an infinite dataset without max_epochs.")
+        # Return the total number of samples: max_epochs * length of the dataset
+        return self.max_epochs * await self.dataset.async_len()
+
+    async def final_length_is_known(self) -> bool:
+        return await self.dataset.final_length_is_known()
+
+    def is_finite(self) -> bool:
+        # EpochDataset can be finite if max_epochs is set.
+        return self.max_epochs is not None
+
+    async def current_len(self) -> Optional[int]:
+        # If max_epochs is None, the dataset is effectively infinite.
+        if self.max_epochs is None:
+            return None
+
+        # If the final length of the dataset is not known, return the current length of the underlying dataset.
+        if not await self.dataset.final_length_is_known():
+            return await self.dataset.current_len()
+
+        # If the final length is known, return the max_epochs * async_len of the dataset.
         return self.max_epochs * await self.dataset.async_len()
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
-        if not indices:
-            return []
+        # Use self.wait_until_len_at_least to ensure we have enough data for the batch.
+        max_index = max(indices)
+        ds_len = await self.dataset.wait_until_len_at_least(max_index + 1)
 
-        base_len = await self.dataset.async_len()
-        if base_len == 0:
-            raise ValueError("Cannot iterate epochs over an empty dataset.")
+        # Determine the epoch based on the largest index
+        epoch = max_index // ds_len
 
-        if self.max_epochs is not None:
-            total_len = self.max_epochs * base_len
-            out_of_range = [idx for idx in indices if idx < 0 or idx >= total_len]
-            if out_of_range:
-                raise IndexError(
-                    f"Indices {out_of_range} are out of range for an EpochDataset of length {total_len} "
-                    f"({self.max_epochs} epochs of {base_len})."
-                )
+        # If max_epochs is specified, raise an error if the epoch exceeds the allowed number of epochs
+        if self.max_epochs is not None and epoch >= self.max_epochs:
+            raise StopIteration(
+                f"Reached maximum number of epochs: epoch {epoch} exceeds the maximum allowed {self.max_epochs}"
+            )
 
-        wrapped_indices = [int(idx) % base_len for idx in indices]
+        # Wrap the indices within the bounds of the dataset length
+        wrapped_indices = [idx % ds_len for idx in indices]
+
+        # Delegate to the underlying dataset's get_batch
         return await self.dataset.get_batch(wrapped_indices)
+
+    async def wait_until_len_at_least(self, length: int) -> int:
+        """
+        Returns the length of the dataset once it is at least `length` or if the dataset has a known (finished) length.
+        If the dataset's actual length is less than `length`, it returns the minimum of async_len and the current length.
+        """
+        # Wait until the underlying dataset's length is at least `length`
+        if not self.is_finite():
+            return length
+
+        if await self.dataset.final_length_is_known():
+            base_length = await self.dataset.async_len()
+        else:
+            base_length = await self.dataset.wait_until_len_at_least(length)
+
+        if base_length < length:
+            # hit epoch boundary
+            assert self.max_epochs is not None
+            return self.max_epochs * base_length
+
+        return base_length
 
 
 def _key_on_local_cpu(key: PRNGKeyArray) -> PRNGKeyArray:

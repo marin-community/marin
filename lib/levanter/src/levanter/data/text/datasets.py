@@ -24,7 +24,6 @@ from rigging.timing import log_time
 import levanter
 import levanter.config
 from levanter.data.dataset import AsyncDataset
-from levanter.data.dataset import EpochDataset
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.mixture import (
     ConcatDataset,
@@ -776,29 +775,12 @@ class LmDataConfig:
         batch_schedule: BatchSchedule,
         *,
         key: PRNGKeyArray,
-        epochs: int | None = None,
     ) -> AsyncDataset[LmExample]:
-        """Build the training dataset.
-
-        When ``epochs`` is set, the single training component is repeated for exactly that
-        many passes and returned as a *finite* dataset, so the data loader stops on its own
-        after ``epochs`` epochs regardless of ``num_train_steps``. Epoch semantics are only
-        defined for a single training component; a weighted/scheduled mixture raises. When
-        ``epochs`` is None, all components are combined into the usual (infinite-by-default)
-        :class:`MixtureDataset`.
-        """
         mix_key, shuffle_key = jax.random.split(key)
-        initial_batch_size = batch_schedule.batch_size_at_step(0)
-
-        if epochs is not None:
-            if epochs < 1:
-                raise ValueError(f"epochs must be >= 1, got {epochs}")
-            _, dataset = self._single_training_dataset(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-            return NamedLmDataset(EpochDataset(dataset, max_epochs=epochs), Pos)
-
         weights = self.train_weights
         if isinstance(weights, list):
             weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
+        initial_batch_size = batch_schedule.batch_size_at_step(0)
         datasets = self.train_sets(Pos, key=shuffle_key, initial_batch_size=initial_batch_size)
         mixture = MixtureDataset(
             datasets=datasets,
@@ -808,43 +790,6 @@ class LmDataConfig:
             block_size=self.mixture_block_size,
         )
         return NamedLmDataset(mixture, Pos)
-
-    def _single_training_dataset(
-        self,
-        Pos: Axis,
-        *,
-        key: PRNGKeyArray,
-        initial_batch_size: int | None = None,
-    ) -> tuple[str, AsyncDataset[GrugLmExample]]:
-        """Return the (name, dataset) of the sole training component, or raise if there is not exactly one.
-
-        Epoch-based training length is only well-defined over a single component: a weighted or
-        scheduled mixture has no single "number of examples in one pass". This builds the component
-        through :meth:`train_sets`, so the same validation split, max-batch, and budget slicing that
-        training applies is reflected in the returned dataset's length.
-        """
-        datasets = self.train_sets(Pos, key=key, initial_batch_size=initial_batch_size)
-        if len(datasets) != 1:
-            raise ValueError(
-                "Epoch-based training length is only defined for a single training component; found "
-                f"{len(datasets)} components with nonzero weight: {sorted(datasets)}. "
-                "Set num_train_steps explicitly for mixtures."
-            )
-        return next(iter(datasets.items()))
-
-    def num_train_sequences(self, Pos: Axis, *, initial_batch_size: int | None = None) -> int:
-        """Number of (post-packing) training sequences in one full pass over the data.
-
-        This is the packing-aware length: for a packed component it counts packed examples, not
-        raw documents, so epoch->step resolution matches what the loader actually sees. Only an
-        offsets read is needed (no token or accelerator I/O). Raises if there is not exactly one
-        training component (see :meth:`_single_training_dataset`).
-        """
-        # Shuffling preserves length, so the concrete key here does not affect the result.
-        _, dataset = self._single_training_dataset(
-            Pos, key=jax.random.PRNGKey(0), initial_batch_size=initial_batch_size
-        )
-        return len(dataset.as_sync_dataset())
 
     def train_sets(
         self,

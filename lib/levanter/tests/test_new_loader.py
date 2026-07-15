@@ -12,9 +12,9 @@ import haliax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
-from levanter.data.dataset import AsyncDataset, EpochDataset, ListAsyncDataset
+from levanter.data.dataset import AsyncDataset, ListAsyncDataset
 from levanter.data.loader import DataLoader, check_sharded_consistency
-from levanter.schedule import BatchSchedule, ScheduleStep
+from levanter.schedule import ScheduleStep
 
 from test_utils import skip_if_not_enough_devices, use_test_mesh
 
@@ -302,29 +302,3 @@ def test_padded_final_batch(model_axis_size):
         # ensure all the padded examples are all 0's
         num_padding = 32 - (1007 - 240) % 32
         assert np.all(batch[-num_padding:] == 0)
-
-
-@pytest.mark.parametrize(
-    "base_len,epochs,batch_size",
-    [(10, 1, 2), (5, 1, 2), (7, 1, 3), (5, 2, 2)],
-)
-def test_epoch_dataset_loader_stops_after_exactly_n_passes(base_len, epochs, batch_size):
-    """A finite EpochDataset makes the loader stop after exactly ``epochs`` passes.
-
-    This is the training-length guarantee: with the final partial batch padded (the trainer
-    default), the loader yields exactly ``ceil(base_len * epochs / batch_size)`` batches and then
-    terminates, which is the same step count epoch->step resolution targets. That equality is why
-    training cannot over-run its epoch budget even if ``num_train_steps`` is larger.
-    """
-    sequences = [np.arange(4) + 1000 * i for i in range(base_len)]
-    dataset = EpochDataset(ListAsyncDataset(sequences), max_epochs=epochs)
-
-    # This asserts on batch counting, not sharded numerics, so put every device on the model axis
-    # (data axis size 1). Small batch sizes then stay valid regardless of the runner's device count.
-    with use_test_mesh(tensor_parallelism=len(jax.devices())), haliax.axis_mapping({"batch": ResourceAxis.DATA}):
-        loader = DataLoader(dataset, batch_size, max_buffered_batches=0, mesh=None, axis_resources=None)
-        num_batches = sum(1 for _ in loader)
-
-    total_sequences = base_len * epochs
-    expected_steps = BatchSchedule(batch_size).find_step_containing_offset(total_sequences - 1) + 1
-    assert num_batches == expected_steps
