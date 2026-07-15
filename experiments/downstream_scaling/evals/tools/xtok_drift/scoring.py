@@ -53,9 +53,12 @@ TOPK_STORE = 256
 # Cache location is per-machine environment: flag wins, then this env var,
 # then a hard error — no baked-in default path.
 CACHE_DIR_ENV_VAR = "XTOK_DRIFT_CACHE"
-# Null check: identical ids evaluated in two differently-batched forwards may
-# differ by kernel nondeterminism; more than this is a replay bug, not numerics.
-COINCIDE_KL_MAX = 1e-2
+# Null check: at coinciding boundaries the model input is bit-identical under
+# both conditionings, so only two things can differ — bf16 kernel noise across
+# the two batch shapes (measured up to ~0.014 nats in practice) or reading the
+# wrong logit position (adjacent-position distributions differ by >=~0.5 nats).
+# The threshold separates the two.
+COINCIDE_KL_MAX = 0.25
 
 
 @dataclass(frozen=True)
@@ -225,7 +228,8 @@ def score_rollout(
         if coincide and worst > COINCIDE_KL_MAX:
             raise RuntimeError(
                 f"null check failed at step {boundary.step_index} of {rollout.problem_id} "
-                f"completion {rollout.completion_index}: KL={worst:.4f} nats on identical ids — replay bug"
+                f"completion {rollout.completion_index}: KL={worst:.4f} nats on identical ids — "
+                "logit-position indexing bug, or numeric noise far beyond calibration"
             )
         next_step = rollout.steps[boundary.step_index] if boundary.step_index < len(rollout.steps) else None
         if next_step is None:
