@@ -1138,11 +1138,21 @@ def test_kueue_drops_active_deadline_seconds():
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
-def test_non_coscheduled_keeps_active_deadline_seconds():
-    """A non-coscheduled job (not Kueue-gated) keeps the activeDeadlineSeconds budget."""
+def test_non_coscheduled_kueue_pod_drops_active_deadline_seconds():
+    """A non-coscheduled pod is also Kueue-gated when a LocalQueue is set (every pod routes
+    through Kueue), so it too omits activeDeadlineSeconds."""
     req = make_run_req("/job/task/0", num_tasks=4)
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+    assert "activeDeadlineSeconds" not in manifest["spec"]
+
+
+def test_non_kueue_pod_keeps_active_deadline_seconds():
+    """With no LocalQueue (Kueue not configured) a pod is not gated and keeps its
+    activeDeadlineSeconds budget."""
+    req = make_run_req("/job/task/0", num_tasks=4)
+    req.timeout.milliseconds = 3600_000
+    manifest = _build_pod_manifest(req, pod_config(local_queue=""))
     assert manifest["spec"]["activeDeadlineSeconds"] == 3600
 
 
@@ -1154,10 +1164,34 @@ def test_kueue_gang_uses_topology_not_affinity():
     assert _KUEUE_PREFERRED_TOPOLOGY in manifest["metadata"]["annotations"]
 
 
-def test_non_coscheduled_pod_has_no_kueue_labels():
-    """A non-coscheduled pod never carries Kueue labels even with a LocalQueue configured."""
+def test_non_coscheduled_pod_routed_through_kueue_without_gang_metadata():
+    """Every pod routes through Kueue when a LocalQueue is set: a non-coscheduled pod
+    carries the queue-name label but none of the gang-only pod-group labels or topology
+    annotations."""
     manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue="iris-lq"))
-    assert _KUEUE_POD_GROUP_NAME not in manifest["metadata"]["labels"]
+    labels = manifest["metadata"]["labels"]
+    assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
+    assert _KUEUE_POD_GROUP_NAME not in labels
+    assert _KUEUE_POD_GROUP_POD_INDEX not in labels
+    assert "annotations" not in manifest["metadata"]
+
+
+def test_single_pod_gpu_job_routed_through_kueue():
+    """A single-pod GPU job (not coscheduled) still routes through Kueue so its GPU capacity
+    is accounted and preemptible — queue-name label, but no gang pod-group/topology metadata."""
+    req = make_run_req("/gpu-job/task/0", num_tasks=1)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+    labels = manifest["metadata"]["labels"]
+    assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
+    assert _KUEUE_POD_GROUP_NAME not in labels
+    assert "annotations" not in manifest["metadata"]
+
+
+def test_non_kueue_cluster_pod_has_no_kueue_labels():
+    """With no LocalQueue configured (Kueue not installed), a pod carries no Kueue labels."""
+    manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue=""))
+    assert _KUEUE_QUEUE_NAME not in manifest["metadata"]["labels"]
     assert "annotations" not in manifest["metadata"]
 
 

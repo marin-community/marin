@@ -722,17 +722,35 @@ def _build_pod_manifest(
         "labels": labels,
     }
 
-    # Kueue gang admission for coscheduled jobs. Coscheduling requires Kueue:
-    # there is no non-Kueue colocation fallback, so a coscheduled job dispatched
-    # to a cluster where Kueue is not configured is a misconfiguration.
-    kueue_enabled = bool(run_req.coscheduling.group_by)
-    if kueue_enabled and not config.local_queue:
+    # Route every pod through Kueue when the cluster runs it (a LocalQueue is set),
+    # so Kueue's admission accounting and preemption see all the capacity they must
+    # arbitrate. Coscheduled gangs REQUIRE Kueue (there is no non-Kueue colocation
+    # fallback); single-pod jobs go through it too. A GPU pod that bypassed Kueue
+    # would hold nodes Kueue can neither count in its quota / topology bookkeeping
+    # nor select as a preemption victim, silently defeating priority preemption of
+    # lower-priority gangs. CPU-only pods route through Kueue as well, so their
+    # capacity is accounted uniformly; the ClusterQueue must carry a CPU
+    # ResourceFlavor covering their resources (install_kueue.py --with-cpu-flavor),
+    # else they hang SchedulingGated.
+    is_gang = bool(run_req.coscheduling.group_by)
+    if is_gang and not config.local_queue:
         raise ValueError(
             f"Coscheduled task {run_req.task_id!r} (group_by={run_req.coscheduling.group_by!r}) "
             "requires Kueue gang admission, but Kueue is not configured. Install Kueue "
             "(lib/iris/scripts/install_kueue.py) and set kubernetes_provider.kueue.cluster_queue."
         )
+    kueue_enabled = bool(config.local_queue)
     if kueue_enabled:
+        labels[_KUEUE_QUEUE_NAME] = config.local_queue
+        # Stamp an explicit WorkloadPriorityClass only when the cluster maps this
+        # band. An unmapped band is not left unranked: Kueue derives the Workload's
+        # priority from the pod's own PriorityClass (spec.priorityClassName), so the
+        # iris-{production,interactive,batch} bands already order the queue. Iris
+        # never invents a WorkloadPriorityClass name (a missing one is rejected).
+        wpc = config.kueue_priority_classes.get(run_req.priority)
+        if wpc:
+            labels[_KUEUE_PRIORITY_CLASS] = wpc
+    if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
         # unmapped value is a misconfiguration: it would gang atomically but
@@ -747,14 +765,8 @@ def _build_pod_manifest(
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        labels[_KUEUE_QUEUE_NAME] = config.local_queue
         # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
-        # Stamp the WorkloadPriorityClass only when the cluster maps this band:
-        # an unmapped band gets Kueue's default priority, never an invented name.
-        wpc = config.kueue_priority_classes.get(run_req.priority)
-        if wpc:
-            labels[_KUEUE_PRIORITY_CLASS] = wpc
         node_label, required = topo
         anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
         metadata["annotations"] = {
