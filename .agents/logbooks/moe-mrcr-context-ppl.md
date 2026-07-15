@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-001-d512-r1` in `us-east5-a`. No experiment result is available yet.
+The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-001-d512-r2` in `us-east5-a`. No experiment result is available yet.
 
 ## Scope
 
@@ -35,7 +35,7 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted recovery job `/held/moe-mrcr-001-d512-r1`. Next test: monitor training and collect final MRCR metrics.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted recovery job `/held/moe-mrcr-001-d512-r2`. Next test: monitor training and collect final MRCR metrics.
 
 ### Blocked
 
@@ -90,3 +90,13 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 - Result: original job `/held/moe-mrcr-001-d512` failed during coordinator import with `ModuleNotFoundError: No module named 'tiktoken'`, before TPU dispatch. The root dependency was declared, checks passed, and Iris accepted `/held/moe-mrcr-001-d512-r1`.
 - Interpretation: this was packaging-only and does not alter the dataset transform or experiment configuration.
 - Next action: verify that the recovery coordinator reaches MRCR preprocessing, TPU dispatch, and W&B registration.
+
+### 2026-07-14 17:38 - MOE-MRCR-001 scoped root package sync
+
+- Hypothesis: explicitly syncing `marin-root` will install the root experiment dependency that Iris's default `--all-packages` workspace-member sync omitted.
+- Commit Hash: `32003287679aa042cc1ccb68ee0f728b84e58ecc`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r2 --zone us-east5-a --sync-package marin-root -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r2 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: unchanged d512 experiment; recovery run ID `MOE-MRCR-001-d512-r2`; Iris sync target `marin-root`.
+- Result: `/held/moe-mrcr-001-d512-r1` repeated the import failure because the default workspace-member sync did not install root-only dependencies. Iris accepted `/held/moe-mrcr-001-d512-r2` with the explicit root sync.
+- Interpretation: the declared dependency was correct; the remaining failure was limited to coordinator environment selection.
+- Next action: verify coordinator import and continue monitoring through TPU dispatch and W&B registration.
