@@ -63,6 +63,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.evaluation.olmo_base_eval.run import olmo_base_eval_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.rl.placement import marin_prefix_for_region
@@ -186,6 +187,14 @@ ORIGINAL_STYLE_MATCHED_SEPHEADS_MIXTURE_GCS_DIR = (
     "delphi_original_style_matched_sepheads_ablation_20260712/mixtures"
 )
 ORIGINAL_STYLE_MATCHED_SEPHEADS_DATA_SEED = 690300
+COMPACT_RETAINED_STATE_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_compact_retained_state_validation_20260713/mixtures"
+)
+COMPACT_RETAINED_STATE_DATA_SEED = 713300
+BUCKET_FAMILY_POWER_HEADS_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_bucket_family_power_heads_validation_20260714/mixtures"
+)
+BUCKET_FAMILY_POWER_HEADS_DATA_SEED = 714300
 TABLE9_REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 TABLE9_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], zone="us-east5-b", disk="80g")
 TABLE9_TARGET_METRIC = "olmo_base_easy/table9_51_component_macro_bpb"
@@ -195,6 +204,7 @@ DEFAULT_ANALYSIS_OUTPUT_PATH = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
 )
 DEFAULT_MAX_CONCURRENT = 4
+HF_HUB_DISABLE_XET_ENV_VAR = "HF_HUB_DISABLE_XET"
 RUN_ID_BASE = 662_000
 PHASE_SCHEDULE = PhaseSchedule.from_boundaries(boundaries=PHASE_BOUNDARIES, names=list(PHASE_NAMES))
 PHASE_FRACTIONS = {phase.name: phase.end_fraction - phase.start_fraction for phase in PHASE_SCHEDULE.phases}
@@ -444,6 +454,32 @@ class DelphiValidationMixture(StrEnum):
     ORIGSTYLE_SEP_T9_2P_KL0P15 = "origstyle_sep_t9_2p_kl0p15"
     ORIGSTYLE_SEP_T9_2P_KL0P2 = "origstyle_sep_t9_2p_kl0p2"
     ORIGSTYLE_SEP_T9_2P_KL0P3 = "origstyle_sep_t9_2p_kl0p3"
+    BFGRP_T9_1P_AKL0 = "bfgrp_t9_1p_akl0"
+    BFGRP_T9_1P_AKL0P05 = "bfgrp_t9_1p_akl0p05"
+    BFGRP_T9_1P_AKL0P1 = "bfgrp_t9_1p_akl0p1"
+    BFGRP_T9_ETA_2P_AKL0P05_E0P005 = "bfgrp_t9_eta_2p_akl0p05_e0p005"
+    BFGRP_T9_ETA_2P_AKL0P05_E0P02 = "bfgrp_t9_eta_2p_akl0p05_e0p02"
+    BFGRP_T9_ETA_2P_AKL0P05_E0P05 = "bfgrp_t9_eta_2p_akl0p05_e0p05"
+    BFGRP_T9_ETA_2P_RAW = "bfgrp_t9_eta_2p_raw"
+    BFGRP_T9_SEPARATE_HEADS_2P_AKL0P05_E0P005 = "bfgrp_t9_separate_heads_2p_akl0p05_e0p005"
+    BFGRP_T9_SEPARATE_HEADS_2P_AKL0P05_E0P02 = "bfgrp_t9_separate_heads_2p_akl0p05_e0p02"
+    BFGRP_T9_SEPARATE_HEADS_2P_AKL0P05_E0P05 = "bfgrp_t9_separate_heads_2p_akl0p05_e0p05"
+    BFGRP_T9_SEPARATE_HEADS_2P_RAW = "bfgrp_t9_separate_heads_2p_raw"
+    BFGRP_UNCH_1P_AKL0 = "bfgrp_unch_1p_akl0"
+    BFGRP_UNCH_1P_AKL0P05 = "bfgrp_unch_1p_akl0p05"
+    BFGRP_UNCH_1P_AKL0P1 = "bfgrp_unch_1p_akl0p1"
+    BFGRP_UNCH_ETA_2P_AKL0P05_E0P005 = "bfgrp_unch_eta_2p_akl0p05_e0p005"
+    BFGRP_UNCH_ETA_2P_AKL0P05_E0P02 = "bfgrp_unch_eta_2p_akl0p05_e0p02"
+    BFGRP_UNCH_ETA_2P_AKL0P05_E0P05 = "bfgrp_unch_eta_2p_akl0p05_e0p05"
+    BFGRP_UNCH_ETA_2P_RAW = "bfgrp_unch_eta_2p_raw"
+    BFGRP_UNCH_SEPARATE_HEADS_2P_AKL0P05_E0P005 = "bfgrp_unch_separate_heads_2p_akl0p05_e0p005"
+    BFGRP_UNCH_SEPARATE_HEADS_2P_AKL0P05_E0P02 = "bfgrp_unch_separate_heads_2p_akl0p05_e0p02"
+    BFGRP_UNCH_SEPARATE_HEADS_2P_AKL0P05_E0P05 = "bfgrp_unch_separate_heads_2p_akl0p05_e0p05"
+    BFGRP_UNCH_SEPARATE_HEADS_2P_RAW = "bfgrp_unch_separate_heads_2p_raw"
+    RETSTATE_UNCH_NOGROUP_1P = "retstate_unch_nogroup_1p"
+    RETSTATE_UNCH_NOGROUP_2P = "retstate_unch_nogroup_2p"
+    RETSTATE_UNCH_GROUPED_1P = "retstate_unch_grouped_1p"
+    RETSTATE_UNCH_GROUPED_2P = "retstate_unch_grouped_2p"
     PROPORTIONAL_NOISE_3E18_A = "proportional_noise_3e18_a"
     PROPORTIONAL_NOISE_3E18_B = "proportional_noise_3e18_b"
     PROPORTIONAL_NOISE_3E18_C = "proportional_noise_3e18_c"
@@ -909,6 +945,48 @@ def _original_style_matched_sepheads_source(
         wandb_series_tag="delphi-original-style-matched-sepheads-ablation",
         expected_max_simulated_epoch=expected_max_simulated_epoch,
         data_seed_override=ORIGINAL_STYLE_MATCHED_SEPHEADS_DATA_SEED,
+    )
+
+
+def _compact_retained_state_source(
+    *,
+    key: DelphiValidationMixture,
+    grouping: str,
+    policy: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=f"compact retained-state Uncheatable {grouping} {policy}",
+        source_csv=f"{COMPACT_RETAINED_STATE_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric="eval/uncheatable_eval/bpb",
+        method=key.value,
+        wandb_series_tag="delphi-compact-retained-state-ablation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+        data_seed_override=COMPACT_RETAINED_STATE_DATA_SEED,
+    )
+
+
+def _bucket_family_power_heads_source(
+    *,
+    key: DelphiValidationMixture,
+    objective: str,
+    model: str,
+    policy: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    target_metric = TABLE9_TARGET_METRIC if objective == "table9" else "eval/uncheatable_eval/bpb"
+    return MixtureSource(
+        key=key,
+        display_name=f"bucket-family power GRP {objective} {model} {policy}",
+        source_csv=f"{BUCKET_FAMILY_POWER_HEADS_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=key.value,
+        wandb_series_tag="delphi-bucket-family-power-heads",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+        data_seed_override=BUCKET_FAMILY_POWER_HEADS_DATA_SEED,
     )
 
 
@@ -2370,6 +2448,96 @@ MIXTURE_SOURCES.update(
     }
 )
 
+_COMPACT_RETAINED_STATE_SPECS = {
+    DelphiValidationMixture.RETSTATE_UNCH_NOGROUP_1P: ("no-family-prior", "1p", 9.904822),
+    DelphiValidationMixture.RETSTATE_UNCH_NOGROUP_2P: ("no-family-prior", "2p", 9.904822),
+    DelphiValidationMixture.RETSTATE_UNCH_GROUPED_1P: ("family-coverage", "1p", 9.801222),
+    DelphiValidationMixture.RETSTATE_UNCH_GROUPED_2P: ("family-coverage", "2p", 9.801222),
+}
+MIXTURE_SOURCES.update(
+    {
+        key: _compact_retained_state_source(
+            key=key,
+            grouping=grouping,
+            policy=policy,
+            expected_max_simulated_epoch=expected_max_simulated_epoch,
+        )
+        for key, (grouping, policy, expected_max_simulated_epoch) in _COMPACT_RETAINED_STATE_SPECS.items()
+    }
+)
+
+_BUCKET_FAMILY_POWER_HEADS_SPECS = {
+    DelphiValidationMixture.BFGRP_T9_1P_AKL0: ("table9", "shared-head", "1p/raw", 25.431295),
+    DelphiValidationMixture.BFGRP_T9_1P_AKL0P05: ("table9", "shared-head", "1p/aggregate-KL-0.05", 17.534476),
+    DelphiValidationMixture.BFGRP_T9_1P_AKL0P1: ("table9", "shared-head", "1p/aggregate-KL-0.1", 12.891962),
+    DelphiValidationMixture.BFGRP_T9_ETA_2P_AKL0P05_E0P005: ("table9", "scalar-eta", "2p/epsilon-0.005", 17.534476),
+    DelphiValidationMixture.BFGRP_T9_ETA_2P_AKL0P05_E0P02: ("table9", "scalar-eta", "2p/epsilon-0.02", 17.534476),
+    DelphiValidationMixture.BFGRP_T9_ETA_2P_AKL0P05_E0P05: ("table9", "scalar-eta", "2p/epsilon-0.05", 17.534476),
+    DelphiValidationMixture.BFGRP_T9_ETA_2P_RAW: ("table9", "scalar-eta", "2p/raw", 77.021590),
+    DelphiValidationMixture.BFGRP_T9_SEPARATE_HEADS_2P_AKL0P05_E0P005: (
+        "table9",
+        "separate-heads",
+        "2p/epsilon-0.005",
+        17.534476,
+    ),
+    DelphiValidationMixture.BFGRP_T9_SEPARATE_HEADS_2P_AKL0P05_E0P02: (
+        "table9",
+        "separate-heads",
+        "2p/epsilon-0.02",
+        17.534476,
+    ),
+    DelphiValidationMixture.BFGRP_T9_SEPARATE_HEADS_2P_AKL0P05_E0P05: (
+        "table9",
+        "separate-heads",
+        "2p/epsilon-0.05",
+        17.534476,
+    ),
+    DelphiValidationMixture.BFGRP_T9_SEPARATE_HEADS_2P_RAW: ("table9", "separate-heads", "2p/raw", 238.142660),
+    DelphiValidationMixture.BFGRP_UNCH_1P_AKL0: ("uncheatable", "shared-head", "1p/raw", 23.878221),
+    DelphiValidationMixture.BFGRP_UNCH_1P_AKL0P05: ("uncheatable", "shared-head", "1p/aggregate-KL-0.05", 14.854553),
+    DelphiValidationMixture.BFGRP_UNCH_1P_AKL0P1: ("uncheatable", "shared-head", "1p/aggregate-KL-0.1", 10.689206),
+    DelphiValidationMixture.BFGRP_UNCH_ETA_2P_AKL0P05_E0P005: (
+        "uncheatable",
+        "scalar-eta",
+        "2p/epsilon-0.005",
+        14.854553,
+    ),
+    DelphiValidationMixture.BFGRP_UNCH_ETA_2P_AKL0P05_E0P02: ("uncheatable", "scalar-eta", "2p/epsilon-0.02", 14.854553),
+    DelphiValidationMixture.BFGRP_UNCH_ETA_2P_AKL0P05_E0P05: ("uncheatable", "scalar-eta", "2p/epsilon-0.05", 14.854553),
+    DelphiValidationMixture.BFGRP_UNCH_ETA_2P_RAW: ("uncheatable", "scalar-eta", "2p/raw", 99.625115),
+    DelphiValidationMixture.BFGRP_UNCH_SEPARATE_HEADS_2P_AKL0P05_E0P005: (
+        "uncheatable",
+        "separate-heads",
+        "2p/epsilon-0.005",
+        14.854553,
+    ),
+    DelphiValidationMixture.BFGRP_UNCH_SEPARATE_HEADS_2P_AKL0P05_E0P02: (
+        "uncheatable",
+        "separate-heads",
+        "2p/epsilon-0.02",
+        14.854553,
+    ),
+    DelphiValidationMixture.BFGRP_UNCH_SEPARATE_HEADS_2P_AKL0P05_E0P05: (
+        "uncheatable",
+        "separate-heads",
+        "2p/epsilon-0.05",
+        14.854553,
+    ),
+    DelphiValidationMixture.BFGRP_UNCH_SEPARATE_HEADS_2P_RAW: ("uncheatable", "separate-heads", "2p/raw", 20.905872),
+}
+MIXTURE_SOURCES.update(
+    {
+        key: _bucket_family_power_heads_source(
+            key=key,
+            objective=objective,
+            model=model,
+            policy=policy,
+            expected_max_simulated_epoch=expected_max_simulated_epoch,
+        )
+        for key, (objective, model, policy, expected_max_simulated_epoch) in _BUCKET_FAMILY_POWER_HEADS_SPECS.items()
+    }
+)
+
 
 _EMBEDDED_MIXTURE_WEIGHT_CSVS: dict[DelphiValidationMixture, str] = {
     DelphiValidationMixture.OLMIX_D001_KL005_CAP4: (
@@ -3151,10 +3319,15 @@ def build_launch_artifacts(
             )
             source = MIXTURE_SOURCES[mixture]
             data_seed = source.data_seed_override if source.data_seed_override is not None else RUN_ID_BASE + run_order
+            training_resources = ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone)
             training_step = ExecutorStep(
                 name=f"{EXPERIMENT_NAME}/{run_name}",
-                fn=run_delphi_optimized_training,
-                resources=ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone),
+                fn=remote(
+                    run_delphi_optimized_training,
+                    resources=training_resources,
+                    env_vars={HF_HUB_DISABLE_XET_ENV_VAR: "1"},
+                ),
+                resources=training_resources,
                 config=DelphiOptimizedTrainingConfig(
                     analysis_output_path=analysis_output_path,
                     target_flops=target_flops,
