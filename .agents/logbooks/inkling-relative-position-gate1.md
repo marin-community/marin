@@ -57,3 +57,13 @@ None.
 - Result: local config contract, dense value/gradient parity, 8192-token lowering probe, dry-run DAG, and repository lint passed. Iris submission is pending.
 - Interpretation: the launch snapshot is reproducible and matches the requested comparator; no experiment claim is available before the runs finish.
 - Next action: push the snapshot and submit both cells through Iris.
+
+### 2026-07-15 12:06 PDT - Final formatted launch snapshot
+
+- Hypothesis: unchanged from `MOE-RPE-001` and `MOE-RPE-002` above.
+- Commit Hash: `a496bc044`
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe_relative_position.launch`
+- Config: unchanged from the prior entry.
+- Result: applied the repository's Black formatting to two experiment files and reran `./infra/pre-commit.py --changed-files --fix` successfully. No behavior changed.
+- Interpretation: use this commit, rather than the earlier pre-format snapshot, as the reproducible launch revision.
+- Next action: push the snapshot and submit both cells through Iris.
