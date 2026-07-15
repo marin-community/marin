@@ -210,12 +210,6 @@ def test_packed_loss_weight_charges_only_generation_spans(tokenizer, tmp_path):
     assert float(loss_weight[segments == -1].sum()) == 0.0
 
 
-def _per_position_loss(model, grug_example):
-    """Weighted per-position next-token loss for a GrugLmExample under `model`."""
-    named = named_lm_example_from_grug(grug_example, Pos=model.Pos)
-    return np.asarray(model.compute_next_token_loss(named, reduction=None, reduction_axis=()).array)
-
-
 def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
     """Packing must not change the leading document's per-token loss.
 
@@ -231,7 +225,7 @@ def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
     leading_len = len(processed[0]["input_ids"])
 
     # A rotary-position model whose attention honors segment ids; vanilla runs the same
-    # on CPU and TPU so the comparison is exact rather than backend-dependent.
+    # on CPU and TPU so the leading-document loss matches regardless of backend.
     config = LlamaConfig(
         max_seq_len=POS,
         hidden_dim=32,
@@ -241,11 +235,19 @@ def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
         num_layers=2,
         attn_backend=AttentionBackend.VANILLA,
     )
-    model = inference_mode(config.build(Axis("vocab", tokenizer.vocab_size), key=jax.random.PRNGKey(0)), True)
 
-    with use_test_mesh(tensor_parallelism=1):
-        packed_loss = _per_position_loss(model, packed)
-        unpacked_loss = _per_position_loss(model, unpacked)
+    # Build the model and run the forward under an active mesh; the attention path uses
+    # shard_map, which requires a concrete mesh, so both must be inside use_test_mesh and
+    # the forward must be jitted (matching tests/test_qwen3_moe.py).
+    with use_test_mesh():
+        model = inference_mode(config.build(Axis("vocab", tokenizer.vocab_size), key=jax.random.PRNGKey(0)), True)
+
+        @hax.named_jit
+        def per_position_loss(model, example):
+            return model.compute_next_token_loss(example, reduction=None, reduction_axis=()).array
+
+        packed_loss = np.asarray(per_position_loss(model, named_lm_example_from_grug(packed, Pos=model.Pos)))
+        unpacked_loss = np.asarray(per_position_loss(model, named_lm_example_from_grug(unpacked, Pos=model.Pos)))
 
     # The leading document occupies positions 0..leading_len-1 in both cases; its loss
     # must be identical. (Uncharged positions are zero in both, so this also confirms
