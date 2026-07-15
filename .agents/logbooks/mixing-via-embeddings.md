@@ -416,3 +416,19 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   macro dominated by an unpredictable multilingual factor, smooth kernel regression on content
   histograms dominates and mechanistic per-bucket saturation adds parameters, not signal.
   If a mechanistic surrogate is still wanted, content-tied DSP is the only defensible flavor.
+
+## 2026-07-15 grug holdout test — pre-registered PASS (one-shot, labels opened once)
+
+- SHA chain honored: predictions sha 0a4cc4e6… published on #7067 BEFORE opening; quarantine
+  sha matched manifest (68a90838…).
+- **R1 PASS**: test Spearman 0.7205, 10k-perm p=1e-4. **R2 PASS**: +0.035 vs weights-LGBM
+  (best incumbent, 0.685; CI [−0.14,+0.21], exclusion was stretch). **R3 PASS**: 0.7205 ≥
+  0.668 (gap −0.098). **R4 measured**: +0.015 vs matched-random [−0.05,+0.10]; shuffled
+  mean-of-10 0.7212 ≈ primary — on this swarm the signal is mostly histogram SHAPE, semantics
+  a small increment (per-seed: primary beats matched 10/10, shuffled 7/10; _mean10 controls
+  carry a 10-predictor ensemble advantage).
+- Campaign net: target repair 0.303→0.818 train-CV (zmacro_english_20, ~93% of reliability
+  bound); DSP ported + retired (0.643 best tied; content-tying its best flavor); primary =
+  Hellinger kernel K=1000 per-phase; holdout confirms transfer at 0.72.
+- Verdict + full numbers: #7067 comment; artifacts on GCS grug/ prefix
+  (holdout_readout.{json,md}, realized_vs_predicted.parquet).
