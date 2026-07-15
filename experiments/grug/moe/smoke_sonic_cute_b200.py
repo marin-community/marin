@@ -13,6 +13,7 @@ import traceback
 
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 from jax.sharding import AxisType, Mesh
 
@@ -50,8 +51,12 @@ def main() -> None:
         tokens = jnp.ones((4, 128), dtype=jnp.int32)
         loss_weight = jnp.ones((4, 128), dtype=jnp.float32)
 
+        # QuACK's GemmGatedSm100 requires 16-bit compute (bf16 postact); mirror training's
+        # mixed-precision policy (params=float32, compute=bfloat16) by casting inside loss_fn.
+        policy = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+
         def loss_fn(m):
-            return m.next_token_loss(tokens, loss_weight, reduction="mean")
+            return policy.cast_to_compute(m).next_token_loss(tokens, loss_weight, reduction="mean")
 
         loss, grads = jax.value_and_grad(loss_fn)(model)
         jax.block_until_ready(grads)
