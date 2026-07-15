@@ -492,7 +492,7 @@ def resolve_multinode_defaults(
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
     TPU slice. For GPUs with replicas > 1, the coscheduling level is derived from
-    the GPU variant by :func:`gpu_gang_coscheduling_level`: NVL72 (GB200/GB300)
+    the GPU variant: NVL72 (GB200/GB300)
     gangs that fit one rack bind HARD to ``nvlink.domain``, while H100 (and larger
     GB200 gangs that span racks) coschedule on the soft ``leafgroup`` IB level.
 
