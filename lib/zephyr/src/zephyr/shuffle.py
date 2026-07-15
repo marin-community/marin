@@ -192,10 +192,7 @@ def _read_sidecar_slice(fs: Any, fs_path: str, path: str, shard_key: str) -> _Si
     """Read one sidecar and extract only the fields for ``shard_key``.
 
     ``fs``/``fs_path`` are the pre-resolved filesystem and native path for
-    ``path``'s sidecar. The caller resolves them once on the submitting thread
-    so every worker shares one ``S3FileSystem`` — fsspec keys its instance cache
-    on the thread id, so resolving inside each worker would build (and leak, via
-    fsspec's strong-ref cache) a separate ~12MB botocore client per thread.
+    ``path``'s sidecar, shared across workers (see the caller).
 
     Returns ``None`` if the sidecar has no ranges for this shard. The parsed
     dict is released when this function returns. Once we confirm this shard
