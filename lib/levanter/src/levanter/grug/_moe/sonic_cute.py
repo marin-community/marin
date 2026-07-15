@@ -22,7 +22,7 @@ import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jax import P
-from jax.sharding import get_abstract_mesh, reshard
+from jax.sharding import AxisType, get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
@@ -51,37 +51,49 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
 
 
-def _fsdp_spec(spec: P) -> P | None:
-    """Return ``spec`` if every named axis exists in the current mesh, else None."""
+# Residual storage for the expert weights: shard the hidden dim over the FSDP axis
+# (mirroring the param layout) and re-gather in backward — the same all-gather
+# whole-block remat pays — so a remat split that leaves the MoE live does not pin
+# 26 layers of gathered expert weights. The local MoE usually runs inside a
+# shard_map (the FSDP axis is Manual there → slice/all_gather); under explicit
+# GSPMD sharding use reshard; with no mesh (unit tests) store the full weight.
+_FSDP_AXIS = "data"
+
+
+def _fsdp_axis_kind() -> tuple[AxisType | None, int]:
     mesh = get_abstract_mesh()
-    if mesh is None or mesh.empty:
-        return None
-    for entry in spec:
-        names = entry if isinstance(entry, tuple) else (entry,)
-        for name in names:
-            if name is not None and name not in mesh.shape:
-                return None
-    return spec
+    if mesh is None or mesh.empty or _FSDP_AXIS not in mesh.shape:
+        return None, 1
+    kinds = dict(zip(mesh.axis_names, mesh.axis_types))
+    return kinds[_FSDP_AXIS], int(mesh.shape[_FSDP_AXIS])
 
 
-def _store_sharded(w: jax.Array, spec: P) -> jax.Array:
-    """Reshard a (gathered) weight back to its FSDP layout for residual storage."""
-    resolved = _fsdp_spec(spec)
-    return w if resolved is None else reshard(w, resolved)
+def _store_sharded(w: jax.Array, dim: int) -> jax.Array:
+    """Store a (gathered) weight residual sharded along ``dim`` over the FSDP axis."""
+    kind, n = _fsdp_axis_kind()
+    if n <= 1 or w.shape[dim] % n != 0:
+        return w
+    if kind == AxisType.Explicit:
+        spec = [None] * w.ndim
+        spec[dim] = _FSDP_AXIS
+        return reshard(w, P(*spec))
+    if kind == AxisType.Manual:
+        shard = w.shape[dim] // n
+        start = jax.lax.axis_index(_FSDP_AXIS) * shard
+        return jax.lax.dynamic_slice_in_dim(w, start, shard, axis=dim)
+    return w
 
 
-def _restore_full(w: jax.Array, spec: P) -> jax.Array:
-    """All-gather a residual weight stored in FSDP layout."""
-    resolved = _fsdp_spec(spec)
-    return w if resolved is None else reshard(w, P(*(None for _ in w.shape)))
-
-
-# Residual-storage layouts for the expert weights (mirror the FSDP param sharding:
-# hidden dim over "data"). Residuals are stored sharded and re-gathered in backward —
-# the same all-gather whole-block remat pays — so a remat split that leaves the MoE
-# live does not pin 26 layers of gathered expert weights.
-_W13_STORE_SPEC = P(None, "data", None)
-_W2_STORE_SPEC = P(None, None, "data")
+def _restore_full(w: jax.Array, dim: int, full_size: int) -> jax.Array:
+    """Re-gather a weight residual stored by ``_store_sharded``."""
+    if w.shape[dim] == full_size:
+        return w
+    kind, _ = _fsdp_axis_kind()
+    if kind == AxisType.Explicit:
+        return reshard(w, P(*(None for _ in w.shape)))
+    if kind == AxisType.Manual:
+        return jax.lax.all_gather(w, _FSDP_AXIS, axis=dim, tiled=True)
+    raise AssertionError(f"weight residual sharded along dim {dim} but FSDP axis kind is {kind}")
 
 
 @jax.custom_vjp
@@ -107,8 +119,8 @@ def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu, x, token_dispat
     res = (
         x,
         token_dispatch,
-        _store_sharded(w13_il, _W13_STORE_SPEC),
-        _store_sharded(moe_w2, _W2_STORE_SPEC),
+        _store_sharded(w13_il, 1),  # [E, H, 2I] sharded along H
+        _store_sharded(moe_w2, 2),  # [E, I, H] sharded along H
         gu,
         group_sizes,
         cu,
@@ -118,9 +130,10 @@ def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu, x, token_dispat
 
 def _expert_mlp_bwd(res, dy):
     x, token_dispatch, w13_stored, w2_stored, gu, group_sizes, cu = res
+    hidden = x.shape[-1]
     x_dispatch = x[token_dispatch]
-    w13_il = _restore_full(w13_stored, _W13_STORE_SPEC)
-    moe_w2 = _restore_full(w2_stored, _W2_STORE_SPEC)
+    w13_il = _restore_full(w13_stored, 1, hidden)
+    moe_w2 = _restore_full(w2_stored, 2, hidden)
     # h = swiglu(gu), recomputed elementwise (fp32 internally, matching kernel accum)
     gate32 = gu[:, 0::2].astype(jnp.float32)
     up32 = gu[:, 1::2].astype(jnp.float32)
