@@ -265,11 +265,10 @@ def all_sources() -> dict[str, DatakitSource]:
     )
 
     # dolma3.5_pool PDF subset, minus the finepdfs component we already ingest
-    # separately (see dolma4pdfs.py). The count is the whole-subset chars/4
-    # estimate (2300.61) scaled by the 0.7055 byte share of the two components
-    # we keep. Still an estimate, and likely low: chars/4 undercounted both code
-    # subsets above once measured. Tokenize to replace it with an exact count.
-    dolma4pdfs = _rows_flat(dolma4pdfs_normalize_steps, {"dolma4pdfs": 1623.12})
+    # separately (see dolma4pdfs.py). Exact count measured over the normalized
+    # data with marin-community/marin-tokenizer: 1,804,002,448,556 tokens over
+    # 137,132,279 documents.
+    dolma4pdfs = _rows_flat(dolma4pdfs_normalize_steps, {"dolma4pdfs": 1804.002448556})
 
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
