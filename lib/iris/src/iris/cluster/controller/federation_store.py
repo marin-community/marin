@@ -11,6 +11,7 @@ on the ``FederationStore`` protocol.
 """
 
 import logging
+import uuid
 
 from rigging.timing import Duration, Timestamp
 
@@ -155,6 +156,10 @@ class ControllerFederationStore:
                 peer_id=spec.peer_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.QUEUED_HANDOFF),
+                # Mint this handle's incarnation. Every (re-)drive delivers the same
+                # nonce; a later resubmission replaces the job row and this handle,
+                # minting a new one — how the peer tells a replay from a new run.
+                handoff_nonce=uuid.uuid4().hex,
             )
         return HandoffAdmission.ADMITTED
 
@@ -190,6 +195,7 @@ class ControllerFederationStore:
                         request=reconstruct_launch_job_request(
                             job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
                         ),
+                        handoff_nonce=handle.handoff_nonce,
                     )
                 )
         return pending
