@@ -394,6 +394,8 @@ def main(config: TrainLmConfig):
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)
             activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
+            if isinstance(activations, tuple):
+                activations, _ = activations
             head = model.get_lm_head()
             logits = hax.dot(activations, head, axis=model.Embed)
             return logits

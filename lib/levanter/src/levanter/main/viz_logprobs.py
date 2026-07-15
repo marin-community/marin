@@ -83,6 +83,8 @@ def main(config: VizLmConfig):
             model = mp.cast_to_compute(model)
 
             activations = model.activations(example.tokens, example.attn_mask, key=key)
+            if isinstance(activations, tuple):
+                activations, _ = activations
             logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
 
             loss = next_token_loss(

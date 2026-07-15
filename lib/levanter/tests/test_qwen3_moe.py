@@ -176,7 +176,8 @@ def _single_token_block_grad(block: Qwen3MoeSparseMoeBlock, config: Qwen3MoeConf
     x = hax.random.normal(random.PRNGKey(2), (hax.Axis(config.max_Pos.name, 1), config.Embed))
 
     def task_loss(block, x):
-        return hax.sum(block(x)).scalar()
+        out, _ = block(x)
+        return hax.sum(out).scalar()
 
     return eqx.filter_jit(eqx.filter_grad(task_loss))(block, x)
 
@@ -229,6 +230,84 @@ def test_qwen3_moe_dense_router_gradient_disabled_in_inference():
     )
 
 
+def _hf_load_balancing_loss(router_logits: np.ndarray, num_experts: int, top_k: int, coef: float) -> float:
+    """Independent numpy port of HF's ``load_balancing_loss_func`` for a single layer's logits."""
+    logits = router_logits.astype(np.float64)
+    probs = np.exp(logits - logits.max(axis=-1, keepdims=True))
+    probs = probs / probs.sum(axis=-1, keepdims=True)
+    tokens = logits.shape[0]
+    selected = np.argsort(-probs, axis=-1)[:, :top_k]
+    expert_mask = np.zeros((tokens, top_k, num_experts))
+    for t in range(tokens):
+        for j in range(top_k):
+            expert_mask[t, j, selected[t, j]] = 1.0
+    tokens_per_expert = expert_mask.mean(axis=0)  # [top_k, num_experts]
+    router_prob_per_expert = probs.mean(axis=0)  # [num_experts]
+    overall = float((tokens_per_expert * router_prob_per_expert[None, :]).sum())
+    return coef * overall * num_experts
+
+
+def test_qwen3_moe_router_aux_loss_matches_hf_load_balancing_formula():
+    config = dataclasses.replace(_tiny_moe_config(dense_router_gradient=False), router_aux_loss_coef=0.3)
+    Pos = hax.Axis(config.max_Pos.name, 8)
+
+    with use_test_mesh():
+        block = Qwen3MoeSparseMoeBlock.init(config, key=random.PRNGKey(0))
+        x = hax.random.normal(random.PRNGKey(3), (Pos, config.Embed))
+
+        @eqx.filter_jit
+        def run(block, x):
+            out, extras = block(x)
+            x_flat = hax.flatten_axes(x, old_axes=[x.resolve_axis(config.max_Pos.name)], new_axis="token")
+            return extras["load_balancing_loss"].scalar(), block.gate(x_flat).array
+
+        lbl, router_logits = run(block, x)
+
+    expected = _hf_load_balancing_loss(
+        np.asarray(router_logits), config.num_experts, config.num_experts_per_tok, config.router_aux_loss_coef
+    )
+    np.testing.assert_allclose(float(lbl), expected, rtol=1e-4, atol=1e-6)
+
+
+def test_qwen3_moe_router_aux_loss_added_to_next_token_loss():
+    Batch = hax.Axis("batch", 2)
+    Vocab = hax.Axis("vocab", 64)
+    base = _tiny_moe_config(dense_router_gradient=False)
+    Pos = base.max_Pos
+    input_ids = hax.random.randint(random.PRNGKey(1), (Batch, Pos), 0, Vocab.size)
+
+    with use_test_mesh():
+        # Same key => identical weights; only the aux coefficient differs.
+        model_aux = Qwen3MoeLMHeadModel.init(
+            Vocab, dataclasses.replace(base, router_aux_loss_coef=0.5), key=random.PRNGKey(0)
+        )
+        model_no_aux = Qwen3MoeLMHeadModel.init(
+            Vocab, dataclasses.replace(base, router_aux_loss_coef=None), key=random.PRNGKey(0)
+        )
+
+        @eqx.filter_jit
+        def loss(model, ids):
+            example = LmExample(
+                tokens=ids,
+                loss_weight=hax.ones((Batch, Pos), dtype=jnp.float32),
+                attn_mask=AttentionMask.causal(),
+            )
+            return model.compute_next_token_loss(example, reduction=hax.mean).scalar()
+
+        @eqx.filter_jit
+        def reported_aux(model, ids):
+            _, aux = model.activations(ids, attn_mask=AttentionMask.causal())
+            return aux.scalar()
+
+        loss_aux = float(loss(model_aux, input_ids))
+        loss_no_aux = float(loss(model_no_aux, input_ids))
+        aux = float(reported_aux(model_aux, input_ids))
+
+    # The aux loss is a positive term added on top of the (weight-identical) cross-entropy.
+    assert aux > 0
+    np.testing.assert_allclose(loss_aux - loss_no_aux, aux, rtol=1e-5, atol=1e-6)
+
+
 @skip_if_no_torch
 def test_qwen3_moe_hf_logits_and_loss_match_torch(local_gpt2_tokenizer_path):
     import torch  # noqa: PLC0415
@@ -262,9 +341,12 @@ def test_qwen3_moe_hf_logits_and_loss_match_torch(local_gpt2_tokenizer_path):
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
+        # HF's logits/CE path carries no auxiliary loss; disable the router load-balancing loss so this
+        # stays a pure forward/cross-entropy parity check (the aux wiring is covered separately).
         model = converter.load_pretrained(
             Qwen3MoeLMHeadModel,
             ref=f"{tmpdir}/torch_model",
+            config=dataclasses.replace(config, router_aux_loss_coef=None),
             resize_vocab_to_match_tokenizer=False,
         )
 
