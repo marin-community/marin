@@ -106,5 +106,5 @@ targets:
 
 ## Operator Directives
 
-- Append `--user "$USERNAME"` to every Iris job submission and resubmission.
-- Show me an assembled Iris job-run command and ask for review before the first job submission.
+- Append `--user "$USERNAME"` to every Iris job submission
+- Show me an assembled Iris job run command and ask for review before the first job submission
