@@ -52,11 +52,11 @@ auth:
     signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555
     # An IAP-verified identity not named in `admin_users` gets the `user` role: it
     # may submit jobs (capped at its `user_budgets` max_band, defaulting to
-    # INTERACTIVE), but NOT PRODUCTION band or other admin-only actions. Before
-    # #6948 this was `admin` because a per-user DB role overrode it for everyone
-    # real; that table is gone, so the default now applies to every IAP user and
-    # must be a non-admin role, with admins named explicitly below — otherwise
-    # everyone holds MANAGE_BUDGETS and the PRODUCTION max_band cap is dead.
+    # INTERACTIVE), but NOT PRODUCTION band or other admin-only actions. This was
+    # once `admin`, overridden per-user by a DB role table that has since been
+    # removed; with no table the default now applies to every IAP user, so it must
+    # be a non-admin role with admins named explicitly below — otherwise everyone
+    # holds MANAGE_BUDGETS and the PRODUCTION max_band cap is dead.
     unprovisioned_role: user
   # Verified IAP identities granted the admin role (MANAGE_BUDGETS, PRODUCTION band,
   # elevated container profiles, submit-as-any-user). These are the exact emails the
