@@ -17,10 +17,17 @@ Namespace derives from `kubernetes_provider.namespace`, the Kueue ClusterQueue n
 import enum
 from enum import StrEnum
 
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.config import IrisClusterConfig, load_config
 from pydantic import BaseModel, Field
 from rigging.config_discovery import resolve_cluster_config
+
+# IaC reads only the reviewed, in-tree cluster config — deliberately NOT Iris's runtime
+# search path (IRIS_CLUSTER_CONFIG_DIRS), which checks the operator override
+# ~/.config/marin/clusters *first*. A `pulumi preview/up` plan must derive its NodePools,
+# Kueue/RBAC, and GCP addresses from the committed stack inputs so the production plan is
+# reproducible and review-gated, never from a private local override. Relative to the marin
+# project root (resolved by rigging.config_discovery).
+IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
 
 
 class Provider(StrEnum):
@@ -136,8 +143,14 @@ def _validate_provider_block(provisioning: ProvisioningConfig) -> ProvisioningCo
 
 
 def load_iris_config(cluster: str) -> IrisClusterConfig:
-    """Resolve and load the per-cluster Iris config via the standard iris search path."""
-    return load_config(resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS))
+    """Load the per-cluster Iris config from the reviewed in-tree config dir.
+
+    Deliberately does NOT use Iris's runtime search path (IRIS_CLUSTER_CONFIG_DIRS): that
+    checks ~/.config/marin/clusters first, so an operator override could feed `pulumi
+    preview/up` inputs that never went through review. IaC plans read only the committed
+    config (see IAC_CLUSTER_CONFIG_DIR).
+    """
+    return load_config(resolve_cluster_config(cluster, dirs=(IAC_CLUSTER_CONFIG_DIR,)))
 
 
 def load_provisioning(cluster: str) -> ProvisioningConfig:
