@@ -319,10 +319,9 @@ def _plot(points: list[CasePoint], output_path: Path) -> None:
 
     corrections = [p.correction_mean for p in points]
     summary = (
-        f"{sum(p.replicate_count for p in points)} finished runs across {len(points)} TPU/model/batch groups. "
-        f"Each point's correction_factor = measured / estimated per-chip HBM: "
-        f"median {median(corrections):.2f}, range {min(corrections):.2f}-{max(corrections):.2f}. "
-        f"Diagonal = estimate matches measured; shaded band is +/-20%."
+        f"{sum(p.replicate_count for p in points)} runs, {len(points)} groups.  "
+        f"correction_factor (measured/estimated): median {median(corrections):.2f}, "
+        f"range {min(corrections):.2f}-{max(corrections):.2f}."
     )
     fig.suptitle("Batch Calibration Results", fontsize=16, y=0.9)
     fig.text(0.5, 0.845, summary, ha="center", fontsize=10, color="#555555")
