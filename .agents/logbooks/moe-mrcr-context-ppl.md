@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR` series is preparing its first d512 run. No experiment result is available yet.
+The `MOE-MRCR-001` d512 snapshot is ready, but submission is blocked because the submitter environment has no W&B authentication. No experiment result is available yet.
 
 ## Scope
 
@@ -35,11 +35,11 @@ The `MOE-MRCR` series is preparing its first d512 run. No experiment result is a
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Next test: run the d512 recipe in `us-east5-a`.
+- None.
 
 ### Blocked
 
-- None.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Blocker: `WANDB_API_KEY` is absent from the submitter environment and `wandb status` reports no API key. Resume when: W&B authentication is available to the Iris submission shell.
 
 ### Falsified / Dead End
 
@@ -60,3 +60,13 @@ The `MOE-MRCR` series is preparing its first d512 run. No experiment result is a
 - Result: implementation and launcher prepared; no remote run yet.
 - Interpretation: d512 is the smallest standard Grug gate scale and is large enough to test learned use of context, unlike a one-step initialization smoke.
 - Next action: run focused tests, snapshot the research branch, and submit the Iris job.
+
+### 2026-07-14 17:15 - MOE-MRCR-001 submission preflight blocked
+
+- Hypothesis: the prepared d512 snapshot can be submitted with the standard Grug Iris command.
+- Commit Hash: `4534ffb60170cc3bdbb348dce081c525d60042cb`.
+- Command: `test -n "${WANDB_API_KEY:-}"` and `wandb status` before Iris submission.
+- Config: branch `research/helw150/7181-mrcr-context-ppl`; v5p-8 in `us-east5-a`; W&B project `marin-community/marin_moe`.
+- Result: the environment variable is absent and W&B reports `api_key: null`; no Iris job was submitted.
+- Interpretation: submitting without the required key would spend capacity on a run that cannot emit the experiment's required metrics.
+- Next action: resume the standard Iris submission as soon as W&B authentication is available in the submitter environment.
