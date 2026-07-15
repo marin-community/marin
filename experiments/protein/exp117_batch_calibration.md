@@ -12,13 +12,9 @@ memory — not training alone. A run stopped at the first training step would mi
 overstate the ceiling, so every measured run must complete. Measure on the smaller slices, tune
 `correction_factor` to reproduce the ceiling, and confirm it generalizes to larger slices in the family.
 
-Workload: 1.5B dense transformer, `seq_len 8192`, bf16 params, Adam. Code:
-[`exp117_batch_calibration.py`](./exp117_batch_calibration.py) (analysis); the `SMOKE_BATCH` path in
-[`exp117_sweep.py`](./exp117_sweep.py) (the probe). Core library patches this depends on:
-[`exp117_core_patches.md`](./exp117_core_patches.md).
-
 ## Parameters
 
+- **Model** — 1.5B dense transformer, `seq_len 8192`, bf16 params, Adam.
 - **Slices** — 3 per family, smallest useful first (drop the very smallest so the floor is a 4-chip slice):
   - v5e (16 GiB/chip): `v5litepod-4/8/16`
   - v6e (32 GiB/chip): `v6e-4/8/16`
