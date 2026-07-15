@@ -63,7 +63,7 @@ execution:
   # Hard elapsed sweep limit, including queueing and retries.
   wall_time: 8 weeks
   # Maximum requested TPU chips across submitted, running, or retrying dispatches.
-  max_inflight_chips: 128
+  max_inflight_chips: 256
   # Dispatcher cadence for polling Iris, logs, and W&B. Throughput is recomputed on each observation.
   observation_interval: 15m
   # Resource level at which placement uses only the best currently observed target. Earlier rungs
@@ -107,4 +107,4 @@ targets:
 ## Operator Directives
 
 - Append `--user "$USERNAME"` to every Iris job submission and resubmission.
-- Show me the assembled Iris job-run command and ask for review before the first submission.
+- Show me an assembled Iris job-run command and ask for review before the first job submission.
