@@ -1,7 +1,7 @@
 # CoreWeave US-EAST-08A cluster (cluster name: cw-us-east-08a) — GB200 delivery.
 #
-# Reserved GB200 NVL72 fleet: 4 racks (72x gb200-4x nodes, 4 GB200 GPUs each =
-# 288 Blackwell GPUs) plus 4x cd-gp-i64-erapids CPU nodes (controller + CPU tasks).
+# Reserved GB200 NVL72 fleet: 12 racks (216x gb200-4x nodes, 4 GB200 GPUs each =
+# 864 Blackwell GPUs) plus 4x cd-gp-i64-erapids CPU nodes (controller + CPU tasks).
 # Same KubernetesProvider model as cw-us-east-02a: task Pods dispatch directly to
 # the k8s API (Pod-per-task), Kueue gang-admits coscheduled groups, and CoreWeave's
 # cluster autoscaler provisions nodes. See lib/iris/docs/coreweave.md.
@@ -9,7 +9,7 @@
 # Both pools are pinned ALWAYS WARM (buffer_slices == max_slices) rather than
 # autoscaled: the fleet is prepaid/reserved, so there is nothing to save by scaling
 # down. GB200 NVL72 instances deploy in whole racks of 18 nodes — a NodePool's node
-# count must be a multiple of 18 (72 = 4 racks), or CoreWeave marks it invalid.
+# count must be a multiple of 18 (216 = 12 racks), or CoreWeave marks it invalid.
 #
 # One CKS cluster / one Iris cluster / one Pulumi stack holds the full delivery
 # (confirmed one cluster), mirroring how cw-us-east-02a and cw-rno2a each hold a whole
@@ -205,10 +205,10 @@ scale_groups:
     worker:
       attributes:
         pool: gb200
-    # Pinned full reserved fleet: 4 racks x 18 nodes. GB200 NVL72 deploys in whole
+    # Pinned full reserved fleet: 12 racks x 18 nodes. GB200 NVL72 deploys in whole
     # racks, so this MUST stay a multiple of 18 (see header + gaps.md).
-    buffer_slices: 72
-    max_slices: 72
+    buffer_slices: 216
+    max_slices: 216
     priority: 100
     slice_template:
       num_vms: 1

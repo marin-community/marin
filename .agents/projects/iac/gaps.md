@@ -128,8 +128,8 @@ the follow-up slices are turnkey.
 Added in this PR, using only the existing schema + pt1 components:
 
 - [`lib/iris/config/cw-us-east-08a.yaml`](../../../lib/iris/config/cw-us-east-08a.yaml) —
-  the cluster: `cpu-erapids` pool (4× `cd-gp-i64-erapids`) + `gb200` pool (72× `gb200-4x`,
-  4 GB200 GPUs each = 288 Blackwell GPUs), both pinned warm.
+  the cluster: `cpu-erapids` pool (4× `cd-gp-i64-erapids`) + `gb200` pool (216× `gb200-4x`,
+  4 GB200 GPUs each = 864 Blackwell GPUs = 12 NVL72 racks), both pinned warm.
 - [`infra/iac/Pulumi.cw-us-east-08a.yaml`](../../../infra/iac/Pulumi.cw-us-east-08a.yaml) —
   the Pulumi stack pointer.
 
