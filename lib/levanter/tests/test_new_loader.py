@@ -319,7 +319,9 @@ def test_epoch_dataset_loader_stops_after_exactly_n_passes(base_len, epochs, bat
     sequences = [np.arange(4) + 1000 * i for i in range(base_len)]
     dataset = EpochDataset(ListAsyncDataset(sequences), max_epochs=epochs)
 
-    with use_test_mesh(tensor_parallelism=1), haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+    # This asserts on batch counting, not sharded numerics, so put every device on the model axis
+    # (data axis size 1). Small batch sizes then stay valid regardless of the runner's device count.
+    with use_test_mesh(tensor_parallelism=len(jax.devices())), haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         loader = DataLoader(dataset, batch_size, max_buffered_batches=0, mesh=None, axis_resources=None)
         num_batches = sum(1 for _ in loader)
 
