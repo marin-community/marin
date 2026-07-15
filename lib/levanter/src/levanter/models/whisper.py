@@ -64,7 +64,7 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
 
-    # config narrows the base's model_type to its own concrete model class (LSP narrowing; mypy flags the same)
+    # config narrows the base's model_type to its own concrete model class (LSP narrowing; pyrefly flags the same)
     @property
     def model_type(self) -> Type["WhisperModel"]:  # pyrefly: ignore[bad-override]
         return WhisperModel

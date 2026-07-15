@@ -40,7 +40,6 @@ test = [
 ]
 dev = [
     { include-group = "test" },
-    "mypy >= 0.910",
     "mkdocs >= 1.4.3",
     "mkdocs-material >= 7.3.3",
     "mkdocstrings >= 0.22.0",

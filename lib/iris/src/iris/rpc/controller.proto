@@ -139,6 +139,13 @@ message Controller {
     // allowlist gates on. The peer re-checks it against the same claim carried in
     // the federation JWT before trusting it (defense in depth).
     string submitting_user = 3;
+    // Identifies one parent-side handoff incarnation. A re-drive of the same
+    // handle repeats it; a resubmission that replaced the parent's job mints a
+    // new one. The peer matches it against the nonce stored on its RECEIVED
+    // handle: equal means idempotent replay (return the existing job), different
+    // means a new incarnation (the existing-job policy applies, so a finished
+    // previous run is replaced and re-run).
+    string handoff_nonce = 4;
   }
 
   message LaunchJobResponse {

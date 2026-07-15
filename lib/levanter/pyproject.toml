@@ -200,13 +200,6 @@ ignore = [
 line-length = 119
 target-version = ["py312"]
 
-[tool.mypy]
-python_version = "3.12"
-mypy_path = ["src"]
-
-[tool.mypy-haliax.core]
-ignore_missing_imports = true
-
 [tool.pytest.ini_options]
 addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
 pythonpath = ["src", "tests"]

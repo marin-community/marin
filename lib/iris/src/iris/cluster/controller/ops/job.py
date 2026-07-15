@@ -289,6 +289,7 @@ def insert_job_and_config(
             job_id=job_id,
             requester_id=request.federation.requester_id,
             owner_principal=request.federation.owner_principal,
+            handoff_nonce=request.federation.handoff_nonce,
         )
 
     # Record the job-level creation for any requester federating with this peer (a
@@ -347,18 +348,22 @@ def cancel(
 def remove_finished(
     cur: Tx,
     job_id: JobName,
+    *,
+    record_tombstone: bool = True,
 ) -> bool:
     """Remove a finished job and its tasks from state.
 
     Only removes jobs that are in a terminal state. Returns True if removed,
-    False if the job does not exist or is not finished.
+    False if the job does not exist or is not finished. ``record_tombstone=False``
+    is for a federated resubmission replacing a finished run in place — the
+    parent must see the fresh submission's changelog row, not a tombstone.
     """
     job_state = reads.get_job_state(cur, job_id)
     if job_state is None:
         return False
     if job_state not in TERMINAL_JOB_STATES:
         return False
-    writes.delete_job(cur, job_id)
+    writes.delete_job(cur, job_id, record_tombstone=record_tombstone)
     cur.register(
         lambda: log_event(
             "job_removed",

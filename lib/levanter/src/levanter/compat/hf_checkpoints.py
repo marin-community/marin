@@ -51,7 +51,6 @@ from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
-from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -286,10 +285,6 @@ class ModelWithHfSerializationMixin(Generic[MConfig]):
     @abc.abstractmethod
     def init(cls, Vocab: Axis, config: MConfig, *, key: PRNGKeyArray) -> "ModelWithHfSerializationMixin":
         pass
-
-
-class ASRWithHfSerializationMixin(ASRMixin, ModelWithHfSerializationMixin[MConfig]):
-    pass
 
 
 class LmWithHfSerializationMixin(LmHeadModel, ModelWithHfSerializationMixin[MConfig]):

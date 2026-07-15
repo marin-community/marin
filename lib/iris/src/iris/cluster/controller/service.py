@@ -1202,7 +1202,8 @@ class ControllerServiceImpl:
         identity = get_verified_identity()
         if identity is not None and identity.role == FEDERATION_PEER_ROLE:
             with self._db.read_snapshot() as snap:
-                if reads.received_requester(snap, job_id) == identity.user_id:
+                handoff = reads.received_handoff(snap, job_id)
+                if handoff is not None and handoff.requester_id == identity.user_id:
                     return
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
         authorize_resource_owner(job_id.user)
@@ -1223,7 +1224,7 @@ class ControllerServiceImpl:
 
         return ExponentialBackoff(initial=1.0, maximum=10.0, factor=2).wait_until(drained, timeout=wait)
 
-    def _replace_finished_job(self, cur, job_id: JobName) -> bool:
+    def _replace_finished_job(self, cur, job_id: JobName, *, record_tombstone: bool = True) -> bool:
         """Attempt to replace a terminal job; signal whether a drain is needed.
 
         CASCADE-deleting a job's tasks while its attempts are still worker-
@@ -1236,7 +1237,7 @@ class ControllerServiceImpl:
         """
         if reads.has_unfinished_worker_attempts(cur, job_id):
             return True
-        ops.job.remove_finished(cur, job_id)
+        ops.job.remove_finished(cur, job_id, record_tombstone=record_tombstone)
         return False
 
     def _admit_federated_resubmit(
@@ -1244,22 +1245,28 @@ class ControllerServiceImpl:
         cur: Tx,
         job_id: JobName,
         request: controller_pb2.Controller.LaunchJobRequest,
-    ) -> controller_pb2.Controller.LaunchJobResponse:
+    ) -> controller_pb2.Controller.LaunchJobResponse | None:
         """Federation-aware admission for a handoff whose job id already exists.
 
-        Runs before the generic ``existing_job_policy`` switch, so it governs a
-        handoff regardless of that policy. A re-drive from the *same* requester
-        (recorded as a RECEIVED handle) is an idempotent replay — return the existing
-        job. Any other existing row — a local job, a job received from a different
-        requester, or a SENT handle — is a genuine collision the parent must see, so
-        reject with ``ALREADY_EXISTS``.
+        A delivery repeating the stored nonce from the same requester is an
+        idempotent replay: return the existing job and re-report its state, so a
+        parent whose sync cursor already consumed this job's deltas still
+        converges. The same requester with a new nonce is a fresh incarnation
+        (the parent replaced its finished job and resubmitted): return ``None``
+        and the caller applies the generic ``existing_job_policy``. Anything
+        else — a local job, a different requester's job, or a SENT handle — is a
+        collision: raise ``ALREADY_EXISTS``.
         """
-        if reads.received_requester(cur, job_id) == request.federation.requester_id:
-            return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
-        raise ConnectError(
-            Code.ALREADY_EXISTS,
-            f"Job {job_id} already exists and was not handed off by {request.federation.requester_id!r}",
-        )
+        handoff = reads.received_handoff(cur, job_id)
+        if handoff is None or handoff.requester_id != request.federation.requester_id:
+            raise ConnectError(
+                Code.ALREADY_EXISTS,
+                f"Job {job_id} already exists and was not handed off by {request.federation.requester_id!r}",
+            )
+        if handoff.handoff_nonce != request.federation.handoff_nonce:
+            return None
+        writes.record_federation_change(cur, job_id)
+        return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
     def _queue_federated_job(
         self,
@@ -1490,14 +1497,20 @@ class ControllerServiceImpl:
         # avoid tripping the jobs.job_id PK. See the inner re-check at
         # the second ``with self._db.transaction()`` below.
         needs_drain = False
+        # A federated replacement (same requester, new handoff nonce) deletes the
+        # previous run's rows without a tombstone: the job id lives on, so the
+        # parent must mirror the fresh run, not drop its handle.
+        record_tombstone = not is_received_handoff
         with self._db.transaction() as cur:
             existing_state = reads.get_job_state(cur, job_id)
             if existing_state is not None:
-                # A received handoff whose id already exists takes the federation
-                # admission path (idempotent re-drive vs. genuine collision) before
-                # any generic replace/keep policy applies.
-                if request.HasField("federation"):
-                    return self._admit_federated_resubmit(cur, job_id, request)
+                # Federation admission first: a replay returns the existing job,
+                # a collision raises, and a new incarnation (``None``) falls
+                # through to the policy switch like any local resubmission.
+                if is_received_handoff:
+                    replay = self._admit_federated_resubmit(cur, job_id, request)
+                    if replay is not None:
+                        return replay
                 policy = request.existing_job_policy
                 if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
                     raise ConnectError(
@@ -1511,7 +1524,9 @@ class ControllerServiceImpl:
                     # If worker-bound attempts haven't finalized yet (e.g. the
                     # task is terminal at the job level but its attempt is still
                     # pending a heartbeat), defer to the drain wait below.
-                    needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
+                    needs_drain = needs_drain or self._replace_finished_job(
+                        cur, job_id, record_tombstone=record_tombstone
+                    )
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
                         ops.job.cancel(
@@ -1527,7 +1542,9 @@ class ControllerServiceImpl:
                         # path is still racing to land.
                         needs_drain = True
                     else:
-                        needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
+                        needs_drain = needs_drain or self._replace_finished_job(
+                            cur, job_id, record_tombstone=record_tombstone
+                        )
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
                     logger.info(
@@ -1535,7 +1552,9 @@ class ControllerServiceImpl:
                         job_id,
                         job_pb2.JobState.Name(existing_state),
                     )
-                    needs_drain = needs_drain or self._replace_finished_job(cur, job_id)
+                    needs_drain = needs_drain or self._replace_finished_job(
+                        cur, job_id, record_tombstone=record_tombstone
+                    )
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
 
@@ -1553,7 +1572,7 @@ class ControllerServiceImpl:
                     _JOB_REPLACEMENT_DRAIN_WAIT.to_seconds(),
                 )
             with self._db.transaction() as cur:
-                ops.job.remove_finished(cur, job_id)
+                ops.job.remove_finished(cur, job_id, record_tombstone=record_tombstone)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1658,7 +1677,6 @@ class ControllerServiceImpl:
         # never picks a peer — the control tick's federation pass does, once a peer
         # reports free capacity. A job this cluster received via handoff (federation
         # field set) always runs here — it is never re-federated — so it skips this.
-        is_received_handoff = request.HasField("federation")
         if is_received_handoff:
             plan = SubmitPlan(SubmitDisposition.LOCAL)
         else:
@@ -1713,7 +1731,16 @@ class ControllerServiceImpl:
             # replace without re-running the whole flow.
             if reads.get_job_state(cur, job_id) is not None:
                 if request.HasField("federation"):
-                    return self._admit_federated_resubmit(cur, job_id, request)
+                    replay = self._admit_federated_resubmit(cur, job_id, request)
+                    if replay is not None:
+                        return replay
+                    # A different incarnation of the same requester's job landed
+                    # between the two transactions; too late to re-run the
+                    # replacement flow, so surface the collision.
+                    raise ConnectError(
+                        Code.ALREADY_EXISTS,
+                        f"Job {job_id} already exists (concurrent submission)",
+                    )
                 if request.existing_job_policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
                     return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                 raise ConnectError(
@@ -1873,6 +1900,11 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 reason="Terminated by user",
             )
+            # Re-report the job's state to its requester (a no-op unless this
+            # root was received via handoff). A routed cancel of an already-
+            # terminal job changes nothing, and this re-report is what converges
+            # the parent's stale mirror and stops its cancel re-drive.
+            writes.record_federation_change(cur, job_id)
         # The next polling tick reconciles each affected worker; the
         # cancellation appears in the desired-set diff so the worker stops
         # the attempt within one tick rather than waiting on the next backoff.
@@ -3367,6 +3399,13 @@ class ControllerServiceImpl:
                     order.append(row.job_id)
                 if row.tombstone:
                     tombstoned[row.job_id] = True
+                elif tombstoned[row.job_id]:
+                    # Re-created after a delete within this window (a prune racing
+                    # a fresh handoff of the same id): rows are in seq order, so
+                    # the later creation supersedes the tombstone — report full
+                    # current state, not an instruction to drop the handle.
+                    tombstoned[row.job_id] = False
+                    all_tasks[row.job_id] = True
                 elif row.task_index is None:
                     all_tasks[row.job_id] = True
                 else:
