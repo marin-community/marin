@@ -1122,37 +1122,22 @@ def test_pod_group_name_is_valid_label_value():
     assert len(name) <= 63
 
 
-def test_coscheduled_without_local_queue_raises():
-    """A coscheduled job dispatched to a cluster with no LocalQueue is a
-    misconfiguration: Kueue gang admission is required, with no fallback."""
-    req = _cosched_req("/job/task/0", num_tasks=4, group_by="leafgroup")
-    with pytest.raises(ValueError, match="requires Kueue gang admission"):
-        _build_pod_manifest(req, pod_config(local_queue=""))
-
-
-def test_kueue_drops_active_deadline_seconds():
-    """Kueue-gated pods omit activeDeadlineSeconds (gated wait would burn the deadline)."""
+def test_kueue_gang_drops_active_deadline_seconds():
+    """A gang omits activeDeadlineSeconds: k8s counts it from creation, so a gang waiting
+    SchedulingGated for the autoscaler could burn the deadline before it runs."""
     req = _cosched_req("/job/task/0")
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
-def test_non_coscheduled_kueue_pod_drops_active_deadline_seconds():
-    """A non-coscheduled pod is also Kueue-gated when a LocalQueue is set (every pod routes
-    through Kueue), so it too omits activeDeadlineSeconds."""
+def test_non_coscheduled_pod_keeps_active_deadline_seconds():
+    """A non-coscheduled pod keeps activeDeadlineSeconds even though it routes through Kueue:
+    single pods admit quickly, and on a K8s-only cluster this is their only timeout
+    enforcement (the controller's execution-timeout scan runs only for worker-daemon backends)."""
     req = make_run_req("/job/task/0", num_tasks=4)
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
-    assert "activeDeadlineSeconds" not in manifest["spec"]
-
-
-def test_non_kueue_pod_keeps_active_deadline_seconds():
-    """With no LocalQueue (Kueue not configured) a pod is not gated and keeps its
-    activeDeadlineSeconds budget."""
-    req = make_run_req("/job/task/0", num_tasks=4)
-    req.timeout.milliseconds = 3600_000
-    manifest = _build_pod_manifest(req, pod_config(local_queue=""))
     assert manifest["spec"]["activeDeadlineSeconds"] == 3600
 
 
@@ -1185,13 +1170,6 @@ def test_single_pod_gpu_job_routed_through_kueue():
     labels = manifest["metadata"]["labels"]
     assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
     assert _KUEUE_POD_GROUP_NAME not in labels
-    assert "annotations" not in manifest["metadata"]
-
-
-def test_non_kueue_cluster_pod_has_no_kueue_labels():
-    """With no LocalQueue configured (Kueue not installed), a pod carries no Kueue labels."""
-    manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue=""))
-    assert _KUEUE_QUEUE_NAME not in manifest["metadata"]["labels"]
     assert "annotations" not in manifest["metadata"]
 
 

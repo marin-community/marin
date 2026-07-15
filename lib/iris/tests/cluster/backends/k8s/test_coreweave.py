@@ -23,6 +23,7 @@ from iris.cluster.config import (
     CoreweaveSliceConfig,
     IrisClusterConfig,
     KubernetesProviderConfig,
+    KueueConfig,
     PlatformConfig,
     ScaleGroupConfig,
     SliceConfig,
@@ -139,7 +140,8 @@ def _make_cluster_config(
         storage=StorageConfig(
             remote_state_dir=remote_state_dir,
         ),
-        kubernetes_provider=KubernetesProviderConfig(),
+        # Kueue is mandatory on the K8s backend.
+        kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")),
         # The controller's scale group so start_controller can validate it.
         scale_groups={
             controller_scale_group: ScaleGroupConfig(
@@ -945,11 +947,14 @@ def test_ensure_kueue_queues_reconciles_local_queue():
     provider.shutdown()
 
 
-def test_ensure_kueue_queues_noop_without_cluster_queue():
-    """No cluster_queue configured -> Kueue not in use -> nothing applied."""
-    provider, k8s = _make_provider(label_prefix="iris")
-    provider.ensure_kueue_queues(_make_cluster_config())
-    assert k8s.get_json(K8sResource.LOCAL_QUEUES, "iris-lq") is None
+def test_ensure_kueue_queues_raises_without_cluster_queue():
+    """Kueue is mandatory on the K8s backend, so a missing cluster_queue is a fail-fast
+    misconfiguration rather than a silent skip."""
+    provider, _ = _make_provider(label_prefix="iris")
+    cfg = _make_cluster_config()
+    cfg.kubernetes_provider.kueue.cluster_queue = ""
+    with pytest.raises(ValueError, match=r"kueue\.cluster_queue is required"):
+        provider.ensure_kueue_queues(cfg)
     provider.shutdown()
 
 

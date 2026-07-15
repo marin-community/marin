@@ -746,12 +746,16 @@ class K8sControllerProvider:
         cluster-global and admin-provisioned out of band (the CKS cluster is
         shared across tenants); see scripts/install_kueue.py. Iris owns
         only its own LocalQueue, binding its namespace to the admin ClusterQueue.
-        The LocalQueue name is derived from label_prefix, not configured. No-op
-        when Kueue is not configured (cluster_queue unset).
+        The LocalQueue name is derived from label_prefix, not configured. Kueue is
+        mandatory on the K8s backend (every pod is admitted through it), so a missing
+        cluster_queue is a fail-fast misconfiguration, not a skip.
         """
         cluster_queue = config.kubernetes_provider.kueue.cluster_queue
         if not cluster_queue:
-            return
+            raise ValueError(
+                "kubernetes_provider.kueue.cluster_queue is required: the K8s backend admits every "
+                "pod through Kueue. Provision it with scripts/install_kueue.py --with-queues."
+            )
         name = local_queue_name(self._label_prefix)
         manifest = {
             "apiVersion": "kueue.x-k8s.io/v1beta1",
