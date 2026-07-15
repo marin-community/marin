@@ -118,6 +118,10 @@ class MarinTokenizer(Protocol):
     @property
     def chat_template(self) -> str | None: ...
 
+    def with_chat_template(self, chat_template: str) -> "MarinTokenizer":
+        """Return a copy of this tokenizer that renders ``chat_template``."""
+        ...
+
     def apply_chat_template(
         self,
         conversation: list[dict[str, str]],
@@ -572,6 +576,9 @@ class HfMarinTokenizer:
     @property
     def all_special_ids(self) -> list[int]:
         return self._all_special_ids
+
+    def with_chat_template(self, chat_template: str) -> "HfMarinTokenizer":
+        return dataclasses.replace(self, _chat_template=chat_template)
 
     def apply_chat_template(
         self,

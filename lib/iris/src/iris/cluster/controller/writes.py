@@ -298,18 +298,23 @@ def insert_job_config(
 
 
 @writes_to(jobs_table, cascades_into=(task_attempts_table, job_config_table, job_workdir_files_table))
-def delete_job(tx: Tx, job_id: JobName) -> None:
+def delete_job(tx: Tx, job_id: JobName, *, record_tombstone: bool = True) -> None:
     """Delete a job row and drop the per-job memos its cascade would strand.
 
     ``ON DELETE CASCADE`` removes the job's tasks, attempts, endpoints, config, and
     workdir files.
+
+    ``record_tombstone=False`` is for a deletion that immediately re-creates the
+    job id for the same requester (a federated resubmission replacing a finished
+    run): the parent must mirror the fresh submission, not drop its live handle.
     """
     # Record the tombstone BEFORE the delete so a parent federating with this peer
     # learns the job was pruned. The event resolves and stamps its requester from
     # the RECEIVED federated_jobs row (still present here) and carries no FK to
     # jobs, so it survives the CASCADE that removes that row (a no-op unless this
     # root was received via handoff).
-    record_federation_change(tx, job_id, tombstone=True)
+    if record_tombstone:
+        record_federation_change(tx, job_id, tombstone=True)
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
     # The attempt-counts and run-template memos are keyed by job id and derived from
     # the cascaded rows. Drop them at this chokepoint — every job-row deletion flows
@@ -368,6 +373,7 @@ def insert_received_handle(
     job_id: JobName,
     requester_id: str,
     owner_principal: str,
+    handoff_nonce: str,
 ) -> None:
     """Record that ``job_id`` was handed to this peer by ``requester_id`` as a
     RECEIVED ``federated_jobs`` row (``peer_id`` is the requester; the SENT-only
@@ -384,10 +390,11 @@ def insert_received_handle(
             direction=int(FederationDirection.RECEIVED),
             peer_id=requester_id,
             owner_principal=owner_principal,
+            handoff_nonce=handoff_nonce,
         )
         .on_conflict_do_update(
             index_elements=["job_id"],
-            set_={"peer_id": requester_id, "owner_principal": owner_principal},
+            set_={"peer_id": requester_id, "owner_principal": owner_principal, "handoff_nonce": handoff_nonce},
         )
     )
     # Keep the per-transaction requester resolution consistent with this insert so a
@@ -764,6 +771,7 @@ def insert_federated_handle(
     peer_id: str,
     owner_principal: str,
     handoff_state: int,
+    handoff_nonce: str,
 ) -> None:
     """Insert the SENT ``federated_jobs`` handle for a job handed off to ``peer_id``."""
     tx.execute(
@@ -774,6 +782,7 @@ def insert_federated_handle(
             owner_principal=owner_principal,
             handoff_state=handoff_state,
             cancel_intent_version=0,
+            handoff_nonce=handoff_nonce,
         )
     )
 

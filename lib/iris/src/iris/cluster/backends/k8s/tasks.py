@@ -31,6 +31,7 @@ from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
     BackendRuntime,
+    DeviceCapacity,
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
@@ -1234,16 +1235,16 @@ class ClusterState:
             self._workloads = new_workloads
             self._node_pools = list(node_pools)
 
-    def free_gpus(self) -> int:
-        """Approximate free GPUs across the cluster: allocatable minus pod requests.
+    def gpu_capacity(self) -> DeviceCapacity:
+        """Approximate free vs. total GPUs across the cluster.
 
         Best-effort federation availability hint inferred from the last periodic
         kubectl sync (no extra kubectl call): total ``nvidia.com/gpu`` allocatable
-        across nodes minus what non-terminal pods request. Counts GPUs on all nodes
-        (GPU nodes are commonly tainted, and a taint a GPU pod tolerates does not make
-        the GPU unavailable). Deliberately imperfect — it lags the sync and ignores
-        per-node packing, which the meta-scheduler tolerates (the peer's own Kueue is
-        the backstop)."""
+        across nodes, with the free count subtracting what non-terminal pods
+        request. Counts GPUs on all nodes (GPU nodes are commonly tainted, and a
+        taint a GPU pod tolerates does not make the GPU unavailable). Deliberately
+        imperfect — it lags the sync and ignores per-node packing, which the
+        meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
         with self._lock:
             nodes = self._nodes[:]
             pods = self._pods[:]
@@ -1257,7 +1258,7 @@ class ClusterState:
             if pod.get("status", {}).get("phase", "") in ("Succeeded", "Failed"):
                 continue
             requested += _pod_gpu_request(pod)
-        return max(0, allocatable - int(requested))
+        return DeviceCapacity(free=max(0, allocatable - int(requested)), total=allocatable)
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Build the dashboard RPC response from current state. No kubectl calls."""
@@ -1540,20 +1541,21 @@ class K8sTaskProvider:
     def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
 
-    def available_resources(self) -> dict[str, int] | None:
-        """Free GPUs inferred from the periodic kubectl cluster sync, for federation.
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+        """Free and total GPUs inferred from the periodic kubectl cluster sync.
 
         Kueue owns placement, so there is no per-worker Iris capacity view here; instead
-        we infer a best-effort free-GPU count from the cached node/pod state
-        (:meth:`ClusterState.free_gpus`) and attribute it to this backend's advertised
-        GPU ``device-variant`` so a parent's ``available:<variant>`` gate lines up. Only
-        when the backend advertises exactly one GPU variant can free GPUs be attributed
-        unambiguously; otherwise it returns ``None`` (unset — shape-only federation)."""
+        we infer best-effort GPU counts from the cached node/pod state
+        (:meth:`ClusterState.gpu_capacity`) and attribute them to this backend's
+        advertised GPU ``device-variant`` so a parent's ``available:<variant>`` gate
+        lines up. Only when the backend advertises exactly one GPU variant can the
+        GPUs be attributed unambiguously; otherwise it returns ``None`` (unset —
+        shape-only federation)."""
         variants = self.advertised.get(WellKnownAttribute.DEVICE_VARIANT)
         if not variants or len(variants) != 1:
             return None
         variant = next(iter(variants)).strip().lower()
-        return {variant: self._cluster_state.free_gpus()}
+        return {variant: self._cluster_state.gpu_capacity()}
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""

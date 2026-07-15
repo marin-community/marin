@@ -23,7 +23,7 @@ from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
-from iris.cluster.controller.backend import BackendCapability, BackendRuntime
+from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
@@ -1713,7 +1713,7 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, adve
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
     # Default: this backend supplies no federation availability metric (UNSET). Tests
     # exercising the metric override the return value explicitly.
-    backend.available_resources.return_value = None
+    backend.resource_capacity.return_value = None
     # status() authors the BackendStatus variant the backend's capability selects:
     # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
@@ -1955,7 +1955,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    gcp_backend.available_resources.return_value = {"v6e-16": 32}  # supplies the federation metric
+    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
@@ -1987,6 +1987,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # The federation availability metric is populated for a supplying backend and left
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
+    assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
     assert summaries["gcp"]["availability"]["version"] == 1
     assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.

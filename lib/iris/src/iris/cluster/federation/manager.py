@@ -380,9 +380,7 @@ class FederationManager:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
         try:
-            handoff = self._build_handoff_request(
-                spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
-            )
+            handoff = self._build_handoff_request(spec)
             peer.launch_job(handoff)
         except ConnectError as exc:
             # The peer answers a rejected handoff the same way every time — a name
@@ -424,29 +422,22 @@ class FederationManager:
 
     # -- helpers -------------------------------------------------------------
 
-    def _build_handoff_request(
-        self,
-        request: controller_pb2.Controller.LaunchJobRequest,
-        local_job_id: JobName,
-        owner_principal: str,
-        submitting_user: str,
-    ) -> controller_pb2.Controller.LaunchJobRequest:
+    def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer matches
-        workers, not the parent's ``backend``/``cluster`` pins). Idempotency of a
-        re-drive is owned by the peer's federation-aware admission, which returns the
-        existing job for a re-drive from the same requester."""
+        federation attribution, and the routing directives stripped (the peer
+        matches workers, not the parent's ``backend``/``cluster`` pins)."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
-        handoff.CopyFrom(request)
-        handoff.name = local_job_id.to_wire()
-        kept = [c for c in request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
+        handoff.CopyFrom(spec.request)
+        handoff.name = spec.local_job_id.to_wire()
+        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
         del handoff.constraints[:]
         handoff.constraints.extend(kept)
         handoff.federation.CopyFrom(
             controller_pb2.Controller.FederationHandoff(
                 requester_id=self._cluster_id,
-                owner_principal=owner_principal,
-                submitting_user=submitting_user,
+                owner_principal=spec.owner_principal,
+                submitting_user=spec.submitting_user,
+                handoff_nonce=spec.handoff_nonce,
             )
         )
         self._inline_blobs(handoff)
