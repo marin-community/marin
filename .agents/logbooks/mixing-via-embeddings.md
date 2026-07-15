@@ -376,3 +376,43 @@ mirrored to `gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/v0/grug
   (2) DSP port to grug (same folds as phase 2; per-cluster tying; content-tied a_i variant).
 - Holdout untouched; protocol amendment (target + R1 bar) to be re-registered on issue #7067
   BEFORE any label opening.
+
+## 2026-07-15 grug DSP port — functional-form experiment (dsp_grug; holdout untouched)
+
+Ported the swarm branch's DSP fitter (dsp_exact.py, OOF 0.91-0.93 on qsplit240) to the grug
+swarm: vendored unmodified into `experiments/datakit/mixture_features/dsp_grug/` + loader/driver
+`dsp_grug.py`. Packet: w (800,2,168) sorted-bucket order; y macro_bpb; epoch multipliers
+c_p[j] = f_p·target_budget/T_j with target budget 10.372e12 (verified == launcher
+`_TARGET_BUDGET_TOKENS`; simulated-epoching target-budget semantics per the swarm branch's
+debug log), f = 0.767/0.233, T_j from buckets_table (tail = pooled 33 children; ΣT_j matches
+budget to 3e-7). SAME RepeatedKFold(5,3,seed0) folds as phase 2, nonlinear params refit per
+fold. Engineering: on this 2-CPU-quota box the 337-dim FD L-BFGS-B is infeasible → exact
+variable-projection gradient (implicit diff of the NNLS head on its active set; validated vs
+refit-FD to ~6 digits; A/B vs plain-FD fits identical to 3-4 decimals; untied path reproduces
+dsp_exact bit-exactly). Outputs: `scratch/mixture_features/grug/{dsp_results.parquet,
+dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
+
+- **Verdict: DSP does NOT transfer.** Every DSP config loses to the Hellinger kernel (0.3076)
+  on macro_bpb, all paired p≤0.002: best content_canonical **0.2455** (Δ −0.062, 1/15 folds),
+  cluster_canonical 0.2370, best full full_effexp 0.2323. Same on the recommended
+  zmacro_english_20 target: content 0.6431 / cluster 0.6406 vs kernel **0.8147** (0/15 folds).
+- **Overfit watch confirmed**: untied 673-param models fold-train ~0.60-0.70 vs OOF 0.18-0.23
+  (gap ~0.5); cluster-tied (146p) and content-tied (156p) calibrated (train 0.33-0.39, gap
+  ~0.15) but only reach linear-content-level skill (hist-ridge was 0.254). Shared-rho/tau +
+  free per-bucket head (globalrt, 340p) is the worst (0.171) — the per-bucket NNLS head is
+  the overfitting element, not rho/tau.
+- **Content-coupled tying wins within DSP**: a_i,p_i = u·f_i (u≥0, f_i = K40 profile + 1;
+  feature-space NNLS) beats cluster tying on both targets — K40 shares strength across
+  clusters; it is quality-blind (cross-tier cos ≈ 1 at K40), consistent with phase-2's
+  "quality features add nothing".
+- **Phase-mode ranking flips vs qsplit240**: canonical BENEFIT_GAIN > split_saturation_penalty
+  ≈ effective_exposure here (qsplit240: split 0.929 > effexp 0.920 > canonical 0.898); the
+  phase-gain term is worth +0.026 over no_phase. Fitted γ≈1-1.7 (tied), 0.32 (full); rho med
+  0.48-0.51 tied (saturation ~2 epochs), 0.125 full; no quality-tier gradient in fitted a
+  (mean tier-Spearman +0.02-0.05) — fitted "value" is cluster-level, tiers indistinguishable.
+- **Read on g**: the DSP dose-response form is NOT the right g for this swarm/target — its
+  edge on qsplit240 (39 domains, dose-swept, strong signal 0.91 vs weights-ridge ~0.9)
+  came from per-domain saturation with enough runs/domain; at 168 buckets × 800 runs with a
+  macro dominated by an unpredictable multilingual factor, smooth kernel regression on content
+  histograms dominates and mechanistic per-bucket saturation adds parameters, not signal.
+  If a mechanistic surrogate is still wanted, content-tied DSP is the only defensible flavor.
