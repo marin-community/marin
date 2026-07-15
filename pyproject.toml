@@ -255,13 +255,6 @@ known-first-party = ["experiments"]
 known-third-party = ["wandb", "config"]
 
 
-[tool.mypy]
-python_version = "3.12"
-
-# Note: Grow more strict over time!
-ignore_missing_imports = true
-exclude = ["marin/", "scripts/"]
-
 # Pyrefly type checker configuration
 [tool.pyrefly]
 python-version = "3.12"
