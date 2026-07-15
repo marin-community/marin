@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
+from rigging.filesystem import StoragePath, prefix_join
+
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
@@ -49,8 +51,6 @@ from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_n
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
 from marin.datakit.normalize import DedupMode, normalize_step
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep
 from marin.execution.step_spec import StepSpec
 
 NEMOTRON_CODE_V2_CONTENT_SOURCE = "raw/nemotron-code-v2-content"
@@ -58,33 +58,35 @@ NEMOTRON_CODE_V2_CONTENT_SOURCE = "raw/nemotron-code-v2-content"
 NEMOTRON_CODE_V2_CONTENT_TOKENS_B = 120.254379519
 
 
-def nemotron_code_v2_content() -> ArtifactStep[Artifact]:
-    """Adopt reconstructed Nemotron Code v2 contents resolved through Software Heritage."""
-    return ArtifactStep.adopt(
-        NEMOTRON_CODE_V2_CONTENT_SOURCE,
-        "2026.07.14",
-        NEMOTRON_CODE_V2_CONTENT_SOURCE,
-        kind=Artifact,
-        config={
+def _validate_nemotron_code_v2_content(output_path: str) -> None:
+    shards = StoragePath(prefix_join(output_path, "*.parquet")).glob()
+    if next(iter(shards), None) is None:
+        raise FileNotFoundError(f"No Parquet shards found under {output_path}")
+
+
+def nemotron_code_v2_content_step() -> StepSpec:
+    return StepSpec(
+        name=NEMOTRON_CODE_V2_CONTENT_SOURCE,
+        override_output_path=NEMOTRON_CODE_V2_CONTENT_SOURCE,
+        fn=_validate_nemotron_code_v2_content,
+        hash_attrs={
+            "version": "2026.07.14",
             "format": "parquet",
             "columns": ["sha1_git", "sha1", "content", "present"],
             "rows": 132_903_245,
             "present_rows": 132_666_330,
             "shards": 133,
-            "graph_export": "2025-05-18",
         },
     )
 
 
 def nemotron_code_v2_content_normalize_steps() -> tuple[StepSpec, ...]:
-    artifact = nemotron_code_v2_content()
-    source = artifact.lower()
+    source = nemotron_code_v2_content_step()
     normalized = normalize_step(
         name="normalized/nemotron_code_v2_content",
         download=source,
         text_field="content",
         id_field="sha1_git",
-        input_path_override=artifact.path(),
         file_extensions=(".parquet",),
         dedup_mode=DedupMode.NONE,
         bare=True,

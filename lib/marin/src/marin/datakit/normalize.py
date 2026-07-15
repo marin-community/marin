@@ -481,7 +481,6 @@ def normalize_step(
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
-    input_path_override: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
@@ -490,8 +489,7 @@ def normalize_step(
 
     Args:
         name: Step name (e.g. ``"fineweb/normalize"``).
-        download: Upstream download step retained as provenance. Its output path
-            is the input unless ``input_path_override`` is set.
+        download: Upstream download step whose output_path is the input.
         text_field: Name of the field containing primary text content.
         id_field: Name of the field containing the source ID.
         target_partition_bytes: Target size per output partition.
@@ -503,22 +501,13 @@ def normalize_step(
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
             Useful when normalizing a subdirectory of the download output.
-        input_path_override: Read data from this path while retaining ``download``
-            as the provenance dependency. This supports adopted artifacts whose
-            physical source differs from their managed record path. Mutually
-            exclusive with ``relative_input_path``.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
-    if relative_input_path is not None and input_path_override is not None:
-        raise ValueError("relative_input_path and input_path_override are mutually exclusive")
-
-    if input_path_override is not None:
-        resolved_input = input_path_override
-    elif relative_input_path:
+    if relative_input_path:
         # ``prefix_join`` yields exactly one separator even when ``download.output_path``
         # ends with ``/`` (e.g. ``gs://.../nemotro-cc-eeb783/``); a naive f-string join
         # would leave the doubled ``//`` that ``_discover_files`` then fails to resolve on GCS.
@@ -539,9 +528,6 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
-    if input_path_override is not None:
-        hash_attrs["input_path_override"] = input_path_override
-
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(
