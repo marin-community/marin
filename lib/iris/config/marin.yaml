@@ -74,6 +74,7 @@ auth:
     - will.held@openathena.ai
     - larry.dial@openathena.ai
     - wbmoss@gmail.com
+    - ben.feuer@openathena.ai
     # CI / automation (the old `runner` admin tier)
     - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
@@ -297,6 +298,8 @@ user_budgets:
       - larry.dial@openathena.ai
       - wmoss
       - wbmoss@gmail.com
+      - benjaminfeuer
+      - ben.feuer@openathena.ai
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
   # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE. Verified IAP
@@ -328,8 +331,6 @@ user_budgets:
       - ryan
       - ryan.williams@openathena.ai
       - marinazh
-      - benjaminfeuer
-      - ben.feuer@openathena.ai
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
