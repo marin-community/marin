@@ -36,6 +36,20 @@ You have two ways to specify this output location:
 
 **Precedence:** If both the `MARIN_PREFIX` environment variable is set and the `--prefix` command-line argument is provided, the `--prefix` argument will always take precedence.
 
+## Per-User Namespacing for Dev Runs
+
+Within a prefix, *mutable* (`dev`) training checkpoints are automatically isolated per user. A mutable checkpoint addresses identity on `{name}/dev` alone, so without isolation two people iterating on the same experiment would write to the same path and clobber each other (and a resumption checkpointer could resume from whichever run last touched it).
+
+To prevent this, Marin prefixes a mutable training step's name with `users/{username}/`, so each author gets their own scratch namespace under the shared prefix:
+
+```
+<MARIN_PREFIX>/checkpoints/users/<username>/<experiment-name>/dev/...
+```
+
+The username is resolved from your OS login by `rigging.provenance.username_segment()` — the same identity that stamps provenance `built_by`. An email-like login keeps its full local name (`russell.power@host` → `russell-power`) so distinct users stay distinct, and resolution raises rather than silently falling back to a shared `users/unknown/` path.
+
+Fixed (calendar-versioned) checkpoints and **all** datasets keep their shared, un-namespaced names, so published runs stay citable and the expensive multi-TB tokenized caches still cache-hit across users. Only mutable `dev`/`<label>-dev` steps are moved. See `marin.experiment.namespacing.user_namespaced_name` for the exact policy.
+
 ## Acceptable Storage Backends and Paths
 
 Marin leverages the `fsspec` library, allowing you to use various storage backends. The path you provide should be a URI understandable by `fsspec`. Common examples include:

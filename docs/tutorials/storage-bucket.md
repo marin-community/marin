@@ -137,6 +137,8 @@ env:
 
 Use a checkout-local `.levanter.yaml` only for values that should override your personal defaults for that repository.
 
+These per-user settings are the recommended way to point Marin at your own storage — prefer them over relying on the shared `marin-{region}` cluster defaults. Within whatever prefix you choose, mutable `dev` checkpoints are further isolated per user under a `users/<username>/` segment, so multiple people can share a bucket without clobbering each other's scratch runs (see [Understanding `MARIN_PREFIX`](../explanations/marin-prefix.md#per-user-namespacing-for-dev-runs)).
+
 ## Ongoing Hygiene Checklist
 
 - Re-run `gcloud storage buckets describe` monthly to confirm soft delete stays disabled.
