@@ -1,20 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""exp117 batch study: empirical max-batch vs the HBM estimator.
+"""TPU batch calibration: tune ``batch_config.overhead_factor`` against measured ceilings.
 
-For each TPU slice we measured the largest power-of-2 GLOBAL batch that trains with
-``per_device_parallelism = -1`` (the whole per-chip batch in one microbatch, no gradient
-accumulation). This module turns those measurements into the study's two tables:
+Ground truth is the measured per-chip microbatch ceiling for each slice (largest global batch that
+trains with ``per_device_parallelism = -1``, divided by chip count) in :data:`CEILINGS`. The
+estimator ``tpu_batch_config`` exposes one knob -- ``overhead_factor`` -- that scales its byte
+estimate. This module finds the single overhead that best makes the estimator's predicted per-chip
+microbatch match the measurement, so the heuristic can predict gradient accumulation for any slice.
 
-1. ``print_ceiling_summary`` -- the measured max batch per slice, the per-chip ceiling, and the
-   HBM ``overhead`` factor that makes the sweep's estimator agree with the measurement.
-2. ``print_target_table`` -- for a target global batch that does NOT fit in one microbatch on any
-   slice (default 512), the ``(pdp, grad_accum)`` implied by the MEASURED ceiling versus the
-   ``(pdp, grad_accum)`` PREDICTED by :func:`tpu_batch_config`, plus the peak HBM utilization each
-   slice actually reached (from W&B).
-
-The measured ceilings in :data:`CEILINGS` are ground truth; everything else is derived.
+Reports: measured ceilings; the overhead each family needs; the single recommended value; and the
+per-slice ``(pdp, accum)`` the estimator then predicts vs. measured, at the default overhead and the
+calibrated one. ``--hbm`` adds peak HBM utilization from W&B as corroboration.
 Run: ``python -m experiments.protein.exp117_batch_calibration`` (see exp117_batch_calibration.md).
 """
 
@@ -34,12 +31,12 @@ from experiments.coral.batch_config import (
 from experiments.protein.exp117_sweep import MODEL_CONFIG, SEQ_LEN, VOCAB_SIZE
 
 WANDB_PATH = "eric-czech/marin"
-TARGET_BATCH = 512  # a batch too large to fit in one microbatch on any slice, so every slice needs accumulation
-PREDICT_OVERHEAD = 1.0  # the estimator's default HBM overhead factor (sweep default)
-HBM_METRIC = "hbmMemoryUsage"  # W&B system metric, a percentage, one series per chip: system.tpu.<i>.hbmMemoryUsage
-# W&B run-name suffix of a max-fit probe: the sweep folds slice + overhead tag + smoke version +
-# batch into the run id (see exp117_sweep.smoke_shape). "-oh1-v2-b<batch>" is overhead 1.0, smoke v2.
-RUN_SUFFIX = "-oh1-v2-b{batch}$"
+DEFAULT_OVERHEAD = 1.0  # the estimator's current default (what the sweep ships with)
+CALIB_TARGET = 2048  # large enough that pdp is never capped; per-chip prediction is stable for target >= 512
+TARGET_BATCH = 512  # example target for the (pdp, accum) comparison table
+OVERHEAD_GRID = [round(0.01 * i, 2) for i in range(1, 201)]  # 0.01 .. 2.00
+HBM_METRIC = "hbmMemoryUsage"  # W&B system metric (percent, one series per chip): system.tpu.<i>.hbmMemoryUsage
+RUN_SUFFIX = "-oh1-v2-b{batch}$"  # W&B run-name suffix of a max-fit probe (overhead 1.0, smoke v2)
 
 
 @dataclass(frozen=True)
@@ -55,9 +52,13 @@ class SliceCeiling:
     def per_chip_ceiling(self) -> int:
         return self.max_batch // self.chips
 
+    @property
+    def family(self) -> str:
+        return "v5e" if self.tpu.startswith("v5litepod") else self.tpu.split("-")[0]
+
 
 # Measured ground truth. Per-chip ceiling is constant within a family (v5e=4, v6e=16, v5p=32) and
-# scales with chip count -- a strong internal-consistency check on the measurement.
+# scales with chip count -- an internal consistency check on the measurement.
 CEILINGS: list[SliceCeiling] = [
     SliceCeiling("v5litepod-4", 4, 16, 16),
     SliceCeiling("v5litepod-8", 8, 16, 32),
@@ -90,44 +91,40 @@ def estimated_batch_bytes(global_batch: int, overhead: float) -> int:
     )
 
 
-def measured_config(c: SliceCeiling, target: int) -> tuple[int, int]:
-    """``(pdp, grad_accum)`` the MEASURED ceiling implies to run ``target`` global batch.
-
-    Uses the largest microbatch the slice actually fit; ``pdp = -1`` when the whole target batch
-    fits per-chip in one microbatch.
-    """
-    per_chip_needed = target // c.chips
-    if c.per_chip_ceiling >= per_chip_needed:
-        return -1, 1
-    pdp = c.per_chip_ceiling
-    return pdp, target // (pdp * c.chips)
+def predicted_per_chip(tpu: str, chips: int, overhead: float, target: int = CALIB_TARGET) -> int:
+    """Per-chip microbatch the estimator allows at ``overhead`` (``pdp``; -1 resolves to target/chips)."""
+    pdp, _ = tpu_batch_config(tpu, target, estimated_batch_bytes(target, overhead))
+    return target // chips if pdp == -1 else pdp
 
 
-def predicted_config(tpu: str, target: int, overhead: float) -> tuple[int, int]:
-    """``(pdp, grad_accum)`` the estimator predicts for ``target`` global batch at ``overhead``."""
-    return tpu_batch_config(tpu, target, estimated_batch_bytes(target, overhead))
+def accum(per_chip: int, chips: int, target: int) -> int:
+    """Gradient-accumulation steps for ``per_chip`` microbatch to reach ``target`` global batch."""
+    return max(1, target // (per_chip * chips))
 
 
-def matching_overhead(c: SliceCeiling) -> str:
-    """Coarsely, the largest overhead at which the estimator's per-chip prediction still reaches the
-    measured ceiling (searched on a log2 grid). '>=X' means even the smallest tried overhead
-    under-predicts (estimator saturates at pdp=-1 for the fixed global-128 basis)."""
-    grid = [2.0, 1.0, 0.5, 0.25, 0.125, 0.0625]
-    for oh in grid:
-        pdp, _ = tpu_batch_config(c.tpu, 128, estimated_batch_bytes(128, oh))
-        pred_per_chip = (128 // c.chips) if pdp == -1 else pdp
-        if pred_per_chip >= c.per_chip_ceiling:
-            return f"{oh:g}"
-    return f"<{grid[-1]:g}"
+def family_overhead_range(family: str) -> tuple[float | None, float | None]:
+    """Overhead interval on :data:`OVERHEAD_GRID` where the estimator reproduces the family's measured
+    per-chip ceiling (evaluated on the family's smallest slice; per-chip is constant within a family)."""
+    c = min((c for c in CEILINGS if c.family == family), key=lambda c: c.chips)
+    lo = hi = None
+    for oh in OVERHEAD_GRID:
+        if predicted_per_chip(c.tpu, c.chips, oh) == c.per_chip_ceiling:
+            lo = oh if lo is None else lo
+            hi = oh
+    return lo, hi
+
+
+def recommended_overhead() -> float:
+    """Smallest overhead that never over-predicts on any slice (safe: predicted per-chip <= measured,
+    so the estimator never under-accumulates into an OOM). Minimizes wasted accumulation subject to that."""
+    for oh in OVERHEAD_GRID:
+        if all(predicted_per_chip(c.tpu, c.chips, oh) <= c.per_chip_ceiling for c in CEILINGS):
+            return oh
+    return OVERHEAD_GRID[-1]
 
 
 def hbm_peak_util(tpu: str, batch: int, chips: int) -> tuple[float | None, bool]:
-    """Peak ``hbmMemoryUsage`` (%) over all chips and steps for the max-fit run(s).
-
-    Fans over every region variant of the run (they horse-raced; any that trained is valid) and
-    takes the overall max. Returns ``(util, from_finished)`` where ``from_finished`` is False if no
-    completed run was found and provisional data from an unfinished run was used instead.
-    """
+    """Peak ``hbmMemoryUsage`` (%) over all chips and steps of the completed max-fit run(s)."""
     api = wandb.Api()
     runs = list(api.runs(WANDB_PATH, filters={"display_name": {"$regex": f"-{tpu}{RUN_SUFFIX.format(batch=batch)}"}}))
     finished = [r for r in runs if r.state == "finished"]
@@ -145,66 +142,56 @@ def hbm_peak_util(tpu: str, batch: int, chips: int) -> tuple[float | None, bool]
     return peak, bool(finished)
 
 
-def print_ceiling_summary() -> None:
-    print("Measured max global batch (pdp=-1, no grad accum) and the overhead that reproduces it:\n")
-    print(f"{'slice':13s} {'chips':>5s} {'HBM/ch':>6s} {'maxBatch':>8s} {'perChip':>7s} {'~overhead':>9s}")
+def print_ceilings(with_hbm: bool) -> None:
+    print("Measured ceilings (ground truth) — largest global batch with pdp=-1, no accumulation:\n")
+    head = f"{'slice':13s} {'chips':>5s} {'GiB/chip':>8s} {'max batch':>9s} {'per-chip':>8s}"
+    print(head + ("  peak HBM%" if with_hbm else ""))
     for c in CEILINGS:
-        print(
-            f"{c.tpu:13s} {c.chips:>5d} {c.hbm_gib_per_chip:>6d} {c.max_batch:>8d} "
-            f"{c.per_chip_ceiling:>7d} {matching_overhead(c):>9s}"
-        )
-
-
-def print_target_table(target: int, overhead: float, with_hbm: bool) -> None:
-    print(f"\nTarget global batch = {target}; predicted at overhead = {overhead:g}\n")
-    cols = [
-        "slice",
-        "chips",
-        "HBM tot",
-        "HBM/chip",
-        "peak HBM%",
-        "max batch",
-        "pdp meas",
-        "acc meas",
-        "pdp est",
-        "acc est",
-    ]
-    print(" ".join(f"{h:>12s}" for h in cols))
-    any_provisional = False
-    for c in CEILINGS:
-        pdp_a, gac_a = measured_config(c, target)
-        pdp_p, gac_p = predicted_config(c.tpu, target, overhead)
-        util = "-"
+        line = f"{c.tpu:13s} {c.chips:>5d} {c.hbm_gib_per_chip:>8d} {c.max_batch:>9d} {c.per_chip_ceiling:>8d}"
         if with_hbm:
-            peak, finished = hbm_peak_util(c.tpu, c.max_batch, c.chips)
-            if peak is not None and not finished:
-                any_provisional = True
-            util = "n/a" if peak is None else (f"{peak:.1f}" if finished else f"{peak:.1f}*")
+            peak, _ = hbm_peak_util(c.tpu, c.max_batch, c.chips)
+            line += f"  {'n/a' if peak is None else f'{peak:.1f}':>8s}"
+        print(line)
+
+
+def print_calibration() -> None:
+    print("\nCalibrating overhead_factor so predicted per-chip == measured (target >= 512, stable):\n")
+    for fam in ("v5e", "v6e", "v5p"):
+        lo, hi = family_overhead_range(fam)
+        m = next(c.per_chip_ceiling for c in CEILINGS if c.family == fam)
+        print(f"  {fam:4s}  per-chip {m:>2d}  reproduced by overhead in [{lo}, {hi}]")
+    rec = recommended_overhead()
+    print(f"\n  recommended single overhead = {rec}  (smallest that never over-predicts)")
+
+
+def print_config_table(overhead: float) -> None:
+    print(f"\nConfig to reach global batch {TARGET_BATCH} at overhead {overhead:g}:\n")
+    cols = ["slice", "chips", "per-chip meas", "per-chip pred", "accum meas", "accum pred", "fit"]
+    print(" ".join(f"{h:>13s}" for h in cols))
+    for c in CEILINGS:
+        meas = c.per_chip_ceiling
+        pred = predicted_per_chip(c.tpu, c.chips, overhead)
+        verdict = "exact" if pred == meas else ("OOM" if pred > meas else f"{meas // pred if pred else 0}x accum")
         row = [
             c.tpu,
             c.chips,
-            c.chips * c.hbm_gib_per_chip,
-            c.hbm_gib_per_chip,
-            util,
-            c.max_batch,
-            pdp_a,
-            gac_a,
-            pdp_p,
-            gac_p,
+            meas,
+            pred,
+            accum(meas, c.chips, TARGET_BATCH),
+            accum(pred, c.chips, TARGET_BATCH),
+            verdict,
         ]
-        print(" ".join(f"{v!s:>12s}" for v in row))
-    if any_provisional:
-        print("\n* = from an unfinished (killed/crashed) run; peak is provisional until a completed run exists.")
+        print(" ".join(f"{v!s:>13s}" for v in row))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="exp117 batch study analysis")
-    parser.add_argument("--target", type=int, default=TARGET_BATCH, help="target global batch for the comparison table")
-    parser.add_argument("--overhead", type=float, default=PREDICT_OVERHEAD, help="HBM overhead for the prediction")
-    parser.add_argument("--no-hbm", action="store_true", help="skip the W&B HBM-utilization query")
+    parser = argparse.ArgumentParser(description="TPU batch calibration")
+    parser.add_argument("--hbm", action="store_true", help="add peak HBM utilization from W&B (slow)")
     args = parser.parse_args()
-    print_ceiling_summary()
-    print_target_table(args.target, args.overhead, with_hbm=not args.no_hbm)
+    print_ceilings(with_hbm=args.hbm)
+    print_calibration()
+    print_config_table(DEFAULT_OVERHEAD)
+    print_config_table(recommended_overhead())
 
 
 if __name__ == "__main__":

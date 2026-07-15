@@ -1,12 +1,17 @@
 # TPU batch calibration
 
-Measure, per TPU slice, the largest global batch that trains with no gradient accumulation, and check
-the `tpu_batch_config` HBM estimator against it. Workload: 1.5B dense transformer, `seq_len 8192`,
-bf16 params, Adam. A probe is a **full** smoke run (~20 steps + evals + checkpoints), never a single
-step — peak HBM includes eval and checkpoint memory, not just the step-0 allocation.
+`tpu_batch_config` predicts, for a slice and target global batch, the per-device microbatch (`pdp`)
+and gradient accumulation that fit HBM. Its one free parameter is `overhead_factor` — a scalar on the
+byte estimate. **Goal: calibrate that single knob** — one value, tuned against direct measurement on a
+small set of slices, that lets the heuristic predict accumulation for any slice.
 
-Code: [`exp117_batch_calibration.py`](./exp117_batch_calibration.py) (analysis); the `SMOKE_BATCH`
-path in [`exp117_sweep.py`](./exp117_sweep.py) (the probe). Core library patches this depends on:
+Ground truth is the measured per-chip microbatch ceiling: the largest global batch that trains with no
+accumulation, ÷ chips. Measure it on the smaller slices, tune `overhead_factor` so the estimator
+reproduces it, and confirm it generalizes to larger slices in the same family.
+
+Workload: 1.5B dense transformer, `seq_len 8192`, bf16 params, Adam. Code:
+[`exp117_batch_calibration.py`](./exp117_batch_calibration.py) (analysis); the `SMOKE_BATCH` path in
+[`exp117_sweep.py`](./exp117_sweep.py) (the probe). Core library patches this depends on:
 [`exp117_core_patches.md`](./exp117_core_patches.md).
 
 ## Parameters
@@ -19,12 +24,15 @@ path in [`exp117_sweep.py`](./exp117_sweep.py) (the probe). Core library patches
 - **Regions** — v5e: europe-west4, us-west4 · v6e: europe-west4, us-east1, us-east5 · v5p: us-central1, us-east5.
 - **Probe** — `SMOKE_BATCH=<N>` sets the exact global batch and forces `per_device_parallelism = -1`
   (whole per-chip batch, no accumulation), bypassing the estimator: the run fits (trains) or OOMs.
-  `N` is folded into the run id + a tag, so each probe is a distinct W&B run.
+  `N` folds into the run id + a tag, so each probe is a distinct W&B run.
 
-## Method
+## Measuring the ceiling
 
-Per slice: exponential gallop over power-of-2 global batches, then bisect the fit→OOM boundary
-(~5–8 probes). Result = largest power of 2 that fits. Each probe, and the completion/HBM rules:
+Per slice, search for the largest power-of-2 global batch that trains with `pdp = -1`. `max batch ÷
+chips` = the per-chip ceiling — the largest microbatch the chip holds; accumulation for any target
+follows from it. A probe is a **full** smoke run (~20 steps + evals + checkpoints), never a single
+step. Search = exponential gallop over powers of 2, then bisect the fit→OOM boundary (~5–8 probes).
+Each probe:
 
 - **Fan across every region the slice lives in; first terminal verdict wins.** — tolerates preemption
   and per-region capacity gaps.
@@ -33,67 +41,92 @@ Per slice: exponential gallop over power-of-2 global batches, then bisect the fi
   and scrolls past any tail once eval/checkpoint/W&B output piles up — a tail scan misses it. A
   `Progress on:train` line is **not** a fit; it prints before allocation (treating it as one lets the
   gallop run away to absurd batches).
-- **Compile that neither completes step 0 nor OOMs within a deadline → OOM.** Batches far over the
-  ceiling stall in compilation instead of raising cleanly.
+- **Compile that neither completes step 0 nor OOMs within a deadline → OOM.** Far-over-ceiling batches
+  stall in compilation instead of raising cleanly.
 - **Kill the probe's jobs on OOM.** `CompileTimeHbmOom` is permanent; iris otherwise re-attempts
   preempted/failed jobs indefinitely and burns the slice.
-- **Capture the verdict's log line at detection.** — the result stays verifiable without re-reading a
-  preempted job's rewritten/truncated logs.
-- **Let every non-OOMing run finish** (all regions). A run killed after step 0 records only the
-  compile-time allocation and understates peak HBM.
-- **Reported max-fit run must be iris `succeeded` + W&B `finished`** — no partial or failed run in the
-  numbers. Peak HBM = max `system/tpu.<i>.hbmMemoryUsage` (percent, per chip) over all chips and steps
-  of that run.
-- **Retry policy** — on a failed job classify: OOM (ceiling moved) / preemption (resubmit; resumes
-  from checkpoint) / genuine crash (Python traceback, `preemptions=0` → stop after two, surface). Stops
-  a real bug from being hammered as if it were preemption.
+- **Capture the verdict's log line at detection.** — verifiable without re-reading a preempted job's
+  rewritten logs.
+- **Let every non-OOMing run finish; the reported max-fit run is iris `succeeded` + W&B `finished`.**
+  A run killed after step 0 records only the compile-time allocation; only a completed run gives a
+  trustworthy peak HBM (corroboration below).
+- **Retry policy** — on a failed job classify: OOM (ceiling moved) / preemption (resubmit; resumes from
+  checkpoint) / genuine crash (Python traceback, `preemptions=0` → stop after two, surface).
 
-Estimator comparison: `tpu_batch_config(tpu, target, batch_bytes(target, oh))` gives predicted
-`(pdp, accum)`; the measured ceiling gives actual. Compare at a target batch too large to fit in one
-microbatch on any slice.
+## Calibrating the knob
+
+`batch_memory_bytes = ⌈(params + Adam state + activations) × overhead⌉`; `tpu_batch_config` returns the
+largest microbatch whose scaled estimate fits capacity. Higher overhead → smaller predicted microbatch
+→ more accumulation.
+
+- Evaluate the prediction at a **target ≥ 512** so `pdp` is not capped by a small batch basis — below
+  that it saturates at `128/chips` for many-chip slices (see Nuances). The per-chip prediction is
+  stable for any target in that range.
+- Per family, take the overhead interval that reproduces the measured per-chip ceiling (per-chip is
+  constant within a family, so the family's smallest slice suffices — this is the calibrate-on-small
+  step).
+- **Recommended single value = the smallest overhead that never over-predicts on any slice** (predicted
+  per-chip ≤ measured, so the heuristic never under-accumulates into an OOM), which also minimizes
+  wasted accumulation subject to that safety constraint.
 
 ## Nuances (Marin)
 
+- **Estimator basis.** `tpu_batch_config` caps `pdp` at `batch/chips`, so calling it with a small basis
+  (the sweep's default 128) saturates the per-chip prediction at `128/chips` for many-chip slices,
+  masking the knob. Calibrate and predict against a target ≥ 512.
+- **One scalar, multi-slice.** The knob lumps replicated params/optimizer and batch-scaled activations
+  into a single factor. HBM-to-activation ratio differs per family, so one overhead can be exact for at
+  most a subset — the residual is cross-family, not cross-size.
 - **Region-local data.** Tokenized caches and checkpoints are region-scoped; cross-region reads are
-  disallowed (cost). Raw docs must be staged per region; the cache builds once per region on first
-  probe. A family confined to a region without staged docs is unmeasurable (v4).
-- **Estimator basis.** `tpu_batch_config` is anchored to global batch 128, so for many-chip slices its
-  per-chip prediction saturates at `128/chips` (`pdp = -1`) below the true per-chip ceiling. The
-  overhead back-out is only meaningful where the prediction is accumulation-bound.
+  disallowed (cost). Raw docs are staged per region; the cache builds once per region on first probe.
+  A family confined to a region without staged docs is unmeasurable (v4).
 - **Multi-host slices** (>1 VM host) exercise the sharded checkpoint + HF-export path, which needed a
-  levanter fix to run at all (`exp117_core_patches.md`). Their peak HBM includes the multi-host
-  checkpoint gather — real and in scope.
+  levanter fix to run at all (`exp117_core_patches.md`). Peak HBM there includes the multi-host
+  checkpoint gather.
 - **Run identity = region + slice + batch + smoke-version.** Same-region resubmit resumes from
-  checkpoint (preemption tolerance); bump the smoke-version to fork clean W&B runs after a
-  recipe/library change.
-- **`CompileTimeHbmOom` is deterministic** (compile-time), so the OOM boundary is reproducible; only
-  run completion is subject to preemption.
+  checkpoint; bump the smoke-version to fork clean W&B runs after a recipe/library change.
+- **`CompileTimeHbmOom` is deterministic** (compile-time) — the OOM boundary is reproducible; only run
+  completion is subject to preemption.
 
 ## Results
 
-Per-chip ceiling is constant within a family (v5e 4, v6e 16, v5p 32) and scales with chip count — an
-internal consistency check. `pdp·acc` = microbatch × accumulation to reach a global batch of 512.
+Measured ceilings (ground truth). Per-chip is constant within a family and scales with chip count — an
+internal consistency check. Peak HBM is the max `hbmMemoryUsage` over all chips and steps of the
+completed run.
 
-| slice | chips | GiB/chip | max batch | per-chip | peak HBM % | meas pdp·acc | est pdp·acc | est asks |
-|---|---|---|---|---|---|---|---|---|
-| v5litepod-4 | 4 | 16 | 16 | 4 | 87.0 | 4·32 | 2·64 | 2× |
-| v5litepod-8 | 8 | 16 | 32 | 4 | 72.1 | 4·16 | 2·32 | 2× |
-| v5litepod-16 | 16 | 16 | 64 | 4 | 68.6 | 4·8 | 2·16 | 2× |
-| v6e-4 | 4 | 32 | 64 | 16 | 100.0 | 16·8 | 4·32 | 4× |
-| v6e-8 | 8 | 32 | 128 | 16 | 96.6 | 16·4 | 4·16 | 4× |
-| v6e-16 | 16 | 32 | 256 | 16 | 97.8 | 16·2 | 4·8 | 4× |
-| v5p-8 | 4 | 95 | 128 | 32 | 63.9 | 32·4 | 16·8 | 2× |
-| v5p-16 | 8 | 95 | 256 | 32 | 65.6 | 32·2 | 16·4 | 2× |
-| v5p-32 | 16 | 95 | 512 | 32 | 64.0 | full·1 | 16·2 | 2× |
+| slice | chips | GiB/chip | max batch | per-chip | peak HBM % |
+|---|---|---|---|---|---|
+| v5litepod-4 | 4 | 16 | 16 | 4 | 87.0 |
+| v5litepod-8 | 8 | 16 | 32 | 4 | 72.1 |
+| v5litepod-16 | 16 | 16 | 64 | 4 | 68.6 |
+| v6e-4 | 4 | 32 | 64 | 16 | 100.0 |
+| v6e-8 | 8 | 32 | 128 | 16 | 96.6 |
+| v6e-16 | 16 | 32 | 256 | 16 | 97.8 |
+| v5p-8 | 4 | 95 | 128 | 32 | 63.9 |
+| v5p-16 | 8 | 95 | 256 | 32 | 65.6 |
+| v5p-32 | 16 | 95 | 512 | 32 | 64.0 |
 
-- **max batch** — largest global batch trained with no accumulation (`pdp = -1`); **per-chip** = max
-  batch ÷ chips. **full** = whole per-chip batch fits, no accumulation.
-- **peak HBM %** — max `hbmMemoryUsage` over all chips and steps of the completed (`succeeded` +
-  `finished`) run.
-- **meas / est pdp·acc** — per-device parallelism × accumulation to reach global 512; `est` =
-  `tpu_batch_config` at overhead 1.0. **est asks** = accum(est) ÷ accum(meas).
+Overhead that reproduces the measured per-chip, per family: **v5e `[0.40, 0.78]` · v6e `[0.20, 0.39]` ·
+v5p `[0.30, 0.58]`**. No single value fits all three — v5e needs ≥0.40, v6e ≤0.39 (disjoint).
+**Recommended single overhead = 0.40** (smallest that never over-predicts): exact on v5e and v5p, 2×
+conservative on v6e, safe everywhere. The shipped default `overhead_factor = 1.0` is far too
+conservative.
 
-The estimator is uniformly conservative — 2× the accumulation on v5e/v5p, 4× on v6e. Overhead that
-reproduces the measured ceiling: v5e ≈ 0.5, v6e ≈ 0.25, v5p ≈ 0.5 (only where accumulation-bound; the
-128-batch basis saturates for the many-chip slices). Peak HBM explains the ceiling gaps: v6e sits at
-97–100%, v5e/v5p at 64–87% because the next power-of-two batch would overshoot 100%.
+Accumulation to reach a global batch of 512 — measured vs. the estimator at the default and calibrated
+overhead:
+
+| slice | chips | per-chip | accum (measured) | accum @1.0 (default) | accum @0.40 (calibrated) |
+|---|---|---|---|---|---|
+| v5litepod-4 | 4 | 4 | 32 | 64 | 32 |
+| v5litepod-8 | 8 | 4 | 16 | 32 | 16 |
+| v5litepod-16 | 16 | 4 | 8 | 16 | 8 |
+| v6e-4 | 4 | 16 | 8 | 32 | 16 |
+| v6e-8 | 8 | 16 | 4 | 16 | 8 |
+| v6e-16 | 16 | 16 | 2 | 8 | 4 |
+| v5p-8 | 4 | 32 | 4 | 8 | 4 |
+| v5p-16 | 8 | 32 | 2 | 4 | 2 |
+| v5p-32 | 16 | 32 | 1 | 2 | 1 |
+
+Calibrating `1.0 → 0.40` halves over-accumulation everywhere: exact on v5e and v5p, and v6e drops from
+4× to 2× the necessary accumulation. Full accuracy on v6e would need overhead ≤0.39, which over-predicts
+(OOMs) v5e — the limit of a single scalar.
