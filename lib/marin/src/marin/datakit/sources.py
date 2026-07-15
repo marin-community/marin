@@ -36,7 +36,11 @@ from marin.datakit.download.institutional_books import institutional_books_norma
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
-from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
+from marin.datakit.download.nemotron_v2 import (
+    NEMOTRON_PRETRAINING_LEGAL_V1,
+    NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+    nemotron_v2_normalize_steps,
+)
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
@@ -327,7 +331,7 @@ def all_sources() -> dict[str, DatakitSource]:
     # Its multiple_choice is a distinct, larger regeneration of the v1.1 subset
     # of the same name, so both are carried.
     nemotron_specialized_v1_2 = _rows_nemotron(
-        "nemotron_pretraining_specialized_v1_2",
+        NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
         "nemotron_specialized_v1_2",
         {
             "nemotron_specialized_v1_2/fact_seeking": 34.264249298,
@@ -337,7 +341,7 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
     nemotron_legal = _rows_nemotron(
-        "nemotron_pretraining_legal_v1",
+        NEMOTRON_PRETRAINING_LEGAL_V1,
         "nemotron_legal",
         {
             "nemotron_legal/california_code_of_regulations": 0.033064243,

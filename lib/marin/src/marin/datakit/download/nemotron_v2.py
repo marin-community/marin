@@ -36,6 +36,9 @@ class NemotronV2Dataset:
     """Allow to point at existing download output to avoid re-downloading"""
 
 
+NEMOTRON_PRETRAINING_LEGAL_V1 = "nemotron_pretraining_legal_v1"
+NEMOTRON_PRETRAINING_SPECIALIZED_V1_2 = "nemotron_pretraining_specialized_v1_2"
+
 NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
     "nemotron_cc_v2": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-CC-v2",
@@ -155,7 +158,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
         },
         override_output_path="raw/nemotron_pretraining_specialized_v1_1-b12f71",
     ),
-    "nemotron_pretraining_specialized_v1_2": NemotronV2Dataset(
+    NEMOTRON_PRETRAINING_SPECIALIZED_V1_2: NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-Specialized-v1.2",
         revision="807afc1",
         subsets={
@@ -165,7 +168,7 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "multiple_choice": "Nemotron-Pretraining-Multiple-Choice/**/*.parquet",
         },
     ),
-    "nemotron_pretraining_legal_v1": NemotronV2Dataset(
+    NEMOTRON_PRETRAINING_LEGAL_V1: NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-Pretraining-Legal-v1",
         revision="3d91d58",
         subsets={
