@@ -336,10 +336,10 @@ def cancel(
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
     effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
     commit_effects(cur, effects)
-    # Sweep endpoints that survived because their owning task was already
-    # terminal before cancel ran (kernel only emits EndpointDeletion for
-    # tasks we actively killed). Derive the same subtree the kernel cancelled
-    # from the snapshot's transitive descendants.
+    # Fast-path clear of the cancelled subtree's endpoints (the FK CASCADE
+    # backstop): cancellation stops routing to these endpoints at once rather
+    # than waiting out their lease. Derive the subtree from the snapshot's
+    # transitive descendants.
     subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
     cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
 

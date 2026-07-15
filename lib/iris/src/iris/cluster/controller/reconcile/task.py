@@ -147,7 +147,7 @@ def merge_task_termination(
     stamp_attempt_finished: bool,
     attempt_state: int | None = None,
 ) -> None:
-    """Move a task to ``task_state`` and record its attempt + endpoint deletion.
+    """Move a task to ``task_state`` and record its attempt.
 
     ``stamp_attempt_finished`` controls whether the attempt's ``finished_at_ms``
     is stamped: finalizing callers stamp it (the attempt is truly done);
@@ -190,7 +190,6 @@ def merge_task_termination(
             finished_at=task_finished_at,
         )
     )
-    state.emit_endpoint_deletion(task_name)
 
 
 # ─── Per-task decision helpers ───
@@ -505,9 +504,6 @@ def apply_one_transition(
             container_id=update.container_id,
         )
     )
-
-    if update.new_state in TERMINAL_TASK_STATES:
-        state.emit_endpoint_deletion(update.task_id)
 
     jc = state.job_config(task.job_id)
     has_cosched = bool(jc is not None and jc.has_coscheduling and update.new_state in PEER_CASCADE_TRIGGER_STATES)

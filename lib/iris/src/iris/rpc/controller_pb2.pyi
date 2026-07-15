@@ -710,8 +710,15 @@ class Controller(_message.Message):
         worker: Controller.WorkerFleetDetail
         def __init__(self, kubernetes: _Optional[_Union[Controller.GetKubernetesClusterStatusResponse, _Mapping]] = ..., worker: _Optional[_Union[Controller.WorkerFleetDetail, _Mapping]] = ...) -> None: ...
     class ResourceAvailability(_message.Message):
-        __slots__ = ("version", "observation_epoch_ms", "amounts")
+        __slots__ = ("version", "observation_epoch_ms", "amounts", "total_amounts")
         class AmountsEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        class TotalAmountsEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
             VALUE_FIELD_NUMBER: _ClassVar[int]
@@ -721,10 +728,12 @@ class Controller(_message.Message):
         VERSION_FIELD_NUMBER: _ClassVar[int]
         OBSERVATION_EPOCH_MS_FIELD_NUMBER: _ClassVar[int]
         AMOUNTS_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_AMOUNTS_FIELD_NUMBER: _ClassVar[int]
         version: int
         observation_epoch_ms: int
         amounts: _containers.ScalarMap[str, int]
-        def __init__(self, version: _Optional[int] = ..., observation_epoch_ms: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        total_amounts: _containers.ScalarMap[str, int]
+        def __init__(self, version: _Optional[int] = ..., observation_epoch_ms: _Optional[int] = ..., amounts: _Optional[_Mapping[str, int]] = ..., total_amounts: _Optional[_Mapping[str, int]] = ...) -> None: ...
     class BackendSummary(_message.Message):
         __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail", "availability")
         class AdvertisedAttributesEntry(_message.Message):

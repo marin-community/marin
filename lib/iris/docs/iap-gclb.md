@@ -242,9 +242,14 @@ iris --cluster=marin-dev cluster status   # just works; no iris-specific flag or
 
 `iris` reads that ADC through the standard Google resolver — `fetch_id_token`
 ignores the well-known ADC file, so `IapServiceAccountTokenProvider` mints the
-token through `google.auth.default()` for an impersonated ADC. On a GCE/GKE/Cloud
-Run workload, attach the SA instead (metadata; zero files); in external CI, use
-Workload Identity Federation. A downloaded SA key
+token through `google.auth.default()` for any ADC that carries service-account
+impersonation: the `gcloud ... --impersonate-service-account` ADC above, or a
+Workload Identity Federation external-account ADC whose config sets a
+`service_account_impersonation_url`. On a GCE/GKE/Cloud Run workload, attach the
+SA instead (metadata; zero files); in external CI, use Workload Identity
+Federation — e.g. GitHub Actions with `google-github-actions/auth` configured
+with `workload_identity_provider` and `service_account`, which writes exactly
+such an external-account ADC. A downloaded SA key
 (`GOOGLE_APPLICATION_CREDENTIALS=key.json`) also works but is a long-lived secret —
 avoid it.
 

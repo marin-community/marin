@@ -13,6 +13,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.tracker import NoopConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.py_utils import FailSafeJSONEncoder
 from rigging.filesystem import filesystem as marin_filesystem
 from rigging.filesystem import prefix_join
 
@@ -363,28 +364,10 @@ class LevanterLmEvalEvaluator(Evaluator):
         try:
             fs = marin_filesystem("gcs")
             with fs.open(results_path, "w") as f:
-                json.dump(results, f, indent=2, default=_json_default)
+                # Match Levanter's own eval artifact serialization.
+                json.dump(results, f, indent=2, cls=FailSafeJSONEncoder)
             logger.info("Upload completed successfully.")
         except Exception:
             logger.warning("Failed to upload results to GCS: %s", results_path, exc_info=True)
         finally:
             _finish_current_tracker_best_effort()
-
-
-def _json_default(value):
-    """
-    Provide a best-effort JSON serialization for objects returned by the eval harness.
-    """
-    if dataclasses.is_dataclass(value):
-        return dataclasses.asdict(value)
-
-    if isinstance(value, set):
-        return list(value)
-
-    if hasattr(value, "to_dict") and callable(value.to_dict):
-        try:
-            return value.to_dict()
-        except Exception:
-            pass
-
-    return repr(value)

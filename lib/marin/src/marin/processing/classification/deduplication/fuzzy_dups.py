@@ -41,7 +41,7 @@ from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -250,10 +250,11 @@ def compute_fuzzy_dups_attrs(
     output_path: str,
     cc_max_iterations: int = 10,
     cc_resume: bool = False,
-    max_parallelism: int,
+    max_parallelism: int = MAX_WORKERS_PER_JOB,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
-    map_workers_per_actor: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
 ) -> FuzzyDupsAttrData:
     """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
@@ -276,8 +277,12 @@ def compute_fuzzy_dups_attrs(
             ``<output_path>/outputs/source_NNN/``.
         cc_max_iterations: Max iterations for connected components.
         max_parallelism: Worker count for the ZephyrContext.
-        worker_resources: Per-worker resource request.
+        worker_resources: Per-worker resource request. Required when
+            ``map_task_resources`` is set.
         coordinator_resources: Coordinator resource request.
+        map_task_resources: ResourceConfig for map-stage tasks.
+        reduce_task_resources: ResourceConfig for reduce-stage tasks (e.g.
+            the per-shard ``group_by`` writer).
 
     Returns:
         :class:`FuzzyDupsAttrData` describing per-source attr directories,
@@ -305,8 +310,10 @@ def compute_fuzzy_dups_attrs(
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_workers_per_actor is not None:
-        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
+    if map_task_resources is not None:
+        ctx_kwargs["map_task_resources"] = map_task_resources
+    if reduce_task_resources is not None:
+        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = ZephyrContext(**ctx_kwargs)
 
     # Cap shard count at max_parallelism. Each group reads its attr files

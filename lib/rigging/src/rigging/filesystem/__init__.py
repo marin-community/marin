@@ -11,7 +11,7 @@ Focused submodules with one-directional imports:
   region-local temp storage, and GCS-location utils.
 - ``cross_region`` — the :class:`TransferBudget` and :class:`CrossRegionGuardedFS`.
 - ``factory`` — the guarded ``url_to_fs`` / ``open_url`` / ``filesystem`` entry
-  points and ``atomic_rename``.
+  points, ``atomic_rename``, and ``fetch_file_atomic``.
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 
@@ -61,6 +61,7 @@ from rigging.filesystem.cross_region import (
 )
 from rigging.filesystem.factory import (
     atomic_rename,
+    fetch_file_atomic,
     filesystem,
     is_remote_path,
     open_url,

@@ -14,7 +14,6 @@ from rigging.timing import Timestamp
 from iris.cluster.controller.reconcile.effects import (
     AttemptRowDelta,
     ControllerEffects,
-    EndpointDeletion,
     JobRowDelta,
     LogEvent,
     TaskRowDelta,
@@ -58,9 +57,9 @@ class Overlay:
       the per-field rules (see each method). Reads (:meth:`task_state`,
       :meth:`job_basis`, ...) consult the accumulator, so prospective state and
       the persisted SQL cannot drift.
-    * ``emit_*`` appends a cross-aggregate effect category (endpoint deletions,
-      worker health, structured audit log events). These fire after commit and
-      so are not row deltas.
+    * ``emit_*`` appends a cross-aggregate effect category (worker health,
+      structured audit log events). These fire after commit and so are not row
+      deltas.
     """
 
     def __init__(self, snapshot: TransitionSnapshot) -> None:
@@ -338,9 +337,6 @@ class Overlay:
     # Cross-aggregate effect emitters. NOT row deltas — these are
     # post-commit categories, kept separate from the row-delta setters.
     # ------------------------------------------------------------------
-
-    def emit_endpoint_deletion(self, task_id: JobName) -> None:
-        self._effects.endpoint_deletions.append(EndpointDeletion(task_id=task_id))
 
     def emit_log_event(self, event: LogEvent) -> None:
         self._effects.log_events.append(event)

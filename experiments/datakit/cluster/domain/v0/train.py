@@ -59,7 +59,10 @@ def _load_sample_parquet(sample_path: str) -> np.ndarray:
     t0 = time.monotonic()
 
     def _read(path: str) -> pa.Table:
-        return pq.read_table(path, columns=["embedding"])
+        # fsspec handle rather than a path: pyarrow's native S3 filesystem issues
+        # HeadObject probes the CW object store rejects with HTTP 400.
+        with StoragePath(path).open("rb") as fh:
+            return pq.read_table(fh, columns=["embedding"])
 
     tables: list[pa.Table] = [None] * len(shard_paths)  # type: ignore[list-item]
     with ThreadPoolExecutor(max_workers=_LOAD_PARALLELISM) as pool:

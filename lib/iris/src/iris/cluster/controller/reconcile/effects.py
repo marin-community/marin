@@ -81,11 +81,6 @@ class JobRowDelta:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class EndpointDeletion:
-    task_id: JobName
-
-
 @dataclass(slots=True)
 class WorkerHealthEffect:
     """Kernel-derived health signal surfaced to the controller (not applied here).
@@ -127,7 +122,6 @@ class ControllerEffects:
     attempts: dict[tuple[JobName, int], AttemptRowDelta] = field(default_factory=dict)
     jobs: dict[JobName, JobRowDelta] = field(default_factory=dict)
 
-    endpoint_deletions: list[EndpointDeletion] = field(default_factory=list)
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
     log_events: list[LogEvent] = field(default_factory=list)
 
@@ -138,4 +132,4 @@ class ControllerEffects:
         ``health.build_failed`` is excluded: it is folded into the liveness
         tracker by the backend, never persisted by ``commit_effects``.
         """
-        return not (self.tasks or self.attempts or self.jobs or self.endpoint_deletions or self.log_events)
+        return not (self.tasks or self.attempts or self.jobs or self.log_events)

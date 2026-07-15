@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -53,9 +54,18 @@ def baby_llama_config():
             max_queued_tokens=32,
             hbm_utilization=0.1,
         ),
+        model_name="timinar/baby-llama-58m",
         temperature=0.7,
         seed=42,
     )
+
+
+# baby-llama is a base checkpoint and ships no chat template, so the chat tests below bring one:
+# the server refuses to invent a conversation format a model was never trained on.
+BABY_LLAMA_CHAT_TEMPLATE = (
+    "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
+    "{% if add_generation_prompt %}assistant: {% endif %}"
+)
 
 
 @pytest.fixture(scope="module")
@@ -64,6 +74,7 @@ def loaded_model(trainer_config):
     hf_checkpoint = "timinar/baby-llama-58m"
     model_config = LlamaConfig()
     tokenizer = load_tokenizer(hf_checkpoint)
+    tokenizer.chat_template = BABY_LLAMA_CHAT_TEMPLATE
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = HFCheckpointConverter(
@@ -178,8 +189,103 @@ def test_endpoints_exist(test_client):
     _, server = test_client
     routes = [route.path for route in server.app.routes]
     assert "/health" in routes
+    assert "/v1/models" in routes
     assert "/v1/completions" in routes
     assert "/v1/chat/completions" in routes
+
+
+def test_models_endpoint_reports_the_configured_model(test_client):
+    """A client discovering the server (OpenAI SDK, dashboards) reads the id it should send back."""
+    client, server = test_client
+
+    response = client.get("/v1/models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["object"] == "list"
+    assert [model["id"] for model in payload["data"]] == [server.config.model_name]
+
+
+def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkeypatch):
+    """A model with no chat template cannot represent a conversation, so chat requests are refused.
+
+    Rendering one anyway would feed the model a prompt format it was never trained on and return
+    it as a normal completion, leaving callers unable to tell a chat model from a base one.
+    """
+    client, server = test_client
+    monkeypatch.setattr(server.inference_context.tokenizer, "chat_template", None)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "timinar/baby-llama-58m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4},
+    )
+
+    assert response.status_code == 400
+    assert "no chat template" in response.json()["detail"]
+
+
+def _sse_payloads(body: str) -> list[str]:
+    """The `data:` payloads of an SSE body, in order."""
+    return [line[len("data:") :].strip() for line in body.splitlines() if line.startswith("data:")]
+
+
+@pytest.mark.slow
+def test_streaming_chat_completion_carries_the_same_content(test_client):
+    """`stream: true` must produce a parseable SSE stream, not a bare JSON body.
+
+    The engine generates whole completions, so the deltas are not incremental; what a client
+    needs is that the events are well-formed, terminated by [DONE], and add up to the content the
+    non-streaming call returns for the same request.
+    """
+    client, _ = test_client
+    request = {
+        "model": "timinar/baby-llama-58m",
+        "messages": [{"role": "user", "content": "The quick brown fox"}],
+        "max_tokens": 8,
+        "temperature": 0.0,
+        "seed": 42,
+    }
+
+    streamed = client.post("/v1/chat/completions", json={**request, "stream": True})
+    assert streamed.status_code == 200
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+
+    payloads = _sse_payloads(streamed.text)
+    assert payloads[-1] == "[DONE]"
+    chunks = [json.loads(payload) for payload in payloads[:-1]]
+    assert all(chunk["object"] == "chat.completion.chunk" for chunk in chunks)
+    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    content = "".join(chunk["choices"][0]["delta"].get("content") or "" for chunk in chunks)
+
+    blocking = client.post("/v1/chat/completions", json=request)
+    assert blocking.status_code == 200
+    assert content == ChatCompletion.model_validate(blocking.json()).choices[0].message.content
+
+
+@pytest.mark.slow
+def test_streaming_completion_carries_the_same_text(test_client):
+    client, _ = test_client
+    request = {
+        "model": "timinar/baby-llama-58m",
+        "prompt": "The quick brown fox",
+        "max_tokens": 8,
+        "temperature": 0.0,
+        "seed": 42,
+    }
+
+    streamed = client.post("/v1/completions", json={**request, "stream": True})
+    assert streamed.status_code == 200
+    assert streamed.headers["content-type"].startswith("text/event-stream")
+
+    payloads = _sse_payloads(streamed.text)
+    assert payloads[-1] == "[DONE]"
+    chunks = [json.loads(payload) for payload in payloads[:-1]]
+    assert all(chunk["object"] == "text_completion" for chunk in chunks)
+    text = "".join(chunk["choices"][0]["text"] for chunk in chunks)
+
+    blocking = client.post("/v1/completions", json=request)
+    assert blocking.status_code == 200
+    assert text == Completion.model_validate(blocking.json()).choices[0].text
 
 
 class _OpenAITestTokenizer:

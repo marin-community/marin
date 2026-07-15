@@ -10,10 +10,9 @@ that drains it into the caller's write transaction. Kept separate from
 ``db``/``schema``/``projections``.
 
 Row deltas flush via bulk ``executemany`` statements (one per entity group);
-endpoint deletions write within the Tx; audit log lines are deferred to ``cur``'s
-post-commit hooks so a rolled-back transaction leaves no observable trace. Health
-is owned by the controller and folded through a single ``apply`` site, so this
-sink never touches it.
+audit log lines are deferred to ``cur``'s post-commit hooks so a rolled-back
+transaction leaves no observable trace. Health is owned by the controller and
+folded through a single ``apply`` site, so this sink never touches it.
 """
 
 from sqlalchemy import bindparam, func
@@ -22,7 +21,6 @@ from sqlalchemy import update as sa_update
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.effects import (
     AttemptRowDelta,
     ControllerEffects,
@@ -224,15 +222,11 @@ def commit_effects(
     events) through the single ``WorkerHealthTracker.apply`` site.
 
     Attempt writes invalidate the derived-count cache through the cursor
-    (``cur.caches[AttemptCountsProjection]``); endpoint deletions reach the
-    projection the same way — no cache reference is threaded here.
+    (``cur.caches[AttemptCountsProjection]``) — no cache reference is threaded here.
     """
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
-
-    for d in effects.endpoint_deletions:
-        cur.caches[EndpointsProjection].remove_by_task(cur, d.task_id)
 
     log_events = effects.log_events
     if log_events:

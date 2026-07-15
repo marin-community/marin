@@ -24,17 +24,25 @@ _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
 )
+# The worker interpreter marin-serve provisions everywhere it controls one: the checkout-free
+# venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
+# worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
+WORKER_PYTHON_VERSION = "3.12"
 
 
 class VllmLauncher(Protocol):
-    """Builds the argv that runs the ``vllm`` CLI, before its ``serve …`` args.
+    """Builds the argv and extra environment that run the ``vllm`` CLI.
 
-    vLLM is always launched as a subprocess, so a launcher is just the command
-    prefix. This lets the TPU path run the ``vllm`` on the workspace ``PATH`` while
-    the GPU path runs CUDA vLLM from an isolated, uv-managed environment.
+    vLLM always runs as a subprocess, so a launcher is the command prefix (before its
+    ``serve …`` args) plus any environment it needs. Implementations run either the
+    ``vllm`` already on ``PATH`` or one provisioned in a throwaway uv-managed env.
     """
 
     def command(self) -> list[str]: ...
+
+    def env(self) -> dict[str, str]:
+        """Extra environment variables to overlay on the vLLM subprocess env."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,9 @@ class WorkspaceVllm:
 
     def command(self) -> list[str]:
         return [shutil.which("vllm") or "vllm"]
+
+    def env(self) -> dict[str, str]:
+        return {}
 
 
 @dataclass(frozen=True)
@@ -59,7 +70,7 @@ class IsolatedCudaVllm:
 
     version: str
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
-    python_version: str = "3.12"
+    python_version: str = WORKER_PYTHON_VERSION
     # uv's PyTorch index selector; stock vLLM (>=0.25) targets torch 2.11 / CUDA 13.
     torch_backend: str = "cu128"
 
@@ -74,6 +85,50 @@ class IsolatedCudaVllm:
             self.torch_backend,
             "vllm",
         ]
+
+    def env(self) -> dict[str, str]:
+        return {}
+
+
+@dataclass(frozen=True)
+class IsolatedTpuVllm:
+    """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
+
+    The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
+    runtime are two git forks pinned by SHA (see ``marin.inference.tpu_vllm_pins``); this
+    provisions them in an isolated uv-tool env rather than the workspace lock, so
+    ``marin-serve --tpu`` runs from outside a checkout.
+    """
+
+    vllm_ref: str
+    """``uvx --from`` spec for the vLLM fork, e.g.
+    ``vllm @ git+https://github.com/marin-community/vllm.git@<sha>``."""
+    tpu_inference_ref: str
+    """``uvx --with`` spec for the tpu-inference fork (vLLM's TPU runtime dependency)."""
+    # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
+    python_version: str = WORKER_PYTHON_VERSION
+    # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
+    # CPU index rather than dragging in a CUDA tree.
+    torch_backend: str = "cpu"
+
+    def command(self) -> list[str]:
+        return [
+            "uvx",
+            "--from",
+            self.vllm_ref,
+            "--with",
+            self.tpu_inference_ref,
+            "--python",
+            self.python_version,
+            "--torch-backend",
+            self.torch_backend,
+            "vllm",
+        ]
+
+    def env(self) -> dict[str, str]:
+        # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
+        # inherits this from the launch environment.
+        return {"VLLM_TARGET_DEVICE": "tpu"}
 
 
 @dataclass(frozen=True)
@@ -356,7 +411,15 @@ class VllmEnvironment:
         return _native_diagnostics(self.vllm_server, max_lines=max_lines)
 
 
-def _default_jax_compilation_cache_dir() -> str:
+# Cache aggressively for iterative bring-up workflows: every compilation is worth keeping, and
+# a serve of the same model on the same slice should not pay for the compile twice. Both serving
+# backends key off these — vLLM through its subprocess environment, Levanter through jax.config.
+JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = -1
+JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS = 2
+
+
+def default_jax_compilation_cache_dir() -> str:
+    """Persistent XLA/JAX compilation cache shared by every serving backend on this slice."""
     return f"{marin_prefix()}/compilation-cache"
 
 
@@ -379,14 +442,13 @@ def _vllm_env() -> dict[str, str]:
     Starts from ``os.environ`` and applies the canonical defaults.
     """
     env = dict(os.environ)
-    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", default_jax_compilation_cache_dir())
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     env.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
     # TPU vLLM uses XLA compilation caches; this env var is the one it keys off.
     env.setdefault("VLLM_XLA_CACHE_PATH", cache_dir)
-    # Cache aggressively for iterative bring-up workflows.
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2")
+    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", str(JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES))
+    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", str(JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS))
     for key, default in _VLLM_ENV_DEFAULTS:
         env.setdefault(key, default)
     return env
@@ -404,9 +466,10 @@ def _start_vllm_native_server(
     """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
     resolved_port = port if port is not None else 8000
+    launcher = launcher or WorkspaceVllm()
 
     cmd: list[str] = [
-        *(launcher or WorkspaceVllm()).command(),
+        *launcher.command(),
         "serve",
         model_name_or_path,
         "--trust-remote-code",
@@ -425,6 +488,9 @@ def _start_vllm_native_server(
     stdout_f = open(stdout_path, "w")  # noqa: SIM115
     stderr_f = open(stderr_path, "w")  # noqa: SIM115
     native_env = _vllm_env()
+    # A launcher (e.g. the isolated TPU build) may require extra env, such as the
+    # vLLM build target; overlay it after the canonical defaults so it wins.
+    native_env.update(launcher.env())
     logger.info(
         "Starting vLLM native server with "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "

@@ -176,14 +176,6 @@ def datasource_from_hf_or_none(id: str, *, split, **kwargs) -> ShardedDataSource
     return source
 
 
-def datasource_from_jsonl(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return JsonlDataSource(urls_or_paths)
-
-
-def datasource_from_json(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return JsonDataSource(urls_or_paths)
-
-
 class WrappedHFDataSource(ShardedDataSource[dict]):
     """
     This class is responsible for loading a dataset from HuggingFace Datasets and returning the shards.
@@ -459,27 +451,6 @@ def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None)
         if rg_idx == row_group_index:
             table = table.slice(start_row_in_group)
         yield from table.to_pylist()
-
-
-class JsonlDataSource(UrlBackedShardedDataSource[dict]):
-    def __init__(self, urls):
-        super().__init__(urls)
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        with open_url(url, "r", compression="infer") as f:
-            yield from _iter_jsonl_from_row(f, row)
-
-
-class JsonDataSource(UrlBackedShardedDataSource[dict]):
-    def __init__(self, urls):
-        super().__init__(urls)
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        with open_url(url, "r", compression="infer") as f:
-            data = json.load(f)
-            return iter(data[row:])
 
 
 class ParquetDataSource(UrlBackedShardedDataSource[dict]):
