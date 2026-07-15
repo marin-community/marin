@@ -52,10 +52,11 @@ provisioning:
   provider: coreweave
   coreweave:
     region: US-EAST-08A
-    cluster: { name: marin-gb200, zone: US-EAST-08A }  # placeholder CKS name — confirm
+    cluster: { name: marin-us-east-08a, zone: US-EAST-08A }
     kueue:
       resource_flavor: cw-ib
       topologies: [infiniband, multinode-nvlink-ib]
+      flavor_topology: multinode-nvlink-ib  # GB200 NVL72: bind the flavor to the nvlink.domain topology
     ingress:
       ingress_class: traefik
       acme_email: ops@oa.dev
@@ -74,7 +75,7 @@ platform:
     region: US-EAST-08A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris
-    kube_context: marin-gb200_US-EAST-08A  # placeholder — confirm against the console token
+    kube_context: marin-us-east-08a_US-EAST-08A
     # CoreWeave AI Object Storage: LOTA is the in-cluster cache, cwobject.com the
     # endpoint an operator's own machine reaches. Bare endpoints only; buckets use
     # virtual-hosted addressing (http://<bucket>.cwlota.com), detected from these domains.

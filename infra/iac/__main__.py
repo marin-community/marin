@@ -25,6 +25,7 @@ import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from iac.config import Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
+from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.nodepools import derive_nodepools
@@ -73,6 +74,23 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     IrisRbac(
         "rbac",
         IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac, adopt=adopt),
+        k8s_provider=k8s_provider,
+    )
+
+    kueue_config = kubernetes_provider.kueue if kubernetes_provider else None
+    if kueue_config is None or not kueue_config.cluster_queue:
+        raise ValueError(
+            f"cluster {cluster!r} has no kubernetes_provider.kueue.cluster_queue; "
+            "KueueAddon needs the ClusterQueue name Iris binds its LocalQueue to"
+        )
+    KueueAddon(
+        "kueue",
+        KueueAddonArgs(
+            namespace=namespace,
+            cluster_queue=kueue_config.cluster_queue,
+            spec=coreweave_provisioning.kueue,
+            adopt=adopt,
+        ),
         k8s_provider=k8s_provider,
     )
 

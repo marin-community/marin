@@ -45,6 +45,9 @@ class KueueProvisioningSpec(BaseModel):
 
     resource_flavor: str
     topologies: list[str]
+    # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
+    # `multinode-nvlink-ib` to expose the nvlink.domain level; IB clusters bind `infiniband`.
+    flavor_topology: str = "infiniband"
 
 
 # Egress addresses of the marin-side controllers that federate into every CoreWeave cluster
