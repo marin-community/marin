@@ -41,10 +41,6 @@ def dense_router_delta(
     forward for the expert-parameter gradient. Adding this delta to the sparse
     output leaves the forward value unchanged.
 
-    Experts are accumulated with a ``remat``'d fold over the ``Experts`` axis so
-    peak memory stays ``O(Token * Mlp)`` rather than materializing the
-    ``Token x Experts x Mlp`` dense intermediates.
-
     Args:
         x_flat: Token-major inputs ``[Token, Embed]``.
         router_logits: Gate logits ``[Token, Experts]``.
@@ -63,5 +59,7 @@ def dense_router_delta(
         return acc + jax.lax.stop_gradient(expert_out) * weight
 
     acc0 = hax.zeros(x_flat.axes, dtype=x_flat.dtype)
+    # remat the fold so peak memory stays O(Token * Mlp): recompute each expert in the backward pass
+    # instead of stacking Token x Experts x Mlp dense intermediates across the scan.
     dense = hax.fold(add_expert, Experts, remat=True)(acc0, (gate_weight, up_weight, down_weight, dense_weights))
     return dense - jax.lax.stop_gradient(dense)
