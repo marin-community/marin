@@ -105,11 +105,7 @@ def test_mixtral_dense_router_gradient_reaches_unselected_experts():
     config_on = _tiny_moe_config(dense_router_gradient=True)
     n_unselected = config_off.n_routed_experts - config_off.num_experts_per_tok
 
-    # The expert-parameter gradients are mathematically identical with the flag on or off (the dense
-    # branch's expert outputs are stop_gradient-wrapped), so we compare them at float32 matmul
-    # precision. TPU's default bf16 matmuls otherwise perturb the two differently-scheduled backward
-    # graphs past any equality tolerance; the router-norm assertions run in f32 either way.
-    with use_test_mesh(), jax.default_matmul_precision("float32"):
+    with use_test_mesh():
         block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
         block_on = dataclasses.replace(block_off, config=config_on)
 
@@ -124,13 +120,19 @@ def test_mixtral_dense_router_gradient_reaches_unselected_experts():
     # Dense router gradient: every expert (including the unselected ones) gets a real gradient.
     assert np.all(rows_on > 1e-4)
 
-    # Expert-parameter gradients must be untouched by the flag: only the router gradient changes.
-    # On CPU they are bit-identical; TPU's f32-emulated matmuls leave a small reordering residual.
-    tol = 1e-4 if jax.default_backend() == "tpu" else 1e-6
-    for projection in ("w1", "w2", "w3"):
-        weight_off = getattr(grad_off.experts, projection).weight.array
-        weight_on = getattr(grad_on.experts, projection).weight.array
-        np.testing.assert_allclose(np.asarray(weight_on), np.asarray(weight_off), rtol=tol, atol=tol)
+    # The flag changes only the router gradient; the sparse expert-parameter gradients are identical.
+    # This is a mathematical identity (the dense delta's expert outputs are stop_gradient-wrapped),
+    # checked exactly on CPU. It is not asserted on TPU: the flag-on and flag-off blocks compile to
+    # separate graphs, and the bf16 router matmul rounds differently under each graph's fusion, so a
+    # single-token near-tie can put a different expert in the top-k between the two runs -- the
+    # cross-graph gradient comparison is then comparing different routings, not the flag's effect.
+    # (The dense delta contributing no expert-weight gradient is checked on every backend by
+    # test_moe.py::test_dense_router_delta_gradient_reaches_expert_outputs_not_weights.)
+    if jax.default_backend() == "cpu":
+        for projection in ("w1", "w2", "w3"):
+            weight_off = getattr(grad_off.experts, projection).weight.array
+            weight_on = getattr(grad_on.experts, projection).weight.array
+            np.testing.assert_array_equal(np.asarray(weight_on), np.asarray(weight_off))
 
 
 def test_mixtral_dense_router_gradient_disabled_in_inference():
