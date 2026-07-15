@@ -48,6 +48,10 @@ DEFAULT_MAX_WHITESPACE_RUN_CHARS = 128
 # Counter name for documents that had whitespace runs compacted.
 COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
 
+# Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
+# a single normalize spans thousands of shards over very large staged dumps.
+DEFAULT_MAX_WORKERS = 1024
+
 
 class DedupMode(StrEnum):
     """How aggressively to deduplicate records during normalization.
@@ -360,7 +364,7 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
@@ -410,8 +414,6 @@ def normalize_to_parquet(
         aggregated zephyr counters.
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
-    if max_workers is None:
-        max_workers = 1024
 
     files = _discover_files(input_path, file_extensions=file_extensions)
     if not files:
@@ -439,10 +441,7 @@ def normalize_to_parquet(
         max_whitespace_run_chars,
         bare=bare,
     )
-    ctx_kwargs: dict = {"name": "normalize", "resources": resources}
-    if max_workers is not None:
-        ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
+    ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
     outcome = ctx.execute(pipeline)
     counters_dict = dict(outcome.counters)
 
@@ -471,7 +470,7 @@ def normalize_step(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
@@ -489,8 +488,8 @@ def normalize_step(
         target_partition_bytes: Target size per output partition.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
             See :func:`normalize_to_parquet` for the default.
-        max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
-            own default (128 for distributed backends).
+        max_workers: Maximum number of Zephyr workers. Defaults to
+            ``DEFAULT_MAX_WORKERS`` (1024).
         output_path_prefix: Optional prefix for the normalized step output.
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
