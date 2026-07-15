@@ -124,8 +124,10 @@ decoded charset.
 Submit the extraction on Iris with:
 
 ```bash
-uv run iris --cluster=<cluster> job run --priority production --cpu 2 --memory 8GB \
-    -- python -m experiments.datakit.focus_crawl
+uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \
+    --priority batch --cpu 2 --memory 8GB --enable-extra-resources \
+    --sync-package marin-core --extra dedup \
+    -- python -c 'from experiments.datakit.focus_crawl import main; main()'
 ```
 
 The test uses a local WARC fixture and does not access Common Crawl:

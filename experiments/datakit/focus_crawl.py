@@ -4,9 +4,10 @@
 """Extract the Common Crawl science focus crawl to normalized Datakit Parquet.
 
 The crawl is read from WARC response records so Michael Ryan's jusText fork can
-remove boilerplate from the original HTML. Run with::
+remove boilerplate from the original HTML. Invoke through the canonical module
+path so remote callables remain importable::
 
-    python -m experiments.datakit.focus_crawl
+    python -c 'from experiments.datakit.focus_crawl import main; main()'
 """
 
 import codecs
