@@ -112,7 +112,7 @@ SMOKE_WANDB_GROUP: str = "exp117-smoke"
 # or recipe change gets a FRESH run + checkpoint path instead of resuming/merging the prior smoke
 # run of the same (point, region, tpu, overhead). Bump ("v2", ...) to fork a clean smoke run; the
 # old run and its checkpoints are left in place untouched.
-SMOKE_VERSION: str = "v1"
+SMOKE_VERSION: str = "v2"  # v2: multi-host HF-checkpoint save fixed (levanter process_allgather)
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
 # Nominal point used when EPOCHS/LR/WD are omitted in smoke mode; overridden by any that are

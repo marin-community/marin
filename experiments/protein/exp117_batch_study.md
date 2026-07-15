@@ -113,6 +113,38 @@ fits with no accumulation.
 high) — the overhead-1.0 estimate is that conservative. v6e runs right at the edge (95–99.6% at its
 ceiling); v5e/v5p ceilings sit lower (60–80%) only because the next power of two would overshoot 100%.
 
+## Failure modes & fixes
+
+1. **OOM'd runs re-attempt forever.** A `CompileTimeHbmOom` is permanent, but iris re-attempts
+   preempted/failed jobs. Fix: kill the whole probe on the first confirmed OOM.
+2. **Fit/OOM markers missed in tail logs.** The fit marker (`First train step completed`) is mid-run
+   and scrolls out of any tail once eval/checkpoint/wandb output piles up. Fix: scan the full log.
+3. **Terminating a fit run after step 0 gives bad HBM.** Killing the run right after step 0 captures
+   only the compile-time allocation and understates peak HBM (which rises during later steps, eval,
+   and checkpointing). Fix: let every launched, non-OOMing run train to completion; kill only OOMs.
+4. **Preemption vs genuine crash conflated.** The orchestrator retried a real code crash 20×. Fix:
+   classify a failed job — OOM / preemption (retry; resumes from checkpoint) / genuine crash (Python
+   traceback with `preemptions=0`) → stop after two crashes and surface it.
+5. **CORE CODE CHANGE — multi-host HF-checkpoint save (`lib/levanter/.../compat/hf_checkpoints.py`).**
+   Slices spanning more than one VM host (16-chip `v5litepod-16`/`v6e-16`; multi-host `v5p-16`/`v5p-32`)
+   crashed at the periodic HF checkpoint save with
+   `RuntimeError: Fetching value for jax.Array that spans non-addressable (non process local) devices`.
+   - **Cause:** `save_pretrained` deshards each weight with `reshard(w, PartitionSpec())` then
+     `np.asarray(w)`. Under the trainer's default **Auto-axis mesh**, the deshard does not make the
+     array host-addressable, so `np.asarray` fails whenever the array spans >1 process. Single-host
+     slices never hit it (their arrays are already host-local).
+   - **Rejected fix — `use_explicit_mesh_axes=True`:** makes the `reshard` replicate correctly, but
+     breaks *training* with a `ShardingTypeError` in RMSNorm — the model/haliax code is not
+     sharding-type-clean under explicit axes. Not viable without deep haliax changes.
+   - **Applied fix:** replace `np.asarray(v)` with
+     `jax.experimental.multihost_utils.process_allgather(v, tiled=True)` — a collective that gathers
+     each weight to host on **every** process (only process 0 uploads; `temp_dir_before_upload`
+     already guards that). This touches only the save path — the training mesh stays Auto, so the HBM
+     measurement is unperturbed, and multi-host checkpointing (whose memory cost the study captures)
+     runs for real. Validated with a 2-process CPU repro and an end-to-end multi-host smoke run that
+     finished with checkpoints, HF checkpoints, and evals. Bumped `SMOKE_VERSION` to `v2` so post-fix
+     runs fork clean W&B identities.
+
 ## Reproducing
 
 1. Confirm raw docs are staged region-local for each target region; the tokenized cache is built once

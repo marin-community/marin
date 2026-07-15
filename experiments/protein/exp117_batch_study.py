@@ -38,8 +38,8 @@ TARGET_BATCH = 512  # a batch too large to fit in one microbatch on any slice, s
 PREDICT_OVERHEAD = 1.0  # the estimator's default HBM overhead factor (sweep default)
 HBM_METRIC = "hbmMemoryUsage"  # W&B system metric, a percentage, one series per chip: system.tpu.<i>.hbmMemoryUsage
 # W&B run-name suffix of a max-fit probe: the sweep folds slice + overhead tag + smoke version +
-# batch into the run id (see exp117_sweep.smoke_shape). "-oh1-v1-b<batch>" is overhead 1.0, smoke v1.
-RUN_SUFFIX = "-oh1-v1-b{batch}$"
+# batch into the run id (see exp117_sweep.smoke_shape). "-oh1-v2-b<batch>" is overhead 1.0, smoke v2.
+RUN_SUFFIX = "-oh1-v2-b{batch}$"
 
 
 @dataclass(frozen=True)
