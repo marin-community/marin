@@ -16,11 +16,18 @@ forward/reduce 4.7s + write 3.1s.
 | path | hardware | warm docs/s | note |
 |---|---|---|---|
 | fast (fork pool + parallel read + stager) | 1× v6e-4 | ~18,000 | `--tok-procs 96 --device-batch 4096` |
+| fast, tiktoken | 1× v6e-4 | ~26,600 | `--tokenizer tiktoken:o200k_base`; read+write-bound |
 | fast, 4 workers | 4× v6e-4 (16 chips) | ~18,000/VM → ~72,000 agg | linear (per-VM independent) |
 | fast, GPU | CoreWeave 8× H100 | ~22,700 | `--accelerator H100x8`; faster S3 writes |
 | fasttext (baseline) | 32 vCPU | ~6,122 | quality Spearman 0.44 vs 0.69 |
 
 A 10T-token corpus (~11 B docs) is **~2.7 h on 64 v6e-4** (~0.7 h on 256), on preemptible TPU.
+
+Tokenization is the largest host cost, so the tokenizer is the main throughput lever. A
+tiktoken BPE (`tiktoken:o200k_base`) tokenizes ~6× faster per core than the deployed
+SentencePiece tokenizer and halves the compute phase, leaving the shard read+write-bound at
+~26,600 docs/s; a controlled retrain matches classifier quality (held-out Spearman 0.70 vs
+0.695). `build_scorer.py`, `run_bench.py`, and `train.py` all take `--tokenizer`.
 
 The harness is accelerator- and cluster-agnostic: `--accelerator` selects a TPU type
 (`v6e-4`) or a `VARIANTxCOUNT` GPU request (`H100x8`), and relative `--corpus` / `--model-dir`

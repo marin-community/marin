@@ -5460,6 +5460,7 @@ dependencies = [
     { name = "marin-levanter" },
     { name = "marin-rigging", extra = ["secrets"] },
     { name = "marin-zephyr" },
+    { name = "tiktoken" },
     { name = "watchdog" },
 ]
 
@@ -5475,6 +5476,7 @@ requires-dist = [
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
+    { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "watchdog" },
 ]
 

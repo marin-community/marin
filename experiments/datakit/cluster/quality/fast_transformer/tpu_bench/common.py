@@ -13,8 +13,10 @@ import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Protocol
 
 import numpy as np
+import tiktoken
 from rigging.filesystem import marin_prefix, open_url, prefix_join
 
 # Disable the tokenizers-lib internal rayon parallelism: this pipeline drives its own thread
@@ -22,9 +24,9 @@ from rigging.filesystem import marin_prefix, open_url, prefix_join
 # still releases the GIL) rather than contending over one shared process-wide rayon pool.
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from levanter.tokenizers import load_tokenizer
 
-from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID
+from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, TIKTOKEN_PREFIX, UNK_ID
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, MODEL_META, MODEL_REMAP
 
 # Calibration json name in a scorer dir.
@@ -77,18 +79,42 @@ def remap_to_array(remap: dict[int, int]) -> np.ndarray:
     return lut
 
 
-def load_shared_tokenizer(tokenizer_name: str) -> MarinTokenizer:
-    """Load the tokenizer once via levanter (mirror-staged, no repeated HF Hub calls).
+class BatchTokenizer(Protocol):
+    """A tokenizer that encodes a batch of texts to raw id lists off the GIL."""
 
-    The returned wrapper's ``encode_batch`` calls the raw ``tokenizers`` Rust encoder with an
-    immutable ``&self`` (unlike HF's ``PreTrainedTokenizerFast``, which rewrites truncation
-    state per call), so a single instance is shared across all worker threads -- concurrent
-    ``encode_batch`` is safe and, with rayon disabled, each call runs on one core.
+    def encode_batch(self, texts: list[str]) -> list[list[int]]: ...
+
+
+class TiktokenBatchTokenizer:
+    """Adapt a tiktoken encoding to the ``encode_batch`` interface the pipeline expects.
+
+    ``num_threads=1`` because the pipeline already fans tokenization across a fork pool and a
+    read-thread pool; tiktoken's own batch threads would oversubscribe the host.
     """
+
+    def __init__(self, encoding_name: str):
+        self._encoding = tiktoken.get_encoding(encoding_name)
+
+    def encode_batch(self, texts: list[str]) -> list[list[int]]:
+        return self._encoding.encode_ordinary_batch(texts, num_threads=1)
+
+
+def load_shared_tokenizer(tokenizer_name: str) -> BatchTokenizer:
+    """Load a thread-shareable batch tokenizer by name.
+
+    A ``tiktoken:<encoding>`` name (e.g. ``tiktoken:o200k_base``) loads a tiktoken BPE
+    encoder; any other name loads the levanter HF tokenizer. Both are safe to share across
+    the pipeline's read/fork workers: the levanter wrapper calls the Rust ``tokenizers``
+    encoder with an immutable ``&self`` (unlike HF's ``PreTrainedTokenizerFast``, which
+    rewrites truncation state per call), and tiktoken's encoder is likewise stateless per
+    call, so concurrent ``encode_batch`` is safe and each call runs on one core.
+    """
+    if tokenizer_name.startswith(TIKTOKEN_PREFIX):
+        return TiktokenBatchTokenizer(tokenizer_name.removeprefix(TIKTOKEN_PREFIX))
     return load_tokenizer(tokenizer_name)
 
 
-def pack_windows(texts: list[str], tokenizer: MarinTokenizer, lut: np.ndarray, max_tokens: int) -> np.ndarray:
+def pack_windows(texts: list[str], tokenizer: BatchTokenizer, lut: np.ndarray, max_tokens: int) -> np.ndarray:
     """Tokenize (shared wrapper) + remap + right-pad window texts to ``[N, max_tokens]`` int32.
 
     ``encode_batch`` does not truncate, so ids are cut to ``max_tokens`` here.

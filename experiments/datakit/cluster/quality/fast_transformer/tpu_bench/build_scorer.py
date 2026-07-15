@@ -77,14 +77,20 @@ def main() -> None:
     p.add_argument("--text-col", default="text")
     p.add_argument("--vocab-docs", type=int, default=50000, help="docs used to build the vocab remap")
     p.add_argument("--calib-docs", type=int, default=3000, help="docs used to fit the calibration")
+    p.add_argument(
+        "--tokenizer",
+        default=TOKENIZER,
+        help="HF tokenizer name, or tiktoken:<encoding> for a tiktoken BPE (e.g. tiktoken:o200k_base)",
+    )
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO)
 
     corpus = resolve_dataset_path(args.corpus)
     out_dir = resolve_dataset_path(args.out_dir)
+    tokenizer = args.tokenizer
     texts = read_texts(corpus, args.vocab_docs, args.text_col)
-    logger.info("building vocab from %d docs with tokenizer %s", len(texts), TOKENIZER)
-    raw_ids = encode_texts(TOKENIZER, texts, MAX_TOKENS)
+    logger.info("building vocab from %d docs with tokenizer %s", len(texts), tokenizer)
+    raw_ids = encode_texts(tokenizer, texts, MAX_TOKENS)
     remap = build_remap(raw_ids, min_count=2)
     vocab = len(remap) + 2
     config = FastTransformerConfig(
@@ -95,7 +101,7 @@ def main() -> None:
         "model: vocab=%d params=%.2fM flops/token=%.0f", vocab, count_params(model) / 1e6, config.flops_per_token()
     )
 
-    _save_scorer(model, remap, TOKENIZER, config, out_dir, name="pooled_junkgate2")
+    _save_scorer(model, remap, tokenizer, config, out_dir, name="pooled_junkgate2")
 
     scorer = load_pooled_scorer(out_dir)
     calib = fit_calibration(scorer, texts[: args.calib_docs])
