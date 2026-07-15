@@ -175,14 +175,17 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
 
+    # GPUs per node: 8 for the H100 nodes, 4 for a GB200 node (SCALE_GPUS_PER_NODE=4).
+    gpus_per_node = env_int("SCALE_GPUS_PER_NODE", GPUS_PER_NODE)
+    gpu_type = os.environ.get("SCALE_GPU_TYPE", "H100")
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    # rest of the gpus_per_node*replicas devices. Require the global batch to cover every shard.
+    data_axis = (replicas * gpus_per_node) // (replica_axis * expert_axis)
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas)
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
