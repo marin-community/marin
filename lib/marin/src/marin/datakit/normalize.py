@@ -490,7 +490,8 @@ def normalize_step(
 
     Args:
         name: Step name (e.g. ``"fineweb/normalize"``).
-        download: Upstream download step whose output_path is the input.
+        download: Upstream download step retained as provenance. Its output path
+            is the input unless ``input_path_override`` is set.
         text_field: Name of the field containing primary text content.
         id_field: Name of the field containing the source ID.
         target_partition_bytes: Target size per output partition.

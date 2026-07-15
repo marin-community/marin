@@ -59,19 +59,7 @@ NEMOTRON_CODE_V2_CONTENT_TOKENS_B = 120.254379519
 
 
 def nemotron_code_v2_content() -> ArtifactStep[Artifact]:
-    """Return the reconstructed Nemotron-Pretraining-Code-v2 file contents.
-
-    NVIDIA publishes the Nemotron-Code-Metadata subset as ``(repo, commit_id,
-    rel_path)`` triples because its license forbids redistributing file
-    contents. This adopted artifact contains the reconstructed file bytes,
-    resolved through the Software Heritage 2025-05-18 compressed graph export.
-
-    The Parquet dataset has one row per distinct content, with ``sha1_git``,
-    ``sha1``, raw ``content`` bytes, and a ``present`` flag. It contains
-    132,903,245 rows across 133 shards; 132,666,330 contents are present and
-    byte-verified. The source resolves under the runtime ``MARIN_PREFIX``. The
-    origin copy remains at ``s3://marin-na/users/held/nemotron-code-v2-content``.
-    """
+    """Adopt reconstructed Nemotron Code v2 contents resolved through Software Heritage."""
     return ArtifactStep.adopt(
         "raw/nemotron-code-v2-content",
         "2026.07.14",
@@ -89,7 +77,6 @@ def nemotron_code_v2_content() -> ArtifactStep[Artifact]:
 
 
 def nemotron_code_v2_content_normalize_steps() -> tuple[StepSpec, ...]:
-    """Return the adopted source and normalization steps for reconstructed code."""
     artifact = nemotron_code_v2_content()
     source = artifact.lower()
     normalized = normalize_step(
