@@ -63,6 +63,9 @@ provisioning:
       ingress_class: traefik
       acme_email: ops@oa.dev
       cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+      # federation_allow_sources (the marin/marin-dev controller egress IPs admitted through
+      # the federation route) defaults to iac.config.MARIN_FEDERATION_EGRESS_SOURCES; override
+      # here only if this cluster's allowlist differs.
     rbac: { service_account: iris-controller }
     object_storage:
       buckets:

@@ -47,12 +47,25 @@ class KueueProvisioningSpec(BaseModel):
     topologies: list[str]
 
 
+# Egress addresses of the marin-side controllers that federate into every CoreWeave cluster
+# (reserved as iris-marin-fed-egress / iris-marin-dev-fed-egress in project hai-gcp-models).
+# The federation ingress admits only these; the set is the same for every CW cluster. Modeled
+# as a plain input with these constants for now rather than as a GCP address reservation that
+# the GCP arm looks up (that consolidation is deferred). Mirrors FEDERATION_ALLOW_SOURCES in
+# lib/iris/scripts/install_cw_network.py — keep the two in sync until the federation-ingress
+# component reads this field and that constant is deleted (see .agents/projects/iac/gaps.md).
+MARIN_FEDERATION_EGRESS_SOURCES = ["34.27.183.11", "35.254.13.19"]
+
+
 class IngressSpec(BaseModel):
-    """Traefik + cert-manager + ACME issuers (TraefikAddon)."""
+    """Traefik + cert-manager + ACME issuers, and the IP-locked federation route (TraefikAddon)."""
 
     ingress_class: str = "traefik"
     acme_email: str
     cluster_issuers: list[str]
+    # Sources allowed through the federation ingress ipAllowList. A Pulumi input to the
+    # (deferred) federation-ingress component; constant default covers every CW cluster.
+    federation_allow_sources: list[str] = Field(default_factory=lambda: list(MARIN_FEDERATION_EGRESS_SOURCES))
 
 
 class RbacSpec(BaseModel):
