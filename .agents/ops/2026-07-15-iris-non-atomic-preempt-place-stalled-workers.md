@@ -3,7 +3,7 @@ date: 2026-07-15
 system: iris
 severity: degradation
 resolution: fixed
-pr: none
+pr: 7206
 issue: weaver #439
 ---
 
