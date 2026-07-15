@@ -438,36 +438,159 @@ On a zero-node cluster the install's controller-rollout wait times out (the
 manager has nowhere to schedule) — provision the controller node first, or
 re-run the install after it is Ready.
 
-### Bringing up a new cluster
+### Bringing up a new cluster (end-to-end rollout runbook)
 
-1. Install the kubeconfig (§0) at `~/.kube/coreweave-iris` and export
-   `CW_KEY_ID`, `CW_KEY_SECRET`.
-2. Copy an existing cluster config pair — `lib/iris/config/cw-*.yaml` and
-   `lib/finelog/config/cw-*.yaml` — and adjust region, `kube_context`,
-   instance types, and fleet sizes. The console capacity view's display label is NOT the k8s
-   `spec.instanceType` (e.g. "turin-gp-l4" vs `turin-gp-l`); to probe a SKU,
-   create a NodePool with `minNodes: 0, maxNodes: 0, targetNodes: 0` and read
-   its `Validated` condition (server dry-run accepts any string).
-   For a reserved/prepaid fleet set `buffer_slices: max_slices` — there is
-   nothing to save by autoscaling it down.
-3. Install Kueue (previous section). On a brand-new cluster expect the
-   controller-rollout wait to time out; continue.
-4. `iris --cluster=<name> cluster start`. On a zero-node cluster this creates
-   the NodePools (kicking off node delivery) and then fails at the LocalQueue
-   step because the Kueue webhook has no backend yet — expected.
-5. Once the controller node is Ready, re-run the Kueue install (`--with-queues`)
-   and `cluster start`; both are idempotent and now complete.
-6. Verify assumptions against a live GPU node before trusting multi-host NCCL:
-   `NCCL_SOCKET_IFNAME` (the host ethernet PF carrying the node IP — same SKU
-   has different PCI names per region, e.g. `enp157s0np0` on US-EAST-02A vs
-   `enp90s0np0` on RNO2A; check with a job running `ls /sys/class/net`), and
-   scale-group `cpu`/`ram`/`disk` against `kubectl get node -o
-   jsonpath={.status.allocatable}`.
-7. Deploy finelog (`uv run finelog deploy up <name> --no-build` — the default
-   `--build` compiles the Rust server image first), point the iris config's
-   `finelog.config` at it, and `cluster start` again.
-8. Smoke: a CPU hello-world, an 8-GPU `jax.devices()` job, then the multinode
-   grug smoke (below).
+The ordered sequence to take a fresh CKS cluster to a reachable, federated,
+log-forwarding Iris cluster. `cw-us-east-08a` (a GB200 NVL72 fleet) is the worked
+example; substitute your `<cluster>`. Steps marked **(console)** or **(manual)**
+are the only ones not driven from a repo checkout on the cluster's branch — an
+operator does them in the CoreWeave console or the DNS registrar.
+
+**One-time prerequisites**
+
+- **(console)** CKS cluster created (Console or Terraform). Kubeconfig from
+  Console > Tokens installed at `~/.kube/coreweave-iris`; the context is
+  `<cks-name>_<REGION>` (e.g. `marin-us-east-08a_US-EAST-08A`).
+- **(console)** Object-storage bucket created (Console or `cwic`) and an Object
+  Storage access key: `export CW_KEY_ID=… CW_KEY_SECRET=…`.
+- Local tooling: `uv pip install 'marin-iris[controller]'`; `docker login
+  ghcr.io` with a `write:packages` PAT (`cluster start` builds + pushes images);
+  `gcloud auth application-default login` (ADC — `init-keys` and the deploy-time
+  `gcp-secret://` resolution read Secret Manager through it).
+
+**1. Write the cluster config.** Copy an existing `lib/iris/config/cw-*.yaml` and
+adjust `name`, region, `platform.coreweave.kube_context`, the CKS
+`provisioning.coreweave.cluster.name`, scale groups, and fleet sizes. The console
+capacity view's display label is NOT the k8s `spec.instanceType` (e.g.
+"turin-gp-l4" vs `turin-gp-l`); to probe a SKU, create a NodePool with `minNodes:
+0, maxNodes: 0, targetNodes: 0` and read its `Validated` condition (server
+dry-run accepts any string). For a reserved/prepaid fleet set `buffer_slices ==
+max_slices` — there is nothing to save by autoscaling it down. GB200 NVL72
+deploys in whole racks of 18, so a rack pool's node count must be a multiple of
+18.
+
+**2. Provision the static prerequisites (IaC).** The `infra/iac` Pulumi program
+declares the namespace, controller RBAC, the reserved NodePools, and the whole
+cluster-scoped Kueue substrate (`cks-kueue` release, Topology CRs, `cw-ib`
+ResourceFlavor, `iris-cq` ClusterQueue, `iris-system` PriorityClass) from the
+`provisioning:` section of the config. See `infra/iac/README.md`. (Pre-IaC path:
+`install_kueue.py --with-queues` for Kueue and let `cluster start` create the
+RBAC + NodePools.)
+
+**3. Mint the controller signing key.** The cluster's identity — signs every
+worker/proxy token it mints.
+
+```bash
+uv run iris cluster init-keys \
+  --gcp-secret projects/<project-number>/secrets/iris-<cluster>-signing-key
+```
+
+Creates the secret and stores the private key as **version 1**; pin that version
+in `auth.signing_key` alongside the `env:IRIS_SIGNING_KEY` marker. The
+credential-less controller pod never reads Secret Manager: at deploy time the
+operator's shell resolves the `gcp-secret://` ref and projects it into the
+`iris-controller-env` Secret. `--rotate` replaces it later.
+
+**4. Start the controller.**
+
+```bash
+export CW_KEY_ID=… CW_KEY_SECRET=…
+uv run iris --cluster=<cluster> cluster start
+uv run iris --cluster=<cluster> cluster status
+```
+
+Builds + pushes the controller/worker/task images, then applies (idempotently)
+the `iris-cluster-config` ConfigMap, the `iris-task-env` + `iris-controller-env`
+Secrets, the namespaced LocalQueue (`{label_prefix}-lq`), the controller
+Deployment + Service + PDB, and waits for rollout. Needs a Ready controller-pool
+node (the `cpu-*` scale group); on a still-delivering cluster the Deployment
+stays Pending until one lands.
+
+**5. Install the network stack, then the DNS record.** Publishes the controller
+off-cluster behind an IP-locked ingress.
+
+```bash
+uv run lib/iris/scripts/install_cw_network.py --cluster <cluster> \
+  install --acme-email <ops-email> --apply           # staging cert first
+```
+
+Installs Traefik + cert-manager + the HTTP-01 Let's Encrypt issuers + the
+federation `Ingress` (Traefik `ipAllowList` admitting only marin's egress IPs).
+Read the CNAME target off the Traefik LoadBalancer's `*.coreweave.app` wildcard:
+
+```bash
+kubectl get svc traefik -n traefik \
+  -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
+```
+
+**(manual)** Create the record in the `oa.dev` registrar (**Namecheap**, Advanced
+DNS panel — not Cloudflare):
+
+```
+iris-cw-<cluster>.oa.dev   CNAME   iris-cw-<cluster>.<tenant>.coreweave.app
+```
+
+The CNAME must be live before TLS issuance (HTTP-01 validates through Traefik).
+Once it resolves and the staging cert validates, flip to the prod issuer:
+
+```bash
+uv run lib/iris/scripts/install_cw_network.py --cluster <cluster> install \
+  --cluster-issuer letsencrypt-http01-prod \
+  --skip-traefik --skip-cert-manager --skip-issuers --apply
+```
+
+**6. Register federation (hub → cluster).** So marin/marin-dev can route jobs in.
+Add an address-only peer entry (no key — the cluster already trusts the hubs via
+its own `auth.federation_peers`) under `peers:` in both `lib/iris/config/marin.yaml`
+and `lib/iris/config/marin-dev.yaml`:
+
+```yaml
+  <cluster>:
+    controller_address: https://iris-cw-<cluster>.oa.dev
+```
+
+**7. Wire finelog (roll the hub first).** Until this lands the controller logs to
+an in-process store (lost on restart).
+
+```bash
+# Mint the forwarding key by hand (Ed25519); keep the printed PUBLIC half.
+openssl genpkey -algorithm ed25519 -out /tmp/<cluster>.pem
+openssl pkey -in /tmp/<cluster>.pem -pubout
+gcloud secrets create finelog-<cluster>-signing-key --project=<project> \
+  --replication-policy=automatic --labels=component=finelog,purpose=forwarding
+gcloud secrets versions add finelog-<cluster>-signing-key --project=<project> \
+  --data-file=/tmp/<cluster>.pem
+shred -u /tmp/<cluster>.pem
+```
+
+- Add a `- cluster: <cluster>` entry with that **public** key under the `jwt`
+  layer of `lib/finelog/config/marin.yaml`, then **roll the hub before the
+  sender** — a sender whose key the hub doesn't yet trust gets 401:
+  `uv run finelog deploy restart marin`.
+- Create `lib/finelog/config/<cluster>.yaml` (copy an existing one; set `name`,
+  `remote_log_dir`, `kube_context`, `object_storage_endpoint`,
+  `forwarding.cluster`, and `forwarding.signing_key`), then deploy the sender:
+  `uv run finelog deploy up <cluster> --no-build` (the default `--build`
+  recompiles the Rust image first). finelog archives to **Cloudflare R2**
+  (`s3://marin-na/finelog/<cluster>`, the R2 `object_storage_endpoint`),
+  authenticated by `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` in the deploy
+  shell — *not* the CoreWeave `CW_KEY_*` keys iris uses for its own
+  `marin-us-east-*` state and task storage. Pointing `remote_log_dir` at a
+  CoreWeave bucket with R2 keys (or vice-versa) fails the archive with
+  `403 InvalidAccessKeyId`.
+- Add `finelog: { config: <cluster> }` to the iris config and `cluster start`
+  again to pick it up. CI enforces the pairing: a sender config cannot merge
+  until some hub's `jwt` layer names its cluster.
+
+**8. Verify node assumptions before trusting multi-host NCCL:**
+`NCCL_SOCKET_IFNAME` (the host ethernet PF carrying the node IP — same SKU has
+different PCI names per region, e.g. `enp157s0np0` on US-EAST-02A vs `enp90s0np0`
+on RNO2A; check with a job running `ls /sys/class/net`), and scale-group
+`cpu`/`ram`/`disk` against `kubectl get node -o
+jsonpath={.status.allocatable}`.
+
+**9. Smoke:** a CPU hello-world, an 8-GPU `jax.devices()` job, then the multinode
+grug smoke (below).
 
 ### Connecting
 

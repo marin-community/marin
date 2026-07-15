@@ -477,7 +477,7 @@ class Checkpointer:
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
         for i in range(1, len(step_policies)):
-            # factor these out so mypy can figure it out
+            # factor these out so pyrefly can figure it out
             prev_until = step_policies[i - 1].until
             until = step_policies[i].until
             if prev_until is None:

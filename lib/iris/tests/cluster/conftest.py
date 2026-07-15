@@ -453,6 +453,8 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         namespace="default",
         default_image="iris:test",
         controller_address="http://localhost:0",
+        # Kueue is mandatory on the K8s backend, so every provider carries a LocalQueue.
+        local_queue="iris-lq",
         cluster_scan_interval=0.0,
         transition_reader=DbTransitionReader(db),
     )

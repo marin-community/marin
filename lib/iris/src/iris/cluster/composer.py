@@ -76,6 +76,15 @@ def make_task_backend(
     which = config.provider_kind()
     if which == "kubernetes_provider":
         kp = config.kubernetes_provider
+        # Kueue is mandatory on the K8s backend: every pod is admitted through it, so
+        # its accounting and preemption arbitrate all capacity. A cluster with no
+        # ClusterQueue has no flavor to admit pods against — they would hang gated.
+        if not kp.kueue.cluster_queue:
+            raise ValueError(
+                "kubernetes_provider requires kueue.cluster_queue: the K8s backend admits every pod "
+                "through Kueue. Provision it (lib/iris/scripts/install_kueue.py --with-queues) and set "
+                "kubernetes_provider.kueue.cluster_queue."
+            )
         namespace = kp.namespace or "iris"
         label_prefix = config.platform.label_prefix or "iris"
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
@@ -103,9 +112,9 @@ def make_task_backend(
 
         # Empty topologies falls back to the CoreWeave-convention defaults.
         topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
-        # Kueue is enabled by a configured cluster_queue; the LocalQueue name is
-        # derived from label_prefix, not configured.
-        local_queue = local_queue_name(label_prefix) if kp.kueue.cluster_queue else ""
+        # The LocalQueue name is derived from label_prefix, not configured; Kueue is
+        # mandatory (checked above), so it is always set.
+        local_queue = local_queue_name(label_prefix)
         env_secret_name = TASK_ENV_SECRET_NAME if projects_task_env_secret(config) else ""
         return K8sTaskProvider(
             kubectl=CloudK8sService(

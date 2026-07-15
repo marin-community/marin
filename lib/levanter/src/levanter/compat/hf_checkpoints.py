@@ -46,12 +46,11 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
-from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -286,10 +285,6 @@ class ModelWithHfSerializationMixin(Generic[MConfig]):
     @abc.abstractmethod
     def init(cls, Vocab: Axis, config: MConfig, *, key: PRNGKeyArray) -> "ModelWithHfSerializationMixin":
         pass
-
-
-class ASRWithHfSerializationMixin(ASRMixin, ModelWithHfSerializationMixin[MConfig]):
-    pass
 
 
 class LmWithHfSerializationMixin(LmHeadModel, ModelWithHfSerializationMixin[MConfig]):
@@ -1599,15 +1594,13 @@ def _patch_hf_hub_download():
 
             if repo_id and filename and _is_url_like(repo_id):
                 remote_path = StoragePath(repo_id) / filename
-                # local_path = os.path.join(tmpdir, filename)
                 local_path = os.path.join(
                     cache_dir, repo_folder_name(repo_id=repo_id, repo_type=repo_type), "snapshots", revision, filename
                 )
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-                if not remote_path.exists():
+                if not fetch_file_atomic(str(remote_path), local_path):
                     raise EntryNotFoundError(f"File {remote_path} not found")
-
-                remote_path.download_to(local_path)
                 return local_path
 
             # Fallback to the original implementation

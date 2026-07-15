@@ -203,13 +203,17 @@ def _cluster_pinned_request(
     return request
 
 
-def _received_handoff_request(name: str, requester_id: str) -> controller_pb2.Controller.LaunchJobRequest:
+def _received_handoff_request(
+    name: str, requester_id: str, handoff_nonce: str = ""
+) -> controller_pb2.Controller.LaunchJobRequest:
     """A handoff request as a peer receives it: the federation field carries the
-    requester (parent) cluster id and the asserted owner principal. The job id is
-    cluster-invariant, so it is the plain ``/test-user/<name>`` the parent submitted."""
+    requester (parent) cluster id, the asserted owner principal, and the handoff
+    incarnation nonce. The job id is cluster-invariant, so it is the plain
+    ``/test-user/<name>`` the parent submitted."""
     request = make_direct_job_request(name, replicas=1)
     request.federation.requester_id = requester_id
     request.federation.owner_principal = _USER
+    request.federation.handoff_nonce = handoff_nonce
     return request
 
 
@@ -232,6 +236,14 @@ def _run_peer_task_to_success(peer_state: ControllerTestState, job_id: JobName) 
     (task,) = query_tasks_for_job(peer_state, job_id)
     dispatch_task(peer_state, task, worker)
     transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_SUCCEEDED)
+
+
+def _run_peer_task_to_failure(peer_state: ControllerTestState, job_id: JobName) -> None:
+    """Register a worker on the peer and drive the handed-off job's task to FAILED."""
+    worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
+    (task,) = query_tasks_for_job(peer_state, job_id)
+    dispatch_task(peer_state, task, worker)
+    transition_task(peer_state, task.task_id, job_pb2.TASK_STATE_FAILED, error="boom", exit_code=1)
 
 
 # ---------------------------------------------------------------------------
@@ -1033,6 +1045,158 @@ def test_peer_admission_dedups_a_redrive_and_rejects_a_collision(tmp_path, log_c
             with pytest.raises(ConnectError) as exc:
                 peer_service.launch_job(_received_handoff_request("local-job", "parent"), _WIRE_CTX)
         assert exc.value.code == Code.ALREADY_EXISTS
+
+
+def test_resubmit_of_a_failed_federated_job_replaces_and_reruns_on_the_peer(tmp_path, log_client):
+    """Resubmitting a job id whose previous handoff already failed on the peer must
+    re-run it there, exactly like a local resubmission replaces a finished job.
+
+    Regression: a peer that answers the fresh delivery with the old terminal job
+    as an "idempotent replay" emits no changelog row, and the parent's new handle
+    sits in "Handed off; awaiting first status report" forever (the old deltas
+    are already behind its sync cursor).
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        # First incarnation: handed off, fails on the peer, failure mirrors back.
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+        first_nonce = _handle(parent_state, job_id).handoff_nonce
+        _run_peer_task_to_failure(peer_state, job_id)
+        manager.sync_once()
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_FAILED
+
+        # Resubmit the same id: the parent replaces its finished job with a fresh
+        # handle carrying a NEW nonce, and delivery replaces the peer's finished
+        # run instead of replaying it.
+        parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        promote_queued_federation(manager, parent_state)
+        handle = _handle(parent_state, job_id)
+        assert handle.handoff_state == int(HandoffState.HANDED_OFF)
+        assert handle.handoff_nonce != first_nonce
+        assert query_job(peer_state, job_id).state == job_pb2.JOB_STATE_PENDING  # re-running, not the old FAILED row
+
+        # The fresh run's creation reaches the parent on the next sync: the mirror
+        # leaves "awaiting first status report" instead of hanging there forever.
+        manager.sync_once()
+        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_SYNCED
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_PENDING
+
+        _run_peer_task_to_success(peer_state, job_id)
+        manager.sync_once()
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_replayed_handoff_rereports_current_state(tmp_path, log_client):
+    """A replay of the SAME incarnation (re-drive after a lost ack) returns the
+    existing job AND writes a changelog row, so a parent whose cursor is already
+    past the job's deltas still converges on the next sync."""
+    with ExitStack() as stack:
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+
+        with identity_scope(_PEER_IDENTITY):
+            first = peer_service.launch_job(_received_handoff_request("fed-job", "parent", "nonce-1"), _WIRE_CTX)
+        job_id = JobName.from_wire(first.job_id)
+        with peer_state._db.read_snapshot() as tx:
+            consumed = reads.changelog_max_seq(tx)
+
+        with identity_scope(_PEER_IDENTITY):
+            again = peer_service.launch_job(_received_handoff_request("fed-job", "parent", "nonce-1"), _WIRE_CTX)
+        assert again.job_id == first.job_id
+        assert len(query_tasks_for_job(peer_state, job_id)) == 1  # replay, no duplicate
+
+        # The replay re-reported the job past the already-consumed cursor.
+        with identity_scope(_PEER_IDENTITY):
+            sync = peer_service.federation_sync(
+                controller_pb2.Controller.FederationSyncRequest(requester_id="parent", cursor=str(consumed)), None
+            )
+        assert [d.job_id for d in sync.deltas] == [job_id.to_wire()]
+        assert not sync.deltas[0].tombstone
+
+
+def test_new_incarnation_of_a_live_job_is_a_collision(tmp_path, log_client):
+    """A new incarnation (different nonce) whose previous run is still live on the
+    peer is a genuine collision under the default policy — rejected so the parent
+    terminalizes the handle with the peer's message, never silently bound to the
+    old run."""
+    with ExitStack() as stack:
+        peer_service, _peer_state = _make_service(stack, "peer", tmp_path, log_client)
+
+        with identity_scope(_PEER_IDENTITY):
+            peer_service.launch_job(_received_handoff_request("fed-job", "parent", "nonce-1"), _WIRE_CTX)
+        with identity_scope(_PEER_IDENTITY):
+            with pytest.raises(ConnectError) as exc:
+                peer_service.launch_job(_received_handoff_request("fed-job", "parent", "nonce-2"), _WIRE_CTX)
+        assert exc.value.code == Code.ALREADY_EXISTS
+
+
+def test_routed_cancel_of_an_already_terminal_job_converges_the_parent(tmp_path, log_client):
+    """A routed cancel for a job already terminal on the peer changes nothing
+    there, but must still converge the parent: the peer re-reports the job's
+    state, the mirror terminalizes, and the cancel re-drive stops.
+
+    Regression: without the re-report, a parent whose cursor already consumed
+    the job's terminal deltas re-drives TerminateJob every sync tick forever
+    while its mirror sits in PENDING.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+        _run_peer_task_to_failure(peer_state, job_id)
+
+        # Wedge the parent: its cursor is past the peer's terminal deltas but its
+        # mirror never saw them (as after a handle replacement or state restore).
+        with peer_state._db.read_snapshot() as tx:
+            peer_max = reads.changelog_max_seq(tx)
+        with parent_state._db.transaction() as cur:
+            writes.upsert_sync_cursor(cur, "cw", str(peer_max))
+        manager.sync_once()
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_PENDING
+
+        # The user's stop: the routed cancel is a no-op on the terminal peer job,
+        # but forces a re-report that the next sync mirrors — the job terminalizes
+        # and drops out of the cancel re-drive queue.
+        parent_service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
+        manager.sync_once()
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_FAILED
+        store = ControllerFederationStore(parent_state._db)
+        assert store.pending_cancels() == []
+
+
+def test_recreation_after_a_tombstone_in_one_window_reports_state_not_tombstone(tmp_path, log_client):
+    """A tombstone followed by a re-creation of the same job id within one sync
+    window means the job was pruned and immediately re-handed: the parent must
+    mirror the fresh run, not drop its live handle on the stale tombstone."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+        manager.sync_once()  # cursor caught up
+
+        # Prune and re-receive before the parent's next pull: both events land in
+        # the same sync window, in changelog order.
+        with peer_state._db.transaction() as cur:
+            writes.delete_job(cur, job_id)
+        with identity_scope(_PEER_IDENTITY):
+            peer_service.launch_job(_received_handoff_request("fed-job", "parent", "fresh"), _WIRE_CTX)
+        manager.sync_once()
+
+        assert _handle(parent_state, job_id) is not None
+        assert query_job(parent_state, job_id) is not None
+        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_PENDING
 
 
 def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, log_client):

@@ -1445,7 +1445,7 @@ def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
 
     with (
         patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()),
-        patch("levanter.tokenizers._fetch_file_atomic", side_effect=fake_fetch),
+        patch("levanter.tokenizers.fetch_file_atomic", side_effect=fake_fetch),
     ):
         result = _stage_from_mirror("org/model", str(local_dir))
 

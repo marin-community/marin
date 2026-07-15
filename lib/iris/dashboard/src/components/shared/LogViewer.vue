@@ -5,6 +5,7 @@ import { logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useIndexCursor } from '@/composables/useIndexCursor'
 import { useLogSearch } from '@/composables/useLogSearch'
+import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import { CUSTOM_PRESET, SINCE_PRESETS, type TimeZoneName, useTimeWindow } from '@/composables/useTimeWindow'
 import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelName, formatLogTime } from '@/utils/formatting'
@@ -544,6 +545,28 @@ function isoTimestamp(entry: LogEntry): string {
   return ms ? new Date(ms).toISOString() : ''
 }
 
+// Serialize the currently loaded lines (respecting the active server-side
+// filter and any expanded context) as a JSON array, one object per line.
+function logsAsJson(): string {
+  // In EXACT scope the backend omits per-row keys (they all equal the queried
+  // source), so fall back to the query source for those rows.
+  const exactSource = matchScope.value === 'EXACT' ? sourceInput.value : ''
+  const rows = logRows.value.map((row) => ({
+    seq: row.seq,
+    timestamp: isoTimestamp(row.entry),
+    level: logLevelName(row.entry.level),
+    source: row.entry.key || exactSource,
+    message: row.entry.data ?? '',
+  }))
+  return JSON.stringify(rows, null, 2)
+}
+
+const { copied, error: copyError, copy } = useCopyToClipboard()
+
+function copyLogs() {
+  copy(logsAsJson())
+}
+
 function onKeydown(e: KeyboardEvent) {
   // Only the visible viewer responds; a hidden tab keeps its handler inert.
   if (!scrollBox.value?.offsetParent) return
@@ -774,6 +797,13 @@ defineExpose({ selectedAttemptId })
           :disabled="!exceptionIndices.length"
           @click="gotoException(-1)"
         >↑</button>
+        <button
+          class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
+          :class="copied ? 'text-status-success' : copyError ? 'text-status-danger' : 'text-text-muted'"
+          :disabled="!logRows.length"
+          title="Copy the loaded lines to the clipboard as JSON"
+          @click="copyLogs"
+        >{{ copied ? 'Copied' : copyError ? 'Failed' : 'Copy JSON' }}</button>
         <button
           class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
           :class="wrap ? 'text-accent' : 'text-text-muted'"

@@ -1816,6 +1816,7 @@ class FederatedHandle:
     owner_principal: str
     handoff_state: int
     cancel_intent_version: int
+    handoff_nonce: str  # this handle's incarnation, repeated on every re-drive
 
 
 _SENT_HANDLE_COLUMNS = (
@@ -1824,6 +1825,7 @@ _SENT_HANDLE_COLUMNS = (
     federated_jobs_table.c.owner_principal,
     federated_jobs_table.c.handoff_state,
     federated_jobs_table.c.cancel_intent_version,
+    federated_jobs_table.c.handoff_nonce,
 )
 
 
@@ -1834,6 +1836,7 @@ def _sent_handle(row) -> FederatedHandle:
         owner_principal=row.owner_principal,
         handoff_state=int(row.handoff_state),
         cancel_intent_version=int(row.cancel_intent_version),
+        handoff_nonce=row.handoff_nonce,
     )
 
 
@@ -2000,19 +2003,26 @@ def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:
     return {r.job_id: int(r.handoff_state) for r in rows}
 
 
-def received_requester(tx: Tx, job_id: JobName) -> str | None:
-    """The requester ``peer_id`` of a RECEIVED ``federated_jobs`` row for ``job_id``, else ``None``.
+@dataclass(frozen=True)
+class ReceivedHandoff:
+    """The RECEIVED ``federated_jobs`` row a peer keeps for a handed-off job."""
 
-    Drives peer-side handoff admission: a re-drive from the same requester is an
-    idempotent replay; any other existing row is a genuine collision.
-    """
+    requester_id: str  # the parent cluster that handed the job here
+    handoff_nonce: str  # the incarnation the parent delivered
+
+
+def received_handoff(tx: Tx, job_id: JobName) -> ReceivedHandoff | None:
+    """The RECEIVED handoff record for ``job_id``, or ``None`` if this cluster
+    did not receive the job via handoff."""
     row = tx.execute(
-        select(federated_jobs_table.c.peer_id).where(
+        select(federated_jobs_table.c.peer_id, federated_jobs_table.c.handoff_nonce).where(
             federated_jobs_table.c.job_id == job_id,
             federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
         )
     ).first()
-    return row.peer_id if row is not None else None
+    if row is None:
+        return None
+    return ReceivedHandoff(requester_id=row.peer_id, handoff_nonce=row.handoff_nonce)
 
 
 def federated_handles_for_peer(tx: Tx, peer_id: str) -> set[JobName]:
