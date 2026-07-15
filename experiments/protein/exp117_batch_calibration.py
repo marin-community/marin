@@ -14,8 +14,8 @@ accumulation). This module turns those measurements into the study's two tables:
    ``(pdp, grad_accum)`` PREDICTED by :func:`tpu_batch_config`, plus the peak HBM utilization each
    slice actually reached (from W&B).
 
-The measured ceilings in :data:`CEILINGS` are the study's ground truth; everything else is derived.
-Run: ``python -m experiments.protein.exp117_batch_study`` (see exp117_batch_study.md for method).
+The measured ceilings in :data:`CEILINGS` are ground truth; everything else is derived.
+Run: ``python -m experiments.protein.exp117_batch_calibration`` (see exp117_batch_calibration.md).
 """
 
 from __future__ import annotations
