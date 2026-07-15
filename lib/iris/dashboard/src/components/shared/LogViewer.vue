@@ -5,6 +5,7 @@ import { logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { useIndexCursor } from '@/composables/useIndexCursor'
 import { useLogSearch } from '@/composables/useLogSearch'
+import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import { CUSTOM_PRESET, SINCE_PRESETS, type TimeZoneName, useTimeWindow } from '@/composables/useTimeWindow'
 import { isFederated, type FetchLogsResponse, type LogEntry, type TaskAttempt } from '@/types/rpc'
 import { timestampMs, logLevelName, formatLogTime } from '@/utils/formatting'
@@ -557,19 +558,10 @@ function logsAsJson(): string {
   return JSON.stringify(rows, null, 2)
 }
 
-const copied = ref(false)
-const copyError = ref(false)
+const { copied, error: copyError, copy } = useCopyToClipboard()
 
-async function copyLogs() {
-  copyError.value = false
-  try {
-    await navigator.clipboard.writeText(logsAsJson())
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 1500)
-  } catch {
-    copyError.value = true
-    setTimeout(() => { copyError.value = false }, 1500)
-  }
+function copyLogs() {
+  copy(logsAsJson())
 }
 
 function onKeydown(e: KeyboardEvent) {
