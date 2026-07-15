@@ -544,6 +544,34 @@ function isoTimestamp(entry: LogEntry): string {
   return ms ? new Date(ms).toISOString() : ''
 }
 
+// Serialize the currently loaded lines (respecting the active server-side
+// filter and any expanded context) as a JSON array, one object per line.
+function logsAsJson(): string {
+  const rows = logRows.value.map((row) => ({
+    seq: row.seq,
+    timestamp: isoTimestamp(row.entry),
+    level: logLevelName(row.entry.level),
+    source: row.entry.key ?? '',
+    message: row.entry.data ?? '',
+  }))
+  return JSON.stringify(rows, null, 2)
+}
+
+const copied = ref(false)
+const copyError = ref(false)
+
+async function copyLogs() {
+  copyError.value = false
+  try {
+    await navigator.clipboard.writeText(logsAsJson())
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1500)
+  } catch {
+    copyError.value = true
+    setTimeout(() => { copyError.value = false }, 1500)
+  }
+}
+
 function onKeydown(e: KeyboardEvent) {
   // Only the visible viewer responds; a hidden tab keeps its handler inert.
   if (!scrollBox.value?.offsetParent) return
@@ -774,6 +802,13 @@ defineExpose({ selectedAttemptId })
           :disabled="!exceptionIndices.length"
           @click="gotoException(-1)"
         >↑</button>
+        <button
+          class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
+          :class="copied ? 'text-status-success' : copyError ? 'text-status-danger' : 'text-text-muted'"
+          :disabled="!logRows.length"
+          title="Copy the loaded lines to the clipboard as JSON"
+          @click="copyLogs"
+        >{{ copied ? 'Copied' : copyError ? 'Failed' : 'Copy JSON' }}</button>
         <button
           class="px-2 py-0.5 border border-surface-border rounded text-xs hover:bg-surface-sunken"
           :class="wrap ? 'text-accent' : 'text-text-muted'"
