@@ -455,16 +455,6 @@ subpath and does not reach the controller's finelog server.
 | Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
 
-## Known Bugs
-
-1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detect by joining `workers` against active tasks in `task_attempts`.
-
-2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
-
-3. **Wedged preemption victim holds its worker** (weaver #439, `.agents/ops/2026-07-15-iris-non-atomic-preempt-place-stalled-workers.md`). Preempt-and-place is atomic: the scheduler commits the preemptor as ASSIGNED onto the worker its victim frees in the *same* transaction as the victim's PREEMPT (`scheduling/policy.py` `run_preemption_pass` → `PreemptionPlan.placements`, emitted by `run_scheduling_decision`), and the reconcile dispatch gate withholds the preemptor's run-intent while the victim's PREEMPTED attempt still occupies the worker (`reconcile/worker.py` `_holds_preemption_victim`). So during a preemption a worker briefly shows **both** the draining victim and the incoming ASSIGNED preemptor — that is expected, not a stuck worker; the gate clears the cycle after the victim's terminal heartbeat stamps `finished_at_ms` and drops it from the reconcile snapshot. **Remaining gap:** if the victim's process never dies (a live, heartbeating worker whose container won't tear down), the victim's attempt never finalizes, so the gate holds the co-assigned preemptor indefinitely — an infra wedge, not a scheduler bug. There is no automatic watchdog yet; reclaim the worker by hand — restart it (`iris cluster controller worker-restart <worker-id>`) so its attempts go WORKER_FAILED and the ASSIGNED preemptor retries elsewhere. Diagnose the wedge: the worker keeps emitting `Dropping late update for terminal attempt ... attempt_state=10 reported=3` for the victim (worker still running a task the controller already marked PREEMPTED). Substring-trace with `iris process logs --substring='<victim-task-id>'`.
-
----
-
 ## GCP (TPU) Operations
 
 ### Connecting
