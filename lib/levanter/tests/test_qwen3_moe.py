@@ -170,7 +170,11 @@ def test_qwen3_moe_dense_router_gradient_reaches_unselected_experts():
     config_on = _tiny_moe_config(dense_router_gradient=True)
     n_unselected = config_off.num_experts - config_off.num_experts_per_tok
 
-    with use_test_mesh():
+    # The expert-parameter gradients are mathematically identical with the flag on or off (the dense
+    # branch's expert outputs are stop_gradient-wrapped), so we compare them at float32 matmul
+    # precision. TPU's default bf16 matmuls otherwise perturb the two differently-scheduled backward
+    # graphs past any equality tolerance; the router-norm assertions run in f32 either way.
+    with use_test_mesh(), jax.default_matmul_precision("float32"):
         block_off = Qwen3MoeSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
         block_on = dataclasses.replace(block_off, config=config_on)
 
@@ -186,10 +190,12 @@ def test_qwen3_moe_dense_router_gradient_reaches_unselected_experts():
     assert np.all(rows_on > 1e-4)
 
     # Expert-parameter gradients must be untouched by the flag: only the router gradient changes.
+    # On CPU they are bit-identical; TPU's f32-emulated matmuls leave a small reordering residual.
+    tol = 1e-4 if jax.default_backend() == "tpu" else 1e-6
     for projection in ("gate_proj", "up_proj", "down_proj"):
         weight_off = getattr(grad_off.experts, projection).weight.array
         weight_on = getattr(grad_on.experts, projection).weight.array
-        np.testing.assert_allclose(np.asarray(weight_on), np.asarray(weight_off), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(np.asarray(weight_on), np.asarray(weight_off), rtol=tol, atol=tol)
 
 
 def test_qwen3_moe_dense_router_gradient_disabled_in_inference():

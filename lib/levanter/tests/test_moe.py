@@ -100,6 +100,11 @@ def test_dense_router_delta_gradient_reaches_expert_outputs_not_weights():
 def test_dense_router_delta_memory_is_bounded_in_expert_count():
     # The remat'd fold keeps peak temp memory at O(Token * Mlp): growing the expert count 16x must
     # not blow up the dense activation footprint (it would with a Token x Experts x Mlp layout).
+    # memory_analysis() reports the compiled scratch (temp) allocation only on CPU; on TPU it comes
+    # back as 0 because buffers are assigned in HBM under a different accounting. The property is a
+    # graph-structural one, so the CPU lane covers it.
+    if jax.default_backend() != "cpu":
+        pytest.skip("memory_analysis temp sizes are only populated on the CPU backend")
     Token, Embed, Mlp = Axis("token", 256), Axis("embed", 128), Axis("mlp", 512)
     act = ActivationFunctionEnum.silu.to_fn()
 
@@ -112,10 +117,7 @@ def test_dense_router_delta_memory_is_bounded_in_expert_count():
             delta = dense_router_delta(x, lg, gate_w, up_w, down_w, act, Experts=Experts, Embed=Embed, Mlp=Mlp)
             return hax.sum(delta * cotangent).scalar()
 
-        analysis = jax.jit(jax.grad(scalar)).lower(logits).compile().memory_analysis()
-        if analysis is None:
-            pytest.skip("memory_analysis unavailable on this backend")
-        return analysis.temp_size_in_bytes
+        return jax.jit(jax.grad(scalar)).lower(logits).compile().memory_analysis().temp_size_in_bytes
 
     with use_test_mesh():
         small = peak_temp_bytes(8)
