@@ -344,17 +344,18 @@ def _packed_sft_train_config(trainer_config, tmp_path, *, num_docs=24, seq_len=1
 def test_auto_resolve_lm_schedule_uses_packed_length(trainer_config, tmp_path):
     train_config, num_docs = _packed_sft_train_config(trainer_config, tmp_path, num_docs=24, seq_len=16, batch_size=1)
 
+    # Materialize the cache first: resolution reads packed offsets and never builds a cache itself.
+    # batch_size=1 makes the target concrete: N packed sequences -> N steps. A raw-row resolver
+    # (the DPO-style mistake) would instead use num_docs and be wrong.
+    Pos = train_config.model.max_Pos.resize(16)
+    per_epoch = train_config.data.num_train_sequences(Pos)
+
     config = TrainLmOnPodConfig(
         train_config=train_config,
         resources=ResourceConfig.with_tpu("v4-8"),
         auto_num_epochs=1,
     )
     resolved = _maybe_auto_resolve_lm_schedule(config)
-
-    # batch_size=1 makes the target concrete: N packed sequences -> N steps. A raw-row resolver
-    # (the DPO-style mistake) would instead use num_docs and be wrong.
-    Pos = train_config.model.max_Pos.resize(16)
-    per_epoch = train_config.data.num_train_sequences(Pos)
 
     assert per_epoch < num_docs  # packing actually collapsed documents
     assert resolved.train_config.trainer.num_train_steps == per_epoch

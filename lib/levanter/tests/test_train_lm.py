@@ -241,6 +241,23 @@ def test_num_train_steps_for_epochs_rejects_nonpositive_epochs(tmp_path):
         train_lm.num_train_steps_for_epochs(config)
 
 
+def test_num_train_steps_for_epochs_rejects_unresolved_batch_size(tmp_path):
+    # train_batch_size=-1 is resolved from per_device_parallelism only after device init, which is
+    # after epoch resolution; resolving steps against it must fail fast rather than produce garbage.
+    config = _packed_supervised_lm_config(tmp_path, batch_size=-1)
+    with pytest.raises(ValueError, match="train_batch_size"):
+        train_lm.num_train_steps_for_epochs(config)
+
+
+def test_num_train_steps_for_epochs_does_not_build_missing_cache(tmp_path):
+    # Resolution runs before jax.distributed init, so it must never build a cache (that would race
+    # across hosts). Even with auto_build_caches enabled, a missing cache must raise, not build.
+    config = _packed_supervised_lm_config(tmp_path)
+    assert config.data.auto_build_caches is True
+    with pytest.raises(FileNotFoundError):
+        train_lm.num_train_steps_for_epochs(config)
+
+
 def test_train_lm_num_train_epochs_stops_after_one_pass():
     with tempfile.TemporaryDirectory() as tmpdir:
         data_config, _ = tiny_test_corpus.construct_small_data_cache(

@@ -101,10 +101,19 @@ class TrainLmConfig:
 def num_train_steps_for_epochs(config: TrainLmConfig) -> int:
     """Resolve ``num_train_steps`` for ``config.num_train_epochs`` from the packed dataset length.
 
-    Builds the offsets-only packed training dataset to get the true post-packing sequence count, then
+    Reads the offsets-only packed training dataset to get the true post-packing sequence count, then
     converts ``num_train_epochs`` passes into the step at which the loader (which pads the final partial
-    batch) is exhausted. No token or accelerator I/O is required. Raises if ``num_train_epochs`` is unset
-    or < 1, if there is not exactly one training component, or if the resolved training set is empty.
+    batch) is exhausted. This runs before ``levanter.trainer.initialize``, so it must not depend on
+    anything initialization establishes:
+
+    - The training cache must already exist. Resolution only reads packed offsets; it never builds a
+      cache, which would otherwise race or duplicate writes across hosts before ``jax.distributed`` is
+      initialized. A missing cache raises rather than being auto-built here.
+    - ``trainer.train_batch_size`` must be an explicit positive value. The ``-1`` sentinel is resolved
+      into a concrete global batch size only once the device mesh exists, which is after this call.
+
+    Raises if ``num_train_epochs`` is unset or < 1, if the batch size is unresolved, if there is not
+    exactly one training component, or if the resolved training set is empty.
     """
     epochs = config.num_train_epochs
     if epochs is None:
@@ -112,10 +121,21 @@ def num_train_steps_for_epochs(config: TrainLmConfig) -> int:
     if epochs < 1:
         raise ValueError(f"num_train_epochs must be >= 1, got {epochs}")
 
+    batch_schedule = config.trainer.batch_schedule
+    initial_batch_size = batch_schedule.batch_size_at_step(0)
+    if initial_batch_size <= 0:
+        raise ValueError(
+            "num_train_epochs requires an explicit positive trainer.train_batch_size to resolve steps; "
+            f"got {initial_batch_size}. The -1 sentinel is resolved from per_device_parallelism only "
+            "after device initialization, which runs after epoch resolution."
+        )
+
     train_length = config.train_seq_len if config.train_seq_len is not None else config.model.max_seq_len
     Pos = config.model.max_Pos.resize(train_length)
-    batch_schedule = config.trainer.batch_schedule
-    seq_per_epoch = config.data.num_train_sequences(Pos, initial_batch_size=batch_schedule.batch_size_at_step(0))
+    # Read existing packed offsets only: this runs before jax.distributed is initialized, so building a
+    # missing cache here could race across hosts. Force a load-only read and let a missing cache raise.
+    data = dataclasses.replace(config.data, auto_build_caches=False)
+    seq_per_epoch = data.num_train_sequences(Pos, initial_batch_size=initial_batch_size)
     total_sequences = epochs * seq_per_epoch
     if total_sequences < 1:
         raise ValueError("Resolved an empty training set for epoch-based training (0 sequences).")
