@@ -315,8 +315,10 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    num_train_steps: int,
 ):
     one = jnp.array(1, dtype=jnp.int32)
+    inv_num_train_steps = 1.0 / max(num_train_steps, 1)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
@@ -336,6 +338,9 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        # Training progress in [0, 1] for the MTP loss-weight schedule (no-op when mtp_depth == 0).
+        mtp_progress = state.step.astype(jnp.float32) * inv_num_train_steps
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -345,6 +350,7 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                mtp_progress=mtp_progress,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
@@ -410,6 +416,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        num_train_steps=trainer.num_train_steps,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

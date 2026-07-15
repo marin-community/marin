@@ -73,6 +73,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe", "none"]
+MtpWeightSchedule = Literal["constant", "linear", "step"]
 
 
 def _batch_spec() -> P:
@@ -165,8 +166,40 @@ class GrugModelConfig:
     ``mtp_loss_weight``."""
     mtp_loss_weight: float = 0.3
     """Weight lambda on the averaged MTP cross-entropy (DeepSeek-V3 uses 0.3). The MTP term
-    added to the loss is ``(mtp_loss_weight / mtp_depth) * sum_k CE_k``."""
+    added to the loss is ``mtp_weight_at(progress) * (sum_k CE_k / mtp_depth)`` where the weight
+    follows ``mtp_weight_schedule`` and ``progress = step / num_train_steps``."""
+    mtp_loss_weight_final: float = 0.3
+    """Final MTP lambda for scheduled weighting. Equal to ``mtp_loss_weight`` (the default) gives
+    a constant weight regardless of ``mtp_weight_schedule``."""
+    mtp_weight_schedule: MtpWeightSchedule = "constant"
+    """How the MTP weight moves over training progress ``p = step / num_train_steps``:
+    "constant" holds ``mtp_loss_weight``; "linear" interpolates ``mtp_loss_weight`` ->
+    ``mtp_loss_weight_final`` linearly in ``p``; "step" holds ``mtp_loss_weight`` for
+    ``p < mtp_step_decay_fraction`` then drops to ``mtp_loss_weight_final`` (DeepSeek-V3's
+    0.3-then-0.1-for-the-last-10%)."""
+    mtp_step_decay_fraction: float = 0.9
+    """Progress fraction at which the "step" schedule drops to ``mtp_loss_weight_final``."""
+    mtp_dense: bool = False
+    """If True, each MTP module's transformer block uses a single dense SwiGLU MLP
+    (``mtp_dense_intermediate_dim`` wide, no routed experts, no shared expert) instead of the
+    MoE MLP. The attention half is unchanged."""
+    mtp_dense_intermediate_dim: int = 0
+    """SwiGLU inner width of the dense MTP MLP when ``mtp_dense`` is set (e.g. 3 * hidden_dim).
+    Must be > 0 when ``mtp_dense`` and ``mtp_depth > 0``."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+
+    def mtp_weight_at(self, progress: jax.Array | float) -> jax.Array:
+        """Scheduled MTP loss weight at training ``progress`` (= step / num_train_steps, in [0,1])."""
+        w0 = jnp.asarray(self.mtp_loss_weight, dtype=jnp.float32)
+        if self.mtp_weight_schedule == "constant":
+            return w0
+        w1 = jnp.asarray(self.mtp_loss_weight_final, dtype=jnp.float32)
+        p = jnp.clip(jnp.asarray(progress, dtype=jnp.float32), 0.0, 1.0)
+        if self.mtp_weight_schedule == "linear":
+            return w0 + (w1 - w0) * p
+        if self.mtp_weight_schedule == "step":
+            return jnp.where(p < self.mtp_step_decay_fraction, w0, w1)
+        raise ValueError(f"unknown mtp_weight_schedule {self.mtp_weight_schedule!r}")
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -186,6 +219,10 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.mtp_depth < 0:
             raise ValueError("mtp_depth must be non-negative")
+        if self.mtp_depth > 0 and self.mtp_dense and self.mtp_dense_intermediate_dim <= 0:
+            raise ValueError("mtp_dense requires mtp_dense_intermediate_dim > 0")
+        if not 0.0 <= self.mtp_step_decay_fraction <= 1.0:
+            raise ValueError("mtp_step_decay_fraction must be in [0, 1]")
         if self.use_mla:
             if self.q_lora_rank < 0:
                 raise ValueError("q_lora_rank must be >= 0 (0 selects a direct Q projection)")
@@ -872,27 +909,54 @@ class MTPModule(eqx.Module):
 
     For module depth k at position i: normalize the previous depth's hidden ``h_i^{k-1}``
     and the shared-embedding of input token ``x_{i+k}``, concatenate, project 2d->d with
-    ``proj`` (M_k), then run one grug ``Block`` (GQA/MoE/shared-expert/XSA, same config as a
-    main-model layer). ``out_norm(h_i^k)`` feeds the shared output head. The token embedding
-    and output head are the main model's -- only ``h_norm``/``e_norm``/``proj``/``block``/
-    ``out_norm`` are new per module.
+    ``proj`` (M_k), then run one transformer block (attention + MLP, same config as a
+    main-model layer) as a full-causal ("long") layer like DeepSeek's MTP TRM. The MLP is the
+    routed MoE + shared expert by default, or a single dense SwiGLU MLP when ``cfg.mtp_dense``.
+    ``out_norm(h_i^k)`` feeds the shared output head; the token embedding and output head are
+    the main model's -- only the fields below are new per module.
     """
 
     h_norm: RMSNorm
     e_norm: RMSNorm
     proj: jax.Array
-    block: Block
+    rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm
+    attn: CausalSelfAttention | MultiheadLatentAttention
+    rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm
+    mlp: MoEMLP | DenseMLP
+    shared: DenseMLP | None
     out_norm: RMSNorm
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MTPModule":
-        k_proj, k_block = random.split(key, 2)
+        k_proj, k_attn, k_mlp, k_shared, k_gn_attn, k_gn_mlp = random.split(key, 6)
         d = cfg.hidden_dim
+        if cfg.mtp_dense:
+            mlp: MoEMLP | DenseMLP = DenseMLP.init(d, cfg.mtp_dense_intermediate_dim, cfg.initializer_std, key=k_mlp)
+            shared = None
+        else:
+            mlp = MoEMLP.init(cfg, key=k_mlp)
+            shared = (
+                DenseMLP.init(d, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=k_shared)
+                if cfg.shared_expert_intermediate_dim > 0
+                else None
+            )
         return MTPModule(
             h_norm=RMSNorm.init(d, cfg.layer_norm_eps),
             e_norm=RMSNorm.init(d, cfg.layer_norm_eps),
             proj=reshard(_init_weight(k_proj, (2 * d, d), cfg.initializer_std), P("data", "model")),
-            block=Block.init(cfg, key=k_block),
+            rms_attn=RMSNorm.init(d, cfg.layer_norm_eps),
+            attn_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_gn_attn),
+            attn=(
+                MultiheadLatentAttention.init(cfg, key=k_attn)
+                if cfg.use_mla
+                else CausalSelfAttention.init(cfg, key=k_attn)
+            ),
+            rms_mlp=RMSNorm.init(d, cfg.layer_norm_eps),
+            mlp_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_gn_mlp),
+            mlp=mlp,
+            shared=shared,
             out_norm=RMSNorm.init(d, cfg.layer_norm_eps),
         )
 
@@ -907,9 +971,17 @@ class MTPModule(eqx.Module):
     ) -> Float[Array, "B S D"]:
         combined = jnp.concatenate([self.h_norm(h_prev), self.e_norm(emb)], axis=-1)
         h = jnp.einsum("bsD,Dd->bsd", combined, self.proj, out_sharding=_batch_spec())
-        # One transformer block, run as a full-causal ("long") layer like DeepSeek's MTP TRM.
-        h, _ = self.block(h, short_mask, long_mask, True, False, disable_long_rope)
-        return h
+        # Always a full-causal ("long") layer -- no long/short cond like the main Block.
+        attn_in = self.attn_gated_norm(self.rms_attn(h))
+        h = h + self.attn(attn_in, long_mask, use_pko=False, disable_rope=disable_long_rope)
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(h))
+        if isinstance(self.mlp, MoEMLP):
+            mlp_out, _ = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+        else:
+            mlp_out = self.mlp(mlp_in, activation=ActivationFunctionEnum.silu)
+        return h + mlp_out
 
 
 class Transformer(eqx.Module):
@@ -1086,6 +1158,7 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        mtp_progress: jax.Array | float = 0.0,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
@@ -1107,9 +1180,11 @@ class Transformer(eqx.Module):
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
 
         mtp_loss = None
+        mtp_weight = None
         if reduction != "none" and self.config.mtp_depth > 0:
             mtp_loss = self._mtp_loss(token_ids, hidden, loss_weight, mask, loss_dtype)
-            loss = loss + self.config.mtp_loss_weight * mtp_loss
+            mtp_weight = self.config.mtp_weight_at(mtp_progress)
+            loss = loss + mtp_weight * mtp_loss
 
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
@@ -1117,7 +1192,8 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             if mtp_loss is not None:
                 summarized_metrics["train/mtp_loss"] = mtp_loss
-                summarized_metrics["train/mtp_loss_weighted"] = self.config.mtp_loss_weight * mtp_loss
+                summarized_metrics["train/mtp_loss_weight"] = mtp_weight
+                summarized_metrics["train/mtp_loss_weighted"] = mtp_weight * mtp_loss
             return loss, summarized_metrics
         return loss
 
