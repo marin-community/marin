@@ -33,6 +33,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    CanonicalScope,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -93,6 +94,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
+            canonical_scope=CanonicalScope.PER_SOURCE,
             max_parallelism=64,
             cc_max_iterations=3,
         ),

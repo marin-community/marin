@@ -13,7 +13,7 @@ import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.datakit.normalize import NormalizedData, generate_id, normalize_to_parquet
-from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs
+from marin.processing.classification.deduplication.fuzzy_dups import CanonicalScope, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     MinHashParams,
@@ -121,7 +121,11 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
 
     source = _normalize(fox_corpus["test_dir"], norm_dir)
     minhash = compute_minhash_attrs(source=source, output_path=minhash_dir)
-    dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=dups_dir, max_parallelism=4)
+    # Single source: PER_SOURCE and GLOBAL coincide (one canonical per cluster,
+    # all in the one source), so this pins the shared invariant.
+    dups = compute_fuzzy_dups_attrs(
+        inputs=[minhash], output_path=dups_dir, canonical_scope=CanonicalScope.PER_SOURCE, max_parallelism=4
+    )
 
     assert dups.params == minhash.params
     per_source = dups.sources[source.main_output_dir]
@@ -144,15 +148,22 @@ def test_fuzzy_dups_single_source_schema_and_pair(fox_corpus):
     assert "test_unique_2" not in by_source_id
 
 
-def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
+@pytest.mark.parametrize("scope", [CanonicalScope.GLOBAL, CanonicalScope.PER_SOURCE])
+def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus, scope):
     """Two MinHashAttrData inputs produce two per-source attr trees.
 
     Cross-source exact-text duplicates (e.g. ``train_arctic_1`` ==
     ``test_contaminated_1`` byte-identical → same normalized id in both
     datasets) must be detected as a 2-member cluster rather than collapsing
     into a single node. Each side independently carries its own attr row for
-    the shared content hash, with a shared ``dup_cluster_id`` and exactly one
-    canonical across the pair.
+    the shared content hash and a shared ``dup_cluster_id``.
+
+    The number of canonicals across the pair depends on ``canonical_scope``:
+
+    - ``GLOBAL``: exactly one canonical across both sources (the other copy is
+      dropped — the whole-source-wipeout hazard of issue #6854).
+    - ``PER_SOURCE``: both sources keep their copy (both canonical), so neither
+      source loses its content to cross-source dedup. This is the #6854 fix.
 
     This test targets multi-source fuzzy dedup behavior directly. Normalization
     and MinHash generation already have separate coverage above.
@@ -198,7 +209,8 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
 
     dups = compute_fuzzy_dups_attrs(
         inputs=[train_mh, test_mh],
-        output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+        output_path=os.path.join(fox_corpus["output_dir"], f"fuzzy_dups_{scope.value}"),
+        canonical_scope=scope,
         max_parallelism=1,
     )
 
@@ -214,8 +226,8 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
     test_rows = rows_by_id(test_main_dir)
 
     # Each cross-source byte-identical text must appear as an attr row on both
-    # sides (keyed by the same content hash), share a dup_cluster_id, and have
-    # exactly one canonical across the pair.
+    # sides (keyed by the same content hash) and share the global dup_cluster_id.
+    # How many are canonical depends on canonical_scope (see docstring).
     for shared_text in (
         "Arctic predators have superior auditory capabilities for hunting beneath snow.",
         "Red canids inhabit northern territories worldwide.",
@@ -225,9 +237,26 @@ def test_fuzzy_dups_multi_source_per_source_attr_trees(fox_corpus):
         assert content_id in test_rows, f"missing test attr row for {shared_text!r}"
         a, b = train_rows[content_id]["attributes"], test_rows[content_id]["attributes"]
         assert a["dup_cluster_id"] == b["dup_cluster_id"], f"{shared_text!r}: dup_cluster_id mismatch"
-        assert (
-            a["is_cluster_canonical"] != b["is_cluster_canonical"]
-        ), f"{shared_text!r}: exactly one canonical expected across pair"
+        if scope is CanonicalScope.PER_SOURCE:
+            assert (
+                a["is_cluster_canonical"] and b["is_cluster_canonical"]
+            ), f"{shared_text!r}: both sources must keep a canonical under PER_SOURCE (issue #6854)"
+        else:
+            assert (
+                a["is_cluster_canonical"] != b["is_cluster_canonical"]
+            ), f"{shared_text!r}: exactly one canonical expected across pair under GLOBAL"
+
+    # Aggregate no-wipeout property. Each source's only cluster members are the
+    # two cross-source shared texts (the unique docs are singletons with no
+    # attr row). Under PER_SOURCE every source keeps a canonical for each shared
+    # cluster (2 + 2), so neither source is dropped; under GLOBAL there is one
+    # canonical per cluster total (2), which is what lets a source be wiped out.
+    train_canon = sum(r["attributes"]["is_cluster_canonical"] for r in train_rows.values())
+    test_canon = sum(r["attributes"]["is_cluster_canonical"] for r in test_rows.values())
+    if scope is CanonicalScope.PER_SOURCE:
+        assert train_canon == 2 and test_canon == 2, f"per-source canonicals: train={train_canon}, test={test_canon}"
+    else:
+        assert train_canon + test_canon == 2, f"global canonicals across pair: {train_canon + test_canon}"
 
 
 def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
@@ -245,6 +274,7 @@ def test_fuzzy_dups_rejects_param_mismatch(fox_corpus):
         compute_fuzzy_dups_attrs(
             inputs=[a, b],
             output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+            canonical_scope=CanonicalScope.PER_SOURCE,
             max_parallelism=4,
         )
 
@@ -258,6 +288,7 @@ def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
         compute_fuzzy_dups_attrs(
             inputs=[mh, mh],
             output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups"),
+            canonical_scope=CanonicalScope.PER_SOURCE,
             max_parallelism=4,
         )
 
@@ -535,7 +566,12 @@ def _run_dedup_on_corpus(tmp_path: Path, docs: list[dict]) -> dict[str, dict]:
 
     source = _normalize(str(src_dir), str(tmp_path / "norm"))
     minhash = compute_minhash_attrs(source=source, output_path=str(tmp_path / "minhash"))
-    dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=str(tmp_path / "dups"), max_parallelism=1)
+    dups = compute_fuzzy_dups_attrs(
+        inputs=[minhash],
+        output_path=str(tmp_path / "dups"),
+        canonical_scope=CanonicalScope.PER_SOURCE,
+        max_parallelism=1,
+    )
 
     by_id = _read_main_records(source)
     rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)

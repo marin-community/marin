@@ -27,7 +27,11 @@ from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
-from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    CanonicalScope,
+    FuzzyDupsAttrData,
+    compute_fuzzy_dups_attrs,
+)
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.log_setup import configure_logging
@@ -84,6 +88,7 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(mh.output_path, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
+            canonical_scope=CanonicalScope.PER_SOURCE,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
             worker_resources=_FUZZY_DUPS_WORKER_RESOURCES,

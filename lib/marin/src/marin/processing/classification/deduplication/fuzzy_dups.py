@@ -14,8 +14,8 @@ Per-document attr rows have schema::
     {
       id: str,
       attributes: {
-        dup_cluster_id: str,         # CC component id — shared by all cluster members
-        is_cluster_canonical: bool,  # True for exactly one member per cluster
+        dup_cluster_id: str,         # global CC component id — shared by all cluster members
+        is_cluster_canonical: bool,  # True for the canonical member(s); see canonical_scope
       }
     }
 
@@ -24,7 +24,10 @@ non-canonicals). Singletons get no row, preserving the
 ``consolidate(..., keep_if_missing=True)`` pattern. This shape lets the
 canonical-selection policy live in consolidate (e.g. the default
 ``keep is_cluster_canonical=True``, or any custom per-cluster reducer) rather
-than being baked in here.
+than being baked in here. ``canonical_scope`` decides how many members are
+flagged canonical: one per cluster (``GLOBAL``) or one per ``(source, cluster)``
+(``PER_SOURCE``, which prevents cross-source dedup from wiping out whole
+sources) — ``dup_cluster_id`` stays the global component id either way.
 
 Combining multiple ``MinHashAttrData`` inputs is the foundation for iterative
 global dedup: re-running this job over the union of all per-dataset MinHash
@@ -34,6 +37,7 @@ artifacts produces fresh markers without re-reading any source text.
 import logging
 import os
 from collections.abc import Iterator
+from enum import StrEnum
 from typing import Any
 
 from fray.types import ResourceConfig
@@ -52,6 +56,29 @@ from marin.processing.classification.deduplication.dedup_commons import _load_ba
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, MinHashParams
 
 logger = logging.getLogger(__name__)
+
+
+class CanonicalScope(StrEnum):
+    """Which members of a duplicate cluster are marked ``is_cluster_canonical``.
+
+    Connected components always run globally across every input, so
+    ``dup_cluster_id`` identifies a cross-source cluster regardless of scope.
+    This only controls *which* members of that cluster survive the default
+    keep-canonical policy:
+
+    - ``GLOBAL``: exactly one member per cluster (the min-``id_norm`` node),
+      regardless of source. Cross-source near-duplicates collapse to a single
+      surviving copy — appropriate when source boundaries are irrelevant (e.g.
+      deduping one logical corpus).
+    - ``PER_SOURCE``: one member per ``(source, cluster)`` — the min-``id_norm``
+      node *within each source*. Every source that participates in a cluster
+      keeps a representative, so no source can be wiped out just because its
+      content near-duplicates content in another source. Genuine *intra*-source
+      near-duplicates are still collapsed to one.
+    """
+
+    GLOBAL = "global"
+    PER_SOURCE = "per_source"
 
 
 class FuzzyDupsPerSource(BaseModel):
@@ -159,15 +186,16 @@ def _cc_id(source_tag: str, doc_id: str) -> str:
     inputs can carry byte-identical normalized ids (e.g. exact text overlap
     across datasets), and without this prefix they collapse to a single
     node — under-reporting dups and potentially clobbering co-partitioned
-    attr files. The prefix is stripped in :func:`_strip_cc_prefix` before
+    attr files. The prefix is split back off in :func:`_split_cc_id` before
     the final attr parquet is written.
     """
     return f"{source_tag}{_CC_ID_SEP}{doc_id}"
 
 
-def _strip_cc_prefix(record_id: str) -> str:
-    """Reverse :func:`_cc_id`, returning the original ``doc_id``."""
-    return record_id.split(_CC_ID_SEP, 1)[1]
+def _split_cc_id(record_id: str) -> tuple[str, str]:
+    """Reverse :func:`_cc_id`, returning ``(source_tag, doc_id)``."""
+    source_tag, doc_id = record_id.split(_CC_ID_SEP, 1)
+    return source_tag, doc_id
 
 
 def _emit_bucket_records(entries: list[dict[str, Any]]) -> Iterator[dict]:
@@ -244,10 +272,48 @@ def _make_per_shard_writer(output_path: str, counter_prefix: str):
     return aggregate
 
 
+def _to_cc_member(record: dict) -> dict:
+    """Project one raw ``CCNode`` parquet row into a cluster-member record.
+
+    Returns ``{id, id_norm, source_tag, component_id, file_idx, is_singleton}``:
+    the source-stripped doc ``id``, the orderable ``id_norm``, its
+    ``source_tag``, the global ``component_id`` (the ``dup_cluster_id``), the
+    ``file_idx`` write shard, and whether the node is a singleton.
+    """
+    source_tag, doc_id = _split_cc_id(record["record_id"])
+    adjacency = record["adjacency_list"]
+    return {
+        "id": doc_id,
+        "id_norm": record["id_norm"],
+        "source_tag": source_tag,
+        "component_id": record["component_id"],
+        "file_idx": record["file_idx"],
+        # preserve_singletons wires singletons as a self-link, so a node is a
+        # singleton iff its adjacency is exactly [id_norm] — no cluster peers.
+        "is_singleton": len(adjacency) == 1 and adjacency[0] == record["id_norm"],
+    }
+
+
+def _mark_source_canonicals(key: tuple[str, str], members: Iterator[dict]) -> Iterator[dict]:
+    """Flag the min-``id_norm`` member of one ``(source_tag, component_id)`` group as canonical.
+
+    Relies on the upstream ``group_by(sort_by=id_norm)`` delivering members in
+    ascending ``id_norm`` order, so the first member is the per-source minimum
+    and the rest are non-canonical. Streaming (O(1) memory) — a single cluster
+    within one over-merged source can hold millions of members. ``id_norm`` is
+    unique per node within a source, so the minimum is unambiguous.
+    """
+    is_first = True
+    for member in members:
+        yield {**member, "is_canonical": is_first}
+        is_first = False
+
+
 def compute_fuzzy_dups_attrs(
     *,
     inputs: list[MinHashAttrData],
     output_path: str,
+    canonical_scope: CanonicalScope,
     cc_max_iterations: int = 10,
     cc_resume: bool = False,
     max_parallelism: int = MAX_WORKERS_PER_JOB,
@@ -266,15 +332,29 @@ def compute_fuzzy_dups_attrs(
     cluster member with ``{id: str, attributes: {dup_cluster_id: str,
     is_cluster_canonical: bool}}``; singletons are omitted.
 
-    Exactly one member per cluster has ``is_cluster_canonical=True`` — the
-    one CC's Hash-to-Min picked as the natural canonical (min ``id_norm``).
-    Consolidate may honor that flag (default policy) or ignore it and apply
-    a custom per-``dup_cluster_id`` policy.
+    ``dup_cluster_id`` is always the global connected-component id, so it
+    identifies a cross-source cluster regardless of ``canonical_scope``.
+    ``canonical_scope`` controls how many members are flagged
+    ``is_cluster_canonical=True`` (the members the default keep-canonical
+    policy retains):
+
+    - :attr:`CanonicalScope.GLOBAL`: exactly one per cluster (the min-``id_norm``
+      node). Cross-source near-duplicates collapse to a single surviving copy.
+    - :attr:`CanonicalScope.PER_SOURCE`: one per ``(source, cluster)`` — the
+      min-``id_norm`` node within each source. Prevents whole-source wipeouts
+      when a source's content near-duplicates content in other sources, while
+      still collapsing genuine intra-source near-duplicates.
+
+    Consolidate may honor the flag (default policy) or ignore it and apply a
+    custom per-``dup_cluster_id`` policy.
 
     Args:
         inputs: ``MinHashAttrData`` artifacts to fuzzy-dedup together.
         output_path: Output root. Per-source attr trees land under
             ``<output_path>/outputs/source_NNN/``.
+        canonical_scope: Whether ``is_cluster_canonical`` marks one member per
+            cluster (:attr:`CanonicalScope.GLOBAL`) or one per ``(source,
+            cluster)`` (:attr:`CanonicalScope.PER_SOURCE`).
         cc_max_iterations: Max iterations for connected components.
         max_parallelism: Worker count for the ZephyrContext.
         worker_resources: Per-worker resource request. Required when
@@ -357,27 +437,29 @@ def compute_fuzzy_dups_attrs(
     ctx.put(_SHARED_ENTRIES_KEY, entries)
     aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")
 
-    # CC's Hash-to-Min guarantees component_id == min(id_norm) across a cluster,
-    # so `component_id == id_norm` cheaply identifies the natural canonical.
-    # `preserve_singletons=True` wires singletons as self-links, so a node is a
-    # singleton iff its adjacency_list is exactly [id_norm] — no cluster peers.
-    shard_pipeline = (
-        Dataset.from_list(cc_files)
-        .load_parquet()
-        .map(
-            lambda r: {
-                "id": _strip_cc_prefix(r["record_id"]),
-                "component_id": r["component_id"],
-                "is_canonical": r["component_id"] == r["id_norm"],
-                "is_singleton": len(r["adjacency_list"]) == 1 and r["adjacency_list"][0] == r["id_norm"],
-                "file_idx": r["file_idx"],
-            }
+    members = Dataset.from_list(cc_files).load_parquet().map(_to_cc_member)
+    if canonical_scope is CanonicalScope.GLOBAL:
+        # CC's Hash-to-Min guarantees component_id == min(id_norm) across a
+        # cluster, so `component_id == id_norm` cheaply identifies the single
+        # global canonical — no extra shuffle.
+        labeled = members.map(lambda m: {**m, "is_canonical": m["component_id"] == m["id_norm"]})
+    else:
+        # Per-source canonical: regroup members by (source_tag, component_id)
+        # sorted by id_norm and flag the per-source minimum. One extra shuffle
+        # over the cluster members (marginal vs CC's iterations), gated behind
+        # PER_SOURCE so global callers keep the single-shuffle fast path.
+        labeled = members.group_by(
+            lambda m: (m["source_tag"], m["component_id"]),
+            sort_by=lambda m: m["id_norm"],
+            reducer=_mark_source_canonicals,
         )
-        .group_by(
-            lambda r: r["file_idx"],
-            sort_by=lambda r: r["id"],
-            reducer=aggregator,
-        )
+
+    # Co-partition annotations with their source shard for the writer. Rows are
+    # sorted by id so the per-shard attr parquet mirrors its NormalizedData shard.
+    shard_pipeline = labeled.group_by(
+        lambda r: r["file_idx"],
+        sort_by=lambda r: r["id"],
+        reducer=aggregator,
     )
 
     outcome = ctx.execute(shard_pipeline, verbose=True)
@@ -389,12 +471,14 @@ def compute_fuzzy_dups_attrs(
     }
 
     cluster_members = sum(r["cluster_members"] for r in shard_results)
-    clusters = sum(r["canonicals"] for r in shard_results)  # one canonical per cluster
+    # One canonical per cluster (GLOBAL) or per (source, cluster) (PER_SOURCE).
+    canonicals = sum(r["canonicals"] for r in shard_results)
     logger.info(
-        "Fuzzy dups: %d cluster members across %d clusters (non-canonicals to drop by default: %d)",
+        "Fuzzy dups (%s): %d cluster members, %d canonical survivors (non-canonicals to drop by default: %d)",
+        canonical_scope.value,
         cluster_members,
-        clusters,
-        cluster_members - clusters,
+        canonicals,
+        cluster_members - canonicals,
     )
 
     return FuzzyDupsAttrData(
@@ -408,6 +492,7 @@ def compute_fuzzy_dups_attrs_step(
     *,
     name: str,
     minhash_steps: list[StepSpec],
+    canonical_scope: CanonicalScope,
     cc_max_iterations: int = 10,
     max_parallelism: int,
     worker_resources: ResourceConfig | None = None,
@@ -421,11 +506,12 @@ def compute_fuzzy_dups_attrs_step(
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=output_path,
+            canonical_scope=canonical_scope,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=max_parallelism,
             worker_resources=worker_resources,
             coordinator_resources=coordinator_resources,
         ),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        hash_attrs={"cc_max_iterations": cc_max_iterations, "canonical_scope": canonical_scope.value},
         override_output_path=override_output_path,
     )

@@ -97,6 +97,7 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    CanonicalScope,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -649,10 +650,15 @@ def reference_datakit_steps(
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
+            canonical_scope=CanonicalScope.PER_SOURCE,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
             worker_resources=scale.pool.worker,
         ),
+        # canonical_scope changes which docs survive, so bind it into the step
+        # hash: a scope flip must land in a fresh artifact, never reuse a
+        # previously-computed GLOBAL dedup at the same path.
+        hash_attrs={"canonical_scope": CanonicalScope.PER_SOURCE.value},
     )
 
     # ---- Final store: 5-way join + per-bucket Levanter cache ------------------
