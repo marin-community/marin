@@ -74,7 +74,10 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
 
 def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
     """Extract static env vars from the k8s pod manifest (excludes downward API entries)."""
-    config = PodConfig(namespace="test", default_image="img:latest", controller_address=controller_address)
+    # Kueue is mandatory on the K8s backend, so a LocalQueue is always configured.
+    config = PodConfig(
+        namespace="test", default_image="img:latest", controller_address=controller_address, local_queue="iris-lq"
+    )
     manifest = _build_pod_manifest(req, config)
     env_list = manifest["spec"]["containers"][0]["env"]
     return {e["name"]: e["value"] for e in env_list if "value" in e}

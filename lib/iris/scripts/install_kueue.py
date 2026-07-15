@@ -40,10 +40,23 @@ Both variants:
      ``ds.coreweave.com/nvlink.domain``).
   4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavor
      (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes) +
-     ClusterQueue (the quota). The namespaced LocalQueue is NOT created here: Iris
-     reconciles its own (``{label_prefix}-lq``) at controller start
-     (``K8sControllerProvider.ensure_kueue_queues``), binding it to this
-     ClusterQueue via ``kubernetes_provider.kueue.cluster_queue``.
+     ClusterQueue. The ClusterQueue enables priority preemption within the queue
+     (``preemption.withinClusterQueue: LowerPriority``): a higher-priority Workload
+     evicts lower-priority admitted ones when it cannot otherwise be admitted —
+     including when TAS cannot place it on real nodes (topology pressure), which is
+     how a higher-priority gang reclaims capacity from running lower-priority gangs.
+     Quota stays non-binding, so the pressure signal is TAS, not quota. Because Iris
+     now routes *every* pod through Kueue (not just gangs), pass
+     ``--cpu-flavor-node-label KEY=VALUE`` to also provision the ``cw-cpu``
+     ResourceFlavor so CPU-only pods have a flavor to match. The namespaced
+     LocalQueue is NOT created here: Iris reconciles its own (``{label_prefix}-lq``)
+     at controller start (``K8sControllerProvider.ensure_kueue_queues``), binding it
+     to this ClusterQueue via ``kubernetes_provider.kueue.cluster_queue``.
+
+NB on Kueue version: TAS-aware preemption is version-sensitive. On too-old a Kueue
+a ClusterQueue that combines a topology-bound flavor with a ``preemption`` stanza
+can be marked Inactive, which breaks all gang admission. Validate on the target
+version (kind smoke first) before applying to a shared cluster.
 
 NB on the topology levels / flavor node-labels: to Kueue these are just node-label
 *keys* and a node selector — nothing CoreWeave-specific. The ``upstream`` variant
@@ -89,6 +102,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     VARIANT_UPSTREAM,
     build_cks_values,
     build_cluster_queue,
+    build_cpu_resource_flavor,
     build_resource_flavor,
     build_topology_cr,
     build_upstream_values,
@@ -217,6 +231,7 @@ def run_install(
     with_queues: bool = False,
     cluster_queue: str = "iris-cq",
     flavor_topology: str = INFINIBAND_TOPOLOGY_NAME,
+    cpu_flavor_node_label: tuple[str, str] | None = None,
     pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     apply: bool = False,
 ) -> None:
@@ -225,6 +240,9 @@ def run_install(
     Idempotent. Prints the plan and returns without mutating the cluster unless
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
+    ``cpu_flavor_node_label`` is a ``(key, value)`` node label selecting CPU nodes;
+    when set, ``--with-queues`` also provisions the cw-cpu ResourceFlavor and adds it
+    to the ClusterQueue so CPU-only pods routed through Kueue have a flavor to match.
     ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
     namespace) — never widen this to system namespaces on a shared cluster.
     """
@@ -233,7 +251,13 @@ def run_install(
 
     hflags = helm_flags(kubeconfig, context)
     kflags = kubectl_flags(kubeconfig, context)
-    queue_docs = [build_resource_flavor(flavor_topology), build_cluster_queue(cluster_queue)] if with_queues else []
+    if with_queues:
+        queue_docs = [build_resource_flavor(flavor_topology)]
+        if cpu_flavor_node_label is not None:
+            queue_docs.append(build_cpu_resource_flavor(*cpu_flavor_node_label))
+        queue_docs.append(build_cluster_queue(cluster_queue, include_cpu_flavor=cpu_flavor_node_label is not None))
+    else:
+        queue_docs = []
 
     if variant == VARIANT_COREWEAVE:
         values = build_cks_values(pod_namespaces)
@@ -383,6 +407,14 @@ def _apply(
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
+def _parse_node_label(spec: str) -> tuple[str, str]:
+    """Parse a ``KEY=VALUE`` node-label selector; raise on a malformed value."""
+    key, sep, value = spec.partition("=")
+    if not sep or not key or not value:
+        raise click.BadParameter(f"expected KEY=VALUE, got {spec!r}", param_hint="--cpu-flavor-node-label")
+    return key, value
+
+
 @click.command()
 @click.option(
     "--variant",
@@ -407,6 +439,13 @@ def _apply(
     help="Topology the cw-ib ResourceFlavor binds (default: infiniband; multinode-nvlink-ib exposes nvlink.domain).",
 )
 @click.option(
+    "--cpu-flavor-node-label",
+    default=None,
+    metavar="KEY=VALUE",
+    help="Node label selecting CPU nodes. When set, --with-queues also provisions the cw-cpu "
+    "ResourceFlavor so CPU-only pods routed through Kueue land on CPU capacity (never the IB GPU flavor).",
+)
+@click.option(
     "--pod-namespace",
     "pod_namespaces",
     multiple=True,
@@ -424,10 +463,12 @@ def main(
     with_queues: bool,
     cluster_queue: str,
     flavor_topology: str,
+    cpu_flavor_node_label: str | None,
     pod_namespaces: tuple[str, ...],
     apply: bool,
 ) -> None:
     """Install + configure Kueue (coreweave or upstream) for Iris gang admission."""
+    cpu_label = _parse_node_label(cpu_flavor_node_label) if cpu_flavor_node_label else None
     run_install(
         variant=variant,
         kubeconfig=kubeconfig,
@@ -437,6 +478,7 @@ def main(
         with_queues=with_queues,
         cluster_queue=cluster_queue,
         flavor_topology=flavor_topology,
+        cpu_flavor_node_label=cpu_label,
         pod_namespaces=pod_namespaces,
         apply=apply,
     )

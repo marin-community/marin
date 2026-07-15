@@ -651,6 +651,19 @@ export interface BackendStatus {
   worker?: WorkerFleetDetail
 }
 
+/** Free vs. total consumable capacity per resource token (lowercased
+ *  device-variant → chips). map<string,int64> values JSON-encode as strings. */
+export interface ResourceAvailability {
+  version?: number
+  /** When the serving cluster computed the amounts, ms since epoch. int64 → string. */
+  observationEpochMs?: string
+  /** Free chips per variant, e.g. { h100: "24" }. */
+  amounts?: Record<string, string>
+  /** Total chips per variant over the same capacity; absent on a peer that
+   *  predates the field. */
+  totalAmounts?: Record<string, string>
+}
+
 /** Per-backend summary returned by the ListBackends RPC. */
 export interface BackendSummary {
   backendId: string
@@ -668,6 +681,8 @@ export interface BackendSummary {
   capacityHealth: Record<string, number>
   /** Expanded per-backend status rendered in the Backends tab detail panel. */
   detail?: BackendStatus
+  /** Free/total capacity metric; unset when the backend does not supply it. */
+  availability?: ResourceAvailability
 }
 
 export interface UnroutableJob {

@@ -132,6 +132,43 @@ class TestIrisActorHandlePickle:
         assert restored._client is None
 
 
+class TestResourceConfigScale:
+    def test_scale_with_uniform_factor_scales_all_dimensions(self):
+        scaled = ResourceConfig(cpu=1, ram="4g", disk="2g").scale(2)
+        assert scaled.cpu == 2
+        assert scaled.ram == "8g"
+        assert scaled.disk == "4g"
+
+    def test_scale_with_fractional_factor_scales_all_dimensions_down(self):
+        scaled = ResourceConfig(cpu=2, ram="8g", disk="4g").scale(0.5)
+        assert scaled.cpu == 1
+        assert scaled.ram == "4g"
+        assert scaled.disk == "2g"
+
+    def test_scale_with_individual_factors_scales_specified_dimensions(self):
+        base = ResourceConfig(cpu=1, ram="4g", disk="2g")
+        scaled = base.scale(cpu=3, ram=3, disk=2.5)
+        assert scaled.cpu == 3
+        assert scaled.ram == "12g"
+        assert scaled.disk == "5g"
+
+    def test_scale_with_omitted_kwargs_leaves_unspecified_dimensions_unchanged(self):
+        scaled = ResourceConfig(cpu=1, ram="10g", disk="2g").scale(cpu=2, ram=2.4)
+        assert scaled.cpu == 2
+        assert scaled.ram == "24g"
+        assert scaled.disk == "2g"
+
+    def test_scale_with_factor_preserves_non_size_fields(self):
+        base = ResourceConfig(cpu=1, ram="4g", disk="2g", preemptible=False, image="custom")
+        scaled = base.scale(2)
+        assert scaled.preemptible is False
+        assert scaled.image == "custom"
+
+    def test_scale_with_mixed_factor_and_kwargs_raises_value_error(self):
+        with pytest.raises(ValueError, match="either a single factor"):
+            ResourceConfig(cpu=1, ram="4g").scale(2, cpu=3)
+
+
 class TestImagePlumbing:
     def test_resource_config_image_default_is_none(self):
         rc = ResourceConfig()

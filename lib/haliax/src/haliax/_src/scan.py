@@ -282,7 +282,7 @@ def scan(
 
 
 def scan(
-    f: Callable,  # : ScanFn[Carry, Args, Y],  This confuses mypy too much
+    f: Callable,  # : ScanFn[Carry, Args, Y],  This confuses pyrefly too much
     axis: AxisSelector,
     *,
     remat: ScanCheckpointSpec = False,
@@ -312,7 +312,7 @@ def scan(
     checkpoint = ScanCheckpointPolicy._mk(remat)
 
     if isinstance(is_scanned, bool):
-        q = is_scanned  # this is to make mypy happy
+        q = is_scanned  # this is to make pyrefly happy
         is_scanned = lambda _: q
 
     def is_scanned_with_axis(leaf):
