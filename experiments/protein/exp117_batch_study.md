@@ -88,19 +88,18 @@ overhead comparison is only clean where the prediction is accumulation-bound (v5
 
 | slice | chips | HBMtot | HBM/ch | maxUtil% | maxB | pdp_a | gac_a | pdp_p | gac_p |
 |---|---|---|---|---|---|---|---|---|---|
-| v5litepod-4 | 4 | 64 | 16 | 80.0* | 16 | 4 | 32 | 2 | 64 |
-| v5litepod-8 | 8 | 128 | 16 | 72.1* | 32 | 4 | 16 | 2 | 32 |
-| v5litepod-16 | 16 | 256 | 16 | 59.8* | 64 | 4 | 8 | 2 | 16 |
-| v6e-4 | 4 | 128 | 32 | 99.6* | 64 | 16 | 8 | 4 | 32 |
-| v6e-8 | 8 | 256 | 32 | 94.7* | 128 | 16 | 4 | 4 | 16 |
-| v6e-16 | 16 | 512 | 32 | 96.8* | 256 | 16 | 2 | 4 | 8 |
-| v5p-8 | 4 | 380 | 95 | 62.6* | 128 | 32 | 4 | 16 | 8 |
-| v5p-16 | 8 | 760 | 95 | 64.9* | 256 | 32 | 2 | 16 | 4 |
-| v5p-32 | 16 | 1520 | 95 | 63.7* | 512 | −1 | 1 | 16 | 2 |
+| v5litepod-4 | 4 | 64 | 16 | 87.0 | 16 | 4 | 32 | 2 | 64 |
+| v5litepod-8 | 8 | 128 | 16 | 72.1 | 32 | 4 | 16 | 2 | 32 |
+| v5litepod-16 | 16 | 256 | 16 | 68.6 | 64 | 4 | 8 | 2 | 16 |
+| v6e-4 | 4 | 128 | 32 | 100.0 | 64 | 16 | 8 | 4 | 32 |
+| v6e-8 | 8 | 256 | 32 | 96.6 | 128 | 16 | 4 | 4 | 16 |
+| v6e-16 | 16 | 512 | 32 | 97.8 | 256 | 16 | 2 | 4 | 8 |
+| v5p-8 | 4 | 380 | 95 | 63.9 | 128 | 32 | 4 | 16 | 8 |
+| v5p-16 | 8 | 760 | 95 | 65.6 | 256 | 32 | 2 | 16 | 4 |
+| v5p-32 | 16 | 1520 | 95 | 64.0 | 512 | −1 | 1 | 16 | 2 |
 
-**\* Provisional HBM** — these came from runs stopped shortly after step 0, so they reflect only the
-compile-time allocation and likely *understate* the true peak (which can rise during later steps,
-eval, and checkpointing). They must be refreshed from completed runs (method step 5) before use.
+HBM utilization is from **completed** runs (iris `succeeded` + wandb `finished`) — the full smoke test
+including evals and checkpoints, so the peak reflects real training, not just the step-0 allocation.
 
 **Legend** — `chips`: TPU chips in the slice. `HBMtot` / `HBM/ch`: total and per-chip HBM (GiB;
 `HBMtot = chips × HBM/ch`). `maxUtil%`: peak `hbmMemoryUsage` over all chips and steps of the max-fit
@@ -110,8 +109,8 @@ same, **predicted** by `tpu_batch_config` at overhead 1.0. **pdp = −1** means 
 fits with no accumulation.
 
 **Takeaway**: predicted `pdp` is 2–4× below measured everywhere (predicted `gac` correspondingly too
-high) — the overhead-1.0 estimate is that conservative. v6e runs right at the edge (95–99.6% at its
-ceiling); v5e/v5p ceilings sit lower (60–80%) only because the next power of two would overshoot 100%.
+high) — the overhead-1.0 estimate is that conservative. v6e runs right at the edge (96.6–100% at its
+ceiling); v5e/v5p ceilings sit lower (64–87%) only because the next power of two would overshoot 100%.
 
 ## Failure modes & fixes
 

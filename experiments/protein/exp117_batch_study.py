@@ -159,12 +159,15 @@ def print_target_table(target: int, overhead: float, with_hbm: bool) -> None:
     print(f"\nTarget global batch = {target}; predicted at overhead = {overhead:g}\n")
     cols = ["slice", "chips", "HBMtot", "HBM/ch", "maxUtil%", "maxB", "pdp_a", "gac_a", "pdp_p", "gac_p"]
     print(" ".join(f"{h:>11s}" for h in cols))
+    any_provisional = False
     for c in CEILINGS:
         pdp_a, gac_a = measured_config(c, target)
         pdp_p, gac_p = predicted_config(c.tpu, target, overhead)
         util = "-"
         if with_hbm:
             peak, finished = hbm_peak_util(c.tpu, c.max_batch, c.chips)
+            if peak is not None and not finished:
+                any_provisional = True
             util = "n/a" if peak is None else (f"{peak:.1f}" if finished else f"{peak:.1f}*")
         row = [
             c.tpu,
@@ -179,7 +182,7 @@ def print_target_table(target: int, overhead: float, with_hbm: bool) -> None:
             gac_p,
         ]
         print(" ".join(f"{v!s:>11s}" for v in row))
-    if with_hbm:
+    if any_provisional:
         print("\n* = from an unfinished (killed/crashed) run; peak is provisional until a completed run exists.")
 
 
