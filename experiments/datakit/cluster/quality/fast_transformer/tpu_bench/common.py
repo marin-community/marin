@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared helpers for the TPU throughput benchmark (issue #7187).
+"""Shared helpers for the TPU throughput benchmark.
 
-Kept separate from the production ``score.py`` so the benchmark's instrumentation and
-window-carrying schema don't leak into the deployed path. Everything here reuses the
-production model / tokenizer / windowing so the numbers reflect the real code.
+Kept separate from the production ``score.py`` so the benchmark's instrumentation doesn't
+leak into the deployed path. Everything here reuses the production model / tokenizer /
+windowing so the numbers reflect the real code.
 """
 
 import json
@@ -19,15 +19,13 @@ from rigging.filesystem import open_url
 from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, MODEL_META, MODEL_REMAP
 
-# Peak bf16 FLOP/s per v6e chip (fray/device_flops.py: v6e bf16 = 918e12).
-V6E_BF16_PEAK_FLOPS = 918e12
-
-# Calibration json name in a scorer dir (matches score.py's MODEL_CALIB).
+# Calibration json name in a scorer dir.
 MODEL_CALIB = "calib_bme.json"
 
 
 def doc_windows(text: str) -> list[str]:
-    """The begin/middle/end ~512-token windows of a doc (mirrors ``score_bme``)."""
+    """The begin/middle/end ~512-token windows of a doc: the whole text if short, else the
+    first, middle, and last ``CHUNK_CHARS``-char slices."""
     if len(text) <= CHUNK_CHARS:
         return [text]
     m = len(text) // 2
@@ -44,22 +42,19 @@ def load_remap_meta(model_dir: str) -> tuple[dict[int, int], str, int]:
     return remap, meta["tokenizer"], int(meta["max_tokens"])
 
 
-def remap_to_array(remap: dict[int, int], vocab_size: int) -> np.ndarray:
-    """Dense lookup table: raw HF token id -> compact id (UNK for pruned). Vectorizes the
-    per-token ``remap.get`` loop so packing is a gather, not a Python dict loop."""
-    hi = max(remap) + 1
-    lut = np.full(max(hi, 1), UNK_ID, dtype=np.int32)
+def remap_to_array(remap: dict[int, int]) -> np.ndarray:
+    """Dense lookup table indexed by raw HF token id -> compact id (UNK for pruned ids).
+
+    Sized to ``max(remap) + 1``; callers guard raw ids beyond that range before indexing.
+    """
+    lut = np.full(max(max(remap) + 1, 1), UNK_ID, dtype=np.int32)
     for raw, compact in remap.items():
         lut[raw] = compact
     return lut
 
 
 def pack_windows(texts: list[str], tokenizer_name: str, lut: np.ndarray, max_tokens: int) -> np.ndarray:
-    """Tokenize + remap + right-pad a list of window texts to ``[N, max_tokens]`` int32.
-
-    Uses the dense ``lut`` (vectorized gather) instead of the production per-token dict
-    loop; the benchmark reports both so we can attribute the pack cost.
-    """
+    """Tokenize + remap + right-pad a list of window texts to ``[N, max_tokens]`` int32."""
     encoded = encode_texts(tokenizer_name, texts, max_tokens)
     ids = np.full((len(texts), max_tokens), PAD_ID, dtype=np.int32)
     lut_n = lut.shape[0]

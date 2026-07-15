@@ -23,6 +23,7 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
+from fray.device_flops import device_flops
 
 from experiments.datakit.cluster.quality.fast_transformer.inference import (
     _predict_batch,
@@ -35,8 +36,8 @@ from experiments.datakit.cluster.quality.fast_transformer.model import (
 
 logger = logging.getLogger(__name__)
 
-# Peak bf16 FLOP/s per v6e chip (fray/device_flops.py).
-V6E_BF16_PEAK_FLOPS = 918e12
+# Peak bf16 FLOP/s per v6e chip.
+V6E_BF16_PEAK_FLOPS = device_flops("v6e", "bf16")
 
 # The deployed scorer's architecture (train.py DEPLOY_CONFIG + MAX_TOKENS).
 DEPLOYED = dict(embed_dim=256, hidden_dim=256, num_layers=2, num_heads=4, pool_window=64, pool_kind="meanmaxmin")

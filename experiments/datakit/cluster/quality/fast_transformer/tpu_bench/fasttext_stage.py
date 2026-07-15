@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pipeline C: fasttext quality-classifier baseline on the SAME corpus slice.
+"""fasttext quality-classifier baseline on the same corpus slice.
 
 Runs the deployed-style fasttext inference (the path the fast-transformer replaced) on a
 CPU Zephyr fleet so the throughput / $ comparison is apples-to-apples: identical doc set,
-identical sharding. fasttext's natural unit is docs/sec (and chars/sec); corpus-token
-throughput is derived from the shared reference-tokenizer count (from the B1 run), so both
-classifiers are compared on the same corpus tokens.
+identical sharding. Reports docs/sec and chars/sec (fasttext's natural units).
 """
 
 import argparse

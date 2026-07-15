@@ -3,10 +3,10 @@
 
 """Child-process tokenization worker for the fast scoring pipeline.
 
-Deliberately imports NO jax: the fast stage spawns a process pool to tokenize across the
-v6e host's many cores, and a spawned child must not import the TPU runtime (only the
-parent process owns the 4 chips). Each child loads the tokenizer + vocab lookup once via
-``child_init`` and then packs window-text batches to ``[N, max_tokens]`` int32.
+The fast stage forks a process pool to tokenize across the v6e host's many cores. A child
+runs no jax *device* ops -- it only tokenizes -- so it never initializes the TPU runtime
+(the parent process owns the 4 chips). Each child loads the tokenizer + vocab lookup once
+via ``child_init`` and then packs window-text batches to ``[N, max_tokens]`` int32.
 """
 
 import os
@@ -25,7 +25,7 @@ _STATE: dict = {}
 def child_init(model_dir: str) -> None:
     """Pool initializer: load tokenizer + dense remap once per child process."""
     remap, tokenizer_name, max_tokens = load_remap_meta(model_dir)
-    _STATE["lut"] = remap_to_array(remap, len(remap) + 2)
+    _STATE["lut"] = remap_to_array(remap)
     _STATE["tokenizer_name"] = tokenizer_name
     _STATE["max_tokens"] = max_tokens
 

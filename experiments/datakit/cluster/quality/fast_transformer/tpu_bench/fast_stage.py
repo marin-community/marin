@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 def _load_worker(model_dir: str, device_batch: int, max_tokens: int, calib_file: str):
     scorer = load_pooled_scorer(model_dir)
     remap, tokenizer_name, _ = load_remap_meta(model_dir)
-    lut = remap_to_array(remap, len(remap) + 2)
+    lut = remap_to_array(remap)
     with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
         calib = json.loads(fh.read())
     xk = np.asarray(calib["xk"], dtype=np.float64)
