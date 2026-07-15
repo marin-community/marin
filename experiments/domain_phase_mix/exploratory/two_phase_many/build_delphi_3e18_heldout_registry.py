@@ -34,6 +34,7 @@ DEFAULT_LEDGER = REPO_ROOT / ".experiments/ledger.sqlite"
 
 TRAIN_PROJECT = "marin-community/marin"
 EVAL_PROJECT = "marin-community/marin-eval"
+EAST5_PREFIX = "gs://marin-us-east5/"
 TRAIN_FILTER = {
     "$and": [
         {"display_name": {"$regex": "_3e18"}},
@@ -122,6 +123,20 @@ EVAL_ATTEMPT_FIELDS = (
     "checkpoint_path",
     "table9_macro_bpb",
     "eval_group",
+)
+
+MISSING_TABLE9_MANIFEST_FIELDS = (
+    "eval_name",
+    "checkpoint",
+    "panel",
+    "scale",
+    "run_name",
+    "source_experiment",
+    "checkpoint_root",
+    "expected_checkpoint_step",
+    "method",
+    "fit_panel_overlap",
+    "wandb_url",
 )
 
 
@@ -588,12 +603,19 @@ def audit_summary(
     policy_counts = Counter(str(row["policy_class"]) for row in current)
     overlap_counts = Counter(str(row["fit_panel_overlap"]) for row in current)
     series_counts = Counter(str(row["training_series"]) for row in current)
+    complete = [row for row in current if str(row["checkpoint_declared_complete"]) == "1"]
+    disjoint_complete = [row for row in complete if row["fit_panel_overlap"] == "coordinate_disjoint"]
     return {
         "training_attempt_count": len(current),
         "training_state_counts": dict(sorted(state_counts.items())),
         "checkpoint_complete_count": sum(str(row["checkpoint_declared_complete"]) == "1" for row in current),
         "uncheatable_metric_count": sum(row["uncheatable_bpb"] != "" for row in current),
         "table9_metric_count": sum(row["table9_macro_bpb"] != "" for row in current),
+        "usable_complete_count": len(complete),
+        "usable_complete_with_table9_count": sum(row["table9_macro_bpb"] != "" for row in complete),
+        "usable_disjoint_complete_count": len(disjoint_complete),
+        "usable_disjoint_complete_with_table9_count": sum(row["table9_macro_bpb"] != "" for row in disjoint_complete),
+        "missing_table9_eval_ready_count": sum(row["table9_macro_bpb"] == "" for row in complete),
         "fieldbook_match_count": sum(int(str(row["fieldbook_match_count"] or 0)) > 0 for row in current),
         "objective_counts": dict(sorted(objective_counts.items())),
         "policy_class_counts": dict(sorted(policy_counts.items())),
@@ -604,6 +626,36 @@ def audit_summary(
         "missing_uncheatable_runs": [row["wandb_run_name"] for row in current if row["uncheatable_bpb"] == ""],
         "missing_table9_runs": [row["wandb_run_name"] for row in current if row["table9_macro_bpb"] == ""],
     }
+
+
+def missing_table9_manifest(current: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in current:
+        if str(row["checkpoint_declared_complete"]) != "1" or row["table9_macro_bpb"] != "":
+            continue
+        checkpoint = str(row["expected_hf_checkpoint"])
+        if not checkpoint.startswith(EAST5_PREFIX):
+            raise ValueError(f"Expected east5 checkpoint, got {checkpoint}")
+        checkpoint_root, separator, _ = checkpoint.partition("/hf/")
+        if not separator:
+            raise ValueError(f"Expected checkpoint path containing /hf/: {checkpoint}")
+        eval_name = re.sub(r"[^A-Za-z0-9_]+", "_", f"t9_gap_{row['wandb_run_name']}").strip("_")
+        rows.append(
+            {
+                "eval_name": eval_name,
+                "checkpoint": checkpoint.removeprefix(EAST5_PREFIX),
+                "panel": "delphi_3e18_append_only_heldouts",
+                "scale": "3e18",
+                "run_name": row["wandb_run_name"],
+                "source_experiment": row["training_series"],
+                "checkpoint_root": checkpoint_root,
+                "expected_checkpoint_step": row["global_step"],
+                "method": row["objective"],
+                "fit_panel_overlap": row["fit_panel_overlap"],
+                "wandb_url": row["wandb_url"],
+            }
+        )
+    return rows
 
 
 def write_report(path: Path, summary: Mapping[str, object], fit_panel: Path, observed_at: str) -> None:
@@ -623,6 +675,10 @@ def write_report(path: Path, summary: Mapping[str, object], fit_panel: Path, obs
         f"- Declared-complete checkpoints: **{summary['checkpoint_complete_count']}**",
         f"- Uncheatable BPB coverage: **{summary['uncheatable_metric_count']}**",
         f"- native/direct Table-9 macro coverage: **{summary['table9_metric_count']}**",
+        f"- Strict coordinate-disjoint usable heldouts with Table-9: "
+        f"**{summary['usable_disjoint_complete_with_table9_count']} / "
+        f"{summary['usable_disjoint_complete_count']}**",
+        f"- Completed checkpoints ready for missing Table-9 eval: **{summary['missing_table9_eval_ready_count']}**",
         f"- Native Table-9 eval attempts retained: **{summary['native_table9_eval_attempt_count']}**",
         f"- Fieldbook-linked training attempts: **{summary['fieldbook_match_count']}**",
         f"- Objectives: `{objectives}`",
@@ -691,6 +747,11 @@ def main() -> None:
     current_fields = (*IDENTITY_FIELDS, *[field for field in OBSERVATION_FIELDS if field != "heldout_id"])
     write_csv(args.output_dir / "heldout_current.csv", current_fields, current)
     write_csv(args.output_dir / "table9_eval_attempts.csv", EVAL_ATTEMPT_FIELDS, eval_rows)
+    write_csv(
+        args.output_dir / "missing_table9_eval_manifest.csv",
+        MISSING_TABLE9_MANIFEST_FIELDS,
+        missing_table9_manifest(current),
+    )
 
     summary = audit_summary(current, eval_rows)
     summary.update(
