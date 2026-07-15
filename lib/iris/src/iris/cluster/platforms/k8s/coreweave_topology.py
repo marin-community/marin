@@ -32,3 +32,15 @@ CW_FLAVOR_INFINIBAND = "infiniband"
 # GB200 NVLink domain (hard/required single-domain colocation). H100 nodes do
 # NOT carry this label, so an H100 IB deployment has no nvlink.domain level.
 CW_LABEL_NVLINK_DOMAIN = "ds.coreweave.com/nvlink.domain"
+
+# NVL72 (GB200/GB300) instances deploy in whole racks of 18 nodes. Such NodePools are
+# declared by rack count (spec.targetRacks) and do NOT autoscale — CoreWeave rejects both a
+# partial rack and the autoscaler on rack-based instances. Every other instance type is
+# node-based (spec.targetNodes + autoscaling). See docs.coreweave.com nvl72 instance docs.
+RACK_SIZE = 18
+NVL72_INSTANCE_PREFIXES = ("gb200", "gb300")
+
+
+def is_rack_based(instance_type: str) -> bool:
+    """True if `instance_type` is an NVL72 SKU that deploys in whole racks (spec.targetRacks)."""
+    return instance_type.lower().startswith(NVL72_INSTANCE_PREFIXES)

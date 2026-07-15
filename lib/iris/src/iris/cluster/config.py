@@ -756,6 +756,10 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
+    # Infrastructure-as-code provisioning section (see infra/iac). Carried as an
+    # opaque dict so `provisioning:` can live in the cluster config file without
+    # Iris depending on the IaC schema; iac.config owns the typed validation.
+    provisioning: dict[str, Any] | None = None
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()

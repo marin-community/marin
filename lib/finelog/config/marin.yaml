@@ -29,3 +29,9 @@ auth:
               -----BEGIN PUBLIC KEY-----
               MCowBQYDK2VwAyEAJYrTAboQmQmVnSRcsxusCfosRTUl7t2L3q2yRzW5Kwk=
               -----END PUBLIC KEY-----
+      - cluster: cw-us-east-08a
+        public_keys:
+          - |
+              -----BEGIN PUBLIC KEY-----
+              MCowBQYDK2VwAyEAfUBNvrpunm0oJIaOSVElfwPSEdob4v8ehthSiqsk9ZM=
+              -----END PUBLIC KEY-----

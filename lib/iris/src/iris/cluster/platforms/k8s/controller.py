@@ -32,6 +32,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_SYSTEM,
@@ -872,11 +873,48 @@ class K8sControllerProvider:
         are reconciled on every cluster start. Existing pools keep one full
         slice worth of nodes warm so a transient pod deletion does not collapse
         multihost desired capacity back to a single node.
+
+        NVL72 (GB200/GB300) instances deploy in whole racks: their pools set
+        spec.targetRacks and do not autoscale (CoreWeave rejects the autoscaler
+        and a partial rack on rack-based instances). Every other instance type
+        is node-based (spec.targetNodes + autoscaling).
         """
-        target_nodes = 0
-        existing = self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name)
-        if existing is not None:
-            target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
+        node_labels = {
+            self._iris_labels.iris_managed: "true",
+            self._iris_labels.iris_scale_group: scale_group_name,
+            # Pin Konnectivity agents and monitoring pods to always-on nodes
+            # so GPU NodePools can safely scale to zero.
+            **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
+        }
+
+        if is_rack_based(instance_type):
+            if max_nodes % RACK_SIZE != 0:
+                raise InfraError(
+                    f"scale group {scale_group_name!r} is a rack-based ({instance_type}) NVL72 pool, "
+                    f"so its node count must be a whole number of {RACK_SIZE}-node racks; got {max_nodes}"
+                )
+            spec = {
+                "computeClass": "default",
+                "instanceType": instance_type,
+                "targetRacks": max_nodes // RACK_SIZE,
+                "nodeLabels": node_labels,
+            }
+            reconcile_note = f"targetRacks={max_nodes // RACK_SIZE}"
+        else:
+            target_nodes = 0
+            existing = self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name)
+            if existing is not None:
+                target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
+            spec = {
+                "computeClass": "default",
+                "instanceType": instance_type,
+                "autoscaling": True,
+                "minNodes": min_nodes,
+                "maxNodes": max_nodes,
+                "targetNodes": target_nodes,
+                "nodeLabels": node_labels,
+            }
+            reconcile_note = f"targetNodes={target_nodes}"
 
         manifest = {
             "apiVersion": "compute.coreweave.com/v1alpha1",
@@ -885,24 +923,10 @@ class K8sControllerProvider:
                 "name": pool_name,
                 "labels": self._resource_labels(scale_group_name),
             },
-            "spec": {
-                "computeClass": "default",
-                "instanceType": instance_type,
-                "autoscaling": True,
-                "minNodes": min_nodes,
-                "maxNodes": max_nodes,
-                "targetNodes": target_nodes,
-                "nodeLabels": {
-                    self._iris_labels.iris_managed: "true",
-                    self._iris_labels.iris_scale_group: scale_group_name,
-                    # Pin Konnectivity agents and monitoring pods to always-on nodes
-                    # so GPU NodePools can safely scale to zero.
-                    **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
-                },
-            },
+            "spec": spec,
         }
         self._kubectl.apply_json(manifest)
-        logger.info("NodePool %s applied (instance_type=%s, targetNodes=%d)", pool_name, instance_type, target_nodes)
+        logger.info("NodePool %s applied (instance_type=%s, %s)", pool_name, instance_type, reconcile_note)
 
     # -- Storage Detection ----------------------------------------------------
 
