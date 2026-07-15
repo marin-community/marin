@@ -28,7 +28,7 @@ EXPERIMENT_ID = "MOE-MRCR-001"
 BUDGET = 3.82e17
 HIDDEN_DIM = 512
 TARGET_STEPS = 10_980
-TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8", zone="us-east5-a")
+TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8", zone="us-east5-a", ram="128g")
 NEMOTRON_WEIGHTS = {
     "hq_actual": 0.91351,
     "hq_synth": 2.72,
