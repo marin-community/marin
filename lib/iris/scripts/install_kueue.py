@@ -38,17 +38,21 @@ Both variants:
   3. Create the Topology CRs (infiniband + multinode-nvlink-ib) so TAS can resolve
      the podset-topology annotations (``backend.coreweave.cloud/leafgroup``,
      ``ds.coreweave.com/nvlink.domain``).
-  4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavor
-     (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes) +
-     ClusterQueue. The ClusterQueue enables priority preemption within the queue
-     (``preemption.withinClusterQueue: LowerPriority``): a higher-priority Workload
-     evicts lower-priority admitted ones when it cannot otherwise be admitted —
-     including when TAS cannot place it on real nodes (topology pressure), which is
+  4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavors
+     (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes, and
+     ``cw-cpu``) + ClusterQueue. The ClusterQueue enables priority preemption within
+     the queue (``preemption.withinClusterQueue: LowerPriority``): a higher-priority
+     Workload evicts lower-priority admitted ones when it cannot otherwise be admitted
+     — including when TAS cannot place it on real nodes (topology pressure), which is
      how a higher-priority gang reclaims capacity from running lower-priority gangs.
      Quota stays non-binding, so the pressure signal is TAS, not quota. Because Iris
-     now routes *every* pod through Kueue (not just gangs), pass
-     ``--cpu-flavor-node-label KEY=VALUE`` to also provision the ``cw-cpu``
-     ResourceFlavor so CPU-only pods have a flavor to match. The namespaced
+     now routes *every* pod through Kueue (not just gangs), CPU-only pods need a flavor
+     to match, so ``cw-cpu`` is always provisioned. By default it carries NO node
+     selector, so a CPU pod admitted to it gets no nodeSelector injected and stays free
+     to schedule on any node: it prefers CPU nodes (GPU nodes carry a soft
+     ``PreferNoSchedule`` taint) but reuses idle GPU nodes when CPU capacity is full,
+     rather than being fenced onto CPU-only capacity. Pass ``--cpu-flavor-node-label
+     KEY=VALUE`` to instead pin ``cw-cpu`` to specific CPU nodes. The namespaced
      LocalQueue is NOT created here: Iris reconciles its own (``{label_prefix}-lq``)
      at controller start (``K8sControllerProvider.ensure_kueue_queues``), binding it
      to this ClusterQueue via ``kubernetes_provider.kueue.cluster_queue``.
@@ -191,10 +195,13 @@ NON_BINDING_QUOTA = {
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 # The CPU ResourceFlavor (cw-cpu) covers the SAME resources so it can share one
-# resourceGroup with cw-ib, but pins the accelerator quotas to ZERO: a GPU pod can
-# never match cw-cpu and falls through to the IB flavor, while a CPU-only pod (which
-# requests no GPU/RDMA) matches cw-cpu and lands on CPU capacity. Listed first in the
-# resourceGroup so CPU pods pick it before the GPU flavor.
+# resourceGroup with cw-ib, but pins the accelerator quotas to ZERO: a GPU pod (which
+# requests nvidia.com/gpu + rdma/ib) can never be admitted under cw-cpu and falls
+# through to the IB flavor, while a CPU-only pod matches cw-cpu. Listed first in the
+# resourceGroup so CPU pods pick it before the GPU flavor. cw-cpu carries no node
+# selector by default (build_cpu_resource_flavor), so a CPU pod admitted to it gets no
+# injected nodeSelector and can run on any node — it reuses idle GPU nodes rather than
+# being fenced onto CPU-only capacity.
 CPU_RESOURCE_FLAVOR_NAME = "cw-cpu"
 CPU_FLAVOR_QUOTA = {**NON_BINDING_QUOTA, "nvidia.com/gpu": "0", "rdma/ib": "0"}
 
@@ -331,23 +338,28 @@ def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict
     }
 
 
-def build_cpu_resource_flavor(node_label_key: str, node_label_value: str) -> dict:
+def build_cpu_resource_flavor(node_label: tuple[str, str] | None = None) -> dict:
     """Return the cluster-scoped CPU ResourceFlavor (cw-cpu), no topology.
 
-    Selects CPU nodes via a caller-supplied node label so CPU-only pods routed
-    through Kueue land on CPU capacity, never the IB GPU flavor. The correct label
-    is cluster-specific (which nodes are CPU nodes), so it is a required input, not
-    a default. No ``topologyName``: CPU jobs need no topology-aware placement.
+    By default cw-cpu carries NO node selector (empty spec). A CPU-only pod admitted
+    to it therefore gets no nodeSelector injected and stays free to schedule on any
+    node: it prefers CPU nodes (GPU nodes carry a soft ``PreferNoSchedule`` taint) but
+    reuses idle GPU nodes when CPU capacity is full, rather than being fenced onto
+    CPU-only capacity. Pass ``node_label`` as ``(key, value)`` to instead pin cw-cpu to
+    specific CPU nodes. No ``topologyName``: CPU jobs need no topology-aware placement.
     """
+    spec: dict = {}
+    if node_label is not None:
+        spec["nodeLabels"] = {node_label[0]: node_label[1]}
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ResourceFlavor",
         "metadata": {"name": CPU_RESOURCE_FLAVOR_NAME},
-        "spec": {"nodeLabels": {node_label_key: node_label_value}},
+        "spec": spec,
     }
 
 
-def build_cluster_queue(name: str, *, include_cpu_flavor: bool = False) -> dict:
+def build_cluster_queue(name: str) -> dict:
     """Return the cluster-scoped, admin-owned ClusterQueue.
 
     Covers every resource Iris pods request (COVERED_RESOURCES) with a non-binding
@@ -358,24 +370,20 @@ def build_cluster_queue(name: str, *, include_cpu_flavor: bool = False) -> dict:
     place it (topology pressure), which is how a higher-priority gang reclaims nodes
     from running batch gangs even though quota never binds.
 
-    With ``include_cpu_flavor`` the resourceGroup carries cw-cpu (first) as well as
-    cw-ib, so CPU-only pods routed through Kueue match a CPU flavor instead of the IB
-    GPU flavor. Both flavors cover the same resources; cw-cpu pins GPU/RDMA to 0.
+    The resourceGroup carries cw-cpu (first) and cw-ib, so a CPU-only pod matches the
+    CPU flavor and a GPU pod (nvidia.com/gpu + rdma/ib, which cw-cpu pins to 0) matches
+    the IB flavor. Both flavors cover the same resources.
     """
     flavors = [
         {
+            "name": CPU_RESOURCE_FLAVOR_NAME,
+            "resources": [{"name": r, "nominalQuota": CPU_FLAVOR_QUOTA[r]} for r in COVERED_RESOURCES],
+        },
+        {
             "name": RESOURCE_FLAVOR_NAME,
             "resources": [{"name": r, "nominalQuota": NON_BINDING_QUOTA[r]} for r in COVERED_RESOURCES],
-        }
+        },
     ]
-    if include_cpu_flavor:
-        flavors.insert(
-            0,
-            {
-                "name": CPU_RESOURCE_FLAVOR_NAME,
-                "resources": [{"name": r, "nominalQuota": CPU_FLAVOR_QUOTA[r]} for r in COVERED_RESOURCES],
-            },
-        )
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ClusterQueue",
@@ -520,9 +528,10 @@ def run_install(
     Idempotent. Prints the plan and returns without mutating the cluster unless
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
-    ``cpu_flavor_node_label`` is a ``(key, value)`` node label selecting CPU nodes;
-    when set, ``--with-queues`` also provisions the cw-cpu ResourceFlavor and adds it
-    to the ClusterQueue so CPU-only pods routed through Kueue have a flavor to match.
+    ``--with-queues`` always provisions the cw-cpu ResourceFlavor (CPU pods route
+    through Kueue too and need a flavor to match). ``cpu_flavor_node_label`` is an
+    optional ``(key, value)`` node label that pins cw-cpu to specific CPU nodes; when
+    omitted, cw-cpu carries no node selector so CPU pods can reuse idle GPU nodes.
     ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
     namespace) — never widen this to system namespaces on a shared cluster.
     """
@@ -532,10 +541,11 @@ def run_install(
     hflags = helm_flags(kubeconfig, context)
     kflags = kubectl_flags(kubeconfig, context)
     if with_queues:
-        queue_docs = [build_resource_flavor(flavor_topology)]
-        if cpu_flavor_node_label is not None:
-            queue_docs.append(build_cpu_resource_flavor(*cpu_flavor_node_label))
-        queue_docs.append(build_cluster_queue(cluster_queue, include_cpu_flavor=cpu_flavor_node_label is not None))
+        queue_docs = [
+            build_resource_flavor(flavor_topology),
+            build_cpu_resource_flavor(cpu_flavor_node_label),
+            build_cluster_queue(cluster_queue),
+        ]
     else:
         queue_docs = []
 
@@ -581,7 +591,7 @@ def run_install(
         fg="green",
         bold=True,
     )
-    click.echo("  kubernetes_provider:\n    kueue:\n" f"      cluster_queue: {cluster_queue}")
+    click.echo(f"  kubernetes_provider:\n    kueue:\n      cluster_queue: {cluster_queue}")
 
 
 def _helm_upgrade(chart: str, release: str, values_file: str, hflags: list[str], version_args: list[str]) -> None:
@@ -714,8 +724,8 @@ def _apply(
     "--cpu-flavor-node-label",
     default=None,
     metavar="KEY=VALUE",
-    help="Node label selecting CPU nodes. When set, --with-queues also provisions the cw-cpu "
-    "ResourceFlavor so CPU-only pods routed through Kueue land on CPU capacity (never the IB GPU flavor).",
+    help="Optional node label pinning the cw-cpu ResourceFlavor to specific CPU nodes. --with-queues "
+    "always provisions cw-cpu; omit this to leave it selector-less so CPU pods can reuse idle GPU nodes.",
 )
 @click.option(
     "--pod-namespace",
