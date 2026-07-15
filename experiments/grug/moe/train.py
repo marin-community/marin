@@ -28,7 +28,7 @@ from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
-from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.eval import EvalLossContrast, TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -83,6 +83,7 @@ class GrugEvalConfig:
     eval_current: bool = True
     eval_ema: bool = True
     compute_bpb: bool = True
+    loss_contrasts: tuple[EvalLossContrast, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -501,6 +502,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         prefix=eval_cfg.prefix,
                         eval_current=eval_cfg.eval_current,
                         eval_ema=eval_ema,
+                        loss_contrasts=eval_cfg.loss_contrasts,
                     ),
                     every=interval,
                 )

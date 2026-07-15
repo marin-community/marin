@@ -540,6 +540,40 @@ def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
 
 
+def test_supervised_text_right_slice_retains_target_tokens(tmp_path):
+    data_path = tmp_path / "supervised_truncate.jsonl"
+    data_path.write_text(json.dumps({"input": "1 2 3 4 ", "target": "5 6"}) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=SupervisedLmDatasetFormat(
+            input_key="input",
+            target_key="target",
+            pack=True,
+            slice_strategy="right",
+        ),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    cache = config.build_caches("train")["supervised"]
+    Pos = hax.Axis("position", 4)
+    example = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    ).as_sync_dataset()[0]
+
+    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([3, 4, 5, 6], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([0.0, 1.0, 1.0, 0.0]))
+
+
 def test_train_set_last_mile_wraps_to_named(tmp_path):
     records = [{"input_ids": [1, 2, 3, 4]}]
     data_path = tmp_path / "prebuilt_train.jsonl"

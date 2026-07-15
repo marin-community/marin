@@ -362,6 +362,8 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
         return False
+    if isinstance(fmt, SupervisedLmDatasetFormat):
+        return False if fmt.pack is None else fmt.pack
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
     return False
@@ -520,6 +522,7 @@ def dataset_for_component(
                 cache,
                 Pos,
                 max_segments_per_example=max_segments,
+                slice_strategy=fmt.slice_strategy,
                 loss_weights_key=loss_weights_key,
                 block_cross_document_attention=block_cross_document_attention,
             )

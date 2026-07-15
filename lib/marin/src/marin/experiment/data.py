@@ -31,7 +31,7 @@ from collections.abc import Callable, Mapping, Sequence
 import click
 from fray.types import ResourceConfig
 from levanter.data.text.datasets import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, LmDataConfig, UrlDatasetSourceConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from rigging.filesystem import prefix_join
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
@@ -143,6 +143,7 @@ def tokenized(
     validation: bool = False,
     pin: str | None = None,
     text_key: str = "text",
+    dataset_format: LmDatasetFormatBase | None = None,
     sample_count: int | None = None,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
@@ -154,14 +155,17 @@ def tokenized(
     (a download handle and a subpath glob within it). ``validation=True`` routes the data
     to the cache's validation split. ``sample_count`` caps the documents tokenized per shard
     (it bears identity — a sampled cache differs from the full one). ``pin`` references
-    already-tokenized data at an existing location instead of recomputing it.
+    already-tokenized data at an existing location instead of recomputing it. ``dataset_format``
+    selects structured tokenization such as supervised target-only loss.
     """
     if sum(x is not None for x in (source, paths, raw)) != 1:
         raise ValueError(f"{name}: provide exactly one of source, paths, or raw")
     if (raw is None) != (glob is None):
         raise ValueError(f"{name}: raw and glob must be given together")
 
-    fmt = TextLmDatasetFormat(text_key=text_key)
+    if dataset_format is not None and text_key != "text":
+        raise ValueError(f"{name}: text_key cannot be combined with dataset_format")
+    fmt = dataset_format if dataset_format is not None else TextLmDatasetFormat(text_key=text_key)
 
     def build_config(ctx: StepContext) -> TokenizeConfigBase:
         if source is not None and _looks_like_hf_id(source):

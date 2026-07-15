@@ -21,6 +21,7 @@ from levanter.data.text.examples import (
     named_lm_example_from_grug,
 )
 from levanter.eval import (
+    EvalLossContrast,
     EvalResult,
     LabeledEvaluator,
     LabeledLossFnOutput,
@@ -339,3 +340,48 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
     assert "eval/ema/loss" in log_events[1]["metrics"]
     assert "eval/loss" in log_events[2]["metrics"]
     assert "eval/ema/loss" in log_events[3]["metrics"]
+
+
+def test_cb_tagged_evaluate_logs_loss_contrast_metrics(caplog):
+    class _FakeEvaluator:
+        tokenizer = None
+        dataset = SimpleNamespace(tag_to_index={"final_user_only": 0, "full_context": 1})
+
+        def evaluate(self, _model):
+            return EvalResult(
+                micro_avg_loss=1.75,
+                macro_avg_loss=1.75,
+                tag_macro_losses={},
+                tag_micro_losses={"final_user_only": 2.0, "full_context": 1.5},
+                total_eval_loading_time=0.0,
+            )
+
+    logger_name = "test.cb_tagged_evaluate.loss_contrast"
+    tracker = JsonLoggerConfig(logger_name=logger_name).init(run_id=None)
+    caplog.set_level(logging.INFO, logger=logger_name)
+    callback = cb_tagged_evaluate(
+        _FakeEvaluator(),
+        prefix="eval",
+        eval_current=True,
+        eval_ema=False,
+        loss_contrasts=[
+            EvalLossContrast(
+                name="mrcr/2needle/4k-8k",
+                baseline_tag="final_user_only",
+                conditioned_tag="full_context",
+            )
+        ],
+    )
+
+    with current_tracker(tracker):
+        callback(SimpleNamespace(step=0, model=object()))
+
+    log_event = next(
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == logger_name and json.loads(record.message).get("event") == "log"
+    )
+    metrics = log_event["metrics"]
+    np.testing.assert_allclose(metrics["eval/mrcr/2needle/4k-8k/context_nll_reduction"], 0.5)
+    np.testing.assert_allclose(metrics["eval/mrcr/2needle/4k-8k/context_ppl_ratio"], np.exp(0.5))
+    np.testing.assert_allclose(metrics["eval/mrcr/2needle/4k-8k/context_ppl_reduction"], np.exp(2.0) - np.exp(1.5))

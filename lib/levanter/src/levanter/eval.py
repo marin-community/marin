@@ -42,7 +42,6 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import RunningMean
 from levanter.utils.tree_utils import inference_mode
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -67,6 +66,15 @@ class EvalResult:
     macro_bpb: Optional[float] = None
     tag_macro_bpb: Optional[dict[str, float]] = None
     tag_micro_bpb: Optional[dict[str, float]] = None
+
+
+@dataclasses.dataclass(frozen=True)
+class EvalLossContrast:
+    """A token-weighted loss contrast between tagged evaluation datasets."""
+
+    name: str
+    baseline_tag: str
+    conditioned_tag: str
 
 
 @dataclasses.dataclass
@@ -384,6 +392,7 @@ def cb_tagged_evaluate(
     prefix: str = "eval",
     eval_current: bool = True,
     eval_ema: bool = True,
+    loss_contrasts: Sequence[EvalLossContrast] = (),
 ) -> Callable[[StepInfo], None]:
     """Build a callback that logs tagged eval metrics for current and/or eval model."""
     if not eval_current and not eval_ema:
@@ -402,11 +411,16 @@ def cb_tagged_evaluate(
             return
 
         if eval_current:
-            log_dict = eval_model(evaluator, step.model, prefix=prefix)
+            log_dict = eval_model(evaluator, step.model, prefix=prefix, loss_contrasts=loss_contrasts)
             levanter.tracker.log(log_dict, step=step_count)
 
         if eval_ema:
-            log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+            log_dict = eval_model(
+                evaluator,
+                step.eval_model,
+                prefix=_join_prefix(prefix, "ema"),
+                loss_contrasts=loss_contrasts,
+            )
             levanter.tracker.log(log_dict, step=step_count)
 
         last_eval_step = step_count
@@ -414,10 +428,15 @@ def cb_tagged_evaluate(
     return eval_callback
 
 
-def eval_model(evaluator, model, prefix: str = "") -> dict[str, float]:
+def eval_model(
+    evaluator,
+    model,
+    prefix: str = "",
+    loss_contrasts: Sequence[EvalLossContrast] = (),
+) -> dict[str, float]:
     with levanter.tracker.capture_time() as time_fn:
         result = evaluator.evaluate(model)
-    log_dict = construct_log_dict(evaluator, result, time_fn(), prefix=prefix)
+    log_dict = construct_log_dict(evaluator, result, time_fn(), prefix=prefix, loss_contrasts=loss_contrasts)
     return log_dict
 
 
@@ -428,7 +447,13 @@ def eval_labeled_model(evaluator, model, prefix: str = "labeled_eval") -> dict[s
     return log_dict
 
 
-def construct_log_dict(evaluator, eval_result, total_time, prefix):
+def construct_log_dict(
+    evaluator,
+    eval_result,
+    total_time,
+    prefix,
+    loss_contrasts: Sequence[EvalLossContrast] = (),
+):
     tokenizer = evaluator.tokenizer
     log_dict = {
         # log micro average as just "loss"
@@ -468,6 +493,18 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
         if has_tags:
             for tag, bpb in eval_result.tag_macro_bpb.items():
                 log_dict[_join_prefix(prefix, tag) + "/macro_bpb"] = bpb
+    for contrast in loss_contrasts:
+        baseline_loss = eval_result.tag_micro_losses[contrast.baseline_tag]
+        conditioned_loss = eval_result.tag_micro_losses[contrast.conditioned_tag]
+        nll_reduction = baseline_loss - conditioned_loss
+        baseline_ppl = float(np.exp(baseline_loss))
+        conditioned_ppl = float(np.exp(conditioned_loss))
+        contrast_prefix = _join_prefix(prefix, contrast.name)
+        log_dict[f"{contrast_prefix}/final_user_only_ppl"] = baseline_ppl
+        log_dict[f"{contrast_prefix}/full_context_ppl"] = conditioned_ppl
+        log_dict[f"{contrast_prefix}/context_nll_reduction"] = nll_reduction
+        log_dict[f"{contrast_prefix}/context_ppl_reduction"] = baseline_ppl - conditioned_ppl
+        log_dict[f"{contrast_prefix}/context_ppl_ratio"] = float(np.exp(nll_reduction))
     return log_dict
 
 

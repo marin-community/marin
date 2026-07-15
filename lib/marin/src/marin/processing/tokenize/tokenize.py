@@ -29,7 +29,7 @@ from levanter.data.text.datasets import (
     LmDatasetSourceConfigBase,
     UrlDatasetSourceConfig,
 )
-from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
+from levanter.data.text.formats import LmDatasetFormatBase, SupervisedLmDatasetFormat, TextLmDatasetFormat
 from levanter.store.cache import ShardedCacheLayout
 from levanter.tokenizers import TokenizerBackend
 from rigging.filesystem import StoragePath, prefix_join
@@ -98,8 +98,15 @@ class TokenizedCache(Artifact):
 
     @property
     def format(self) -> LmDatasetFormatBase:
-        """The dataset format; marin's tokenized caches are text format (``text_key``)."""
+        """The dataset format recorded when this cache was tokenized."""
         fmt = self._config.get("format")
+        if isinstance(fmt, dict) and "input_key" in fmt and "target_key" in fmt:
+            return SupervisedLmDatasetFormat(
+                input_key=fmt["input_key"],
+                target_key=fmt["target_key"],
+                pack=fmt.get("pack"),
+                slice_strategy=fmt.get("slice_strategy", "left"),
+            )
         if isinstance(fmt, dict) and "text_key" in fmt:
             return TextLmDatasetFormat(text_key=fmt["text_key"])
         return TextLmDatasetFormat()
