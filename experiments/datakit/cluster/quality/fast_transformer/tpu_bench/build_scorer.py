@@ -4,7 +4,7 @@
 """Build a *config-faithful* fast-transformer scorer for the TPU throughput benchmark.
 
 The deployed ``.eqx`` lives in the CoreWeave object store (no creds from a GCP box), so
-this reconstructs an equivalent scorer in a GCS model dir: the deployed architecture +
+this reconstructs an equivalent scorer in a model dir: the deployed architecture +
 tokenizer, a vocab remap built from a **real** corpus slice (``min_count=2``, exactly as
 training does), and a monotonic calibration fit to this model's own raw-score
 distribution. Weights are random -- throughput depends only on config + vocab size +
@@ -12,11 +12,12 @@ token-length distribution, all of which this preserves -- so the benchmark numbe
 faithful. Quality is NOT faithful (that comes from the recorded Spearman 0.69 vs 0.44),
 and the calibration only guarantees non-degenerate buckets, not oracle agreement.
 
-Run once (CPU is fine) before the scoring pipelines:
+Corpus/out-dir take absolute URLs or paths relative to ``marin_prefix()`` (the local object
+store on each cluster). Run once (CPU is fine) before the scoring pipelines:
 
     python -m ...tpu_bench.build_scorer \
-        --corpus 'gs://marin-eu-west4/.../data-*.parquet' \
-        --out-dir gs://marin-eu-west4/user/rav/quality/ft-tpu-bench
+        --corpus 'normalized/nemotron_cc_v2/high_quality_.../outputs/main/part-*.parquet' \
+        --out-dir datakit/quality/ft-tpu-bench
 """
 
 import argparse
@@ -35,6 +36,7 @@ from experiments.datakit.cluster.quality.fast_transformer.model import (
     count_params,
 )
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
+from experiments.datakit.cluster.quality.fast_transformer.tpu_bench.common import MODEL_CALIB, resolve_dataset_path
 from experiments.datakit.cluster.quality.fast_transformer.train import DEPLOY_CONFIG, MAX_TOKENS, TOKENIZER, _save_scorer
 
 logger = logging.getLogger(__name__)
@@ -70,15 +72,17 @@ def fit_calibration(scorer, texts: list[str]) -> dict:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--corpus", required=True, help="glob of text parquet files for vocab + calibration")
-    p.add_argument("--out-dir", required=True, help="GCS model dir to write scorer + calib_bme.json")
+    p.add_argument("--corpus", required=True, help="text parquet glob; relative paths root at marin_prefix()")
+    p.add_argument("--out-dir", required=True, help="model dir for scorer + calib; relative roots at marin_prefix()")
     p.add_argument("--text-col", default="text")
     p.add_argument("--vocab-docs", type=int, default=50000, help="docs used to build the vocab remap")
     p.add_argument("--calib-docs", type=int, default=3000, help="docs used to fit the calibration")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO)
 
-    texts = read_texts(args.corpus, args.vocab_docs, args.text_col)
+    corpus = resolve_dataset_path(args.corpus)
+    out_dir = resolve_dataset_path(args.out_dir)
+    texts = read_texts(corpus, args.vocab_docs, args.text_col)
     logger.info("building vocab from %d docs with tokenizer %s", len(texts), TOKENIZER)
     raw_ids = encode_texts(TOKENIZER, texts, MAX_TOKENS)
     remap = build_remap(raw_ids, min_count=2)
@@ -91,13 +95,13 @@ def main() -> None:
         "model: vocab=%d params=%.2fM flops/token=%.0f", vocab, count_params(model) / 1e6, config.flops_per_token()
     )
 
-    _save_scorer(model, remap, TOKENIZER, config, args.out_dir, name="pooled_junkgate2")
+    _save_scorer(model, remap, TOKENIZER, config, out_dir, name="pooled_junkgate2")
 
-    scorer = load_pooled_scorer(args.out_dir)
+    scorer = load_pooled_scorer(out_dir)
     calib = fit_calibration(scorer, texts[: args.calib_docs])
-    with open_url(f"{args.out_dir.rstrip('/')}/calib_bme.json", "w") as fh:
+    with open_url(str(StoragePath(out_dir) / MODEL_CALIB), "w") as fh:
         fh.write(json.dumps(calib))
-    logger.info("wrote scorer + calib_bme.json to %s (vocab=%d)", args.out_dir, vocab)
+    logger.info("wrote scorer + %s to %s (vocab=%d)", MODEL_CALIB, out_dir, vocab)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import numpy as np
-from rigging.filesystem import open_url
+from rigging.filesystem import marin_prefix, open_url, prefix_join
 
 # Disable the tokenizers-lib internal rayon parallelism: this pipeline drives its own thread
 # pool over row groups, so each thread's ``encode_batch`` runs single-threaded (the Rust encode
@@ -29,6 +29,23 @@ from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CH
 
 # Calibration json name in a scorer dir.
 MODEL_CALIB = "calib_bme.json"
+
+# Datakit assets, relative to marin_prefix() so one path resolves to the region-appropriate copy
+# on each cluster -- GCS on marin, S3 on CoreWeave.
+DEFAULT_CORPUS = "normalized/nemotron_cc_v2/high_quality_b451aefe/outputs/main/part-*-of-04136.parquet"
+FASTTEXT_MODEL = "datakit/llm-quality-classifier/model/sonnet46-thr05/model.bin"
+
+
+def resolve_dataset_path(path: str) -> str:
+    """Root a cluster-relative datakit path at ``marin_prefix()``; pass absolute URLs through.
+
+    Resolve on the driver, where the cluster config has injected ``MARIN_PREFIX``, so a relative
+    corpus/model path picks up the local object store (GCS on marin, S3 on CoreWeave) with no
+    cross-region read.
+    """
+    if "://" in path or path.startswith("/"):
+        return path
+    return prefix_join(marin_prefix(), path)
 
 
 def doc_windows(text: str) -> list[str]:

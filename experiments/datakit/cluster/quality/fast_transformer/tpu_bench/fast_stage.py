@@ -58,18 +58,23 @@ from experiments.datakit.cluster.quality.fast_transformer.inference import (
 from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer
 from experiments.datakit.cluster.quality.fast_transformer.tpu_bench import tokenize_worker
 from experiments.datakit.cluster.quality.fast_transformer.tpu_bench.common import (
+    DEFAULT_CORPUS,
     doc_windows,
     load_remap_meta,
     load_shared_tokenizer,
     remap_to_array,
+    resolve_dataset_path,
     write_result_json,
 )
 
 logger = logging.getLogger(__name__)
 
 READ_COLUMNS = ["id", "text"]
-# vCPUs requested per v6e-4 worker (of the host's 180) -- see the ResourceConfig note in run().
+# Default vCPUs requested per worker of the accelerator host. TPU: 128 of a v6e-4's 180 (leave
+# headroom so the worker co-schedules with other tenants vs forcing a fresh slice). GPU: a
+# smaller share of an 8x-GPU node's host, still plenty for the tokenizer fork pool.
 TPU_HOST_CPU = 128
+GPU_HOST_CPU = 96
 # How many staged (H2D'd) blocks the stager thread may run ahead of the forward. Bounds the
 # resident device memory while keeping the chips fed; the forward is never blocked on H2D.
 STAGE_QUEUE_DEPTH = 8
@@ -290,6 +295,20 @@ def _writer(output_path, model_dir, device_batch, calib_file, tok_procs, read_th
     return writer
 
 
+def _resolve_resources(accelerator: str, worker_cpu: int | None) -> tuple[ResourceConfig, int]:
+    """Resolve an accelerator request to ``(ResourceConfig, chips_per_worker)``.
+
+    ``accelerator`` is a TPU type (``"v6e-4"``, ``"v5litepod-16"``) or a GPU ``VARIANTxCOUNT``
+    (``"H100x8"``). The forward runs data-parallel across the worker's chips either way.
+    """
+    if "x" in accelerator:  # GPU, e.g. "H100x8"
+        variant, _, count = accelerator.partition("x")
+        cpu = worker_cpu if worker_cpu is not None else GPU_HOST_CPU
+        return ResourceConfig.with_gpu(variant, count=int(count), cpu=cpu, ram=f"{cpu * 4}g"), int(count)
+    cpu = worker_cpu if worker_cpu is not None else TPU_HOST_CPU
+    return ResourceConfig.with_tpu(accelerator, cpu=cpu, ram="400g"), int(accelerator.rsplit("-", 1)[1])
+
+
 def run(
     *,
     corpus_glob,
@@ -302,14 +321,20 @@ def run(
     read_threads,
     calib_file,
     result_json,
+    accelerator="v6e-4",
+    worker_cpu=None,
 ):
+    corpus_glob = resolve_dataset_path(corpus_glob or DEFAULT_CORPUS)
+    model_dir = resolve_dataset_path(model_dir)
     files = sorted(str(m) for m in StoragePath(corpus_glob).glob())[:max_files]
     if not files:
         raise ValueError(f"no files matched {corpus_glob}")
+    resources, chips_per_worker = _resolve_resources(accelerator, worker_cpu)
     logger.info(
-        "fast: %d files, %d workers, device_batch=%d tok_procs=%d read_threads=%d",
+        "fast: %d files, %d %s workers, device_batch=%d tok_procs=%d read_threads=%d",
         len(files),
         max_workers,
+        accelerator,
         device_batch,
         tok_procs,
         read_threads,
@@ -317,10 +342,6 @@ def run(
     pipeline = Dataset.from_list(files).map_shard(
         _writer(output_path, model_dir, device_batch, calib_file, tok_procs, read_threads)
     )
-    # Request 128 of the host's 180 vCPUs (not the whole host): the pipeline uses ~tok_procs
-    # tokenizer cores plus the read threads and JAX dispatch, and leaving headroom lets the
-    # worker co-schedule onto a host other tenants already partially occupy vs forcing a fresh slice.
-    resources = ResourceConfig.with_tpu("v6e-4", cpu=TPU_HOST_CPU, ram="400g")
     ctx = ZephyrContext(
         name="ft-fast",
         resources=resources,
@@ -333,10 +354,11 @@ def run(
     wall = time.time() - t0
     docs = agg.get("fast/docs", 0)
     tokens = agg.get("fast/tokens", 0)
-    n_chips = 4 * max_workers
+    n_chips = chips_per_worker * max_workers
     payload = {
         "stage": "fast",
-        "cpu_per_worker": TPU_HOST_CPU,
+        "accelerator": accelerator,
+        "cpu_per_worker": resources.cpu,
         "tok_procs": tok_procs,
         "read_threads": read_threads,
         "files": len(files),

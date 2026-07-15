@@ -28,7 +28,13 @@ from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, load_file
 from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
-from experiments.datakit.cluster.quality.fast_transformer.tpu_bench.common import accumulate, write_result_json
+from experiments.datakit.cluster.quality.fast_transformer.tpu_bench.common import (
+    DEFAULT_CORPUS,
+    FASTTEXT_MODEL,
+    accumulate,
+    resolve_dataset_path,
+    write_result_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,14 +104,16 @@ def _writer(output_path: str, model_path: str):
 
 def run(
     *,
-    corpus_glob: str,
-    model_path: str,
+    corpus_glob: str | None,
+    model_path: str | None,
     output_path: str,
     max_files: int,
     max_workers: int,
     cpu: int,
     result_json: str | None,
 ):
+    corpus_glob = resolve_dataset_path(corpus_glob or DEFAULT_CORPUS)
+    model_path = resolve_dataset_path(model_path or FASTTEXT_MODEL)
     files = sorted(str(m) for m in StoragePath(corpus_glob).glob())[:max_files]
     if not files:
         raise ValueError(f"no files matched {corpus_glob}")
@@ -148,10 +156,8 @@ def run(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--corpus", required=True)
-    p.add_argument(
-        "--model-path", default="gs://marin-eu-west4/datakit/llm-quality-classifier/model/sonnet46-thr05/model.bin"
-    )
+    p.add_argument("--corpus", default=None, help="text parquet glob; relative paths root at marin_prefix()")
+    p.add_argument("--model-path", default=None, help="fasttext .bin; relative paths root at marin_prefix()")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--max-files", type=int, default=64)
     p.add_argument("--max-workers", type=int, default=32)
