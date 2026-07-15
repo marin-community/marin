@@ -156,6 +156,16 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    mtp_depth: int = 0
+    """Number of DeepSeek-V3-style Multi-Token Prediction modules (arXiv 2412.19437 2.2).
+    0 (default) = no MTP, model is byte-for-byte unchanged. D>0 adds D sequential modules:
+    module k predicts token t+1+k from the main model's final hidden via the shared token
+    embedding, the shared output head, one extra ``Block``, and a 2d->d projection ``M_k``.
+    The averaged MTP cross-entropy is added to the main next-token loss with weight
+    ``mtp_loss_weight``."""
+    mtp_loss_weight: float = 0.3
+    """Weight lambda on the averaged MTP cross-entropy (DeepSeek-V3 uses 0.3). The MTP term
+    added to the loss is ``(mtp_loss_weight / mtp_depth) * sum_k CE_k``."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -174,6 +184,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.mtp_depth < 0:
+            raise ValueError("mtp_depth must be non-negative")
         if self.use_mla:
             if self.q_lora_rank < 0:
                 raise ValueError("q_lora_rank must be >= 0 (0 selects a direct Q projection)")
@@ -842,6 +854,64 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+def _shift_left(x: jax.Array, n: int) -> jax.Array:
+    """Shift ``x`` left by ``n`` along the sequence axis (axis=1), zero-padding the tail.
+
+    ``result[:, i] = x[:, i + n]`` for ``i + n < S`` and 0 otherwise. Used to align an
+    MTP module's shifted embedding / target / loss-weight to the input position ``i``.
+    """
+    if n == 0:
+        return x
+    pad_widths = [(0, 0)] * x.ndim
+    pad_widths[1] = (0, n)
+    return jax.lax.slice_in_dim(jnp.pad(x, pad_widths), n, n + x.shape[1], axis=1)
+
+
+class MTPModule(eqx.Module):
+    """One DeepSeek-V3 Multi-Token Prediction module (arXiv 2412.19437 2.2).
+
+    For module depth k at position i: normalize the previous depth's hidden ``h_i^{k-1}``
+    and the shared-embedding of input token ``x_{i+k}``, concatenate, project 2d->d with
+    ``proj`` (M_k), then run one grug ``Block`` (GQA/MoE/shared-expert/XSA, same config as a
+    main-model layer). ``out_norm(h_i^k)`` feeds the shared output head. The token embedding
+    and output head are the main model's -- only ``h_norm``/``e_norm``/``proj``/``block``/
+    ``out_norm`` are new per module.
+    """
+
+    h_norm: RMSNorm
+    e_norm: RMSNorm
+    proj: jax.Array
+    block: Block
+    out_norm: RMSNorm
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MTPModule":
+        k_proj, k_block = random.split(key, 2)
+        d = cfg.hidden_dim
+        return MTPModule(
+            h_norm=RMSNorm.init(d, cfg.layer_norm_eps),
+            e_norm=RMSNorm.init(d, cfg.layer_norm_eps),
+            proj=reshard(_init_weight(k_proj, (2 * d, d), cfg.initializer_std), P("data", "model")),
+            block=Block.init(cfg, key=k_block),
+            out_norm=RMSNorm.init(d, cfg.layer_norm_eps),
+        )
+
+    @named_call
+    def __call__(
+        self,
+        h_prev: Float[Array, "B S D"],
+        emb: Float[Array, "B S D"],
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        disable_long_rope: bool,
+    ) -> Float[Array, "B S D"]:
+        combined = jnp.concatenate([self.h_norm(h_prev), self.e_norm(emb)], axis=-1)
+        h = jnp.einsum("bsD,Dd->bsd", combined, self.proj, out_sharding=_batch_spec())
+        # One transformer block, run as a full-causal ("long") layer like DeepSeek's MTP TRM.
+        h, _ = self.block(h, short_mask, long_mask, True, False, disable_long_rope)
+        return h
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -853,6 +923,9 @@ class Transformer(eqx.Module):
     stacked_blocks: ArrayStacked[Block] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
+    # DeepSeek-V3 MTP modules (empty when cfg.mtp_depth == 0). Kept out of the main
+    # blocks/stacked_blocks so the main forward and QB router-bias plumbing are untouched.
+    mtp_modules: tuple[MTPModule, ...]
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -881,9 +954,9 @@ class Transformer(eqx.Module):
                 "CausalSelfAttention reads use_pko at trace time (not scan-expressible)."
             )
 
-        keys = random.split(key, cfg.num_layers + 4)
-        embed_key, out_key, embed_gn_key, final_gn_key = keys[:4]
-        block_keys = keys[4:]
+        keys = random.split(key, cfg.num_layers + 5)
+        embed_key, out_key, embed_gn_key, final_gn_key, mtp_key = keys[:5]
+        block_keys = keys[5:]
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
@@ -898,6 +971,9 @@ class Transformer(eqx.Module):
             blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
             stacked_blocks = None
 
+        mtp_keys = random.split(mtp_key, cfg.mtp_depth) if cfg.mtp_depth > 0 else []
+        mtp_modules = tuple(MTPModule.init(cfg, key=mtp_keys[i]) for i in range(cfg.mtp_depth))
+
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -907,6 +983,7 @@ class Transformer(eqx.Module):
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            mtp_modules=mtp_modules,
             config=cfg,
         )
 
@@ -1028,12 +1105,72 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
+
+        mtp_loss = None
+        if reduction != "none" and self.config.mtp_depth > 0:
+            mtp_loss = self._mtp_loss(token_ids, hidden, loss_weight, mask, loss_dtype)
+            loss = loss + self.config.mtp_loss_weight * mtp_loss
+
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+            if mtp_loss is not None:
+                summarized_metrics["train/mtp_loss"] = mtp_loss
+                summarized_metrics["train/mtp_loss_weighted"] = self.config.mtp_loss_weight * mtp_loss
             return loss, summarized_metrics
         return loss
+
+    def _mtp_loss(
+        self,
+        token_ids: Int[Array, "B S"],
+        h0: Float[Array, "B S D"],
+        loss_weight: Float[Array, "B S"],
+        mask: AttentionMask | jax.Array | None,
+        loss_dtype: jnp.dtype,
+    ) -> jax.Array:
+        """Averaged DeepSeek-V3 MTP cross-entropy over ``cfg.mtp_depth`` modules.
+
+        Module k (k=1..D) predicts token ``t+1+k`` from the recurrent hidden ``h^{k-1}``
+        (``h^0`` = the main model's final hidden ``h0``) and the shared embedding of the
+        input token ``x_{i+k}``. Targets/weights are the main next-token labels shifted left
+        so the last k positions (no ``t+1+k`` target) carry zero weight. Returns the mean
+        over modules of each module's weighted-mean CE.
+        """
+        cfg = self.config
+        batch_spec = _batch_spec()
+        embed_all = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+
+        # Gradient-checkpoint each MTP module exactly like the main blocks, so its extra
+        # attention/MoE activations are recomputed in backward instead of retained (an
+        # un-remat'd MTP module OOMs at seq/batch that the remat'd main model fits).
+        remat_policy = (
+            jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
+            if cfg.remat_mode == "save_moe"
+            else None
+        )
+        h_prev = h0
+        mtp_ce = jnp.zeros((), dtype=loss_dtype)
+        for k, module in enumerate(self.mtp_modules, start=1):
+            emb_k = _shift_left(embed_all, k)  # Embed(x_{i+k})
+            target_k = _shift_left(token_ids, k + 1).astype(jnp.int32)  # x_{i+k+1}
+            weight_k = _shift_left(loss_weight, k)  # loss_weight[i+k]; 0 on the last k positions
+            h_prev = eqx.filter_checkpoint(module, policy=remat_policy)(
+                h_prev, emb_k, short_mask, long_mask, cfg.disable_long_rope
+            )
+            ce_k = fused_linear_softmax_cross_entropy_loss(
+                module.out_norm(h_prev),
+                self.output_proj,
+                target_k,
+                weight=weight_k,
+                reduction="mean",
+                dtype=loss_dtype,
+            )
+            mtp_ce = mtp_ce + ce_k
+        return mtp_ce / cfg.mtp_depth
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

@@ -205,20 +205,30 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
-        hidden_dim=model_config.hidden_dim,
-        intermediate_dim=model_config.intermediate_dim,
-        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
-        num_kv_heads=model_config.num_kv_heads,
-        num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
-        vocab_size=model_config.vocab_size,
-        glu=True,
-        num_experts=model_config.num_experts,
-        num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
-        num_experts_per_tok=model_config.num_experts_per_token,
-    )
+    def _fpt(num_layers: int) -> float:
+        return lm_flops_per_token(
+            hidden_dim=model_config.hidden_dim,
+            intermediate_dim=model_config.intermediate_dim,
+            shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
+            num_layers=num_layers,
+            num_kv_heads=model_config.num_kv_heads,
+            num_heads=model_config.num_heads,
+            seq_len=model_config.max_seq_len,
+            vocab_size=model_config.vocab_size,
+            glu=True,
+            num_experts=model_config.num_experts,
+            num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
+            num_experts_per_tok=model_config.num_experts_per_token,
+        )
+
+    flops_per_token = _fpt(model_config.num_layers)
+    # Each DeepSeek-V3 MTP module adds one transformer block (folded in via the extra
+    # num_layers term), one extra shared-head lm_head pass, and a 2d->d projection.
+    if model_config.mtp_depth > 0:
+        d = model_config.hidden_dim
+        extra_lm_heads = model_config.mtp_depth * 2 * d * model_config.vocab_size
+        extra_proj = model_config.mtp_depth * 2 * (2 * d) * d
+        flops_per_token = _fpt(model_config.num_layers + model_config.mtp_depth) + extra_lm_heads + extra_proj
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {

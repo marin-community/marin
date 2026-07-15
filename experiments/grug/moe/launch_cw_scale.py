@@ -154,6 +154,11 @@ def build_scale_model() -> GrugModelConfig:
     disable_long_rope = os.environ.get("SCALE_LONG_ROPE") != "1"
     if not disable_pko and use_stacked_blocks:
         raise ValueError("SCALE_PKO=1 is incompatible with SCALE_SCAN_LAYERS=1 (unset SCALE_SCAN_LAYERS).")
+    # SCALE_MTP_DEPTH>0 adds DeepSeek-V3 Multi-Token Prediction modules (each = one extra
+    # Block + a 2d->d projection + an extra shared-head CE pass); SCALE_MTP_LOSS_WEIGHT is the
+    # lambda on the averaged MTP CE (DeepSeek-V3 default 0.3). Depth 0 (default) = no MTP.
+    mtp_depth = env_int("SCALE_MTP_DEPTH", 0)
+    mtp_loss_weight = float(os.environ.get("SCALE_MTP_LOSS_WEIGHT", "0.3"))
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -178,6 +183,8 @@ def build_scale_model() -> GrugModelConfig:
         disable_pko=disable_pko,
         disable_long_rope=disable_long_rope,
         use_array_stacked_blocks=use_stacked_blocks,
+        mtp_depth=mtp_depth,
+        mtp_loss_weight=mtp_loss_weight,
     )
 
 
@@ -226,7 +233,10 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    # Host RAM per node. Default 256g; SCALE_RAM=512g gives headroom for the fa4/compile
+    # host staging on a single-node run.
+    ram = os.environ.get("SCALE_RAM", "256g")
+    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram=ram, disk="256g", replicas=replicas)
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
