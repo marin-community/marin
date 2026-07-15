@@ -53,6 +53,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
+    NsysSpec,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
@@ -454,6 +455,40 @@ class LocalClientConfig:
 
 # Module path of the in-task GPU process supervisor (see iris/runtime/multigpu.py).
 _MULTIGPU_MODULE = "iris.runtime.multigpu"
+# Module path of the in-task Nsight launch wrapper (see iris/runtime/nsys.py).
+_NSYS_MODULE = "iris.runtime.nsys"
+
+
+def _wrap_entrypoint_for_nsys(entrypoint: Entrypoint, resources: ResourceSpec, nsys: NsysSpec) -> Entrypoint:
+    """Wrap an entrypoint so selected ranks run under ``nsys profile``.
+
+    Prepends ``python -m iris.runtime.nsys --ranks ... --``. Rank selection happens
+    in-task, where the rank env exists; an unselected rank execs the command
+    unchanged. Requires a GPU device — Nsight profiles CUDA work, and the setup
+    script that installs it only runs on the node that will use it.
+    """
+    device = resources.device
+    if device is None or not device.HasField("gpu"):
+        raise ValueError("nsys profiling requires a GPU device")
+    wrapper = [
+        "python",
+        "-m",
+        _NSYS_MODULE,
+        "--ranks",
+        nsys.ranks,
+        "--trace",
+        nsys.trace,
+        "--output-uri",
+        nsys.output_uri,
+    ]
+    if nsys.capture_range:
+        wrapper.append("--capture-range")
+    wrapper.append("--")
+    return Entrypoint(
+        command=[*wrapper, *entrypoint.command],
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
 
 
 def _wrap_entrypoint_for_multiprocess(
@@ -717,6 +752,12 @@ class IrisClient:
 
         if processes_per_task < 1:
             raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
+        # Nsight wraps first so the multigpu supervisor wraps *around* it: the nsys
+        # wrapper must sit in each child, where the per-child rank env exists and
+        # where the CUDA context actually lives. Wrapping the supervisor instead
+        # would fold every child into one report and defeat rank selection.
+        if environment is not None and environment.nsys is not None:
+            entrypoint = _wrap_entrypoint_for_nsys(entrypoint, resources, environment.nsys)
         if processes_per_task > 1:
             entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
 

@@ -53,6 +53,7 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     JobName,
+    NsysSpec,
     ResourceSpec,
     gpu_device,
     tpu_device,
@@ -634,6 +635,7 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
+    nsys: NsysSpec | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -749,6 +751,7 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         container_profile=profile,
+        nsys=nsys,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -776,6 +779,7 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    nsys: NsysSpec | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -794,7 +798,11 @@ def _submit_and_wait_job(
         name=job_name,
         resources=resources,
         environment=EnvironmentSpec(
-            env_vars=env_vars, extras=extras or [], setup_scripts=setup_scripts, sync_packages=sync_packages or []
+            env_vars=env_vars,
+            extras=extras or [],
+            setup_scripts=setup_scripts,
+            sync_packages=sync_packages or [],
+            nsys=nsys,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
@@ -996,6 +1004,50 @@ Examples:
     ),
 )
 @click.option(
+    "--nsys",
+    is_flag=True,
+    default=False,
+    help=(
+        "Profile the run with Nsight Systems, uploading one .nsys-rep per profiled rank to "
+        "--nsys-output. Requires --gpu. CPU sampling and GPU metrics are unavailable in an "
+        "unprivileged task container, so this is a CUDA/NVTX/NCCL timeline."
+    ),
+)
+@click.option(
+    "--nsys-output",
+    default=None,
+    help=(
+        "Directory URI for the reports; required with --nsys. Must be storage the job's "
+        "cluster can write (note that under --target-cluster that is the peer, not this one). "
+        "Reports are lost otherwise: the task workdir does not outlive the pod. Prefer a "
+        "TTL'd temp prefix, e.g. s3://marin-us-east-02a/tmp/ttl=30d/rav/nsys."
+    ),
+)
+@click.option(
+    "--nsys-ranks",
+    default=NsysSpec.ranks,
+    show_default=True,
+    help=(
+        "Which ranks to profile: 'first', 'per-node', 'all', or a comma-separated list "
+        "(e.g. 0,7). One report per profiled rank and no merged report, so prefer a subset."
+    ),
+)
+@click.option(
+    "--nsys-trace",
+    default=NsysSpec.trace,
+    show_default=True,
+    help="nsys --trace value. NCCL appears as CUDA kernels plus its own NVTX ranges.",
+)
+@click.option(
+    "--nsys-capture-range",
+    is_flag=True,
+    default=False,
+    help=(
+        "Collect only between cuProfilerStart/Stop instead of the whole run. Keeps compile "
+        "out of the report; the app must call the API or nothing is collected."
+    ),
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -1029,6 +1081,11 @@ def run(
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
+    nsys: bool,
+    nsys_output: str | None,
+    nsys_ranks: str,
+    nsys_trace: str,
+    nsys_capture_range: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -1040,6 +1097,17 @@ def run(
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
+    if nsys and no_sync:
+        raise click.UsageError("--nsys installs Nsight during setup; it cannot be combined with --no-sync.")
+    if nsys and not nsys_output:
+        raise click.UsageError("--nsys requires --nsys-output; a report left in the task workdir is discarded.")
+    if nsys_output and not nsys:
+        raise click.UsageError("--nsys-output has no effect without --nsys.")
+    nsys_spec = (
+        NsysSpec(output_uri=nsys_output, ranks=nsys_ranks, trace=nsys_trace, capture_range=nsys_capture_range)
+        if nsys and nsys_output
+        else None
+    )
 
     command = list(cmd)
     if not command:
@@ -1089,6 +1157,7 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
+            nsys=nsys_spec,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

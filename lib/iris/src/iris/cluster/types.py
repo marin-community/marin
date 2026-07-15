@@ -28,7 +28,12 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, wants_gpu_extra
+from iris.cluster.setup_scripts import (
+    cuda_toolchain_setup_script,
+    default_setup_script,
+    nsys_setup_script,
+    wants_gpu_extra,
+)
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import controller_pb2, job_pb2
 
@@ -704,6 +709,42 @@ except Exception:
 """
 
 
+@dataclass(frozen=True)
+class NsysSpec:
+    """Opt-in Nsight Systems profiling for a GPU job.
+
+    Setting this on an ``EnvironmentSpec`` installs the Nsight Systems CLI during
+    setup and wraps the run command in ``nsys profile`` on the selected ranks. It is
+    a launch wrapper by necessity — CUDA tracing is injected at ``cuInit`` — so it
+    cannot be turned on for a job that is already running, unlike the py-spy/memray
+    profiler in ``iris.cluster.runtime.profile``.
+
+    Attributes:
+        output_uri: Directory URI each profiled rank uploads its report to (any
+            fsspec target the *task* can reach, e.g. ``s3://bucket/tmp/ttl=30d/nsys``).
+            Required, and deliberately not defaulted: the task workdir is an emptyDir,
+            so a report that is not uploaded is destroyed with the pod, and only the
+            caller knows which storage the job's cluster can actually write — under
+            ``--target-cluster`` the submitting cluster's storage is the wrong answer.
+        ranks: Which ranks write a report: ``first``, ``per-node``, ``all``, or a
+            comma-separated list of global ranks. One report per profiled process
+            and no merged report, so profiling every rank of a large job is rarely
+            what you want. ``per-node`` is the usual choice for collective analysis.
+        trace: The nsys ``--trace`` value. CPU sampling and GPU metrics are never
+            enabled: the task container lacks the privileges for either.
+        capture_range: Collect only between ``cuProfilerStart``/``cuProfilerStop``
+            instead of for the whole run. Keeps compilation out of the report, and
+            is how multi-rank captures are aligned — ranks must bracket the same
+            step, since aligning on wall-clock leaves the windows disjoint. The
+            application must call the API, or nothing is collected.
+    """
+
+    output_uri: str
+    ranks: str = "first"
+    trace: str = "cuda,nvtx,cublas"
+    capture_range: bool = False
+
+
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -737,6 +778,7 @@ class EnvironmentSpec:
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
+    nsys: NsysSpec | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -775,6 +817,12 @@ class EnvironmentSpec:
                 setup_scripts.append(cuda_toolchain_setup_script())
         else:
             setup_scripts = [s for s in self.setup_scripts if s.strip()]
+        # Appended even to a custom setup list, unlike the CUDA toolchain: the run
+        # command is wrapped in `nsys` whenever nsys is requested, so the binary has
+        # to be there. `setup_scripts=[]` (bring-your-own image) still opts out of
+        # every script, and is the caller's business to make consistent.
+        if self.nsys is not None and setup_scripts:
+            setup_scripts.append(nsys_setup_script())
 
         return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
