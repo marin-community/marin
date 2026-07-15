@@ -3,7 +3,7 @@
 name: finelog-cw-use08a
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
-remote_log_dir: s3://marin-us-east-08a/finelog/cw-us-east-08a
+remote_log_dir: s3://marin-us-east-02a/finelog/cw-us-east-08a
 deployment:
   k8s:
     namespace: iris

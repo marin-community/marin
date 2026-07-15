@@ -62,9 +62,8 @@ provisioning:
       # the federation route) defaults to iac.config.MARIN_FEDERATION_EGRESS_SOURCES; override
       # here only if this cluster's allowlist differs.
     rbac: { service_account: iris-controller }
-    object_storage:
-      buckets:
-        - { name: marin-us-east-08a, region: US-EAST-08A }
+    # Reuses the shared CoreWeave bucket marin-us-east-02a (provisioned by cw-us-east-02a),
+    # like cw-rno2a — this cluster declares no bucket of its own; LOTA caches reads in-cluster.
 
 platform:
   label_prefix: cw-use08a
@@ -80,7 +79,7 @@ platform:
     external_object_storage_endpoint: https://cwobject.com
 
 storage:
-  remote_state_dir: s3://marin-us-east-08a/iris/cw-us-east-08a/state
+  remote_state_dir: s3://marin-us-east-02a/iris/cw-us-east-08a/state
   # Node-local NVMe for the controller's SQLite state, not the default
   # network-attached PVC.
   local_state_dir: /mnt/local/iris-controller-state
@@ -154,11 +153,11 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # The shared CoreWeave bucket (everything lives in marin-us-east-08a; LOTA
+    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
     # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
     # data under s3://marin-na/ is not reachable from jobs unless they override
     # AWS_ENDPOINT_URL and credentials themselves.
-    MARIN_PREFIX: s3://marin-us-east-08a/marin
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name
