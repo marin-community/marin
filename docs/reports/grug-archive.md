@@ -37,3 +37,12 @@ This file is the paper trail for grug experiments.
 - Status: deleted
 - Purpose: historical head-to-head comparison.
 - Superseded by: template-first workflow centered on `experiments/grug/base/`.
+
+### moe-relative-position
+- Path: `experiments/grug/moe_relative_position/`
+- Origin: `experiments/grug/moe/` at `ff3cb0282`
+- Introduced: local branch `codex/inkling-relative-position`
+- Last known-good: local validation on 2026-07-15
+- Status: active
+- Purpose: replace positional encoding with Inkling-style learned input-dependent relative attention bias and evaluate Gate 1 against the July Baseline in #6882.
+- Diff: local report generated at `/private/tmp/grug-moe-relative-position-diff/index.html`; PR diff pending

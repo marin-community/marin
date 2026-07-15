@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -190,6 +191,93 @@ def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
     assert out_shape.shape == (8, 16, cfg.hidden_dim)
 
 
+def _dense_relative_position_attention_reference(q, k, v, relative_queries, relative_embeddings, mask):
+    """Small independent oracle for the blockwise relative-position attention."""
+    repeat = q.shape[2] // k.shape[2]
+    k = jnp.repeat(k, repeat, axis=2)
+    v = jnp.repeat(v, repeat, axis=2)
+
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q * (q.shape[-1] ** -0.5),
+        k,
+        preferred_element_type=jnp.float32,
+    )
+    positions = jnp.arange(q.shape[1], dtype=jnp.int32)
+    distances = positions[:, None] - positions[None, :]
+    relative_indices = jnp.clip(distances, 0, relative_embeddings.shape[1] - 1)
+    relative_vectors = relative_embeddings[:, relative_indices]
+    relative_bias = jnp.einsum(
+        "bqhr,rqk->bhqk",
+        relative_queries,
+        relative_vectors,
+        preferred_element_type=jnp.float32,
+    )
+    relative_bias = jnp.where(
+        (distances >= 0) & (distances < relative_embeddings.shape[1]),
+        relative_bias,
+        0.0,
+    )
+    scores = scores + relative_bias
+
+    allowed = mask.materialize_mask(q.shape[1], k.shape[1])
+    if allowed.ndim == 2:
+        allowed = allowed[None, :, :]
+    scores = jnp.where(allowed[:, None, :, :], scores, -1e9)
+    weights = jax.nn.softmax(scores, axis=-1)
+    return jnp.einsum("bhqk,bkhd->bqhd", weights, v).astype(v.dtype)
+
+
+def test_grug_moe_relative_position_attention_matches_dense_values_and_gradients():
+    model_module = importlib.import_module("experiments.grug.moe_relative_position.model")
+    keys = jax.random.split(jax.random.PRNGKey(0), 5)
+    q = jax.random.normal(keys[0], (2, 5, 4, 3))
+    k = jax.random.normal(keys[1], (2, 5, 2, 3))
+    v = jax.random.normal(keys[2], (2, 5, 2, 3))
+    relative_queries = jax.random.normal(keys[3], (2, 5, 4, 2))
+    relative_embeddings = jax.random.normal(keys[4], (2, 3))
+    segment_ids = jnp.array(
+        [
+            [0, 0, 0, 1, 1],
+            [0, 0, 1, 1, 1],
+        ],
+        dtype=jnp.int32,
+    )
+    mask = GrugAttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids)
+
+    def actual(*args):
+        return model_module.relative_position_attention(*args, mask, block_size=4)
+
+    def expected(*args):
+        return _dense_relative_position_attention_reference(*args, mask)
+
+    actual_output = actual(q, k, v, relative_queries, relative_embeddings)
+    expected_output = expected(q, k, v, relative_queries, relative_embeddings)
+    np.testing.assert_allclose(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+    def squared_output_sum(fn, *args):
+        return jnp.sum(jnp.square(fn(*args)))
+
+    actual_grads = jax.grad(squared_output_sum, argnums=(1, 2, 3, 4, 5))(
+        actual,
+        q,
+        k,
+        v,
+        relative_queries,
+        relative_embeddings,
+    )
+    expected_grads = jax.grad(squared_output_sum, argnums=(1, 2, 3, 4, 5))(
+        expected,
+        q,
+        k,
+        v,
+        relative_queries,
+        relative_embeddings,
+    )
+    for actual_grad, expected_grad in zip(actual_grads, expected_grads, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, rtol=1e-5, atol=1e-5)
+
+
 def _seed_cache_records(step, prefix: str) -> None:
     """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
     ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the
@@ -205,6 +293,41 @@ def _seed_cache_records(step, prefix: str) -> None:
                     config={"tokenizer": llama3_tokenizer, "format": {"text_key": "text"}},
                 )
             )
+
+
+def test_grug_moe_relative_position_gate_1_matches_july_baseline(tmp_path):
+    launch = importlib.import_module("experiments.grug.moe_relative_position.launch")
+    expected_cells = (
+        ("MOE-RPE-001", 512, 16, 10_980, 3.5667, 352_609),
+        ("MOE-RPE-002", 768, 32, 16_875, 3.2272, 249_954),
+    )
+
+    for point, expected in zip(launch.GATE_1_POINTS, expected_cells, strict=True):
+        assert (
+            point.experiment_id,
+            point.hidden_dim,
+            point.batch_size,
+            point.num_steps,
+            point.baseline_macro_loss,
+            point.baseline_tokens_per_second,
+        ) == expected
+        step = launch.grug_moe_relative_position_gate_1(point)
+        _seed_cache_records(step, str(tmp_path))
+        config = materialized_config(step, str(tmp_path))
+
+        assert config.run_id == f"{point.experiment_id}-d{point.hidden_dim}"
+        assert config.model.hidden_dim == point.hidden_dim
+        assert config.model.max_seq_len == 8192
+        assert config.model.disable_pko
+        assert config.model.relative_position_dim == 16
+        assert config.model.relative_position_extent == 1024
+        assert config.batch_size == point.batch_size
+        assert config.steps == point.num_steps
+        assert config.grug_trainer.z_loss_weight == 0.0
+        assert config.eval.eval_batch_size == 256
+        assert config.tracker.entity == "marin-community"
+        assert config.tracker.project == "dial_moe"
+        assert config.tracker.group == "MOE-RPE-gate1-issue-7208"
 
 
 def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tmp_path):
