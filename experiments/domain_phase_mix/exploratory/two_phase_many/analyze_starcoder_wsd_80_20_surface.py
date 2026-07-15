@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
+import textwrap
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
@@ -31,6 +33,15 @@ from plotly.colors import get_colorscale
 from plotly.subplots import make_subplots
 from scipy import stats
 from scipy.spatial import Delaunay
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from experiments.domain_phase_mix.starcoder_wsd_80_20_refinement_coordinates import (  # noqa: E402
+    DRIFT_ANCHOR_COORDINATE,
+    REFINEMENT_COORDINATES,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 EXPLORATORY_DIR = SCRIPT_DIR.parent
@@ -59,6 +70,7 @@ DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "starcoder_wsd80_surface
 
 WANDB_PATH = "marin-community/marin"
 WSD80_GROUP = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_wsd80_20_surface64_20260711_retry2"
+WSD80_REFINEMENT_GROUP = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_wsd80_20_refinement44_20260714"
 WSD80_REPEAT_GROUP = "pinlin_calvin_xu/data_mixture/two_phase_starcoder_wsd80_20_repeat3x4_20260711"
 WSD80_TARGET = "eval/paloma/dolma_100_programing_languages-llama3/bpb"
 HISTORICAL_TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
@@ -106,6 +118,7 @@ class Surface:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--include-refinement", action="store_true")
     return parser.parse_args()
 
 
@@ -141,6 +154,50 @@ def _collect_wsd80() -> pd.DataFrame:
     if len(merged) != 64 or merged["wsd80_bpb"].isna().any():
         raise ValueError("The 64-coordinate manifest did not join one-to-one with completed W&B results")
     return merged.sort_values("selection_rank").reset_index(drop=True)
+
+
+def _collect_wsd80_refinement() -> tuple[pd.DataFrame, pd.Series]:
+    api = wandb.Api(timeout=60)
+    runs = list(api.runs(WANDB_PATH, filters={"group": WSD80_REFINEMENT_GROUP}, per_page=100))
+    ranked_coordinates = tuple(enumerate((*REFINEMENT_COORDINATES, DRIFT_ANCHOR_COORDINATE), start=65))
+    if len(runs) != len(ranked_coordinates):
+        raise ValueError(f"Expected {len(ranked_coordinates)} W&B runs in {WSD80_REFINEMENT_GROUP!r}, got {len(runs)}")
+
+    observed_rows: list[dict[str, object]] = []
+    for run in runs:
+        match = RUN_NAME_PATTERN.fullmatch(run.name)
+        if match is None:
+            raise ValueError(f"Unexpected refinement W&B run name: {run.name!r}")
+        target = run.summary.get(WSD80_TARGET)
+        if run.state != "finished" or target is None:
+            raise ValueError(f"Incomplete refinement run {run.name}: state={run.state}, target={target}")
+        observed_rows.append(
+            {
+                "selection_rank": int(match.group("rank")),
+                "wandb_run_id": run.id,
+                "wandb_run_name": run.name,
+                "wandb_url": run.url,
+                "wandb_state": run.state,
+                "wsd80_bpb": float(target),
+                "eval_loss": float(run.summary["eval/loss"]),
+            }
+        )
+
+    manifest = pd.DataFrame(
+        {
+            "selection_rank": [rank for rank, _coordinate in ranked_coordinates],
+            "phase_0_starcoder": [coordinate[0] for _rank, coordinate in ranked_coordinates],
+            "phase_1_starcoder": [coordinate[1] for _rank, coordinate in ranked_coordinates],
+            "panel": ["refinement44"] * len(ranked_coordinates),
+        }
+    )
+    merged = manifest.merge(pd.DataFrame(observed_rows), on="selection_rank", how="left", validate="one_to_one")
+    if merged["wsd80_bpb"].isna().any():
+        raise ValueError("The refinement manifest did not join one-to-one with completed W&B results")
+    anchor_rank = ranked_coordinates[-1][0]
+    anchor = merged.loc[merged["selection_rank"].eq(anchor_rank)].iloc[0]
+    new_coordinates = merged.loc[~merged["selection_rank"].eq(anchor_rank)].copy()
+    return new_coordinates, anchor
 
 
 def _matched_surface_row(wsd80: pd.DataFrame, phase_0: float, phase_1: float) -> pd.Series:
@@ -426,7 +483,7 @@ def _add_surface(
             marker={"symbol": "diamond", "size": 7, "color": GLOBAL_MIN_COLOR, "line": {"color": "white", "width": 1.2}},
             text=[f"best observed<br>p0={best['p0']:.4f}<br>p1={best['p1']:.4f}<br>BPB={best['bpb']:.6f}"],
             hoverinfo="text",
-            name="best observed",
+            name=f"best observed: p0={best['p0']:.3f}, p1={best['p1']:.3f}; BPB={best['bpb']:.3f}",
             showlegend=show_legend,
             scene=scene,
         )
@@ -468,6 +525,52 @@ def _write_figure(fig: go.Figure, stem: Path, *, static_scale: int = 2) -> None:
     fig.write_image(stem.with_suffix(".png"), scale=static_scale)
 
 
+def _add_fact_sheet(fig: go.Figure, columns: tuple[tuple[tuple[str, str], ...], ...]) -> None:
+    num_columns = len(columns)
+    fig.add_shape(
+        type="rect",
+        xref="paper",
+        yref="paper",
+        x0=0.0,
+        x1=1.0,
+        y0=-0.25,
+        y1=-0.04,
+        fillcolor="#F5F1E8",
+        line={"color": "#C7BFB0", "width": 1},
+        layer="below",
+    )
+    fig.add_annotation(
+        x=0.015,
+        y=-0.07,
+        xref="paper",
+        yref="paper",
+        text="<b>EXPERIMENT FACT SHEET</b>",
+        showarrow=False,
+        xanchor="left",
+        yanchor="top",
+        font={"family": "Arial, sans-serif", "size": 13, "color": "#C94F2D"},
+    )
+    for index, facts in enumerate(columns):
+        lines = []
+        for label, value in facts:
+            wrapped_value = "<br>".join(textwrap.wrap(value, width=34))
+            lines.append(f"<b>{label}</b>  {wrapped_value}")
+        text = "<br>".join(lines)
+        fig.add_annotation(
+            x=0.02 + index * (0.98 / num_columns),
+            y=-0.115,
+            xref="paper",
+            yref="paper",
+            text=text,
+            width=225,
+            showarrow=False,
+            xanchor="left",
+            yanchor="top",
+            align="left",
+            font={"family": "Arial, sans-serif", "size": 9, "color": PAPER_TEXT},
+        )
+
+
 def _render_wsd80_surface(surface: Surface, output_dir: Path) -> None:
     frame = surface.frame
     color_min = float(frame["bpb"].min())
@@ -505,19 +608,48 @@ def _render_wsd80_surface(surface: Surface, output_dir: Path) -> None:
                 marker={"symbol": symbol, "size": 7, "color": color, "line": {"color": "white", "width": 1.2}},
                 text=[f"{name}<br>p0={row['p0']:.4f}<br>p1={row['p1']:.4f}<br>BPB={row['bpb']:.6f}"],
                 hoverinfo="text",
-                name=name,
+                name=f"{name}: p0={row['p0']:.3f}, p1={row['p1']:.3f}; BPB={row['bpb']:.3f}",
             )
         )
+    best = frame.loc[frame["bpb"].idxmin()]
+    _add_fact_sheet(
+        fig,
+        (
+            (
+                ("Model", "Llama; 10 layers, d=768, FFN=1536, 8 Q/KV heads"),
+                ("Parameters", "157.5M trainable incl. tied 128,256-token embedding; ~59M transformer"),
+                ("Tokenizer / sequence", "Llama 3.1 tokenizer; 2,048 tokens"),
+            ),
+            (
+                ("Training", "999.8M materialized tokens; batch 128; 3,814 steps"),
+                ("Optimizer", "MuonH; Muon LR 0.02, Adam LR 0.008"),
+                ("LR schedule", "1% warmup; stable through phase 0; cosine decay over final 20%"),
+            ),
+            (
+                ("Data", "Nemotron-CC broad pool + Dolma StarCoder rare bucket"),
+                ("Phases", "80% / 20%; boundary step 3,040 (realized 79.71%)"),
+                ("Simulated epoch target", "5.730T tokens; no fixed subset seed"),
+            ),
+            (
+                ("Objective", "Dolma 100 Programming Languages BPB; lower is better"),
+                ("Surface", f"{len(frame)} unique coordinates; linear Delaunay triangulation"),
+                (
+                    "Inference",
+                    f"shared data seed {REFERENCE_DATA_SEED}; best sampled p0={best['p0']:.3f}, p1={best['p1']:.3f}",
+                ),
+            ),
+        ),
+    )
     fig.update_layout(
         template="plotly_white",
         width=1100,
-        height=900,
+        height=1040,
         paper_bgcolor=PAPER_BACKGROUND,
         font={"family": SERIF_FONT, "size": 17, "color": PAPER_TEXT},
         title={"text": "StarCoder response under 80/20 WSD", "x": 0.5, "font": {"size": 26}},
         legend={"x": 0.01, "y": 0.97, "bgcolor": "rgba(255,255,255,0.9)"},
         scene=_scene_layout(max(0.88, color_min - 0.03), z_max),
-        margin={"l": 20, "r": 80, "t": 75, "b": 30},
+        margin={"l": 20, "r": 80, "t": 75, "b": 220},
     )
     _write_figure(fig, output_dir / "starcoder_wsd80_surface")
 
@@ -926,6 +1058,7 @@ def _overlap_bullet(name: str, overlap: dict[str, object]) -> str:
 def _write_report(summary: dict[str, object], output_dir: Path) -> None:
     surfaces = summary["surfaces"]
     wsd80 = surfaces[2]
+    refinement = summary["refinement"]
     fixed = summary["fixed_aggregate_contrasts"]
     overlap = summary["exact_coordinate_overlaps"]
     repeats = summary["paired_schedule_repeats"]
@@ -942,7 +1075,17 @@ def _write_report(summary: dict[str, object], output_dir: Path) -> None:
         "",
         "- Original RegMix 60M architecture, 1B materialized tokens, and the historical datasets.",
         "- Phase 0 is 80% of training at the WSD plateau; phase 1 is the final 20% cosine decay.",
-        "- All 64 coordinates completed with one shared configured seed.",
+        f"- All {wsd80['n']} unique coordinates completed with one shared configured seed.",
+        *(
+            []
+            if refinement is None
+            else [
+                "- The refined surface pools 64 original coordinates with "
+                f"{refinement['new_coordinate_count']} new coordinates; its repeated optimum anchor is "
+                "excluded from triangulation and used only to measure drift "
+                f"(delta BPB {refinement['drift_anchor_delta_bpb']:+.6f})."
+            ]
+        ),
         "- Surfaces use linear triangulation; no smoothed or model-predicted optimum is called observed.",
         "- Target: Dolma 100 Programming Languages BPB, lower is better.",
         "",
@@ -1080,15 +1223,35 @@ def _write_report(summary: dict[str, object], output_dir: Path) -> None:
 def main() -> None:
     args = _parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    wsd80 = _collect_wsd80()
+    original_wsd80 = _collect_wsd80()
+    wsd80 = original_wsd80
+    refinement_summary: dict[str, object] | None = None
+    if args.include_refinement:
+        new_coordinates, drift_anchor = _collect_wsd80_refinement()
+        original_anchor = _matched_surface_row(
+            original_wsd80,
+            DRIFT_ANCHOR_COORDINATE[0],
+            DRIFT_ANCHOR_COORDINATE[1],
+        )
+        refinement_summary = {
+            "wandb_group": WSD80_REFINEMENT_GROUP,
+            "new_coordinate_count": len(new_coordinates),
+            "drift_anchor_original_bpb": float(original_anchor["wsd80_bpb"]),
+            "drift_anchor_repeat_bpb": float(drift_anchor["wsd80_bpb"]),
+            "drift_anchor_delta_bpb": float(drift_anchor["wsd80_bpb"] - original_anchor["wsd80_bpb"]),
+        }
+        wsd80 = pd.concat([original_wsd80, new_coordinates], ignore_index=True)
+        if len(wsd80) != 107 or wsd80.duplicated(["phase_0_starcoder", "phase_1_starcoder"]).any():
+            raise ValueError("Expected 107 unique coordinates after pooling the original and refinement panels")
     wsd80.to_csv(args.output_dir / "wsd80_observed_metrics.csv", index=False)
-    repeats = _collect_wsd80_repeats(wsd80)
+    repeats = _collect_wsd80_repeats(original_wsd80)
     repeats.to_csv(args.output_dir / "wsd80_repeat_observations.csv", index=False)
     repeat_summary, raw_contrasts = _paired_repeat_summary(repeats)
     raw_contrasts.to_csv(args.output_dir / "wsd80_paired_contrasts.csv", index=False)
     surfaces = _load_surfaces(wsd80)
     summary = {
         "wsd80_wandb_group": WSD80_GROUP,
+        "refinement": refinement_summary,
         "target": WSD80_TARGET,
         "surfaces": [_best_summary(surface) for surface in surfaces],
         "paired_schedule_repeats": repeat_summary,

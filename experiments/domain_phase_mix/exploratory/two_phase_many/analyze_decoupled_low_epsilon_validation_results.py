@@ -31,9 +31,16 @@ import plotly.graph_objects as go
 import wandb
 from plotly.subplots import make_subplots
 
+from experiments.domain_phase_mix.exploratory.two_phase_many.interactive_mixture_inspector import (
+    mixture_inspector_payload,
+    mixture_inspector_script,
+)
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUTS = SCRIPT_DIR / "reference_outputs"
 DEFAULT_PANEL_DIR = REFERENCE_OUTPUTS / "decoupled_phase_information_low_epsilon_validation_panel_20260712"
+DEFAULT_BASE_MIXTURE_DIR = REFERENCE_OUTPUTS / "decoupled_phase_information_validation_panel_20260712" / "mixtures"
+DEFAULT_LOW_EPSILON_MIXTURE_DIR = DEFAULT_PANEL_DIR / "mixtures"
 DEFAULT_PRIOR_RESULTS = (
     REFERENCE_OUTPUTS / "decoupled_phase_information_validation_results_20260712" / "observed_results.csv"
 )
@@ -63,12 +70,17 @@ ANCHOR_LABELS = {
     "t9b075": "Table-9, observed-best aggregate KL=0.075",
 }
 RESULT_URI_PATTERN = re.compile(r"wrote results to (gs://\S+/olmo_base_eval_table9_results\.json)")
+PARAMETER_COUNT = 358_306_688
+TRAIN_TOKENS = 1_576_534_016
+VALIDATION_TPP = TRAIN_TOKENS / PARAMETER_COUNT
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
     parser.add_argument("--prior-results", type=Path, default=DEFAULT_PRIOR_RESULTS)
+    parser.add_argument("--base-mixture-dir", type=Path, default=DEFAULT_BASE_MIXTURE_DIR)
+    parser.add_argument("--low-epsilon-mixture-dir", type=Path, default=DEFAULT_LOW_EPSILON_MIXTURE_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
@@ -320,12 +332,22 @@ def add_anchor_traces(
                 showlegend=show_legend,
                 line={"color": FAMILY_COLORS[family], "width": 3},
                 marker={"size": 10},
-                customdata=np.stack([candidates, observed_gain, predicted_gain, phase_tv, raw_predicted], axis=-1),
+                customdata=np.stack(
+                    [
+                        candidates,
+                        np.full(len(candidates), VALIDATION_TPP),
+                        observed_gain,
+                        predicted_gain,
+                        phase_tv,
+                        raw_predicted,
+                    ],
+                    axis=-1,
+                ),
                 hovertemplate=(
                     "%{customdata[0]}<br>epsilon=%{x:.4f}<br>observed BPB=%{y:.6f}"
-                    "<br>observed gain vs tied=%{customdata[1]:+.6f}"
-                    "<br>predicted gain vs tied=%{customdata[2]:+.6f}"
-                    "<br>phase TV=%{customdata[3]:.4f}<br>raw 300M prediction=%{customdata[4]:.6f}<extra></extra>"
+                    "<br>observed gain vs tied=%{customdata[2]:+.6f}"
+                    "<br>predicted gain vs tied=%{customdata[3]:+.6f}"
+                    "<br>phase TV=%{customdata[4]:.4f}<br>raw 300M prediction=%{customdata[5]:.6f}<extra></extra>"
                 ),
             )
         )
@@ -340,13 +362,22 @@ def add_anchor_traces(
                 line={"color": FAMILY_COLORS[family], "width": 2, "dash": "dash"},
                 marker={"size": 9, "symbol": "circle-open"},
                 customdata=np.stack(
-                    [candidates, observed, observed_gain, predicted_gain, phase_tv, raw_predicted], axis=-1
+                    [
+                        candidates,
+                        np.full(len(candidates), VALIDATION_TPP),
+                        observed,
+                        observed_gain,
+                        predicted_gain,
+                        phase_tv,
+                        raw_predicted,
+                    ],
+                    axis=-1,
                 ),
                 hovertemplate=(
                     "%{customdata[0]}<br>epsilon=%{x:.4f}<br>anchored predicted BPB=%{y:.6f}"
-                    "<br>observed BPB=%{customdata[1]:.6f}<br>observed gain vs tied=%{customdata[2]:+.6f}"
-                    "<br>predicted gain vs tied=%{customdata[3]:+.6f}"
-                    "<br>phase TV=%{customdata[4]:.4f}<br>raw 300M prediction=%{customdata[5]:.6f}<extra></extra>"
+                    "<br>observed BPB=%{customdata[2]:.6f}<br>observed gain vs tied=%{customdata[3]:+.6f}"
+                    "<br>predicted gain vs tied=%{customdata[4]:+.6f}"
+                    "<br>phase TV=%{customdata[5]:.4f}<br>raw 300M prediction=%{customdata[6]:.6f}<extra></extra>"
                 ),
             )
         )
@@ -359,13 +390,112 @@ def add_anchor_traces(
             legendgroup="control",
             showlegend=show_legend,
             marker={"color": FAMILY_COLORS["control"], "size": 12, "symbol": "diamond"},
-            customdata=[[control["candidate"]]],
+            customdata=[[control["candidate"], VALIDATION_TPP]],
             hovertemplate="%{customdata[0]}<br>epsilon=0<br>observed BPB=%{y:.6f}<extra></extra>",
         )
     )
 
 
-def render_paths(paths: pd.DataFrame, output_dir: Path) -> None:
+def add_fact_sheet(figure: go.Figure) -> None:
+    columns = (
+        (
+            ("Surrogate fit panel", "300M / 6B-token Dolma 3 + Dolmino swarm"),
+            ("Fit rows", "280 two-phase schedules; 39 top-level buckets"),
+            ("Models", "effective-exposure DSP and separate phase heads"),
+        ),
+        (
+            ("Intervention", "hold aggregate mixture fixed; vary phase-information budget"),
+            ("Phase-information grid", "0.001-0.2; sampled most densely near zero"),
+            ("Aggregate anchors", "KL 0.05; plus Table-9 observed-best KL 0.075"),
+        ),
+        (
+            ("Architecture", "Qwen3: 10 layers, d=896, FFN=3,584, 7 Q/KV heads"),
+            ("Parameters / tokens", "358.3M trainable; 1.576B materialized tokens"),
+            ("Optimization", "AdamH; sequence 4,096; batch 128; 3,007 steps; seed 690300"),
+        ),
+        (
+            ("Phases / LR", "80% / 20% boundary at step 2,406; 10% warmup, 20% linear decay"),
+            ("Simulated epoch target", "6.325T tokens; no fixed subset seed"),
+            ("Evidence", "one training seed per candidate; no candidate repeats"),
+            ("Prediction display", "300M curves offset to the observed tied 3e18 control"),
+        ),
+    )
+    figure.add_shape(
+        type="rect",
+        xref="paper",
+        yref="paper",
+        x0=0.0,
+        x1=1.0,
+        y0=-0.46,
+        y1=-0.18,
+        fillcolor="#F5F1E8",
+        line={"color": "#C7BFB0", "width": 1},
+        layer="below",
+    )
+    figure.add_annotation(
+        x=0.01,
+        y=-0.22,
+        xref="paper",
+        yref="paper",
+        text="<b>EXPERIMENT FACT SHEET</b>",
+        showarrow=False,
+        xanchor="left",
+        yanchor="top",
+        font={"family": "Arial, sans-serif", "size": 14, "color": "#C94F2D"},
+    )
+    for index, facts in enumerate(columns):
+        text = "<br>".join(f"<b>{label}</b>  {value}" for label, value in facts)
+        figure.add_annotation(
+            x=0.01 + index * 0.247,
+            y=-0.29,
+            xref="paper",
+            yref="paper",
+            text=text,
+            showarrow=False,
+            xanchor="left",
+            yanchor="top",
+            align="left",
+            font={"family": "Arial, sans-serif", "size": 11, "color": "#23395D"},
+        )
+
+
+def mixture_inspector_post_script(
+    paths: pd.DataFrame,
+    base_mixture_dir: Path,
+    low_epsilon_mixture_dir: Path,
+) -> str:
+    displayed = paths[paths["phase_information_budget"].le(0.2)].drop_duplicates("candidate")
+    mixture_paths: dict[str, Path] = {}
+    labels: dict[str, str] = {}
+    for record in displayed.to_dict(orient="records"):
+        candidate = str(record["candidate"])
+        matches = [
+            path
+            for path in (base_mixture_dir / f"{candidate}.csv", low_epsilon_mixture_dir / f"{candidate}.csv")
+            if path.exists()
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"Expected one local mixture CSV for {candidate}, got {matches}")
+        mixture_paths[candidate] = matches[0]
+
+        anchor = ANCHOR_LABELS[str(record["anchor_tag"])]
+        family = FAMILY_LABELS[str(record["family"])]
+        if record["family"] == "control":
+            labels[candidate] = f"{anchor} · {family}"
+        else:
+            epsilon = float(record["phase_information_budget"])
+            labels[candidate] = f"{anchor} · {family} · <i>ε</i><sub>phase</sub> = {epsilon:g}"
+
+    payload = mixture_inspector_payload(mixture_paths, labels)
+    return mixture_inspector_script(payload, parameter_count=PARAMETER_COUNT)
+
+
+def render_paths(
+    paths: pd.DataFrame,
+    base_mixture_dir: Path,
+    low_epsilon_mixture_dir: Path,
+    output_dir: Path,
+) -> None:
     figure = go.Figure()
     add_anchor_traces(figure, paths, "unch05", show_legend=True, max_epsilon=0.01)
     figure.update_layout(
@@ -397,20 +527,38 @@ def render_paths(paths: pd.DataFrame, output_dir: Path) -> None:
             row=1,
             col=col,
             show_legend=col == 1,
-            max_epsilon=0.01,
         )
-        comparison.update_xaxes(title_text="Phase-information budget", row=1, col=col)
+        comparison.update_xaxes(
+            title_text="Phase-information budget",
+            tickmode="array",
+            tickvals=[0.0, 0.05, 0.1, 0.15, 0.2],
+            row=1,
+            col=col,
+        )
         comparison.update_yaxes(title_text="Target BPB" if col == 1 else None, row=1, col=col)
+    add_fact_sheet(comparison)
     comparison.update_layout(
-        title={"text": "Low-epsilon phase paths: predicted versus observed at 3e18", "x": 0.5},
+        title={
+            "text": (
+                "Phase-information paths: predicted versus observed at 3e18"
+                "<br><sup>Separate-heads epsilon=0.2 duplicates epsilon=0.15 for Uncheatable and stable Table-9; "
+                "it was not rerun.</sup>"
+            ),
+            "x": 0.5,
+        },
         template="plotly_white",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
         width=1800,
-        height=720,
+        height=900,
         legend={"orientation": "h", "yanchor": "top", "y": -0.16, "xanchor": "center", "x": 0.5},
-        margin={"l": 80, "r": 40, "t": 135, "b": 175},
+        margin={"l": 80, "r": 40, "t": 135, "b": 310},
     )
     comparison.write_html(
-        output_dir / "low_epsilon_predicted_vs_observed_paths.html", include_plotlyjs=True, config=EXPORT_CONFIG
+        output_dir / "low_epsilon_predicted_vs_observed_paths.html",
+        include_plotlyjs=True,
+        config=EXPORT_CONFIG,
+        post_script=mixture_inspector_post_script(paths, base_mixture_dir, low_epsilon_mixture_dir),
     )
     comparison.write_image(output_dir / "low_epsilon_predicted_vs_observed_paths.png", scale=2)
 
@@ -434,6 +582,8 @@ def render_paths(paths: pd.DataFrame, output_dir: Path) -> None:
             "x": 0.5,
         },
         template="plotly_white",
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
         width=1800,
         height=720,
         legend={"orientation": "h", "yanchor": "top", "y": -0.16, "xanchor": "center", "x": 0.5},
@@ -522,7 +672,7 @@ def main() -> None:
     summary.to_csv(args.output_dir / "uncheatable_path_summary.csv", index=False)
     complete_summary.to_csv(args.output_dir / "predicted_vs_observed_path_summary.csv", index=False)
     (args.output_dir / "collection_audit.json").write_text(json.dumps(audit, indent=2) + "\n")
-    render_paths(paths, args.output_dir)
+    render_paths(paths, args.base_mixture_dir, args.low_epsilon_mixture_dir, args.output_dir)
     write_report(results, paths, summary, complete_summary, audit, args.output_dir)
     print(summary.to_string(index=False))
     print(f"Wrote {args.output_dir}")
