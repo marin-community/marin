@@ -403,14 +403,3 @@ def all_sources() -> dict[str, DatakitSource]:
     }
     assert len(entries) == len(all_rows), "duplicate marin_name across families"
     return entries
-
-
-def select_sources(names: list[str] | None) -> list[DatakitSource]:
-    """Return all registered sources or the requested named subset."""
-    sources = all_sources()
-    if not names:
-        return list(sources.values())
-    missing = [name for name in names if name not in sources]
-    if missing:
-        raise SystemExit(f"unknown source(s): {', '.join(missing)}")
-    return [sources[name] for name in names]

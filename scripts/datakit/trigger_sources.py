@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trigger selected Datakit source chains via ``StepRunner``, optionally downloads-only.
+"""Trigger every Datakit source's chain via ``StepRunner``, optionally downloads-only.
 
 For each :class:`marin.datakit.sources.DatakitSource`, hand ``StepRunner`` the
 terminal normalize step (or, with ``--downloads-only``, just the chain's
@@ -19,7 +19,7 @@ not set or validate it.
 import argparse
 import logging
 
-from marin.datakit.sources import select_sources
+from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from rigging.log_setup import configure_logging
 
@@ -33,17 +33,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run only the download step of each source's chain (normalize_steps[0]).",
     )
-    parser.add_argument(
-        "--source",
-        action="append",
-        help="Source name to trigger (repeatable). Default: all registered sources.",
-    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    sources = select_sources(args.source)
+    sources = list(all_sources().values())
     terminals = [src.normalize_steps[0] if args.downloads_only else src.normalized for src in sources]
     stage = "downloads" if args.downloads_only else "normalize chains"
     logger.info("Running %s for %d sources", stage, len(sources))
