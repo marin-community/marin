@@ -5,6 +5,8 @@
 This file represents the best practices for each stage of the pipeline.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import logging
 import os
@@ -65,8 +67,6 @@ from experiments.datasets.uncheatable import (
 )
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.paloma import paloma_raw_validation_sets, paloma_tokenized
-from experiments.simple_dpo_config import SimpleDPOConfig
-from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
@@ -613,7 +613,7 @@ def default_sft(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LlamaConfig,
-    sft_config: SimpleSFTConfig,
+    sft_config: Any,
     tags: Sequence[str] = (),
     adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
@@ -687,7 +687,7 @@ def default_dpo(
     name: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     model_config: LlamaConfig,
-    dpo_config: SimpleDPOConfig,
+    dpo_config: Any,
     tags: Sequence[str] = (),
     override_output_path: str | None = None,
 ) -> ExecutorStep:
