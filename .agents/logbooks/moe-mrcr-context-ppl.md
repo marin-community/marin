@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-001-d512-r3` in `us-east5-a`. No experiment result is available yet.
+The `MOE-MRCR-001` d512 recovery run is preprocessing MRCR successfully as Iris job `/held/moe-mrcr-001-d512-r5` in `us-east5-a`. The tokenizer-free transform completed within a 3 GB coordinator, final-user-only caches completed, and the three full-context caches are running. No model result is available yet.
 
 ## Scope
 
@@ -17,7 +17,7 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 - Primary metrics: aggregate and per-needle final-user-only PPL, full-context PPL, context PPL reduction, context PPL ratio, and context NLL reduction.
 - Constraints: v5p-8 in `us-east5-a`; model sequence length 8192; left truncation; final assistant turn is the only scored target.
 - Coordinating issue: https://github.com/marin-community/marin/issues/7181
-- Stop criterion: one finished d512 run with finite paired metrics across MRCR context bins, or a documented unrecoverable infrastructure or evaluation failure.
+- Stop criterion: one finished d512 run with finite aggregate and per-needle paired metrics, or a documented unrecoverable infrastructure or evaluation failure.
 
 ## Baseline
 
@@ -35,7 +35,7 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted recovery job `/held/moe-mrcr-001-d512-r3`. Next test: monitor training and collect final MRCR metrics.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: recovery job `/held/moe-mrcr-001-d512-r5` completed the tokenizer-free transform and final-user-only caches without a TPU allocation. Next test: finish full-context caches, monitor training, and collect final MRCR metrics.
 
 ### Blocked
 
@@ -110,3 +110,23 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 - Result: `/held/moe-mrcr-001-d512-r2` failed during its explicitly scoped environment build because Iris applies `--no-group dev` to `marin-root`, which has no such dependency group. The separate tokenizer and its dependency were removed; the focused transform test passed, repository checks passed, and Iris accepted `/held/moe-mrcr-001-d512-r3` with default syncing.
 - Interpretation: the evaluation now has one tokenization authority: the model tokenizer used by the supervised cache. This is simpler and directly matches the requested aggregate context-conditioned PPL reduction.
 - Next action: verify coordinator startup, MRCR preprocessing, TPU dispatch, and W&B registration.
+
+### 2026-07-14 18:00 - MOE-MRCR-001 corrected the dataset artifact version
+
+- Hypothesis: the tokenizer-free transform will proceed once its immutable artifact version uses Marin's accepted calendar format.
+- Commit Hash: `257199771f642a7c279936a6f4c934b24bcabfd3`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r4 --zone us-east5-a -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r4 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: unchanged d512 model and paired evaluation; MRCR artifact version `2026.07.14.1`.
+- Result: `/held/moe-mrcr-001-d512-r3` failed before preprocessing because version `2026.07.14-1` was not a valid Marin calendar version. The corrected run downloaded all six MRCR parquet shards to `gs://marin-us-east5/raw/openai/mrcr/2026.07.14.1`, then its 1 GB coordinator was OOM-killed during the inline processed transform before TPU dispatch.
+- Interpretation: dataset discovery and regional download succeeded; the remaining failure was the coordinator memory limit, not the transform semantics or training resource.
+- Next action: reuse the cached download and increase only the CPU coordinator memory.
+
+### 2026-07-14 18:03 - MOE-MRCR-001 preprocessing recovered
+
+- Hypothesis: a 3 GB CPU coordinator is sufficient for the inline MRCR transform and cache orchestration.
+- Commit Hash: `257199771f642a7c279936a6f4c934b24bcabfd3`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r5 --zone us-east5-a --memory 3GB -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r5 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: unchanged d512 model and paired evaluation; CPU coordinator memory increased from 1 GB to 3 GB; v5p-8 child remains pinned to `us-east5-a`.
+- Result: Iris accepted `/held/moe-mrcr-001-d512-r5`. The cached raw dataset was reused, the processed transform completed at approximately 850 MB RSS, and all six model-tokenized validation-cache pipelines started. All three 800-document final-user-only caches and their probes succeeded; the 2-, 4-, and 8-needle full-context caches remain active.
+- Interpretation: removing pre-tokenization and increasing coordinator memory resolved the ingestion path without changing the requested left-truncated paired metric.
+- Next action: monitor the full-context caches through TPU dispatch, W&B registration, training, and terminal metrics.
