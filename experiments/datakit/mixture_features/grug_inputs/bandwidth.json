@@ -1,0 +1,10 @@
+{
+  "rff_bandwidth": 0.9812282919883728,
+  "calib_domains": [
+    "dolma3_arxiv",
+    "dolma3_cc/art_and_design_high",
+    "dolma3_cc/art_and_design_low",
+    "dolma3_cc/crime_and_law_high"
+  ],
+  "calib_pool_size": 2000
+}

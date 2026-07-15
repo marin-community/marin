@@ -250,6 +250,58 @@ come from starcoder-DOMINATED anchors in the starcoder-stress swarm; our proposa
 starcoder — even a paranoid 3× inflation leaves 2.7σ/4.6σ. Replicates skipped (would cost ~24
 TPU-hours to confirm an ~8σ result).
 
+## 2026-07-15 Grug-MoE 168-bucket histograms (same frozen basis) + zephyr port
+
+Extended the featurization to the **Grug-MoE Fisher-DSP sweep** (issue #7067): 168 buckets over
+datakit `store_8ac06c74` (40 lexical clusters × 5 quality tiers). Mapping `cNNqQ` →
+`cluster=NN/quality=Q` (0-based); `tail` = token-weighted pooled sample over the 33 below-threshold
+partitions (`_TAIL_BUCKETS`). Built with the SAME frozen basis as the 39 qsplit240 domains —
+centroids sha `11e7ed99…`, bandwidth **0.98123** (reused from `domain_histograms/bandwidth.json`,
+never recomputed), int8-round-trip assignment — so the two sweeps are poolable.
+
+- **Local build** (`experiments/datakit/mixture_features/build_grug_histograms.py`, gs store):
+  168/168, ~2.5h compute (~53s/bucket embed) + tail's 33-child sequential read (1790s) + a
+  crash/resume; resumable (per-bucket sentinels, ENOSPC + prefetch of N+1 while N embeds → I/O
+  hidden behind embed). Outputs `scratch/mixture_features/grug_histograms/` uploaded to
+  `gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/v0/grug_histograms/`.
+- **Distributed zephyr port** (`grug_histograms_zephyr.py` + thin launcher; reuses the histogram
+  math verbatim): map-one-task-per-bucket on cw-rno2a reading the CW mirror
+  `s3://marin-us-east-02a/…store_8ac06c74`. 168 buckets in **~5.5 min** wall (32 CPU workers). Two
+  blockers fixed: (1) `python -m pipeline` ran the module as `__main__` → cloudpickle stamped the
+  map fn `__module__=__main__` → coordinator `AttributeError`; fixed with a separate thin launcher
+  so functions keep their qualified module. (2) frozen basis + input JSONs are under gitignored
+  `scratch/` → staged into the bundled workspace `grug_inputs/`. CW gotchas confirmed: no
+  `--region`, `--extra datakit --extra cpu` (torch-cpu), worker pods auto-read/write CW via
+  `iris-task-env`, `TreeCache.load` works on `s3://` directly. Outputs on CW under
+  `…/v0/grug_histograms_zephyr/`. **Roles: local = primary deliverable (methodology-matched, GCS);
+  zephyr = independent replicate (CW), kept.** This VM (us-west2) has no CW creds → cannot pull CW
+  outputs here.
+
+**V-column sampling-noise floor** (same-store gs, seed 0 vs 1, n=24 spanning cell extremes;
+`noise_floor.json`): cos_K5000 median **0.977** (p10 0.872, worst 0.809 for the most diffuse
+900-cell buckets); cos_K40 median **0.9999** (worst 0.9936); Hellinger_K5000 med 0.191.
+Floor scales with concentration (degenerate c38q0=3 cells → cos 1.0000; diffuse c05q1=700 cells →
+0.809).
+
+**Sanity + the key read against the floor**: all 168 columns sum to 1.0. Occupied cells median 116,
+min 3 (c38q0), 27 buckets ≤50 — grug *lexical* clusters concentrate far more in the *semantic*
+codebook than dolma topics did. Cluster↔codebook alignment: median max-K40-cell-share **0.964**,
+all 35 clusters >0.5, K40 entropy median 0.244 nats → grug clusters **nest within** codebook cells,
+don't cut across. Cross-cluster cosine ≈ **0.000** (near-orthogonal). Quality axis:
+- within-cluster cross-tier cos **K40 = 0.9999 == the K40 noise floor** → tiers indistinguishable
+  from sampling noise at coarse granularity (**quality-blind**, matches the 39-domain finding);
+- within-cluster cross-tier cos **K5000 = 0.787 << floor 0.977** (below even the worst-case 0.809)
+  → **real fine-grained tier separation** the K40 view cannot see.
+`tail` is the most diffuse bucket (290 cells, entropy 2.95 nats, top-cell share 0.22) — as expected.
+
+**Mirror-drift ops observation** (`mirror_drift.json`, 41 overlap buckets, gs vs CW same seed/code):
+0 exact matches; |Δtokens| median 3.3% (max 43%), |Δcells| median 7. Deltas are **symmetric (±)**
+and their magnitude is **consistent with the same-store sampling floor** — dominated by
+contiguous-range variance over huge heavy-tailed partitions (tens of M docs), NOT evidence of
+systematic mirror corruption. A store-ops per-partition doc-count parity check would confirm
+(couldn't read CW ledgers from this VM). Basis is identical on both sides → poolability holds;
+only cross-store bitwise reproducibility does not.
+
 ## 2026-07-14 grug-moe-mix-swarm campaign start (independent of qsplit240)
 
 - New sweep: HF `marin-community/grug-moe-mix-swarm` — 840 MoE runs (d512), two-phase mixtures
