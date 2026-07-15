@@ -213,9 +213,11 @@ dedup = [
 datakit = [
     "luxical",
     "huggingface-hub",
+    "jusText[encoding] @ git+https://github.com/XenonMolecule/jusText@1652a1497b36c4b9941c609ffa1714eeefedc70b",
     "faiss-cpu",
     "scikit-learn",
     "scipy",
+    "warcio>=1.7.5",
 ]
 
 math = ["pylatexenc", "sympy"]

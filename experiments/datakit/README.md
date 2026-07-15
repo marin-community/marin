@@ -109,11 +109,37 @@ List them with:
 aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 ```
 
+## Common Crawl focus crawl
+
+[`focus_crawl.py`](focus_crawl.py) streams the 4,573 WARC files in
+`CC-SUPPLEMENTAL-2026-22`, decodes each HTML response using its BOM, HTTP
+charset, HTML metadata, or detected encoding, and extracts text with
+[`XenonMolecule/jusText`](https://github.com/XenonMolecule/jusText/tree/1652a1497b36c4b9941c609ffa1714eeefedc70b).
+The step pins commit `1652a1497b36c4b9941c609ffa1714eeefedc70b` and the
+bundled `sklearn` model with the English stoplist in its hash attributes. It
+writes normalized Parquet to `outputs/main/`; each row includes the content
+hash, text, URL, WARC record ID, WARC filename, WARC date, content type, and
+decoded charset.
+
+Submit the extraction on Iris with:
+
+```bash
+uv run iris --cluster=<cluster> job run --priority production --cpu 2 --memory 8GB \
+    -- python -m experiments.datakit.focus_crawl
+```
+
+The test uses a local WARC fixture and does not access Common Crawl:
+
+```bash
+uv run --all-packages --extra datakit pytest tests/datakit/test_focus_crawl.py
+```
+
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `reference_pipeline.py` | The DAG builder + CLI (`--mode full\|sample`, `--pool-*`, `--sources`, `--quality-model`) |
+| `focus_crawl.py` | WARC download, charset handling, jusText extraction, and normalized Parquet output for `CC-SUPPLEMENTAL-2026-22` |
 | `cluster/quality/fast_transformer/` | Quality classifier: per-source scoring step + training/calibration |
 | `cluster/domain/v0/` | Domain clustering: centroid sampling/training + per-source assignment |
 | `embeddings/luxical/` | Luxical-one document embeddings feeding the domain stage |
