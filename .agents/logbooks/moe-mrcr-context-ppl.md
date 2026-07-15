@@ -9,12 +9,12 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-001-d512-r2` in `us-east5-a`. No experiment result is available yet.
+The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-001-d512-r3` in `us-east5-a`. No experiment result is available yet.
 
 ## Scope
 
 - Goal: measure final-turn PPL with and without retained MRCR context on the smallest standard Grug scale.
-- Primary metrics: `eval/mrcr/context_ppl`, `eval/mrcr/no_context_ppl`, `eval/mrcr/ppl_reduction`, `eval/mrcr/ppl_ratio`, and the corresponding context-bin metrics.
+- Primary metrics: aggregate and per-needle final-user-only PPL, full-context PPL, context PPL reduction, context PPL ratio, and context NLL reduction.
 - Constraints: v5p-8 in `us-east5-a`; model sequence length 8192; left truncation; final assistant turn is the only scored target.
 - Coordinating issue: https://github.com/marin-community/marin/issues/7181
 - Stop criterion: one finished d512 run with finite paired metrics across MRCR context bins, or a documented unrecoverable infrastructure or evaluation failure.
@@ -35,7 +35,7 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted recovery job `/held/moe-mrcr-001-d512-r2`. Next test: monitor training and collect final MRCR metrics.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted recovery job `/held/moe-mrcr-001-d512-r3`. Next test: monitor training and collect final MRCR metrics.
 
 ### Blocked
 
@@ -100,3 +100,13 @@ The `MOE-MRCR-001` d512 recovery run is submitted as Iris job `/held/moe-mrcr-00
 - Result: `/held/moe-mrcr-001-d512-r1` repeated the import failure because the default workspace-member sync did not install root-only dependencies. Iris accepted `/held/moe-mrcr-001-d512-r2` with the explicit root sync.
 - Interpretation: the declared dependency was correct; the remaining failure was limited to coordinator environment selection.
 - Next action: verify coordinator import and continue monitoring through TPU dispatch and W&B registration.
+
+### 2026-07-14 17:58 - MOE-MRCR-001 removed pre-tokenization binning
+
+- Hypothesis: MRCR PPL reduction needs model-tokenized full-context and final-user-only pairs, not a separate tokenizer used only for reporting bins.
+- Commit Hash: `f010c2009cdd753150f43220d4551c8c4d67bf6f`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r3 --zone us-east5-a -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r3 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: unchanged d512 model and paired left-truncated evaluation; aggregate and per-needle metrics replace pre-tokenization context bins.
+- Result: `/held/moe-mrcr-001-d512-r2` failed during its explicitly scoped environment build because Iris applies `--no-group dev` to `marin-root`, which has no such dependency group. The separate tokenizer and its dependency were removed; the focused transform test passed, repository checks passed, and Iris accepted `/held/moe-mrcr-001-d512-r3` with default syncing.
+- Interpretation: the evaluation now has one tokenization authority: the model tokenizer used by the supervised cache. This is simpler and directly matches the requested aggregate context-conditioned PPL reduction.
+- Next action: verify coordinator startup, MRCR preprocessing, TPU dispatch, and W&B registration.
