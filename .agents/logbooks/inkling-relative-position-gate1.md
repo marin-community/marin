@@ -67,3 +67,15 @@ None.
 - Result: applied the repository's Black formatting to two experiment files and reran `./infra/pre-commit.py --changed-files --fix` successfully. No behavior changed.
 - Interpretation: use this commit, rather than the earlier pre-format snapshot, as the reproducible launch revision.
 - Next action: push the snapshot and submit both cells through Iris.
+
+### 2026-07-15 12:12 PDT - Gate 1 submitted
+
+- Hypothesis: unchanged from `MOE-RPE-001` and `MOE-RPE-002` above.
+- Commit Hash: `45487ef99`
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --preemptible --reserve v5p-8 --job-name inkling-relative-position-gate1-7208 -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe_relative_position.launch`
+- Config: unchanged from the final launch snapshot.
+- Result: parent `/kaiyuew/inkling-relative-position-gate1-7208` submitted at 2026-07-15 12:08 PDT. Children `/kaiyuew/inkling-relative-position-gate1-7208/grug-train-MOE-RPE-001-d512` and `/kaiyuew/inkling-relative-position-gate1-7208/grug-train-MOE-RPE-002-d768` are both running with zero failures and zero preemptions. W&B group `MOE-RPE-gate1-issue-7208` is pending run initialization.
+- Interpretation: both required Gate 1 cells were dispatched from the same pushed snapshot. Final loss, throughput, and effective speedup are not yet available.
+- Next action: wait for both W&B runs to finish, then compute effective speedup against #6882.
+
+The first submission attempt omitted `--preemptible` and was rejected before job creation because the CPU parent inherited a non-preemptible constraint while `--reserve v5p-8` matched only preemptible v5p groups. The retry above made the placement constraint explicit; no experiment work was duplicated.
