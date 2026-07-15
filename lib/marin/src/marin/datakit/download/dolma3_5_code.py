@@ -14,11 +14,11 @@ PDF subset is ``dolma4pdfs.py``.
 default ``ram="10g"``; tokenize it with more.
 """
 
+from rigging.filesystem import prefix_join
+
+from marin.datakit.download.dolma3_5 import HF_DATASET_ID, HF_REVISION, STAGED_ROOT
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.execution.step_spec import StepSpec
-
-HF_DATASET_ID = "allenai/dolma3.5_pool"
-HF_REVISION = "d2bf6ae"
 
 SUBSETS = ("dolma_code", "dolma_code_prose")
 
@@ -33,8 +33,8 @@ def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             marin_name=subset,
             hf_dataset_id=HF_DATASET_ID,
             revision=HF_REVISION,
-            staged_path=f"raw/dolma3_5_pool-{HF_REVISION}/{subset}",
-            hf_urls_glob=(f"{subset}/**/*.jsonl.zst",),
+            staged_path=prefix_join(STAGED_ROOT, subset),
+            hf_urls_glob=(prefix_join(subset, "**/*.jsonl.zst"),),
             file_extensions=(".jsonl.zst",),
         )
         for subset in SUBSETS
