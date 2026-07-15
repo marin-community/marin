@@ -30,6 +30,7 @@ from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddin
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.models.mistral import MistralConfig
+from levanter.models.moe import dense_router_delta
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -83,6 +84,11 @@ class MixtralConfig(MistralConfig):
 
     lbl_coef: Optional[float] = 0.01
     rzl_coef: Optional[float] = 0.001
+
+    # DenseMixer-style dense router gradient (training only). When enabled, the block keeps the
+    # sparse forward value but routes the dense all-experts gradient to the router logits. Default
+    # off; the exported/served forward is untouched. See levanter.models.moe.dense_router_delta.
+    dense_router_gradient: bool = False
 
     # Attention-related config
     upcast_attn: bool = False
@@ -329,6 +335,9 @@ class MixtralSparseMoeBlock(eqx.Module):
     config: MistralConfig = eqx.field(static=True)
     gate: hnn.Linear  # projection from Embed to Experts
     experts: MixtralMoEMlp
+    # Non-static (hnn.Dropout pattern) so levanter.utils.tree_utils.inference_mode can flip it for
+    # eval, which skips the DenseMixer dense pass. The flag only saves compute; values are identical.
+    inference: bool = False
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralSparseMoeBlock":
@@ -497,7 +506,24 @@ class MixtralSparseMoeBlock(eqx.Module):
             out_repeat_sort, sort_idx, topk_weights, Token, TokenRepeat, TopExperts
         )  # [TokenRepeat, Embed]
 
-        out = out_repeat_unflat.dot(topk_weights, axis=TopExperts)  # [Token, Embed]
+        use_dense = self.config.dense_router_gradient and not self.inference
+        # Detach the router weights in the sparse combine so the router logits get their gradient
+        # purely from the dense delta (below); expert parameters still get the conventional sparse
+        # gradient through out_repeat_unflat.
+        combine_weights = jax.lax.stop_gradient(topk_weights) if use_dense else topk_weights
+        out = out_repeat_unflat.dot(combine_weights, axis=TopExperts)  # [Token, Embed]
+        if use_dense:
+            out = out + dense_router_delta(
+                x_flat,
+                router_logits,
+                self.experts.w1.weight,
+                self.experts.w3.weight,
+                self.experts.w2.weight,
+                self.experts.act,
+                Experts=Experts,
+                Embed=self.config.Embed,
+                Mlp=self.config.Mlp,
+            )
 
         # aux loss
         extras = {}

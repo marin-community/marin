@@ -26,6 +26,7 @@ from levanter.layers.attention import Attention, AttentionBackend, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding
 from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
+from levanter.models.moe import dense_router_delta
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -71,6 +72,11 @@ class Qwen3MoeConfig(LlamaConfig):
     router_aux_loss_coef: float | None = 0.001
     decoder_sparse_step: int = 1
     mlp_only_layers: tuple[int, ...] = ()
+
+    # DenseMixer-style dense router gradient (training only). When enabled, the block keeps the
+    # sparse forward value but routes the dense all-experts gradient to the router logits. Default
+    # off; the exported/served forward is untouched. See levanter.models.moe.dense_router_delta.
+    dense_router_gradient: bool = False
 
     sliding_window: int | None = None
     max_window_layers: int = 48
@@ -291,6 +297,9 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
     config: Qwen3MoeConfig = eqx.field(static=True)
     gate: hnn.Linear
     experts: Qwen3MoeExperts
+    # Non-static (hnn.Dropout pattern) so levanter.utils.tree_utils.inference_mode can flip it for
+    # eval, which skips the DenseMixer dense pass. The flag only saves compute; values are identical.
+    inference: bool = False
 
     @staticmethod
     def init(config: Qwen3MoeConfig, *, key) -> "Qwen3MoeSparseMoeBlock":
@@ -424,7 +433,25 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
         x_repeat_sort, group_sizes, sort_idx = self._permute(x_flat, topk_idx_flat, TokenRepeat)
         out_repeat_sort = self.experts(x_repeat_sort, group_sizes, key=k_experts)
         out_repeat_unflat = self._unpermute(out_repeat_sort, sort_idx, Token, TopExperts)
-        out = out_repeat_unflat.dot(topk_weights, axis=TopExperts)
+
+        use_dense = self.config.dense_router_gradient and not self.inference
+        # Detach the router weights in the sparse combine so the router logits get their gradient
+        # purely from the dense delta (below); expert parameters still get the conventional sparse
+        # gradient through out_repeat_unflat.
+        combine_weights = jax.lax.stop_gradient(topk_weights) if use_dense else topk_weights
+        out = out_repeat_unflat.dot(combine_weights, axis=TopExperts)
+        if use_dense:
+            out = out + dense_router_delta(
+                x_flat,
+                router_logits,
+                self.experts.gate_proj.weight,
+                self.experts.up_proj.weight,
+                self.experts.down_proj.weight,
+                self.experts.act,
+                Experts=self.config.Experts,
+                Embed=self.config.Embed,
+                Mlp=self.config.MoeMlp,
+            )
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes)
 
 

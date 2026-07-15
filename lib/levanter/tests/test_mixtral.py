@@ -1,15 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
+import equinox as eqx
 import haliax as hax
 import jax
 import numpy as np
-
-# import equinox as eqx
-# import jax
-# import numpy as np
 import pytest
 import transformers
 from jax import random
@@ -25,7 +23,12 @@ from levanter.layers.attention import AttentionMask
 from levanter.main.train_lm import TrainLmConfig
 
 # from levanter.models.loss import next_token_loss
-from levanter.models.mixtral import MixtralConfig, MixtralLMHeadModel  # , MixtralDecoderLayer, MixtralSparseMoeBlock
+from levanter.models.mixtral import (  # , MixtralDecoderLayer
+    MixtralConfig,
+    MixtralLMHeadModel,
+    MixtralSparseMoeBlock,
+)
+from levanter.utils.tree_utils import inference_mode
 
 # from jax.sharding import Mesh
 
@@ -58,6 +61,111 @@ def test_mixtral_config():
         assert getattr(new_hf_config, k) == getattr(
             hf_config, k
         ), f"{k} {getattr(new_hf_config, k)} != {getattr(hf_config, k)}"
+
+
+def _tiny_moe_config(dense_router_gradient: bool) -> MixtralConfig:
+    return MixtralConfig(
+        max_seq_len=8,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_heads=4,
+        num_kv_heads=2,
+        n_routed_experts=4,
+        num_experts_per_tok=2,
+        gradient_checkpointing=False,
+        dense_router_gradient=dense_router_gradient,
+    )
+
+
+def _gate_grad_row_norms(block_grad: MixtralSparseMoeBlock, config: MixtralConfig) -> np.ndarray:
+    """L2 norm of the router-gate weight gradient per expert (shape [n_routed_experts])."""
+    per_expert = hax.sqrt(hax.sum(block_grad.gate.weight**2, axis=config.Embed))
+    return np.asarray(per_expert.rearrange((config.Experts,)).array)
+
+
+def _single_token_block_grad(block: MixtralSparseMoeBlock, config: MixtralConfig):
+    """Task-loss gradient of a one-token MoE-block forward.
+
+    With a single token, the router-gate weight gradient factors as ``x (x) dL/d(logit_e)``, so a
+    zero gate-gradient row for expert ``e`` means expert ``e``'s router logit received no task-loss
+    gradient. This isolates the router gradient per expert without reimplementing the routing.
+    """
+    x = hax.random.normal(random.PRNGKey(2), (hax.Axis(config.max_Pos.name, 1), config.Embed))
+
+    def task_loss(block, x):
+        out, _ = block(x)
+        return hax.sum(out).scalar()
+
+    return eqx.filter_jit(eqx.filter_grad(task_loss))(block, x)
+
+
+def test_mixtral_dense_router_gradient_leaves_forward_unchanged():
+    # The DenseMixer flag is a training-only backward-pass change: the forward value must be
+    # bit-identical to the stock sparse forward.
+    config_off = _tiny_moe_config(dense_router_gradient=False)
+
+    with use_test_mesh():
+        block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
+        block_on = dataclasses.replace(block_off, config=_tiny_moe_config(dense_router_gradient=True))
+        x = hax.random.normal(random.PRNGKey(1), (config_off.max_Pos, config_off.Embed))
+
+        @eqx.filter_jit
+        def forward(block, x):
+            out, _ = block(x)
+            return out.array
+
+        out_off = forward(block_off, x)
+        out_on = forward(block_on, x)
+
+    np.testing.assert_array_equal(np.asarray(out_on), np.asarray(out_off))
+
+
+def test_mixtral_dense_router_gradient_reaches_unselected_experts():
+    config_off = _tiny_moe_config(dense_router_gradient=False)
+    config_on = _tiny_moe_config(dense_router_gradient=True)
+    n_unselected = config_off.n_routed_experts - config_off.num_experts_per_tok
+
+    with use_test_mesh():
+        block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
+        block_on = dataclasses.replace(block_off, config=config_on)
+
+        grad_off = _single_token_block_grad(block_off, config_off)
+        grad_on = _single_token_block_grad(block_on, config_on)
+
+    rows_off = _gate_grad_row_norms(grad_off, config_off)
+    rows_on = _gate_grad_row_norms(grad_on, config_on)
+
+    # Sparse forward: exactly `n_unselected` experts get no task-loss router gradient.
+    assert int(np.sum(rows_off < 1e-6)) == n_unselected
+    # Dense router gradient: every expert (including the unselected ones) gets a real gradient.
+    assert np.all(rows_on > 1e-4)
+
+    # Expert-parameter gradients must be untouched by the flag: only the router gradient changes.
+    for projection in ("w1", "w2", "w3"):
+        weight_off = getattr(grad_off.experts, projection).weight.array
+        weight_on = getattr(grad_on.experts, projection).weight.array
+        np.testing.assert_allclose(np.asarray(weight_on), np.asarray(weight_off), rtol=1e-6, atol=1e-6)
+
+
+def test_mixtral_dense_router_gradient_disabled_in_inference():
+    config_off = _tiny_moe_config(dense_router_gradient=False)
+    config_on = _tiny_moe_config(dense_router_gradient=True)
+
+    with use_test_mesh():
+        block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
+        block_on = dataclasses.replace(block_off, config=config_on)
+        block_on_eval = inference_mode(block_on, True)
+
+        grad_off = _single_token_block_grad(block_off, config_off)
+        grad_eval = _single_token_block_grad(block_on_eval, config_on)
+
+    # inference_mode skips the dense pass, so the router gradient collapses back to the sparse one.
+    np.testing.assert_allclose(
+        _gate_grad_row_norms(grad_eval, config_on),
+        _gate_grad_row_norms(grad_off, config_off),
+        rtol=1e-5,
+        atol=1e-6,
+    )
 
 
 # @skip_if_no_torch
