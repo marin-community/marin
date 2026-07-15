@@ -424,11 +424,10 @@ class FederationManager:
 
     def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer matches
-        workers, not the parent's ``backend``/``cluster`` pins). Idempotency of a
-        re-drive is owned by the peer's federation-aware admission, which matches the
-        delivered ``handoff_nonce`` against its stored one and returns the existing
-        job for a replay from the same requester."""
+        federation attribution (including the handle's ``handoff_nonce``), and the
+        routing directives stripped (the peer matches workers, not the parent's
+        ``backend``/``cluster`` pins). Idempotency of a re-drive is owned by the
+        peer's federation-aware admission."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
         handoff.CopyFrom(spec.request)
         handoff.name = spec.local_job_id.to_wire()

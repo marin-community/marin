@@ -2003,21 +2003,6 @@ def handoff_states(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName, int]:
     return {r.job_id: int(r.handoff_state) for r in rows}
 
 
-def received_requester(tx: Tx, job_id: JobName) -> str | None:
-    """The requester ``peer_id`` of a RECEIVED ``federated_jobs`` row for ``job_id``, else ``None``.
-
-    Authorizes a federation peer to act on a job it handed here (e.g. a routed
-    cancel).
-    """
-    row = tx.execute(
-        select(federated_jobs_table.c.peer_id).where(
-            federated_jobs_table.c.job_id == job_id,
-            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
-        )
-    ).first()
-    return row.peer_id if row is not None else None
-
-
 @dataclass(frozen=True)
 class ReceivedHandoff:
     """The RECEIVED ``federated_jobs`` row a peer keeps for a handed-off job."""

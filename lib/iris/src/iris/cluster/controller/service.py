@@ -1202,7 +1202,8 @@ class ControllerServiceImpl:
         identity = get_verified_identity()
         if identity is not None and identity.role == FEDERATION_PEER_ROLE:
             with self._db.read_snapshot() as snap:
-                if reads.received_requester(snap, job_id) == identity.user_id:
+                handoff = reads.received_handoff(snap, job_id)
+                if handoff is not None and handoff.requester_id == identity.user_id:
                     return
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
         authorize_resource_owner(job_id.user)
