@@ -5,9 +5,12 @@ and gradient accumulation that fit HBM. Its one free parameter is `correction_fa
 byte estimate. **Goal: calibrate that single knob** — a value, tuned against direct measurement on a
 small set of slices, that lets the heuristic predict accumulation for any slice.
 
-Ground truth is the measured per-chip microbatch ceiling: the largest global batch that trains with no
-accumulation, ÷ chips. Measure it on the smaller slices, tune `correction_factor` so the estimator
-reproduces it, and confirm it generalizes to larger slices in the same family.
+Ground truth is the measured per-chip microbatch ceiling: the largest global batch that runs to
+completion with no accumulation, ÷ chips. What's calibrated is the peak HBM of a *whole* run — the
+training forward/backward **plus the evaluation and checkpoint passes**, each of which allocates its own
+memory — not training alone. A run stopped at the first training step would miss that memory and
+overstate the ceiling, so every measured run must complete. Measure on the smaller slices, tune
+`correction_factor` to reproduce the ceiling, and confirm it generalizes to larger slices in the family.
 
 Workload: 1.5B dense transformer, `seq_len 8192`, bf16 params, Adam. Code:
 [`exp117_batch_calibration.py`](./exp117_batch_calibration.py) (analysis); the `SMOKE_BATCH` path in
@@ -20,7 +23,8 @@ Workload: 1.5B dense transformer, `seq_len 8192`, bf16 params, Adam. Code:
   - v5e (16 GiB/chip): `v5litepod-4/8/16`
   - v6e (32 GiB/chip): `v6e-4/8/16`
   - v5p (95 GiB/chip): `v5p-8/16/32`
-  - v4 excluded — its only region has no region-local raw docs (see Nuances).
+  - v4 excluded — its only region has no region-local raw docs, so it can't tokenize without a
+    (disallowed) cross-region copy.
 - **Regions** — v5e: europe-west4, us-west4 · v6e: europe-west4, us-east1, us-east5 · v5p: us-central1, us-east5.
 - **Probe** — `SMOKE_BATCH=<N>` sets the exact global batch and forces `per_device_parallelism = -1`
   (whole per-chip batch, no accumulation), bypassing the estimator: the run fits (trains) or OOMs.
@@ -48,8 +52,9 @@ Each probe:
 - **Capture the verdict's log line at detection.** — verifiable without re-reading a preempted job's
   rewritten logs.
 - **Let every non-OOMing run finish; the reported max-fit run is iris `succeeded` + W&B `finished`.**
-  A run killed after step 0 records only the compile-time allocation; only a completed run gives a
-  trustworthy peak HBM (corroboration below).
+  The batch must hold through the eval and checkpoint passes, which allocate beyond the training step —
+  a run killed after step 0 misses that memory, overstates the ceiling, and gives an untrustworthy peak
+  HBM.
 - **Retry policy** — on a failed job classify: OOM (ceiling moved) / preemption (resubmit; resumes from
   checkpoint) / genuine crash (Python traceback, `preemptions=0` → stop after two, surface).
 
@@ -59,35 +64,16 @@ Each probe:
 returns the largest microbatch whose scaled estimate fits capacity. Higher correction factor → smaller
 predicted microbatch → more accumulation.
 
-- Evaluate the prediction at a **target ≥ 512** so `pdp` is not capped by a small batch basis — below
-  that it saturates at `128/chips` for many-chip slices (see Nuances). The per-chip prediction is
-  stable for any target in that range.
+- Evaluate the prediction at a **target ≥ 512** so `pdp` is not capped by a small batch basis —
+  `tpu_batch_config` caps `pdp` at `batch/chips`, so a small basis saturates the per-chip prediction at
+  `128/chips` for many-chip slices and masks the knob. The per-chip prediction is stable for any target
+  in that range.
 - Per family, take the correction-factor interval that reproduces the measured per-chip ceiling
   (per-chip is constant within a family, so the family's smallest slice suffices — the calibrate-on-small
   step).
 - **Recommended single value = the smallest correction factor that never over-predicts on any slice**
   (predicted per-chip ≤ measured, so the heuristic never under-accumulates into an OOM), which also
   minimizes wasted accumulation subject to that safety constraint.
-
-## Nuances (Marin)
-
-- **Estimator basis.** `tpu_batch_config` caps `pdp` at `batch/chips`, so calling it with a small basis
-  (the sweep's default 128) saturates the per-chip prediction at `128/chips` for many-chip slices,
-  masking the knob. Calibrate and predict against a target ≥ 512.
-- **One scalar, multi-slice.** The knob lumps replicated params/optimizer and batch-scaled activations
-  into a single factor. HBM-to-activation ratio differs per family, so one correction factor can be exact
-  for at most a subset — the residual is cross-family, not cross-size. The sweep therefore keys the
-  correction factor by family (`CORRECTION_FACTORS` in `exp117_sweep.py`).
-- **Region-local data.** Tokenized caches and checkpoints are region-scoped; cross-region reads are
-  disallowed (cost). Raw docs are staged per region; the cache builds once per region on first probe.
-  A family confined to a region without staged docs is unmeasurable (v4).
-- **Multi-host slices** (>1 VM host) exercise the sharded checkpoint + HF-export path, which needed a
-  levanter fix to run at all (`exp117_core_patches.md`). Peak HBM there includes the multi-host
-  checkpoint gather.
-- **Run identity = region + slice + batch + smoke-version.** Same-region resubmit resumes from
-  checkpoint; bump the smoke-version to fork clean W&B runs after a recipe/library change.
-- **`CompileTimeHbmOom` is deterministic** (compile-time) — the OOM boundary is reproducible; only run
-  completion is subject to preemption.
 
 ## Results
 
