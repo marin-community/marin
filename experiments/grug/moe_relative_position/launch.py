@@ -203,6 +203,7 @@ def _gate_1_recipe(point: Gate1Point) -> tuple[GrugModelConfig, OptimizerConfig]
     )
     return model, optimizer
 
+
 # Public alias for generic Grug variant contract checks.
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _gate_1_recipe(GATE_1_POINTS[0])[0]
 

@@ -137,6 +137,7 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
         if self.num_heads % self.num_kv_heads != 0:
@@ -221,9 +222,7 @@ class GrugModelConfig:
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
             relative_position_dim=int(_hf_config_attr(hf_config, ("relative_position_dim", "d_rel"), 16)),
-            relative_position_extent=int(
-                _hf_config_attr(hf_config, ("relative_position_extent", "rel_extent"), 1024)
-            ),
+            relative_position_extent=int(_hf_config_attr(hf_config, ("relative_position_extent", "rel_extent"), 1024)),
             attention_block_size=int(_hf_config_attr(hf_config, ("attention_block_size",), 128)),
         )
 
@@ -291,9 +290,7 @@ def _padded_segment_ids(
         segment_ids = jnp.broadcast_to(segment_ids[None, :], (batch_size, seq_len))
     elif segment_ids.ndim == 2:
         if segment_ids.shape not in ((1, seq_len), (batch_size, seq_len)):
-            raise ValueError(
-                f"segment_ids must have shape [1|{batch_size}, {seq_len}], got {segment_ids.shape}"
-            )
+            raise ValueError(f"segment_ids must have shape [1|{batch_size}, {seq_len}], got {segment_ids.shape}")
         if segment_ids.shape[0] == 1 and batch_size != 1:
             segment_ids = jnp.broadcast_to(segment_ids, (batch_size, seq_len))
     else:
@@ -336,9 +333,7 @@ def relative_position_attention(
     if q.ndim != 4 or k.ndim != 4 or v.ndim != 4 or relative_queries.ndim != 4:
         raise ValueError("q, k, v, and relative_queries must all be rank-4 arrays")
     if q.shape[:2] != k.shape[:2] or q.shape[:2] != v.shape[:2] or q.shape[:3] != relative_queries.shape[:3]:
-        raise ValueError(
-            "relative-position self-attention requires matching batch, sequence, and query-head dimensions"
-        )
+        raise ValueError("relative-position self-attention requires matching batch, sequence, and query-head dimensions")
     if q.shape[-1] != k.shape[-1] or k.shape[2] != v.shape[2]:
         raise ValueError("q/k head dimensions and k/v head counts must match")
     if relative_queries.shape[-1] != relative_embeddings.shape[0]:
@@ -422,9 +417,7 @@ def relative_position_attention(
             k_block, v_block, kv_positions, kv_valid, kv_segments = key_inputs
             block_in_range = kv_positions[0] <= q_positions[-1]
             if mask.sliding_window is not None:
-                block_in_range = block_in_range & (
-                    kv_positions[-1] >= q_positions[0] - (mask.sliding_window - 1)
-                )
+                block_in_range = block_in_range & (kv_positions[-1] >= q_positions[0] - (mask.sliding_window - 1))
 
             def compute_key_block(current_carry):
                 current_max, current_sum, current_output = current_carry
@@ -456,9 +449,7 @@ def relative_position_attention(
                 allowed = q_valid[:, None] & kv_valid[None, :]
                 allowed = allowed & (kv_positions[None, :] <= q_positions[:, None])
                 if mask.sliding_window is not None:
-                    allowed = allowed & (
-                        kv_positions[None, :] >= q_positions[:, None] - (mask.sliding_window - 1)
-                    )
+                    allowed = allowed & (kv_positions[None, :] >= q_positions[:, None] - (mask.sliding_window - 1))
                 allowed = allowed[None, :, :] & (q_segments[:, :, None] == kv_segments[:, None, :])
                 scores = jnp.where(allowed[:, None, :, :], scores, masked_score)
 
