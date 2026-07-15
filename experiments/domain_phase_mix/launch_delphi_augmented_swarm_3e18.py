@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -78,8 +79,10 @@ logger = logging.getLogger(__name__)
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUT_DIR = SCRIPT_DIR / "exploratory" / "two_phase_many" / "reference_outputs"
 DEFAULT_SOURCE_PANEL = (
-    REFERENCE_OUTPUT_DIR / "olmo_base_easy_paper_faithful_olmix_300m_20260625" / "fit_panel_table9_macro.csv"
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_3e18_20260714/"
+    "source/fit_panel_table9_macro-4f283bacb4ef269c.csv"
 )
+SOURCE_PANEL_SHA256 = "4f283bacb4ef269c396277cbd518ef74212a51741c909a1e1e9ace040751d507"
 LOCAL_ARTIFACT_DIR = REFERENCE_OUTPUT_DIR / "delphi_augmented_swarm_3e18_20260714"
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_augmented_swarm_3e18_20260714"
@@ -162,6 +165,7 @@ class SaveDelphiSwarmManifestConfig:
 
     output_path: str
     source_panel: str
+    source_panel_sha256: str
     analysis_output_path: str
     run_specs_json: str
 
@@ -304,14 +308,18 @@ def _weight_diagnostics(phase_weights: dict[str, dict[str, float]]) -> tuple[flo
 
 def load_source_panel(
     *,
-    source_panel: Path,
+    source_panel: str,
     analysis_output_path: str,
     tpu_region: str,
     tpu_zone: str,
 ) -> list[DelphiSwarmRunSpec]:
     """Load and strictly validate the canonical 280-row panel."""
-    with source_panel.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
+    with fsspec.open(source_panel, "rb") as handle:
+        source_bytes = handle.read()
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    if source_sha256 != SOURCE_PANEL_SHA256:
+        raise ValueError(f"Source panel SHA-256 changed: {source_sha256} != {SOURCE_PANEL_SHA256}")
+    rows = list(csv.DictReader(io.StringIO(source_bytes.decode("utf-8"))))
 
     if len(rows) != EXPECTED_RUNS:
         raise ValueError(f"Expected {EXPECTED_RUNS} source rows, found {len(rows)} in {source_panel}")
@@ -541,6 +549,7 @@ def save_delphi_swarm_manifest(config: SaveDelphiSwarmManifestConfig) -> None:
     summary: dict[str, Any] = {
         "experiment_name": EXPERIMENT_NAME,
         "source_panel": config.source_panel,
+        "source_panel_sha256": config.source_panel_sha256,
         "analysis_output_path": config.analysis_output_path,
         "n_runs": len(run_specs),
         "panel_counts": dict(Counter(spec.panel_source for spec in run_specs)),
@@ -612,6 +621,7 @@ def build_launch_artifacts(
         config=SaveDelphiSwarmManifestConfig(
             output_path=this_output_path(),
             source_panel=source_panel,
+            source_panel_sha256=SOURCE_PANEL_SHA256,
             analysis_output_path=analysis_output_path,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
         ),
@@ -625,7 +635,7 @@ def build_launch_artifacts(
 
 def _write_local_dry_run(
     *,
-    source_panel: Path,
+    source_panel: str,
     analysis_output_path: str,
     run_specs: list[DelphiSwarmRunSpec],
 ) -> None:
@@ -634,6 +644,7 @@ def _write_local_dry_run(
         SaveDelphiSwarmManifestConfig(
             output_path=str(LOCAL_ARTIFACT_DIR),
             source_panel=str(source_panel),
+            source_panel_sha256=SOURCE_PANEL_SHA256,
             analysis_output_path=analysis_output_path,
             run_specs_json=json.dumps([asdict(spec) for spec in run_specs], sort_keys=True),
         )
@@ -642,7 +653,7 @@ def _write_local_dry_run(
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-panel", type=Path, default=DEFAULT_SOURCE_PANEL)
+    parser.add_argument("--source-panel", default=DEFAULT_SOURCE_PANEL)
     parser.add_argument("--analysis-output-path", default=DEFAULT_ANALYSIS_OUTPUT_PATH)
     parser.add_argument("--tpu-region", default=DEFAULT_TPU_REGION)
     parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
