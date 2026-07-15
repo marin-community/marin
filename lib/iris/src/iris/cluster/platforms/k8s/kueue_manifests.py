@@ -105,10 +105,13 @@ NON_BINDING_QUOTA = {
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
 # The CPU ResourceFlavor (cw-cpu) covers the SAME resources so it can share one
-# resourceGroup with cw-ib, but pins the accelerator quotas to ZERO: a GPU pod can
-# never match cw-cpu and falls through to the IB flavor, while a CPU-only pod (which
-# requests no GPU/RDMA) matches cw-cpu and lands on CPU capacity. Listed first in the
-# resourceGroup so CPU pods pick it before the GPU flavor.
+# resourceGroup with cw-ib, but pins the accelerator quotas to ZERO: a GPU pod (which
+# requests nvidia.com/gpu + rdma/ib) can never be admitted under cw-cpu and falls
+# through to the IB flavor, while a CPU-only pod matches cw-cpu. Listed first in the
+# resourceGroup so CPU pods pick it before the GPU flavor. cw-cpu carries no node
+# selector by default (build_cpu_resource_flavor), so a CPU pod admitted to it gets no
+# injected nodeSelector and can run on any node — it reuses idle GPU nodes rather than
+# being fenced onto CPU-only capacity.
 CPU_RESOURCE_FLAVOR_NAME = "cw-cpu"
 CPU_FLAVOR_QUOTA = {**NON_BINDING_QUOTA, "nvidia.com/gpu": "0", "rdma/ib": "0"}
 
@@ -245,23 +248,28 @@ def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict
     }
 
 
-def build_cpu_resource_flavor(node_label_key: str, node_label_value: str) -> dict:
+def build_cpu_resource_flavor(node_label: tuple[str, str] | None = None) -> dict:
     """Return the cluster-scoped CPU ResourceFlavor (cw-cpu), no topology.
 
-    Selects CPU nodes via a caller-supplied node label so CPU-only pods routed
-    through Kueue land on CPU capacity, never the IB GPU flavor. The correct label
-    is cluster-specific (which nodes are CPU nodes), so it is a required input, not
-    a default. No ``topologyName``: CPU jobs need no topology-aware placement.
+    By default cw-cpu carries NO node selector (empty spec). A CPU-only pod admitted
+    to it therefore gets no nodeSelector injected and stays free to schedule on any
+    node: it prefers CPU nodes (GPU nodes carry a soft ``PreferNoSchedule`` taint) but
+    reuses idle GPU nodes when CPU capacity is full, rather than being fenced onto
+    CPU-only capacity. Pass ``node_label`` as ``(key, value)`` to instead pin cw-cpu to
+    specific CPU nodes. No ``topologyName``: CPU jobs need no topology-aware placement.
     """
+    spec: dict = {}
+    if node_label is not None:
+        spec["nodeLabels"] = {node_label[0]: node_label[1]}
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ResourceFlavor",
         "metadata": {"name": CPU_RESOURCE_FLAVOR_NAME},
-        "spec": {"nodeLabels": {node_label_key: node_label_value}},
+        "spec": spec,
     }
 
 
-def build_cluster_queue(name: str, *, include_cpu_flavor: bool = False) -> dict:
+def build_cluster_queue(name: str) -> dict:
     """Return the cluster-scoped, admin-owned ClusterQueue.
 
     Covers every resource Iris pods request (COVERED_RESOURCES) with a non-binding
@@ -272,24 +280,22 @@ def build_cluster_queue(name: str, *, include_cpu_flavor: bool = False) -> dict:
     place it (topology pressure), which is how a higher-priority gang reclaims nodes
     from running batch gangs even though quota never binds.
 
-    With ``include_cpu_flavor`` the resourceGroup carries cw-cpu (first) as well as
-    cw-ib, so CPU-only pods routed through Kueue match a CPU flavor instead of the IB
-    GPU flavor. Both flavors cover the same resources; cw-cpu pins GPU/RDMA to 0.
+    The resourceGroup carries cw-cpu (first) and cw-ib, so a CPU-only pod matches the
+    CPU flavor and a GPU pod (nvidia.com/gpu + rdma/ib, which cw-cpu pins to 0) matches
+    the IB flavor. Both flavors cover the same resources. Every pod on the k8s backend
+    routes through Kueue, so both flavors are always present (the caller provisions the
+    cw-cpu ResourceFlavor alongside cw-ib).
     """
     flavors = [
         {
+            "name": CPU_RESOURCE_FLAVOR_NAME,
+            "resources": [{"name": r, "nominalQuota": CPU_FLAVOR_QUOTA[r]} for r in COVERED_RESOURCES],
+        },
+        {
             "name": RESOURCE_FLAVOR_NAME,
             "resources": [{"name": r, "nominalQuota": NON_BINDING_QUOTA[r]} for r in COVERED_RESOURCES],
-        }
+        },
     ]
-    if include_cpu_flavor:
-        flavors.insert(
-            0,
-            {
-                "name": CPU_RESOURCE_FLAVOR_NAME,
-                "resources": [{"name": r, "nominalQuota": CPU_FLAVOR_QUOTA[r]} for r in COVERED_RESOURCES],
-            },
-        )
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ClusterQueue",
