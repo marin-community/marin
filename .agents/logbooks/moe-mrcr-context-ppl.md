@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 recovery run is queued for a `v5p-8` as Iris job `/held/moe-mrcr-001-d512-r6` in `us-east5-a`. All tokenizer-free transforms, paired caches, and probes completed successfully. The TPU child uses the proven 128 GB Grug host reservation and is waiting only for regional capacity. No model result is available yet.
+`MOE-MRCR-001-d512-r6` finished 3,494 steps on a `v5p-8` in `us-east5-a`. Conditioning on the left-truncated 8,192-token context reduced aggregate final-turn PPL from 21.0855 to 10.4012, a 2.0272x ratio and 0.7067 nat/token NLL reduction. The 2-, 4-, and 8-needle subsets each showed approximately 2x lower PPL. This is an exploratory result from one d512 run.
 
 ## Scope
 
@@ -35,7 +35,7 @@ The `MOE-MRCR-001` d512 recovery run is queued for a `v5p-8` as Iris job `/held/
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: recovery job `/held/moe-mrcr-001-d512-r6` reused six completed paired caches and reached the regional `v5p-8` capacity queue. Next test: monitor training and collect final MRCR metrics.
+- None.
 
 ### Blocked
 
@@ -47,7 +47,7 @@ The `MOE-MRCR-001` d512 recovery run is queued for a `v5p-8` as Iris job `/held/
 
 ### Promoted
 
-- None.
+- `MOE-MRCR-001`: retained MRCR context reduced aggregate final-turn PPL from 21.0855 to 10.4012 in the d512 run. Evidence: [W&B run](https://wandb.ai/marin-community/marin_moe/runs/MOE-MRCR-001-d512-r6). Decision: extract the paired evaluator into a production PR.
 
 ## Entry Log
 
@@ -134,9 +134,28 @@ The `MOE-MRCR-001` d512 recovery run is queued for a `v5p-8` as Iris job `/held/
 ### 2026-07-14 18:29 - MOE-MRCR-001 reduced the d512 host reservation
 
 - Hypothesis: the d512 run can safely use the former 128 GB Grug TPU-host default and fit an occupied regional host or the next available slice.
-- Commit Hash: `d03b1cab67153a6d725b54e2fbf52cbf09a0f4cc`.
+- Commit Hash: `d03b1cab6df40726a57d1b4bb8965e8a78ab1e9e`.
 - Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r6 --zone us-east5-a --memory 3GB -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r6 -- python -m experiments.grug.moe.launch_mrcr_d512`.
 - Config: unchanged d512 model and paired evaluation; TPU child host reservation reduced from the current generic v5p default of 224 GB to the former Grug default of 128 GB.
 - Result: all six paired caches and probes completed under `/held/moe-mrcr-001-d512-r5`. Its child could not fit the five partially occupied hosts at 224 GB, and 19 attempted new regional slices failed during an availability backoff. The parent was stopped before TPU assignment. `/held/moe-mrcr-001-d512-r6` reused all cached preprocessing and reached the TPU queue; the memory constraint is resolved, and it is pending only because all five live `us-east5-a` v5p-8 slices are occupied.
 - Interpretation: the remaining delay is regional capacity. Historical Grug runs used 128 GB, and the d512 model does not need the larger default introduced to protect large-model checkpoint saves.
 - Next action: keep the interactive child queued until a regional slice is available, then verify W&B registration and paired metrics.
+
+### 2026-07-15 09:30 - MOE-MRCR-001 finished with a 2.027x context PPL ratio
+
+- Hypothesis: retained MRCR context reduces final-turn perplexity on a compute-optimal d512 Grug model.
+- Commit Hash: `d03b1cab6df40726a57d1b4bb8965e8a78ab1e9e`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r6 --zone us-east5-a --memory 3GB -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r6 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: budget 3.82e17 FLOPs, hidden dimension 512, batch 32, 3,494 steps, sequence length 8,192, final-assistant-target-only loss, rightmost-window truncation, eval every 1,000 steps, max 8 batches per validation set, v5p-8 in `us-east5-a`.
+- Result: Iris job `/held/moe-mrcr-001-d512-r6` finished. [W&B](https://wandb.ai/marin-community/marin_moe/runs/MOE-MRCR-001-d512-r6) recorded the following final paired metrics:
+
+  | Subset | Final-user-only PPL | Full-context PPL | NLL reduction | PPL ratio | PPL reduction |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Aggregate | 21.0855 | 10.4012 | 0.7067 | 2.0272x | 10.6843 |
+  | 2 needles | 20.8989 | 10.2703 | 0.7104 | 2.0349x | 10.6286 |
+  | 4 needles | 21.6428 | 10.6670 | 0.7075 | 2.0289x | 10.9758 |
+  | 8 needles | 20.7468 | 10.2837 | 0.7018 | 2.0174x | 10.4631 |
+
+  Aggregate conditioning removed 50.67% of final-user-only PPL. Paloma macro loss was 3.6643 and micro loss was 3.4159 at the final evaluation.
+- Interpretation: the paired metric is finite and consistent across all three needle counts. Retained context approximately halved final-turn PPL at the model's 8,192-token training length. This run does not compare model context lengths, so the expected reward for longer-context models remains untested.
+- Next action: extract the reusable MRCR dataset and paired-loss reporting changes into a production PR linked to issue #7181.
