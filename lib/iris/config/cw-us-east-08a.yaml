@@ -1,0 +1,220 @@
+# CoreWeave US-EAST-08A cluster (cluster name: cw-us-east-08a) — GB200 delivery.
+#
+# Reserved GB200 NVL72 fleet: 4 racks (72x gb200-4x nodes, 4 GB200 GPUs each =
+# 288 Blackwell GPUs) plus 4x cd-gp-i64-erapids CPU nodes (controller + CPU tasks).
+# Same KubernetesProvider model as cw-us-east-02a: task Pods dispatch directly to
+# the k8s API (Pod-per-task), Kueue gang-admits coscheduled groups, and CoreWeave's
+# cluster autoscaler provisions nodes. See lib/iris/docs/coreweave.md.
+#
+# Both pools are pinned ALWAYS WARM (buffer_slices == max_slices) rather than
+# autoscaled: the fleet is prepaid/reserved, so there is nothing to save by scaling
+# down. GB200 NVL72 instances deploy in whole racks of 18 nodes — a NodePool's node
+# count must be a multiple of 18 (72 = 4 racks), or CoreWeave marks it invalid.
+#
+# NOTE (unconfirmed, see .agents/projects/iac/gaps.md): rjpower's delivery note said
+# "2 clusters". This models the delivery as ONE CKS cluster / one Iris cluster / one
+# Pulumi stack holding the full inventory, mirroring how cw-us-east-02a and cw-rno2a
+# each hold a whole region's reserved fleet. If the delivery is really two CKS
+# clusters, split this into cw-us-east-08a / cw-us-east-08b (mechanical copy). The
+# CKS cluster name, kube_context, and kubeconfig_path below are placeholders to
+# confirm against the console once the hardware lands.
+#
+# Workflow:
+#   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
+#      Access Keys). `iris cluster start` turns them into the iris-task-env
+#      Secret (addressing style is derived from the endpoint domain):
+#        export CW_KEY_ID=<coreweave-access-key-id>
+#        export CW_KEY_SECRET=<coreweave-access-key-secret>
+#   2. Install the kubeconfig (Console -> Tokens) at ~/.kube/coreweave-iris.
+#      Operations are bound to kube_context below, so no KUBECONFIG export and no
+#      current-context switching is needed.
+#   3. Start / inspect the cluster:
+#        uv run iris --cluster=cw-us-east-08a cluster start
+#        uv run iris --cluster=cw-us-east-08a cluster status
+
+# This cluster's identity. Used for token minting and for authenticating to peers.
+name: cw-us-east-08a
+
+# External finelog log server (in-cluster k8s Deployment, namespace `iris`).
+# Resolves to k8s://finelog-cw-use08a.iris; see lib/finelog/config/cw-us-east-08a.yaml.
+# Without this the controller falls back to an in-process MemStore (logs lost on
+# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-08a`. Forwarding
+# to the hub lives in that server's own `forwarding:` block.
+finelog:
+  config: cw-us-east-08a
+
+# Public host of this controller. The whole surface is IP-locked to the marin
+# egress (scripts/install_cw_network.py); there is no off-cluster user surface.
+dashboard_url: https://iris-cw-us-east-08a.oa.dev
+
+# Infrastructure-as-code provisioning (see infra/iac). Iris carries this as an opaque
+# dict; iac.config owns the typed schema. NodePools derive from scale_groups,
+# namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
+# from kubernetes_provider.kueue.cluster_queue — none of those are repeated here.
+provisioning:
+  provider: coreweave
+  coreweave:
+    region: US-EAST-08A
+    cluster: { name: marin-gb200, zone: US-EAST-08A }  # placeholder CKS name — confirm
+    kueue:
+      resource_flavor: cw-ib
+      topologies: [infiniband, multinode-nvlink-ib]
+    ingress:
+      ingress_class: traefik
+      acme_email: ops@oa.dev
+      cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+    rbac: { service_account: iris-controller }
+    object_storage:
+      buckets:
+        - { name: marin-us-east-08a, region: US-EAST-08A }
+
+platform:
+  label_prefix: cw-use08a
+  coreweave:
+    region: US-EAST-08A
+    namespace: iris
+    kubeconfig_path: ~/.kube/coreweave-iris
+    kube_context: marin-gb200_US-EAST-08A  # placeholder — confirm against the console token
+    # CoreWeave AI Object Storage: LOTA is the in-cluster cache, cwobject.com the
+    # endpoint an operator's own machine reaches. Bare endpoints only; buckets use
+    # virtual-hosted addressing (http://<bucket>.cwlota.com), detected from these domains.
+    object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
+
+storage:
+  remote_state_dir: s3://marin-us-east-08a/iris/cw-us-east-08a/state
+  # Node-local NVMe for the controller's SQLite state, not the default
+  # network-attached PVC.
+  local_state_dir: /mnt/local/iris-controller-state
+
+# Request auth. Identity is by network location: in-cluster peers (RFC1918
+# pods/nodes, loopback for kubectl port-forward) are trusted as admin. A non-empty
+# trusted_cidrs makes the controller enforcing — an off-cluster request arrives
+# through Traefik with an appended X-Forwarded-For, never matches a CIDR, and must
+# present a bearer. This is the identity gate behind the IP-restricted federation
+# ingress (scripts/install_cw_network.py).
+#
+# `signing_key` signs this controller's worker and /proxy tokens. The controller pod
+# has no GCP credentials, so `iris cluster up` resolves the Secret Manager reference in
+# the operator's shell and projects it as IRIS_SIGNING_KEY through the
+# iris-controller-env Secret, which task pods do not mount. Rotate with
+# `iris cluster init-keys --rotate`.
+#
+# The iris-cw-us-east-08a-signing-key secret does NOT exist yet — mint it with
+# `iris cluster init-keys` and register this cluster's public half in the marin /
+# marin-dev federation_peers before first start (see .agents/projects/iac/gaps.md).
+auth:
+  signing_key:
+    - env:IRIS_SIGNING_KEY
+    - gcp-secret://projects/748532799086/secrets/iris-cw-us-east-08a-signing-key/versions/1
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+  federation_peers:
+    marin: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEAubVBH+W56J9tNAcffmYkWLLHNgFy1cKYGNNEGwrexMs=
+      -----END PUBLIC KEY-----
+    marin-dev: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
+      -----END PUBLIC KEY-----
+  allowed_submitters: ["*@openathena.ai"]
+
+kubernetes_provider:
+  namespace: iris
+  default_image: ghcr.io/marin-community/iris-task:latest
+  host_network: true                # Required for NCCL/IB multi-host traffic
+  cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+  kueue:
+    # Enables Kueue gang admission for multi-host GPU jobs. The ClusterQueue
+    # (cluster-scoped) and ResourceFlavor cw-ib are created out-of-band by
+    # lib/iris/scripts/install_kueue.py --with-queues; Iris reconciles the
+    # namespaced LocalQueue (cw-use08a-lq) bound to it at controller start.
+    cluster_queue: iris-cq
+  # CoreWeave's node health checker runs preemptible (priority -1) GPU
+  # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
+  # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;
+  # Iris evicts them itself when it has gang work.
+  preempt_namespaces: ["cw-hpc-verification"]
+
+controller:
+  image: ghcr.io/marin-community/iris-controller:latest
+  checkpoint_interval_seconds: 600
+  coreweave:
+    port: 10000
+    service_name: iris-controller-svc
+    scale_group: cpu-erapids
+    # Off-cluster reach is the operator-managed, IP-locked federation ingress
+    # (docs/coreweave.md, scripts/install_cw_network.py).
+
+defaults:
+  autoscaler:
+    evaluation_interval:
+      milliseconds: 10000
+    scale_up_delay:
+      milliseconds: 60000
+    scale_down_delay:
+      milliseconds: 300000
+  task_env:
+    # The shared CoreWeave bucket (everything lives in marin-us-east-08a; LOTA
+    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
+    # data under s3://marin-na/ is not reachable from jobs unless they override
+    # AWS_ENDPOINT_URL and credentials themselves.
+    MARIN_PREFIX: s3://marin-us-east-08a/marin
+    # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
+    # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
+    # back to the host ethernet PF that carries the node IP. The exact PF name
+    # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
+    # silently unmatched by the current task image's NCCL build, breaking bootstrap.
+    NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+  worker:
+    docker_image: ghcr.io/marin-community/iris-worker:latest
+    port: 10001
+    cache_dir: /mnt/local/iris-cache
+    runtime: kubernetes
+    default_task_image: ghcr.io/marin-community/iris-task:latest
+
+scale_groups:
+  cpu-erapids:
+    num_vms: 1
+    resources:
+      cpu: 64        # cd-gp-i64-erapids: 64 vCPUs (32 physical Emerald Rapids 8562Y+ cores)
+      ram: 512GB     # 512 GB on-node RAM (8 GB per vCPU)
+      disk: 15.36TB  # 15.36 TB local NVMe
+      device_type: cpu
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: cpu-erapids
+    buffer_slices: 4     # pinned: 4 CPU nodes always warm (controller + CPU tasks)
+    max_slices: 4
+    priority: 50
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-EAST-08A
+        instance_type: cd-gp-i64-erapids
+
+  gb200:
+    num_vms: 1
+    resources:
+      cpu: 144       # gb200-4x: 144 vCPUs (2x NVIDIA Grace Arm v9)
+      ram: 960GB     # 960 GB system (LPDDR5X) RAM
+      disk: 30.72TB  # 30.72 TB local NVMe
+      device_type: gpu
+      device_variant: GB200
+      device_count: 4        # 4 Blackwell GPUs per gb200-4x node
+      capacity_type: on-demand
+    worker:
+      attributes:
+        pool: gb200
+    # Pinned full reserved fleet: 4 racks x 18 nodes. GB200 NVL72 deploys in whole
+    # racks, so this MUST stay a multiple of 18 (see header + gaps.md).
+    buffer_slices: 72
+    max_slices: 72
+    priority: 100
+    slice_template:
+      num_vms: 1
+      coreweave:
+        region: US-EAST-08A
+        instance_type: gb200-4x

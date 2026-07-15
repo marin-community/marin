@@ -7,6 +7,12 @@ This is the **minimal cut**: it provisions the ceded RBAC and the reserved NodeP
 CoreWeave cluster — enough to run `pulumi preview` end-to-end. Kueue/Traefik/object-storage
 and the CKS cluster object itself are the next slices (see the `TODO(iac)` in
 `coreweave/cluster.py` and out-of-scope in `spec.md`).
+[`gaps.md`](../../.agents/projects/iac/gaps.md) inventories every remaining prerequisite of a
+live deployment (the deferred components plus the GCP-arm bits — egress IPs, signing-key
+secrets) with the exact landing site for each.
+
+Stacks: one per cluster — `cw-us-east-02a`, `cw-us-east-08a` (GB200), each a
+`Pulumi.<cluster>.yaml` pointer to the cluster name.
 
 ## What it reads
 
