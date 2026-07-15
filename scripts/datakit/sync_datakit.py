@@ -77,7 +77,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 
 from fray.types import ResourceConfig
-from marin.datakit.sources import DatakitSource, all_sources
+from marin.datakit.sources import DatakitSource, select_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
@@ -674,16 +674,6 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _select_sources(names: list[str] | None) -> list[DatakitSource]:
-    all_src = all_sources()
-    if not names:
-        return list(all_src.values())
-    missing = [n for n in names if n not in all_src]
-    if missing:
-        raise SystemExit(f"unknown source(s): {', '.join(missing)}")
-    return [all_src[n] for n in names]
-
-
 def _source_already_synced(
     source: DatakitSource,
     canonical_prefix: str,
@@ -719,7 +709,7 @@ def main() -> None:
     src_prefix = args.src_prefix or marin_prefix()
     logger.info("Syncing %s -> %s (scope=%s)", src_prefix, args.dest_prefix, args.scope.value)
 
-    sources = _select_sources(args.source)
+    sources = select_sources(args.source)
 
     # Pre-flight: drop sources whose dst already has ``.executor_status`` on
     # every in-scope path. Parallelized because each check is one ``fs.exists``
