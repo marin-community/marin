@@ -17,8 +17,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
-from rigging.filesystem import StoragePath, prefix_join
-
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
@@ -37,6 +35,7 @@ from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
@@ -50,48 +49,7 @@ from marin.datakit.download.swe_rebench_contree import swe_rebench_contree_norma
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
-from marin.datakit.normalize import DedupMode, normalize_step
 from marin.execution.step_spec import StepSpec
-
-NEMOTRON_CODE_V2_CONTENT_SOURCE = "raw/nemotron-code-v2-content"
-# Exact count from marin-community/marin-tokenizer over the normalized artifact.
-NEMOTRON_CODE_V2_CONTENT_TOKENS_B = 120.254379519
-
-
-def _validate_nemotron_code_v2_content(output_path: str) -> None:
-    shards = StoragePath(prefix_join(output_path, "*.parquet")).glob()
-    if next(iter(shards), None) is None:
-        raise FileNotFoundError(f"No Parquet shards found under {output_path}")
-
-
-def nemotron_code_v2_content_step() -> StepSpec:
-    return StepSpec(
-        name=NEMOTRON_CODE_V2_CONTENT_SOURCE,
-        override_output_path=NEMOTRON_CODE_V2_CONTENT_SOURCE,
-        fn=_validate_nemotron_code_v2_content,
-        hash_attrs={
-            "version": "2026.07.14",
-            "format": "parquet",
-            "columns": ["sha1_git", "sha1", "content", "present"],
-            "rows": 132_903_245,
-            "present_rows": 132_666_330,
-            "shards": 133,
-        },
-    )
-
-
-def nemotron_code_v2_content_normalize_steps() -> tuple[StepSpec, ...]:
-    source = nemotron_code_v2_content_step()
-    normalized = normalize_step(
-        name="normalized/nemotron_code_v2_content",
-        download=source,
-        text_field="content",
-        id_field="sha1_git",
-        file_extensions=(".parquet",),
-        dedup_mode=DedupMode.NONE,
-        bare=True,
-    )
-    return source, normalized
 
 
 @dataclass(frozen=True)
@@ -199,7 +157,7 @@ def all_sources() -> dict[str, DatakitSource]:
         (
             "nemotron_code_v2/content",
             nemotron_code_v2_content_normalize_steps,
-            NEMOTRON_CODE_V2_CONTENT_TOKENS_B,
+            120.254379519,
         ),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
