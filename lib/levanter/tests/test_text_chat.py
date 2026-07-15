@@ -720,6 +720,26 @@ LLAMA3_STYLE_TEMPLATE = """{{- bos_token }}
     {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}
 {%- endif %}"""
 
+# Serializes the `tools` list, forcing canonical key order with `tojson(sort_keys=True)`
+# when the `sort_tools` kwarg is set. Both HF's tojson filter and Levanter's accept the
+# sort_keys flag, so the canonical rendering must agree byte-for-byte — this is the
+# escape hatch a deployment uses for prefix-cache-stable prompts, and it must stay a
+# template choice rather than a hardcoded renderer policy.
+HF_SORT_KEYS_TEMPLATE = """\
+<|start_header_id|>system<|end_header_id|>
+{% for tool in tools %}{% if sort_tools %}{{ tool | tojson(sort_keys=True) }}{% else %}{{ tool | tojson }}{% endif %}
+{% endfor %}<|eot_id|>
+{%- for message in messages -%}
+{%- if message['role'] == 'assistant' -%}
+<|start_header_id|>assistant<|end_header_id|>
+{% generation %}{{ message['content'] }}{% endgeneration %}<|eot_id|>
+{%- else -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{{ message['content'] }}<|eot_id|>
+{%- endif -%}
+{%- endfor -%}
+"""
+
 _WEATHER_TOOLS = [
     {
         "type": "function",
@@ -852,3 +872,52 @@ def test_chat_template_matches_hf(tokenizer: MarinTokenizer, hf_tokenizer, templ
     # A template with an assistant turn must charge at least one assistant token,
     # otherwise "masks match" could hold vacuously on two all-zero masks.
     assert sum(lev_mask) > 0
+
+
+def test_tojson_sort_keys_flag_matches_hf(tokenizer: MarinTokenizer, hf_tokenizer):
+    """An explicit `tojson(sort_keys=True)` in a template canonicalizes JSON key order,
+    identically in Levanter and HF.
+
+    The renderer must honor the template's sort choice rather than hardcode one: the
+    default (insertion order) keeps parity with the base model's native tool format,
+    while `sort_keys=True` is the opt-in a deployment uses for prefix-cache-stable
+    prompts. The tool keys here are in insertion order (`type` before `function`), which
+    is not alphabetical, so sorting must change the output — asserted below so the parity
+    check is not vacuously satisfied by both engines ignoring the flag.
+    """
+    conversation = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+
+    def lev_render(sort_tools: bool) -> str:
+        return tokenizer.with_chat_template(HF_SORT_KEYS_TEMPLATE).apply_chat_template(
+            conversation, tokenize=False, tools=_WEATHER_TOOLS, sort_tools=sort_tools
+        )
+
+    sorted_rendered = lev_render(sort_tools=True)
+    assert sorted_rendered != lev_render(sort_tools=False), "sort_keys=True must reorder non-alphabetical keys"
+
+    lev = tokenizer.apply_chat_template_with_masks(
+        [conversation], chat_template=HF_SORT_KEYS_TEMPLATE, tools=_WEATHER_TOOLS, sort_tools=True
+    )
+    hf_out = hf_tokenizer.apply_chat_template(
+        conversation,
+        chat_template=HF_SORT_KEYS_TEMPLATE,
+        tools=_WEATHER_TOOLS,
+        sort_tools=True,
+        tokenize=True,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
+        add_generation_prompt=False,
+    )
+    hf_rendered = hf_tokenizer.apply_chat_template(
+        conversation,
+        chat_template=HF_SORT_KEYS_TEMPLATE,
+        tools=_WEATHER_TOOLS,
+        sort_tools=True,
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+
+    assert sorted_rendered == hf_rendered
+    assert lev["input_ids"][0] == list(hf_out["input_ids"])
+    assert lev["assistant_masks"][0] == list(hf_out["assistant_masks"])
+    assert sum(lev["assistant_masks"][0]) > 0
