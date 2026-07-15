@@ -40,11 +40,12 @@ class CksClusterSpec(BaseModel):
 class KueueProvisioningSpec(BaseModel):
     """Cluster-scoped Kueue objects owned by IaC (KueueAddon).
 
-    cluster_queue and pod_namespace are NOT here — they derive from the Iris config.
+    The ResourceFlavor name and the Topology set are canonical constants in
+    iris.cluster.platforms.k8s.kueue_manifests (shared with install_kueue.py so IaC and the
+    script render identically), not per-cluster knobs. cluster_queue derives from the Iris
+    config. Only the flavor→topology binding varies per cluster and lives here.
     """
 
-    resource_flavor: str
-    topologies: list[str]
     # Which topology the ResourceFlavor binds (spec.topologyName). NVL72 clusters bind
     # `multinode-nvlink-ib` to expose the nvlink.domain level; IB clusters bind `infiniband`.
     flavor_topology: str = "infiniband"

@@ -54,8 +54,6 @@ provisioning:
     region: US-EAST-08A
     cluster: { name: marin-us-east-08a, zone: US-EAST-08A }
     kueue:
-      resource_flavor: cw-ib
-      topologies: [infiniband, multinode-nvlink-ib]
       flavor_topology: multinode-nvlink-ib  # GB200 NVL72: bind the flavor to the nvlink.domain topology
     ingress:
       ingress_class: traefik

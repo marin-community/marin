@@ -48,8 +48,7 @@ provisioning:
     region: US-EAST-02A
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
-      resource_flavor: cw-ib
-      topologies: [infiniband, multinode-nvlink-ib]
+      flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
       acme_email: ops@oa.dev
