@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batch configuration helpers for throughput-oriented TPU training."""
-
 import math
 
 from fray.types import get_tpu_topology, tpu_family
@@ -24,12 +22,7 @@ def adam_optimizer_bytes(
     first_moment_dtype_bytes: int = 4,
     second_moment_dtype_bytes: int = 4,
 ) -> int:
-    """Return optimizer-state bytes for AdamW, AdamC, or AdamH.
-
-    These Adam-family optimizers all keep first and second moment buffers.
-    AdamC changes weight decay math, not persistent state size. Gradients and
-    other transient buffers are not included.
-    """
+    """Adam-family optimizer-state bytes: the first- and second-moment buffers, excluding gradients."""
     first_moment_bytes = parameter_count * first_moment_dtype_bytes
     second_moment_bytes = parameter_count * second_moment_dtype_bytes
     return first_moment_bytes + second_moment_bytes
@@ -46,16 +39,15 @@ def dense_transformer_bytes(
     parameter_dtype_bytes: int = 4,
     activation_layer_fraction: float = 0.75,
 ) -> tuple[int, int]:
-    """Return ``(param_bytes, activation_bytes)`` for a dense transformer heuristic."""
+    """Estimate ``(param_bytes, activation_bytes)`` for a dense transformer."""
     _validate_activation_layer_fraction(activation_layer_fraction)
 
     hidden_activation_bytes = batch_size * seq_len * hidden_dim * 2
     attention_activation_bytes = batch_size * seq_len * hidden_dim * 4 * 2
     mlp_activation_bytes = batch_size * seq_len * intermediate_dim * 2
     per_layer_activation_bytes = hidden_activation_bytes + attention_activation_bytes + mlp_activation_bytes
-    # Assume checkpointing/remat still leaves activation memory roughly
-    # proportional to a fraction of layers, with a four-layer floor for shallow
-    # models and fixed overheads.
+    # Layers whose activations are resident at once: with gradient checkpointing only a fraction are,
+    # floored at 4 for shallow models.
     saved_activation_layers = max(math.floor(num_layers * activation_layer_fraction), 4)
     param_bytes = parameter_count * parameter_dtype_bytes
     activation_bytes = per_layer_activation_bytes * saved_activation_layers
@@ -69,14 +61,10 @@ def batch_memory_bytes(
     activation_bytes: int,
     correction_factor: float = 1.0,
 ) -> int:
-    """Total HBM for one global training batch: the sum of the byte buckets scaled by a correction
-    factor.
+    """Total HBM for one global batch: the byte buckets scaled by ``correction_factor``.
 
-    The buckets are first-order estimates (parameters, optimizer state, activations); ``correction_factor``
-    absorbs everything the buckets do not model directly — runtime/framework overhead, allocator
-    fragmentation, and the gap between the activation heuristic and reality. It is the single knob
-    calibrated against measured per-chip ceilings (see experiments/protein/exp117_batch_calibration.md);
-    ``1.0`` applies the raw bucket sum with no correction.
+    ``correction_factor`` scales the (rough) bucket sum to absorb HBM the buckets omit — framework
+    runtime, allocator fragmentation, and estimate error; calibrate it empirically. ``1.0`` is the raw sum.
     """
     return math.ceil((param_bytes + optimizer_bytes + activation_bytes) * correction_factor)
 
@@ -88,26 +76,13 @@ def tpu_batch_config(
     *,
     data_axis_size: int | None = None,
 ) -> tuple[int, int]:
-    """Choose TPU batch fit settings for a global batch.
+    """Return ``(per_device_parallelism, gradient_accumulation)`` to fit ``batch_size`` on ``tpu``.
 
-    Args:
-        tpu: TPU topology string accepted by Fray, such as `"v5litepod-8"`.
-        batch_size: Global training batch size.
-        batch_bytes: Aggregate HBM needed to place the full global batch. This
-            can come from `batch_memory_bytes` or from empirical measurements of
-            a similar run. When the full batch does not fit, this calculation
-            assumes the memory requirement scales linearly with microbatch size.
-        data_axis_size: Number of TPU chips on the batch/data axis. This defaults
-            to the TPU slice chip count for pure data parallel training. Pass a
-            smaller value when some chips are assigned to non-batch axes; for
-            example, on `"v5p-32"` with 16 chips and tensor parallel size 2, pass
-            `data_axis_size=8` because each microbatch is spread over 8 data
-            shards.
-
-    Returns:
-        A `(per_device_parallelism, gradient_accumulation)` tuple. The
-        `per_device_parallelism` value is `-1` when the full batch fits without
-        extra microbatching.
+    ``batch_bytes`` is the HBM to place the full global batch (from ``batch_memory_bytes`` or a measured
+    run); when it does not fit, memory is assumed to scale linearly with microbatch size.
+    ``data_axis_size`` defaults to the slice chip count; pass a smaller value when some chips are off the
+    batch axis — e.g. ``"v5p-32"`` (16 chips) with tensor-parallel size 2 uses ``data_axis_size=8``.
+    ``per_device_parallelism`` is ``-1`` when the full batch fits without microbatching.
     """
     topology = get_tpu_topology(tpu)
     data_axis_size = _resolve_data_axis_size(topology.chip_count, data_axis_size)
@@ -141,7 +116,6 @@ def tpu_batch_config(
 
 
 def tpu_hbm_capacity_bytes(tpu: str) -> int:
-    """Return aggregate HBM capacity for a TPU slice."""
     return _slice_hbm_capacity_bytes(tpu)
 
 
