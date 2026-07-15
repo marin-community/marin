@@ -20,6 +20,7 @@ from haliax.quantization import QuantizationConfig
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.adaptor import LoraAdaptorConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
@@ -257,6 +258,8 @@ def test_train_lm_num_train_epochs_stops_after_one_pass():
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                # Keep checkpoints inside the temp dir instead of a cwd-relative "checkpoints/".
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
                 require_accelerator=False,
                 distributed=DistributedConfig(initialize_jax_distributed=False),
             ),
