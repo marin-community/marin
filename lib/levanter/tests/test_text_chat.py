@@ -18,6 +18,8 @@ from levanter.data.text.trace_chat import (
     TRACE_LABEL_OBSERVATION,
     TRACE_LABEL_PATCH,
     TraceChatDataset,
+    TraceChatEvaluationFormat,
+    dataset_for_trace_chat_format,
 )
 from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
@@ -630,3 +632,59 @@ def test_chat_processor_rejects_system_mapping_without_content(tokenizer: MarinT
 
     with pytest.raises(ValueError, match="System prompt mapping must include 'content'"):
         processor(batch)
+
+
+def _write_trace_cache(tmp_path, docs):
+    exemplar = {
+        "input_ids": np.zeros((0,), dtype=np.int32),
+        "loss_labels": np.zeros((0,), dtype=np.int32),
+    }
+    with SerialCacheWriter(str(tmp_path), exemplar) as writer:
+        writer.write_batch(
+            [
+                {
+                    "input_ids": np.array(ids, dtype=np.int32),
+                    "loss_labels": np.array(labels, dtype=np.int32),
+                }
+                for ids, labels in docs
+            ]
+        )
+    return writer.result()
+
+
+@pytest.mark.parametrize("pack", ["pad", False, 1])
+def test_dataset_for_trace_chat_format_pad_yields_one_padded_example_per_trace(tmp_path, pack):
+    cache = _write_trace_cache(
+        tmp_path,
+        [
+            ([10, 11, 12], [TRACE_LABEL_ASSISTANT_TEXT] * 3),
+            ([20, 21], [TRACE_LABEL_ASSISTANT_TOOL_CALL] * 2),
+        ],
+    )
+    trace_format = TraceChatEvaluationFormat(pack=pack)
+    Pos = Axis("position", 8)
+    ds = dataset_for_trace_chat_format(trace_format, Pos, cache).as_sync_dataset()
+
+    # one example per trace; pad mode never packs two traces together
+    assert len(ds) == 2
+    first = ds[0]
+    np.testing.assert_array_equal(np.asarray(first.tokens)[:3], np.array([10, 11, 12], dtype=np.int32))
+    for ex in ds:
+        assert ex.tokens.shape == (Pos.size,)
+        segment_ids = np.asarray(ex.attn_mask.segment_ids[0])
+        padding = segment_ids == -1
+        assert padding.any(), "trace should be shorter than Pos, leaving padding"
+        # neither padding nor the position predicting the first pad token may carry a loss label
+        predicts_padding = np.roll(segment_ids, -1) == -1
+        np.testing.assert_array_equal(np.asarray(ex.loss_labels)[padding | predicts_padding], 0)
+
+
+def test_dataset_for_trace_chat_format_pad_raises_on_document_longer_than_pos(tmp_path):
+    cache = _write_trace_cache(
+        tmp_path,
+        [([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [TRACE_LABEL_ASSISTANT_TEXT] * 10)],
+    )
+    trace_format = TraceChatEvaluationFormat(pack="pad")
+    Pos = Axis("position", 4)
+    with pytest.raises(ValueError, match="exceeds"):
+        dataset_for_trace_chat_format(trace_format, Pos, cache)

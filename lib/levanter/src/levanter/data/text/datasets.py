@@ -367,6 +367,26 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
     return False
 
 
+def _resolve_pack_config(
+    pack: bool | int | Literal["pad"],
+    *,
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
+) -> tuple[int, Literal["left", "right", "raise"]]:
+    """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
+
+    ``"pad"`` and any falsy value (``False``/``0``) select *pad mode*: one document
+    per example, padded to ``Pos``, with over-long documents raising instead of being
+    silently truncated. ``True`` packs up to 64 documents per example; an integer
+    packs up to that many. The ``packed_slice_strategy`` applies only to the packing
+    branches -- pad mode always raises.
+    """
+    if pack == "pad" or not pack:
+        return 1, "raise"
+    if pack is True:
+        return 64, packed_slice_strategy
+    return int(pack), packed_slice_strategy
+
+
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
@@ -494,14 +514,13 @@ def dataset_for_component(
     pack = _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
-        if pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        if pack:
-            max_segments = 64 if pack is True else int(pack)
+        if pack == "pad" or pack:
+            max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
                 Pos,
                 max_segments_per_example=max_segments,
+                slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
             )
         return CausalLmDataset(
@@ -512,14 +531,13 @@ def dataset_for_component(
         )
     elif isinstance(fmt, SupervisedLmDatasetFormat):
         loss_weights_key = SupervisedTextProcessor.loss_weights_key
-        if pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        if pack:
-            max_segments = 64 if pack is True else int(pack)
+        if pack == "pad" or pack:
+            max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
                 Pos,
                 max_segments_per_example=max_segments,
+                slice_strategy=slice_strategy,
                 loss_weights_key=loss_weights_key,
                 block_cross_document_attention=block_cross_document_attention,
             )
@@ -530,18 +548,15 @@ def dataset_for_component(
             block_cross_document_attention=block_cross_document_attention,
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
-        effective_pack = pack
-        if effective_pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        max_segments = (
-            64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
-        )
-        mask_user_turns = fmt.mask_user_turns
+        # Chat has no continuous-stream mode: a falsy pack means one conversation per
+        # example (pad mode), matching pack="pad".
+        max_segments, slice_strategy = _resolve_pack_config(pack)
         return ChatDataset(
             cache,
             Pos,
             max_segments_per_example=max_segments,
-            mask_user_turns=mask_user_turns,
+            slice_strategy=slice_strategy,
+            mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
