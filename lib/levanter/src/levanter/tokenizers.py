@@ -443,7 +443,9 @@ def _assistant_mask_from_generation_spans(
 
     Mirrors transformers' assistant-mask extraction: each generation char span maps to
     tokens via `char_to_token(start)` and `char_to_token(end - 1)`, marking the closed
-    token range. A `None` start (span dropped by truncation) stops processing, matching HF.
+    token range. A `None` start (span dropped by truncation) stops processing, matching HF;
+    a `None` end (only the tail was truncated) marks through the final token. `end_token`
+    is checked against `None` explicitly so a span ending at token 0 marks just that token.
     """
     mask = [0] * num_tokens
     for start_char, end_char in generation_spans:
@@ -451,7 +453,7 @@ def _assistant_mask_from_generation_spans(
         end_token = encoding.char_to_token(end_char - 1)
         if start_token is None:
             break
-        for token_index in range(start_token, end_token + 1 if end_token else num_tokens):
+        for token_index in range(start_token, end_token + 1 if end_token is not None else num_tokens):
             mask[token_index] = 1
     return mask
 

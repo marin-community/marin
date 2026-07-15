@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import ast
-import pathlib
 from typing import Sequence
 
 import numpy as np
@@ -675,27 +673,52 @@ User: {{ message['content'] }}
 """
 
 
-def _load_llama3_trainable_template() -> str | None:
-    """Read the trainable llama3-instruct chat template out of experiments/llama.py.
-
-    That template trains real SFT models, so parity against HF matters for it directly.
-    It lives in the marin layer, which levanter must not import, so the constant is read
-    from source via AST instead of imported. Returns None when the file is absent (e.g.
-    levanter checked out on its own), in which case the parametrized case is skipped.
-    """
-    path = pathlib.Path(__file__).resolve().parents[3] / "experiments" / "llama.py"
-    if not path.exists():
-        return None
-    tree = ast.parse(path.read_text())
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "llama3_instruct_trainable_chat_template" for t in node.targets
-        ):
-            return ast.literal_eval(node.value)
-    return None
-
-
-LLAMA3_TRAINABLE_TEMPLATE = _load_llama3_trainable_template()
+# A llama3-instruct-style trainable template exercising the constructs that separate real
+# SFT templates from the toy ones above: a hoisted system message, a `tools` parameter
+# serialized with `tojson(indent=4)`, tool_calls rendered with `tojson`, tool-role
+# responses, and `{% generation %}` assistant spans. Self-contained so the levanter test
+# suite stays independent of the marin layer where the production template lives.
+LLAMA3_STYLE_TEMPLATE = """{{- bos_token }}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content'] %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = '' %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{{- '<|start_header_id|>system<|end_header_id|>\\n\\n' + system_message }}
+{%- if tools is defined and tools %}
+    {{- '\\n\\nYou have access to the following functions:\\n' }}
+    {%- for tool in tools %}
+        {{- tool | tojson(indent=4) }}
+        {{- '\\n' }}
+    {%- endfor %}
+{%- endif %}
+{{- '<|eot_id|>' }}
+{%- for message in loop_messages %}
+    {%- if message['role'] == 'assistant' and message.get('tool_calls') %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' -}}
+        {%- generation %}
+        {%- for tool_call in message['tool_calls'] %}
+            {{- '{"name": "' + tool_call['function']['name'] + '", "parameters": ' }}
+            {{- tool_call['function']['arguments'] | tojson }}
+            {{- '}' }}
+        {%- endfor %}
+        {%- endgeneration %}
+        {{- '<|eot_id|>' }}
+    {%- elif message['role'] == 'assistant' %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' -}}
+        {%- generation %}{{ message['content'] }}{%- endgeneration %}
+        {{- '<|eot_id|>' }}
+    {%- elif message['role'] == 'tool' %}
+        {{- '<|start_header_id|>ipython<|end_header_id|>\\n\\n' + (message['content'] | tojson) + '<|eot_id|>' }}
+    {%- else %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n' + message['content'] + '<|eot_id|>' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}
+{%- endif %}"""
 
 _WEATHER_TOOLS = [
     {
@@ -782,23 +805,12 @@ _PARITY_CASES = [
         id="alt-chat-template-kwargs",
     ),
     pytest.param(HF_BOUNDARY_MERGE_TEMPLATE, _ADVERSARIAL_CONV, {}, id="boundary-merge-crosses-generation"),
+    pytest.param(LLAMA3_STYLE_TEMPLATE, _LLAMA3_TOOL_CONV, {"tools": _WEATHER_TOOLS}, id="llama3-style-with-tools"),
     pytest.param(
-        LLAMA3_TRAINABLE_TEMPLATE,
-        _LLAMA3_TOOL_CONV,
-        {"tools": _WEATHER_TOOLS},
-        id="llama3-trainable-with-tools",
-        marks=pytest.mark.skipif(
-            LLAMA3_TRAINABLE_TEMPLATE is None, reason="experiments/llama.py not present in this checkout"
-        ),
-    ),
-    pytest.param(
-        LLAMA3_TRAINABLE_TEMPLATE,
+        LLAMA3_STYLE_TEMPLATE,
         _WITH_SYSTEM + [{"role": "user", "content": "Bye"}, {"role": "assistant", "content": "Goodbye."}],
         {},
-        id="llama3-trainable-plain",
-        marks=pytest.mark.skipif(
-            LLAMA3_TRAINABLE_TEMPLATE is None, reason="experiments/llama.py not present in this checkout"
-        ),
+        id="llama3-style-plain",
     ),
 ]
 
