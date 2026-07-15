@@ -185,8 +185,6 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "nycourts_judicial_ethics_opinions": (
                 "Nemotron-Pretraining-Legal-NYCourts-Judicial-Ethics-Opinions/**/*.parquet"
             ),
-            "tos_clause_understanding": "Nemotron-Pretraining-Legal-ToS-Clause-Understanding/**/*.parquet",
-            "tosdr_qa": "Nemotron-Pretraining-Legal-ToSDR-QA/**/*.parquet",
         },
     ),
 }

@@ -355,8 +355,6 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_legal/globalcit": 0.007366386,
             "nemotron_legal/legalbench_cuad_v2": 0.047987198,
             "nemotron_legal/nycourts_judicial_ethics_opinions": 0.004178264,
-            "nemotron_legal/tos_clause_understanding": 0.000337263,
-            "nemotron_legal/tosdr_qa": 0.002550481,
         },
     )
 
