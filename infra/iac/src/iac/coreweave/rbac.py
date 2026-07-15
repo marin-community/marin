@@ -16,9 +16,11 @@ import pulumi_kubernetes as k8s
 
 from iac.config import RbacSpec
 
-# The permissions the iris-controller ServiceAccount needs at runtime. Kept byte-identical
-# to the live ClusterRole (was iris.cluster.platforms.k8s.controller.ensure_rbac before the
-# cede). If the controller gains a new permission need, update this list.
+# The permissions the iris-controller ServiceAccount needs at runtime. Until the cede
+# (spec §4), iris.cluster.platforms.k8s.controller.ensure_rbac still applies an identical
+# ClusterRole on every `cluster start`, so these rules must stay byte-identical to it; the
+# cede deletes ensure_rbac and leaves this the sole copy, closing the drift window. If the
+# controller gains a new permission need before then, update BOTH lists.
 _CLUSTER_ROLE_RULES = [
     {
         "apiGroups": ["compute.coreweave.com"],

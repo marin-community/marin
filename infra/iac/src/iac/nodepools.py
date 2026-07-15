@@ -29,7 +29,6 @@ class NodePoolSpec:
     min_nodes: int
     max_nodes: int
     node_labels: dict[str, str]
-    system_critical: bool
     autoscaling: bool = True
 
 
@@ -42,8 +41,7 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
     """Return one NodePoolSpec per scale group that defines a CoreWeave slice_template.
 
     Scale groups without a CoreWeave `instance_type` are skipped (mirroring
-    `ensure_nodepools`), not errored. This is the single owner of NodePool shape and MUST be
-    used both by the IaC program and by Iris's `verify_prerequisites` so names match.
+    `ensure_nodepools`), not errored.
     """
     label_prefix = config.platform.label_prefix
     labels = Labels(label_prefix)
@@ -69,7 +67,6 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
                 node_labels=node_labels,
-                system_critical=min_nodes > 0,
             )
         )
     return specs
