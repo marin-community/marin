@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 snapshot is ready, but submission is blocked because the submitter environment has no W&B authentication. No experiment result is available yet.
+The `MOE-MRCR-001` d512 run is submitted as Iris job `/held/moe-mrcr-001-d512` in `us-east5-a`. No experiment result is available yet.
 
 ## Scope
 
@@ -35,11 +35,11 @@ The `MOE-MRCR-001` d512 snapshot is ready, but submission is blocked because the
 
 ### Active
 
-- None.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: Iris accepted `/held/moe-mrcr-001-d512`. Next test: monitor training and collect final MRCR metrics.
 
 ### Blocked
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Blocker: `WANDB_API_KEY` is absent from the submitter environment and `wandb status` reports no API key. Resume when: W&B authentication is available to the Iris submission shell.
+- None.
 
 ### Falsified / Dead End
 
@@ -70,3 +70,13 @@ The `MOE-MRCR-001` d512 snapshot is ready, but submission is blocked because the
 - Result: the environment variable is absent and W&B reports `api_key: null`; no Iris job was submitted.
 - Interpretation: submitting without the required key would spend capacity on a run that cannot emit the experiment's required metrics.
 - Next action: resume the standard Iris submission as soon as W&B authentication is available in the submitter environment.
+
+### 2026-07-14 17:20 - MOE-MRCR-001 submitted
+
+- Hypothesis: the d512 run will exercise the paired MRCR evaluation end to end and quantify context-conditioned PPL reduction.
+- Commit Hash: `4534ffb60170cc3bdbb348dce081c525d60042cb`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512 --zone us-east5-a -e WANDB_API_KEY "$WANDB_API_KEY" -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: budget 3.82e17 FLOPs, hidden dimension 512, batch 32, 3494 steps, sequence length 8192, eval every 1000 steps, v5p-8 training resource pinned to `us-east5-a`.
+- Result: Iris accepted job `/held/moe-mrcr-001-d512`; dashboard https://iris.oa.dev/#/job/%2Fheld%2Fmoe-mrcr-001-d512.
+- Interpretation: the required W&B authentication is now available. The first submission with the additional `--reserve v5p-8` constraint was rejected because no non-preemptible CPU coordinator group matched that live preemptible availability constraint in `us-east5-a`; the retry retained the explicit zone pin, while the launcher independently pins its v5p-8 child resource to the same zone.
+- Next action: monitor Iris logs and W&B until terminal, recovering the self-submitted job if necessary.
