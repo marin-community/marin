@@ -13,22 +13,12 @@ reproduced so Iris scheduling and `cluster status` keep working after the cede.
 from dataclasses import dataclass
 
 from iris.cluster.config import IrisClusterConfig
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
 from iris.cluster.platforms.types import Labels
 
 # NodePool spec.nodeLabels key that pins system pods (Konnectivity, monitoring) to
 # always-on nodes so GPU pools can scale to zero. Applied only when min_nodes > 0.
 SYSTEM_CRITICAL_LABEL = "cks.coreweave.cloud/system-critical"
-
-# NVL72 (GB200/GB300) instances deploy in whole racks; a rack is 18 nodes. Such pools are
-# declared by rack (spec.targetRacks) and do not autoscale — CoreWeave rejects partial racks
-# and does not support the autoscaler for rack-based instances. Everything else is node-based
-# (spec.targetNodes + autoscaling). See docs.coreweave.com/docs/platform/instances/nvl72.
-RACK_SIZE = 18
-_NVL72_INSTANCE_PREFIXES = ("gb200", "gb300")
-
-
-def _is_rack_based(instance_type: str) -> bool:
-    return instance_type.lower().startswith(_NVL72_INSTANCE_PREFIXES)
 
 
 @dataclass(frozen=True)
@@ -77,7 +67,7 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
         if min_nodes > 0:
             node_labels[SYSTEM_CRITICAL_LABEL] = "true"
 
-        rack_based = _is_rack_based(coreweave.instance_type)
+        rack_based = is_rack_based(coreweave.instance_type)
         target_racks: int | None = None
         if rack_based:
             if max_nodes % RACK_SIZE != 0:
