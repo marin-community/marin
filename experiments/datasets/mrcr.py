@@ -23,7 +23,7 @@ from rigging.filesystem import StoragePath
 from experiments.llama import llama3_tokenizer
 
 _HF_REVISION = "f4c69fae7cf81f7ca26b9fee34b392a50f6b8a1d"
-_VERSION = "2026.07.14-1"
+_VERSION = "2026.07.14.1"
 MRCR_NEEDLE_COUNTS = (2, 4, 8)
 MRCR_CONDITIONS = ("full_context", "final_user_only")
 
