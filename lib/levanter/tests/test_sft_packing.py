@@ -246,8 +246,14 @@ def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
         def per_position_loss(model, example):
             return model.compute_next_token_loss(example, reduction=None, reduction_axis=()).array
 
-        packed_loss = np.asarray(per_position_loss(model, named_lm_example_from_grug(packed, Pos=model.Pos)))
-        unpacked_loss = np.asarray(per_position_loss(model, named_lm_example_from_grug(unpacked, Pos=model.Pos)))
+        def host_example(grug_example):
+            # ChatDataset pins its arrays to CPU; drop that device commitment (via host
+            # numpy) so the jit under the mesh places the inputs on its own devices.
+            named = named_lm_example_from_grug(grug_example, Pos=model.Pos)
+            return jax.tree.map(np.asarray, named)
+
+        packed_loss = np.asarray(per_position_loss(model, host_example(packed)))
+        unpacked_loss = np.asarray(per_position_loss(model, host_example(unpacked)))
 
     # The leading document occupies positions 0..leading_len-1 in both cases; its loss
     # must be identical. (Uncharged positions are zero in both, so this also confirms
