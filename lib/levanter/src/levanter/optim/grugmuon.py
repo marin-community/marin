@@ -31,6 +31,15 @@ STACK_BATCH_SHARDED = "stack_batch_sharded"
 ORTHOGONALIZATION_LAYOUTS = (VMAP_REPLICATED, STACK_BATCH_SHARDED)
 
 
+def _effective_ns_steps(steps: int) -> int:
+    """Newton-Schulz iteration count, forced to 0 when SCALE_MUON_DROP_NS_MATMULS=1.
+
+    Dropping the iterations skips the XX^T / A@A / B@X matmuls while keeping the bf16 cast,
+    Frobenius normalization, and any reshard/distribution the caller performs -- isolating the
+    NS matmul cost without the fp32/undistributed confound of a full no-op. Read at trace time."""
+    return 0 if os.environ.get("SCALE_MUON_DROP_NS_MATMULS") == "1" else steps
+
+
 def _target_sharding(array) -> jax.sharding.Sharding | None:
     if array is None or not hasattr(array, "shape"):
         return None
@@ -203,7 +212,15 @@ def _grug_scale_with_muon(
                 # gathering D/I to full-replicated.
                 updated = _newtonschulz_4d_distributed(path, x, steps, muon_eps, coefficient_type)
             else:
-                if orthogonalization_layout == VMAP_REPLICATED:
+                # 3D non-expert leaf (attn q/k/v/o + gated norms + dense, stacked [L, d_in, d_out]
+                # under scan). SCALE_MUON_DIST_NONEXPERT=1 forces the stack-sharded distributed NS
+                # (each chip orthogonalizes its ~L/shards matrices) instead of replicating the whole
+                # stack to P(None,None) and running NS redundantly on every device. Read at trace
+                # time so it can be toggled in-process.
+                effective_layout = orthogonalization_layout
+                if os.environ.get("SCALE_MUON_DIST_NONEXPERT") == "1":
+                    effective_layout = STACK_BATCH_SHARDED
+                if effective_layout == VMAP_REPLICATED:
                     updated = jax.vmap(
                         lambda matrix: _zeropower_via_newtonschulz_replicated(
                             matrix,
@@ -302,7 +319,7 @@ def _zeropower_via_newtonschulz_local(
         X = X.T
         transpose = True
 
-    for i in range(steps):
+    for i in range(_effective_ns_steps(steps)):
         a, b, c = coeffs[i % len(coeffs)]
         A = jnp.einsum("ik,jk->ij", X, X)
         B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
@@ -413,7 +430,7 @@ def _zeropower_via_newtonschulz_replicated(
         X = X.T
         transpose = True
 
-    for i in range(steps):
+    for i in range(_effective_ns_steps(steps)):
         a, b, c = coeffs[i % len(coeffs)]
         out_sharding = P(None, None) if has_mesh else None
         A = jnp.einsum("ik,jk->ij", X, X, out_sharding=out_sharding)
@@ -457,7 +474,7 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
         X = reshard(X, target_pspec)
 
     X_out_sharding = target_pspec if (has_mesh and target_pspec is not None) else None
-    for i in range(steps):
+    for i in range(_effective_ns_steps(steps)):
         a, b, c = coeffs[i % len(coeffs)]
         A = jnp.einsum("...ik,...jk->...ij", X, X, out_sharding=X_out_sharding)
         B = b * A + c * jnp.einsum("...ik,...kj->...ij", A, A, out_sharding=X_out_sharding)

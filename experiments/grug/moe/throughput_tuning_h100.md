@@ -14,10 +14,16 @@ The chronological research log (including dead ends and corrections) lives in
 |---|---|---|---|---|
 | **GQA** | FSDP scan, batch 256 | **28.16%** | 203k (25.4k) | ~24.4% (×0.868) |
 | **MLA** | FSDP scan, batch 256 | **21.51%** | 155k (19.4k) | ~24.8% (×1.154) |
+| **MLA parallel/ScMoE** | FSDP scan, batch ~208 | 11.3% | 164k (20.5k) | ~23.1% (×2.077) |
 
 *Reported MFU uses the standard full-attention analytic (see "MFU accuracy"). GQA's
 head_dim=128 is real so causal+SWA make it an over-count (×0.868); MLA's qk=192/v=128
-+ latent projections are under-counted by the head_dim=64 analytic (×1.154).
++ latent projections are under-counted by the head_dim=64 analytic (×1.154). The
+**parallel/ScMoE block** (LongCat-Flash, `SCALE_PARALLEL_BLOCK=1`) is undercounted
+**×2.077**: the analytic sees only 12 blocks of (1 attn + MoE) and misses the dense
+chain + 2nd attention. On tok/s/GPU (formula-free) it **beats plain MLA: 20.5k vs
+19.4k**; honest MFU ~23.1% is on par (it OOMs at b224 before reaching the b256
+optimum). See `.agents/projects/parallel-block-scmoe.md`.
 
 Both use the same recipe: **`SCALE_SCAN_LAYERS=1 SCALE_WATCH=0`, FSDP mesh
 (`SCALE_EXPERT_AXIS=1`), `ring` MoE, `gpu_fa4_cute`, `recompute_all`,

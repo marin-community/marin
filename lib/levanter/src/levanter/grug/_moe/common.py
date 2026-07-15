@@ -24,6 +24,8 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "te_nccl",  # Block-level TransformerEngine fused MoE over NCCL-EP (multi-process, one GPU/proc).
+    "te_grouped",  # Local: grug dispatch + TE grouped_dense (cuBLAS grouped GEMM, fp8-capable) experts.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
@@ -34,6 +36,7 @@ _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic",
+    "te_grouped",
 )
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"

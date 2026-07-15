@@ -38,6 +38,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_LOSS_EVERY    grad-only CE interleave: compute the real loss + forward lm_head
+                        GEMM every N steps (and the final step), grad-only (exact gradient,
+                        placeholder-0 loss, skipped logits GEMM) otherwise. 1 (default) is
+                        off. Pair with CE_IMPL=liger for a bit-identical trajectory.
     RUN_ID              unique run identifier
 """
 
@@ -47,7 +51,7 @@ import os
 from typing import cast
 
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import BlockShuffleConfig
 from levanter.optim import AdamConfig, GrugMuonConfig, OptimizerConfig
@@ -107,9 +111,15 @@ def build_scale_model() -> GrugModelConfig:
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
     num_heads = hidden_dim // HEAD_DIM
+    # SCALE_PARALLEL_BLOCK=1 selects the ScMoE parallel block (LongCat-Flash, arXiv 2509.01322):
+    # a shared head MLA feeding a routed MoE and a dense->MLA->dense chain in parallel, summed
+    # into the residual. It forces MLA on (num_heads = 2*d//128), drops the shared expert (the
+    # dense chain replaces it), and sets the two dense MLPs to 1.5*d wide. num_layers counts
+    # blocks (24 serial layers -> 12 parallel blocks). See .agents/projects/parallel-block-scmoe.md.
+    parallel_block = os.environ.get("SCALE_PARALLEL_BLOCK") == "1"
     # SCALE_MLA=1 switches the block to Multi-head Latent Attention with num_heads = 2*d//128
     # and its own qk/v head dims (128 nope + 64 rope, v=128); the dense head_dim is unused.
-    use_mla = os.environ.get("SCALE_MLA") == "1"
+    use_mla = os.environ.get("SCALE_MLA") == "1" or parallel_block
     if use_mla:
         num_heads = 2 * hidden_dim // HEAD_DIM
     # Q latent rank. SCALE_Q_LORA_RANK=0 uses a direct Q projection (DeepSeek-V3 / TorchTitan
@@ -134,13 +144,26 @@ def build_scale_model() -> GrugModelConfig:
             num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # routed expert FFN inner width (~d/2)
     # Shared (always-on) expert width. Defaults to the full hidden_dim (2x a routed expert).
-    shared_intermediate_dim = env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim)
+    # The parallel block has no shared expert (its dense chain replaces it).
+    shared_intermediate_dim = 0 if parallel_block else env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim)
+    # Dense-chain MLP width for the parallel block, as a multiple of hidden_dim.
+    # SCALE_PARALLEL_DENSE_MULT: 1.5 (default) for this variant; 2.0 makes the parallel
+    # block iso-FLOP with the 24-layer serial-MLA baseline (per-block MLP 1818 MFLOP/token).
+    dense_mult = float(os.environ.get("SCALE_PARALLEL_DENSE_MULT", "1.5"))
+    parallel_dense_intermediate_dim = int(dense_mult * hidden_dim) if parallel_block else 0
+    # Serial variant defaults to 48 layers; the parallel variant to 12 blocks (= 24 serial layers).
+    num_layers = env_int("SCALE_NUM_LAYERS", 12 if parallel_block else 48)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
+    # Sliding-window size for the short layers. Set >= seq_len to disable windowing (every layer
+    # becomes full-causal/global, i.e. sliding window off).
+    sliding_window = env_int("SCALE_SLIDING_WINDOW", SLIDING_WINDOW)
+    # Query logit scaling (on top of 1/sqrt(head_dim)). Default 1.3; set SCALE_QK_MULT=1.0 to turn off.
+    qk_mult = float(os.environ.get("SCALE_QK_MULT", "1.3"))
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
     moe_impl = os.environ.get("SCALE_MOE_IMPL") or None
-    if moe_impl not in (None, "ring", "ragged_all_to_all", "deepep", "scatter", "sonic"):
+    if moe_impl not in (None, "ring", "ragged_all_to_all", "deepep", "scatter", "sonic", "te_grouped", "te_nccl"):
         raise ValueError(f"SCALE_MOE_IMPL={moe_impl!r} is not a known MoeImplementation")
     attn_impl = os.environ.get("SCALE_ATTN_IMPL") or None
     initializer_std = float(os.environ.get("SCALE_INIT_STD", "0.02"))
@@ -157,7 +180,7 @@ def build_scale_model() -> GrugModelConfig:
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
-        num_layers=env_int("SCALE_NUM_LAYERS", 48),
+        num_layers=num_layers,
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
@@ -170,7 +193,8 @@ def build_scale_model() -> GrugModelConfig:
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
-        sliding_window=SLIDING_WINDOW,
+        sliding_window=sliding_window,
+        qk_mult=qk_mult,
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_impl,
         attention_implementation=attn_impl,
@@ -178,6 +202,8 @@ def build_scale_model() -> GrugModelConfig:
         disable_pko=disable_pko,
         disable_long_rope=disable_long_rope,
         use_array_stacked_blocks=use_stacked_blocks,
+        parallel_block=parallel_block,
+        parallel_dense_intermediate_dim=parallel_dense_intermediate_dim,
     )
 
 
@@ -196,10 +222,14 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
+    # Enable host tracer + HLO proto so the JAX named_scope / HLO computation names
+    # survive into the trace, giving the profile_summary tool the semantic regions
+    # needed to attribute the optimizer (Newton-Schulz / Muon reshard) cost.
     profiler = ProfilerConfig(
         enabled=profiler_steps > 0,
         start_step=env_int("SCALE_PROFILER_START", 8),
         num_steps=profiler_steps,
+        profile_options=ProfileOptionsConfig(host_tracer_level=1, enable_hlo_proto=True),
     )
 
     checkpoint_mode = os.environ.get("SCALE_CHECKPOINTS", "s3").lower()
@@ -233,9 +263,14 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     wandb_entity = os.environ.get("WANDB_ENTITY") or None
     wandb_project = os.environ.get("WANDB_PROJECT", "marin_moe")
 
+    # SCALE_LOSS_EVERY=N (>1) enables the grad-only CE interleave: real loss + forward
+    # lm_head GEMM every N steps (and the final step), grad-only (exact gradient, skipped
+    # logits GEMM) otherwise. Pair with CE_IMPL=liger so the interleaved real-loss steps use
+    # the same recompute backend as the grad-only steps (bit-identical trajectory).
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
         replica_axis_size=replica_axis,
+        loss_every=env_int("SCALE_LOSS_EVERY", 1),
         **SCALE_TRAINER_DEFAULTS,
     )
 

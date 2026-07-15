@@ -156,6 +156,15 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    parallel_block: bool = False
+    """Use the ScMoE parallel block (LongCat-Flash, arXiv 2509.01322): a shared head
+    attention whose output feeds two parallel chains -- a routed MoE (reading a
+    post-attention shortcut) and a dense->attention->dense chain -- summed back into
+    the residual. See .agents/projects/parallel-block-scmoe.md. num_layers counts
+    blocks (24 serial layers -> 12 parallel blocks)."""
+    parallel_dense_intermediate_dim: int = 0
+    """SwiGLU inner width of the two dense MLPs in the parallel block's dense chain
+    (1.5*hidden_dim for this variant). Must be > 0 when parallel_block is True."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -174,6 +183,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.parallel_block and self.parallel_dense_intermediate_dim <= 0:
+            raise ValueError("parallel_block requires parallel_dense_intermediate_dim > 0")
         if self.use_mla:
             if self.q_lora_rank < 0:
                 raise ValueError("q_lora_rank must be >= 0 (0 selects a direct Q projection)")
@@ -586,11 +597,51 @@ class MoEMLP(eqx.Module):
             cfg=cfg,
         )
 
+    def _call_te_nccl(
+        self,
+        x: Float[Array, "B S D"],
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        """Block-level TransformerEngine fused NCCL-EP MoE path.
+
+        Replaces grug's QB router + expert dispatch/compute/combine with TE's
+        ``moe`` (router + ep_dispatch + grouped_gemm + ep_combine). Requires an
+        eager ``ep_bootstrap`` in the training entry, a mesh with an ``expert``
+        axis, and one GPU per process. The router semantics differ from grug's QB
+        router (see ``ep_te_nccl`` docstring); this is a throughput bring-up path.
+        """
+        from levanter.grug._moe.ep_te_nccl import moe_te_nccl  # noqa: PLC0415
+
+        mesh = get_abstract_mesh()
+        ep_size = _mesh_axis_size(mesh, "expert")
+        dp_axes = tuple(a for a in ("replica_dcn", "data") if a in mesh.shape)
+        b, s, _ = x.shape
+        recv_capacity = ep_size * ((b * s) // max(1, ep_size * self._num_procs())) * self.cfg.num_experts_per_token
+        out, aux = moe_te_nccl(
+            x,
+            self.router,
+            self.expert_mlp.w_gate,
+            self.expert_mlp.w_up,
+            self.expert_mlp.w_down,
+            num_experts=self.cfg.num_experts,
+            num_experts_per_token=self.cfg.num_experts_per_token,
+            ep_axis="expert",
+            data_parallelism_axes=dp_axes,
+            recv_capacity_per_rank=recv_capacity,
+        )
+        stats = {"aux_loss": aux if aux is not None else jnp.array(0.0, jnp.float32)}
+        return out, stats
+
+    @staticmethod
+    def _num_procs() -> int:
+        return jax.process_count()
+
     @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        if self.cfg.moe_implementation == "te_nccl":
+            return self._call_te_nccl(x)
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
@@ -842,6 +893,121 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+def _cond_attention(
+    attn: "CausalSelfAttention | MultiheadLatentAttention",
+    attn_in: Float[Array, "B S D"],
+    short_mask: AttentionMask | jax.Array,
+    long_mask: AttentionMask | jax.Array,
+    use_long_mask: Bool[Array, ""] | bool,
+    use_pko: bool,
+    disable_long_rope: bool,
+) -> Float[Array, "B S D"]:
+    """Run ``attn`` under a ``lax.cond`` on the long/short mask so the body stays
+    shape-uniform across scan iterations (long -> full-causal mask, may PKO / drop
+    RoPE; short -> sliding-window mask, never PKO, always RoPE)."""
+    return jax.lax.cond(
+        jnp.asarray(use_long_mask, dtype=jnp.bool_),
+        lambda _: attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
+        lambda _: attn(attn_in, short_mask, use_pko=False, disable_rope=False),
+        operand=None,
+    )
+
+
+class ParallelBlock(eqx.Module):
+    """ScMoE parallel block (LongCat-Flash, arXiv 2509.01322).
+
+    A shared head attention, then two parallel chains summed into the residual:
+    Chain 1 is a routed MoE reading the post-head-attention shortcut; Chain 2 is
+    dense -> attention -> dense (each dense MLP is ``parallel_dense_intermediate_dim``
+    wide). Both attentions are the block's configured attention (MLA when use_mla),
+    sharing the block's long/short mask decision. No shared expert -- the dense chain
+    replaces it. See .agents/projects/parallel-block-scmoe.md.
+    """
+
+    rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm
+    attn: CausalSelfAttention | MultiheadLatentAttention
+    # MoE sublayer, named ``mlp`` to match ``Block`` so the QB router-bias update in
+    # train.py (``block.mlp.router_bias`` / ``stacked.mlp.router_bias``) is shared.
+    rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm
+    mlp: MoEMLP
+    rms_dense1: RMSNorm
+    dense1_gated_norm: GatedNorm
+    dense1: DenseMLP
+    rms_attn2: RMSNorm
+    attn2_gated_norm: GatedNorm
+    attn2: CausalSelfAttention | MultiheadLatentAttention
+    rms_dense2: RMSNorm
+    dense2_gated_norm: GatedNorm
+    dense2: DenseMLP
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "ParallelBlock":
+        a1_k, a2_k, moe_k, d1_k, d2_k, gn_a1, gn_moe, gn_d1, gn_a2, gn_d2 = random.split(key, 10)
+
+        def _attn(k: PRNGKeyArray) -> "CausalSelfAttention | MultiheadLatentAttention":
+            return MultiheadLatentAttention.init(cfg, key=k) if cfg.use_mla else CausalSelfAttention.init(cfg, key=k)
+
+        di = cfg.parallel_dense_intermediate_dim
+        return ParallelBlock(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_a1),
+            attn=_attn(a1_k),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_moe),
+            mlp=MoEMLP.init(cfg, key=moe_k),
+            rms_dense1=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            dense1_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_d1),
+            dense1=DenseMLP.init(cfg.hidden_dim, di, cfg.initializer_std, key=d1_k),
+            rms_attn2=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn2_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_a2),
+            attn2=_attn(a2_k),
+            rms_dense2=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            dense2_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_d2),
+            dense2=DenseMLP.init(cfg.hidden_dim, di, cfg.initializer_std, key=d2_k),
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        use_long_mask: Bool[Array, ""] | bool,
+        use_pko: bool = False,
+        disable_long_rope: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        # Shared head attention (ScMoE Attn #1).
+        x = x + _cond_attention(
+            self.attn,
+            self.attn_gated_norm(self.rms_attn(x)),
+            short_mask,
+            long_mask,
+            use_long_mask,
+            use_pko,
+            disable_long_rope,
+        )
+        # ScMoE shortcut: the MoE reads the post-head-attention residual, so it is
+        # independent of (schedulable in parallel with) the dense chain below.
+        moe_out, router_stats = self.mlp(self.mlp_gated_norm(self.rms_mlp(x)))
+        # Chain 2: dense -> attention -> dense, each with its own residual add.
+        x = x + self.dense1(self.dense1_gated_norm(self.rms_dense1(x)), activation=ActivationFunctionEnum.silu)
+        x = x + _cond_attention(
+            self.attn2,
+            self.attn2_gated_norm(self.rms_attn2(x)),
+            short_mask,
+            long_mask,
+            use_long_mask,
+            use_pko,
+            disable_long_rope,
+        )
+        x = x + self.dense2(self.dense2_gated_norm(self.rms_dense2(x)), activation=ActivationFunctionEnum.silu)
+        # Combine: sum the MoE branch (computed from the shortcut) back in.
+        x = x + moe_out
+        return x, router_stats
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -849,8 +1015,8 @@ class Transformer(eqx.Module):
     output_proj: jax.Array
     # Exactly one is populated: ``blocks`` (unrolled per-layer) or ``stacked_blocks``
     # (homogeneous lax.scan), selected by ``cfg.use_array_stacked_blocks``.
-    blocks: tuple[Block, ...] | None
-    stacked_blocks: ArrayStacked[Block] | None
+    blocks: tuple[Block | ParallelBlock, ...] | None
+    stacked_blocks: ArrayStacked | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -889,13 +1055,14 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
 
-        blocks: tuple[Block, ...] | None
-        stacked_blocks: ArrayStacked[Block] | None
+        block_cls: type[Block] | type[ParallelBlock] = ParallelBlock if cfg.parallel_block else Block
+        blocks: tuple[Block | ParallelBlock, ...] | None
+        stacked_blocks: ArrayStacked | None
         if cfg.use_array_stacked_blocks:
             blocks = None
-            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
+            stacked_blocks = ArrayStacked.init(cfg.num_layers, block_cls)(cfg=cfg, key=block_keys)
         else:
-            blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+            blocks = tuple(block_cls.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
             stacked_blocks = None
 
         return Transformer(
@@ -1009,20 +1176,34 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        compute_loss: bool | jax.Array = True,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        # compute_loss=False (or a runtime-False bool array) selects the grad-only CE: the
+        # forward [tokens, vocab] logits GEMM + logsumexp are skipped and the loss is a
+        # placeholder 0, while the gradient stays exact (the CE backward recomputes logits).
+        # A traced bool interleaves real-loss and grad-only steps in one compiled graph.
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
-            hidden,
-            self.output_proj,
-            labels,
-            weight=loss_weight,
-            reduction=reduction,
-            logsumexp_weight=logsumexp_weight,
-            dtype=loss_dtype,
-        )
+        def _ce(h: jax.Array, grad_only: bool) -> jax.Array:
+            return fused_linear_softmax_cross_entropy_loss(
+                h,
+                self.output_proj,
+                labels,
+                weight=loss_weight,
+                reduction=reduction,
+                logsumexp_weight=logsumexp_weight,
+                dtype=loss_dtype,
+                grad_only=grad_only,
+            )
+
+        if isinstance(compute_loss, bool):
+            cross_entropy_loss = _ce(hidden, grad_only=not compute_loss)
+        else:
+            # Both branches share the same (logit-recomputing) backward, so the gradient is
+            # identical regardless of which branch runs -- only the forward loss value differs.
+            cross_entropy_loss = jax.lax.cond(compute_loss, lambda h: _ce(h, False), lambda h: _ce(h, True), hidden)
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
@@ -1034,6 +1215,78 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
+
+
+def grug_forward_flops_per_token(cfg: GrugModelConfig) -> float:
+    """Accurate forward FLOPs/token for a grug MoE config (2 FLOPs per multiply-add).
+
+    Supersedes ``levanter.utils.flop_utils.lm_flops_per_token`` for grug, which models a
+    generic ``num_layers x (1 attn + 1 MLP)`` GQA layer with ``head_dim = hidden/num_heads``
+    and full non-causal attention -- wrong for both MLA (real qk=192/v=128 + latent
+    projections) and the parallel/ScMoE block (24 MLAs + 24 dense + 12 MoE that the generic
+    formula is blind to). This counts:
+
+    - **Attention** with real projection FLOPs. MLA: ``w_dq``/``w_uq`` (or a direct ``w_q``
+      when ``q_lora_rank==0``), ``w_dkv``, ``w_uk``, ``w_uv``, ``w_kr``, ``w_o``; scores over
+      qk=nope+rope and values over ``v_head_dim``. GQA: q/k/v/o projections; scores/values
+      over ``head_dim``. Score/value FLOPs are per-token with a causal factor 0.5 and the
+      sliding window applied to short layers (long layers = every 4th + last see full seq).
+    - **MoE**: top-k of ``num_experts`` at ``intermediate_dim`` (SwiGLU, 3 matmuls) + router.
+    - **Dense**: SwiGLU at the given width -- the parallel block's two ``parallel_dense_
+      intermediate_dim`` MLPs, or the serial block's shared expert.
+    - **lm_head**: ``2 * hidden * vocab`` (untied). Embedding lookup is a gather (~free).
+
+    The parallel block has two attentions and two dense MLPs per block and no shared expert;
+    the serial block has one attention, one MoE, and an optional shared expert.
+    """
+    d = cfg.hidden_dim
+    n = cfg.num_heads
+    num_layers = cfg.num_layers
+    seq = cfg.max_seq_len
+    window = min(seq, cfg.sliding_window)
+    topk = cfg.num_experts_per_token
+
+    if cfg.use_mla:
+        cq, ckv = cfg.q_lora_rank, cfg.kv_lora_rank
+        nope, rope_d, vd = cfg.qk_nope_head_dim, cfg.qk_rope_head_dim, cfg.v_head_dim
+        qk = nope + rope_d
+        q_macs = d * n * qk if cq == 0 else d * cq + cq * n * qk
+        proj_macs = q_macs + d * ckv + ckv * n * nope + ckv * n * vd + d * rope_d + n * vd * d
+        attn_proj = 2.0 * proj_macs
+
+        def attn_score(seq_eff: int) -> float:
+            # QK^T over qk dims + A@V over vd dims, n heads, causal 0.5 (2 flops * 0.5 = 1).
+            return float(n * seq_eff * (qk + vd))
+
+    else:
+        hd = cfg.inferred_head_dim
+        m = cfg.num_kv_heads
+        attn_proj = 2.0 * (d * (n * hd + 2 * m * hd) + n * hd * d)
+
+        def attn_score(seq_eff: int) -> float:
+            return float(2 * n * seq_eff * hd)
+
+    def swiglu(inter: int) -> float:
+        return 2.0 * 3 * d * inter
+
+    def moe(inter: int) -> float:
+        return 2.0 * 3 * d * inter * topk + 2.0 * d * cfg.num_experts  # experts + router
+
+    total = 0.0
+    for i in range(num_layers):
+        is_long = (i % 4 == 3) or (i == num_layers - 1)
+        seq_eff = seq if is_long else window
+        if cfg.parallel_block:
+            total += 2 * attn_proj + 2 * attn_score(seq_eff)
+            total += moe(cfg.intermediate_dim)
+            total += 2 * swiglu(cfg.parallel_dense_intermediate_dim)
+        else:
+            total += attn_proj + attn_score(seq_eff)
+            total += moe(cfg.intermediate_dim)
+            if cfg.shared_expert_intermediate_dim > 0:
+                total += swiglu(cfg.shared_expert_intermediate_dim)
+    total += 2.0 * d * cfg.vocab_size  # untied lm_head
+    return total
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
@@ -1068,6 +1321,10 @@ def _linear_inference_tensor(value: jax.Array) -> jax.Array:
 
 
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
+    if model.config.parallel_block:
+        raise NotImplementedError("state-dict export is not implemented for parallel_block (ScMoE) models")
+    if model.blocks is None:
+        raise NotImplementedError("state-dict export requires unrolled blocks (use_array_stacked_blocks=False)")
     tensors: dict[str, jax.Array] = {
         "model.embed_tokens.weight": model.token_embed,
         "model.embed_norm.weight": model.embed_norm.weight,
@@ -1129,8 +1386,10 @@ __all__ = [
     "GrugMoeHfConfig",
     "MoEMLP",
     "MoeActivation",
+    "ParallelBlock",
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",
+    "grug_forward_flops_per_token",
     "grugmoe_inference_state_dict",
 ]

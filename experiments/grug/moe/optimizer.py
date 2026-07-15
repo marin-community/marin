@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import jax
@@ -122,8 +123,24 @@ def scale_with_grug_muonh(
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
 
+        if os.environ.get("SCALE_MUON_SKIP_UPDATE") == "1":
+            # Probe: skip the entire Muon-group update (no momentum, NS, reshard, or hyperball).
+            # Returns a zero delta so apply_updates leaves the Muon params unchanged -- measures the
+            # floor step time with the whole Muon optimizer tail removed. Read at trace time.
+            zero = jax.tree.map(lambda u: None if u is None else jnp.zeros_like(u), updates, is_leaf=lambda x: x is None)
+            return zero, state
         muon_updates, next_state = muon_transform.update(updates, state, params)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        if os.environ.get("SCALE_MUON_NO_HYPERBALL") == "1":
+            # Ablation: drop the scale-invariant hyperball projection (its per-matrix Frobenius
+            # norms -> shard-axis all-reduces, plus the reproject elementwise) and take the plain
+            # Muon step -lr*update. Keeps Newton-Schulz on; isolates hyperball's cost.
+            muonh_updates = jax.tree.map(
+                lambda u: None if u is None else -learning_rate * u,
+                muon_updates,
+                is_leaf=lambda x: x is None,
+            )
+        else:
+            muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)

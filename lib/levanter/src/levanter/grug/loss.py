@@ -103,6 +103,32 @@ def _liger_ce_vjp_bwd(logsumexp_weight, chunk_size, residual, g):
 _liger_weighted_ce.defvjp(_liger_ce_vjp_fwd, _liger_ce_vjp_bwd)
 
 
+# Grad-only ("loss-free") CE. The Liger backward (_liger_ce_vjp_bwd) recomputes the
+# [tokens, vocab] logits itself to form the gradient, so the *forward's* logits GEMM +
+# logsumexp are pure redundancy whenever only the gradient is needed. This variant makes
+# the custom_vjp forward return a placeholder zero and skip that GEMM entirely, while the
+# backward is the *same* real VJP -> the gradient is bit-identical to _liger_weighted_ce,
+# only the loss value is dropped. A plain "compute loss then let XLA DCE it" does not work:
+# custom_vjp forbids eliminating the primal of a differentiated call, so an explicit
+# grad-only forward rule is required.
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(4, 5))
+def _liger_weighted_ce_grad_only(hidden, lm_head, labels, weight, logsumexp_weight, chunk_size):
+    """Grad-only twin of _liger_weighted_ce: placeholder zero loss, exact gradient."""
+    return jnp.zeros((hidden.shape[0],), dtype=jnp.float32)
+
+
+def _liger_ce_grad_only_vjp_fwd(hidden, lm_head, labels, weight, logsumexp_weight, chunk_size):
+    # Skip the [tokens, vocab] logits GEMM + logsumexp; keep only the residuals the shared
+    # backward needs (it recomputes logits from these). Residual matches _liger_ce_vjp_fwd.
+    out = jnp.zeros((hidden.shape[0],), dtype=jnp.float32)
+    return out, (hidden, lm_head, labels, weight)
+
+
+_liger_weighted_ce_grad_only.defvjp(_liger_ce_grad_only_vjp_fwd, _liger_ce_vjp_bwd)
+
+
 def _batch_axis_spec(x: jax.Array):
     x_type = jax.typeof(x)
     sharding = getattr(x_type, "sharding", None)
@@ -164,6 +190,7 @@ def fused_linear_softmax_cross_entropy_loss(
     dtype: jnp.dtype = jnp.float32,
     precision: jax.lax.PrecisionLike = None,
     implementation: str | tuple[str, ...] | None = None,
+    grad_only: bool = False,
 ) -> jax.Array:
     """Compute cross-entropy loss via the fused kernel path.
 
@@ -177,6 +204,12 @@ def fused_linear_softmax_cross_entropy_loss(
         dtype: Accumulator dtype for logits/logsumexp.
         precision: Optional matmul precision override for XLA/reference paths.
         implementation: Optional fused CE backend selection override.
+        grad_only: If True, skip the forward [tokens, vocab] logits GEMM + logsumexp and
+            return a placeholder zero loss; the (Liger) backward still recomputes logits, so
+            the gradient is exact. A pure throughput lever for steps whose loss value is not
+            needed. Always uses the Liger chunked custom_vjp regardless of ``CE_IMPL`` (it is
+            the path whose backward recomputes logits); for a bit-identical trajectory against
+            interleaved real-loss steps, run those steps with ``CE_IMPL=liger`` too.
 
     Returns:
         If reduction=="none": array with shape labels.shape.
@@ -212,12 +245,13 @@ def fused_linear_softmax_cross_entropy_loss(
         flat_labels = shard_labels.reshape((-1,)).astype(jnp.int32)
         flat_weight = shard_weight.reshape((-1,))
 
-        if os.environ.get("CE_IMPL") == "liger":
+        if os.environ.get("CE_IMPL") == "liger" or grad_only:
             ce_chunk = int(os.environ.get("CE_LIGER_CHUNK", "8192"))
             if ce_chunk <= 0:
                 # 0 -> one chunk per shard: a single CE iteration per device (max MFU).
                 ce_chunk = flat_hidden.shape[0]
-            loss = _liger_weighted_ce(
+            ce_fn = _liger_weighted_ce_grad_only if grad_only else _liger_weighted_ce
+            loss = ce_fn(
                 flat_hidden,
                 shard_lm_head,
                 flat_labels,

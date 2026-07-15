@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -22,6 +23,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
+from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data import AsyncDataset, DataLoader
@@ -35,13 +37,12 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
-from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer, grug_forward_flops_per_token
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -60,6 +61,12 @@ class GrugTrainerConfig:
     log_every: int = 1
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
+    # Grad-only CE interleave: compute the real loss (+ forward lm_head GEMM) only every
+    # `loss_every` steps (and always on the final step); other steps use the grad-only CE
+    # (exact gradient, placeholder-0 loss) to skip the redundant forward logits GEMM. 1
+    # disables the interleave (real loss every step). Loss/CE metrics are logged only on
+    # real-loss steps so the loss curve is not polluted by the placeholder zeros.
+    loss_every: int = 1
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -205,20 +212,11 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
-        hidden_dim=model_config.hidden_dim,
-        intermediate_dim=model_config.intermediate_dim,
-        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
-        num_kv_heads=model_config.num_kv_heads,
-        num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
-        vocab_size=model_config.vocab_size,
-        glu=True,
-        num_experts=model_config.num_experts,
-        num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
-        num_experts_per_tok=model_config.num_experts_per_token,
-    )
+    # grug_forward_flops_per_token is MLA/GQA- and parallel-block-aware (real MLA latent
+    # projections, 24 MLAs + 24 dense + 12 MoE for the parallel block, causal + sliding
+    # window). The generic lm_flops_per_token undercounts MLA (head_dim=64, full seq^2) and
+    # is entirely blind to the parallel block's dense chain + 2nd attention.
+    flops_per_token = grug_forward_flops_per_token(model_config)
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
@@ -305,9 +303,14 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    loss_every: int = 1,
+    num_train_steps: int,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
+    # Real loss on steps where step % loss_every == 0, and always on the final step; grad-only
+    # (exact grad, placeholder loss) otherwise. A runtime bool keeps it in one compiled graph.
+    last_step = num_train_steps - 1
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
             watch_targets = tuple(t.strip() for t in watch_config.watch_targets.split(","))
@@ -326,6 +329,11 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        if loss_every > 1:
+            compute_loss = jnp.logical_or(state.step % loss_every == 0, state.step >= last_step)
+        else:
+            compute_loss = True
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -335,6 +343,7 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                compute_loss=compute_loss,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
@@ -387,6 +396,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
+    # Confirm the fused-CE backend actually seen by the worker process (CE_IMPL is read at
+    # trace time in levanter.grug.loss). Load-bearing for the grad-only interleave: grad-only
+    # steps always use the Liger recompute backend, so real-loss steps must too (CE_IMPL=liger)
+    # for a bit-identical trajectory.
+    logger.info(
+        "grug CE backend: CE_IMPL=%r CE_LIGER_CHUNK=%r loss_every=%d",
+        os.environ.get("CE_IMPL"),
+        os.environ.get("CE_LIGER_CHUNK"),
+        config.trainer.loss_every,
+    )
 
     run_id = trainer.id
     if run_id is None:
@@ -400,6 +419,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        loss_every=config.trainer.loss_every,
+        num_train_steps=trainer.num_train_steps,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -477,6 +498,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
+        # With the grad-only interleave, the real loss exists only every `loss_every` steps
+        # (and on the final step); log train/loss on that cadence so the curve skips the
+        # placeholder zeros. Throughput/MFU still logs every `log_every` (it ignores loss).
+        loss_every = max(1, config.trainer.loss_every)
+        loss_log_every = loss_every if loss_every > 1 else log_every
         iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
@@ -490,7 +516,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             every=log_every,
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
-        state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=loss_log_every)
         if profiler_enabled:
             # log_dir is node-local and dies with the ephemeral GPU node, so mirror the finished
             # trace to the run's durable checkpoint dir (S3) when that path is remote.
@@ -506,6 +532,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
+                    profiler_options=profiler_cfg.build_jax_profile_options(),
                     upload_dir=profiler_upload_dir,
                 ),
                 every=1,
@@ -541,17 +568,39 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 )
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
+                # On grad-only steps train/loss is a placeholder 0, so loss-based logging and
+                # the NaN guard only apply on real-loss steps (every loss_every + final step).
+                real_loss_step = (
+                    loss_every <= 1 or current_step % loss_every == 0 or current_step >= trainer.num_train_steps - 1
+                )
 
                 jax.block_until_ready(metrics["train/loss"])
 
-                if jnp.isnan(metrics["train/loss"]):
+                if real_loss_step and jnp.isnan(metrics["train/loss"]):
                     logger.error(f"NaN loss at step {int(state.step)}. Stopping training.")
                     break
                 duration = time.perf_counter() - step_start
+                # Per-step throughput/MFU to stdout (greppable) in addition to the tracker hook,
+                # so same-node medians are recoverable from the run log without the tracker API.
+                _thr = compute_instant_throughput(
+                    batch_size=trainer.train_batch_size,
+                    step_duration=duration,
+                    tokens_per_example=config.model.max_seq_len,
+                    flops_per_example=flops_per_example,
+                    theoretical_flops=aggregate_device_flops(),
+                )
+                logger.info(
+                    "STEP_THRPUT step=%d dur=%.4f tok_s=%.1f mfu=%.3f",
+                    current_step,
+                    duration,
+                    _thr.tokens_per_second or 0.0,
+                    _thr.mfu or 0.0,
+                )
                 hook_start = time.perf_counter()
                 with jax.profiler.TraceAnnotation("callbacks"):
                     state_callbacks.run(state, loss=metrics["train/loss"], step_duration=duration)
-                    last_loss = metrics["train/loss"]
+                    if real_loss_step:
+                        last_loss = metrics["train/loss"]
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
@@ -563,7 +612,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
+                    if real_loss_step and "train/cross_entropy_loss" in metrics:
                         levanter.tracker.log(
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
