@@ -17,7 +17,7 @@ from enum import StrEnum
 from typing import Any
 
 import fsspec
-from rigging.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock
+from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, LeaseLostError, create_lock
 
 
 class ChunkStatus(StrEnum):

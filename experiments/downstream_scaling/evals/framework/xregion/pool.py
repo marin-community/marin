@@ -50,7 +50,6 @@ def _context_for_pool(pool: WorkerPoolConfig, heartbeat_timeout: float) -> Zephy
         resources=pool.worker_resources,
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=False),
         stage_runner_factory=InlineRunner,
-        map_workers_per_actor=1,
         heartbeat_timeout=heartbeat_timeout,
         max_execution_retries=0,
     )

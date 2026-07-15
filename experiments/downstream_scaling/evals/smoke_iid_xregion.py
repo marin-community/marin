@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 
 import fsspec
 from fray.cluster import ANY_REGION, ResourceConfig, get_tpu_topology
-from rigging.filesystem import REGION_TO_DATA_BUCKET
+from rigging.filesystem import data_config
 from rigging.log_setup import configure_logging
 from thalas.execution.executor import ExecutorStep, executor_main, output_path_of
 from thalas.execution.remote import remote
@@ -203,7 +203,7 @@ def build_preseed_steps(
 
     steps = []
     for region in regions:
-        bucket = REGION_TO_DATA_BUCKET[region]
+        bucket = data_config().region_buckets[region]
         regional_step = replace(
             base_step,
             name=f"downstream_scaling/evals/smoke/iid_xregion/preseed/{model_key}/{region}",
@@ -213,9 +213,9 @@ def build_preseed_steps(
 
 
 def _validate_regions(regions: list[str], *, name: str) -> None:
-    unknown_regions = sorted(set(regions) - set(REGION_TO_DATA_BUCKET))
+    unknown_regions = sorted(set(regions) - set(data_config().region_buckets))
     if unknown_regions:
-        raise ValueError(f"Unknown {name} {unknown_regions}; known: {sorted(REGION_TO_DATA_BUCKET)}")
+        raise ValueError(f"Unknown {name} {unknown_regions}; known: {sorted(data_config().region_buckets)}")
 
 
 def resolve_worker_regions(worker_regions: list[str] | None, preseed_regions: list[str]) -> list[str]:

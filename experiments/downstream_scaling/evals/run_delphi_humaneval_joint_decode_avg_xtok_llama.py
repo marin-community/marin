@@ -50,12 +50,12 @@ from experiments.models import ModelConfig, download_model_step
 
 logger = logging.getLogger(__name__)
 
-N_SAMPLES = 32
+N_SAMPLES = 64
 # All 164 HumanEval problems.
 N_PROBLEMS: int | None = None
 WORKERS_PER_TPU_TYPE = 2
 AGGREGATE_WORKERS = 32
-CHUNK_SIZE = 64
+CHUNK_SIZE = 512
 # Single-VM, even-chip TPU types and their configured zones (from
 # lib/iris/config/marin.yaml):
 #   v4-8         us-central2-b
@@ -64,7 +64,7 @@ CHUNK_SIZE = 64
 #   v5litepod-8  europe-west4-b, us-west4-a
 #   v6e-4        europe-west4-a, us-east1-d, us-east5-b
 #   v6e-8        europe-west4-a, us-east1-d, us-east5-b
-TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v5litepod-4", "v5litepod-8", "v6e-4", "v6e-8")
+TPU_TYPES: tuple[str, ...] = ("v5p-8", "v5litepod-4", "v5litepod-8", "v6e-4", "v6e-8")
 
 # Generous enough to absorb the first-step XLA compilation skew between the
 # two engines for the largest delphi sizes (60s was too short for 1e22).
@@ -81,7 +81,7 @@ ADVISOR_MAX_TOKENS = MAX_TOKENS
 SEED = 42
 STOP_TOKENS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint")
 
-NUM_FEWSHOT = 10
+NUM_FEWSHOT = 5
 FEWSHOT_SEED = 1234
 
 TEMPERATURE = 0.4
