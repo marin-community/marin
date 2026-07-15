@@ -48,7 +48,61 @@ from marin.datakit.download.swe_rebench_contree import swe_rebench_contree_norma
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
+from marin.datakit.normalize import DedupMode, normalize_step
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.execution.step_spec import StepSpec
+
+NEMOTRON_CODE_V2_CONTENT_SOURCE = "raw/nemotron-code-v2-content"
+# Exact count from marin-community/marin-tokenizer over the normalized artifact.
+NEMOTRON_CODE_V2_CONTENT_TOKENS_B = 120.254379519
+
+
+def nemotron_code_v2_content() -> ArtifactStep[Artifact]:
+    """Return the reconstructed Nemotron-Pretraining-Code-v2 file contents.
+
+    NVIDIA publishes the Nemotron-Code-Metadata subset as ``(repo, commit_id,
+    rel_path)`` triples because its license forbids redistributing file
+    contents. This adopted artifact contains the reconstructed file bytes,
+    resolved through the Software Heritage 2025-05-18 compressed graph export.
+
+    The Parquet dataset has one row per distinct content, with ``sha1_git``,
+    ``sha1``, raw ``content`` bytes, and a ``present`` flag. It contains
+    132,903,245 rows across 133 shards; 132,666,330 contents are present and
+    byte-verified. The source resolves under the runtime ``MARIN_PREFIX``. The
+    origin copy remains at ``s3://marin-na/users/held/nemotron-code-v2-content``.
+    """
+    return ArtifactStep.adopt(
+        "raw/nemotron-code-v2-content",
+        "2026.07.14",
+        NEMOTRON_CODE_V2_CONTENT_SOURCE,
+        kind=Artifact,
+        config={
+            "format": "parquet",
+            "columns": ["sha1_git", "sha1", "content", "present"],
+            "rows": 132_903_245,
+            "present_rows": 132_666_330,
+            "shards": 133,
+            "graph_export": "2025-05-18",
+        },
+    )
+
+
+def nemotron_code_v2_content_normalize_steps() -> tuple[StepSpec, ...]:
+    """Return the adopted source and normalization steps for reconstructed code."""
+    artifact = nemotron_code_v2_content()
+    source = artifact.lower()
+    normalized = normalize_step(
+        name="normalized/nemotron_code_v2_content",
+        download=source,
+        text_field="content",
+        id_field="sha1_git",
+        input_path_override=artifact.path(),
+        file_extensions=(".parquet",),
+        dedup_mode=DedupMode.NONE,
+        bare=True,
+    )
+    return source, normalized
 
 
 @dataclass(frozen=True)
@@ -153,6 +207,11 @@ def all_sources() -> dict[str, DatakitSource]:
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        (
+            "nemotron_code_v2/content",
+            nemotron_code_v2_content_normalize_steps,
+            NEMOTRON_CODE_V2_CONTENT_TOKENS_B,
+        ),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),

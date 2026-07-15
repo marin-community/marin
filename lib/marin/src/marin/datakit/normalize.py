@@ -88,6 +88,12 @@ def generate_id(text: str) -> str:
     return format(dupekit.hash_xxh3_128(text.encode("utf-8")), "032x")
 
 
+def _text_from_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
@@ -115,7 +121,7 @@ def _make_normalize_fn(
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
-        text = str(record[text_field])
+        text = _text_from_value(record[text_field])
 
         # --- source_id (skip silently if id_field absent) ---
         source_id = record.get(id_field)
@@ -328,7 +334,7 @@ def _build_pipeline(
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
-        if text is None or str(text).strip() == "":
+        if text is None or _text_from_value(text).strip() == "":
             counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
             return False
         return True
@@ -475,6 +481,7 @@ def normalize_step(
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
+    input_path_override: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
@@ -495,13 +502,22 @@ def normalize_step(
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
             Useful when normalizing a subdirectory of the download output.
+        input_path_override: Read data from this path while retaining ``download``
+            as the provenance dependency. This supports adopted artifacts whose
+            physical source differs from their managed record path. Mutually
+            exclusive with ``relative_input_path``.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
         dedup_mode: How to deduplicate records within each output shard.
             Defaults to ``DedupMode.EXACT``; use ``DedupMode.NONE`` to skip.
     """
-    if relative_input_path:
+    if relative_input_path is not None and input_path_override is not None:
+        raise ValueError("relative_input_path and input_path_override are mutually exclusive")
+
+    if input_path_override is not None:
+        resolved_input = input_path_override
+    elif relative_input_path:
         # ``prefix_join`` yields exactly one separator even when ``download.output_path``
         # ends with ``/`` (e.g. ``gs://.../nemotro-cc-eeb783/``); a naive f-string join
         # would leave the doubled ``//`` that ``_discover_files`` then fails to resolve on GCS.
@@ -522,6 +538,8 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
+    if input_path_override is not None:
+        hash_attrs["input_path_override"] = input_path_override
 
     return StepSpec(
         name=name,
