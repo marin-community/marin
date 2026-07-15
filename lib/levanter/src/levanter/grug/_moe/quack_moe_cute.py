@@ -12,6 +12,7 @@ A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 from __future__ import annotations
 
 import importlib
+import os
 from functools import partial
 
 import jax
@@ -34,6 +35,22 @@ _JAX_TO_CUTE = {
 
 def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
+
+
+# SMs reserved for concurrent comm kernels (SM specialization): size the persistent
+# schedulers' grids to (SM count - carveout) so GEMM waves stay exact while NCCL
+# holds a fixed CTA budget (pin the comm side with NCCL_MIN_CTAS=NCCL_MAX_CTAS).
+_SM_CARVEOUT = int(os.environ.get("SONIC_CUTE_SM_CARVEOUT", "0"))
+
+
+def _max_active_clusters(cluster_size: int) -> int:
+    try:
+        mac = get_max_active_clusters(cluster_size)
+    except Exception:
+        mac = 148  # B200 SM-count fallback for host-side lowering tests
+    if _SM_CARVEOUT:
+        mac = max(1, mac - -(-_SM_CARVEOUT // cluster_size))
+    return mac
 
 
 def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle):
@@ -80,10 +97,7 @@ def quack_gated_grouped_gemm(x_sort, w_gate_up, cu_seqlens, *, activation="swigl
     N2 = w_gate_up.shape[2]
     N = N2 // 2
     a_dtype = _cute_dtype(x_sort.dtype)
-    try:
-        max_active_clusters = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
-    except Exception:
-        max_active_clusters = 148  # B200 SM-count fallback for host-side lowering tests
+    max_active_clusters = _max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     launcher = _build_launcher(
         a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk,
         activation=activation, max_active_clusters=max_active_clusters, max_swizzle=max_swizzle,
@@ -137,10 +151,7 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 256), clu
     N = w.shape[2] if b_major == "n" else w.shape[1]
     _bmode = (2, 1, 0) if b_major == "n" else (1, 2, 0)
     a_dtype = _cute_dtype(a.dtype)
-    try:
-        mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
-    except Exception:
-        mac = 148
+    mac = _max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     launcher = _build_plain_launcher(a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk,
                                      max_active_clusters=mac, max_swizzle=max_swizzle)
     ts = cjax.TensorSpec
@@ -205,10 +216,7 @@ def quack_grouped_wgrad_gemm(acts, grads, cu_seqlens, num_experts, *,
     M = acts.shape[1]
     N = grads.shape[1]
     a_dtype = _cute_dtype(acts.dtype)
-    try:
-        mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
-    except Exception:
-        mac = 148  # B200 SM-count fallback for host-side lowering tests
+    mac = _max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     launcher = _build_wgrad_launcher(
         a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk,
         max_active_clusters=mac, max_swizzle=max_swizzle,
