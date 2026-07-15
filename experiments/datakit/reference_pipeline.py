@@ -197,12 +197,6 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
-    # Cross-source fuzzy-dedup connected-components iteration cap. A capped run is
-    # deterministic and reproducible across executor counts (the bucket group_by is
-    # sorted by id_norm, marin#6798) but under-dedups when it doesn't converge, so
-    # large/long dup clusters (e.g. rewrite-heavy sources) may want a higher cap than
-    # the library default of 10.
-    dedup_cc_max_iterations: int = 10
     store_shards_per_task: int = 1
     # Centroid training is single-process FAISS K-means, not a pool stage.
     train_centroids_resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_cpu(cpu=32, ram="64g"))
@@ -521,12 +515,10 @@ def reference_datakit_steps(
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
-            cc_max_iterations=scale.dedup_cc_max_iterations,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
             worker_resources=scale.pool.worker,
         ),
-        hash_attrs={"cc_max_iterations": scale.dedup_cc_max_iterations},
     )
 
     # ---- Final store: 5-way join + per-bucket Levanter cache ------------------
@@ -709,8 +701,7 @@ def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> Pip
         **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
     )
     n_workers = args.pool_workers if args.pool_workers is not None else scale.pool.n_workers
-    cc_iters = args.cc_max_iterations if args.cc_max_iterations is not None else scale.dedup_cc_max_iterations
-    return replace(scale, pool=PoolConfig(n_workers=n_workers, worker=worker), dedup_cc_max_iterations=cc_iters)
+    return replace(scale, pool=PoolConfig(n_workers=n_workers, worker=worker))
 
 
 def main() -> None:
@@ -738,12 +729,6 @@ def main() -> None:
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
     parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
-    parser.add_argument(
-        "--cc-max-iterations",
-        type=int,
-        default=None,
-        help="fuzzy-dedup connected-components iteration cap (override scale); raises if CC doesn't converge",
-    )
     parser.add_argument(
         "--run-tag",
         default="",
