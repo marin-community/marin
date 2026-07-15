@@ -30,33 +30,37 @@ not yet modeled anywhere.
 | 7 | Object-storage buckets + access keys (`s3://marin-<region>`) | manual console + `configure_buckets.py` (lifecycle) | IaC-next | `ObjectStorage` (`ObjectStorageSpec` exists); bucket *lifecycle* stays out (spec §7) |
 | 8 | **iris controller signing key** (`iris-<cluster>-signing-key`) | `iris cluster init-keys` → GCP Secret Manager | **gap** | IaC-gcp Secret Manager (see §Signing secrets) |
 | 9 | **finelog forwarding signing key** (`finelog-<cluster>-signing-key`) | minted by hand → GCP Secret Manager | **gap** | IaC-gcp Secret Manager (see §Signing secrets) |
-| 10 | Federation **egress** allowlist (`34.27.183.11`, `35.254.13.19`) | `FEDERATION_ALLOW_SOURCES` constant in `install_cw_network.py` | **input landed** (constant) | `IngressSpec.federation_allow_sources` (see §Egress IPs) |
+| 10 | Federation **egress** IP reservations (`34.27.183.11`, `35.254.13.19` = `iris-marin-fed-egress` / `iris-marin-dev-fed-egress`) | reserved by hand in `hai-gcp-models` | **IaC-landed** (GCP arm) | `GcpStaticAddresses` ✅ ([gcp/addresses.py](../../../infra/iac/src/iac/gcp/addresses.py)); the CoreWeave-side allowlist is `IngressSpec.federation_allow_sources` (see §Egress IPs) |
 | 11 | DNS: `iris-cw-<cluster>.oa.dev` CNAME → Traefik LB FQDN | manual (Cloudflare) | gap | out of scope now; bridged Cloudflare provider later, or stay manual |
-| 12 | finelog server Deployment (in-cluster) | `finelog deploy up <cluster>` | separate lifecycle | finelog's own tooling — adjacent, not IaC |
+| 12 | finelog server Deployment (in-cluster) | `finelog deploy up <cluster>` | IaC-next (planned) | `FinelogServer` component (a later CoreWeave slice; needs the finelog signing key) |
 | 13 | Iris runtime objects: ConfigMap, `iris-task-env` Secret, LocalQueue, PriorityClasses, controller Deployment + Service, state PVC | `start_controller()` | **Iris (by design)** | stays in Iris (spec §4) |
 
-Rows 1–2 are done. Rows 3–7 are the sequenced CoreWeave follow-ups already in the design.
-Rows 8–11 are the newly-surfaced gaps this analysis adds; rows 8–10 are the ones rjpower
-called out. Rows 12–13 are deliberately *not* IaC.
+Rows 1–2, 10 are done. Rows 3–7 are the sequenced CoreWeave follow-ups already in the design;
+row 12 is a planned CoreWeave slice. Rows 8–11 are the newly-surfaced gaps this analysis adds;
+rows 8–10 are the ones rjpower called out. Row 13 is deliberately *not* IaC.
 
 ## The two gaps rjpower named
 
 ### Egress IPs (row 6 + row 10)
 
-"Egress IPs for the iris controller" is really two coupled resources, split across clouds:
+"Egress IPs for the iris controller" is really three coupled resources, split across clouds —
+two now modeled, one deferred:
 
-- **The allowed sources (row 10) — landed as a config input.** The marin / marin-dev
-  controllers federate *into* each CoreWeave controller, so CoreWeave must admit their egress
-  (`34.27.183.11`, `35.254.13.19`, reserved as `iris-marin-fed-egress` /
-  `iris-marin-dev-fed-egress` in project `hai-gcp-models`). Rather than defer these to a
-  GCP-arm `google_compute_address` lookup, they are modeled now as a plain Pulumi input —
-  `IngressSpec.federation_allow_sources`, defaulting to the
-  `MARIN_FEDERATION_EGRESS_SOURCES` constant in
+- **The GCP reservations (row 10) — landed.** The marin / marin-dev controllers federate
+  *into* each CoreWeave controller, and their egress IPs (`34.27.183.11`, `35.254.13.19`) are
+  reserved as `iris-marin-fed-egress` / `iris-marin-dev-fed-egress` in project
+  `hai-gcp-models`. These are now `google_compute_address` resources in the GCP arm —
+  `GcpStaticAddresses` ([gcp/addresses.py](../../../infra/iac/src/iac/gcp/addresses.py)), the
+  GCP arm's first slice, on the `marin` stack. Each pins its IP so adoption imports the live
+  reservation without ever reassigning an IP baked into a CoreWeave allowlist. (Region is a
+  placeholder to confirm — both controllers run in `us-central1-a`.)
+
+- **The CoreWeave-side allowlist (part of row 6) — landed as a config input.** Which sources
+  the CoreWeave federation route admits is `IngressSpec.federation_allow_sources`, defaulting
+  to the `MARIN_FEDERATION_EGRESS_SOURCES` constant in
   [`config.py`](../../../infra/iac/src/iac/config.py) (the same values as the
   `FEDERATION_ALLOW_SOURCES` constant in
-  [`install_cw_network.py`](../../../lib/iris/scripts/install_cw_network.py)). Constant for
-  now; a later slice can source it from a real GCP address reservation without changing the
-  field.
+  [`install_cw_network.py`](../../../lib/iris/scripts/install_cw_network.py)).
 
 - **The enforcement (CoreWeave side, row 6) — deferred.** The `ipAllowList` Middleware +
   IP-locked Ingress that admits only those sources over the whole controller host. This is a
@@ -103,19 +107,21 @@ the finelog deploy config + `finelog:` block to the Iris config.
 
 ## "Easy to land now" vs deferred — the call
 
-Two things land now. First, the GB200 cluster config itself: a new cluster's `provisioning:`
-+ `scale_groups` flow straight through `derive_nodepools` + `IrisRbac` with no new code
-(below). Second, the federation **egress allowlist** — modeled as the config input
-`IngressSpec.federation_allow_sources` with a constant default (row 10 / §Egress IPs), so the
-IPs live in the schema now instead of waiting on the GCP arm; the enforcement component reads
-it later. This follows the existing `IngressSpec`/`KueueProvisioningSpec` pattern of config
-declared ahead of the component that renders it.
+Three things land now:
 
-Everything else needs a deferred component (rows 3–7) or the GCP arm (rows 8–9): the CKS
-cluster object, Kueue, Traefik/cert-manager, object storage, and the Secret Manager signing
-keys. Those are **documented, not added** — a bucket name or secret with no component to
-create it would be dead config. Each row above names its exact landing site so the follow-up
-slices are turnkey.
+1. **The GB200 cluster config** — a new cluster's `provisioning:` + `scale_groups` flow
+   straight through `derive_nodepools` + `IrisRbac` with no new code (below).
+2. **The federation egress IP reservations** — `GcpStaticAddresses`, the GCP arm's first
+   slice: the two `google_compute_address` reservations, adopted by import so the pinned IPs
+   are never reassigned (row 10 / §Egress IPs).
+3. **The CoreWeave-side allowlist** — the config input `IngressSpec.federation_allow_sources`
+   with a constant default, read later by the deferred federation-ingress enforcement.
+
+Everything else needs a deferred component (rows 3–7, 12) or a later GCP slice (rows 8–9): the
+CKS cluster object, Kueue, Traefik/cert-manager, object storage, the finelog server, and the
+Secret Manager signing keys. Those are **documented, not added** — a bucket name or secret with
+no component to create it would be dead config. Each row above names its exact landing site so
+the follow-up slices are turnkey.
 
 ## What landed now: `cw-us-east-08a` (GB200)
 
@@ -130,6 +136,13 @@ Added in this PR, using only the existing schema + pt1 components:
 No finelog config ships for it — that's blocked on the signing key + hub registration (see
 §finelog auth secrets), so the Iris config omits `finelog:` and the controller uses MemStore
 until the key exists.
+
+Also landed: the **GCP address stub** — [`iac/gcp/addresses.py`](../../../infra/iac/src/iac/gcp/addresses.py)
+(`GcpStaticAddresses`), the `GcpProvisioning` schema, the `Provider.GCP` dispatch in
+`__main__.py`, the `provisioning:` block on [`lib/iris/config/marin.yaml`](../../../lib/iris/config/marin.yaml),
+and the [`Pulumi.marin.yaml`](../../../infra/iac/Pulumi.marin.yaml) stack. `pulumi-gcp` joins
+the deps. This is the GCP arm's first slice (§Egress IPs); its live `pulumi preview --import`
+is operator-run.
 
 `derive_nodepools` yields `cw-use08a-cpu-erapids` (min=max=4) and `cw-use08a-gb200`
 (min=max=72). 72 is a multiple of 18, which the GB200 NVL72 rack constraint requires

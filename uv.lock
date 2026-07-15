@@ -5021,6 +5021,7 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "pulumi" },
+    { name = "pulumi-gcp" },
     { name = "pulumi-kubernetes" },
 ]
 
@@ -5029,6 +5030,7 @@ requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pulumi", specifier = ">=3.140,<4" },
+    { name = "pulumi-gcp", specifier = ">=9,<10" },
     { name = "pulumi-kubernetes", specifier = ">=4.18,<5" },
 ]
 
@@ -8153,6 +8155,20 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/5f/94b4af305a4aa34842bb65282269bc9804125d0d22442d099fec07dd78b3/pulumi-3.224.0-py3-none-any.whl", hash = "sha256:2045987052c39740dcdb13d8845868106aebdc91792aa25ef82b06797ebf0a8e", size = 390575, upload-time = "2026-02-26T16:28:59.795Z" },
+]
+
+[[package]]
+name = "pulumi-gcp"
+version = "9.23.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c6/37/fa0b17bfa51f47ad720081fae0a435d07c4d92bc6f60042895484e9725d6/pulumi_gcp-9.23.0.tar.gz", hash = "sha256:31e9176cec85cb9abd7f1258f4ba81396b0870896a284d26fea6e8be814e838c", size = 10089050, upload-time = "2026-05-07T17:07:19.414Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/be/ef72978a1286c5d5b7b69f13c03517308580271d5c4f8695cc27030d5769/pulumi_gcp-9.23.0-py3-none-any.whl", hash = "sha256:14a81e27c1989ede680af8ab87cd1ba7efd3a90d5aa55eb6eb466594bb605643", size = 12394748, upload-time = "2026-05-07T17:07:16.282Z" },
 ]
 
 [[package]]

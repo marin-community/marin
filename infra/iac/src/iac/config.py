@@ -95,20 +95,35 @@ class CoreweaveProvisioning(BaseModel):
     object_storage: ObjectStorageSpec = ObjectStorageSpec()
 
 
+class GcpAddressSpec(BaseModel):
+    """A reserved external static IP (google_compute_address)."""
+
+    name: str  # e.g. "iris-marin-fed-egress"
+    region: str  # e.g. "us-central1"
+    address: str  # the pinned IP, e.g. "34.27.183.11"
+
+
+class GcpProvisioning(BaseModel):
+    """GCP-arm provisioning: the project and its reserved static IP addresses (GcpStaticAddresses)."""
+
+    project: str
+    addresses: list[GcpAddressSpec] = Field(default_factory=list)
+
+
 class ProvisioningConfig(BaseModel):
     """Top-level `provisioning:` section. Exactly one provider block is populated."""
 
     provider: Provider
     coreweave: CoreweaveProvisioning | None = None
-    # gcp: GcpProvisioning | None = None  # ported after CoreWeave proves the pattern
+    gcp: GcpProvisioning | None = None
 
 
 def _validate_provider_block(provisioning: ProvisioningConfig) -> ProvisioningConfig:
     """Reject a provisioning section whose selected provider has no matching block."""
     if provisioning.provider is Provider.COREWEAVE and provisioning.coreweave is None:
         raise ValueError("provisioning.provider is 'coreweave' but no 'coreweave:' block is present")
-    if provisioning.provider is Provider.GCP:
-        raise ValueError("provisioning.provider 'gcp' is not yet supported by iac")
+    if provisioning.provider is Provider.GCP and provisioning.gcp is None:
+        raise ValueError("provisioning.provider is 'gcp' but no 'gcp:' block is present")
     return provisioning
 
 

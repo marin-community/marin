@@ -4,9 +4,11 @@
 """Pulumi entry point for Marin IaC.
 
 Reads the target cluster from stack config (`marin-iac:cluster`), loads its Iris config +
-typed `provisioning:` section, and builds the provider-appropriate components. Minimal cut:
-CoreWeave RBAC + reserved NodePools (enough to `pulumi preview`). Kueue/Traefik/object-storage
-and the CKS cluster object are the next slices.
+typed `provisioning:` section, and declares that cluster's resources. One stack per cluster;
+`pulumi up` provisions all of a stack's declared resources together. The provider decides
+which resources: CoreWeave declares the controller RBAC + reserved NodePools, GCP declares the
+reserved federation-egress static IPs. Components not yet implemented (Kueue, Traefik, object
+storage, the CKS cluster object; GCP IAM/GCLB+IAP/registry/buckets) are tracked in gaps.md.
 """
 
 import os
@@ -19,10 +21,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import pulumi
+import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from iac.config import Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
+from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.nodepools import derive_nodepools
 
 DEFAULT_NAMESPACE = "iris"
@@ -67,6 +71,23 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     )
 
 
+def _build_gcp(cluster: str, *, adopt: bool) -> None:
+    provisioning = load_provisioning(cluster)
+    assert provisioning.gcp is not None  # guaranteed by load_provisioning
+    gcp_provisioning = provisioning.gcp
+
+    gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
+    GcpStaticAddresses(
+        "addresses",
+        GcpStaticAddressesArgs(
+            project=gcp_provisioning.project,
+            addresses=gcp_provisioning.addresses,
+            adopt=adopt,
+        ),
+        gcp_provider=gcp_provider,
+    )
+
+
 def main() -> None:
     config = pulumi.Config("marin-iac")
     cluster = config.require("cluster")
@@ -77,6 +98,8 @@ def main() -> None:
     provider = load_provisioning(cluster).provider
     if provider is Provider.COREWEAVE:
         _build_coreweave(cluster, adopt=adopt)
+    elif provider is Provider.GCP:
+        _build_gcp(cluster, adopt=adopt)
     else:
         raise NotImplementedError(f"provider {provider!r} not yet implemented in iac")
 

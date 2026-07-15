@@ -11,8 +11,10 @@ and the CKS cluster object itself are the next slices (see the `TODO(iac)` in
 live deployment (the deferred components plus the GCP-arm bits — egress IPs, signing-key
 secrets) with the exact landing site for each.
 
-Stacks: one per cluster — `cw-us-east-02a`, `cw-us-east-08a` (GB200), each a
-`Pulumi.<cluster>.yaml` pointer to the cluster name.
+Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave
+— `cw-us-east-02a`, `cw-us-east-08a` (GB200). GCP — `marin`, which so far declares only the
+reserved federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice; its
+live adoption is operator-run — see `gaps.md`).
 
 ## What it reads
 
