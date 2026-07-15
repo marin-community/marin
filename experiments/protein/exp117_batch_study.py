@@ -157,8 +157,19 @@ def print_ceiling_summary() -> None:
 
 def print_target_table(target: int, overhead: float, with_hbm: bool) -> None:
     print(f"\nTarget global batch = {target}; predicted at overhead = {overhead:g}\n")
-    cols = ["slice", "chips", "HBMtot", "HBM/ch", "maxUtil%", "maxB", "pdp_a", "gac_a", "pdp_p", "gac_p"]
-    print(" ".join(f"{h:>11s}" for h in cols))
+    cols = [
+        "slice",
+        "chips",
+        "HBM tot",
+        "HBM/chip",
+        "peak HBM%",
+        "max batch",
+        "pdp meas",
+        "acc meas",
+        "pdp est",
+        "acc est",
+    ]
+    print(" ".join(f"{h:>12s}" for h in cols))
     any_provisional = False
     for c in CEILINGS:
         pdp_a, gac_a = measured_config(c, target)
@@ -181,7 +192,7 @@ def print_target_table(target: int, overhead: float, with_hbm: bool) -> None:
             pdp_p,
             gac_p,
         ]
-        print(" ".join(f"{v!s:>11s}" for v in row))
+        print(" ".join(f"{v!s:>12s}" for v in row))
     if any_provisional:
         print("\n* = from an unfinished (killed/crashed) run; peak is provisional until a completed run exists.")
 

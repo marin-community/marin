@@ -86,7 +86,7 @@ overhead comparison is only clean where the prediction is accumulation-bound (v5
 
 ### Target global batch = 512 — measured vs predicted
 
-| slice | chips | HBMtot | HBM/ch | maxUtil% | maxB | pdp_a | gac_a | pdp_p | gac_p |
+| slice | chips | HBM total | HBM/chip | peak HBM % | max batch | pdp (meas) | accum (meas) | pdp (est) | accum (est) |
 |---|---|---|---|---|---|---|---|---|---|
 | v5litepod-4 | 4 | 64 | 16 | 87.0 | 16 | 4 | 32 | 2 | 64 |
 | v5litepod-8 | 8 | 128 | 16 | 72.1 | 32 | 4 | 16 | 2 | 32 |
@@ -101,12 +101,12 @@ overhead comparison is only clean where the prediction is accumulation-bound (v5
 HBM utilization is from **completed** runs (iris `succeeded` + wandb `finished`) — the full smoke test
 including evals and checkpoints, so the peak reflects real training, not just the step-0 allocation.
 
-**Legend** — `chips`: TPU chips in the slice. `HBMtot` / `HBM/ch`: total and per-chip HBM (GiB;
-`HBMtot = chips × HBM/ch`). `maxUtil%`: peak `hbmMemoryUsage` over all chips and steps of the max-fit
-run. `maxB`: measured max global batch (pdp −1, no accumulation). `pdp_a`/`gac_a`: per-device
-parallelism & grad-accum the **measured** ceiling implies to reach global 512. `pdp_p`/`gac_p`: the
-same, **predicted** by `tpu_batch_config` at overhead 1.0. **pdp = −1** means the whole per-chip batch
-fits with no accumulation.
+**Legend** — `chips`: TPU chips in the slice. `HBM total` / `HBM/chip`: total and per-chip HBM (GiB;
+total = chips × per-chip). `peak HBM %`: peak `hbmMemoryUsage` over all chips and steps of the
+completed max-fit run. `max batch`: measured max global batch (pdp −1, no accumulation).
+`pdp (meas)` / `accum (meas)`: per-device parallelism & gradient-accumulation the **measured** ceiling
+implies to reach global 512. `pdp (est)` / `accum (est)`: the same, **predicted** by `tpu_batch_config`
+at overhead 1.0. **pdp = −1** means the whole per-chip batch fits with no accumulation.
 
 **Takeaway**: predicted `pdp` is 2–4× below measured everywhere (predicted `gac` correspondingly too
 high) — the overhead-1.0 estimate is that conservative. v6e runs right at the edge (96.6–100% at its
