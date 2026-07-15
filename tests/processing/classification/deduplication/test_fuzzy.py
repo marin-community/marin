@@ -297,14 +297,14 @@ def test_fuzzy_dups_canonical_selection_is_deterministic(fox_corpus):
     ), f"every cluster must have exactly one canonical; got {canonical_per_cluster}"
 
 
-def test_fuzzy_dups_raises_when_cc_does_not_converge(fox_corpus):
-    """Non-converged connected components must fail loud, not ship a budget-dependent dedup (marin#6798).
+def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
+    """A capped (non-converged) run warns but still produces a deterministic result (marin#6798).
 
     Builds a 5-node path graph (A-B-C-D-E, neighbors sharing one LSH bucket
-    each) whose min component id needs ≥2 iterations to reach both ends.
-    Capping ``cc_max_iterations=1`` therefore cannot converge, so the fuzzy
-    step must raise rather than emit an iteration-budget-dependent (hence
-    non-reproducible) set of survivors.
+    each) whose min component id needs >=2 iterations to reach both ends;
+    ``cc_max_iterations=1`` cannot converge. The step must NOT raise -- with the
+    id_norm-sorted bucket topology the capped result is deterministic (just
+    incomplete) -- and must still emit cluster-member attr rows.
     """
     main_dir = os.path.join(fox_corpus["output_dir"], "path_main")
     texts = [f"path node number {i} with distinct filler content here" for i in range(5)]
@@ -325,13 +325,14 @@ def test_fuzzy_dups_raises_when_cc_does_not_converge(fox_corpus):
         rows=rows,
     )
 
-    with pytest.raises(RuntimeError, match=r"did not converge"):
-        compute_fuzzy_dups_attrs(
-            inputs=[mh],
-            output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups_path"),
-            cc_max_iterations=1,
-            max_parallelism=4,
-        )
+    dups = compute_fuzzy_dups_attrs(
+        inputs=[mh],
+        output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups_path"),
+        cc_max_iterations=1,
+        max_parallelism=4,
+    )
+    attr_rows = _read_cluster_attrs(dups.sources[main_dir].attr_dir)
+    assert attr_rows, "capped run should still emit cluster-member rows"
 
 
 def test_text_cap_chars_truncates_mega_docs_only(tmp_path):

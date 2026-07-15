@@ -180,6 +180,14 @@ def connected_components(
                 lambda x: x["bucket"],
                 reducer=_reduce_bucket_to_links,
                 combiner=_dedup_combiner,
+                # Sort each bucket's nodes by id_norm so the reducer always anchors
+                # the star on the true minimum, independent of shuffle/arrival order.
+                # Without this the star-vs-chain topology depends on how many reduce
+                # shards (= executors) the run used, making a capped (unconverged) run
+                # produce different component labels on different machine counts
+                # (marin#6798). The converged result is unchanged; this only pins the
+                # intermediate topology (and speeds convergence).
+                sort_by=lambda x: _internal_orderable_id(x["id"]),
                 num_output_shards=num_reduce_shards,
             )
             # Construct Node state, init with:

@@ -197,10 +197,11 @@ class PipelineScale:
     # stage's coordinator; kept modest so it isn't overwhelmed.
     sample_parallel_sources: int = 4
     dedup_max_parallelism: int = 4096
-    # Cross-source fuzzy-dedup connected-components iteration cap. compute_fuzzy_dups_attrs
-    # now raises when CC does not converge within this many iterations (marin#6798), so
-    # large/long dup clusters (e.g. rewrite-heavy sources) may need a higher cap than the
-    # library default of 10.
+    # Cross-source fuzzy-dedup connected-components iteration cap. A capped run is
+    # deterministic and reproducible across executor counts (the bucket group_by is
+    # sorted by id_norm, marin#6798) but under-dedups when it doesn't converge, so
+    # large/long dup clusters (e.g. rewrite-heavy sources) may want a higher cap than
+    # the library default of 10.
     dedup_cc_max_iterations: int = 10
     store_shards_per_task: int = 1
     # Centroid training is single-process FAISS K-means, not a pool stage.

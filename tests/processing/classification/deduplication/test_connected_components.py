@@ -55,12 +55,12 @@ def test_connected_components_already_converged(tmp_path):
 def test_connected_components_resume_at_cap_reports_converged(tmp_path):
     """Resuming a run that converged exactly at the iteration cap must still report converged.
 
-    Regression for marin#6798: ``compute_fuzzy_dups_attrs`` now raises on
-    non-convergence, so ``connected_components`` must not report a false
+    Regression for marin#6798: ``connected_components`` must not report a false
     non-convergence for a ``resume`` that finds all ``it_0..it_cap`` shards
-    present. A 4-node path graph propagates the min one hop per iteration, so
-    it converges after a few iterations; resuming with the cap set exactly at
-    that convergence iteration would otherwise skip the loop entirely.
+    present (the non-convergence warning keys off the returned flag). A 4-node
+    path graph propagates the min one hop per iteration, so it converges after a
+    few iterations; resuming with the cap set exactly at that convergence
+    iteration would otherwise skip the loop entirely.
     """
     # doc_0 - doc_1 - doc_2 - doc_3 path: consecutive docs share one bucket.
     input_data: list[CCInput] = [
@@ -92,3 +92,38 @@ def test_connected_components_resume_at_cap_reports_converged(tmp_path):
     for r in results:
         components[r["component_id"]].append(r["record_id"])
     assert len(components) == 1, "the path graph is a single connected component"
+
+
+def _labels_at(input_data: list[CCInput], out_dir: str, *, max_iterations: int, max_workers: int) -> dict[str, str]:
+    ctx = ZephyrContext(name=f"cc-exec-{max_workers}", max_workers=max_workers)
+    _, paths = connected_components(
+        Dataset.from_list(input_data), ctx, output_dir=out_dir, max_iterations=max_iterations
+    )
+    res = ctx.execute(Dataset.from_list(paths).load_parquet()).results
+    return {r["record_id"]: r["component_id"] for r in res}
+
+
+def test_connected_components_capped_run_is_executor_independent(tmp_path):
+    """A capped (unconverged) run yields identical labels regardless of executor count (marin#6798).
+
+    ``num_reduce_shards = ctx.max_workers``, so without a stable bucket order the
+    star-vs-chain link topology -- and thus the K-hop labeling of an unconverged
+    run -- depends on how many executors ran. The bucket ``group_by`` sorts by
+    ``id_norm`` to pin the topology; this checks the labels match across executor
+    counts even though the graph is deliberately capped below convergence.
+
+    The graph is a long bridging chain (buckets of 4 nodes, consecutive buckets
+    sharing a node) so convergence needs many iterations; ``max_iterations=2``
+    leaves it unconverged.
+    """
+    data: list[CCInput] = []
+    for b in range(24):
+        members = [f"n_{b}_{k}" for k in range(4)]
+        if b > 0:
+            members[0] = f"n_{b - 1}_3"  # bridge consecutive buckets into one chain
+        data.extend({"bucket": f"bk_{b}", "id": m, "file_idx": 0} for m in members)
+
+    labels_2 = _labels_at(data, (tmp_path / "w2").as_posix(), max_iterations=2, max_workers=2)
+    labels_8 = _labels_at(data, (tmp_path / "w8").as_posix(), max_iterations=2, max_workers=8)
+
+    assert labels_2 == labels_8, "capped CC labels differ across executor counts (bucket order not pinned)"
