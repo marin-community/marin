@@ -1622,9 +1622,10 @@ class K8sTaskProvider:
         and continue to run on an idle cluster (the controller never gates a
         cluster backend's reconcile on having work) so orphaned pods are reaped.
         """
-        # Free GPU capacity for incoming gangs before their pods are created:
-        # Kueue TAS computes node capacity at admission, so blockers must be
-        # gone (or terminating) by the time it evaluates the new Workload.
+        # Free GPU capacity for any incoming GPU pod before it is created (gang
+        # member or single-pod GPU job — both route through Kueue): Kueue TAS
+        # computes node capacity at admission, so blockers must be gone (or
+        # terminating) by the time it evaluates the new Workload.
         if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
             self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
 
@@ -1661,7 +1662,8 @@ class K8sTaskProvider:
         )
 
         # Blockers can also appear AFTER submission (health checks target any
-        # idle GPU node), so keep evicting while a gang waits for admission.
+        # idle GPU node), so keep evicting while any GPU pod waits gated for
+        # Kueue admission.
         if self.preempt_namespaces and _has_gated_gpu_pods(managed_pods):
             self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
