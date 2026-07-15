@@ -72,8 +72,7 @@ but pushes peak RSS past the worker limit is a regression, not a win.
 string), not by Iris job id. The coordinator logs it on startup:
 
 ```bash
-uv run iris rpc controller get-task-logs --id <COORD_JOB_ID> --attempt-id -1 \
-  --max-total-lines 2000 | grep -i "execution_id="
+uv run iris job logs <COORD_JOB_ID> --max-lines 2000 --no-tail | grep -i "execution_id="
 # -> Coordinator job starting: name=..., execution_id=20260715-050040-1a2b3c4d, ...
 ```
 
