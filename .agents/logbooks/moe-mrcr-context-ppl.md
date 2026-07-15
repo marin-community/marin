@@ -9,7 +9,7 @@ author: Helw150
 
 ## Current TL;DR
 
-The `MOE-MRCR-001` d512 recovery run is preprocessing MRCR successfully as Iris job `/held/moe-mrcr-001-d512-r5` in `us-east5-a`. The tokenizer-free transform completed within a 3 GB coordinator, final-user-only caches completed, and the three full-context caches are running. No model result is available yet.
+The `MOE-MRCR-001` d512 recovery run is queued for a `v5p-8` as Iris job `/held/moe-mrcr-001-d512-r6` in `us-east5-a`. All tokenizer-free transforms, paired caches, and probes completed successfully. The TPU child uses the proven 128 GB Grug host reservation and is waiting only for regional capacity. No model result is available yet.
 
 ## Scope
 
@@ -35,7 +35,7 @@ The `MOE-MRCR-001` d512 recovery run is preprocessing MRCR successfully as Iris 
 
 ### Active
 
-- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: recovery job `/held/moe-mrcr-001-d512-r5` completed the tokenizer-free transform and final-user-only caches without a TPU allocation. Next test: finish full-context caches, monitor training, and collect final MRCR metrics.
+- `MOE-MRCR-001`: a d512 Grug model will produce finite paired final-turn PPL metrics, and retained context will reduce aggregate PPL relative to the final-user-only condition. Evidence: recovery job `/held/moe-mrcr-001-d512-r6` reused six completed paired caches and reached the regional `v5p-8` capacity queue. Next test: monitor training and collect final MRCR metrics.
 
 ### Blocked
 
@@ -130,3 +130,13 @@ The `MOE-MRCR-001` d512 recovery run is preprocessing MRCR successfully as Iris 
 - Result: Iris accepted `/held/moe-mrcr-001-d512-r5`. The cached raw dataset was reused, the processed transform completed at approximately 850 MB RSS, and all six model-tokenized validation-cache pipelines started. All three 800-document final-user-only caches and their probes succeeded; the 2-, 4-, and 8-needle full-context caches remain active.
 - Interpretation: removing pre-tokenization and increasing coordinator memory resolved the ingestion path without changing the requested left-truncated paired metric.
 - Next action: monitor the full-context caches through TPU dispatch, W&B registration, training, and terminal metrics.
+
+### 2026-07-14 18:29 - MOE-MRCR-001 reduced the d512 host reservation
+
+- Hypothesis: the d512 run can safely use the former 128 GB Grug TPU-host default and fit an occupied regional host or the next available slice.
+- Commit Hash: `d03b1cab67153a6d725b54e2fbf52cbf09a0f4cc`.
+- Command: `.venv/bin/iris --cluster=marin job run --no-wait --job-name moe-mrcr-001-d512-r6 --zone us-east5-a --memory 3GB -e WANDB_API_KEY "$WANDB_API_KEY" -e GRUG_RUN_ID MOE-MRCR-001-d512-r6 -- python -m experiments.grug.moe.launch_mrcr_d512`.
+- Config: unchanged d512 model and paired evaluation; TPU child host reservation reduced from the current generic v5p default of 224 GB to the former Grug default of 128 GB.
+- Result: all six paired caches and probes completed under `/held/moe-mrcr-001-d512-r5`. Its child could not fit the five partially occupied hosts at 224 GB, and 19 attempted new regional slices failed during an availability backoff. The parent was stopped before TPU assignment. `/held/moe-mrcr-001-d512-r6` reused all cached preprocessing and reached the TPU queue; the memory constraint is resolved, and it is pending only because all five live `us-east5-a` v5p-8 slices are occupied.
+- Interpretation: the remaining delay is regional capacity. Historical Grug runs used 128 GB, and the d512 model does not need the larger default introduced to protect large-model checkpoint saves.
+- Next action: keep the interactive child queued until a regional slice is available, then verify W&B registration and paired metrics.
