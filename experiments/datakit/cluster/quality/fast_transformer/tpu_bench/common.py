@@ -9,6 +9,7 @@ windowing so the numbers reflect the real code.
 """
 
 import json
+import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -16,7 +17,14 @@ from contextlib import contextmanager
 import numpy as np
 from rigging.filesystem import open_url
 
-from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID, encode_texts
+# Disable the tokenizers-lib internal rayon parallelism: this pipeline drives its own thread
+# pool over row groups, so each thread's ``encode_batch`` runs single-threaded (the Rust encode
+# still releases the GIL) rather than contending over one shared process-wide rayon pool.
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
+
+from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID, UNK_ID
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, MODEL_META, MODEL_REMAP
 
 # Calibration json name in a scorer dir.
@@ -53,9 +61,23 @@ def remap_to_array(remap: dict[int, int]) -> np.ndarray:
     return lut
 
 
-def pack_windows(texts: list[str], tokenizer_name: str, lut: np.ndarray, max_tokens: int) -> np.ndarray:
-    """Tokenize + remap + right-pad a list of window texts to ``[N, max_tokens]`` int32."""
-    encoded = encode_texts(tokenizer_name, texts, max_tokens)
+def load_shared_tokenizer(tokenizer_name: str) -> MarinTokenizer:
+    """Load the tokenizer once via levanter (mirror-staged, no repeated HF Hub calls).
+
+    The returned wrapper's ``encode_batch`` calls the raw ``tokenizers`` Rust encoder with an
+    immutable ``&self`` (unlike HF's ``PreTrainedTokenizerFast``, which rewrites truncation
+    state per call), so a single instance is shared across all worker threads -- concurrent
+    ``encode_batch`` is safe and, with rayon disabled, each call runs on one core.
+    """
+    return load_tokenizer(tokenizer_name)
+
+
+def pack_windows(texts: list[str], tokenizer: MarinTokenizer, lut: np.ndarray, max_tokens: int) -> np.ndarray:
+    """Tokenize (shared wrapper) + remap + right-pad window texts to ``[N, max_tokens]`` int32.
+
+    ``encode_batch`` does not truncate, so ids are cut to ``max_tokens`` here.
+    """
+    encoded = tokenizer.encode_batch(texts)
     ids = np.full((len(texts), max_tokens), PAD_ID, dtype=np.int32)
     lut_n = lut.shape[0]
     for i, row in enumerate(encoded):

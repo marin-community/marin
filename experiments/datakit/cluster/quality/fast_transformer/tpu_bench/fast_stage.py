@@ -1,23 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The fast scoring pipeline: parallel-tokenize on the v6e host, forward on the chips.
+"""The fast scoring pipeline: read + tokenize on the v6e host threads, forward on the chips.
 
 A v6e-4 VM has 4 chips *and* a 180-vCPU host. The forward is dispatch-bound (~1% MXU) and
-scoring a shard's windows on-device costs a few seconds, so throughput is host-bound. This
-stage keeps everything on one Zephyr worker (one shard per worker) and parallelizes the
-tokenization across the host cores:
+scoring a shard's windows on-device costs a few seconds, so throughput is host-bound -- by
+the GCS parquet read/decode and by tokenization, not the model. Both parallelize across the
+host cores with an ordinary thread pool (the arrow read and the Rust tokenizer both release
+the GIL), so this stage keeps one shard on one Zephyr worker and drives its own pool:
 
-  - ``--tok-procs 0``: tokenize on the main thread. The HF fast tokenizer is Rust/rayon
-    multi-core, but ONLY when called from the main thread -- calling it from a worker
-    thread silently drops to single-core.
-  - ``--tok-procs N``: a fork process pool (``tokenize_worker``, jax-free so children never
-    touch the TPU) tokenizes window batches across N cores; the main process pulls packed
-    batches in order and runs the forward, so tokenization overlaps the forward.
+  - Each parquet row group is read (``id`` + ``text`` columns only, arrow-native, no per-row
+    dict materialization) and windowed by a pool thread, so the ~400 MB text download and
+    decode run row-group-parallel instead of as one serial stream.
+  - As each row group lands, its docs are cut into ``device_batch``-window blocks and each
+    block is submitted as its own tokenize task -- so tokenization fans out across the whole
+    pool (not just the ~11 row groups), each thread tokenizing single-threaded with the HF
+    rayon pool disabled.
+  - A stager thread pulls finished blocks and ships them to the chips (``device_put``); the
+    main thread only forwards the staged device arrays and reduces windows -> per-doc scores.
+    Reads, tokenization, the H2D transfer, and the forward all overlap.
 
-With tokenization parallel, the per-shard wall is dominated by the GCS parquet data path
-(read/decode the input, write the output), not by tokenize/forward/reduce. ``--cpu-only``
-runs the same path with no TPU (the forward on the host CPUs) for the CPU baseline.
 Weights/vocab come from the config-faithful scorer dir.
 """
 
@@ -27,23 +29,26 @@ import logging
 import multiprocessing as mp
 import os
 import posixpath
+import queue
+import threading
 import time
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from multiprocessing import shared_memory
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pyarrow.parquet as pq
 from fray.cluster import ResourceConfig
 from rigging.filesystem import StoragePath, open_url
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, load_file
 from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
-os.environ["TOKENIZERS_PARALLELISM"] = "true"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
 from experiments.datakit.cluster.quality.fast_transformer.inference import (
@@ -55,18 +60,26 @@ from experiments.datakit.cluster.quality.fast_transformer.tpu_bench import token
 from experiments.datakit.cluster.quality.fast_transformer.tpu_bench.common import (
     doc_windows,
     load_remap_meta,
-    pack_windows,
+    load_shared_tokenizer,
     remap_to_array,
+    write_result_json,
 )
 
 logger = logging.getLogger(__name__)
 
+READ_COLUMNS = ["id", "text"]
+# vCPUs requested per v6e-4 worker (of the host's 180) -- see the ResourceConfig note in run().
+TPU_HOST_CPU = 128
+# How many staged (H2D'd) blocks the stager thread may run ahead of the forward. Bounds the
+# resident device memory while keeping the chips fed; the forward is never blocked on H2D.
+STAGE_QUEUE_DEPTH = 8
+
 
 @functools.cache
 def _load_worker(model_dir: str, device_batch: int, max_tokens: int, calib_file: str):
+    """Parent-side warm: scorer + calibration + compiled forward. Tokenization lives in the
+    fork children, so the parent never loads the tokenizer or remap."""
     scorer = load_pooled_scorer(model_dir)
-    remap, tokenizer_name, _ = load_remap_meta(model_dir)
-    lut = remap_to_array(remap)
     with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
         calib = json.loads(fh.read())
     xk = np.asarray(calib["xk"], dtype=np.float64)
@@ -75,130 +88,204 @@ def _load_worker(model_dir: str, device_batch: int, max_tokens: int, calib_file:
     # Warm the compile for the padded launch shape.
     warm = jax.device_put(jnp.zeros((device_batch, max_tokens), dtype=jnp.int32), batch_shard)
     jax.block_until_ready(_predict_batch(scorer.model, warm))
-    logger.info(
-        "fast worker warm: %d chips, device_batch=%d tok=%d tokenizer=%s", ndev, device_batch, max_tokens, tokenizer_name
-    )
-    return scorer, lut, tokenizer_name, xk, yk, batch_shard
+    logger.info("fast worker warm: %d chips, device_batch=%d tok=%d", ndev, device_batch, max_tokens)
+    return scorer, xk, yk, batch_shard
 
 
 @functools.cache
-def _get_pool(model_dir: str, tok_procs: int) -> ProcessPoolExecutor:
-    """One tokenizer pool per worker (children are jax-free, load the tokenizer once).
+def _get_read_pool(read_threads: int) -> ThreadPoolExecutor:
+    """Thread pool for the row-group arrow reads (the read + parquet decode release the GIL)."""
+    return ThreadPoolExecutor(max_workers=read_threads, thread_name_prefix="rg-read")
 
-    Uses ``fork``, not ``spawn``: the Zephyr worker's ``__main__`` is the (unguarded) iris
-    actor bootstrap, so spawn's ``_check_not_importing_main`` aborts. Fork is safe here only
-    because this is called BEFORE the parent initializes JAX (``_load_worker``) -- the child
-    inherits a pre-TPU process image and never touches jax.
+
+@functools.cache
+def _get_fork_pool(model_dir: str, tok_procs: int) -> ProcessPoolExecutor:
+    """Fork tokenizer pool -- true multi-core tokenization off the GIL.
+
+    ``fork`` (not ``spawn``): the Zephyr worker's ``__main__`` is the unguarded iris actor
+    bootstrap, so spawn's ``_check_not_importing_main`` aborts. Fork is safe only because this
+    runs BEFORE the parent initializes JAX (``_load_worker``) -- children inherit a pre-TPU
+    image and never touch the chips. The tokenizer + remap are warmed here first so forked
+    children inherit them copy-on-write instead of re-staging.
     """
+    remap, tokenizer_name, _ = load_remap_meta(model_dir)
+    load_shared_tokenizer(tokenizer_name)
+    remap_to_array(remap)
     ctx = mp.get_context("fork")
     pool = ProcessPoolExecutor(
         max_workers=tok_procs, mp_context=ctx, initializer=tokenize_worker.child_init, initargs=(model_dir,)
     )
-    # Force children to spin up (and load the tokenizer) now, still before JAX init.
+    # Force children to spin up (and bind the tokenizer) now, still before JAX init.
     list(pool.map(tokenize_worker.child_warm, range(tok_procs)))
-    logger.info("tokenizer pool: %d fork procs", tok_procs)
+    logger.info("tokenizer fork pool: %d procs", tok_procs)
     return pool
 
 
-def _stage_to_device(model, ids: np.ndarray, batch_shard, device_batch: int):
-    """Pad ``ids`` to ``device_batch`` rows, ship H2D, launch forward -> (jax_out, n_real)."""
-    n = ids.shape[0]
-    if n < device_batch:
-        ids = np.concatenate([ids, np.zeros((device_batch - n, ids.shape[1]), dtype=ids.dtype)], axis=0)
-    dev = jax.device_put(jnp.asarray(ids), batch_shard)
-    return _predict_batch(model, dev), n
+def _num_row_groups(path: str) -> int:
+    with open_url(path, "rb") as f:
+        return pq.ParquetFile(f).metadata.num_row_groups
 
 
-def _score_shard(records, model_dir, device_batch, calib_file, tok_procs):
-    """Score one shard's docs; returns (rows, stats). Tokenizes across ``tok_procs`` cores."""
-    # Build the fork pool BEFORE JAX inits (children must inherit a pre-TPU process image).
-    pool = _get_pool(model_dir, tok_procs) if tok_procs and tok_procs > 1 else None
-    scorer, lut, tokenizer_name, xk, yk, batch_shard = _load_worker(model_dir, device_batch, 512, calib_file)
-    max_tokens = scorer.max_tokens
+def _read_and_window_rg(path: str, rg_index: int) -> tuple[list, list[list[str]]]:
+    """Read one row group's ``id``/``text`` columns and window each doc (runs on a read thread)."""
+    with open_url(path, "rb") as f:
+        table = pq.ParquetFile(f).read_row_group(rg_index, columns=READ_COLUMNS)
+    ids = table.column("id").to_pylist()
+    texts = table.column("text").to_pylist()
+    return ids, [doc_windows(t or "") for t in texts]
 
-    # Materialize the shard's window texts in order (a shard is ~one file). ``doc_windows``
-    # always yields >=1 window, so ``ids_out`` (one id per input doc) preserves the exact
-    # input row count, and ``doc_pos_of_win`` maps each window back to its doc for the reduce.
-    stats = {"tokenize_s": 0.0, "forward_s": 0.0, "window_s": 0.0, "reduce_s": 0.0, "n_tokens": 0}
-    t_win = time.perf_counter()
+
+def _iter_blocks(doc_ids: list, doc_win: list[list[str]], device_batch: int):
+    """Cut a row group's docs into blocks of <= ``device_batch`` windows, at doc boundaries.
+
+    Yields ``(block_ids, win_texts, win_doc)`` where ``win_doc[i]`` is the block-local doc
+    index of window ``i`` -- everything a block needs to reduce its windows back to docs.
+    """
+    block_ids: list = []
     win_texts: list[str] = []
-    doc_pos_of_win: list[int] = []
-    ids_out: list[object] = []
-    for doc_pos, r in enumerate(records):
-        ids_out.append(r["id"])
-        for w in doc_windows(r.get("text") or ""):
-            win_texts.append(w)
-            doc_pos_of_win.append(doc_pos)
-    stats["window_s"] = time.perf_counter() - t_win
+    win_doc: list[int] = []
+    for doc_id, windows in zip(doc_ids, doc_win, strict=True):
+        if win_texts and len(win_texts) + len(windows) > device_batch:
+            yield block_ids, win_texts, np.asarray(win_doc, dtype=np.int64)
+            block_ids, win_texts, win_doc = [], [], []
+        local = len(block_ids)
+        block_ids.append(doc_id)
+        win_texts.extend(windows)
+        win_doc.extend([local] * len(windows))
+    if win_texts:
+        yield block_ids, win_texts, np.asarray(win_doc, dtype=np.int64)
 
-    n_windows = len(win_texts)
-    win_scores = np.empty(n_windows, dtype=np.float32)
-    # One tokenize batch == one device launch. A large batch lets the tokenizer's rayon
-    # pool fill the host cores on the main thread (its parallelism only engages there).
-    starts = list(range(0, n_windows, device_batch))
-    batches = [win_texts[s : s + device_batch] for s in starts]
 
-    def forward(start: int, ids: np.ndarray):
-        stats["n_tokens"] += int((ids != 0).sum())
-        t1 = time.perf_counter()
-        out, n = _stage_to_device(scorer.model, ids, batch_shard, device_batch)
-        win_scores[start : start + n] = np.asarray(out)[:n]
-        stats["forward_s"] += time.perf_counter() - t1
+def _read_and_put(shm_name: str, shape: tuple[int, int], batch_shard, device_batch: int):
+    """Copy a child's packed block out of shared memory, pad to ``device_batch``, ship H2D.
 
-    t0 = time.perf_counter()
-    if pool is not None:
-        # Children tokenize in parallel; results stream back in submission order and are
-        # forwarded on-device by the parent -> tokenization overlaps forward + reduce.
-        for start, ids in zip(starts, pool.map(tokenize_worker.child_tokenize, batches), strict=True):
-            forward(start, ids)
-    else:
-        for start, texts in zip(starts, batches, strict=True):
-            forward(start, pack_windows(texts, tokenizer_name, lut, max_tokens))
-    stats["tokenize_s"] = time.perf_counter() - t0 - stats["forward_s"]
+    The copy lets us ``unlink`` the segment immediately; ``device_put`` then owns the data.
+    """
+    shm = shared_memory.SharedMemory(name=shm_name)
+    try:
+        packed = np.ndarray(shape, dtype=np.int32, buffer=shm.buf)
+        n = shape[0]
+        out = np.zeros((device_batch, shape[1]), dtype=np.int32)
+        out[:n] = packed
+    finally:
+        shm.close()
+        shm.unlink()
+    return jax.device_put(out, batch_shard), n
 
-    # Reduce windows -> doc (mean) with a vectorized scatter-add (np.add.at), in doc order.
-    t_red = time.perf_counter()
-    n_docs = len(ids_out)
-    pos = np.asarray(doc_pos_of_win, dtype=np.int64)
+
+def _forward_and_reduce(model, block_ids, win_doc, dev, n_real, xk, yk, stats) -> list[dict]:
+    """Forward a staged device block and reduce its windows to per-doc score rows."""
+    t1 = time.perf_counter()
+    win_scores = np.asarray(_predict_batch(model, dev))[:n_real]  # launch forward + D2H
+    stats["forward_s"] += time.perf_counter() - t1
+    stats["n_windows"] += n_real
+
+    n_docs = len(block_ids)
     sums = np.zeros(n_docs, dtype=np.float64)
     cnts = np.zeros(n_docs, dtype=np.int64)
-    np.add.at(sums, pos, win_scores)
-    np.add.at(cnts, pos, 1)
+    np.add.at(sums, win_doc, win_scores)
+    np.add.at(cnts, win_doc, 1)
     raw = sums / np.maximum(cnts, 1)
     cal = np.interp(raw, xk, yk)
     buckets = np.digitize(cal, BUCKET_EDGES)
-    rows = [{"id": ids_out[i], "score": float(cal[i]), "quality_bucket": int(buckets[i])} for i in range(n_docs)]
-    stats["reduce_s"] = time.perf_counter() - t_red
-    stats["n_docs"] = n_docs
-    stats["n_windows"] = n_windows
+    return [{"id": block_ids[i], "score": float(cal[i]), "quality_bucket": int(buckets[i])} for i in range(n_docs)]
+
+
+def _score_file(path, model_dir, device_batch, tok_procs, read_threads, calib_file):
+    """Score one parquet file's docs; returns ``(rows, stats)``.
+
+    ``rows`` are per-doc ``{id, score, quality_bucket}``; ``stats`` carries the read/forward/
+    compute timings and the token/window/doc counts.
+    """
+    # Fork pool BEFORE JAX init (children must inherit a pre-TPU image).
+    fork_pool = _get_fork_pool(model_dir, tok_procs)
+    read_pool = _get_read_pool(read_threads)
+    scorer, xk, yk, batch_shard = _load_worker(model_dir, device_batch, 512, calib_file)
+    stats = {"read_s": 0.0, "forward_s": 0.0, "compute_s": 0.0, "n_tokens": 0, "n_windows": 0}
+
+    n_rg = _num_row_groups(path)
+    read_futs = [read_pool.submit(_read_and_window_rg, path, i) for i in range(n_rg)]
+    tok_futs: dict = {}
+    t_read = time.perf_counter()
+    for rf in as_completed(read_futs):
+        doc_ids, doc_win = rf.result()
+        for block_ids, win_texts, win_doc in _iter_blocks(doc_ids, doc_win, device_batch):
+            tok_futs[fork_pool.submit(tokenize_worker.child_pack, win_texts)] = (block_ids, win_doc)
+    stats["read_s"] = time.perf_counter() - t_read
+
+    # Stage (shm copy + H2D) on a helper thread so the forward thread never waits on the transfer.
+    staged: queue.Queue = queue.Queue(maxsize=STAGE_QUEUE_DEPTH)
+    stage_err: list[Exception] = []
+
+    def _stage() -> None:
+        try:
+            for tf in as_completed(tok_futs):
+                block_ids, win_doc = tok_futs[tf]
+                shm_name, shape, n_tokens = tf.result()
+                dev, n_real = _read_and_put(shm_name, shape, batch_shard, device_batch)
+                staged.put((block_ids, win_doc, dev, n_real, n_tokens))
+        except Exception as e:  # surface to the main thread instead of wedging its get()
+            stage_err.append(e)
+        finally:
+            staged.put(None)
+
+    rows: list[dict] = []
+    t_compute = time.perf_counter()
+    stager = threading.Thread(target=_stage, name="stage-h2d")
+    stager.start()
+    while (item := staged.get()) is not None:
+        block_ids, win_doc, dev, n_real, n_tokens = item
+        stats["n_tokens"] += n_tokens
+        rows.extend(_forward_and_reduce(scorer.model, block_ids, win_doc, dev, n_real, xk, yk, stats))
+    stager.join()
+    if stage_err:
+        raise stage_err[0]
+    stats["compute_s"] = time.perf_counter() - t_compute
+    stats["n_docs"] = len(rows)
     return rows, stats
 
 
-def _writer(output_path, model_dir, device_batch, calib_file, tok_procs):
-    def writer(records: Iterator[dict], shard: ShardInfo) -> Iterator[dict]:
-        records = iter(records)
-        first = next(records, None)
-        if first is None:
-            return
-        shard_file = posixpath.basename(first[DEFAULT_FILE_PATH_COLUMN])
-        rows, stats = _score_shard([first, *records], model_dir, device_batch, calib_file, tok_procs)
-        out_file = f"{output_path.rstrip('/')}/outputs/main/{shard_file}"
-        result: dict = {}
+def _write_rows(rows: list[dict], out_file: str) -> dict:
+    result: dict = {}
 
-        def _sink(items):
-            result.update(write_parquet_file(items, output_path=out_file))
+    def _sink(items):
+        result.update(write_parquet_file(items, output_path=out_file))
 
-        with ThreadedBatchWriter(_sink) as w:
-            for row in rows:
-                w.submit(row)
-        counters.pipeline.update_counter("fast/docs", stats["n_docs"])
-        counters.pipeline.update_counter("fast/windows", stats["n_windows"])
-        counters.pipeline.update_counter("fast/tokens", stats["n_tokens"])
-        counters.pipeline.update_counter("fast/tokenize_ms", int(stats["tokenize_s"] * 1000))
-        counters.pipeline.update_counter("fast/forward_ms", int(stats["forward_s"] * 1000))
-        counters.pipeline.update_counter("fast/window_ms", int(stats["window_s"] * 1000))
-        counters.pipeline.update_counter("fast/reduce_ms", int(stats["reduce_s"] * 1000))
-        yield {"shard_file": shard_file, "docs": stats["n_docs"], **result}
+    with ThreadedBatchWriter(_sink) as w:
+        for row in rows:
+            w.submit(row)
+    return result
+
+
+def _writer(output_path, model_dir, device_batch, calib_file, tok_procs, read_threads):
+    def writer(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict]:
+        for path in paths:
+            t0 = time.perf_counter()
+            rows, stats = _score_file(path, model_dir, device_batch, tok_procs, read_threads, calib_file)
+            out_file = f"{output_path.rstrip('/')}/outputs/main/{posixpath.basename(path)}"
+            t_write = time.perf_counter()
+            result = _write_rows(rows, out_file)
+            write_s = time.perf_counter() - t_write
+            shard_s = time.perf_counter() - t0
+            logger.info(
+                "shard %s: %.1fs (read %.1f, compute %.1f, write %.1f) -> %d docs, %.0f docs/s",
+                posixpath.basename(path),
+                shard_s,
+                stats["read_s"],
+                stats["compute_s"],
+                write_s,
+                stats["n_docs"],
+                stats["n_docs"] / shard_s if shard_s else 0,
+            )
+            counters.pipeline.update_counter("fast/docs", stats["n_docs"])
+            counters.pipeline.update_counter("fast/windows", stats["n_windows"])
+            counters.pipeline.update_counter("fast/tokens", stats["n_tokens"])
+            counters.pipeline.update_counter("fast/read_ms", int(stats["read_s"] * 1000))
+            counters.pipeline.update_counter("fast/forward_ms", int(stats["forward_s"] * 1000))
+            counters.pipeline.update_counter("fast/compute_ms", int(stats["compute_s"] * 1000))
+            counters.pipeline.update_counter("fast/write_ms", int(write_s * 1000))
+            counters.pipeline.update_counter("fast/shard_ms", int(shard_s * 1000))
+            yield {"shard_file": posixpath.basename(path), "docs": stats["n_docs"], **result}
 
     return writer
 
@@ -212,35 +299,30 @@ def run(
     max_workers,
     device_batch,
     tok_procs,
+    read_threads,
     calib_file,
     result_json,
-    cpu_only=False,
-    cpu=180,
 ):
     files = sorted(str(m) for m in StoragePath(corpus_glob).glob())[:max_files]
     if not files:
         raise ValueError(f"no files matched {corpus_glob}")
     logger.info(
-        "fast: %d files, %d workers, device_batch=%d tok_procs=%d cpu_only=%s",
+        "fast: %d files, %d workers, device_batch=%d tok_procs=%d read_threads=%d",
         len(files),
         max_workers,
         device_batch,
         tok_procs,
-        cpu_only,
+        read_threads,
     )
-    pipeline = (
-        Dataset.from_list(files)
-        .flat_map(functools.partial(load_file, include_file_paths=True))
-        .map_shard(_writer(output_path, model_dir, device_batch, calib_file, tok_procs))
+    pipeline = Dataset.from_list(files).map_shard(
+        _writer(output_path, model_dir, device_batch, calib_file, tok_procs, read_threads)
     )
-    # cpu_only measures the "before" baseline the issue describes: the same forward + tokenize
-    # path with no TPU, so JAX runs the forward on the host CPUs where it competes with
-    # tokenization for cores (on a v6e the forward instead offloads to otherwise-idle chips).
-    resources = (
-        ResourceConfig(cpu=cpu, ram=f"{cpu * 3}g") if cpu_only else ResourceConfig.with_tpu("v6e-4", cpu=180, ram="600g")
-    )
+    # Request 128 of the host's 180 vCPUs (not the whole host): the pipeline uses ~tok_procs
+    # tokenizer cores plus the read threads and JAX dispatch, and leaving headroom lets the
+    # worker co-schedule onto a host other tenants already partially occupy vs forcing a fresh slice.
+    resources = ResourceConfig.with_tpu("v6e-4", cpu=TPU_HOST_CPU, ram="400g")
     ctx = ZephyrContext(
-        name="ft-fast-cpu" if cpu_only else "ft-fast",
+        name="ft-fast",
         resources=resources,
         max_workers=max_workers,
         stage_runner_factory=InlineRunner,
@@ -251,12 +333,12 @@ def run(
     wall = time.time() - t0
     docs = agg.get("fast/docs", 0)
     tokens = agg.get("fast/tokens", 0)
-    n_chips = 0 if cpu_only else 4 * max_workers
+    n_chips = 4 * max_workers
     payload = {
-        "stage": "fast_cpu" if cpu_only else "fast",
-        "cpu_only": cpu_only,
-        "cpu_per_worker": cpu if cpu_only else 180,
+        "stage": "fast",
+        "cpu_per_worker": TPU_HOST_CPU,
         "tok_procs": tok_procs,
+        "read_threads": read_threads,
         "files": len(files),
         "workers_v6e4": max_workers,
         "n_chips": n_chips,
@@ -268,14 +350,14 @@ def run(
         "docs_per_s": round(docs / wall, 1) if wall else 0,
         "tokens_per_s": round(tokens / wall, 1) if wall else 0,
         "tokens_per_s_per_chip": round(tokens / wall / n_chips, 1) if wall and n_chips else 0,
-        "tokenize_worker_s": round(agg.get("fast/tokenize_ms", 0) / 1000, 1),
+        "read_worker_s": round(agg.get("fast/read_ms", 0) / 1000, 1),
         "forward_worker_s": round(agg.get("fast/forward_ms", 0) / 1000, 1),
-        "window_worker_s": round(agg.get("fast/window_ms", 0) / 1000, 1),
-        "reduce_worker_s": round(agg.get("fast/reduce_ms", 0) / 1000, 1),
+        "compute_worker_s": round(agg.get("fast/compute_ms", 0) / 1000, 1),
+        "write_worker_s": round(agg.get("fast/write_ms", 0) / 1000, 1),
+        "shard_worker_s": round(agg.get("fast/shard_ms", 0) / 1000, 1),
         "counters": agg,
     }
     print("BENCH " + json.dumps(payload), flush=True)
     if result_json:
-        with open_url(result_json, "w") as fh:
-            fh.write(json.dumps(payload, indent=2))
+        write_result_json(result_json, payload)
     return payload

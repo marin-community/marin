@@ -15,10 +15,10 @@ import argparse
 import logging
 import os
 
-# The marin worker image ships TOKENIZERS_PARALLELISM=false, which pins the HF fast
-# tokenizer to a single core -- fatal here, since tokenization is the throughput bound.
-# Force it on before any transformers import so the tokenizer's rayon pool uses the host.
-os.environ["TOKENIZERS_PARALLELISM"] = "true"
+# The fast stage tokenizes in a fork process pool (one core per proc), so the tokenizers-lib
+# internal rayon parallelism is disabled to avoid oversubscription. Set it before any import
+# that pulls the tokenizers lib.
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from experiments.datakit.cluster.quality.fast_transformer.tpu_bench import fast_stage, fasttext_stage
 from experiments.datakit.cluster.quality.fast_transformer.tpu_bench.common import MODEL_CALIB
@@ -33,13 +33,9 @@ def main() -> None:
     p.add_argument("--max-files", type=int, default=24)
     p.add_argument("--max-workers", type=int, default=1)
     p.add_argument("--device-batch", type=int, default=4096)
-    p.add_argument(
-        "--tok-procs", type=int, default=0, help="tokenizer processes on the v6e host (0/1 = main-thread rayon)"
-    )
-    p.add_argument("--cpu", type=int, default=8)
-    p.add_argument(
-        "--cpu-only", action="store_true", help="fast stage: no TPU, forward on host CPUs (the 'before' baseline)"
-    )
+    p.add_argument("--tok-procs", type=int, default=96, help="fork processes for tokenization (off the GIL)")
+    p.add_argument("--read-threads", type=int, default=12, help="host threads for row-group parquet reads")
+    p.add_argument("--cpu", type=int, default=8, help="vCPUs per worker for the fasttext stage")
     p.add_argument("--calib-file", default=MODEL_CALIB)
     p.add_argument(
         "--fasttext-model", default="gs://marin-eu-west4/datakit/llm-quality-classifier/model/sonnet46-thr05/model.bin"
@@ -57,10 +53,9 @@ def main() -> None:
             max_workers=args.max_workers,
             device_batch=args.device_batch,
             tok_procs=args.tok_procs,
+            read_threads=args.read_threads,
             calib_file=args.calib_file,
             result_json=args.result_json,
-            cpu_only=args.cpu_only,
-            cpu=args.cpu,
         )
     elif args.stage == "fasttext":
         fasttext_stage.run(
