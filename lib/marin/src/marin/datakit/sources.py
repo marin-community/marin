@@ -322,6 +322,39 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_specialized_v1_1/unconditional_algorithmic": 0.19,
         },
     )
+    # v1.2 supersedes neither v1 nor v1.1 — it adds four new synthetic subsets
+    # (fact-seeking, moral scenarios, generative and multiple-choice questions).
+    # Its multiple_choice is a distinct, larger regeneration of the v1.1 subset
+    # of the same name, so both are carried.
+    nemotron_specialized_v1_2 = _rows_nemotron(
+        "nemotron_pretraining_specialized_v1_2",
+        "nemotron_specialized_v1_2",
+        {
+            "nemotron_specialized_v1_2/fact_seeking": 34.264249298,
+            "nemotron_specialized_v1_2/generative": 0.657347056,
+            "nemotron_specialized_v1_2/moral_scenarios": 0.014813270,
+            "nemotron_specialized_v1_2/multiple_choice": 6.826340523,
+        },
+    )
+    nemotron_legal = _rows_nemotron(
+        "nemotron_pretraining_legal_v1",
+        "nemotron_legal",
+        {
+            "nemotron_legal/california_code_of_regulations": 0.033064243,
+            "nemotron_legal/case_law_summary": 0.027076493,
+            "nemotron_legal/casehold": 3.839242351,
+            "nemotron_legal/definition_classification": 0.001354030,
+            "nemotron_legal/diversity_jurisdiction": 0.000837717,
+            "nemotron_legal/ecfr": 0.122605305,
+            "nemotron_legal/ecfr_qa": 0.549815436,
+            "nemotron_legal/function_of_decision": 0.023167261,
+            "nemotron_legal/globalcit": 0.007366386,
+            "nemotron_legal/legalbench_cuad_v2": 0.047987198,
+            "nemotron_legal/nycourts_judicial_ethics_opinions": 0.004178264,
+            "nemotron_legal/tos_clause_understanding": 0.000337263,
+            "nemotron_legal/tosdr_qa": 0.002550481,
+        },
+    )
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
@@ -355,6 +388,8 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *nemotron_specialized_v1_2,
+        *nemotron_legal,
         *safety_pretraining,
     )
 

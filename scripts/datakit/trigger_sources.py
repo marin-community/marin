@@ -33,12 +33,24 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run only the download step of each source's chain (normalize_steps[0]).",
     )
+    parser.add_argument(
+        "--source",
+        action="append",
+        help="Source name to trigger (repeatable). Default: all registered sources.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    sources = list(all_sources().values())
+    registered_sources = all_sources()
+    if args.source:
+        missing = [name for name in args.source if name not in registered_sources]
+        if missing:
+            raise SystemExit(f"unknown source(s): {', '.join(missing)}")
+        sources = [registered_sources[name] for name in args.source]
+    else:
+        sources = list(registered_sources.values())
     terminals = [src.normalize_steps[0] if args.downloads_only else src.normalized for src in sources]
     stage = "downloads" if args.downloads_only else "normalize chains"
     logger.info("Running %s for %d sources", stage, len(sources))

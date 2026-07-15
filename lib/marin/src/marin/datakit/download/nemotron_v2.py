@@ -155,6 +155,37 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
         },
         override_output_path="raw/nemotron_pretraining_specialized_v1_1-b12f71",
     ),
+    "nemotron_pretraining_specialized_v1_2": NemotronV2Dataset(
+        hf_dataset_id="nvidia/Nemotron-Pretraining-Specialized-v1.2",
+        revision="807afc1",
+        subsets={
+            "fact_seeking": "Nemotron-Pretraining-Fact-Seeking/**/*.parquet",
+            "generative": "Nemotron-Pretraining-Generative/**/*.parquet",
+            "moral_scenarios": "Nemotron-Pretraining-Moral-Scenarios/**/*.parquet",
+            "multiple_choice": "Nemotron-Pretraining-Multiple-Choice/**/*.parquet",
+        },
+    ),
+    "nemotron_pretraining_legal_v1": NemotronV2Dataset(
+        hf_dataset_id="nvidia/Nemotron-Pretraining-Legal-v1",
+        revision="3d91d58",
+        subsets={
+            "california_code_of_regulations": "Nemotron-Pretraining-Legal-California-Code-Of-Regulations/**/*.parquet",
+            "case_law_summary": "Nemotron-Pretraining-Legal-Case-Law-Summary/**/*.parquet",
+            "casehold": "Nemotron-Pretraining-Legal-CaseHOLD/**/*.parquet",
+            "definition_classification": "Nemotron-Pretraining-Legal-Definition-Classification/**/*.parquet",
+            "diversity_jurisdiction": "Nemotron-Pretraining-Legal-Diversity-Jurisdiction/**/*.parquet",
+            "ecfr": "Nemotron-Pretraining-Legal-eCFR/**/*.parquet",
+            "ecfr_qa": "Nemotron-Pretraining-Legal-eCFR-QA/**/*.parquet",
+            "function_of_decision": "Nemotron-Pretraining-Legal-Function-Of-Decision/**/*.parquet",
+            "globalcit": "Nemotron-Pretraining-Legal-GlobalCit/**/*.parquet",
+            "legalbench_cuad_v2": "Nemotron-Pretraining-Legal-LegalBench-CUAD-v2/**/*.parquet",
+            "nycourts_judicial_ethics_opinions": (
+                "Nemotron-Pretraining-Legal-NYCourts-Judicial-Ethics-Opinions/**/*.parquet"
+            ),
+            "tos_clause_understanding": "Nemotron-Pretraining-Legal-ToS-Clause-Understanding/**/*.parquet",
+            "tosdr_qa": "Nemotron-Pretraining-Legal-ToSDR-QA/**/*.parquet",
+        },
+    ),
 }
 
 
