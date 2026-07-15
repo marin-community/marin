@@ -652,8 +652,8 @@ def _write_trace_cache(tmp_path, docs):
     return writer.result()
 
 
-@pytest.mark.parametrize("pack", ["pad", False, 1])
-def test_dataset_for_trace_chat_format_pad_yields_one_padded_example_per_trace(tmp_path, pack):
+@pytest.mark.parametrize("pack", [False, 1])
+def test_dataset_for_trace_chat_format_unpacked_yields_one_padded_example_per_trace(tmp_path, pack):
     cache = _write_trace_cache(
         tmp_path,
         [
@@ -665,7 +665,7 @@ def test_dataset_for_trace_chat_format_pad_yields_one_padded_example_per_trace(t
     Pos = Axis("position", 8)
     ds = dataset_for_trace_chat_format(trace_format, Pos, cache).as_sync_dataset()
 
-    # one example per trace; pad mode never packs two traces together
+    # one example per trace; unpacked mode never packs two traces together
     assert len(ds) == 2
     first = ds[0]
     np.testing.assert_array_equal(np.asarray(first.tokens)[:3], np.array([10, 11, 12], dtype=np.int32))
@@ -679,12 +679,12 @@ def test_dataset_for_trace_chat_format_pad_yields_one_padded_example_per_trace(t
         np.testing.assert_array_equal(np.asarray(ex.loss_labels)[padding | predicts_padding], 0)
 
 
-def test_dataset_for_trace_chat_format_pad_raises_on_document_longer_than_pos(tmp_path):
+def test_dataset_for_trace_chat_format_unpacked_raises_on_document_longer_than_pos(tmp_path):
     cache = _write_trace_cache(
         tmp_path,
         [([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [TRACE_LABEL_ASSISTANT_TEXT] * 10)],
     )
-    trace_format = TraceChatEvaluationFormat(pack="pad")
+    trace_format = TraceChatEvaluationFormat(pack=False)
     Pos = Axis("position", 4)
     with pytest.raises(ValueError, match="exceeds"):
         dataset_for_trace_chat_format(trace_format, Pos, cache)

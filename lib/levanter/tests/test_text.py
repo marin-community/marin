@@ -832,12 +832,12 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
 
-# --- pad mode: one example per document ------------------------------------
+# --- one example per document ----------------------------------------------
 #
-# pack="pad" (and, for chat, a falsy pack) selects one document per example, padded
-# to Pos. These tests drive the config-level dispatch (dataset_for_component /
+# A falsy pack (for chat/trace) and pack=1 select one document per example, padded to
+# Pos. These tests drive the config-level dispatch (dataset_for_component /
 # dataset_for_trace_chat_format) rather than the dataset classes directly, since the
-# NotImplementedError and bool/int coercion defects lived in that dispatch.
+# crash and bool/int coercion defects lived in that dispatch.
 
 
 def _build_train_cache(component, tokenizer):
@@ -861,8 +861,10 @@ def assert_padding_never_contributes_loss(example):
     np.testing.assert_array_equal(leaking, np.zeros_like(leaking))
 
 
-@pytest.mark.parametrize("pack", ["pad", False, 1])
-def test_dataset_for_component_chat_pad_yields_one_padded_example_per_conversation(dummy_chat_data, tmp_path, pack):
+@pytest.mark.parametrize("pack", [False, 1])
+def test_dataset_for_component_chat_unpacked_yields_one_padded_example_per_conversation(
+    dummy_chat_data, tmp_path, pack
+):
     tokenizer = load_tokenizer("marin-community/marin-tokenizer")
     component = DatasetComponent(
         source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
@@ -876,7 +878,7 @@ def test_dataset_for_component_chat_pad_yields_one_padded_example_per_conversati
         component, Pos, cache, eos_id=None, block_cross_document_attention=True
     ).as_sync_dataset()
 
-    # dummy_chat_data holds two conversations; pad mode never merges them
+    # dummy_chat_data holds two conversations; unpacked mode never merges them
     assert len(ds) == 2
     for ex in ds:
         assert ex.tokens.shape == (Pos.size,)
@@ -886,8 +888,7 @@ def test_dataset_for_component_chat_pad_yields_one_padded_example_per_conversati
         assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
 
-@pytest.mark.parametrize("pack", ["pad", 1])
-def test_dataset_for_component_supervised_pad_masks_padding_and_prompt(tmp_path, pack):
+def test_dataset_for_component_supervised_unpacked_masks_padding_and_prompt(tmp_path):
     records = [
         {"input": "1 2 ", "target": "3 4"},
         {"input": "5 ", "target": "6 7 8"},
@@ -901,7 +902,7 @@ def test_dataset_for_component_supervised_pad_masks_padding_and_prompt(tmp_path,
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
         format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
         cache_dir=str(tmp_path),
-        pack=pack,
+        pack=1,
     )
     config = LmDataConfig(components={"s": component}, tokenizer="passthrough", vocab_size=16)
     cache = config.build_caches("train")["s"]
@@ -921,9 +922,8 @@ def test_dataset_for_component_supervised_pad_masks_padding_and_prompt(tmp_path,
         assert_padding_never_contributes_loss(ex)
 
 
-@pytest.mark.parametrize("pack", ["pad", 1])
-def test_dataset_for_component_text_pad_masks_padding(tmp_path, pack):
-    """Regression: raw-text pad mode must not train on padding.
+def test_dataset_for_component_text_unpacked_masks_padding(tmp_path):
+    """Regression: one-document-per-example raw text must not train on padding.
 
     PackedTokenDataset supplies loss_weight=1 everywhere for raw text, so without the
     padding-aware masking the pad positions (and the final real token that would predict
@@ -939,7 +939,7 @@ def test_dataset_for_component_text_pad_masks_padding(tmp_path, pack):
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
         format=TextLmDatasetFormat(text_key="text"),
         cache_dir=str(tmp_path),
-        pack=pack,
+        pack=1,
     )
     tokenizer = load_tokenizer("marin-community/marin-tokenizer")
     cache = _build_train_cache(component, tokenizer)
@@ -952,27 +952,6 @@ def test_dataset_for_component_text_pad_masks_padding(tmp_path, pack):
     for ex in ds:
         assert ex.tokens.shape == (Pos.size,)
         assert_padding_never_contributes_loss(ex)
-
-
-def test_dataset_for_component_text_pad_raises_on_document_longer_than_pos(tmp_path):
-    """Pad mode surfaces over-long documents instead of silently truncating them."""
-    records = [{"text": "The quick brown fox jumps over the lazy dog again and again and again"}]
-    data_path = tmp_path / "text_overlong.jsonl"
-    with data_path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
-        format=TextLmDatasetFormat(text_key="text"),
-        cache_dir=str(tmp_path),
-        pack="pad",
-    )
-    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
-    cache = _build_train_cache(component, tokenizer)
-    Pos = hax.Axis("position", 8)
-    with pytest.raises(ValueError, match="exceeds"):
-        dataset_for_component(component, Pos, cache, eos_id=None, block_cross_document_attention=True)
 
 
 # --- LmDataConfig.build_caches ---------------------------------------------

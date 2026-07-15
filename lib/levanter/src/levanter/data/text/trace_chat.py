@@ -227,7 +227,7 @@ class TraceChatEvaluationFormat:
     chat_template: str | None = None
     system_prompt: str | None = None
     chat_template_kwargs: str | None = "chat_template_kwargs"
-    pack: bool | int | Literal["pad"] | None = None
+    pack: bool | int | None = None
     loss_tags: tuple[str, ...] = (
         "assistant",
         "assistant_text",

@@ -86,17 +86,16 @@ The `pack` field controls how documents are batched into fixed-length examples:
 * `pack: true` (the default for chat) packs as many conversations as fit into each
   example, up to 64 per example.
 * `pack: <n>` packs up to `n` conversations per example.
-* `pack: pad`, `pack: false`, and `pack: 1` all select **pad mode**: one conversation
-  per example, padded to the context length. This is simpler but much less efficient
-  than packing. Padding positions are excluded from attention across documents and
-  carry zero loss weight, so the pad value never influences training. In pad mode a
-  conversation longer than the context length raises an error rather than being
-  silently truncated — increase the context length or pre-filter such conversations.
+* `pack: false` produces a single example per conversation, padded to the context
+  length. This is simpler but much less efficient than packing. Padding positions are
+  excluded from attention across documents and carry zero loss weight, so the pad value
+  never influences training. A conversation longer than the context length raises an
+  error rather than being silently truncated — increase the context length or
+  pre-filter such conversations.
 
-The same options apply to `supervised` and (raw) `text` formats, with one difference:
-for those formats `pack: false` selects the continuous-stream layout (documents are
-concatenated and chunked to the context length), so use `pack: pad` to force
-one-document-per-example padding.
+For `supervised` and (raw) `text`, `pack: false` instead selects the continuous-stream
+layout: documents are concatenated and chunked to the context length rather than being
+kept one per example.
 
 #### Processing:
 - Requires a `chat_template`:

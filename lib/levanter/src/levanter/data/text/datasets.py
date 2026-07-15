@@ -331,7 +331,7 @@ class DatasetComponent(DatasetComponentBase):
     source: LmDatasetSourceConfigBase | None = None
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
-    pack: bool | int | Literal["pad"] | None = None
+    pack: bool | int | None = None
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -356,7 +356,7 @@ class ConcatDatasetComponent(DatasetComponentBase):
     tags: list[str] | None = None
 
 
-def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
+def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
@@ -368,19 +368,19 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
 
 
 def _resolve_pack_config(
-    pack: bool | int | Literal["pad"],
+    pack: bool | int,
     *,
     packed_slice_strategy: Literal["left", "right", "raise"] = "left",
 ) -> tuple[int, Literal["left", "right", "raise"]]:
     """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
 
-    ``"pad"`` and any falsy value (``False``/``0``) select *pad mode*: one document
-    per example, padded to ``Pos``, with over-long documents raising instead of being
-    silently truncated. ``True`` packs up to 64 documents per example; an integer
-    packs up to that many. The ``packed_slice_strategy`` applies only to the packing
-    branches -- pad mode always raises.
+    A falsy value (``False``/``0``) selects one document per example, padded to
+    ``Pos``, with over-long documents raising instead of being silently truncated.
+    ``True`` packs up to 64 documents per example; an integer packs up to that many.
+    ``packed_slice_strategy`` applies only to the packing branches -- the
+    one-document-per-example case always raises.
     """
-    if pack == "pad" or not pack:
+    if not pack:
         return 1, "raise"
     if pack is True:
         return 64, packed_slice_strategy
@@ -514,7 +514,7 @@ def dataset_for_component(
     pack = _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
-        if pack == "pad" or pack:
+        if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
@@ -531,7 +531,7 @@ def dataset_for_component(
         )
     elif isinstance(fmt, SupervisedLmDatasetFormat):
         loss_weights_key = SupervisedTextProcessor.loss_weights_key
-        if pack == "pad" or pack:
+        if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
@@ -548,8 +548,7 @@ def dataset_for_component(
             block_cross_document_attention=block_cross_document_attention,
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
-        # Chat has no continuous-stream mode: a falsy pack means one conversation per
-        # example (pad mode), matching pack="pad".
+        # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
         max_segments, slice_strategy = _resolve_pack_config(pack)
         return ChatDataset(
             cache,
