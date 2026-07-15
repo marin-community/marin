@@ -20,7 +20,12 @@ provisioning:
   gcp:
     project: hai-gcp-models
     addresses:
-      - { name: iris-marin-fed-egress, region: us-central1, address: 34.27.183.11 }
+      # description must match the live reservation exactly — it is immutable, so any drift
+      # forces a replace that releases the pinned IP. The dev reservation has no description.
+      - name: iris-marin-fed-egress
+        region: us-central1
+        address: 34.27.183.11
+        description: "Static egress for the marin Iris controller; allowlisted at the CoreWeave federation ingress"
       - { name: iris-marin-dev-fed-egress, region: us-central1, address: 35.254.13.19 }
 
 platform:

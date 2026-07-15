@@ -53,10 +53,14 @@ class GcpStaticAddresses(pulumi.ComponentResource):
                 region=address.region,
                 address=address.address,
                 address_type="EXTERNAL",
+                description=address.description,
                 opts=pulumi.ResourceOptions(
                     parent=self,
                     provider=gcp_provider,
                     import_=_import_id(args.project, address) if args.adopt else None,
+                    # These IPs are baked into every CoreWeave federation allowlist; a stray
+                    # `pulumi destroy`/rename must never release the reservation.
+                    retain_on_delete=True,
                 ),
             )
         self.register_outputs({})

@@ -101,6 +101,10 @@ class GcpAddressSpec(BaseModel):
     name: str  # e.g. "iris-marin-fed-egress"
     region: str  # e.g. "us-central1"
     address: str  # the pinned IP, e.g. "34.27.183.11"
+    # description is immutable on a compute Address (any change forces replacement, which
+    # releases the pinned IP), so it must match the live reservation exactly for adoption to
+    # be a no-op. None => the live reservation has no description.
+    description: str | None = None
 
 
 class GcpProvisioning(BaseModel):

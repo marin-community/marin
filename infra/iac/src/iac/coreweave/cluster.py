@@ -32,28 +32,33 @@ def _nodepool_manifest(nodepool: NodePoolSpec) -> dict:
     # metadata.labels carry the managed + scale-group labels (not the system-critical
     # node label, which belongs on spec.nodeLabels).
     metadata_labels = {k: v for k, v in nodepool.node_labels.items() if k != SYSTEM_CRITICAL_LABEL}
-    # targetNodes is intentionally NOT set: CoreWeave's autoscaler owns the runtime node
-    # count. We declare only the [minNodes, maxNodes] envelope + labels; ignore_changes on
-    # spec.targetNodes (below) keeps Pulumi from ever touching the live count.
-    return {
-        "metadata": {"name": nodepool.name, "labels": metadata_labels},
-        "spec": {
-            "computeClass": "default",
-            "instanceType": nodepool.instance_type,
-            "autoscaling": nodepool.autoscaling,
-            "minNodes": nodepool.min_nodes,
-            "maxNodes": nodepool.max_nodes,
-            "nodeLabels": nodepool.node_labels,
-        },
+    spec: dict = {
+        "computeClass": "default",
+        "instanceType": nodepool.instance_type,
+        "nodeLabels": nodepool.node_labels,
     }
+    if nodepool.target_racks is not None:
+        # Rack-based (NVL72) pool: fixed whole-rack capacity, no autoscaler. The CRD requires
+        # exactly one of targetNodes/targetRacks; racks are declaratively owned by IaC.
+        spec["targetRacks"] = nodepool.target_racks
+    else:
+        # Node-based pool: declare the [minNodes, maxNodes] autoscaler envelope. targetNodes is
+        # required at create; we seed it to minNodes and hand the live count to CoreWeave's
+        # autoscaler thereafter via ignore_changes on spec.targetNodes (see below).
+        spec["autoscaling"] = nodepool.autoscaling
+        spec["minNodes"] = nodepool.min_nodes
+        spec["maxNodes"] = nodepool.max_nodes
+        spec["targetNodes"] = nodepool.min_nodes
+    return {"metadata": {"name": nodepool.name, "labels": metadata_labels}, "spec": spec}
 
 
 class CoreweaveCluster(pulumi.ComponentResource):
     """The reserved NodePools for one Iris cluster.
 
-    Each NodePool is declared with `ignore_changes=["spec.targetNodes"]` so CoreWeave's
+    Node-based pools are declared with `ignore_changes=["spec.targetNodes"]` so CoreWeave's
     autoscaler may move the live node count within [minNodes, maxNodes] without Pulumi
-    reverting it — IaC owns the envelope, not the runtime count.
+    reverting it — IaC owns the envelope, not the runtime count. Rack-based (NVL72) pools
+    don't autoscale, so IaC owns `spec.targetRacks` outright (no ignore_changes).
     """
 
     def __init__(
@@ -71,6 +76,9 @@ class CoreweaveCluster(pulumi.ComponentResource):
         # provider. Until then the cluster + kubeconfig are assumed to already exist.
         for nodepool in args.nodepools:
             manifest = _nodepool_manifest(nodepool)
+            # Node-based pools cede the live count to CoreWeave's autoscaler; rack-based pools
+            # have no autoscaler, so IaC keeps targetRacks reconciled.
+            ignore_changes = [] if nodepool.target_racks is not None else ["spec.targetNodes"]
             # NodePools are cluster-scoped, so the k8s import ID is just the object name.
             k8s.apiextensions.CustomResource(
                 f"nodepool-{nodepool.name}",
@@ -81,7 +89,7 @@ class CoreweaveCluster(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(
                     parent=self,
                     provider=k8s_provider,
-                    ignore_changes=["spec.targetNodes"],
+                    ignore_changes=ignore_changes,
                     import_=nodepool.name if args.adopt else None,
                 ),
             )

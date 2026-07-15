@@ -52,7 +52,13 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
             "the minimal IaC cut needs an out-of-cluster kubeconfig to target"
         )
     kubeconfig_path = os.path.expanduser(platform_coreweave.kubeconfig_path)
-    k8s_provider = k8s.Provider("cw-k8s", kubeconfig=kubeconfig_path)
+    # Bind to the cluster's declared kube_context, not the kubeconfig's current-context —
+    # otherwise a stack silently targets whatever `kubectl` was last pointed at.
+    k8s_provider = k8s.Provider(
+        "cw-k8s",
+        kubeconfig=kubeconfig_path,
+        context=platform_coreweave.kube_context or None,
+    )
 
     CoreweaveCluster(
         "cluster",

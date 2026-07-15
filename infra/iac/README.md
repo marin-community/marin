@@ -57,8 +57,8 @@ cd infra/iac
 #    experimentation); production uses gs://marin-iac-state (see spec.md §2 backend bootstrap).
 pulumi login --local
 
-# 2. no secretsprovider is configured yet (deferred to the KMS bootstrap), so pulumi uses a
-#    passphrase. For a throwaway local preview, an empty passphrase is fine:
+# 2. the secrets provider is a passphrase (production fetches it from Secret Manager — see
+#    "Backend bootstrap" below). For a throwaway local preview, an empty passphrase is fine:
 export PULUMI_CONFIG_PASSPHRASE=""
 
 # 3. one-time: create the stack. This reads the committed Pulumi.cw-us-east-02a.yaml.
@@ -137,20 +137,45 @@ the two managers ping-pong `managedFields` on every controller restart. So:
 Doing it in the other order (or adopting while any old controller can still restart) reintroduces
 the flap until the ceded Iris is deployed everywhere.
 
+### Backend bootstrap (one-time, provisioned)
+
+The shared backend is a GCS bucket + a passphrase secrets provider, both in `hai-gcp-models`:
+
+- **State bucket** `gs://marin-iac-state` (us-central1, uniform bucket-level access, versioned).
+- **Secrets provider: a passphrase**, stored in Secret Manager as `pulumi-iac-passphrase` and
+  fetched at startup. Marin keeps no secrets in the IaC config, so the lighter passphrase provider
+  is used instead of a KMS key. (Trade-off: a passphrase is symmetric — read access to the secret
+  grants both encrypt and decrypt — so it does not express the CI-decrypt-only / operator-encrypt
+  split a `gcpkms://` provider would. Switchable later via `pulumi stack change-secrets-provider`.)
+  Each stack's `encryptionsalt` (derived from the passphrase, safe to commit) lands in its
+  committed `Pulumi.<stack>.yaml` at `stack init`.
+
+Re-provisioning from scratch (already done once):
+
+```bash
+gcloud storage buckets create gs://marin-iac-state --project=hai-gcp-models \
+  --location=us-central1 --uniform-bucket-level-access --public-access-prevention
+gsutil versioning set on gs://marin-iac-state
+python3 -c "import secrets,sys; sys.stdout.write(secrets.token_urlsafe(32))" \
+  | gcloud secrets create pulumi-iac-passphrase --project=hai-gcp-models \
+      --replication-policy=automatic --data-file=-
+```
+
 **The adoption run itself** (per cluster, one-time):
 
 ```bash
-# shared production backend + KMS secrets provider (NOT --local / passphrase)
 pulumi login gs://marin-iac-state
-pulumi stack init cw-us-east-02a \
-  --secrets-provider gcpkms://projects/<proj>/locations/<loc>/keyRings/<ring>/cryptoKeys/pulumi
+# passphrase from Secret Manager (never echo it); every operator/CI runs this line
+export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
+  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
+pulumi stack init cw-us-east-02a                # or: pulumi stack select cw-us-east-02a
 export KUBECONFIG=~/.kube/coreweave-iris-gpu
 export PULUMI_K8S_ENABLE_PATCH_FORCE=true      # take ownership from the (now-retired) `iris` manager
 
 pulumi config set marin-iac:import true
 pulumi preview          # gate: every resource `import` + no-op/update; ANY NodePool replace/delete → STOP
 pulumi up               # adopts live resources into GCS state; does not recreate them
-pulumi config set marin-iac:import false        # import_ is ONE-SHOT — see below
+pulumi config rm marin-iac:import               # import_ is ONE-SHOT — see below
 ```
 
 `marin-iac:import` **is one-shot.** It tells Pulumi "adopt the existing object on the next `up`."
@@ -162,8 +187,8 @@ NodePools so an accidental `pulumi destroy`/rename can't deprovision the reserve
 nodes. Then normal ops are plain `pulumi preview`/`up` with the flag off; state lives in GCS.
 
 > **Keep local recon off the production stack.** Do recon under a throwaway stack name (e.g.
-> `cw-us-east-02a-recon` on `--local`) so the KMS-backed production `cw-us-east-02a` stack config
-> stays clean — don't mix a local passphrase `encryptionsalt` into it.
+> `cw-us-east-02a-recon` on `--local`) so the production `cw-us-east-02a` stack config keeps the
+> `encryptionsalt` from the shared Secret-Manager passphrase — not a local throwaway one.
 
 > **Do not** `pulumi up` **against a live cluster until the cede is deployed.** Recon (dry-run) is
 > always fine; the real adoption is ordered. See `spec.md §4`.

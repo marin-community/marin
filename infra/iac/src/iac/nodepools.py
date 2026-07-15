@@ -19,10 +19,25 @@ from iris.cluster.platforms.types import Labels
 # always-on nodes so GPU pools can scale to zero. Applied only when min_nodes > 0.
 SYSTEM_CRITICAL_LABEL = "cks.coreweave.cloud/system-critical"
 
+# NVL72 (GB200/GB300) instances deploy in whole racks; a rack is 18 nodes. Such pools are
+# declared by rack (spec.targetRacks) and do not autoscale — CoreWeave rejects partial racks
+# and does not support the autoscaler for rack-based instances. Everything else is node-based
+# (spec.targetNodes + autoscaling). See docs.coreweave.com/docs/platform/instances/nvl72.
+RACK_SIZE = 18
+_NVL72_INSTANCE_PREFIXES = ("gb200", "gb300")
+
+
+def _is_rack_based(instance_type: str) -> bool:
+    return instance_type.lower().startswith(_NVL72_INSTANCE_PREFIXES)
+
 
 @dataclass(frozen=True)
 class NodePoolSpec:
-    """One CoreWeave NodePool projected from an Iris scale group."""
+    """One CoreWeave NodePool projected from an Iris scale group.
+
+    A rack-based (NVL72) pool sets `target_racks` and `autoscaling=False`; a node-based pool
+    leaves `target_racks=None` and autoscales within `[min_nodes, max_nodes]`.
+    """
 
     name: str
     instance_type: str
@@ -30,6 +45,7 @@ class NodePoolSpec:
     max_nodes: int
     node_labels: dict[str, str]
     autoscaling: bool = True
+    target_racks: int | None = None
 
 
 def _nodepool_name(label_prefix: str, scale_group: str) -> str:
@@ -60,6 +76,16 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
         }
         if min_nodes > 0:
             node_labels[SYSTEM_CRITICAL_LABEL] = "true"
+
+        rack_based = _is_rack_based(coreweave.instance_type)
+        target_racks: int | None = None
+        if rack_based:
+            if max_nodes % RACK_SIZE != 0:
+                raise ValueError(
+                    f"scale group {name!r} is a rack-based ({coreweave.instance_type}) NVL72 pool, "
+                    f"so its node count must be a whole number of {RACK_SIZE}-node racks; got {max_nodes}"
+                )
+            target_racks = max_nodes // RACK_SIZE
         specs.append(
             NodePoolSpec(
                 name=_nodepool_name(label_prefix, name),
@@ -67,6 +93,8 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
                 node_labels=node_labels,
+                autoscaling=not rack_based,
+                target_racks=target_racks,
             )
         )
     return specs
