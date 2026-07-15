@@ -144,10 +144,16 @@ def hbm_peak_util(tpu: str, batch: int, chips: int) -> tuple[float | None, bool]
 
 def print_ceilings(with_hbm: bool) -> None:
     print("Measured ceilings (ground truth) — largest global batch with pdp=-1, no accumulation:\n")
-    head = f"{'slice':13s} {'chips':>5s} {'GiB/chip':>8s} {'max batch':>9s} {'per-chip':>8s}"
+    ranges = {fam: family_overhead_range(fam) for fam in ("v5e", "v6e", "v5p")}
+    head = f"{'slice':13s} {'chips':>5s} {'GiB/chip':>8s} {'max batch':>9s} {'per-chip':>8s} {'overhead':>11s}"
     print(head + ("  peak HBM%" if with_hbm else ""))
     for c in CEILINGS:
-        line = f"{c.tpu:13s} {c.chips:>5d} {c.hbm_gib_per_chip:>8d} {c.max_batch:>9d} {c.per_chip_ceiling:>8d}"
+        lo, hi = ranges[c.family]
+        rng = f"{lo:.2f}-{hi:.2f}"
+        line = (
+            f"{c.tpu:13s} {c.chips:>5d} {c.hbm_gib_per_chip:>8d} {c.max_batch:>9d} "
+            f"{c.per_chip_ceiling:>8d} {rng:>11s}"
+        )
         if with_hbm:
             peak, _ = hbm_peak_util(c.tpu, c.max_batch, c.chips)
             line += f"  {'n/a' if peak is None else f'{peak:.1f}':>8s}"
@@ -155,13 +161,9 @@ def print_ceilings(with_hbm: bool) -> None:
 
 
 def print_calibration() -> None:
-    print("\nCalibrating overhead_factor so predicted per-chip == measured (target >= 512, stable):\n")
-    for fam in ("v5e", "v6e", "v5p"):
-        lo, hi = family_overhead_range(fam)
-        m = next(c.per_chip_ceiling for c in CEILINGS if c.family == fam)
-        print(f"  {fam:4s}  per-chip {m:>2d}  reproduced by overhead in [{lo}, {hi}]")
+    # per-family overhead ranges are shown in the ceilings table; here just the single value
     rec = recommended_overhead()
-    print(f"\n  recommended single overhead = {rec}  (smallest that never over-predicts)")
+    print(f"\nRecommended single overhead = {rec}  (smallest that never over-predicts on any slice).")
 
 
 def print_config_table(overhead: float) -> None:

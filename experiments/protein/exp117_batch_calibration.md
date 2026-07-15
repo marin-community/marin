@@ -91,23 +91,23 @@ largest microbatch whose scaled estimate fits capacity. Higher overhead → smal
 ## Results
 
 Measured ceilings (ground truth). Per-chip is constant within a family and scales with chip count — an
-internal consistency check. Peak HBM is the max `hbmMemoryUsage` over all chips and steps of the
-completed run.
+internal consistency check. **overhead range** = the `overhead_factor` interval (per family) that makes
+`tpu_batch_config` reproduce that per-chip ceiling. Peak HBM is the max `hbmMemoryUsage` over all chips
+and steps of the completed run.
 
-| slice | chips | GiB/chip | max batch | per-chip | peak HBM % |
-|---|---|---|---|---|---|
-| v5litepod-4 | 4 | 16 | 16 | 4 | 87.0 |
-| v5litepod-8 | 8 | 16 | 32 | 4 | 72.1 |
-| v5litepod-16 | 16 | 16 | 64 | 4 | 68.6 |
-| v6e-4 | 4 | 32 | 64 | 16 | 100.0 |
-| v6e-8 | 8 | 32 | 128 | 16 | 96.6 |
-| v6e-16 | 16 | 32 | 256 | 16 | 97.8 |
-| v5p-8 | 4 | 95 | 128 | 32 | 63.9 |
-| v5p-16 | 8 | 95 | 256 | 32 | 65.6 |
-| v5p-32 | 16 | 95 | 512 | 32 | 64.0 |
+| slice | chips | GiB/chip | max batch | per-chip | overhead range | peak HBM % |
+|---|---|---|---|---|---|---|
+| v5litepod-4 | 4 | 16 | 16 | 4 | 0.40 – 0.78 | 87.0 |
+| v5litepod-8 | 8 | 16 | 32 | 4 | 0.40 – 0.78 | 72.1 |
+| v5litepod-16 | 16 | 16 | 64 | 4 | 0.40 – 0.78 | 68.6 |
+| v6e-4 | 4 | 32 | 64 | 16 | 0.20 – 0.39 | 100.0 |
+| v6e-8 | 8 | 32 | 128 | 16 | 0.20 – 0.39 | 96.6 |
+| v6e-16 | 16 | 32 | 256 | 16 | 0.20 – 0.39 | 97.8 |
+| v5p-8 | 4 | 95 | 128 | 32 | 0.30 – 0.58 | 63.9 |
+| v5p-16 | 8 | 95 | 256 | 32 | 0.30 – 0.58 | 65.6 |
+| v5p-32 | 16 | 95 | 512 | 32 | 0.30 – 0.58 | 64.0 |
 
-Overhead that reproduces the measured per-chip, per family: **v5e `[0.40, 0.78]` · v6e `[0.20, 0.39]` ·
-v5p `[0.30, 0.58]`**. No single value fits all three — v5e needs ≥0.40, v6e ≤0.39 (disjoint).
+The ranges are disjoint — v5e needs ≥0.40, v6e ≤0.39 — so no single value fits all three.
 **Recommended single overhead = 0.40** (smallest that never over-predicts): exact on v5e and v5p, 2×
 conservative on v6e, safe everywhere. The shipped default `overhead_factor = 1.0` is far too
 conservative.
