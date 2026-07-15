@@ -17,8 +17,9 @@ const ONE_PHASE = "#e46f38";
 const TWO_PHASE = "#153d55";
 
 function pointSymbol(datum: PointDatum): d3.SymbolType {
-  if (datum.row.split === "fit") return d3.symbolCircle;
-  if (datum.row.split === "noise_reference") return d3.symbolTriangle;
+  if (datum.displaySplit === "fit") return d3.symbolCircle;
+  if (datum.displaySplit === "noise_reference") return d3.symbolTriangle;
+  if (datum.displaySplit === "off_policy") return d3.symbolSquare;
   return d3.symbolDiamond;
 }
 
@@ -27,16 +28,17 @@ function pointColor(datum: PointDatum, maxStandardizedError: number): string {
   return d3.interpolateRdYlGn(1 - scaled);
 }
 
-function labelForSplit(split: PointDatum["row"]["split"]): string {
+function labelForSplit(split: PointDatum["displaySplit"], inPolicy: boolean): string {
   if (split === "fit") return "Fit design · grouped OOF";
   if (split === "noise_reference") return "Proportional repeat · full fit";
-  return "Heldout checkpoint · full fit";
+  if (split === "off_policy") return "Off-policy projection · full fit";
+  return inPolicy ? "In-policy heldout · full fit" : "Full-fit projection";
 }
 
 function showTooltip(event: MouseEvent, datum: PointDatum, tooltip: HTMLElement): void {
   const sign = datum.residual >= 0 ? "+" : "";
   tooltip.innerHTML = `
-    <div class="tooltip-kicker">${labelForSplit(datum.row.split)}</div>
+    <div class="tooltip-kicker">${labelForSplit(datum.displaySplit, datum.inPolicy)}</div>
     <strong>${datum.row.name}</strong>
     <dl>
       <dt>Observed</dt><dd>${datum.observed.toFixed(6)}</dd>
@@ -174,7 +176,7 @@ export function renderScatter(
     .text(yLabel);
 
   const pointLayer = plot.append("g").attr("class", "point-layer");
-  const symbol = d3.symbol<PointDatum>().size((datum) => (datum.row.split === "noise_reference" ? 76 : 68));
+  const symbol = d3.symbol<PointDatum>().size((datum) => (datum.displaySplit === "noise_reference" ? 76 : 68));
   const point = pointLayer
     .selectAll<SVGPathElement, PointDatum>("path")
     .data(points, (datum) => datum.row.id)
@@ -190,7 +192,7 @@ export function renderScatter(
       return `translate(${x(datum.observed)},${y(yValue)})`;
     })
     .attr("fill", (datum) => pointColor(datum, maxStandardizedError))
-    .attr("fill-opacity", (datum) => (datum.row.split === "fit" ? 0.78 : 0.94))
+    .attr("fill-opacity", (datum) => (datum.displaySplit === "fit" ? 0.78 : 0.94))
     .attr("stroke", (datum) => (datum.row.phaseFamily === "single_phase" ? ONE_PHASE : TWO_PHASE))
     .attr("stroke-width", (datum) => (datum.row.id === options.selectedId ? 3 : 1.6))
     .attr("tabindex", 0)
@@ -233,11 +235,12 @@ export function renderScatter(
     .attr("transform", `translate(${margin.left + 6},${margin.top + 5})`);
   const legendItems: Array<[string, d3.SymbolType]> = [
     ["Fit · OOF", d3.symbolCircle],
-    ["Heldout · full fit", d3.symbolDiamond],
+    ["Heldout", d3.symbolDiamond],
+    ["Off-policy", d3.symbolSquare],
     ["Repeat", d3.symbolTriangle],
   ];
   legendItems.forEach(([label, type], index) => {
-    const group = legend.append("g").attr("transform", `translate(${index * 145},0)`);
+    const group = legend.append("g").attr("transform", `translate(${index * 112},0)`);
     group
       .append("path")
       .attr("d", d3.symbol().type(type).size(54)() ?? "")

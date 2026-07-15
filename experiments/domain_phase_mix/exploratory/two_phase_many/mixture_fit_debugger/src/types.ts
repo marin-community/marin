@@ -1,12 +1,22 @@
 export type ModelId =
+  | "linear"
+  | "olmix_loglinear"
   | "canonical"
   | "effective_exposure"
   | "effective_exposure_geometry"
   | "separate_heads"
-  | "grp";
+  | "grp"
+  | "compact_retained_state"
+  | "bucket_family_grp"
+  | "bucket_family_power_separate_heads"
+  | "bucket_family_power_separate_heads_family_onset"
+  | "bucket_family_weibull_shared_onset"
+  | "bucket_family_weibull_family_replay";
 export type ExplorerTab = "mixtures" | "fit";
-export type ViewMode = "prediction" | "residual" | "standardized";
+export type ViewMode = "prediction" | "residual" | "standardized" | "swoosh";
 export type SortMode = "difference" | "exposure" | "domain";
+export type PolicyClass = "single_phase" | "two_phase";
+export type PolicyFilter = "in_policy" | "off_policy" | "all";
 
 export interface NoiseReference {
   n: number;
@@ -49,6 +59,8 @@ export interface MixtureRow {
   split: "fit" | "heldout" | "noise_reference" | "candidate";
   policyFamily: string | null;
   phaseFamily: string | null;
+  policyClasses: PolicyClass[];
+  fitPolicies: PolicyClass[];
   phaseStructure: string | null;
   panel: string | null;
   method: string | null;
@@ -76,6 +88,11 @@ export interface MetricSummary {
   rmse: number | null;
   mae: number | null;
   spearman: number | null;
+  regretAt1: number | null;
+  foldMeanRegretAt1: number | null;
+  lowerTailOptimism: number | null;
+  lowTailRmse: number | null;
+  lowerTailCount: number;
 }
 
 export interface ModelDiagnostics {
@@ -99,6 +116,9 @@ export interface ModelMetadata {
   id: ModelId;
   label: string;
   description: string;
+  familyId: string;
+  familyLabel: string;
+  variantLabel: string;
 }
 
 export interface FitParameter {
@@ -116,6 +136,7 @@ export interface FitParameter {
 
 export interface FitDetail {
   modelId: ModelId;
+  policyClass: PolicyClass;
   modelLabel: string;
   description: string;
   parameterCount: number;
@@ -154,29 +175,35 @@ export interface SwarmData {
     targetBudget: number;
     oofSeeds: number[];
     fitProtocol: string;
+    policyClasses: PolicyClass[];
+    policyFitCounts: Record<PolicyClass, number> | Partial<Record<PolicyClass, number>>;
   };
   domains: DomainMetadata[];
   targets: Record<string, TargetMetadata>;
   rows: MixtureRow[];
-  predictions: Record<string, Record<ModelId, PredictionSeries>>;
-  diagnostics: Record<string, Record<ModelId, ModelDiagnostics>>;
+  predictions: Record<string, Partial<Record<PolicyClass, Record<ModelId, PredictionSeries>>>>;
+  diagnostics: Record<string, Partial<Record<PolicyClass, Record<ModelId, ModelDiagnostics>>>>;
   baselines: Record<string, BaselineOption[]>;
-  fits: Record<string, Record<ModelId, FitDetail>>;
-  nikeSwoosh: Record<string, Partial<Record<ModelId, NikeSwooshDiagnostic>>>;
+  fits: Record<string, Partial<Record<PolicyClass, Record<ModelId, FitDetail>>>>;
+  nikeSwoosh: Record<string, Partial<Record<PolicyClass, Partial<Record<ModelId, NikeSwooshDiagnostic>>>>>;
   provenance: Record<string, unknown>;
 }
 
 export interface DashboardData {
-  schemaVersion: 2;
+  schemaVersion: 5;
   generatedAt: string;
   models: Record<ModelId, ModelMetadata>;
   swarms: Record<string, SwarmData>;
   provenance: Record<string, unknown>;
 }
 
+export type DisplaySplit = MixtureRow["split"] | "off_policy";
+
 export interface PointDatum {
   row: MixtureRow;
   rowIndex: number;
+  displaySplit: DisplaySplit;
+  inPolicy: boolean;
   observed: number;
   prediction: number;
   fullFitPrediction: number;
@@ -187,6 +214,8 @@ export interface PointDatum {
 export interface DashboardState {
   swarm: string;
   target: string;
+  policyClass: PolicyClass;
+  policyFilter: PolicyFilter;
   model: ModelId;
   tab: ExplorerTab;
   view: ViewMode;
@@ -196,7 +225,6 @@ export interface DashboardState {
   showHeldout: boolean;
   showNoise: boolean;
   hideAliases: boolean;
-  phaseFamily: "all" | "single_phase" | "two_phase";
   search: string;
   sort: SortMode;
   parameterDomain: string;
