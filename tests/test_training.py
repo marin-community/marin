@@ -11,16 +11,19 @@ import pytest
 from fray.types import ResourceConfig
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import DatasetComponent
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.formats import SupervisedLmDatasetFormat
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
+from marin.experiment.train import train_lm as experiment_train_lm
 from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     _maybe_auto_resolve_dpo_schedule,
+    _maybe_auto_resolve_lm_schedule,
     _resolve_run_id,
     apply_output_path,
     doublecheck_paths,
@@ -306,3 +309,83 @@ def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_
     assert resolved.train_config.trainer.num_train_steps == 100
     assert resolved.train_config.run_initial_eval is True
     assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
+
+
+def _packed_sft_train_config(trainer_config, tmp_path, *, num_docs=24, seq_len=16, batch_size=1):
+    """A TrainLmConfig over a single packed supervised component whose short docs pack together."""
+    records = [{"input": f"{i} {i} ", "target": f"{i + 1} {i + 2}"} for i in range(1, num_docs + 1)]
+    data_path = tmp_path / "sft.jsonl"
+    data_path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+    data = LmDataConfig(
+        components={
+            "sft": DatasetComponent(
+                source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
+                format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+                cache_dir=str(tmp_path / "cache"),
+                pack=64,
+            )
+        },
+        tokenizer="passthrough",
+        vocab_size=32,
+    )
+    model = train_lm.LlamaConfig(
+        num_layers=2, num_heads=2, num_kv_heads=2, max_seq_len=seq_len, hidden_dim=32, attn_backend=None
+    )
+    train_config = train_lm.TrainLmConfig(
+        data=data,
+        model=model,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=batch_size, num_train_steps=1, steps_per_eval=1),
+        train_seq_len=seq_len,
+    )
+    return train_config, len(records)
+
+
+def test_auto_resolve_lm_schedule_uses_packed_length(trainer_config, tmp_path):
+    train_config, num_docs = _packed_sft_train_config(trainer_config, tmp_path, num_docs=24, seq_len=16, batch_size=1)
+
+    config = TrainLmOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_num_epochs=1,
+    )
+    resolved = _maybe_auto_resolve_lm_schedule(config)
+
+    # batch_size=1 makes the target concrete: N packed sequences -> N steps. A raw-row resolver
+    # (the DPO-style mistake) would instead use num_docs and be wrong.
+    Pos = train_config.model.max_Pos.resize(16)
+    per_epoch = train_config.data.num_train_sequences(Pos)
+
+    assert per_epoch < num_docs  # packing actually collapsed documents
+    assert resolved.train_config.trainer.num_train_steps == per_epoch
+    assert resolved.train_config.num_train_epochs == 1  # inner cap engaged
+    assert resolved.auto_num_epochs is None  # resolution consumed the request
+
+
+def test_auto_resolve_lm_schedule_noop_without_epochs(trainer_config, tmp_path):
+    train_config, _ = _packed_sft_train_config(trainer_config, tmp_path)
+    config = TrainLmOnPodConfig(train_config=train_config, resources=ResourceConfig.with_tpu("v4-8"))
+    assert _maybe_auto_resolve_lm_schedule(config) is config
+
+
+@pytest.mark.parametrize(
+    "num_train_steps,num_train_epochs",
+    [(100, 1), (None, None)],
+)
+def test_experiment_train_lm_requires_exactly_one_length_control(num_train_steps, num_train_epochs):
+    # The validation short-circuits before any of the other (unused-here) arguments are touched.
+    with pytest.raises(ValueError, match="Exactly one of num_train_steps or num_train_epochs"):
+        experiment_train_lm(
+            name="run",
+            model=None,  # type: ignore[arg-type]
+            optimizer=None,  # type: ignore[arg-type]
+            datasets={},
+            batch_size=8,
+            seq_len=16,
+            num_train_steps=num_train_steps,
+            num_train_epochs=num_train_epochs,
+            z_loss_weight=None,
+            evals=None,
+            resources=None,  # type: ignore[arg-type]
+            version="dev",
+        )

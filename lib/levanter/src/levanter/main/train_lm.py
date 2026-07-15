@@ -49,6 +49,15 @@ class TrainLmConfig:
     train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
+    num_train_epochs: int | None = None
+    """If set, train for exactly this many passes over the (single) training component.
+
+    ``trainer.num_train_steps`` is resolved from the actual post-packing dataset length before the
+    trainer is initialized, so the LR schedule targets the right endpoint. The training data is also
+    made finite, so the run stops after this many epochs even if ``trainer.num_train_steps`` is larger.
+    Only valid for a single training component; mixtures must set ``trainer.num_train_steps`` directly.
+    """
+
     # config related to continued pretraining
     initialize_from_hf: bool | str = False
     """if provided, this will override the model config in the config. if true, use the default hf checkpoint for this model class"""
@@ -87,6 +96,30 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
+
+
+def num_train_steps_for_epochs(config: TrainLmConfig) -> int:
+    """Resolve ``num_train_steps`` for ``config.num_train_epochs`` from the packed dataset length.
+
+    Builds the offsets-only packed training dataset to get the true post-packing sequence count, then
+    converts ``num_train_epochs`` passes into the step at which the loader (which pads the final partial
+    batch) is exhausted. No token or accelerator I/O is required. Raises if ``num_train_epochs`` is unset
+    or < 1, if there is not exactly one training component, or if the resolved training set is empty.
+    """
+    epochs = config.num_train_epochs
+    if epochs is None:
+        raise ValueError("num_train_steps_for_epochs requires config.num_train_epochs to be set.")
+    if epochs < 1:
+        raise ValueError(f"num_train_epochs must be >= 1, got {epochs}")
+
+    train_length = config.train_seq_len if config.train_seq_len is not None else config.model.max_seq_len
+    Pos = config.model.max_Pos.resize(train_length)
+    batch_schedule = config.trainer.batch_schedule
+    seq_per_epoch = config.data.num_train_sequences(Pos, initial_batch_size=batch_schedule.batch_size_at_step(0))
+    total_sequences = epochs * seq_per_epoch
+    if total_sequences < 1:
+        raise ValueError("Resolved an empty training set for epoch-based training (0 sequences).")
+    return batch_schedule.find_step_containing_offset(total_sequences - 1) + 1
 
 
 def _restore_lm_model_from_partial_checkpoint(
@@ -165,6 +198,19 @@ def main(config: TrainLmConfig):
     else:
         converter = None
 
+    # Resolve epochs -> steps before initialize: the trainer consumes num_train_steps (LR schedule) here.
+    if config.num_train_epochs is not None:
+        resolved_steps = num_train_steps_for_epochs(config)
+        logger.info(
+            "Resolved training length from %d epoch(s): %d steps (num_train_steps was %d).",
+            config.num_train_epochs,
+            resolved_steps,
+            config.trainer.num_train_steps,
+        )
+        config = dataclasses.replace(
+            config, trainer=dataclasses.replace(config.trainer, num_train_steps=resolved_steps)
+        )
+
     levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
@@ -221,6 +267,7 @@ def main(config: TrainLmConfig):
             Pos,
             config.trainer.batch_schedule,
             key=data_key,
+            epochs=config.num_train_epochs,
         )
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
