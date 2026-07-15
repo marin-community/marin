@@ -12,9 +12,9 @@ dashboard_url: https://iris.oa.dev
 # iac.config owns the typed schema. The GCP arm's first resources are the reserved
 # federation-egress static IPs: the marin / marin-dev controllers' egress, which the CoreWeave
 # controllers' ipAllowList admits (mirrored as iac.config.MARIN_FEDERATION_EGRESS_SOURCES /
-# FEDERATION_ALLOW_SOURCES in install_cw_network.py). region is a placeholder to confirm (both
-# controllers run in us-central1-a); adoption imports the live reservations, so the pinned IPs
-# are never reassigned. iris-marin-dev-fed-egress is marin-dev's egress, colocated here for now.
+# FEDERATION_ALLOW_SOURCES in install_cw_network.py). Name/IP/region confirmed against the live
+# reservations (EXTERNAL, us-central1, in use); adoption imports them, so the pinned IPs are
+# never reassigned. iris-marin-dev-fed-egress is marin-dev's egress, colocated here for now.
 provisioning:
   provider: gcp
   gcp:

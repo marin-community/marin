@@ -52,8 +52,8 @@ two now modeled, one deferred:
   `hai-gcp-models`. These are now `google_compute_address` resources in the GCP arm —
   `GcpStaticAddresses` ([gcp/addresses.py](../../../infra/iac/src/iac/gcp/addresses.py)), the
   GCP arm's first slice, on the `marin` stack. Each pins its IP so adoption imports the live
-  reservation without ever reassigning an IP baked into a CoreWeave allowlist. (Region is a
-  placeholder to confirm — both controllers run in `us-central1-a`.)
+  reservation without ever reassigning an IP baked into a CoreWeave allowlist. (Confirmed
+  against the live reservations: both are EXTERNAL, `us-central1`, in use.)
 
 - **The CoreWeave-side allowlist (part of row 6) — landed as a config input.** Which sources
   the CoreWeave federation route admits is `IngressSpec.federation_allow_sources`, defaulting
@@ -149,18 +149,17 @@ is operator-run.
 (instances deploy in whole racks of 18 nodes; a NodePool count must be a multiple of 18 —
 [CoreWeave docs](https://docs.coreweave.com/platform/instances/gpu/gb200-4x)).
 
-### Open questions to confirm before this cluster goes live
+### Confirmed / still to confirm
 
-1. **"2 clusters".** The delivery note said *2 clusters*. This models it as one CKS/Iris
-   cluster holding the whole inventory (mirroring how `cw-us-east-02a` = 256 H100 and
-   `cw-rno2a` = 512 H100 are each one cluster). If it is really two CKS clusters, split into
-   `cw-us-east-08a` / `cw-us-east-08b` — a mechanical copy of the config with the fleet
-   halved.
-2. **Placeholders to confirm against the console** once the hardware lands: the CKS cluster
+Confirmed **one cluster** — one CKS cluster / one Iris cluster / one Pulumi stack holds the
+whole delivery (mirroring how `cw-us-east-02a` = 256 H100 and `cw-rno2a` = 512 H100 are each
+one cluster). Still to confirm before it goes live:
+
+1. **Placeholders to confirm against the console** once the hardware lands: the CKS cluster
    name (`marin-gb200`), `kube_context` (`marin-gb200_US-EAST-08A`), and `US-EAST-08A` as the
    exact region string. The `gb200-4x` SKU, 4 GPUs/node, and 144 vCPU / 960 GB / 30.72 TB
    node spec are from CoreWeave's published `gb200-4x` page.
-3. **Secrets + registrations still needed** (rows 8–9): mint `iris-cw-us-east-08a-signing-key`
+2. **Secrets + registrations still needed** (rows 8–9): mint `iris-cw-us-east-08a-signing-key`
    and `finelog-cw-us-east-08a-signing-key`, register this cluster's public halves in the peer
    `federation_peers` blocks and the finelog hub `marin.yaml`, then add the finelog deploy
    config + the `finelog:` block to the Iris config.

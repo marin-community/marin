@@ -11,13 +11,10 @@
 # down. GB200 NVL72 instances deploy in whole racks of 18 nodes — a NodePool's node
 # count must be a multiple of 18 (72 = 4 racks), or CoreWeave marks it invalid.
 #
-# NOTE (unconfirmed, see .agents/projects/iac/gaps.md): rjpower's delivery note said
-# "2 clusters". This models the delivery as ONE CKS cluster / one Iris cluster / one
-# Pulumi stack holding the full inventory, mirroring how cw-us-east-02a and cw-rno2a
-# each hold a whole region's reserved fleet. If the delivery is really two CKS
-# clusters, split this into cw-us-east-08a / cw-us-east-08b (mechanical copy). The
-# CKS cluster name, kube_context, and kubeconfig_path below are placeholders to
-# confirm against the console once the hardware lands.
+# One CKS cluster / one Iris cluster / one Pulumi stack holds the full delivery
+# (confirmed one cluster), mirroring how cw-us-east-02a and cw-rno2a each hold a whole
+# region's reserved fleet. The CKS cluster name, kube_context, and kubeconfig_path below
+# are placeholders to confirm against the console once the hardware lands.
 #
 # Workflow:
 #   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
