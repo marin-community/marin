@@ -13,7 +13,9 @@ import transformers
 from jax import random
 from test_utils import (  # , check_model_works_with_seqlen
     check_load_config,
+    moe_gate_grad_row_norms,
     parameterize_with_configs,
+    single_token_moe_block_grad,
     skip_if_hf_model_not_accessible,
     skip_if_no_torch,
     use_test_mesh,
@@ -77,28 +79,6 @@ def _tiny_moe_config(dense_router_gradient: bool) -> MixtralConfig:
     )
 
 
-def _gate_grad_row_norms(block_grad: MixtralSparseMoeBlock, config: MixtralConfig) -> np.ndarray:
-    """L2 norm of the router-gate weight gradient per expert (shape [n_routed_experts])."""
-    per_expert = hax.sqrt(hax.sum(block_grad.gate.weight**2, axis=config.Embed))
-    return np.asarray(per_expert.rearrange((config.Experts,)).array)
-
-
-def _single_token_block_grad(block: MixtralSparseMoeBlock, config: MixtralConfig):
-    """Task-loss gradient of a one-token MoE-block forward.
-
-    With a single token, the router-gate weight gradient factors as ``x (x) dL/d(logit_e)``, so a
-    zero gate-gradient row for expert ``e`` means expert ``e``'s router logit received no task-loss
-    gradient. This isolates the router gradient per expert without reimplementing the routing.
-    """
-    x = hax.random.normal(random.PRNGKey(2), (hax.Axis(config.max_Pos.name, 1), config.Embed))
-
-    def task_loss(block, x):
-        out, _ = block(x)
-        return hax.sum(out).scalar()
-
-    return eqx.filter_jit(eqx.filter_grad(task_loss))(block, x)
-
-
 def test_mixtral_dense_router_gradient_leaves_forward_unchanged():
     # The DenseMixer flag is a training-only backward-pass change: the forward value must be
     # bit-identical to the stock sparse forward.
@@ -129,11 +109,11 @@ def test_mixtral_dense_router_gradient_reaches_unselected_experts():
         block_off = MixtralSparseMoeBlock.init(config_off, key=random.PRNGKey(0))
         block_on = dataclasses.replace(block_off, config=config_on)
 
-        grad_off = _single_token_block_grad(block_off, config_off)
-        grad_on = _single_token_block_grad(block_on, config_on)
+        grad_off = single_token_moe_block_grad(block_off, config_off)
+        grad_on = single_token_moe_block_grad(block_on, config_on)
 
-    rows_off = _gate_grad_row_norms(grad_off, config_off)
-    rows_on = _gate_grad_row_norms(grad_on, config_on)
+    rows_off = moe_gate_grad_row_norms(grad_off, config_off)
+    rows_on = moe_gate_grad_row_norms(grad_on, config_on)
 
     # Sparse forward: exactly `n_unselected` experts get no task-loss router gradient.
     assert int(np.sum(rows_off < 1e-6)) == n_unselected
@@ -156,13 +136,13 @@ def test_mixtral_dense_router_gradient_disabled_in_inference():
         block_on = dataclasses.replace(block_off, config=config_on)
         block_on_eval = inference_mode(block_on, True)
 
-        grad_off = _single_token_block_grad(block_off, config_off)
-        grad_eval = _single_token_block_grad(block_on_eval, config_on)
+        grad_off = single_token_moe_block_grad(block_off, config_off)
+        grad_eval = single_token_moe_block_grad(block_on_eval, config_on)
 
     # inference_mode skips the dense pass, so the router gradient collapses back to the sparse one.
     np.testing.assert_allclose(
-        _gate_grad_row_norms(grad_eval, config_on),
-        _gate_grad_row_norms(grad_off, config_off),
+        moe_gate_grad_row_norms(grad_eval, config_on),
+        moe_gate_grad_row_norms(grad_off, config_off),
         rtol=1e-5,
         atol=1e-6,
     )

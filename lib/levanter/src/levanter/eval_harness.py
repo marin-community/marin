@@ -82,7 +82,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
@@ -260,9 +260,9 @@ class _LmEvalHarnessWorker:
             if self.mp is not None:
                 model = self.mp.cast_to_compute(model)
 
-            activations = model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
-            if isinstance(activations, tuple):
-                activations, _ = activations
+            activations, _ = split_activations(
+                model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
+            )
 
             pred_embeddings = activations.astype(jnp.float32)
             pred_lm_head = model.get_lm_head().astype(jnp.float32)

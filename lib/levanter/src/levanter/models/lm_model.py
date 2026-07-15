@@ -183,6 +183,20 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
         return self.model_type.init(Vocab, self, key=key)  # type: ignore
 
 
+def split_activations(
+    activations: NamedArray | tuple[NamedArray, NamedOrNumeric],
+) -> tuple[NamedArray, NamedOrNumeric]:
+    """Normalize an ``activations`` return value into ``(hidden_states, aux_loss)``.
+
+    [`LmHeadModel.activations`][] returns either a bare hidden-state array or, for MoE heads that add a
+    router auxiliary loss, a ``(hidden_states, aux_loss)`` tuple. Callers that only need the hidden
+    states use ``x, _ = split_activations(...)``; the aux loss defaults to ``0``.
+    """
+    if isinstance(activations, tuple):
+        return activations
+    return activations, 0
+
+
 class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     """
     Superclass for models with a language modeling head.
@@ -308,11 +322,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
         """
-        activations = self.activations(example.tokens, example.attn_mask, key=key)
-
-        aux_loss = 0
-        if isinstance(activations, tuple):
-            activations, aux_loss = activations
+        activations, aux_loss = split_activations(self.activations(example.tokens, example.attn_mask, key=key))
 
         loss = maybe_fused_next_token_loss(
             self.Pos,
