@@ -381,13 +381,19 @@ def run_scheduling_decision(
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
-    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
-    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
+    preemption_plan = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+
+    # Commit each preemptor onto the worker its victim frees in the same tick as
+    # the PREEMPT, so it is not re-competed for its own freed slot next tick. The
+    # freed worker is not physically empty until the victim's attempt finalizes;
+    # the reconcile dispatch gate holds the preemptor's run-intent until then.
+    assignments = all_assignments + preemption_plan.placements
+    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, assignments, order.ordered_task_ids)
 
     return ScheduleResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
-            for task_id, worker_id in all_assignments
+            for task_id, worker_id in assignments
         ],
         preemptions=[
             TerminalDecision(
@@ -395,7 +401,7 @@ def run_scheduling_decision(
                 task_id=victim_id,
                 reason=f"Preempted by {preemptor_name}",
             )
-            for preemptor_name, victim_id in preemptions
+            for preemptor_name, victim_id in preemption_plan.evictions
         ],
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,

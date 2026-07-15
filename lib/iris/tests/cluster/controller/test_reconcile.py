@@ -447,6 +447,75 @@ def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
     assert desired.attempt_uid == row.attempt_uid
 
 
+def test_reconcile_worker_holds_assigned_run_while_preemption_victim_occupies_worker():
+    """A preemptor ASSIGNED onto the worker its victim frees gets no run-intent
+    while the victim's PREEMPTED attempt is still worker-bound — the victim's
+    stop still fires, but the preemptor waits so it never races the live process."""
+    victim = _row(
+        job_pb2.TASK_STATE_PENDING,
+        task_id="victim",
+        job="job-victim",
+        attempt_id=4,
+        attempt_uid="aaaaaaaaaaaaaaaa",
+        attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+    )
+    preemptor = _row(
+        job_pb2.TASK_STATE_ASSIGNED,
+        task_id="preemptor",
+        job="job-preemptor",
+        attempt_id=1,
+        attempt_uid="bbbbbbbbbbbbbbbb",
+    )
+    plan = _plan_for([victim, preemptor], job_specs={_job_id("job-preemptor"): _spec()})
+
+    by_uid = {d.attempt_uid: d for d in plan.request.desired}
+    assert by_uid[victim.attempt_uid].stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
+    assert (
+        preemptor.attempt_uid not in by_uid
+    ), "preemptor run-intent must be withheld while the victim occupies the worker"
+
+
+def test_reconcile_worker_dispatches_assigned_once_victim_finalized():
+    """Once the victim's attempt is finalized it drops from the reconcile snapshot,
+    so the preemptor — now alone on the worker — is dispatched."""
+    preemptor = _row(
+        job_pb2.TASK_STATE_ASSIGNED,
+        task_id="preemptor",
+        job="job-preemptor",
+        attempt_id=1,
+        attempt_uid="bbbbbbbbbbbbbbbb",
+    )
+    plan = _plan_for([preemptor], job_specs={_job_id("job-preemptor"): _spec()})
+
+    by_uid = {d.attempt_uid: d for d in plan.request.desired}
+    assert by_uid[preemptor.attempt_uid].HasField("run")
+
+
+def test_reconcile_worker_running_cotenant_does_not_hold_assigned_dispatch():
+    """A merely-RUNNING co-tenant does not gate a freshly ASSIGNED task on the
+    same worker — only a preemption victim being torn down does."""
+    running = _row(
+        job_pb2.TASK_STATE_RUNNING,
+        task_id="cotenant",
+        job="job-run",
+        attempt_id=2,
+        attempt_uid="cccccccccccccccc",
+        attempt_state=job_pb2.TASK_STATE_RUNNING,
+    )
+    assigned = _row(
+        job_pb2.TASK_STATE_ASSIGNED,
+        task_id="fresh",
+        job="job-fresh",
+        attempt_id=1,
+        attempt_uid="dddddddddddddddd",
+    )
+    plan = _plan_for([running, assigned], job_specs={_job_id("job-fresh"): _spec()})
+
+    by_uid = {d.attempt_uid: d for d in plan.request.desired}
+    assert by_uid[assigned.attempt_uid].HasField("run")
+    assert by_uid[running.attempt_uid].HasField("run")
+
+
 def test_reconcile_worker_mixed_rows_per_axis():
     """A worker holding tasks across every axis builds one desired entry per worker-bound row."""
     rows = [
