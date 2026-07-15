@@ -571,7 +571,13 @@ shred -u /tmp/<cluster>.pem
   `remote_log_dir`, `kube_context`, `object_storage_endpoint`,
   `forwarding.cluster`, and `forwarding.signing_key`), then deploy the sender:
   `uv run finelog deploy up <cluster> --no-build` (the default `--build`
-  recompiles the Rust image first).
+  recompiles the Rust image first). finelog archives to **Cloudflare R2**
+  (`s3://marin-na/finelog/<cluster>`, the R2 `object_storage_endpoint`),
+  authenticated by `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` in the deploy
+  shell — *not* the CoreWeave `CW_KEY_*` keys iris uses for its own
+  `marin-us-east-*` state and task storage. Pointing `remote_log_dir` at a
+  CoreWeave bucket with R2 keys (or vice-versa) fails the archive with
+  `403 InvalidAccessKeyId`.
 - Add `finelog: { config: <cluster> }` to the iris config and `cluster start`
   again to pick it up. CI enforces the pairing: a sender config cannot merge
   until some hub's `jwt` layer names its cluster.
