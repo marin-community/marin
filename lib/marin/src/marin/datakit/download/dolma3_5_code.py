@@ -16,7 +16,13 @@ default ``ram="10g"``; tokenize it with more.
 
 from rigging.filesystem import prefix_join
 
-from marin.datakit.download.dolma3_5 import HF_DATASET_ID, HF_REVISION, STAGED_ROOT
+from marin.datakit.download.dolma3_5 import (
+    DATA_FILE_EXTENSION,
+    DATA_FILE_GLOB,
+    HF_DATASET_ID,
+    HF_REVISION,
+    STAGED_ROOT,
+)
 from marin.datakit.download.hf_simple_util import hf_normalize_steps
 from marin.execution.step_spec import StepSpec
 
@@ -34,8 +40,8 @@ def dolma3_5_code_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             hf_dataset_id=HF_DATASET_ID,
             revision=HF_REVISION,
             staged_path=prefix_join(STAGED_ROOT, subset),
-            hf_urls_glob=(prefix_join(subset, "**/*.jsonl.zst"),),
-            file_extensions=(".jsonl.zst",),
+            hf_urls_glob=(prefix_join(subset, DATA_FILE_GLOB),),
+            file_extensions=(DATA_FILE_EXTENSION,),
         )
         for subset in SUBSETS
     }

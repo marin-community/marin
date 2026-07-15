@@ -22,9 +22,18 @@ Usage::
     # canonical artifact consumers sample/tokenize off of.
 """
 
+from enum import StrEnum
+
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step as _normalize_step
 from marin.execution.step_spec import StepSpec
+
+
+class NormalizationSchema(StrEnum):
+    """Controls whether normalization preserves source-specific columns."""
+
+    FULL = "full"
+    BARE = "bare"
 
 
 def hf_normalize_steps(
@@ -39,7 +48,7 @@ def hf_normalize_steps(
     text_field: str = "text",
     file_extensions: tuple[str, ...] = (".parquet",),
     zephyr_max_parallelism: int = 8,
-    bare: bool = False,
+    normalization_schema: NormalizationSchema = NormalizationSchema.FULL,
 ) -> tuple[StepSpec, StepSpec]:
     """Return ``(download, normalize)`` for a generic HF-backed source.
 
@@ -60,8 +69,8 @@ def hf_normalize_steps(
         zephyr_max_parallelism: Download parallelism. The default suits repos of a
             few thousand files; raise it for repos with tens of thousands, where
             per-file task dispatch, not bandwidth, is the bottleneck.
-        bare: Forwarded to ``normalize_step``. Set for sources whose extra columns
-            vary across shards -- the parquet writer cannot widen a column mid-write.
+        normalization_schema: Whether to preserve source-specific columns or emit
+            only the normalized ``id``, ``text``, and ``source_id`` fields.
     """
     base = hf_dataset_id.replace("/", "__")
     # Same-repo-different-staging cases (e.g. bigcode/StarCoder2-Extras subsets)
@@ -89,6 +98,6 @@ def hf_normalize_steps(
         id_field=id_field,
         relative_input_path=data_subdir or None,
         file_extensions=file_extensions,
-        bare=bare,
+        bare=normalization_schema is NormalizationSchema.BARE,
     )
     return (download, normalize)

@@ -14,8 +14,14 @@ as the ``finepdfs`` source (``finepdfs.py``).
 
 from rigging.filesystem import prefix_join
 
-from marin.datakit.download.dolma3_5 import HF_DATASET_ID, HF_REVISION, STAGED_ROOT
-from marin.datakit.download.hf_simple_util import hf_normalize_steps
+from marin.datakit.download.dolma3_5 import (
+    DATA_FILE_EXTENSION,
+    DATA_FILE_GLOB,
+    HF_DATASET_ID,
+    HF_REVISION,
+    STAGED_ROOT,
+)
+from marin.datakit.download.hf_simple_util import NormalizationSchema, hf_normalize_steps
 from marin.execution.step_spec import StepSpec
 
 MARIN_NAME = "dolma4pdfs"
@@ -34,11 +40,10 @@ def dolma4pdfs_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
             revision=HF_REVISION,
             staged_path=prefix_join(STAGED_ROOT, MARIN_NAME),
             hf_urls_glob=tuple(
-                prefix_join(prefix_join(MARIN_NAME, component), "**/*.jsonl.zst") for component in COMPONENTS
+                prefix_join(prefix_join(MARIN_NAME, component), DATA_FILE_GLOB) for component in COMPONENTS
             ),
-            file_extensions=(".jsonl.zst",),
+            file_extensions=(DATA_FILE_EXTENSION,),
             zephyr_max_parallelism=DOWNLOAD_PARALLELISM,
-            # The components' nested metadata fields have incompatible types.
-            bare=True,
+            normalization_schema=NormalizationSchema.BARE,
         )
     }
