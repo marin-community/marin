@@ -317,3 +317,62 @@ only cross-store bitwise reproducibility does not.
   (+ GCS mirror).
 - Phase 1 running: 168-bucket histograms in the SAME frozen basis (bandwidth reuse mandatory)
   for feature comparability — fits stay per-sweep.
+
+## 2026-07-15 grug phase 2 — surrogate variant fit on the 800 train runs (holdout untouched)
+
+Suite: `experiments/datakit/mixture_features/grug_fit.py` (reuses featurize + retrodiction by
+import; ridge switched to closed-form GCV to make 800-run kernels tractable, folds parallelized
+8-way, BLAS pinned to 1 thread). Outputs `scratch/mixture_features/grug/{v_audit.json,
+epoch_table.parquet, epoch_matrix.npz, cv_results.parquet, cv_analysis.json, fit_report.md}`,
+mirrored to `gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/v0/grug/`.
+**QUARANTINE_test_labels.parquet never opened.**
+
+- **Stage A (V audit)**: K=40 rank **36/168** (deficiency 132, cond 7.5e34, exact-duplicate
+  columns cos 1.0000 = same-cluster tiers collapse) — unusable, as phase-1 predicted. K=1000 and
+  K=5000 both **full rank 168/168** (cond 939 / 239); worst near-dups are within-cluster adjacent
+  tiers (c32q2~c32q3 0.999@K1000, 0.980@K5000). → fit at K=1000 (or 5000).
+- **Stage B (epoching)**: budget resolves to 2003 steps × 32 × 8192 = 525M tok/run; phase split
+  by 1536-block quant = **0.767/0.233** (not 0.80/0.20). `enable_simulated_epoching=True` slices
+  each cache to ratio·T_j, so effective epochs use the **target budget 10.37e12** over full T_j.
+  Heavy epoching: **every** run has a bucket >1 epoch, p50 max-epoch **9.7**, 45% of runs >10,
+  mean 45 buckets/run >1 epoch.
+- **Stage C/D CV** (5-fold×3, identical splits, seed 0; OOF Spearman on macro_bpb, higher=better):
+  incumbent **weights-ridge 0.215** (weights-LGBM worse, 0.210). Content beats it:
+  hist-ridge K1000 **0.254** (+0.037 paired, p=0.010), **Hellinger-kernel K1000 0.303** (+0.089
+  vs weights p=1e-4; +0.052 vs linear content p=0.003). Quality tier-mass adds ~0 on top of K1000
+  content (+0.0008, p=0.19) and **hurts the kernel** (−0.022, p=0.015). Epochs: constrained
+  in-collapse discount (δ fit, median 0.10) adds **nothing** (−0.0003, p=0.72); only free-hinge
+  repeated-mass gives a tiny sig bump (+0.008, p=4e-4). Combined ≈ hinge.
+- **Controls (semantics-vs-shape)**: linear content ridge has a REAL semantic-identity signal
+  (matched-random −0.060, shuffled −0.030). But the KERNEL's extra power over the linear model is
+  **not** semantic — matched-random reproduces the kernel almost exactly (margin **+0.0007**;
+  shuffled +0.021). I.e. the kernel's gain over the incumbent is RBF nonlinearity + per-bucket
+  dispersion, not cross-bucket embedding semantics.
+- **Recommendation** (primary for the holdout, protocol selects by predictive CV): **Hellinger
+  kernel ridge, K=1000, per-phase, sqrt-hist Hellinger distance** — best OOF Spearman + RMSE,
+  decisive over the incumbent, no fragile add-ons. Flag under R4 that its edge is nonlinearity/
+  dispersion; the linear content ridge is the semantically-honest alternative (~0.05 worse).
+  **Holdout test NOT run.**
+- 3 surprises: (1) quality tier features redundant/harmful given K=1000 content — fine histograms
+  already encode tiers well enough for prediction; (2) despite extreme epoching, the monotone
+  collapse-discount is inert and epoch features barely move macro_bpb; (3) the kernel's win is a
+  dispersion/nonlinearity effect (matched-random ≈ semantic), reviving the qsplit240 H2b
+  dispersion-confound at full force — the "embedding semantics" claim is weak on this sweep.
+
+## 2026-07-15 PR #2393 survey + improvement tracks (goal: satisfactory metric on grug)
+
+- Full reuse map of the swarm branch: scratch/mixture_features/grug/pr2393_reuse_map.md
+  (+ GCS mirror). Highlights: dsp_exact.py (0.914 OOF fitter) is self-contained and
+  dimension-generic (PacketData loader is all grug needs; 672 params vs 800 runs needs tying);
+  SNR target-selection kernel is liftable but REQUIRES a seed-repeat panel (none for grug);
+  trustblend (~40L) is the model-agnostic LCB pattern; solve_single_exact_kl (cvxpy) the only
+  hard-constraint solver; "Fisher" in the swarm name = D-optimal QR-pivot design, and grug's
+  840 runs are a post-filter subset of design_production_swarm_167p.py's 1200 candidates;
+  simulated epoching = target_budget mechanism (no enable flag), epoch features MUST use
+  target_budget not realized tokens (debug-log-epoch-feature-budget-semantics).
+- The branch already analyzed this swarm (build_grug_moe_mix_dashboard.py,
+  analyze_grug_moe_path_response.py) — being consulted for target choice.
+- Running tracks: (1) per-task predictability/reliability + re-registerable target candidates;
+  (2) DSP port to grug (same folds as phase 2; per-cluster tying; content-tied a_i variant).
+- Holdout untouched; protocol amendment (target + R1 bar) to be re-registered on issue #7067
+  BEFORE any label opening.
