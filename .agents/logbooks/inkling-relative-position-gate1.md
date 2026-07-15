@@ -79,3 +79,13 @@ None.
 - Next action: wait for both W&B runs to finish, then compute effective speedup against #6882.
 
 The first submission attempt omitted `--preemptible` and was rejected before job creation because the CPU parent inherited a non-preemptible constraint while `--reserve v5p-8` matched only preemptible v5p groups. The retry above made the placement constraint explicit; no experiment work was duplicated.
+
+### 2026-07-15 12:13 PDT - Training startup confirmed
+
+- Hypothesis: unchanged from `MOE-RPE-001` and `MOE-RPE-002` above.
+- Commit Hash: `45487ef99`
+- Command: inspect both Iris child logs and query W&B project `marin-community/dial_moe` for display names matching `^MOE-RPE-00[12]`.
+- Config: unchanged from the final launch snapshot.
+- Result: both W&B runs are initialized and report state `running`: [MOE-RPE-001-d512](https://wandb.ai/marin-community/dial_moe/runs/MOE-RPE-001-d512) and [MOE-RPE-002-d768](https://wandb.ai/marin-community/dial_moe/runs/MOE-RPE-002-d768). Iris logs show accelerator initialization, cache loading, and entry into the training loop with no job failures.
+- Interpretation: Gate 1 is launched end to end, rather than only queued at the parent level. No quality or speed claim is available until steps and evaluations land.
+- Next action: wait for both runs to finish, then compute the prescribed effective speedups against #6882.
