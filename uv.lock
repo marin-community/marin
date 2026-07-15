@@ -5486,7 +5486,7 @@ requires-dist = [
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
-    { name = "thalas", git = "https://github.com/marin-community/thalas.git?rev=200794797c729d58303b245ee1da111dd5b6f55e" },
+    { name = "thalas", git = "https://github.com/marin-community/thalas.git?rev=6429a38c9747695111129b5b917836012cd77da8" },
     { name = "watchdog" },
 ]
 
@@ -10376,7 +10376,7 @@ jax = [
 [[package]]
 name = "thalas"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/thalas.git?rev=200794797c729d58303b245ee1da111dd5b6f55e#200794797c729d58303b245ee1da111dd5b6f55e" }
+source = { git = "https://github.com/marin-community/thalas.git?rev=6429a38c9747695111129b5b917836012cd77da8#6429a38c9747695111129b5b917836012cd77da8" }
 dependencies = [
     { name = "draccus" },
     { name = "fsspec" },
