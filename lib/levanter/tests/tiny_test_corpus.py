@@ -8,7 +8,34 @@ import numpy as np
 
 from levanter.data.audio import AudioIODatasetConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.formats import SupervisedLmDatasetFormat
 from levanter.store.cache import SerialCacheWriter, TreeCache
+
+
+def construct_packed_supervised_config(
+    path, *, num_docs: int = 8, pack: int = 64, vocab_size: int = 32
+) -> tuple[LmDataConfig, DatasetComponent]:
+    """Build a single packed supervised component whose short docs pack together.
+
+    Returns the ``(config, component)`` pair. The docs are short enough that the packed
+    sequence count is smaller than ``num_docs``, so tests can tell a packing-aware length
+    apart from a raw document count. Uses the passthrough tokenizer, so no network is needed.
+    """
+    os.makedirs(path, exist_ok=True)
+    records = [{"input": f"{i} {i} ", "target": f"{i + 1} {i + 2}"} for i in range(1, num_docs + 1)]
+    data_path = os.path.join(str(path), "sup.jsonl")
+    with open(data_path, "w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[data_path], validation_urls=[]),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(path),
+        pack=pack,
+    )
+    config = LmDataConfig(components={"sup": component}, tokenizer="passthrough", vocab_size=vocab_size)
+    return config, component
 
 
 def _write_tiny_corpus(path):

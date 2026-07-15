@@ -33,6 +33,7 @@ from levanter.data.text.formats import (
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
+import tiny_test_corpus
 from levanter.tokenizers import load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
@@ -906,31 +907,8 @@ def test_build_caches_rebuilds_on_unloadable_cache(tmp_path):
     np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(records[0]["input_ids"], dtype=np.int32))
 
 
-def _write_supervised_jsonl(path, num_docs: int):
-    records = [{"input": f"{i} {i} ", "target": f"{i + 1} {i + 2}"} for i in range(1, num_docs + 1)]
-    with path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-
-def _packed_supervised_config(tmp_path, num_docs: int = 8, pack: int = 64):
-    """A single packed supervised component whose short docs pack together (packed count < doc count)."""
-    tmp_path = Path(tmp_path)
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    data_path = tmp_path / "sup.jsonl"
-    _write_supervised_jsonl(data_path, num_docs)
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
-        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        cache_dir=str(tmp_path),
-        pack=pack,
-    )
-    config = LmDataConfig(components={"sup": component}, tokenizer="passthrough", vocab_size=32)
-    return config, component
-
-
 def test_num_train_sequences_counts_packed_examples_not_documents(tmp_path):
-    config, component = _packed_supervised_config(tmp_path, num_docs=8)
+    config, component = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=8)
     Pos = hax.Axis("position", 16)
 
     cache = config.build_caches("train")["sup"]
@@ -947,7 +925,7 @@ def test_num_train_sequences_counts_packed_examples_not_documents(tmp_path):
 
 
 def test_train_set_epochs_is_finite_with_length_scaled_by_epochs(tmp_path):
-    config, _ = _packed_supervised_config(tmp_path, num_docs=8)
+    config, _ = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=8)
     Pos = hax.Axis("position", 16)
     per_epoch = config.num_train_sequences(Pos)
     schedule = BatchSchedule(2)
@@ -962,7 +940,7 @@ def test_train_set_epochs_is_finite_with_length_scaled_by_epochs(tmp_path):
 
 
 def test_default_train_set_is_infinite_mixture(tmp_path):
-    config, _ = _packed_supervised_config(tmp_path, num_docs=8)
+    config, _ = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=8)
     Pos = hax.Axis("position", 16)
     train_set = config.train_set(Pos, BatchSchedule(2), key=jax.random.PRNGKey(0))
     # The default restart mixture reports itself infinite; that is exactly why epoch capping is needed.
@@ -970,8 +948,8 @@ def test_default_train_set_is_infinite_mixture(tmp_path):
 
 
 def test_epoch_length_rejects_multiple_training_components(tmp_path):
-    config_a, comp_a = _packed_supervised_config(tmp_path / "a", num_docs=8)
-    config_b, comp_b = _packed_supervised_config(tmp_path / "b", num_docs=8)
+    config_a, comp_a = tiny_test_corpus.construct_packed_supervised_config(tmp_path / "a", num_docs=8)
+    config_b, comp_b = tiny_test_corpus.construct_packed_supervised_config(tmp_path / "b", num_docs=8)
     config = LmDataConfig(
         components={"a": comp_a, "b": comp_b},
         train_weights={"a": 1.0, "b": 1.0},

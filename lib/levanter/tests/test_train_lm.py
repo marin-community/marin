@@ -21,9 +21,8 @@ import levanter.main.train_lm as train_lm
 import tiny_test_corpus
 from levanter.adaptor import LoraAdaptorConfig
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
-from levanter.data.text.formats import SupervisedLmDatasetFormat
 from levanter.distributed import DistributedConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
@@ -195,20 +194,8 @@ def test_train_lm_direct_dataset():
 
 
 def _packed_supervised_lm_config(tmp_path, *, num_docs=8, seq_len=16, batch_size=2, num_train_epochs=1):
-    """A single packed supervised component whose short docs pack together, for epoch resolution tests."""
-    records = [{"input": f"{i} {i} ", "target": f"{i + 1} {i + 2}"} for i in range(1, num_docs + 1)]
-    data_path = os.path.join(str(tmp_path), "sup.jsonl")
-    with open(data_path, "w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[data_path], validation_urls=[]),
-        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        cache_dir=str(tmp_path),
-        pack=64,
-    )
-    data = LmDataConfig(components={"sup": component}, tokenizer="passthrough", vocab_size=32)
+    """A TrainLmConfig over a single packed supervised component, for epoch resolution tests."""
+    data, _ = tiny_test_corpus.construct_packed_supervised_config(tmp_path, num_docs=num_docs)
     model = train_lm.LlamaConfig(
         num_layers=2, num_heads=2, num_kv_heads=2, max_seq_len=seq_len, hidden_dim=32, attn_backend=None
     )

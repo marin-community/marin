@@ -103,12 +103,13 @@ class TrainLmOnPodConfig:
     you explicitly want cache construction.
     """
     auto_num_epochs: int | None = None
-    """When set, resolve num_train_steps from the concrete packed SFT train cache at launch time.
+    """When set, resolve num_train_steps from the packed SFT train cache at launch and cap the run
+    at this many epochs.
 
-    Unlike the DPO resolver, this counts *post-packing* sequences — the true number the trainer
-    steps over — so it does not over-count short chat/SFT documents that pack together. It also
-    sets the inner ``num_train_epochs`` so the training data is made finite and the run stops after
-    this many epochs even if ``num_train_steps`` drifts.
+    The step count is derived from the post-packing sequence count — the number of examples the
+    trainer actually steps over — so short chat/SFT documents that pack together are counted once
+    per pack, not once per document. The inner ``num_train_epochs`` is also set so the training data
+    is made finite and the run stops after this many epochs even if ``num_train_steps`` drifts.
     """
 
 
@@ -349,12 +350,12 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
 
 
 def _maybe_auto_resolve_lm_schedule(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
-    """Resolve ``num_train_steps`` from ``auto_num_epochs`` using the packing-aware Levanter helper.
+    """Resolve ``num_train_steps`` from ``auto_num_epochs`` against the packed training cache.
 
-    Mirrors :func:`_maybe_auto_resolve_dpo_schedule` but counts post-packing sequences (via
-    :func:`num_train_steps_for_epochs`) rather than raw cache rows, so packed SFT runs get the true
-    one-epoch step count instead of over-counting documents that pack together. The inner
-    ``num_train_epochs`` is set so Levanter also makes the training data finite as a hard cap.
+    When ``auto_num_epochs`` is set, set the inner ``num_train_epochs`` (so Levanter makes the
+    training data finite as a hard cap) and set ``num_train_steps`` to the step count for that many
+    passes over the post-packing sequence count. Returns the config unchanged when
+    ``auto_num_epochs`` is None.
     """
     if config.auto_num_epochs is None:
         return config
