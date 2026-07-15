@@ -50,6 +50,9 @@ PREFIX_CREDIT = 1.0
 
 # Top entries stored per boundary and conditioning, for the app's tables.
 TOPK_STORE = 256
+# Cache location is per-machine environment: flag wins, then this env var,
+# then a hard error — no baked-in default path.
+CACHE_DIR_ENV_VAR = "XTOK_DRIFT_CACHE"
 # Null check: identical ids evaluated in two differently-batched forwards may
 # differ by kernel nondeterminism; more than this is a replay bug, not numerics.
 COINCIDE_KL_MAX = 1e-2
@@ -85,6 +88,15 @@ class ScoredRollout:
     rollout: Rollout
     boundaries: list[ScoredBoundary]
     skipped_offsets: list[int]
+
+
+def resolve_cache_dir(flag_value: str | None) -> str:
+    if flag_value is not None:
+        return flag_value
+    cache_dir = os.environ.get(CACHE_DIR_ENV_VAR)
+    if cache_dir is None:
+        raise ValueError(f"no cache dir: pass --cache-dir or set {CACHE_DIR_ENV_VAR}")
+    return cache_dir
 
 
 def load_advisor(model: str, revision: str, device: str) -> tuple[Any, Any]:
@@ -350,7 +362,7 @@ def parse_args() -> argparse.Namespace:
         "--samples", nargs="+", type=int, default=[0], help="sample ranks within each (problem, weight) group"
     )
     parser.add_argument("--num-rollouts", type=int, default=None, help="keep only the first N selected rollouts")
-    parser.add_argument("--cache-dir", required=True)
+    parser.add_argument("--cache-dir", default=None, help=f"cache dir; default ${CACHE_DIR_ENV_VAR}")
     parser.add_argument("--model", default=ADVISOR_MODEL, help="HF repo id or local model path")
     parser.add_argument("--revision", default=ADVISOR_REVISION)
     parser.add_argument("--device", default="cuda")
@@ -361,6 +373,7 @@ def parse_args() -> argparse.Namespace:
         parser.error("--slug and --step-output/--prompts are mutually exclusive")
     if args.slug is None and (args.step_output is None or args.prompts is None):
         parser.error("pass --slug, or both --step-output and --prompts")
+    args.cache_dir = resolve_cache_dir(args.cache_dir)
     return args
 
 

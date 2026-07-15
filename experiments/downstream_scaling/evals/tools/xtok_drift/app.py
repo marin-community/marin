@@ -31,8 +31,10 @@ from experiments.downstream_scaling.evals.algorithms import xtok_selection
 from experiments.downstream_scaling.evals.tools.xtok_drift.scoring import (
     ADVISOR_MODEL,
     ADVISOR_REVISION,
+    CACHE_DIR_ENV_VAR,
     Comparison,
     load_advisor,
+    resolve_cache_dir,
     score_chunked_prefix,
     token_label,
 )
@@ -292,14 +294,14 @@ def build_app(cache_dir: str, model: str, revision: str, device: str) -> gr.Bloc
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--cache-dir", required=True)
+    parser.add_argument("--cache-dir", default=None, help=f"cache dir; default ${CACHE_DIR_ENV_VAR}")
     parser.add_argument("--model", default=ADVISOR_MODEL, help="HF repo id or local model path (probe tab only)")
     parser.add_argument("--revision", default=ADVISOR_REVISION)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--server-name", default="127.0.0.1")
     args = parser.parse_args()
-    demo = build_app(args.cache_dir, args.model, args.revision, args.device)
+    demo = build_app(resolve_cache_dir(args.cache_dir), args.model, args.revision, args.device)
     demo.launch(server_name=args.server_name, server_port=args.port)
 
 
