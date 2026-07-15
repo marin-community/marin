@@ -45,7 +45,13 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_LEAFGROUP,
+    COSCHEDULE_NVLINK_DOMAIN,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    RACK_SIZE,
+)
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
@@ -184,9 +190,16 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 # never invents WorkloadPriorityClass names (a missing one is rejected by
 # Kueue), so a band is stamped only when the config maps it explicitly.
 _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
-    "leafgroup": (CW_LABEL_LEAFGROUP, False),
-    "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
+    COSCHEDULE_LEAFGROUP: (CW_LABEL_LEAFGROUP, False),
+    COSCHEDULE_NVLINK_DOMAIN: (CW_LABEL_NVLINK_DOMAIN, True),
 }
+
+# Finest topology level (one node), the last level in both CoreWeave Topology CRs. The
+# GPU ResourceFlavor (cw-ib) is topology-aware, so Kueue rejects any GPU workload that
+# carries no topology request against it. A non-coscheduled GPU pod has no colocation
+# need, so it requests this always-satisfiable level as a soft preference — just enough
+# to be a valid TAS workload — so single-host GPU jobs admit instead of hanging.
+_KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
@@ -757,11 +770,29 @@ def _build_pod_manifest(
         # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
         node_label, required = topo
+        # A hard single-NVLink-domain gang cannot span racks: one NVL72 rack is one NVLink
+        # domain of RACK_SIZE nodes, so a required nvlink.domain gang larger than that can
+        # never be placed and would sit unschedulable forever. Reject it at build time with a
+        # clear message instead (the CLI already caps NVLink gangs at RACK_SIZE; this guards
+        # the programmatic client that stamps group_by directly).
+        if required and node_label == CW_LABEL_NVLINK_DOMAIN and run_req.num_tasks > RACK_SIZE:
+            raise ValueError(
+                f"Coscheduled task {run_req.task_id!r} requires a single {group_by!r} domain but "
+                f"num_tasks={run_req.num_tasks} exceeds the NVLink domain size ({RACK_SIZE} nodes, "
+                "one NVL72 rack). A hard NVLink-domain gang cannot cross racks; request "
+                f"<= {RACK_SIZE} replicas or coschedule on a coarser level (e.g. leafgroup)."
+            )
         anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
         metadata["annotations"] = {
             _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
             anno_key: node_label,
         }
+    elif gpu_count > 0:
+        # A non-coscheduled GPU pod still lands on the topology-aware cw-ib flavor, which
+        # Kueue will not admit without a topology request. It has no gang to colocate, so
+        # ask only for the finest, always-satisfiable level as a soft preference. CPU-only
+        # pods route to the non-TAS cw-cpu flavor and must NOT carry a topology annotation.
+        metadata["annotations"] = {_KUEUE_PREFERRED_TOPOLOGY: _KUEUE_SINGLE_POD_TOPOLOGY}
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is
