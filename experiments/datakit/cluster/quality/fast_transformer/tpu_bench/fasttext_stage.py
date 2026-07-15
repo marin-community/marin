@@ -10,6 +10,7 @@ identical sharding. Reports docs/sec and chars/sec (fasttext's natural units).
 
 import argparse
 import functools
+import itertools
 import json
 import logging
 import os
@@ -64,7 +65,7 @@ def _writer(output_path: str, model_path: str):
         if first is None:
             return
         shard_file = posixpath.basename(first[DEFAULT_FILE_PATH_COLUMN])
-        out_file = f"{output_path.rstrip('/')}/outputs/main/{shard_file}"
+        out_file = str(StoragePath(output_path) / "outputs" / "main" / shard_file)
         timing: dict[str, float] = {}
         result: dict = {}
         n_docs = n_chars = 0
@@ -87,7 +88,7 @@ def _writer(output_path: str, model_path: str):
                 n_docs += len(batch)
                 n_chars += sum(len(t) for t in texts)
 
-            for r in (first, *records):
+            for r in itertools.chain([first], records):
                 batch.append(r)
                 if len(batch) >= PREDICT_BATCH:
                     flush(batch)

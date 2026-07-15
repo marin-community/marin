@@ -28,7 +28,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("stage", choices=["fast", "fasttext"])
     p.add_argument("--corpus", default=None, help="text parquet glob; relative paths root at marin_prefix()")
-    p.add_argument("--model-dir", required=True, help="scorer dir; relative paths root at marin_prefix()")
+    p.add_argument("--model-dir", default=None, help="fast scorer dir; relative paths root at marin_prefix()")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--max-files", type=int, default=24)
     p.add_argument("--max-workers", type=int, default=1)
@@ -45,6 +45,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     if args.stage == "fast":
+        if not args.model_dir:
+            p.error("--model-dir is required for the fast stage")
         fast_stage.run(
             corpus_glob=args.corpus,
             model_dir=args.model_dir,

@@ -59,10 +59,9 @@ def doc_windows(text: str) -> list[str]:
 
 def load_remap_meta(model_dir: str) -> tuple[dict[int, int], str, int]:
     """Load (remap, tokenizer_name, max_tokens) from a scorer dir -- no ``.eqx`` needed."""
-    model_dir = model_dir.rstrip("/")
-    with open_url(f"{model_dir}/{MODEL_META}", "r") as fh:
+    with open_url(prefix_join(model_dir, MODEL_META), "r") as fh:
         meta = json.loads(fh.read())
-    with open_url(f"{model_dir}/{MODEL_REMAP}", "r") as fh:
+    with open_url(prefix_join(model_dir, MODEL_REMAP), "r") as fh:
         remap = {int(k): int(v) for k, v in json.loads(fh.read()).items()}
     return remap, meta["tokenizer"], int(meta["max_tokens"])
 

@@ -18,7 +18,7 @@ the GIL), so this stage keeps one shard on one Zephyr worker and drives its own 
     rayon pool disabled.
   - A stager thread pulls finished blocks and ships them to the chips (``device_put``); the
     main thread only forwards the staged device arrays and reduces windows -> per-doc scores.
-    Reads, tokenization, the H2D transfer, and the forward all overlap.
+    Reads overlap tokenization; the stager's H2D transfers then overlap the forward and reduce.
 
 Weights/vocab come from the config-faithful scorer dir.
 """
@@ -85,7 +85,7 @@ def _load_worker(model_dir: str, device_batch: int, max_tokens: int, calib_file:
     """Parent-side warm: scorer + calibration + compiled forward. Tokenization lives in the
     fork children, so the parent never loads the tokenizer or remap."""
     scorer = load_pooled_scorer(model_dir)
-    with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
+    with open_url(str(StoragePath(model_dir) / calib_file), "r") as fh:
         calib = json.loads(fh.read())
     xk = np.asarray(calib["xk"], dtype=np.float64)
     yk = np.asarray(calib["yk"], dtype=np.float64)
@@ -267,7 +267,7 @@ def _writer(output_path, model_dir, device_batch, calib_file, tok_procs, read_th
         for path in paths:
             t0 = time.perf_counter()
             rows, stats = _score_file(path, model_dir, device_batch, tok_procs, read_threads, calib_file)
-            out_file = f"{output_path.rstrip('/')}/outputs/main/{posixpath.basename(path)}"
+            out_file = str(StoragePath(output_path) / "outputs" / "main" / posixpath.basename(path))
             t_write = time.perf_counter()
             result = _write_rows(rows, out_file)
             write_s = time.perf_counter() - t_write
@@ -362,7 +362,7 @@ def run(
         "tok_procs": tok_procs,
         "read_threads": read_threads,
         "files": len(files),
-        "workers_v6e4": max_workers,
+        "workers": max_workers,
         "n_chips": n_chips,
         "device_batch": device_batch,
         "wall_s": round(wall, 1),
