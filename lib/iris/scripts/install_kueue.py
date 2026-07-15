@@ -196,13 +196,7 @@ COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 # requests no GPU/RDMA) matches cw-cpu and lands on CPU capacity. Listed first in the
 # resourceGroup so CPU pods pick it before the GPU flavor.
 CPU_RESOURCE_FLAVOR_NAME = "cw-cpu"
-CPU_FLAVOR_QUOTA = {
-    "cpu": "1000000000",
-    "memory": "1Pi",
-    "ephemeral-storage": "1Pi",
-    "nvidia.com/gpu": "0",
-    "rdma/ib": "0",
-}
+CPU_FLAVOR_QUOTA = {**NON_BINDING_QUOTA, "nvidia.com/gpu": "0", "rdma/ib": "0"}
 
 
 # --------------------------------------------------------------------------

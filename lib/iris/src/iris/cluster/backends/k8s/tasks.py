@@ -730,8 +730,8 @@ def _build_pod_manifest(
     # nor select as a preemption victim, silently defeating priority preemption of
     # lower-priority gangs. CPU-only pods route through Kueue as well, so their
     # capacity is accounted uniformly; the ClusterQueue must carry a CPU
-    # ResourceFlavor covering their resources (install_kueue.py --with-cpu-flavor),
-    # else they hang SchedulingGated.
+    # ResourceFlavor covering their resources (install_kueue.py
+    # --cpu-flavor-node-label), else they hang SchedulingGated.
     is_gang = bool(run_req.coscheduling.group_by)
     if is_gang and not config.local_queue:
         raise ValueError(
