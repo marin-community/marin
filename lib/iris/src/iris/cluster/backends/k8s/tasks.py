@@ -86,6 +86,19 @@ from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
+
+class PodManifestError(ValueError):
+    """A RunTaskRequest cannot produce a valid Pod manifest.
+
+    Raised for request-level validation failures in manifest construction: an
+    unsupported container profile, a coscheduling group_by with no topology
+    mapping, an NVLink-domain gang larger than one rack, or an unsupported
+    constraint op. These are permanent — the identical request fails the same
+    way on every retry — so ``sync`` fails the task terminally instead of
+    treating it as a retryable worker loss and re-applying it every tick.
+    """
+
+
 # Label key prefix for iris-managed pod identification.
 _LABEL_MANAGED = "iris.managed"
 _LABEL_RUNTIME = "iris.runtime"
@@ -248,7 +261,7 @@ def _constraints_to_node_selector(
         if c.op == job_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
             node_selector[label_key] = c.value.string_value
         else:
-            raise ValueError(
+            raise PodManifestError(
                 f"Unsupported constraint op={c.op} for key={c.key!r}: "
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
@@ -587,7 +600,7 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
     resolved = resolve_container_profile(profile)
 
     if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
-        raise ValueError(
+        raise PodManifestError(
             "container profile DOCKER_ACCESS is not supported on the Kubernetes backend "
             "(nodes run containerd, not dockerd, so there is no host docker socket); use "
             "the docker worker backend, or PRIVILEGED with an in-pod runtime"
@@ -760,7 +773,7 @@ def _build_pod_manifest(
         # topology annotation exists to prevent. Fail fast before stamping.
         topo = config.kueue_topologies.get(group_by)
         if topo is None:
-            raise ValueError(
+            raise PodManifestError(
                 f"Coscheduled task {run_req.task_id!r} has group_by={group_by!r}, which has no "
                 f"topology mapping on this cluster (known: {sorted(config.kueue_topologies)}). "
                 "group_by must name a topology level the cluster provisioned; configure "
@@ -776,7 +789,7 @@ def _build_pod_manifest(
         # clear message instead (the CLI already caps NVLink gangs at RACK_SIZE; this guards
         # the programmatic client that stamps group_by directly).
         if required and node_label == CW_LABEL_NVLINK_DOMAIN and run_req.num_tasks > RACK_SIZE:
-            raise ValueError(
+            raise PodManifestError(
                 f"Coscheduled task {run_req.task_id!r} requires a single {group_by!r} domain but "
                 f"num_tasks={run_req.num_tasks} exceeds the NVLink domain size ({RACK_SIZE} nodes, "
                 "one NVL72 rack). A hard NVLink-domain gang cannot cross racks; request "
@@ -1664,6 +1677,21 @@ class K8sTaskProvider:
         for run_req in request.tasks_to_run:
             try:
                 self._apply_pod(run_req)
+            except PodManifestError as exc:
+                logger.error("Task %s has an invalid manifest and cannot be scheduled: %s", run_req.task_id, exc)
+                # The request itself is invalid, so it can never produce a pod: every
+                # retry rebuilds the same broken manifest, wedging this backend's
+                # reconcile tick (the error would otherwise escape sync and abort the
+                # remaining applies/polls). Fail the task terminally with the reason
+                # instead of the retryable WORKER_FAILED used for transient apply loss.
+                apply_failures.append(
+                    TaskUpdate(
+                        task_id=JobName.from_wire(run_req.task_id),
+                        attempt_id=run_req.attempt_id,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error=str(exc),
+                    )
+                )
             except KubectlError as exc:
                 logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
                 # The pod was never created, so there is no k8s verdict to track
