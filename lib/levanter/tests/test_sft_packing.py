@@ -221,8 +221,8 @@ def test_packed_leading_document_loss_matches_unpacked(tokenizer, tmp_path):
 
     Cross-document attention is blocked by segment ids, but position ids are absolute
     and do not reset per document, so only the position-aligned leading document is
-    invariant under packing today; later documents shift and will match once the
-    pad-per-document path (GH #7086) preserves per-document positions. This pins the
+    invariant under packing today; later documents shift and will match once a
+    pad-per-document packing path preserves per-document positions. This pins the
     leading-document invariant end-to-end through a real attention stack, which is the
     guard against a cross-document leak surfacing as a changed loss.
     """

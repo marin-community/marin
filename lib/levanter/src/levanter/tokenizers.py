@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 import jinja2
 import jinja2.ext
@@ -377,13 +377,21 @@ def _chat_template_messages(
     ]
 
 
-def _strip_sentinels(rendered: str, num_messages: int) -> tuple[str, list[tuple[int, int]], list[tuple[int, int]]]:
-    """Recover the sentinel-free render plus generation and per-message char spans.
+class _StrippedRender(NamedTuple):
+    """Sentinel-free render text with the char spans recovered from the removed sentinels.
 
-    The returned string is byte-for-byte the string HF renders (sentinels removed). The
-    generation spans and per-message spans are half-open char ranges in that string's
-    coordinates, ready to be mapped onto tokens via the encoding's char->token map.
+    `text` is byte-for-byte the string HF renders. `generation_spans` and `message_spans`
+    are half-open char ranges in `text`'s coordinates, ready to map onto tokens via the
+    encoding's char->token map.
     """
+
+    text: str
+    generation_spans: list[tuple[int, int]]
+    message_spans: list[tuple[int, int]]
+
+
+def _strip_sentinels(rendered: str, num_messages: int) -> _StrippedRender:
+    """Recover the sentinel-free render plus generation and per-message char spans."""
     parts = re.split(
         (
             f"({re.escape(_GENERATION_SENTINEL_START)}|"
@@ -425,7 +433,7 @@ def _strip_sentinels(rendered: str, num_messages: int) -> tuple[str, list[tuple[
         clean.append(part)
         position += len(part)
 
-    return "".join(clean), generation_spans, message_spans
+    return _StrippedRender("".join(clean), generation_spans, message_spans)
 
 
 def _assistant_mask_from_generation_spans(
@@ -522,14 +530,14 @@ def _apply_chat_template_with_masks(
             **kwargs,
         )
 
-        clean, generation_spans, message_char_spans = _strip_sentinels(rendered, len(conversation))
-        encoding = tokenizer._tokenizer.encode(clean, add_special_tokens=False)
+        stripped = _strip_sentinels(rendered, len(conversation))
+        encoding = tokenizer._tokenizer.encode(stripped.text, add_special_tokens=False)
         ids = list(encoding.ids)
 
         all_ids.append(ids)
-        all_masks.append(_assistant_mask_from_generation_spans(encoding, len(ids), generation_spans))
+        all_masks.append(_assistant_mask_from_generation_spans(encoding, len(ids), stripped.generation_spans))
         if return_message_spans:
-            all_message_spans.append(_message_token_spans(encoding, len(ids), message_char_spans))
+            all_message_spans.append(_message_token_spans(encoding, len(ids), stripped.message_spans))
 
     result: dict[str, Any] = {"input_ids": all_ids, "assistant_masks": all_masks}
     if return_message_spans:
