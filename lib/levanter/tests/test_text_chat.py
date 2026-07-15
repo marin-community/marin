@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import ast
+import pathlib
 from typing import Sequence
 
 import numpy as np
@@ -630,3 +632,211 @@ def test_chat_processor_rejects_system_mapping_without_content(tokenizer: MarinT
 
     with pytest.raises(ValueError, match="System prompt mapping must include 'content'"):
         processor(batch)
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace parity: Levanter's chat renderer vs transformers.apply_chat_template
+#
+# Levanter reimplements apply_chat_template(..., return_assistant_tokens_mask=True)
+# without transformers. These tests pin that reimplementation against the real HF
+# tokenizer as an independent oracle: rendered string, input_ids, and assistant_masks
+# must all match. HF renders the chat, tokenizes the full string once, and maps
+# {% generation %} char spans onto tokens via char_to_token; Levanter must do the same
+# so that BPE merges spanning a generation boundary and JSON key ordering agree.
+# ---------------------------------------------------------------------------
+
+# Minimal generation-bearing template. Generation content is delimited by special
+# tokens (role header + <|eot_id|>), so no BPE merge crosses the mask boundary.
+HF_SIMPLE_TEMPLATE = """\
+{%- for message in messages -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{%- if message['role'] == 'assistant' -%}
+{% generation %}{{ message['content'] }}{% endgeneration %}
+{%- else -%}
+{{ message['content'] }}
+{%- endif -%}
+<|eot_id|>
+{%- endfor -%}
+"""
+
+# Adversarial: the {% generation %} block abuts ordinary text (no special token,
+# no whitespace) on both sides, so the correct tokenization BPE-merges across the
+# mask boundary ("Bot says: <gen>greetings" and "friend</gen> done"). Levanter's
+# former per-segment encoding split those merges; tokenizing once fixes it. This
+# case fails against HF unless the renderer maps char spans onto a single encoding.
+HF_BOUNDARY_MERGE_TEMPLATE = """\
+{%- for message in messages -%}
+{%- if message['role'] == 'assistant' -%}
+Bot says: {% generation %}{{ message['content'] }}{% endgeneration %} done.
+{%- else -%}
+User: {{ message['content'] }}
+{%- endif -%}
+{%- endfor -%}
+"""
+
+
+def _load_llama3_trainable_template() -> str | None:
+    """Read the trainable llama3-instruct chat template out of experiments/llama.py.
+
+    That template trains real SFT models, so parity against HF matters for it directly.
+    It lives in the marin layer, which levanter must not import, so the constant is read
+    from source via AST instead of imported. Returns None when the file is absent (e.g.
+    levanter checked out on its own), in which case the parametrized case is skipped.
+    """
+    path = pathlib.Path(__file__).resolve().parents[3] / "experiments" / "llama.py"
+    if not path.exists():
+        return None
+    tree = ast.parse(path.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "llama3_instruct_trainable_chat_template" for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    return None
+
+
+LLAMA3_TRAINABLE_TEMPLATE = _load_llama3_trainable_template()
+
+_WEATHER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string", "description": "City name"}},
+                "required": ["city"],
+            },
+        },
+    }
+]
+
+_MULTI_TURN = [
+    {"role": "user", "content": "What is 2+2?"},
+    {"role": "assistant", "content": "4"},
+    {"role": "user", "content": "And 3+3?"},
+    {"role": "assistant", "content": "It is 6."},
+]
+
+_WITH_SYSTEM = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hi there."},
+    {"role": "assistant", "content": "Hello! How can I help you today?"},
+]
+
+_TOOL_CALL_CONV = [
+    {"role": "user", "content": "Call the adder."},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": {"a": 2, "b": 3}}}
+        ],
+    },
+    {"role": "tool", "content": {"result": 5}},
+    {"role": "assistant", "content": "The sum is 5."},
+]
+
+_MULTI_TOOL_CONV = [
+    {"role": "user", "content": "Search then open."},
+    {
+        "role": "assistant",
+        "content": "On it.",
+        "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "search", "arguments": {"query": "cats"}}},
+            {"id": "c2", "type": "function", "function": {"name": "open", "arguments": {"path": "a.py"}}},
+        ],
+    },
+    {"role": "assistant", "content": "Done."},
+]
+
+_LLAMA3_TOOL_CONV = [
+    {"role": "system", "content": "You are a weather bot."},
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Paris"}}}],
+    },
+    {"role": "tool", "content": {"temp": 20}},
+    {"role": "assistant", "content": "It is 20 degrees in Paris."},
+]
+
+_ADVERSARIAL_CONV = [
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": "greetings friend"},
+    {"role": "user", "content": "bye"},
+    {"role": "assistant", "content": "farewell traveller"},
+]
+
+_PARITY_CASES = [
+    pytest.param(HF_SIMPLE_TEMPLATE, _MULTI_TURN, {}, id="simple-multi-turn"),
+    pytest.param(HF_SIMPLE_TEMPLATE, _WITH_SYSTEM, {}, id="simple-system"),
+    pytest.param(TOOL_TEMPLATE, _TOOL_CALL_CONV, {}, id="tool-calls-and-response"),
+    pytest.param(MULTI_TOOL_TEMPLATE, _MULTI_TOOL_CONV, {}, id="multi-tool-calls"),
+    pytest.param(
+        ALT_TEMPLATE,
+        [{"role": "user", "content": "Reason please."}, {"role": "assistant", "content": "Sure, here goes."}],
+        {"enable_thinking": True, "custom_instructions": "Be careful.", "xml_tools": ['{"name": "final_answer"}']},
+        id="alt-chat-template-kwargs",
+    ),
+    pytest.param(HF_BOUNDARY_MERGE_TEMPLATE, _ADVERSARIAL_CONV, {}, id="boundary-merge-crosses-generation"),
+    pytest.param(
+        LLAMA3_TRAINABLE_TEMPLATE,
+        _LLAMA3_TOOL_CONV,
+        {"tools": _WEATHER_TOOLS},
+        id="llama3-trainable-with-tools",
+        marks=pytest.mark.skipif(
+            LLAMA3_TRAINABLE_TEMPLATE is None, reason="experiments/llama.py not present in this checkout"
+        ),
+    ),
+    pytest.param(
+        LLAMA3_TRAINABLE_TEMPLATE,
+        _WITH_SYSTEM + [{"role": "user", "content": "Bye"}, {"role": "assistant", "content": "Goodbye."}],
+        {},
+        id="llama3-trainable-plain",
+        marks=pytest.mark.skipif(
+            LLAMA3_TRAINABLE_TEMPLATE is None, reason="experiments/llama.py not present in this checkout"
+        ),
+    ),
+]
+
+
+@pytest.fixture(scope="module")
+def hf_tokenizer(tokenizer: MarinTokenizer):
+    try:
+        hf = tokenizer.as_hf_tokenizer()
+    except Exception as e:  # noqa: BLE001 - network/optional-dep failure should skip, not error
+        pytest.skip(f"Could not construct HF tokenizer: {e}")
+    if not hf.is_fast:
+        pytest.skip("assistant-mask parity requires a fast HF tokenizer for char_to_token")
+    return hf
+
+
+@pytest.mark.parametrize("template, conversation, kwargs", _PARITY_CASES)
+def test_chat_template_matches_hf(tokenizer: MarinTokenizer, hf_tokenizer, template, conversation, kwargs):
+    lev = tokenizer.apply_chat_template_with_masks([conversation], chat_template=template, **kwargs)
+    lev_ids = lev["input_ids"][0]
+    lev_mask = lev["assistant_masks"][0]
+    lev_rendered = tokenizer.with_chat_template(template).apply_chat_template(conversation, tokenize=False, **kwargs)
+
+    hf_out = hf_tokenizer.apply_chat_template(
+        conversation,
+        chat_template=template,
+        tokenize=True,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
+        add_generation_prompt=False,
+        **kwargs,
+    )
+    hf_rendered = hf_tokenizer.apply_chat_template(
+        conversation, chat_template=template, tokenize=False, add_generation_prompt=False, **kwargs
+    )
+
+    assert lev_rendered == hf_rendered
+    assert lev_ids == list(hf_out["input_ids"])
+    assert lev_mask == list(hf_out["assistant_masks"])
+    # A template with an assistant turn must charge at least one assistant token,
+    # otherwise "masks match" could hold vacuously on two all-zero masks.
+    assert sum(lev_mask) > 0
