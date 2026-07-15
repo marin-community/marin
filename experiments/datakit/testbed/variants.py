@@ -84,7 +84,9 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
     return StepSpec(
         name="data/datakit/fuzzy_dups",
         deps=list(minhash_steps),
-        hash_attrs={"cc_max_iterations": cc_max_iterations},
+        # Bind canonical_scope into the hash so a scope flip lands in a fresh
+        # artifact instead of reusing a previously-computed GLOBAL dedup.
+        hash_attrs={"cc_max_iterations": cc_max_iterations, "canonical_scope": CanonicalScope.PER_SOURCE.value},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(mh.output_path, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
