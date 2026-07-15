@@ -72,7 +72,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe", "attn_only", "moe_only", "none"]
+RematMode = Literal["recompute_all", "save_moe", "attn_only", "moe_only", "all_but_moe", "none"]
 
 
 def _batch_spec() -> P:
@@ -146,7 +146,11 @@ class GrugModelConfig:
     custom_vjp residuals, which name-based save policies cannot reach — is never
     re-executed in backward (memory-heavy: the custom_vjp pins dispatch tensors
     and gathered expert weights per layer); "moe_only" is the inverse — only the
-    MoE sub-block is checkpointed, so attention and the norms are never re-run;
+    MoE sub-block is checkpointed, so attention and the norms are never re-run
+    (memory-heavy: live-side norm/rope intermediates are saved in fp32);
+    "all_but_moe" checkpoints attention *and* all norms, leaving only the MoE
+    (router → dispatch → expert GEMMs → combine) and shared expert live — with
+    the slim sonic_cute residuals this is the split that fits in HBM;
     "none" disables checkpointing entirely."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -680,8 +684,7 @@ class Block(eqx.Module):
         use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
         disable_long_rope: bool = False,
-        remat_attention: bool = False,
-        remat_moe: bool = False,
+        sub_remat: Literal["none", "attention", "moe", "all_but_moe"] = "none",
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         def _attn_block(attn_mods, h, use_long, s_mask, l_mask):
             rms_attn, attn_gated_norm, attn = attn_mods
@@ -696,15 +699,6 @@ class Block(eqx.Module):
                 operand=None,
             )
 
-        # Modules and traced values enter _attn_block as explicit arguments (not via
-        # closure) so eqx.filter_checkpoint sees them as differentiable/dynamic inputs.
-        attn_mods = (self.rms_attn, self.attn_gated_norm, self.attn)
-        if remat_attention:
-            attn_out = eqx.filter_checkpoint(_attn_block)(attn_mods, x, use_long_mask, short_mask, long_mask)
-        else:
-            attn_out = _attn_block(attn_mods, x, use_long_mask, short_mask, long_mask)
-        x = x + attn_out
-
         def _mlp_block(mlp_mods, h):
             rms_mlp, mlp_gated_norm, mlp, shared = mlp_mods
             mlp_in = mlp_gated_norm(rms_mlp(h))
@@ -713,8 +707,36 @@ class Block(eqx.Module):
                 mlp_out = mlp_out + shared(mlp_in, activation=ActivationFunctionEnum.silu)
             return mlp_out, router_stats
 
+        # Modules and traced values enter the checkpointed sub-functions as explicit
+        # arguments (not via closure) so eqx.filter_checkpoint sees them as
+        # differentiable/dynamic inputs.
+        attn_mods = (self.rms_attn, self.attn_gated_norm, self.attn)
         mlp_mods = (self.rms_mlp, self.mlp_gated_norm, self.mlp, self.shared)
-        if remat_moe:
+
+        if sub_remat == "all_but_moe":
+            # Checkpoint attention *and* the mlp-side norms — everything whose live
+            # residuals would otherwise be saved as fp32 by autodiff — leaving only
+            # the MoE (router, dispatch, expert GEMMs, combine) and shared expert
+            # live so backward never re-runs the expert forward.
+            def _pre_moe(mods, h, use_long, s_mask, l_mask):
+                a_mods, rms_mlp, mlp_gated_norm = mods
+                h2 = h + _attn_block(a_mods, h, use_long, s_mask, l_mask)
+                return h2, mlp_gated_norm(rms_mlp(h2))
+
+            pre_mods = (attn_mods, self.rms_mlp, self.mlp_gated_norm)
+            x, mlp_in = eqx.filter_checkpoint(_pre_moe)(pre_mods, x, use_long_mask, short_mask, long_mask)
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            return x + mlp_out, router_stats
+
+        if sub_remat == "attention":
+            attn_out = eqx.filter_checkpoint(_attn_block)(attn_mods, x, use_long_mask, short_mask, long_mask)
+        else:
+            attn_out = _attn_block(attn_mods, x, use_long_mask, short_mask, long_mask)
+        x = x + attn_out
+
+        if sub_remat == "moe":
             mlp_out, router_stats = eqx.filter_checkpoint(_mlp_block)(mlp_mods, x)
         else:
             mlp_out, router_stats = _mlp_block(mlp_mods, x)
@@ -818,17 +840,13 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
+        _SUB_REMAT = {"attn_only": "attention", "moe_only": "moe", "all_but_moe": "all_but_moe"}
+
         def _apply_block(block: Block, *args) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
             if cfg.remat_mode == "none":
                 return block(*args)
-            if cfg.remat_mode == "attn_only":
-                # Checkpoint only the attention sub-block; the MoE forward and its
-                # residuals stay live so backward never re-executes expert dispatch.
-                return block(*args, remat_attention=True)
-            if cfg.remat_mode == "moe_only":
-                # Inverse split: only the MoE sub-block reruns in backward; attention
-                # residuals (FA4 q/k/v/o + lse, small) stay live.
-                return block(*args, remat_moe=True)
+            if cfg.remat_mode in _SUB_REMAT:
+                return block(*args, sub_remat=_SUB_REMAT[cfg.remat_mode])
             return eqx.filter_checkpoint(block, policy=remat_policy)(*args)
 
         if self.blocks is not None:

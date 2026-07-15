@@ -21,6 +21,8 @@ import jax.numpy as jnp
 import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
+from jax import P
+from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
@@ -49,25 +51,80 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
 
 
+def _fsdp_spec(spec: P) -> P | None:
+    """Return ``spec`` if every named axis exists in the current mesh, else None."""
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return None
+    for entry in spec:
+        names = entry if isinstance(entry, tuple) else (entry,)
+        for name in names:
+            if name is not None and name not in mesh.shape:
+                return None
+    return spec
+
+
+def _store_sharded(w: jax.Array, spec: P) -> jax.Array:
+    """Reshard a (gathered) weight back to its FSDP layout for residual storage."""
+    resolved = _fsdp_spec(spec)
+    return w if resolved is None else reshard(w, resolved)
+
+
+def _restore_full(w: jax.Array, spec: P) -> jax.Array:
+    """All-gather a residual weight stored in FSDP layout."""
+    resolved = _fsdp_spec(spec)
+    return w if resolved is None else reshard(w, P(*(None for _ in w.shape)))
+
+
+# Residual-storage layouts for the expert weights (mirror the FSDP param sharding:
+# hidden dim over "data"). Residuals are stored sharded and re-gathered in backward —
+# the same all-gather whole-block remat pays — so a remat split that leaves the MoE
+# live does not pin 26 layers of gathered expert weights.
+_W13_STORE_SPEC = P(None, "data", None)
+_W2_STORE_SPEC = P(None, None, "data")
+
+
 @jax.custom_vjp
-def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu, x, token_dispatch):
     """y = down( swiglu( x @ w13_il ) ), grouped by experts. Activation-path GEMMs on QuACK.
 
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
+    ``x``/``token_dispatch`` are backward hints: ``x_dispatch`` must equal
+    ``x[token_dispatch]``, so backward re-gathers it instead of pinning the [T*K, H]
+    dispatch tensor as a residual. ``x`` gets a zero cotangent — the real gradient
+    flows through ``x_dispatch`` into the caller's gather transpose.
     """
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
 
 
-def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu, x, token_dispatch):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
-    return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
+    # Slim residuals: backward re-gathers x_dispatch from (x, token_dispatch) and
+    # recomputes h elementwise from gu; weights are stored FSDP-sharded.
+    res = (
+        x,
+        token_dispatch,
+        _store_sharded(w13_il, _W13_STORE_SPEC),
+        _store_sharded(moe_w2, _W2_STORE_SPEC),
+        gu,
+        group_sizes,
+        cu,
+    )
+    return y, res
 
 
 def _expert_mlp_bwd(res, dy):
-    x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
+    x, token_dispatch, w13_stored, w2_stored, gu, group_sizes, cu = res
+    x_dispatch = x[token_dispatch]
+    w13_il = _restore_full(w13_stored, _W13_STORE_SPEC)
+    moe_w2 = _restore_full(w2_stored, _W2_STORE_SPEC)
+    # h = swiglu(gu), recomputed elementwise (fp32 internally, matching kernel accum)
+    gate32 = gu[:, 0::2].astype(jnp.float32)
+    up32 = gu[:, 1::2].astype(jnp.float32)
+    h = (gate32 * jax.nn.sigmoid(gate32) * up32).astype(gu.dtype)
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
     num_experts = moe_w2.shape[0]
@@ -91,7 +148,10 @@ def _expert_mlp_bwd(res, dy):
     # int-typed routing args get float0 zero cotangents
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
     cu_ct = np.zeros(cu.shape, dtype=jax.dtypes.float0)
-    return dx, dw13_il, dw2, gs_ct, cu_ct
+    td_ct = np.zeros(token_dispatch.shape, dtype=jax.dtypes.float0)
+    # x is a backward hint only; its gradient flows through x_dispatch (see _expert_mlp)
+    x_ct = jnp.zeros_like(x)
+    return dx, dw13_il, dw2, gs_ct, cu_ct, x_ct, td_ct
 
 
 _expert_mlp.defvjp(_expert_mlp_fwd, _expert_mlp_bwd)
@@ -117,7 +177,8 @@ def _moe_mlp_local_sonic_cute(
 
     with jax.named_scope("moe_up_down_quack"):
         out_dispatch = tree_checkpoint_name(
-            _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu), _CHECKPOINT_DISPATCH_OUTPUT
+            _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu, x, token_dispatch),
+            _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
     with jax.named_scope("scatter"):
