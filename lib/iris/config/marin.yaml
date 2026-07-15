@@ -50,9 +50,33 @@ auth:
     # Audience of IAP's signed assertion: the iris-marin-be backend service in
     # hai-gcp-models (project number 748532799086).
     signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555
-    # IAP's allowlist already restricts who reaches the controller, so anyone
-    # Google admits acts as admin.
-    unprovisioned_role: admin
+    # An IAP-verified identity not named in `admin_users` gets the `user` role: it
+    # may submit jobs (capped at its `user_budgets` max_band, defaulting to
+    # INTERACTIVE), but NOT PRODUCTION band or other admin-only actions. Before
+    # #6948 this was `admin` because a per-user DB role overrode it for everyone
+    # real; that table is gone, so the default now applies to every IAP user and
+    # must be a non-admin role, with admins named explicitly below — otherwise
+    # everyone holds MANAGE_BUDGETS and the PRODUCTION max_band cap is dead.
+    unprovisioned_role: user
+  # Verified IAP identities granted the admin role (MANAGE_BUDGETS, PRODUCTION band,
+  # elevated container profiles, submit-as-any-user). These are the exact emails the
+  # controller sees, read from live `jobs.submitting_user` — they follow no single
+  # convention, so do not derive them from the `user_budgets` handles below.
+  # NOTE: in-VPC / SSH-tunnel callers still authenticate as anonymous admin via
+  # `trusted_cidrs` below, which this list does not gate; closing that second
+  # production-control bypass is a separate tracked follow-up.
+  admin_users:
+    - russell.power@openathena.ai
+    - russell.power@gmail.com
+    - david.hall@openathena.ai
+    - rafal.wojdyla@openathena.ai
+    - romain.yon@openathena.ai
+    - will.held@openathena.ai
+    - larry.dial@openathena.ai
+    - wbmoss@gmail.com
+    # CI / automation (the old `runner` admin tier)
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+    - github-iris@hai-gcp-models.iam.gserviceaccount.com
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
   # Controller server-identity signing key (Ed25519), resolved from Secret Manager
   # at startup — provision with `iris cluster init-keys --gcp-secret …`.
@@ -250,29 +274,62 @@ scale_groups:
 user_budgets:
   # Admins: standard budget, may submit PRIORITY_BAND_PRODUCTION for work that
   # must not be downgraded. INTERACTIVE work still counts against the budget.
-  - user_ids: [runner, power, dlwh, rav, romain, held, larry, wmoss]
+  # Each admin appears as both their friendly handle (`jobs.user_id`, matched when
+  # the caller is admin/local_admin and so is NOT re-pinned) and their verified IAP
+  # email (matched if they ever submit as a non-admin `user`). Admin role itself is
+  # granted by `auth.admin_users` above, not by this tier.
+  - user_ids:
+      - runner
+      - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+      - github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - power
+      - russell.power@openathena.ai
+      - russell.power@gmail.com
+      - dlwh
+      - david.hall@openathena.ai
+      - rav
+      - rafal.wojdyla@openathena.ai
+      - romain
+      - romain.yon@openathena.ai
+      - held
+      - will.held@openathena.ai
+      - larry
+      - larry.dial@openathena.ai
+      - wmoss
+      - wbmoss@gmail.com
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
-  # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE.
+  # Researchers: standard budget, capped at PRIORITY_BAND_INTERACTIVE. Verified IAP
+  # emails (from live jobs.submitting_user) are listed next to the handle where known;
+  # a researcher with no email here keeps their handle (matched on the local_admin /
+  # tunnel path) and falls to the INTERACTIVE default budget on the IAP path until
+  # their email is added.
   - user_ids:
       - ruili
       - quevedo
       - pc0618
       - konwoo
       - ahmedah
+      - ahmedah@stanford.edu
       - ahmed
       - rohith
+      - rohithk@stanford.edu
       - tim
+      - tim@openathena.ai
       - eczech
+      - eric@openathena.ai
       - tonyhlee
       - kevin
       - calvinxu
+      - pinlinxu@stanford.edu
       - moojink
       - michaelryan
       - kaiyue
       - ryan
+      - ryan.williams@openathena.ai
       - marinazh
       - benjaminfeuer
+      - ben.feuer@openathena.ai
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
