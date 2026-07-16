@@ -114,7 +114,7 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
-  allowed_submitters: ["*@openathena.ai", "wg0420@princeton.edu"]
+  allowed_submitters: ["*@openathena.ai", "wg0420@princeton.edu", "ravwojdyla@rav-openathena.iam.gserviceaccount.com"]
 
 kubernetes_provider:
   namespace: iris
