@@ -2045,6 +2045,17 @@ def _parse():
     p.add_argument("--head-dim", type=int, default=128)
     p.add_argument("--num-gpus", type=int, default=8)
     p.add_argument("--moe-implementation", default="sonic")
+    p.add_argument(
+        "--expert-parallelism",
+        type=int,
+        default=1,
+        help=(
+            "Size of the expert mesh axis. 1 = EP1 + FSDP (params shard over the data axis; "
+            "local MoE backends: sonic / sonic_cute / scatter). >1 shards experts over the "
+            "expert axis and requires an expert-parallel backend: --moe-implementation ring "
+            "(recommended) or ragged_all_to_all (currently pathological on GPU; see README)."
+        ),
+    )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     return p.parse_args()
 
@@ -2095,7 +2106,7 @@ def main():
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
     flops_per_example, flops_summary = _compute_flops(model_config=model)
     peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
-    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=1)
     metrics = []
     tps = a.batch_size * a.seq_len
     with set_mesh(mesh):
