@@ -104,7 +104,7 @@ Key behaviors:
 - `defaults.inject_env` values are *defaults*: a literal `defaults.task_env` entry of the same name and a per-job `-e`/`env_vars` both override them.
 - Child jobs inherit parent env vars automatically (child values take precedence).
 - The CLI also loads env vars from `.marin.yaml`'s `env:` section.
-- The submitting user for top-level jobs resolves as: explicit `user`/`--user` → the enclosing job's user → `IRIS_USER` env var → `.marin.yaml`'s `user:` key → OS user → `root` (`resolve_job_user`). Set `user:` in `.marin.yaml` when your OS username is uninformative (e.g. a shared `marin` account).
+- The submitting user for top-level jobs resolves as: explicit `user`/`--user` → `IRIS_USER` env var → the enclosing job's user → `.marin.yaml`'s `user:` key → OS user → `root` (`resolve_job_user`). Set `user:` in `.marin.yaml` (cwd-relative, like its `env:` section) or export `IRIS_USER` when your OS username is uninformative (e.g. a shared `marin` account); the env var also wins inside dev pods, where the enclosing job's user would otherwise apply.
 
 See https://github.com/marin-community/marin/issues/3859 for context.
 

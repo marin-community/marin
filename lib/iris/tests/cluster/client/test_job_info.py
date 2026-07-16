@@ -14,11 +14,9 @@ def _reset_job_info():
     set_job_info(None)
 
 
-@pytest.fixture(autouse=True)
-def _isolate_user_config(monkeypatch, tmp_path):
-    """Shield tests from the developer's IRIS_USER and cwd .marin.yaml."""
-    monkeypatch.delenv("IRIS_USER", raising=False)
-    monkeypatch.chdir(tmp_path)
+# IRIS_USER and .marin.yaml isolation is suite-wide: the autouse
+# _isolate_marin_user_config fixture in tests/conftest.py points
+# MARIN_CONFIG_PATH at <tmp_path>/.marin.yaml, so tests below write there.
 
 
 def test_job_info_user_derives_from_task_id():
@@ -55,14 +53,31 @@ def test_resolve_job_user_reads_iris_user_env(monkeypatch):
     assert resolve_job_user() == "mwittmann"
 
 
-def test_resolve_job_user_current_job_info_beats_iris_user_env(monkeypatch):
+def test_resolve_job_user_iris_user_env_beats_current_job_info(monkeypatch):
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
     monkeypatch.setenv("IRIS_USER", "mwittmann")
+    assert resolve_job_user() == "mwittmann"
+
+
+def test_resolve_job_user_current_job_info_beats_marin_yaml(tmp_path):
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
+    (tmp_path / ".marin.yaml").write_text("user: mwittmann\n")
     assert resolve_job_user() == "alice"
+
+
+def test_resolve_job_user_strips_iris_user_env(monkeypatch):
+    monkeypatch.setenv("IRIS_USER", " mwittmann ")
+    assert resolve_job_user() == "mwittmann"
 
 
 def test_resolve_job_user_rejects_blank_iris_user_env(monkeypatch):
     monkeypatch.setenv("IRIS_USER", "   ")
+    with pytest.raises(ValueError, match="IRIS_USER"):
+        resolve_job_user()
+
+
+def test_resolve_job_user_rejects_slash_in_iris_user_env(monkeypatch):
+    monkeypatch.setenv("IRIS_USER", "team/alice")
     with pytest.raises(ValueError, match="IRIS_USER"):
         resolve_job_user()
 
@@ -88,6 +103,18 @@ def test_resolve_job_user_ignores_marin_yaml_without_user_key(monkeypatch, tmp_p
 def test_resolve_job_user_rejects_non_string_marin_yaml_user(tmp_path):
     (tmp_path / ".marin.yaml").write_text("user: [not, a, string]\n")
     with pytest.raises(ValueError, match=r"\.marin\.yaml"):
+        resolve_job_user()
+
+
+def test_resolve_job_user_rejects_slash_in_marin_yaml_user(tmp_path):
+    (tmp_path / ".marin.yaml").write_text("user: team/alice\n")
+    with pytest.raises(ValueError, match=r"\.marin\.yaml"):
+        resolve_job_user()
+
+
+def test_resolve_job_user_reports_malformed_marin_yaml(tmp_path):
+    (tmp_path / ".marin.yaml").write_text("user: [unclosed\n")
+    with pytest.raises(ValueError, match=r"Failed to parse .*\.marin\.yaml"):
         resolve_job_user()
 
 

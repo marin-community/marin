@@ -19,6 +19,7 @@ from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.local_client import make_local_client
+from iris.cluster.client import job_info
 from iris.cluster.config import (
     IrisClusterConfig,
     LocalSliceConfig,
@@ -188,6 +189,17 @@ def local_iris_client():
         yield client
     finally:
         client.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_marin_user_config(monkeypatch, tmp_path):
+    """Shield tests from the developer's IRIS_USER and cwd .marin.yaml.
+
+    resolve_job_user consults both when naming submitted jobs; without this,
+    a developer's local user config changes job names across the whole suite.
+    """
+    monkeypatch.delenv("IRIS_USER", raising=False)
+    monkeypatch.setattr(job_info, "MARIN_CONFIG_PATH", tmp_path / ".marin.yaml")
 
 
 @pytest.fixture(autouse=True)

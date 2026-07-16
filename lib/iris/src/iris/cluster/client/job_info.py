@@ -145,48 +145,60 @@ def load_marin_config() -> dict:
     if not MARIN_CONFIG_PATH.exists():
         return {}
     with open(MARIN_CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f) or {}
+        try:
+            cfg = yaml.safe_load(f) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Failed to parse {MARIN_CONFIG_PATH}: {exc}") from exc
     if not isinstance(cfg, dict):
         raise ValueError(f"{MARIN_CONFIG_PATH} must be a YAML mapping, got {type(cfg).__name__}")
     return cfg
 
 
-def _configured_user() -> str | None:
-    """User from the ``IRIS_USER`` env var or the ``user:`` key in ``.marin.yaml``, if set."""
-    env_user = os.environ.get("IRIS_USER")
-    if env_user is not None:
-        if not env_user.strip():
-            raise ValueError("IRIS_USER must not be empty")
-        return env_user
+def _validate_user(user: str, source: str) -> str:
+    """Strip and validate a user value, naming the config source in errors."""
+    user = user.strip()
+    if not user:
+        raise ValueError(f"{source} must not be empty")
+    if "/" in user:
+        raise ValueError(f"{source} must not contain '/': {user!r}")
+    return user
 
+
+def _marin_config_user() -> str | None:
+    """User from the ``user:`` key in ``.marin.yaml``, if set."""
     user = load_marin_config().get("user")
     if user is None:
         return None
-    if not isinstance(user, str) or not user.strip():
-        raise ValueError(f"Invalid `user:` in .marin.yaml: {user!r} (expected a non-empty string)")
-    return user
+    if not isinstance(user, str):
+        raise ValueError(f"Invalid `user:` in {MARIN_CONFIG_PATH}: {user!r} (expected a string)")
+    return _validate_user(user, f"`user:` in {MARIN_CONFIG_PATH}")
 
 
 def resolve_job_user(explicit_user: str | None = None) -> str:
     """Resolve the submitting user for a new top-level job.
 
-    Resolution order: the explicit argument, the current job's user (when
-    submitting from inside a job), the ``IRIS_USER`` env var, the ``user:``
-    key in ``.marin.yaml`` (cwd-relative, like the CLI's env handling), the
-    OS user, and finally ``root``.
+    Resolution order: the explicit argument, the ``IRIS_USER`` env var, the
+    current job's user (when submitting from inside a job, e.g. a dev pod),
+    the ``user:`` key in ``.marin.yaml`` (cwd-relative, like the CLI's env
+    handling), the OS user, and finally ``root``. The env var outranks the
+    enclosing job so a deliberate per-shell identity survives shared dev
+    pods; the config file does not, so a ``.marin.yaml`` that rides along in
+    a job bundle cannot re-attribute submissions made from inside the job.
     """
     if explicit_user is not None:
-        if not explicit_user.strip():
-            raise ValueError("Job user must not be empty")
-        return explicit_user
+        return _validate_user(explicit_user, "Job user")
+
+    env_user = os.environ.get("IRIS_USER")
+    if env_user is not None:
+        return _validate_user(env_user, "IRIS_USER")
 
     info = get_job_info()
     if info is not None:
         return info.user
 
-    configured = _configured_user()
-    if configured is not None:
-        return configured
+    config_user = _marin_config_user()
+    if config_user is not None:
+        return config_user
 
     try:
         resolved = getpass.getuser()
