@@ -2118,6 +2118,16 @@ def _parse():
     p.add_argument("--num-experts-per-token", type=int, default=4)
     p.add_argument("--head-dim", type=int, default=128)
     p.add_argument("--num-gpus", type=int, default=8)
+    p.add_argument(
+        "--replica-axis-size",
+        type=int,
+        default=1,
+        help=(
+            "size of the replica_dcn (pure data-parallel) mesh axis; parameters are "
+            "replicated across it and FSDP+EP shard only within each replica group "
+            "(num_gpus / replica_axis_size GPUs per model copy)"
+        ),
+    )
     p.add_argument("--moe-implementation", default="sonic")
     p.add_argument(
         "--expert-parallelism",
@@ -2216,7 +2226,7 @@ def main():
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
     flops_per_example, flops_summary = _compute_flops(model_config=model)
     peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
-    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=1)
+    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis_size)
     metrics = []
     tps = a.batch_size * a.seq_len
     with set_mesh(mesh):
