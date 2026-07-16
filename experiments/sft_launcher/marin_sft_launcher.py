@@ -96,6 +96,10 @@ class SFTSpec:
     chat_template: str  # THE PLUGGABLE PARAMETER — any jinja; MUST carry a {% generation %} block
     datasets: Sequence[DatasetSpec]  # the instruction mixture (+ any warmup source)
     resources: ResourceConfig  # TPU with_tpu(...) | CoreWeave with_gpu("H100", regions=[ANY_REGION])
+    # Levanter model registry key -> selects the HF-checkpoint converter (its LevConfigClass) BEFORE
+    # use_hf_model_config re-derives the arch, so it MUST match the checkpoint's architecture. Delphi
+    # + the Qwen3 smoke are both Qwen3ForCausalLM; set this per-config for a non-Qwen3 checkpoint.
+    model_type: str = "qwen3"
     seq_len: int = 4096
     pack: bool = True  # ChatLmDatasetFormat packs by default (num_train_steps must count PACKED examples)
     lr: float = 1e-5
@@ -121,7 +125,9 @@ def _chat_format(spec: SFTSpec) -> dict:
         "mask_user_turns": True,  # supervise only the assistant {% generation %} span
     }
     if not spec.pack:
-        fmt["pack"] = "pad"  # default (unset) packs; "pad" forces unpacked (parity-neutral, slower)
+        # ChatLmDatasetFormat.pack is bool|int|None: default (None) packs; False = one-conversation
+        # /padded (unpacked, parity-neutral, slower). A non-bool string would fail int(pack) resolution.
+        fmt["pack"] = False
     return fmt
 
 
@@ -184,7 +190,7 @@ def build_sft_train_config(spec: SFTSpec, dep_paths: Sequence[str]) -> TrainLmCo
     cfg = {
         "data": _data_block(spec, dep_paths),
         "model": {
-            "type": "qwen3",
+            "type": spec.model_type,
             "reference_checkpoint": spec.model_ref,
             "max_seq_len": spec.seq_len,
             "tie_word_embeddings": False,
