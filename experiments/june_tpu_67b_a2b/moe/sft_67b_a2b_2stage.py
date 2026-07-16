@@ -25,8 +25,12 @@ LAUNCH-GATED NUMBERS (finalise before a real launch; see the experiment POLICY/S
   * GPU mesh geometry (``_NODES`` / ``_EXPERT_PARALLEL`` / ``_REPLICA_AXIS`` / ``_BATCH`` / ``_SEQ`` /
     ``_PER_DEVICE_PARALLELISM``) -- 67B full-FT on H100x8 nodes at long context is memory-tight;
     confirm feasibility (drop ``_SEQ`` or raise ``_NODES``) before launch.
-  * Stage 2 needs the Delphi think/tool tokens as SINGLE ids in the tokenizer; ``marin_tokenizer``
-    must be verified/prepared for those (Stage 1 plain chat is fine as-is).
+  * Stage 2 tokenizer VERIFIED (2026-07-16): the ``nemotron_science_think`` dataset uses ONLY the
+    think tokens ``<|start_think|>``/``<|end_think|>`` (sampled 3000 rows -> roles={user,assistant},
+    every assistant turn carries ``<|start_think|>``, ZERO tool_call / tool-role / tool-token usage),
+    and ``marin_tokenizer`` (marin-community/marin-tokenizer) already encodes those two as SINGLE ids
+    128002/128003 (MARIN_CUSTOM_SPECIAL_TOKENS). The Delphi tool tokens fragment in this tokenizer but
+    never appear in this data -> NO tokenizer prep is needed; ``marin_tokenizer`` is used as-is.
 
 Compute = CoreWeave ``cw-us-east-02a`` H100 GPU cluster (8x H100-80GB + InfiniBand per node), the
 FSDP + ring-EP JAX/XLA path (mirrors ``experiments/grug/moe/launch_cw_scale.py``). The base
@@ -154,9 +158,12 @@ _JOB2_DATASET = ChatDatasetSpec(
 # --- Packed 1-epoch step counts (steps = total_tokens / seq_len / batch) -------------------------
 # Job1 FINALIZED from the tokenized-cache ledger (2026-07-16): wildchat_386k train field_counts
 # input_ids = 538,878,179 tokens over 385,700 rows. 538_878_179 / (32768 * 64) = 256.96 -> 257 steps
-# (1 packed epoch at seq=32768, bs=64). Job2 still a placeholder (recompute from its cache before Stage 2).
+# (1 packed epoch at seq=32768, bs=64).
+# Job2 FINALIZED from the tokenized-cache ledger (2026-07-16, same procedure): nemotron_science_think
+# train field_counts input_ids = 1,321,080,491 tokens over 708,920 rows.
+# 1_321_080_491 / (32768 * 64) = 629.94 -> 630 steps (1 packed epoch at seq=32768, bs=64).
 _JOB1_STEPS: int = 257
-_JOB2_STEPS: int = 2000
+_JOB2_STEPS: int = 630
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
 # cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). AWS creds are injected
