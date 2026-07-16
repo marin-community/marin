@@ -5,17 +5,18 @@
 """Switch the native (maturin) packages between dev mode (source build) and
 user mode (pre-built wheel).
 
-Covers the native packages marin-dupekit and marin-finelog-server. The
-pure-Python marin-finelog client is a permanent workspace member (always built
-from source, see the root pyproject), so it is not toggled here. Operates on
-each target pyproject.toml by replacing the block between RUST-DEV markers:
+Covers the native packages marin-dupekit-native and marin-finelog-server. Their
+pure-Python fronts (marin-dupekit, marin-finelog) are permanent workspace
+members (always built from source, see the root pyproject), so they are not
+toggled here. Operates on each target pyproject.toml by replacing the block
+between RUST-DEV markers:
     # ### BEGIN RUST-DEV SOURCES ###
     ...
     # ### END RUST-DEV SOURCES ###
 
-Two files carry markers: the repo-root pyproject.toml (governs the root
-workspace venv) and lib/finelog/pyproject.toml (governs in-dir `uv run` in
-lib/finelog, which is its own standalone project).
+Three files carry markers: the repo-root pyproject.toml (governs the root
+workspace venv) and each pure package's pyproject.toml — lib/dupekit and
+lib/finelog — which govern in-dir `uv run` in those members.
 
 Usage:
     python scripts/rust_mode.py dev    # insert path sources (build from source)
@@ -30,20 +31,24 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-# Path sources injected in dev mode, per pyproject. marin-dupekit is editable so
-# source edits land without reinstalling; marin-finelog-server is a plain path
-# source — its [tool.uv] cache-keys cover the Rust sources, so `uv sync` rebuilds
-# the extension when they change. The pure marin-finelog client is omitted: it is
-# a permanent workspace member and always resolves from source.
+# Path sources injected in dev mode, per pyproject. Both native packages are
+# plain path sources — their [tool.uv] cache-keys cover the Rust sources, so
+# `uv sync` rebuilds the extension when they change. The pure fronts
+# (marin-dupekit, marin-finelog) are omitted: they are permanent workspace
+# members and always resolve from source.
 TARGETS = [
     (
         pathlib.Path("pyproject.toml"),
         "\n".join(
             [
-                'marin-dupekit = { path = "lib/dupekit", editable = true }',
+                'marin-dupekit-native = { path = "lib/dupekit/rust" }',
                 'marin-finelog-server = { path = "lib/finelog/rust" }',
             ]
         ),
+    ),
+    (
+        pathlib.Path("lib/dupekit/pyproject.toml"),
+        'marin-dupekit-native = { path = "rust" }',
     ),
     (
         pathlib.Path("lib/finelog/pyproject.toml"),
@@ -99,7 +104,8 @@ def main() -> None:
 
     if mode == "dev":
         print("Switched to dev mode: dupekit/finelog will build from source.")
-        print("Do NOT commit pyproject.toml or lib/finelog/pyproject.toml in this state.")
+        marker_files = ", ".join(str(path) for path, _ in TARGETS)
+        print(f"Do NOT commit these in this state: {marker_files}")
     else:
         print("Switched to user mode: dupekit/finelog from pre-built wheels.")
 

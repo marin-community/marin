@@ -1,11 +1,15 @@
 [package]
-name = "dupekit"
-version = "0.1.0"
+name = "dupekit-native"
+version = "0.1.2"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# Top-level module `dupekit_native` (not nested `dupekit._native`): the pure
+# marin-dupekit package is an editable workspace member, and an editable
+# src/dupekit on sys.path would shadow a nested `dupekit/_native.so` shipped by
+# this wheel. maturin's module-name in the sibling pyproject.toml matches this.
 [lib]
-name = "_native"
+name = "dupekit_native"
 crate-type = ["cdylib"]
 
 [dependencies]

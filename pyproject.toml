@@ -33,13 +33,13 @@ dependencies = [
     "marin-ducky",
     # top level deps. try to keep these small.
     "watchdog",
-    # marin-dupekit is a native (maturin) package shipped as pre-built platform
-    # wheels (built by dupekit-release-wheels.yaml) rather than a workspace
-    # member. A `>= X.Y.Z.dev0` floor opts uv into the daily nightly wheels
-    # (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain `>= X.Y.Z` floor pins to a stable tag
-    # (`dupekit-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
-    # any earlier dev of the same Z; bump the floor to whichever is newest.
-    "marin-dupekit >= 0.1.2.dev202606060824",
+    # marin-dupekit is the pure-Python text-dedup surface, a workspace member
+    # (editable source). Its native companion marin-dupekit-native (the Rust
+    # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a
+    # member: it ships as a pre-built platform wheel and reaches us transitively
+    # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
+    # marin-dupekit-native to a local source build.
+    "marin-dupekit",
 ]
 
 [tool.uv]
@@ -48,7 +48,8 @@ fork-strategy = "fewest"
 # names one, so our intentional pre-releases resolve while everything else stays
 # on its latest stable release. (A global "allow" would instead promote any
 # transitive dependency's newest beta/rc into the lock.) Opted in: the
-# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
+# omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
 # (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
 prerelease = "explicit"
@@ -127,6 +128,7 @@ members = [
     "lib/iris",
     "lib/fray",
     "lib/finelog",
+    "lib/dupekit",
     "lib/ducky",
     "lib/haliax",
     "lib/levanter",
@@ -135,11 +137,13 @@ members = [
     "lib/zephyr",
     "infra/iac",
 ]
-# lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
-# log-server ext is consumed as a pre-built wheel by default and only built from
-# source under `scripts/rust_mode.py dev`. Exclude it so workspace discovery
-# doesn't pull the nested package into the workspace.
-exclude = ["lib/finelog/rust"]
+# The native (maturin) companions are NOT members: their extensions are consumed
+# as pre-built wheels by default and only built from source under
+# `scripts/rust_mode.py dev`. Exclude them so workspace discovery doesn't pull
+# the nested packages into the workspace.
+#   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
+#   - lib/dupekit/rust   -> marin-dupekit-native  (module `dupekit_native`)
+exclude = ["lib/finelog/rust", "lib/dupekit/rust"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -155,6 +159,7 @@ vllm = [
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }

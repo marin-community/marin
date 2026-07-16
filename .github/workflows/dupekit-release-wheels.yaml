@@ -5,6 +5,17 @@ name: "Dupekit - Release Wheels"
 # smoke. There is intentionally no `push: branches: [main]` trigger - that is
 # what previously caused the auto-pin chore PR to recursively re-trigger this
 # workflow on every merge.
+#
+# dupekit ships as TWO dists, published in lockstep at one resolved version:
+#   - marin-dupekit-native: the native (Rust) dedup kernels, importable as the
+#     top-level module `dupekit_native`, built by maturin from lib/dupekit/rust.
+#     Platform wheels come from the build matrix below.
+#   - marin-dupekit: the pure-Python proxy/type surface (hatchling). Its single
+#     py3-none-any wheel is built on the linux matrix leg only, so merged
+#     artifacts never collide. It depends on marin-dupekit-native, so installing
+#     marin-dupekit always pulls the kernels.
+# PyPI trusted publishing must be configured for BOTH projects against this
+# workflow + the pypi-publish environment.
 on:
   workflow_dispatch:
     inputs:
@@ -165,9 +176,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Build sdist into the same dist/ directory the wheels were downloaded
-      # into so gh-action-pypi-publish uploads everything as one release.
-      - name: Build sdist
+      # Build both sdists into the same dist/ directory the wheels were
+      # downloaded into so gh-action-pypi-publish uploads everything as one
+      # release.
+      - name: Build sdists
         run: |
           python lib/dupekit/build_package.py \
             --mode "${{ needs.resolve.outputs.mode }}" \
