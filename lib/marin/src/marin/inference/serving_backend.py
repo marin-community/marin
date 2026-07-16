@@ -21,7 +21,7 @@ import tempfile
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import jax
 import jax.numpy as jnp
@@ -59,6 +59,21 @@ DEFAULT_LEVANTER_MAX_SEQ_LEN = 4096
 _MIN_QUEUED_TOKENS = 512
 # Levanter loads weights at one dtype; vLLM's `auto`/`half`/`float` aliases have no meaning here.
 LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
+
+
+@runtime_checkable
+class SupportsPagedGeneration(Protocol):
+    """A Levanter model the paged-decode inference engine can drive.
+
+    :meth:`LevanterBackend.serve` builds an ``InferenceEngine`` that calls ``initial_cache`` and
+    ``decode``. A model that implements only the full-forward ``LmHeadModel`` interface -- e.g.
+    Snowball, which has no paged decode for grug attention yet -- cannot be served through it, so
+    ``serve`` rejects it up front rather than after the (large) weight load.
+    """
+
+    def initial_cache(self, spec, *, dtype): ...
+
+    def decode(self, tokens, cache, binfo, pos_ids): ...
 
 
 @dataclass(frozen=True)
@@ -312,6 +327,16 @@ class LevanterBackend:
 
     @contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[LevanterServedModel]:
+        # Reject models the inference engine cannot drive before the weight load: resolving the model
+        # class from the HF config is cheap, loading the weights is not. (Forward-only scoring via
+        # load_model has no such requirement.)
+        model_type = HFCheckpointConverter.from_hf(spec.model_path).default_config.model_type
+        if not issubclass(model_type, SupportsPagedGeneration):
+            raise NotImplementedError(
+                f"{model_type.__name__} implements only the full-forward LmHeadModel interface (no "
+                "paged initial_cache/decode), so it cannot be served through the Levanter inference "
+                "engine. Score it with LevanterBackend.load_model, or serve it with vLLM."
+            )
         with self.load_model(spec) as loaded:
             # InferenceServer.create must build the engine on-mesh, so it runs inside load_model's
             # device-mesh context; the serve loop below then runs off-mesh, as before.
