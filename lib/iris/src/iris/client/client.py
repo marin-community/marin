@@ -28,6 +28,7 @@ from typing import Protocol, cast
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
+from rigging.filesystem import StoragePath
 from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
@@ -471,6 +472,14 @@ def _wrap_entrypoint_for_nsys(entrypoint: Entrypoint, resources: ResourceSpec, n
     device = resources.device
     if device is None or not device.HasField("gpu"):
         raise ValueError("nsys profiling requires a GPU device")
+    # A scheme-less URI is workdir-relative, and the workdir is an emptyDir: the wrapper
+    # would report a successful upload into storage that dies with the pod. Caught here
+    # rather than after the GPU work is done.
+    if StoragePath(nsys.output_uri).scheme is None:
+        raise ValueError(
+            f"nsys output_uri needs a scheme (e.g. s3://bucket/tmp/ttl=30d/nsys); {nsys.output_uri!r} "
+            f"resolves inside the task workdir, which does not outlive the task"
+        )
     wrapper = [
         "python",
         "-m",

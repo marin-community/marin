@@ -841,10 +841,15 @@ class EnvironmentSpec:
         else:
             setup_scripts = [s for s in self.setup_scripts if s.strip()]
         # Appended even to a custom setup list, unlike the CUDA toolchain: the run
-        # command is wrapped in `nsys` whenever nsys is requested, so the binary has
-        # to be there. `setup_scripts=[]` (bring-your-own image) still opts out of
-        # every script, and is the caller's business to make consistent.
-        if self.nsys is not None and setup_scripts:
+        # command is wrapped in `nsys` whenever nsys is requested, so the binary has to
+        # be there. The no-setup case cannot install it and the wrapper looks nowhere
+        # else, so the combination is rejected rather than left to fail on a GPU.
+        if self.nsys is not None:
+            if not setup_scripts:
+                raise ValueError(
+                    "nsys profiling needs the Nsight install, which setup_scripts=[] (bring-your-own "
+                    "image) skips; drop the nsys spec or let iris build the setup"
+                )
             setup_scripts.append(nsys_setup_script())
 
         return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)

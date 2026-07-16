@@ -237,9 +237,21 @@ def test_inherited_setup_still_installs_nsys() -> None:
     assert inherited.setup_scripts[0] == "echo parent setup"
 
 
-def test_environment_spec_no_setup_stays_empty() -> None:
-    # `setup_scripts=[]` is bring-your-own-image; iris adds nothing to it.
-    assert EnvironmentSpec(setup_scripts=[], nsys=NsysSpec(output_uri=OUT)).to_proto().setup_scripts == []
+def test_no_setup_plus_nsys_is_rejected() -> None:
+    """`setup_scripts=[]` runs no install, and the wrapper looks nowhere else — so the
+    combination can only fail on a GPU. It has to fail at submit instead."""
+    with pytest.raises(ValueError, match="setup_scripts=\\[\\]"):
+        EnvironmentSpec(setup_scripts=[], nsys=NsysSpec(output_uri=OUT)).to_proto()
+    # Without nsys, no-setup is still the bring-your-own-image path.
+    assert EnvironmentSpec(setup_scripts=[]).to_proto().setup_scripts == []
+
+
+@pytest.mark.parametrize("uri", ["reports", "/app/reports"])
+def test_scheme_less_output_uri_is_rejected(uri: str) -> None:
+    """Such a URI resolves inside the task workdir, which the pod destroys — the wrapper
+    would log a successful upload to storage that no longer exists."""
+    with pytest.raises(ValueError, match="needs a scheme"):
+        _wrap_entrypoint_for_nsys(Entrypoint.from_command("python", "x.py"), _gpu_resources(1), NsysSpec(output_uri=uri))
 
 
 class _Execed(Exception):
@@ -379,3 +391,23 @@ def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.Monke
 
     assert excinfo.value.code == 3
     assert not destination.exists()
+
+
+def test_missing_report_fails_even_when_the_command_succeeded(
+    monkeypatch: pytest.MonkeyPatch, selected_rank: Path
+) -> None:
+    """Exiting 0 here would record a green task that produced no profile and then drop
+    the workdir — the one artifact the run was for."""
+    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(0, write_report=False))
+
+    with pytest.raises(SystemExit) as excinfo:
+        run(
+            ranks="first",
+            scope=NsysScope.PROCESS,
+            trace="cuda",
+            capture_range=False,
+            output_uri=f"file://{selected_rank / 'uploads'}",
+            argv=CMD,
+        )
+
+    assert excinfo.value.code != 0

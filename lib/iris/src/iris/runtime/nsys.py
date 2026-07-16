@@ -10,8 +10,14 @@ unchanged otherwise.
 An unselected rank execs and so costs nothing. A selected rank cannot exec: the report
 has to be uploaded once nsys has written it, and the task workdir is an emptyDir that
 is destroyed with the pod, so a report left on disk is simply lost. It therefore
-supervises the child and forwards signals, taking care that a terminated task still
-lets nsys finalize its report.
+supervises the child and forwards signals.
+
+Delivery on termination is best-effort, not guaranteed. Finalizing the report and
+uploading it both happen after nsys exits, while the SIGTERM that started the teardown
+has already begun a bounded countdown to SIGKILL (10s from the multigpu supervisor;
+the pod's own grace period otherwise). A small report makes it; a multi-hundred-MB one
+racing a preemption may not. A run whose profile must survive preemption wants
+``capture_range`` to keep the report small.
 
 Nsight has to wrap the process at launch: CUDA tracing is injected through
 ``CUDA_INJECTION64_PATH``, which the driver reads once at ``cuInit``. That is why
@@ -63,6 +69,8 @@ NSYS_OUTPUT_DIR = "nsys"
 _CAPTURE_RANGE_ARGS = ("--capture-range=cudaProfilerApi", "--capture-range-end=stop")
 # nsys writes <output>.nsys-rep once the profiled process exits.
 _REPORT_SUFFIX = ".nsys-rep"
+# Exit status when the command succeeded but nsys produced no report to upload.
+_NO_REPORT_EXIT = 1
 # Signals forwarded to nsys so a terminated task still finalizes its report.
 _FORWARDED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
@@ -262,10 +270,12 @@ def run(ranks: str, scope: NsysScope, trace: str, capture_range: bool, output_ur
 
     report = output_path.with_name(output_path.name + _REPORT_SUFFIX)
     if not report.exists():
-        # Don't mask the command's own failure; a crash before nsys wrote anything is
-        # the usual reason, and the exit code is the more useful signal.
+        # A crash before nsys wrote anything is the usual reason, so the command's own
+        # failure stays the reported one. But a command that *succeeded* with no report
+        # must not pass as a successful profiling run: the task would be recorded green
+        # and its workdir dropped, having produced the one artifact it was asked for.
         logger.error("%s %d wrote no report at %s (command exited %d)", unit, rank.global_rank, report, returncode)
-        sys.exit(returncode)
+        sys.exit(returncode or _NO_REPORT_EXIT)
     destination = upload_report(report, output_uri)
     logger.info("%s %d uploaded %s (%.1f MB)", unit, rank.global_rank, destination, report.stat().st_size / 1e6)
     sys.exit(returncode)
