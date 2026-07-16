@@ -13,7 +13,6 @@ python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model 
 import logging
 import os
 import time
-from collections.abc import Callable
 
 import draccus
 from rigging.filesystem import StoragePath
@@ -22,27 +21,16 @@ from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.harbor_evaluator import HarborEvaluator
+from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
 from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
 from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
-from marin.evaluation.lm_eval import patch_transformers_for_lm_eval
 from marin.evaluation.utils import discover_hf_checkpoints
 
 logger = logging.getLogger(__name__)
 
-
-def _levanter_lm_eval_evaluator() -> Evaluator:
-    # Imported lazily: levanter.eval_harness imports lm_eval at module load, so the transformers shim
-    # applied at the top of evaluate() must run first.
-    from marin.evaluation.evaluators.levanter_lm_eval_evaluator import (  # noqa: PLC0415
-        LevanterLmEvalEvaluator,
-    )
-
-    return LevanterLmEvalEvaluator()
-
-
-EVALUATORS: dict[str, Callable[[], Evaluator]] = {
+EVALUATORS = {
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
-    "levanter_lm_evaluation_harness": _levanter_lm_eval_evaluator,
+    "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
     "evalchemy": EvalchemyEvaluator,
     "debug": SimpleEvaluator,
     "harbor": HarborEvaluator,
@@ -56,9 +44,6 @@ def get_evaluator(config: EvaluationConfig) -> Evaluator:
 
 
 def evaluate(config: EvaluationConfig) -> None:
-    # The pinned lm-eval fork accesses a transformers attribute removed in v5; alias it before any
-    # evaluator imports lm_eval (levanter.eval_harness does so at module load).
-    patch_transformers_for_lm_eval()
     logger.info(f"Running evals with args: {config}")
     evaluator: Evaluator = get_evaluator(config)
 
