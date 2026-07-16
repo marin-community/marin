@@ -326,7 +326,6 @@ def grug_ve_trial(
     train_data = fineweb_edu_10B_dataset()
     run_id = _resolve_run_id(f"grug-ve-{size}-{arm}")
     resolved_batch_size = batch_size if batch_size is not None else rung.batch_size
-    resolved_eval_batch_size = eval_batch_size if eval_batch_size is not None else resolved_batch_size
 
     def build_config(ctx: StepContext) -> GrugVeLaunchConfig:
         return GrugVeLaunchConfig(
@@ -352,9 +351,13 @@ def grug_ve_trial(
             z_loss_weight=1e-4,
             ema_beta=None,
             log_every=10,
-            # Eval follows the train batch: eval is forward-only, so anything that fits a train
-            # step fits eval at the same batch, and no separate memory budget is needed.
-            eval_batch_size=resolved_eval_batch_size,
+            # Eval is explicitly off (unless the caller opts in): the prebuilt fineweb-edu-10B
+            # cache carries no validation split, so a configured perplexity eval would silently
+            # never fire. The experiment's readout is the paired train loss instead -- every arm
+            # sees the same never-repeated batches in the same order, so train loss at matched
+            # steps is itself a held-out comparison. Pass eval_batch_size only when pointing at
+            # a cache that actually has a validation split.
+            eval_batch_size=eval_batch_size,
             steps_per_eval=500,
             max_eval_batches=8,
             eval_current=True,
