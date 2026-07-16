@@ -32,6 +32,7 @@ GrugAttentionImplementation = Literal[
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_thd",
+    "cudnn",
 ]
 
 
@@ -290,6 +291,41 @@ def reference_attention(
     return ctx.astype(v.dtype)
 
 
+def cudnn_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Fused cuDNN flash attention (``jax.nn.dot_product_attention``).
+
+    O(seq) memory and no cutlass dependency -- the Blackwell/B200 path, where the CuTe FA4
+    kernels are unavailable (they require cutlass-dsl <4.6, which conflicts with QuACK's 4.6).
+    Query is assumed pre-scaled by ``qk_mult`` upstream; the softmax uses the standard
+    ``1/sqrt(head_dim)``. Supports full-causal masking only (``sliding_window==seq_len`` is
+    full causal); windowed / segmented / dense masks are rejected rather than silently ignored.
+    """
+    is_causal = True
+    if isinstance(mask, AttentionMask):
+        is_causal = bool(mask.is_causal)
+        seq_len = q.shape[1]
+        if mask.sliding_window is not None and mask.sliding_window < seq_len:
+            raise NotImplementedError(f"cudnn attention: sliding_window={mask.sliding_window} < seq={seq_len}")
+        if mask.segment_ids is not None:
+            raise NotImplementedError("cudnn attention: segmented masks are not supported")
+    elif mask is not None:
+        raise NotImplementedError("cudnn attention: explicit dense masks are not supported")
+
+    # jax.nn.dot_product_attention takes [B, seq, heads, dim] (BTNH). Repeat KV heads to the
+    # query head count so the cuDNN path is a plain MHA call (avoids GQA-support edge cases).
+    num_q_heads = q.shape[2]
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    scale = 1.0 / math.sqrt(q.shape[-1])
+    out = jax.nn.dot_product_attention(q, k, v, scale=scale, is_causal=is_causal, implementation="cudnn")
+    return out.astype(v.dtype)
+
+
 def _tpu_splash_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -435,6 +471,8 @@ def attention(
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "cudnn":
+        return cudnn_attention(q, k, v, mask)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
@@ -465,4 +503,5 @@ __all__ = [
     "apply_rotary_embedding",
     "attention",
     "reference_attention",
+    "cudnn_attention",
 ]
