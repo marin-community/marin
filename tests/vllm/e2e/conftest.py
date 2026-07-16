@@ -51,3 +51,12 @@ def marin_gpu_client() -> Iterator[IrisClient]:
         except ConfigException as exc:
             pytest.skip(f"CoreWeave cluster {MARIN_GPU_CLUSTER!r} unavailable (no kube-config): {exc}")
         yield client
+
+
+@pytest.fixture
+def marin_tpu_client() -> Iterator[IrisClient]:
+    with open_iris_client(
+        config_file=MARIN_ROOT / "lib/iris/config/marin.yaml",
+        workspace=MARIN_ROOT,
+    ) as client:
+        yield client
