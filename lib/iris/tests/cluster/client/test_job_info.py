@@ -113,8 +113,9 @@ def test_resolve_job_user_rejects_slash_in_marin_yaml_user(tmp_path):
 
 
 def test_resolve_job_user_reports_malformed_marin_yaml(tmp_path):
+    """A YAML syntax error surfaces as ValueError naming the file, not a raw yaml.YAMLError."""
     (tmp_path / ".marin.yaml").write_text("user: [unclosed\n")
-    with pytest.raises(ValueError, match=r"Failed to parse .*\.marin\.yaml"):
+    with pytest.raises(ValueError, match=r"\.marin\.yaml"):
         resolve_job_user()
 
 
