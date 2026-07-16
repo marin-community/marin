@@ -7,6 +7,7 @@ that drives it, and the setup script that installs the profiler. None of this ru
 from __future__ import annotations
 
 import os
+import signal
 from collections.abc import Iterator, Sequence
 from glob import glob
 from pathlib import Path
@@ -17,7 +18,16 @@ from iris.client.client import _wrap_entrypoint_for_multiprocess, _wrap_entrypoi
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob, nsys_setup_script
 from iris.cluster.types import Entrypoint, EnvironmentSpec, NsysSpec, ResourceSpec, gpu_device
-from iris.runtime.nsys import Rank, build_nsys_argv, report_path, resolve_nsys_bin, run, should_profile, workdir
+from iris.runtime.nsys import (
+    Rank,
+    _supervise,
+    build_nsys_argv,
+    report_path,
+    resolve_nsys_bin,
+    run,
+    should_profile,
+    workdir,
+)
 
 CMD = ["python", "train.py", "--steps", "10"]
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
@@ -223,6 +233,14 @@ def test_environment_spec_appends_nsys_setup_only_when_requested() -> None:
     assert any("nsight-systems" in s for s in with_nsys.setup_scripts)
 
 
+def test_inherited_setup_still_installs_nsys() -> None:
+    """A child job that reuses its parent's setup scripts still needs Nsight installed:
+    its entrypoint is already wrapped, and an unwrapped install would fail at launch."""
+    inherited = EnvironmentSpec(setup_scripts=["echo parent setup"], nsys=NsysSpec(output_uri=OUT)).to_proto()
+    assert any("nsight-systems" in s for s in inherited.setup_scripts)
+    assert inherited.setup_scripts[0] == "echo parent setup"
+
+
 def test_environment_spec_no_setup_stays_empty() -> None:
     # `setup_scripts=[]` is bring-your-own-image; iris adds nothing to it.
     assert EnvironmentSpec(setup_scripts=[], nsys=NsysSpec(output_uri=OUT)).to_proto().setup_scripts == []
@@ -233,6 +251,19 @@ class _Execed(Exception):
 
     def __init__(self, argv: list[str]) -> None:
         self.argv = argv
+
+
+class _FakePopen:
+    """A child that has already exited with `returncode` (negative if signalled)."""
+
+    def __init__(self, returncode: int) -> None:
+        self._returncode = returncode
+
+    def send_signal(self, signum: int) -> None:
+        raise AssertionError("nothing should signal an already-exited child")
+
+    def wait(self) -> int:
+        return self._returncode
 
 
 @pytest.fixture
@@ -307,6 +338,18 @@ def test_failing_command_still_uploads_its_report(monkeypatch: pytest.MonkeyPatc
 
     assert excinfo.value.code == 7
     assert len(list(destination.iterdir())) == 1
+
+
+def test_supervise_normalizes_a_signalled_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Popen.wait reports a SIGTERM'd child as -15; sys.exit would wrap that to 241 and
+    read as an application failure. 128 + signum is the convention (multigpu agrees)."""
+    monkeypatch.setattr("subprocess.Popen", lambda argv: _FakePopen(-signal.SIGTERM))
+    assert _supervise(["nsys", "profile"], ["true"]) == 143
+
+
+def test_supervise_passes_through_a_normal_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("subprocess.Popen", lambda argv: _FakePopen(7))
+    assert _supervise(["nsys", "profile"], ["false"]) == 7
 
 
 def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.MonkeyPatch, selected_rank: Path) -> None:

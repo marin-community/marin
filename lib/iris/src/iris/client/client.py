@@ -796,6 +796,11 @@ class IrisClient:
                     extras=environment.extras,
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
                     sync_packages=environment.sync_packages,
+                    # Carried whether or not the child owns its setup: the child's
+                    # entrypoint is already wrapped in `python -m iris.runtime.nsys`, and
+                    # dropping this here would leave it wrapped with no Nsight installed
+                    # (to_proto appends the install to the inherited scripts too).
+                    nsys=environment.nsys,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)

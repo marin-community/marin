@@ -180,7 +180,14 @@ def upload_report(report: Path, output_uri: str) -> str:
 
 
 def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
-    """Run nsys to completion, forwarding termination so it can finalize the report."""
+    """Run nsys to completion, forwarding termination so it can finalize the report.
+
+    Returns the child's exit code, with a signal death normalized to the conventional
+    ``128 + signum``. ``Popen.wait`` reports those as a negative code, which ``sys.exit``
+    would turn into a wrapping status (``-15`` becomes 241, not 143) and hide the
+    termination behind a bogus application failure. ``iris.runtime.multigpu`` normalizes
+    the same way for the same reason.
+    """
     proc = subprocess.Popen([*nsys_argv, *command])
 
     def forward(signum: int, frame: FrameType | None) -> None:
@@ -188,7 +195,8 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
 
     for sig in _FORWARDED_SIGNALS:
         signal.signal(sig, forward)
-    return proc.wait()
+    returncode = proc.wait()
+    return 128 - returncode if returncode < 0 else returncode
 
 
 def run(ranks: str, trace: str, capture_range: bool, output_uri: str, argv: Sequence[str]) -> NoReturn:
