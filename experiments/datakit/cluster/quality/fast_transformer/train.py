@@ -340,9 +340,14 @@ def main() -> None:
     p.add_argument("--labels", default=DEFAULT_LABELS, help="merged oracle-label parquet")
     p.add_argument("--out-dir", required=True, help="dir to write <name>.eqx + _remap.json + _meta.json")
     p.add_argument("--name", default=MODEL_STEM)
+    p.add_argument(
+        "--tokenizer",
+        default=TOKENIZER,
+        help="HF tokenizer name, or tiktoken:<encoding> for a tiktoken BPE (e.g. tiktoken:o200k_base)",
+    )
     args = p.parse_args()
     configure_logging(logging.INFO)
-    train_from_labels(labels_path=args.labels, out_dir=args.out_dir, name=args.name)
+    train_from_labels(labels_path=args.labels, out_dir=args.out_dir, name=args.name, tokenizer=args.tokenizer)
 
 
 if __name__ == "__main__":

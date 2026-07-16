@@ -14,9 +14,15 @@ from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
+import tiktoken
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+# A tokenizer name with this prefix (e.g. "tiktoken:o200k_base") selects a tiktoken BPE
+# encoder instead of a HuggingFace tokenizer. tiktoken tokenizes several times faster than
+# the HF SentencePiece path.
+TIKTOKEN_PREFIX = "tiktoken:"
 
 
 @functools.lru_cache(maxsize=8)
@@ -28,6 +34,11 @@ def load_tokenizer(tokenizer_name: str):
     without the cache a many-batch shard reloads the tokenizer hundreds of times.
     """
     return AutoTokenizer.from_pretrained(tokenizer_name)
+
+
+@functools.lru_cache(maxsize=4)
+def _load_tiktoken(encoding_name: str):
+    return tiktoken.get_encoding(encoding_name)
 
 
 # Reserved compact ids. Real tokens are remapped to dense ids starting at 2.
@@ -102,7 +113,17 @@ def _pack(raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, m
 
 
 def encode_texts(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
-    """Tokenize raw in-memory texts (no parquet read), truncating to ``max_tokens``."""
+    """Tokenize raw in-memory texts (no parquet read), truncating to ``max_tokens``.
+
+    A ``tiktoken:<encoding>`` name selects a tiktoken BPE encoder; any other name is a
+    HuggingFace tokenizer.
+    """
+    if tokenizer_name.startswith(TIKTOKEN_PREFIX):
+        encoding = _load_tiktoken(tokenizer_name.removeprefix(TIKTOKEN_PREFIX))
+        # Pre-cap by characters like the HF path: bounds tokenizer work and defuses
+        # tiktoken's O(n^2) worst case on pathological (repeated-char) input.
+        capped = [t[: max_tokens * 8] for t in texts]
+        return [row[:max_tokens] for row in encoding.encode_ordinary_batch(capped, num_threads=1)]
     return _encode(load_tokenizer(tokenizer_name), texts, max_tokens)
 
 
