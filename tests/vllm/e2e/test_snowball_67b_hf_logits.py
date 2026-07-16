@@ -3,10 +3,10 @@
 
 """Validate the Snowball Levanter model against the June 67B A2B frozen golden.
 
-This is the full-model parity gate for #7219: load the exact HF BF16 ``grug_moe`` export into the
-first-class Levanter ``SnowballLMHeadModel`` and assert its next-token top-25 log-probs match the
-committed golden. Unlike ``test_june_67b_a2b_levanter_inference.py`` (which restores the native
-TensorStore checkpoint into the vendored training Transformer), this exercises the HF *load* path
+This is the full-model parity gate: load the exact HF BF16 ``grug_moe`` export into the first-class
+Levanter ``SnowballLMHeadModel`` and assert its next-token distribution matches the committed golden.
+Unlike ``test_june_67b_a2b_levanter_inference.py`` (which restores the native TensorStore checkpoint
+into the vendored training Transformer), this exercises the HF *load* path
 that ``marin-serve`` uses, on the exported artifact.
 
 The golden was produced on 8xH100 with ``moe_implementation="sonic"`` and
@@ -41,7 +41,13 @@ from levanter.models.snowball import SnowballLMHeadModel
 from levanter.tokenizers import load_tokenizer
 from levanter.utils.jax_utils import parameter_count
 
-from .june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
+from .june_67b_a2b import (
+    GOLDEN_MAX_PROBABILITY_ERROR,
+    JUNE_67B_A2B,
+    InferenceGolden,
+    read_inference_golden,
+    score_next_token_against_golden,
+)
 from .remote_job import run_remote_test_job
 
 logger = logging.getLogger(__name__)
@@ -49,10 +55,6 @@ logger = logging.getLogger(__name__)
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
 TOP_K = 25
-# Same cross-implementation parity bound as the vLLM export test: the golden's top logprobs sit on a
-# 1/32 grid with many exact ties, so a rank-independent probability-error bound is the meaningful
-# check. Snowball clears it with ~10x margin (observed max prob error < 0.001).
-MAX_PROBABILITY_ERROR = 0.008
 JAX_COMPILATION_CACHE_DIR = (
     "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/snowball-67b-a2b-step-42150-sonic-deterministic-v1"
 )
@@ -109,18 +111,10 @@ def assert_snowball_hf_export_matches_golden(golden: InferenceGolden) -> None:
 
     logprobs = np.asarray(jax.device_get(logprobs))
 
-    golden_ids = np.asarray([entry.token_id for entry in expected_top])
-    golden_logprobs = np.asarray([entry.logprob for entry in expected_top])
-
-    # Greedy token matches the golden on every device (rank 0 sits 3.98 nats clear of rank 1).
-    greedy_ids = logprobs.argmax(axis=-1)
-    np.testing.assert_array_equal(greedy_ids, np.broadcast_to(golden_ids[0], greedy_ids.shape))
-
-    # Rank-independent probability parity on the golden's token set: insensitive to the bf16
-    # tie reordering, meaningful against a real regression. Snowball's logprob for each golden
-    # token vs the golden's own logprob, compared in probability space.
-    mine_at_golden = logprobs[:, golden_ids]  # [batch, TOP_K]
-    max_prob_error = float(np.max(np.abs(np.exp(mine_at_golden) - np.exp(golden_logprobs)[None, :])))
+    # Greedy-token match + rank-independent probability parity on the golden's token set (insensitive
+    # to the bf16 tie reordering, meaningful against a real regression).
+    greedy_ids, max_prob_error = score_next_token_against_golden(logprobs, golden)
+    golden_greedy = golden.top_logprobs[0].token_id
     logger.info(
         "Snowball HF-export inference: %s",
         {
@@ -131,7 +125,9 @@ def assert_snowball_hf_export_matches_golden(golden: InferenceGolden) -> None:
             "max_probability_error_vs_golden": max_prob_error,
         },
     )
-    assert max_prob_error <= MAX_PROBABILITY_ERROR, max_prob_error
+    # Rank 0 sits 3.98 nats clear of rank 1, so the greedy token must match on every device.
+    np.testing.assert_array_equal(greedy_ids, np.broadcast_to(golden_greedy, greedy_ids.shape))
+    assert max_prob_error <= GOLDEN_MAX_PROBABILITY_ERROR, max_prob_error
 
 
 def test_snowball_h100_hf_export_matches_golden(marin_gpu_client: IrisClient) -> None:

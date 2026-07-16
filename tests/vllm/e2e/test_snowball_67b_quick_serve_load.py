@@ -33,7 +33,13 @@ from iris.client import IrisClient
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import parameter_count
 
-from .june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
+from .june_67b_a2b import (
+    GOLDEN_MAX_PROBABILITY_ERROR,
+    JUNE_67B_A2B,
+    InferenceGolden,
+    read_inference_golden,
+    score_next_token_against_golden,
+)
 from .remote_job import run_remote_test_job
 
 logger = logging.getLogger(__name__)
@@ -41,10 +47,6 @@ logger = logging.getLogger(__name__)
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
 TOP_K = 25
-# Rank-independent parity bound (same as the vLLM export test): the golden's top logprobs sit on a
-# 1/32 grid with exact ties, so a probability-error bound is the meaningful cross-implementation
-# check. Snowball clears it with wide margin (observed max prob error < 0.001).
-MAX_PROBABILITY_ERROR = 0.008
 JAX_COMPILATION_CACHE_DIR = (
     "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/snowball-67b-a2b-step-42150-quick-serve-v1"
 )
@@ -121,14 +123,8 @@ def assert_snowball_quick_serve_load_matches_golden(golden: InferenceGolden) -> 
 
     logprobs = np.asarray(jax.device_get(logprobs))
 
-    golden_ids = np.asarray([entry.token_id for entry in expected_top])
-    golden_logprobs = np.asarray([entry.logprob for entry in expected_top])
-
-    # Greedy token matches the golden on every device (rank 0 sits 3.98 nats clear of rank 1).
-    greedy_ids = logprobs.argmax(axis=-1)
-    # Rank-independent probability parity on the golden's token set (insensitive to bf16 tie reorder).
-    mine_at_golden = logprobs[:, golden_ids]  # [batch, TOP_K]
-    max_prob_error = float(np.max(np.abs(np.exp(mine_at_golden) - np.exp(golden_logprobs)[None, :])))
+    greedy_ids, max_prob_error = score_next_token_against_golden(logprobs, golden)
+    golden_greedy = golden.top_logprobs[0].token_id
     logger.info(
         "Snowball quick-serve load: %s",
         {
@@ -139,9 +135,9 @@ def assert_snowball_quick_serve_load_matches_golden(golden: InferenceGolden) -> 
             "max_probability_error_vs_golden": max_prob_error,
         },
     )
-
-    np.testing.assert_array_equal(greedy_ids, np.broadcast_to(golden_ids[0], greedy_ids.shape))
-    assert max_prob_error <= MAX_PROBABILITY_ERROR, max_prob_error
+    # Rank 0 sits 3.98 nats clear of rank 1, so the greedy token must match on every device.
+    np.testing.assert_array_equal(greedy_ids, np.broadcast_to(golden_greedy, greedy_ids.shape))
+    assert max_prob_error <= GOLDEN_MAX_PROBABILITY_ERROR, max_prob_error
 
 
 def test_snowball_h100_quick_serve_load_matches_golden(marin_gpu_client: IrisClient) -> None:
