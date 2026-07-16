@@ -33,7 +33,9 @@ rows.)
 
 It imports only the `levanter.grug` kernels and `levanter.optim` — the model, optimizer
 (MuonH/AdamH), and train step are inlined, so there is no dependency on the marin
-pipeline, data loaders, checkpointing, or HF conversion.
+pipeline, data loaders, checkpointing, or HF conversion. (One optional hook: when
+launched as a multi-task iris gang job it imports `iris.runtime.jax_init` for
+`jax.distributed` coordinator discovery; outside iris that path is never touched.)
 
 ## Results
 
@@ -102,6 +104,17 @@ python grug_moe_mfu.py --run-id row13-ep8 --output-dir runs/row13-ep8 \
   --moe-implementation ring --expert-parallelism 8 --num-gpus 8
 ```
 
+### Multi-node
+
+The script joins one JAX mesh across a multi-node gang automatically. Under an iris
+gang job (`iris job run --replicas N`, one task per node), task 0 registers its
+`jax.distributed` coordinator address in the iris endpoint registry and the other
+tasks poll for it — no hand-rolled rendezvous. Pass `--num-gpus` = total GPUs across
+all nodes; the script fails fast on a mismatch. Sharding spans the whole fleet: FSDP
+(the `data` axis) covers all GPUs (there is no replica axis), and
+`--expert-parallelism` may exceed the per-node GPU count (e.g. EP16 on 8 nodes × 4
+GPUs). Only process 0 prints per-step metrics and writes `metrics_summary.json`.
+
 Compilation dominates the first run (~10–15 min cold for d5120/`sonic_cute`). Set a
 persistent XLA cache to amortize it across runs:
 
@@ -122,7 +135,7 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--expert-parallelism` | 1 | expert mesh axis size; >1 requires an expert-parallel `--moe-implementation` |
 | `--capacity-factor` | 1.0 | EP per-shard capacity multiplier; 1.0 = exact average (drops on imbalance, zero padding) |
 | `--attention-implementation` | `gpu_fa4_cute` | FlashAttention-4 CuTeDSL backend |
-| `--num-gpus` | 8 | GPUs to shard across |
+| `--num-gpus` | 8 | total GPUs to shard across (all nodes; asserted against the joined mesh) |
 | `--num-layers` | 26 | decoder layers |
 | `--num-experts` / `--num-experts-per-token` | 64 / 4 | MoE experts, top-k |
 | `--batch-size` / `--seq-len` | 128 / 4096 | global batch, sequence length |

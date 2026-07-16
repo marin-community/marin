@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -22,10 +23,16 @@ import jmp
 import numpy as np
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+
+try:  # iris is only present on cluster jobs; single-process runs don't need it
+    from iris.runtime.jax_init import initialize_jax as _iris_initialize_jax
+except ModuleNotFoundError:
+    _iris_initialize_jax = None
 
 
 class _Stub:
@@ -2034,6 +2041,27 @@ _H100_BF16_PEAK_FLOPS = 9.89e14
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 
 
+def _maybe_initialize_distributed() -> None:
+    """Join one JAX mesh across an iris gang job (multi-node); no-op otherwise.
+
+    Under ``iris job run --replicas N`` every task sees ``IRIS_NUM_TASKS=N``:
+    task 0 publishes its coordinator address in the iris endpoint registry and
+    the other tasks poll for it (``iris.runtime.jax_init``). Single-task jobs
+    and bare-metal runs skip distributed init entirely, so the script stays
+    runnable without iris installed.
+    """
+    if int(os.environ.get("IRIS_NUM_TASKS", "1")) <= 1:
+        return
+    if _iris_initialize_jax is None:
+        raise ModuleNotFoundError("multi-task iris job detected (IRIS_NUM_TASKS > 1) but iris is not importable")
+    _iris_initialize_jax()
+
+
+def _global_array(host_value: np.ndarray, sharding: NamedSharding) -> jax.Array:
+    """Build a (possibly multi-process) global array from identical host data on every process."""
+    return jax.make_array_from_callback(host_value.shape, sharding, lambda idx: host_value[idx])
+
+
 def _parse():
     p = argparse.ArgumentParser()
     p.add_argument("--run-id", required=True)
@@ -2075,13 +2103,13 @@ def _parse():
 
 
 def _make_batch(bs, seq_len, vocab, step, mesh):
-    tokens = jnp.asarray(synthetic_tokens(bs, seq_len, vocab, step))
-    loss_weight = jnp.ones((bs, seq_len), dtype=jnp.float32)
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    segment_ids = jax.device_put(jnp.zeros((bs, seq_len), dtype=jnp.int32), sharding)
+    tokens = _global_array(synthetic_tokens(bs, seq_len, vocab, step), sharding)
+    loss_weight = _global_array(np.ones((bs, seq_len), dtype=np.float32), sharding)
+    segment_ids = _global_array(np.zeros((bs, seq_len), dtype=np.int32), sharding)
     return Batch(
-        tokens=jax.device_put(tokens, sharding),
-        loss_weight=jax.device_put(loss_weight, sharding),
+        tokens=tokens,
+        loss_weight=loss_weight,
         attn_mask=AttentionMask.causal(sliding_window=seq_len).with_segment_ids(segment_ids),
     )
 
@@ -2089,6 +2117,13 @@ def _make_batch(bs, seq_len, vocab, step, mesh):
 def main():
     jax.config.update("jax_threefry_partitionable", True)
     a = _parse()
+    _maybe_initialize_distributed()
+    if jax.device_count() != a.num_gpus:
+        raise ValueError(
+            f"--num-gpus={a.num_gpus} but jax sees {jax.device_count()} devices "
+            f"({jax.process_count()} processes x {jax.local_device_count()} local)"
+        )
+    is_main_process = jax.process_index() == 0
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     nh = a.hidden_dim // a.head_dim
@@ -2151,7 +2186,8 @@ def main():
                 "loss": float(loss),
             }
             metrics.append(m)
-            print(json.dumps(m, sort_keys=True), flush=True)
+            if is_main_process:
+                print(json.dumps(m, sort_keys=True), flush=True)
     steady = [m for m in metrics if m["step"] >= a.warmup_steps]
 
     def med(xs):
@@ -2172,8 +2208,11 @@ def main():
         "steady_median_tokens_per_second": med([m["tokens_per_second"] for m in steady]),
         "steady_median_duration": med([m["duration"] for m in steady]),
     }
-    (out / "metrics_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
-    print("SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
+    if is_main_process:
+        (out / "metrics_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
+        print("SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
+    # Keep the coordinator (process 0) alive until every process finishes its last step.
+    multihost_utils.sync_global_devices("grug_moe_mfu_done")
 
 
 if __name__ == "__main__":
