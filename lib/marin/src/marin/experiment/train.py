@@ -18,6 +18,7 @@ This is deliberately **not** a ``default_train``: it bakes in no optimizer, no m
 no default eval suite, no learning rate. It only removes boilerplate.
 """
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
@@ -91,7 +92,8 @@ def train_lm(
     datasets: Mapping[ArtifactStep[TokenizedCache], float],
     batch_size: int,
     seq_len: int,
-    num_train_steps: int,
+    num_train_steps: int | None = None,
+    num_train_epochs: int | None = None,
     z_loss_weight: float | None,
     evals: EvalSuite | None,
     resources: ResourceConfig,
@@ -124,14 +126,50 @@ def train_lm(
     never enters the checkpoint's fingerprint). ``init_from`` chains this run onto another
     checkpoint (it becomes a dep and seeds ``initialize_from_checkpoint_path``).
 
+    Training length is set by exactly one of ``num_train_steps`` or ``num_train_epochs`` (setting
+    both, or neither, is an error). ``num_train_epochs`` is a thin convenience over
+    ``num_train_steps``: it resolves to ``ceil(num_train_epochs * num_train_tokens / (seq_len *
+    batch_size))`` from the training cache's token total, which counts packed sequences rather than
+    raw documents — the correct measure for packed SFT, where a hand-computed step count over raw
+    documents can be several times too long. Epoch semantics are only defined for a single training
+    dataset; pass ``num_train_steps`` directly for a mixture.
+
     A mutable (``dev``) ``version`` namespaces the checkpoint per user — its name becomes
     ``users/{username}/{name}`` so concurrent authors of the same experiment do not clobber each
     other; a fixed (calendar) ``version`` keeps the shared name.
     """
+    if (num_train_steps is None) == (num_train_epochs is None):
+        raise ValueError("Exactly one of num_train_steps or num_train_epochs must be set.")
+    if num_train_epochs is not None:
+        if num_train_epochs < 1:
+            raise ValueError(f"num_train_epochs must be >= 1, got {num_train_epochs}")
+        if len(datasets) != 1:
+            raise ValueError(
+                "num_train_epochs is only defined for a single training dataset; got "
+                f"{len(datasets)}. Pass num_train_steps directly for a mixture."
+            )
+
     harness = (
         LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(list(evals.tasks))) if evals is not None else None
     )
     all_deps = (*datasets, *validation, *((init_from,) if init_from is not None else ()))
+
+    def resolve_num_train_steps(ctx: StepContext) -> int:
+        """Steps for one full pass (times ``num_train_epochs``) over the training tokens.
+
+        Dividing the split's token total by ``seq_len * batch_size`` counts packed sequences, not
+        raw documents. At fingerprint time the token total is unavailable (the cache is not built),
+        so we fall back to ``num_train_epochs`` as a placeholder that still keeps the epoch count in
+        the artifact identity; the real step count is read from the cache at run time.
+        """
+        if num_train_steps is not None:
+            return num_train_steps
+        assert num_train_epochs is not None  # guaranteed by the mutual-exclusivity check above
+        if ctx.is_fingerprint:
+            return num_train_epochs
+        (train_dataset,) = tuple(datasets)
+        num_train_tokens = ctx.resolved(train_dataset).num_train_tokens
+        return math.ceil(num_train_epochs * num_train_tokens / (seq_len * batch_size))
 
     def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
         init_path = (
@@ -152,7 +190,7 @@ def train_lm(
                 mp=jmp.get_policy(mp),
                 train_batch_size=batch_size,
                 per_device_parallelism=-1,
-                num_train_steps=num_train_steps,
+                num_train_steps=resolve_num_train_steps(ctx),
                 steps_per_eval=steps_per_eval,
                 checkpointer=CheckpointerConfig(save_interval=_RESUMPTION_INTERVAL, keep=[]),
                 mesh=_marin_mesh(tensor_parallel_size),

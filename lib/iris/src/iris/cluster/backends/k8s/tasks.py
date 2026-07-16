@@ -45,7 +45,14 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_LEAFGROUP,
+    COSCHEDULE_NVLINK_DOMAIN,
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    RACK_SIZE,
+)
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
@@ -79,6 +86,19 @@ from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+class PodManifestError(ValueError):
+    """A RunTaskRequest cannot produce a valid Pod manifest.
+
+    Raised for request-level validation failures in manifest construction: an
+    unsupported container profile, a coscheduling group_by with no topology
+    mapping, an NVLink-domain gang larger than one rack, or an unsupported
+    constraint op. These are permanent — the identical request fails the same
+    way on every retry — so ``sync`` fails the task terminally instead of
+    treating it as a retryable worker loss and re-applying it every tick.
+    """
+
 
 # Label key prefix for iris-managed pod identification.
 _LABEL_MANAGED = "iris.managed"
@@ -179,14 +199,25 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 (H100 InfiniBand deployments).
 #   nvlink.domain hard (required): one GB200 NVLink domain (H100 has no
 #                 nvlink.domain label, so this only binds on GB200 capacity).
+#   nvlink.domain.preferred  soft (preferred) on the SAME nvlink.domain label: a GB200 gang
+#                 too large for one rack, so Kueue packs it into as few whole NVLink domains
+#                 as possible instead of demanding a single (impossible) domain.
 # A cluster whose Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
 # Kueue), so a band is stamped only when the config maps it explicitly.
 _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
-    "leafgroup": (CW_LABEL_LEAFGROUP, False),
-    "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
+    COSCHEDULE_LEAFGROUP: (CW_LABEL_LEAFGROUP, False),
+    COSCHEDULE_NVLINK_DOMAIN: (CW_LABEL_NVLINK_DOMAIN, True),
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED: (CW_LABEL_NVLINK_DOMAIN, False),
 }
+
+# Finest topology level (one node), the last level in both CoreWeave Topology CRs. The
+# GPU ResourceFlavor (cw-ib) is topology-aware, so Kueue rejects any GPU workload that
+# carries no topology request against it. A non-coscheduled GPU pod has no colocation
+# need, so it requests this always-satisfiable level as a soft preference — just enough
+# to be a valid TAS workload — so single-host GPU jobs admit instead of hanging.
+_KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
@@ -235,7 +266,7 @@ def _constraints_to_node_selector(
         if c.op == job_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
             node_selector[label_key] = c.value.string_value
         else:
-            raise ValueError(
+            raise PodManifestError(
                 f"Unsupported constraint op={c.op} for key={c.key!r}: "
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
@@ -574,7 +605,7 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
     resolved = resolve_container_profile(profile)
 
     if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
-        raise ValueError(
+        raise PodManifestError(
             "container profile DOCKER_ACCESS is not supported on the Kubernetes backend "
             "(nodes run containerd, not dockerd, so there is no host docker socket); use "
             "the docker worker backend, or PRIVILEGED with an in-pod runtime"
@@ -747,7 +778,7 @@ def _build_pod_manifest(
         # topology annotation exists to prevent. Fail fast before stamping.
         topo = config.kueue_topologies.get(group_by)
         if topo is None:
-            raise ValueError(
+            raise PodManifestError(
                 f"Coscheduled task {run_req.task_id!r} has group_by={group_by!r}, which has no "
                 f"topology mapping on this cluster (known: {sorted(config.kueue_topologies)}). "
                 "group_by must name a topology level the cluster provisioned; configure "
@@ -757,11 +788,30 @@ def _build_pod_manifest(
         # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
         node_label, required = topo
+        # A hard single-NVLink-domain gang cannot span racks: one NVL72 rack is one NVLink
+        # domain of RACK_SIZE nodes, so a required nvlink.domain gang larger than that can
+        # never be placed and would sit unschedulable forever. Reject it at build time with a
+        # clear message instead. The CLI never emits this — a multi-rack GB200 gang gets the
+        # soft nvlink.domain.preferred level — so this guards a programmatic client that stamps
+        # the hard nvlink.domain level directly for more than one rack.
+        if required and node_label == CW_LABEL_NVLINK_DOMAIN and run_req.num_tasks > RACK_SIZE:
+            raise PodManifestError(
+                f"Coscheduled task {run_req.task_id!r} requires a single {group_by!r} domain but "
+                f"num_tasks={run_req.num_tasks} exceeds the NVLink domain size ({RACK_SIZE} nodes, "
+                "one NVL72 rack). A hard NVLink-domain gang cannot cross racks; request "
+                f"<= {RACK_SIZE} replicas or coschedule on a coarser level (e.g. leafgroup)."
+            )
         anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
         metadata["annotations"] = {
             _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
             anno_key: node_label,
         }
+    elif gpu_count > 0:
+        # A non-coscheduled GPU pod still lands on the topology-aware cw-ib flavor, which
+        # Kueue will not admit without a topology request. It has no gang to colocate, so
+        # ask only for the finest, always-satisfiable level as a soft preference. CPU-only
+        # pods route to the non-TAS cw-cpu flavor and must NOT carry a topology annotation.
+        metadata["annotations"] = {_KUEUE_PREFERRED_TOPOLOGY: _KUEUE_SINGLE_POD_TOPOLOGY}
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is
@@ -1633,6 +1683,21 @@ class K8sTaskProvider:
         for run_req in request.tasks_to_run:
             try:
                 self._apply_pod(run_req)
+            except PodManifestError as exc:
+                logger.error("Task %s has an invalid manifest and cannot be scheduled: %s", run_req.task_id, exc)
+                # The request itself is invalid, so it can never produce a pod: every
+                # retry rebuilds the same broken manifest, wedging this backend's
+                # reconcile tick (the error would otherwise escape sync and abort the
+                # remaining applies/polls). Fail the task terminally with the reason
+                # instead of the retryable WORKER_FAILED used for transient apply loss.
+                apply_failures.append(
+                    TaskUpdate(
+                        task_id=JobName.from_wire(run_req.task_id),
+                        attempt_id=run_req.attempt_id,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error=str(exc),
+                    )
+                )
             except KubectlError as exc:
                 logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
                 # The pod was never created, so there is no k8s verdict to track

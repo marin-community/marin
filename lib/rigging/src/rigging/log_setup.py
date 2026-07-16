@@ -249,5 +249,10 @@ def configure_logging(level: int = logging.INFO) -> LogRingBuffer:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("fsspec").setLevel(logging.WARNING)
     logging.getLogger("fsspec.caching").setLevel(logging.WARNING)
+    # botocore/aiobotocore log credential discovery ("Found credentials in
+    # environment variables.") and retry chatter at INFO, once per fresh S3
+    # session -- pure noise on every S3-backed task (e.g. CoreWeave object store).
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+    logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
     return _global_buffer

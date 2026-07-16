@@ -39,6 +39,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
@@ -490,13 +491,15 @@ def resolve_multinode_defaults(
 
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
-    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``leafgroup``
-    (the H100 InfiniBand multi-node colocation level) so all replicas are
-    scheduled together.
+    TPU slice. For GPUs with replicas > 1, the coscheduling level is derived from
+    the GPU variant: NVL72 (GB200/GB300) gangs that fit one rack bind HARD to
+    ``nvlink.domain``; larger NVL72 gangs bind SOFT to the same level
+    (``nvlink.domain.preferred``) so Kueue packs them into whole racks; H100 and
+    other GPUs coschedule on the soft ``leafgroup`` IB level.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
-        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
+        gpu: GPU spec string (e.g. ``"H100x8"``, ``"GB200x4"``), or ``None``.
         replicas: Explicit replica count from the caller, or ``None`` if not
             specified (meaning the default should be inferred).
 
@@ -506,7 +509,9 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            return replicas, CoschedulingConfig(group_by="leafgroup")
+            variant, _ = parse_gpu_spec(gpu)
+            level = gpu_gang_coscheduling_level(variant, replicas)
+            return replicas, CoschedulingConfig(group_by=level)
         return replicas or 1, None
 
     try:

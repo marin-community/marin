@@ -34,6 +34,7 @@ from iris.cluster.backends.k8s.tasks import (
     _task_update_from_pod,
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -1079,11 +1080,45 @@ def test_kueue_priority_class_stamped_from_config():
 def test_kueue_required_topology_for_nvlink_domain():
     """group_by=nvlink.domain -> required (hard) NVLink-domain topology."""
     manifest = _build_pod_manifest(
-        _cosched_req("/job/task/0", group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
+        _cosched_req("/job/task/0", num_tasks=8, group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
     )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_kueue_required_nvlink_gang_rejects_more_than_one_rack():
+    """A hard nvlink.domain gang cannot span racks: one NVL72 rack is one NVLink domain of
+    RACK_SIZE nodes, so a required gang larger than that is unschedulable and must fail fast
+    (the guard for the programmatic client; the CLI already caps NVLink gangs at RACK_SIZE)."""
+    with pytest.raises(ValueError, match="NVLink domain size"):
+        _build_pod_manifest(
+            _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain"),
+            pod_config(local_queue="iris-lq"),
+        )
+
+
+def test_kueue_required_nvlink_gang_allows_full_rack():
+    """A hard nvlink.domain gang of exactly one full rack (RACK_SIZE nodes) is valid."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=RACK_SIZE, group_by="nvlink.domain"),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert manifest["metadata"]["annotations"][_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+
+
+def test_kueue_preferred_nvlink_gang_packs_multi_rack():
+    """A multi-rack GB200 gang uses the SOFT nvlink.domain.preferred level: it binds the
+    nvlink.domain label as a PREFERRED (not required) topology, so Kueue packs the replicas
+    into as few whole NVLink domains as possible instead of demanding one (impossible) domain.
+    It is admitted for a gang larger than one rack rather than rejected."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain.preferred"),
+        pod_config(local_queue="iris-lq"),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
 
 
 def test_kueue_preferred_topology_for_leafgroup():
@@ -1162,14 +1197,25 @@ def test_non_coscheduled_pod_routed_through_kueue_without_gang_metadata():
 
 
 def test_single_pod_gpu_job_routed_through_kueue():
-    """A single-pod GPU job (not coscheduled) still routes through Kueue so its GPU capacity
-    is accounted and preemptible — queue-name label, but no gang pod-group/topology metadata."""
+    """A single-pod GPU job (not coscheduled) routes through Kueue so its GPU capacity is
+    accounted and preemptible: queue-name label and no gang pod-group metadata, but a soft
+    finest-level topology request so the topology-aware cw-ib flavor will admit it (a GPU
+    workload with no topology request is rejected by TAS)."""
     req = make_run_req("/gpu-job/task/0", num_tasks=1)
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     labels = manifest["metadata"]["labels"]
+    annotations = manifest["metadata"]["annotations"]
     assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
     assert _KUEUE_POD_GROUP_NAME not in labels
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "kubernetes.io/hostname"
+    assert _KUEUE_POD_GROUP_TOTAL not in annotations
+
+
+def test_single_pod_cpu_job_has_no_topology_annotation():
+    """A CPU-only pod routes to the non-TAS cw-cpu flavor, so it must NOT carry a topology
+    annotation (Kueue would reject a topology request against a non-topology flavor)."""
+    manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), pod_config(local_queue="iris-lq"))
     assert "annotations" not in manifest["metadata"]
 
 

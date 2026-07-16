@@ -29,6 +29,7 @@ from iris.cluster.backends.k8s.tasks import (
 )
 from iris.cluster.controller.backend import TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.types import JobName
 from iris.cluster.worker.stats import IrisTaskStat
@@ -82,6 +83,26 @@ def test_sync_apply_error_yields_worker_failed(provider, k8s):
 
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_sync_invalid_manifest_fails_task_terminally(provider, k8s):
+    """An unbuildable manifest -> terminal FAILED, not retryable WORKER_FAILED.
+
+    A programmatic client can stamp a required nvlink.domain gang larger than one
+    rack (the CLI caps it, direct RunTaskRequests do not). The manifest can never
+    be built, so retrying would rebuild the same broken request every tick and
+    wedge the reconcile loop. sync must fail the task terminally and keep going.
+    """
+    req = make_run_req("/test-job/0", num_tasks=RACK_SIZE + 1, coscheduling_group_by="nvlink.domain")
+    batch = make_batch(tasks_to_run=[req])
+
+    result = provider.sync(batch)
+
+    assert len(result) == 1
+    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert "NVLink domain size" in result[0].error
+    # Nothing was created, and the tick was not aborted by the escaping error.
+    assert k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true"}) == []
 
 
 def test_redrive_does_not_recreate_running_pod(provider, k8s):
