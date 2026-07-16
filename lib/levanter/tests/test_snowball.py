@@ -21,6 +21,7 @@ import pytest
 
 import haliax as hax
 from haliax import Axis
+from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
@@ -89,10 +90,9 @@ def test_snowball_config_hf_roundtrip():
 
 
 def test_snowball_hf_converter_matches_config_class():
-    # This is exactly the match HFCheckpointConverter.from_hf performs.
+    # This is exactly the match HFCheckpointConverter.from_hf performs (by HfConfigClass name).
     converter = SnowballConfig().hf_checkpoint_converter()
     assert converter.HfConfigClass is GrugMoeHfConfig
-    assert converter.HfConfigClass.__name__ == "GrugMoeHfConfig"
 
 
 def _expected_state_dict_manifest(cfg: SnowballConfig) -> dict[str, tuple[int, ...]]:
@@ -172,6 +172,19 @@ def test_snowball_state_dict_roundtrip_is_exact():
         src_logits = np.asarray(run(src, ids).array)
         dst_logits = np.asarray(run(dst, ids).array)
     assert np.array_equal(src_logits, dst_logits), "state-dict round-trip changed logits"
+
+
+def test_snowball_torch_compatible_state_dict_roundtrip():
+    """Exercise the exact serialization path load_pretrained uses (to/from_torch_compatible_state_dict)."""
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(4))
+        sd = to_torch_compatible_state_dict(model)
+        loaded = from_torch_compatible_state_dict(model, sd)
+        loaded_sd = to_torch_compatible_state_dict(loaded)
+    assert sd.keys() == loaded_sd.keys()
+    for key, value in sd.items():
+        np.testing.assert_array_equal(np.asarray(loaded_sd[key]), np.asarray(value))
 
 
 def test_snowball_forward_shapes_and_finite():

@@ -48,7 +48,7 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
 )
-from levanter.grug.grug_moe import MoEExpertMlp
+from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -81,6 +81,9 @@ _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
+# June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
+# from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
+_DEFAULT_QK_MULT = 1.5703274004183786
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
@@ -148,9 +151,12 @@ class SnowballConfig(HFCompatConfig):
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.0098821
-    qk_mult: float = 1.5703274004183786
+    qk_mult: float = _DEFAULT_QK_MULT
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     attention_implementation: Optional[GrugAttentionImplementation] = None
+    # Runtime knob, not an architectural switch: selects the MoE dispatch backend (None -> "ring").
+    # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
+    moe_implementation: Optional[MoeImplementation] = None
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -205,7 +211,7 @@ class SnowballConfig(HFCompatConfig):
             sliding_window=int(_hf_attr(hf_config, ("sliding_window",), 2048)),
             layer_norm_eps=float(_hf_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_attr(hf_config, ("initializer_std", "initializer_range"), 0.0098821)),
-            qk_mult=float(_hf_attr(hf_config, ("qk_mult",), 1.3)),
+            qk_mult=float(_hf_attr(hf_config, ("qk_mult",), _DEFAULT_QK_MULT)),
             rope=rope,
         )
 
@@ -466,6 +472,7 @@ class SnowballMoEMLP(eqx.Module):
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
+                implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_EP_CAPACITY_FACTOR,
             ),
@@ -727,11 +734,11 @@ def _get(state_dict: StateDict, prefix: Optional[str], name: str) -> jax.Array:
 def snowball_from_state_dict(
     template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
 ) -> SnowballTransformer:
-    """Populate the template's leaves from canonical HF keys, resharding each leaf to its Grug spec.
+    """Populate the template's leaves from canonical HF keys, resharding each to its Grug spec.
 
-    Resharding here is load-bearing: ``load_pretrained`` shards via NamedArray-keyed axis mappings,
-    which do not touch Snowball's raw-array leaves, so without this the 67B would load replicated
-    and OOM. ``_reshard_for_init`` no-ops off-mesh and drops absent axes under compact meshes.
+    Each leaf must be resharded to its Grug partition spec on load: the generic loader only shards
+    NamedArray-keyed axes, so Snowball's raw-array leaves would otherwise load replicated (and the
+    67B would not fit).
     """
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
 
