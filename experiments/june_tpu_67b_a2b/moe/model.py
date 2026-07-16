@@ -119,6 +119,11 @@ class GrugModelConfig:
     disable_long_rope: bool = False
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    ce_implementation: str | None = None
+    """Fused cross-entropy backend selection (levanter fused_cross_entropy_loss). None keeps the
+    backend default (GPU: full-logits ``xla`` path). Set ``"batched_xla"`` to use the blocked-vocab
+    (cut) CE that avoids materializing the [tokens, vocab] logits tile -- large HBM saving at long
+    context. None is byte-identical to the prior behaviour."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -806,6 +811,7 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
+            implementation=self.config.ce_implementation,
         )
         # No load-balancing loss; router z-loss only.
         num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]

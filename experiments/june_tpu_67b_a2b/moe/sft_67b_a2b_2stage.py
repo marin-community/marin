@@ -57,7 +57,7 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
-from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import (
     ChatDatasetSpec,
     GrugMoeSFTConfig,
@@ -79,17 +79,23 @@ _model_base = _heuristic.build_model_config(_DIM, seq_len=65_536)
 # the 256 routed experts are sharded 8-way over the intra-node NVLink ``expert`` axis (ring-EP).
 # Batch is sharded over (replica, data, expert); batch_shards = replica*data*expert = 1*N*8 = 8N
 # where N=_NODES (data absorbs the remaining 8*N/expert = N devices). _BATCH must be a multiple of 8N.
-_NODES: int = 4  # full-run gang size (H100x8 nodes) -> 32 GPUs; 8N=32 -> _BATCH multiple of 32
-_SMOKE_NODES: int = 2  # smoke gang (2 nodes) -> 16 GPUs; 8N=16 -> _SMOKE_BATCH multiple of 16
+# GEOMETRY (2026-07-16 decision): AdamH (not Muon) + tensor/model parallelism. Muon's Newton-Schulz
+# workspace is a ~21GiB REPLICATED per-device floor that never shards (num_layers=26 is coprime to any
+# expert-inclusive batch_shards), so it OOMs on H100 at any node count -> switched to AdamH (no NS).
+# bs=8 forces data=1 -> the extra nodes go on the MODEL axis (tensor parallel), which also shards the
+# seq32k activation/logits transient. Mesh = (replica=1, data=1, expert=8, model=_MODEL_PARALLEL) on
+# _NODES*8 = 32 GPUs. batch_shards = replica*data*expert = 8; _BATCH must be a multiple of 8.
+# Predicted per-device HBM ~52-56 GiB (AdamH fp32, ~24 GiB headroom). See the experiment GEOMETRY_ANALYSIS.md.
+_NODES: int = 4  # full-run gang: 4x H100x8 = 32 GPUs
+_SMOKE_NODES: int = 4  # smoke at the SAME target geometry (validates the untested model_axis>1 path)
 _EXPERT_PARALLEL: int = 8  # shard the 256 experts across the 8 intra-node GPUs (ring-EP over NVLink)
-_REPLICA_AXIS: int = 1  # pure FSDP (one model copy sharded over all N*8 GPUs; no cross-node replicate)
-_SEQ: int = 8_192  # full-run SFT packed length (64k cooled window; 8k = near-zero padding + tput on H100)
-_SMOKE_SEQ: int = 4_096  # shorter packed length for the 2-node smoke (memory headroom + fast steps)
-_BATCH: int = 64  # full: multiple of 8N=32 (per_device_parallelism auto-derives to 2)
-_SMOKE_BATCH: int = 16  # smoke: multiple of 8N=16 (per_device auto-derives to 1). Was 32: OOM'd on first
-# jit_train_step (24.36GiB step tile atop ~61GiB persistent state > 80GB H100). Halving batch halves the
-# activation tile (~24->~12GiB -> 61+12=73<80) while KEEPING seq=4096 for the thinking-content goal.
-_PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards) given the mesh
+_MODEL_PARALLEL: int = 4  # tensor/model parallel over the cross-node axis; data absorbs 32/(1*8*4)=1
+_REPLICA_AXIS: int = 1  # pure FSDP/TP (one model copy sharded over all 32 GPUs; no cross-node replicate)
+_SEQ: int = 32_768  # full-run SFT packed length (operator target ctx_len=32k)
+_SMOKE_SEQ: int = 32_768  # smoke at the target seq len
+_BATCH: int = 8  # global batch (operator target bs=8); multiple of batch_shards=8; per_device -> 1
+_SMOKE_BATCH: int = 8  # smoke at the target global batch
+_PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards) = 8/8 = 1
 
 _model = dataclasses.replace(
     _model_base,
@@ -102,19 +108,24 @@ _model = dataclasses.replace(
     # H100 GPU attention backend. gpu_fa4_cute (NOT gpu_fa4_thd) because sliding_window=2048 is a SHORT
     # window; thd only handles full-causal windows (canary_ferry.py maps thd -> window=2*seq to fake it).
     attention_implementation="gpu_fa4_cute",
+    # Blocked-vocab (cut) cross-entropy: avoids materializing the [tokens, vocab] logits tile at seq32k
+    # (~15.7 GiB/dev on the default full-logits GPU path). Cheap HBM insurance for the tensor-parallel fit.
+    ce_implementation="batched_xla",
 )
-_smoke_model = dataclasses.replace(_model, max_seq_len=_SMOKE_SEQ)  # 2-node smoke: 4k packed length
+_smoke_model = dataclasses.replace(_model, max_seq_len=_SMOKE_SEQ)  # smoke at target seq32k
 
-# --- Optimizer: FRESH SFT schedule (weights-only init resets it). First-pass LRs — see header. ---
-_SFT_MUON_LR: float = 2e-4
-_SFT_ADAM_LR: float = 5e-5
-_optimizer = GrugMoeMuonHConfig(
-    learning_rate=_SFT_MUON_LR,
+# --- Optimizer: AdamH (NOT Muon). Muon's Newton-Schulz workspace is a ~21GiB replicated per-device
+# floor that never shards -> guaranteed H100 OOM (marin #6693). AdamH (grug_moe_adamh_v2) has no NS
+# workspace (elementwise m/v moments). FRESH SFT schedule (weights-only init resets it). First-pass LRs. ---
+_SFT_ADAMH_LR: float = 5e-5  # adamh group (attn/dense matrices) + expert group (expert_lr=None -> this)
+_SFT_ADAM_LR: float = 5e-5  # adam group (norms / router / embeddings)
+_optimizer = GrugMoeAdamHConfig(
+    learning_rate=_SFT_ADAMH_LR,
     adam_lr=_SFT_ADAM_LR,
     beta1=0.9,
     beta2=0.95,
+    epsilon=1e-8,
     max_grad_norm=1.0,
-    rmsnorm_to_adam=True,  # matches use_array_stacked_blocks=True (as in the cooldown optimizer)
     weight_decay=0.0,
     min_lr_ratio=0.1,
     warmup=0.03,
@@ -203,6 +214,7 @@ def _sft_config(
             ema_beta=None,
             log_every=1,
             replica_axis_size=_REPLICA_AXIS,
+            model_axis_size=_MODEL_PARALLEL,
         ),
         eval=None,
     )
@@ -255,15 +267,16 @@ def build_job2(job1: ArtifactStep[LevanterCheckpoint], *, version: str = "dev") 
     )
 
 
-_SMOKE_STEPS: int = 40
+_SMOKE_STEPS: int = 8  # cheap validation: clear first jit_train_step at the target geometry + bank a few steps
 
 
 def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Stage-5 smoke: the real 67B on 2x H100x8 nodes (cw-us-east-02a), seq 4k, batch 32, wildchat,
-    weights-only init from step-42150, 40 steps + a mid-run native checkpoint save. Validates native
-    S3 ckpt load -> chat+packing -> weights-only init (step starts at 0) -> loss finite/downward ->
-    save, before committing to the 1-epoch Job1. (HF export is validated separately via the grug->HF
-    converter on the saved checkpoint.)"""
+    """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 4x H100x8 nodes (cw-us-east-02a),
+    AdamH, expert=8 + model=4 (tensor parallel), replica=1, bs=8, seq=32768, per_device=1, few steps +
+    a mid-run native checkpoint save. Validates native S3 ckpt load -> chat+packing -> weights-only init
+    (step starts at 0) -> the UNTESTED model_axis>1 path -> first jit_train_step with NO OOM (AdamH kills
+    the ~21GiB Muon-NS floor) -> loss finite -> save, before committing to the 1-epoch Job1. (HF export
+    is validated separately via the grug->HF converter on the saved checkpoint.)"""
 
     def build_config(ctx: StepContext) -> GrugMoeSFTConfig:
         cfg = _sft_config(
@@ -273,8 +286,8 @@ def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
             init_from=_BASE_CKPT,
             steps=_SMOKE_STEPS,
             stage="smoke",
-            model=_smoke_model,  # seq 4k
-            batch_size=_SMOKE_BATCH,  # 32 = multiple of 8*_SMOKE_NODES(16)
+            model=_smoke_model,  # seq 32k
+            batch_size=_SMOKE_BATCH,  # 8 = batch_shards (replica*data*expert = 1*1*8); per_device -> 1
         )
         # Save a native checkpoint mid-smoke so the save path (and resume-on-preempt) is exercised.
         return dataclasses.replace(cfg, save_interval_minutes=5, checkpoint_keep=[{"every": 20}])
