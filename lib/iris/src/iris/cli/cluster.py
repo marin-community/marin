@@ -40,7 +40,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
-from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
     ROLLOUT_RECORD_FILENAME,
     RolloutPhase,
@@ -1021,37 +1021,7 @@ def controller(ctx):
 
 
 @controller.command("serve")
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
-@click.option(
-    "--checkpoint-path",
-    default=None,
-    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
-)
-@click.option(
-    "--checkpoint-interval",
-    default=None,
-    type=float,
-    help="Periodic checkpoint interval in seconds (default: hourly)",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Start in dry-run mode: compute scheduling but suppress all side effects",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Start with an empty database, ignoring any remote checkpoint",
-)
-@click.option(
-    "--state-dir",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
-)
+@controller_serve_options
 @click.pass_context
 def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir):
     """Start a local controller process.
