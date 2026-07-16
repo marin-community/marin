@@ -77,8 +77,8 @@ avenue 7/10 land.
 
 | ID | Hypothesis | Status | Decisive evidence |
 | --- | --- | --- | --- |
-| SPF-001 | bf16 dy before reshard saves ≥4 ms with grad parity within bf16 tolerance | Running | fwd_bwd median vs 63.038 ms + parity check |
-| SPF-002 | Owner-sharded dx return (psum_scatter) saves ≥3 ms with dx parity | Running | fwd_bwd median (alone and stacked on SPF-001) |
+| SPF-001 | bf16 dy before reshard saves ≥4 ms with grad parity within bf16 tolerance | PARTIAL: -1.87 ms (2.97%) at parity; below 4 ms bar (fp32 dy AG is only ~3.7 ms); keep on merit | see SPF-001/002 entry |
+| SPF-002 | Owner-sharded dx return (psum_scatter) saves ≥3 ms with dx parity | FALSIFIED: custom_vjp pins dx to x's (replicated) sharding; reshard-back makes it +0.73 ms | see SPF-001/002 entry |
 | SPF-003a | Tip gather grouping improves fused W13 vs 23.025 ms | CONFIRMED (small): 22.769 ms, -1.11% | see SPF-003 entry |
 | SPF-003b | Zero-fill double-write fix saves ≥2 ms on fused W13-bwd | FALSIFIED: +0.32 ms vs control, bit-exact; discarded | see SPF-003 entry |
 | SPF-006 | Reduced-shape fused-W13 compare regression (valid_error_count 0 -> 5 -> 3) introduced in d2ce47ca35..088831b4b | Open (needs bisect) | reduced `semantic_permute_w13_compare` valid_error_count per commit |
@@ -219,3 +219,45 @@ PermissionError swallowed per-port (`iris/cluster/backends/types.py:70-97`);
 manual `kubectl port-forward` workaround. Worker pytest needs explicit
 `uv pip install pytest pytest-xdist` after the cudnn pin; plain re-sync skews
 jax/pallas.
+
+## 2026-07-16 SPF-001/002 - dy bf16 cast: -1.87 ms at parity; owner-sharded dx return falsified by VJP sharding contract
+
+Branch `spf/001-backward-quick-wins` (final `eab013502`; SPF-001 alone =
+`2fc968f52`). Jobs cw-us-east-02a H100x8, exact replication of the logbook
+command at `6597-moe-mgpu-forward.md:40034` (modes
+`current_best_fwd_bwd,current_best_fwd_bwd_with_metadata`, warmup 1 / steps 3
+/ repeats 3, seed 0). Control reproduced the baseline within 0.3% (API 62.876
+ms vs logged 63.038; manual 51.362 vs 51.466); manual-graph anchors stable
+51.32-51.57 ms across all jobs, so cross-job variance is negligible.
+
+| Arm | Job | API median ms | useful | delta |
+|---|---|---:|---:|---:|
+| control `8a20cc22d` | `/marin/spf-arm0-control-8a20cc22` | 62.876 | 123.02 | — |
+| SPF-001 dy bf16 `2fc968f52` | `/marin/spf-arm1-dybf16-2fc968f5` | **61.008** | 126.79 | **-1.868** |
+| SPF-002 owner-dx (no reshard) `4636076ce` | `/marin/spf-arm2-ownerdx-4636076c` | ERROR | — | — |
+| SPF-002 + reshard-back `0accc617f` | `/marin/spf-arm2-ownerdx-rs-0accc617` | 63.608 | 121.60 | +0.732 |
+| both + reshard `eab013502` | `/marin/spf-arm3-both-rs-eab01350` | 62.077 | 124.60 | -0.799 |
+
+Checksum deltas all within the accepted 2.2e-5 cross-mode threshold (arm 1 at
+3.3e-5 is the expected bf16 shift); dropped routes 0 everywhere; local
+`test_source_push_semantic_mlp.py` 13 passed.
+
+**SPF-001**: real, robust **-1.87 ms (2.97%)** with parity — but the review's
+~5.8 ms estimate was wrong because the fp32 dy all-gather only costs ~3.7 ms
+at head, so halving its bytes can only save ~1.9. Below the pre-registered
+4 ms bar; recommended keep anyway (zero-risk, best-performing arm). Best
+config is SPF-001 alone: 61.008 ms / 126.79 useful.
+
+**SPF-002 FALSIFIED (structural)**: `custom_vjp` requires the returned dx
+cotangent to match x's sharding, and the harness (and public boundary) feeds x
+replicated — returning owner-sharded dx is a compile error, and
+reshard-back-to-replicated (reduce-scatter + all-gather) costs more than the
+single psum it replaces (+0.73 ms). A genuine win requires owner-sharding x
+itself at the MLP boundary — a training-integration change, folded into
+avenue 7/10 design work.
+
+Infra: same `/tmp/iris` port-lock permission bug as SPF-003/004 (lock dir
+owned by another OS user; `PermissionError` swallowed per port in
+`iris/cluster/backends/types.py:70-97`); manual `kubectl port-forward`
+workaround. IRIS_USER not honored by this branch's iris (jobs under
+`/marin/`).
