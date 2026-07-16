@@ -709,6 +709,26 @@ except Exception:
 """
 
 
+class NsysScope(StrEnum):
+    """Where the Nsight wrapper sits relative to the multi-process GPU supervisor.
+
+    nsys traces child processes, so the choice decides how a node's ranks are divided
+    into reports — not whether they are captured at all.
+
+    ``PROCESS`` wraps each child: one report per selected rank, and any subset of a
+    node's ranks can be traced (``first`` profiles one GPU of eight). ``NODE`` wraps
+    the supervisor: every rank on the node lands in one report, on one timeline with a
+    single clock — the better artifact for intra-node collectives, at the cost of
+    tracing every local rank whether or not you wanted them all.
+
+    With ``processes_per_task=1`` there is no supervisor and the two coincide; the
+    scope then only names the report.
+    """
+
+    PROCESS = "process"
+    NODE = "node"
+
+
 @dataclass(frozen=True)
 class NsysSpec:
     """Opt-in Nsight Systems profiling for a GPU job.
@@ -726,10 +746,12 @@ class NsysSpec:
             so a report that is not uploaded is destroyed with the pod, and only the
             caller knows which storage the job's cluster can actually write — under
             ``--target-cluster`` the submitting cluster's storage is the wrong answer.
-        ranks: Which ranks write a report: ``first``, ``per-node``, ``all``, or a
-            comma-separated list of global ranks. One report per profiled process
-            and no merged report, so profiling every rank of a large job is rarely
-            what you want. ``per-node`` is the usual choice for collective analysis.
+        scope: Whether to wrap each process or the whole node (see ``NsysScope``).
+        ranks: Which units write a report — global process ranks under
+            ``NsysScope.PROCESS``, task indices under ``NsysScope.NODE``. Accepts
+            ``first``, ``all``, a comma-separated list, or ``per-node`` (process scope
+            only, meaning each node's local rank 0). Reports are never merged, so
+            tracing every rank of a large job is rarely what you want.
         trace: The nsys ``--trace`` value. CPU sampling and GPU metrics are never
             enabled: the task container lacks the privileges for either.
         capture_range: Collect only between ``cuProfilerStart``/``cuProfilerStop``
@@ -740,6 +762,7 @@ class NsysSpec:
     """
 
     output_uri: str
+    scope: NsysScope = NsysScope.PROCESS
     ranks: str = "first"
     trace: str = "cuda,nvtx,cublas"
     capture_range: bool = False

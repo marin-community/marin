@@ -48,6 +48,7 @@ import fsspec.core
 
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, nsys_bin_glob
+from iris.cluster.types import NsysScope
 from iris.runtime.multigpu import (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
@@ -67,11 +68,16 @@ _FORWARDED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
 class RankSelector(StrEnum):
-    """Which ranks write a report."""
+    """Which units write a report."""
 
     FIRST = "first"
     PER_NODE = "per-node"
     ALL = "all"
+
+
+def _unit_name(scope: NsysScope) -> str:
+    """What a selected unit is called in logs: a node under node scope, else a rank."""
+    return "node" if scope is NsysScope.NODE else "rank"
 
 
 @dataclass(frozen=True)
@@ -163,9 +169,15 @@ def build_nsys_argv(nsys_bin: str, output_path: Path, trace: str, capture_range:
     return argv
 
 
-def report_path(output_dir: Path, rank: Rank) -> Path:
-    """Return this rank's report path. Ranks share a directory, so the name carries identity."""
-    return output_dir / f"rank{rank.global_rank:05d}-{socket.gethostname()}"
+def report_path(output_dir: Path, rank: Rank, scope: NsysScope) -> Path:
+    """Return this unit's report path.
+
+    Every unit uploads into one directory, so the name carries identity: the global
+    rank under process scope, the task index under node scope (where the report holds
+    every rank on that node).
+    """
+    unit = "node" if scope is NsysScope.NODE else "rank"
+    return output_dir / f"{unit}{rank.global_rank:05d}-{socket.gethostname()}"
 
 
 def upload_report(report: Path, output_uri: str) -> str:
@@ -199,26 +211,48 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     return 128 - returncode if returncode < 0 else returncode
 
 
-def run(ranks: str, trace: str, capture_range: bool, output_uri: str, argv: Sequence[str]) -> NoReturn:
-    """Run *argv*, profiled by nsys when this rank is selected.
+def validate_selector(ranks: str, scope: NsysScope) -> None:
+    """Reject a selector that cannot mean anything under *scope*.
 
-    An unselected rank execs and never returns. A selected rank supervises nsys so it
+    Raises:
+        ValueError: For ``per-node`` under node scope, where a report already spans the
+            whole node and the selector would silently be a synonym for ``all``.
+    """
+    if scope is NsysScope.NODE and ranks == RankSelector.PER_NODE:
+        raise ValueError(
+            f"--ranks={RankSelector.PER_NODE} is meaningless with --scope={NsysScope.NODE}: "
+            f"a node-scope report already covers every rank on the node. Use 'all' for every "
+            f"node, 'first' for one, or a list of task indices."
+        )
+
+
+def run(ranks: str, scope: NsysScope, trace: str, capture_range: bool, output_uri: str, argv: Sequence[str]) -> NoReturn:
+    """Run *argv*, profiled by nsys when this unit is selected.
+
+    Under node scope this process is the multi-process supervisor (or the command
+    itself at ``processes_per_task=1``), so the unit is the task and one report covers
+    every rank the supervisor spawns — nsys traces children. Under process scope this
+    is one child and the unit is its global rank.
+
+    An unselected unit execs and never returns. A selected one supervises nsys so it
     can upload the report afterwards, then exits with the command's own status.
     """
+    validate_selector(ranks, scope)
     command = list(argv)
     rank = Rank.from_env()
     if not should_profile(ranks, rank):
-        logger.info("rank %d not selected by --ranks=%s; running unprofiled", rank.global_rank, ranks)
+        logger.info("%s %d not selected by --ranks=%s; running unprofiled", _unit_name(scope), rank.global_rank, ranks)
         os.execvp(command[0], command)
 
     output_dir = workdir() / NSYS_OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = report_path(output_dir, rank)
+    output_path = report_path(output_dir, rank, scope)
     nsys_bin = resolve_nsys_bin(workdir() / NSYS_INSTALL_DIR)
     nsys_argv = build_nsys_argv(nsys_bin, output_path, trace, capture_range)
     # nsys stages its injection libraries in TMPDIR, and /tmp is mounted noexec.
     os.environ["TMPDIR"] = str(output_dir)
-    logger.info("rank %d profiling to %s%s", rank.global_rank, output_path, _REPORT_SUFFIX)
+    unit = _unit_name(scope)
+    logger.info("%s %d profiling to %s%s", unit, rank.global_rank, output_path, _REPORT_SUFFIX)
 
     returncode = _supervise(nsys_argv, command)
 
@@ -226,10 +260,10 @@ def run(ranks: str, trace: str, capture_range: bool, output_uri: str, argv: Sequ
     if not report.exists():
         # Don't mask the command's own failure; a crash before nsys wrote anything is
         # the usual reason, and the exit code is the more useful signal.
-        logger.error("rank %d wrote no report at %s (command exited %d)", rank.global_rank, report, returncode)
+        logger.error("%s %d wrote no report at %s (command exited %d)", unit, rank.global_rank, report, returncode)
         sys.exit(returncode)
     destination = upload_report(report, output_uri)
-    logger.info("rank %d uploaded %s (%.1f MB)", rank.global_rank, destination, report.stat().st_size / 1e6)
+    logger.info("%s %d uploaded %s (%.1f MB)", unit, rank.global_rank, destination, report.stat().st_size / 1e6)
     sys.exit(returncode)
 
 
@@ -242,16 +276,23 @@ def main(argv: list[str] | None = None) -> NoReturn:
     own_args, command = raw[:split], raw[split + 1 :]
 
     parser = argparse.ArgumentParser(prog="python -m iris.runtime.nsys")
-    parser.add_argument("--ranks", required=True, help="'first', 'per-node', 'all', or a comma-separated rank list")
+    parser.add_argument("--ranks", required=True, help="'first', 'per-node', 'all', or a comma-separated list")
+    parser.add_argument(
+        "--scope",
+        required=True,
+        type=NsysScope,
+        choices=list(NsysScope),
+        help="'process' (one report per rank) or 'node' (one report per node, every rank in it)",
+    )
     parser.add_argument("--trace", required=True, help="nsys --trace value (e.g. cuda,nvtx,cublas)")
-    parser.add_argument("--output-uri", required=True, help="directory URI to upload each rank's report to")
+    parser.add_argument("--output-uri", required=True, help="directory URI to upload each report to")
     parser.add_argument(
         "--capture-range",
         action="store_true",
         help="collect only between cuProfilerStart/Stop instead of for the whole run",
     )
     args = parser.parse_args(own_args)
-    run(args.ranks, args.trace, args.capture_range, args.output_uri, command)
+    run(args.ranks, args.scope, args.trace, args.capture_range, args.output_uri, command)
 
 
 if __name__ == "__main__":

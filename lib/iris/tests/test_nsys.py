@@ -17,7 +17,7 @@ import pytest
 from iris.client.client import _wrap_entrypoint_for_multiprocess, _wrap_entrypoint_for_nsys
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob, nsys_setup_script
-from iris.cluster.types import Entrypoint, EnvironmentSpec, NsysSpec, ResourceSpec, gpu_device
+from iris.cluster.types import Entrypoint, EnvironmentSpec, NsysScope, NsysSpec, ResourceSpec, gpu_device
 from iris.runtime.nsys import (
     Rank,
     _supervise,
@@ -26,6 +26,7 @@ from iris.runtime.nsys import (
     resolve_nsys_bin,
     run,
     should_profile,
+    validate_selector,
     workdir,
 )
 
@@ -116,6 +117,8 @@ def test_wrap_entrypoint_prepends_nsys_wrapper() -> None:
         "python",
         "-m",
         "iris.runtime.nsys",
+        "--scope",
+        "process",
         "--ranks",
         "per-node",
         "--trace",
@@ -155,13 +158,35 @@ def test_wrap_entrypoint_requires_gpu() -> None:
         _wrap_entrypoint_for_nsys(Entrypoint.from_command("python", "x.py"), cpu_only, NsysSpec(output_uri=OUT))
 
 
-def test_nsys_wraps_inside_the_multigpu_supervisor() -> None:
-    """The supervisor must spawn nsys, not the reverse: each child needs its own report,
-    and rank selection reads the per-child rank env the supervisor stamps."""
+def test_process_scope_wraps_inside_the_multigpu_supervisor() -> None:
+    """Process scope needs nsys in each child: that is what lets a subset of a node's
+    ranks be traced, and rank selection reads the per-child rank env the supervisor stamps."""
     entry = Entrypoint.from_command("python", "train.py")
     wrapped = _wrap_entrypoint_for_nsys(entry, _gpu_resources(8), NsysSpec(output_uri=OUT))
     wrapped = _wrap_entrypoint_for_multiprocess(wrapped, _gpu_resources(8), processes_per_task=8)
     assert wrapped.command.index("iris.runtime.multigpu") < wrapped.command.index("iris.runtime.nsys")
+
+
+def test_node_scope_wraps_around_the_multigpu_supervisor() -> None:
+    """Node scope needs nsys outside the supervisor, so its child-tracing sweeps every
+    rank on the node into one report."""
+    entry = Entrypoint.from_command("python", "train.py")
+    wrapped = _wrap_entrypoint_for_multiprocess(entry, _gpu_resources(8), processes_per_task=8)
+    wrapped = _wrap_entrypoint_for_nsys(wrapped, _gpu_resources(8), NsysSpec(output_uri=OUT, scope=NsysScope.NODE))
+    assert wrapped.command.index("iris.runtime.nsys") < wrapped.command.index("iris.runtime.multigpu")
+
+
+def test_node_scope_names_reports_by_node() -> None:
+    out = Path("/app/nsys")
+    assert report_path(out, Rank(3, 0), NsysScope.NODE).name.startswith("node00003-")
+
+
+def test_per_node_selector_is_rejected_under_node_scope() -> None:
+    """It would silently be a synonym for 'all' — a node report already covers the node."""
+    with pytest.raises(ValueError, match="meaningless"):
+        validate_selector("per-node", NsysScope.NODE)
+    validate_selector("per-node", NsysScope.PROCESS)
+    validate_selector("all", NsysScope.NODE)
 
 
 def test_build_nsys_argv_disables_unavailable_collection() -> None:
@@ -180,8 +205,8 @@ def test_build_nsys_argv_capture_range_stops_without_killing_the_process() -> No
 
 def test_report_path_is_unique_per_rank() -> None:
     out = Path("/app/nsys")
-    assert report_path(out, Rank(0, 0)) != report_path(out, Rank(1, 1))
-    assert report_path(out, Rank(7, 3)).name.startswith("rank00007-")
+    assert report_path(out, Rank(0, 0), NsysScope.PROCESS) != report_path(out, Rank(1, 1), NsysScope.PROCESS)
+    assert report_path(out, Rank(7, 3), NsysScope.PROCESS).name.startswith("rank00007-")
 
 
 def test_resolve_nsys_bin_reports_missing_install(tmp_path: Path) -> None:
@@ -283,7 +308,7 @@ def test_unselected_rank_execs_command_unwrapped(
     monkeypatch.setenv("IRIS_NUM_TASKS", "2")
 
     with pytest.raises(_Execed) as excinfo:
-        run(ranks="first", trace="cuda", capture_range=False, output_uri=OUT, argv=CMD)
+        run(ranks="first", scope=NsysScope.PROCESS, trace="cuda", capture_range=False, output_uri=OUT, argv=CMD)
     assert excinfo.value.argv == CMD
 
 
@@ -317,7 +342,14 @@ def test_selected_rank_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selec
     destination = selected_rank / "uploads"
 
     with pytest.raises(SystemExit) as excinfo:
-        run(ranks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
+        run(
+            ranks="first",
+            scope=NsysScope.PROCESS,
+            trace="cuda",
+            capture_range=False,
+            output_uri=f"file://{destination}",
+            argv=CMD,
+        )
 
     assert excinfo.value.code == 0
     uploaded = list(destination.iterdir())
@@ -334,7 +366,14 @@ def test_failing_command_still_uploads_its_report(monkeypatch: pytest.MonkeyPatc
     destination = selected_rank / "uploads"
 
     with pytest.raises(SystemExit) as excinfo:
-        run(ranks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
+        run(
+            ranks="first",
+            scope=NsysScope.PROCESS,
+            trace="cuda",
+            capture_range=False,
+            output_uri=f"file://{destination}",
+            argv=CMD,
+        )
 
     assert excinfo.value.code == 7
     assert len(list(destination.iterdir())) == 1
@@ -358,7 +397,14 @@ def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.Monke
     destination = selected_rank / "uploads"
 
     with pytest.raises(SystemExit) as excinfo:
-        run(ranks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
+        run(
+            ranks="first",
+            scope=NsysScope.PROCESS,
+            trace="cuda",
+            capture_range=False,
+            output_uri=f"file://{destination}",
+            argv=CMD,
+        )
 
     assert excinfo.value.code == 3
     assert not destination.exists()

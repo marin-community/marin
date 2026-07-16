@@ -53,6 +53,7 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     JobName,
+    NsysScope,
     NsysSpec,
     ResourceSpec,
     gpu_device,
@@ -1024,12 +1025,24 @@ Examples:
     ),
 )
 @click.option(
+    "--nsys-scope",
+    type=click.Choice([s.value for s in NsysScope], case_sensitive=False),
+    default=NsysScope.PROCESS.value,
+    show_default=True,
+    help=(
+        "'process': one report per rank, and any subset of a node's ranks can be traced. "
+        "'node': wrap the whole node so every rank on it lands in one report on one timeline "
+        "— better for intra-node collectives, but it traces every local rank."
+    ),
+)
+@click.option(
     "--nsys-ranks",
     default=NsysSpec.ranks,
     show_default=True,
     help=(
-        "Which ranks to profile: 'first', 'per-node', 'all', or a comma-separated list "
-        "(e.g. 0,7). One report per profiled rank and no merged report, so prefer a subset."
+        "Which units to profile: 'first', 'all', a comma-separated list (e.g. 0,7), or "
+        "'per-node' (process scope only). Units are ranks under --nsys-scope=process and "
+        "nodes under =node. Reports are never merged, so prefer a subset."
     ),
 )
 @click.option(
@@ -1083,6 +1096,7 @@ def run(
     container_profile: str | None,
     nsys: bool,
     nsys_output: str | None,
+    nsys_scope: str,
     nsys_ranks: str,
     nsys_trace: str,
     nsys_capture_range: bool,
@@ -1104,7 +1118,13 @@ def run(
     if nsys_output and not nsys:
         raise click.UsageError("--nsys-output has no effect without --nsys.")
     nsys_spec = (
-        NsysSpec(output_uri=nsys_output, ranks=nsys_ranks, trace=nsys_trace, capture_range=nsys_capture_range)
+        NsysSpec(
+            output_uri=nsys_output,
+            scope=NsysScope(nsys_scope),
+            ranks=nsys_ranks,
+            trace=nsys_trace,
+            capture_range=nsys_capture_range,
+        )
         if nsys and nsys_output
         else None
     )
