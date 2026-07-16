@@ -372,3 +372,69 @@ THEN grow d/L/E toward 1T/20B (d~4096, L~60-70, E=512, top-8). Set NCCL_GIN_TYPE
   3x padding OR fix routing/capacity; (3) attention 1-seq/rank occupancy; (4) EP comm overlap; (5)
   real-Muon NS all-gather (dp=1 460ms). 20% mfu_b200 for EP 512E is ABOVE best FSDP (14.35%) — a
   multi-week kernel/sharding effort, not achievable by more brute-force runs this session.
+
+## Two-rack recv-capacity bug (2026-07-16, post-commit)
+
+**Root cause of the replicated-recv OOM at 2 racks.** `expected_per_expert` in
+`main()` was computed as `num_procs * t_local * top_k / num_experts`. That is
+wrong for dp>1: each dp replica is an INDEPENDENT `ep_size`-rank EP group with
+its own expert copies, so a given expert only receives from its group's
+`ep_size` ranks — `ep_size * t_local` tokens, not all `num_procs`. Using
+`num_procs` oversizes `recv_cap` by exactly `dp_size` (2× at two racks).
+
+Observed at 512E/dp2/ep64/T_local8192/top8: `slots/expert=49152` = effective
+capacity factor 6 (= 2× bug × cap 3.0), driving `recv_cap=393216` and the
+`[128, recv_cap, D]` buffer that OOM'd at d≥2048 (193–258 GiB). dp=1 (single
+rack) was unaffected because `num_procs == ep_size` there — which is why the bug
+hid until two racks.
+
+Fix: `expected_per_expert = ep_size * t_local * top_k / num_experts` (committed
+in ae7ce24059's follow-up). Halves `recv_cap` at two racks; the "dp=2 needs
+capfac≈3" earlier finding was really "needs 2× (bug) × 1.5 (real)" — real cap is
+~1.5, matching single-rack.
+
+Also worth noting the recv is still materialized *replicated* (not sharded)
+after `ep_dispatch` — the FFI output carries no partition annotation on the Auto
+mesh — so even the halved buffer is per-device-full. The capacity fix makes
+d2048 fit (halved 103 GiB ≈ what d1024 fit at pre-fix); a proper sharded-recv
+fix would shrink it ~128×, the next lever if wider widths still OOM.
+
+Relaunched as `/rav/r2fix` (128 GPU / 32 tasks, 512E, quack expert-glu,
+remat=save_moe): sweep d2048×{cap2,cap3}, d2560×cap2. This is net-new data — the
+#7012 thread has no TE nccl_ep numbers (TE 2.15 lacks the NCCL_EP JAX surface).
+
+## Two-rack width sweep (2026-07-16, post capacity-fix)
+
+All 512E, top-8, seq-8192, dp2/ep64 (EP=1 rack NVLink, dp=2 cross-rack IB),
+QuACK expert-glu, remat=save_moe, SCALE_MUON_NO_NS=1.
+
+| d    | capfac | slots  | mfu_b200 | h100-equiv | note |
+|------|--------|--------|----------|------------|------|
+| 2048 | 2.0    | 16384  | 6.70%    | 15.24%     | fit  |
+| 2560 | 2.0    | 16384  | 7.87%    | 17.91%     | fit  |
+| 3072 | 1.5    | 12288  | —        | —          | CUDA_ERROR_LAUNCH_FAILED (QuACK dim) |
+| 4096 | 1.25   | 10240  | **12.09%** | **27.50%** | fit — best two-rack 512E |
+| 5120 | 1.25   | 10240  | —        | —          | CUDA_ERROR_LAUNCH_FAILED (QuACK dim) |
+
+**Trajectory: 2.88% (d1024, pre-fix) -> 12.09% (d4096) = 4.2x** on the unique
+TE nccl_ep two-rack path. Net-new data (no TE nccl_ep numbers exist in #7012).
+
+Two blockers to 20% mfu_b200:
+1. **QuACK kernel dim-robustness**: fails at d3072/d5120 (inter = d/2 =
+   1536/2560) but fine at d2048/2560/4096 (inter 1024/1280/2048). d4096's
+   inter=2048 is tile-friendly (256x128 tile, (2,1,1) cluster). Not divisibility
+   (all pass /8 and /128). Pattern in d/1024: {2,2.5,4} work, {3,5} fail —
+   likely a 2-CTA cluster grid-evenness constraint. Needs a kernel-side fix or
+   width-picking to tile-friendly dims (d4096, maybe d8192).
+2. **Replicated-recv memory**: TE ep_dispatch outputs recv REPLICATED
+   ([num_procs, recv_cap, D] full per device) — proven by the pre-fix warmup OOM
+   in jit__dispatch. reshard(recv, ep3) then slices it, but the replicated
+   materialization caps width (~d5120 = 107 GiB recv + model). Sharded recv would
+   cut it ~128x and unlock d6144-d8192. The QuACK expert GEMM already runs in a
+   shard_map (_ragged_expert_glu), so only the ep_dispatch->reshard boundary
+   replicates. Fix requires TE ep_dispatch to emit sharded output — probing
+   whether ep_dispatch accepts an out_sharding kwarg like ep_combine does
+   (r2cap job).
+
+capfac lever is minor (~+1pp): cap1.25 padding=25%; r2cap tests d4096 cap
+1.0/1.1/1.15 floor.
