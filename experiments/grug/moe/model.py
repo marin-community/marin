@@ -18,9 +18,9 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
-from haliax.quantization import Fp8RaggedDotOp
+from haliax.quantization import Fp8DotGeneralOp, Fp8RaggedDotOp
 from jax import core, random
-from jax.sharding import NamedSharding, get_abstract_mesh, reshard
+from jax.sharding import NamedSharding, auto_axes, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
 
 try:
@@ -108,7 +108,7 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 
 @dataclass(frozen=True)
 class GrugFp8Config:
-    """FP8 for the routed expert path.
+    """FP8 for the quantizable GEMMs of the model.
 
     Enabling this runs both expert GEMMs as FP8 grouped matmuls with delayed
     per-tensor scaling ([haliax.quantization.Fp8RaggedDotOp][], Hopper-only) and,
@@ -117,9 +117,16 @@ class GrugFp8Config:
     intermediate dims (checked at config time) and expert parallelism
     (expert axis size > 1) with the ring or ragged_all_to_all MoE backend; other
     configurations raise on the first forward pass.
+
+    Unless ``dense`` is disabled, the dense GEMMs — attention q/k/v/o and the
+    shared-expert MLP — also run as FP8 cuBLASLt matmuls with the same delayed
+    per-tensor scaling recipe ([haliax.quantization.Fp8DotGeneralOp][]). The
+    router, attention gate, GatedNorm, embedding, and lm-head projections stay
+    in full precision.
     """
 
     wire: bool = True
+    dense: bool = True
     amax_history_length: int = 1024
 
 
@@ -158,7 +165,7 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     fp8: GrugFp8Config | None = None
-    """FP8 expert GEMMs + EP collectives (see [GrugFp8Config][]); None keeps bf16."""
+    """FP8 expert GEMMs, EP collectives, and dense GEMMs (see [GrugFp8Config][]); None keeps bf16."""
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -187,6 +194,18 @@ class GrugModelConfig:
                 f"kernel's GEMM alignment contract); got hidden_dim={self.hidden_dim}, "
                 f"intermediate_dim={self.intermediate_dim}"
             )
+        if self.fp8 is not None and self.fp8.dense:
+            # cuBLASLt's FP8 GEMMs require 16-element-aligned contraction/output dims.
+            dense_dims = {
+                "num_heads * head_dim": self.num_heads * self.inferred_head_dim,
+                "num_kv_heads * head_dim": self.num_kv_heads * self.inferred_head_dim,
+                "shared_expert_intermediate_dim": self.shared_expert_intermediate_dim,
+            }
+            misaligned = {name: dim for name, dim in dense_dims.items() if dim % 16 != 0}
+            if misaligned:
+                raise ValueError(
+                    f"fp8.dense requires 16-aligned dense GEMM dims (cuBLASLt FP8 contract); got {misaligned}"
+                )
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -298,24 +317,91 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+class AttnFp8Ops(eqx.Module):
+    """Stateful FP8 dot ops for the four attention projections.
+
+    Each projection gets its own op instance because delayed-scaling state
+    tracks per-tensor amax statistics, exactly as [MoeRaggedDotOps][] carries
+    one op per expert GEMM (q/k/v share an input but the kernel and output-grad
+    scales differ per projection; Flax's FP8 ``Linear`` makes the same call).
+    """
+
+    q: Fp8DotGeneralOp
+    k: Fp8DotGeneralOp
+    v: Fp8DotGeneralOp
+    o: Fp8DotGeneralOp
+
+    @staticmethod
+    def init(amax_history_length: int) -> "AttnFp8Ops":
+        return AttnFp8Ops(
+            q=Fp8DotGeneralOp.init(amax_history_length),
+            k=Fp8DotGeneralOp.init(amax_history_length),
+            v=Fp8DotGeneralOp.init(amax_history_length),
+            o=Fp8DotGeneralOp.init(amax_history_length),
+        )
+
+
+class SharedMlpFp8Ops(eqx.Module):
+    """Stateful FP8 dot ops for the shared-expert (dense) MLP GEMMs."""
+
+    gate: Fp8DotGeneralOp
+    up: Fp8DotGeneralOp
+    down: Fp8DotGeneralOp
+
+    @staticmethod
+    def init(amax_history_length: int) -> "SharedMlpFp8Ops":
+        return SharedMlpFp8Ops(
+            gate=Fp8DotGeneralOp.init(amax_history_length),
+            up=Fp8DotGeneralOp.init(amax_history_length),
+            down=Fp8DotGeneralOp.init(amax_history_length),
+        )
+
+
+def _fp8_dense_dot(op: Fp8DotGeneralOp, x: jax.Array, w: jax.Array, *, out_sharding: P) -> jax.Array:
+    """Contract ``x[..., K] @ w[K, N]`` through a stateful FP8 dot op.
+
+    Same contraction the ``jnp.einsum("...h,hd->...d")`` sites lower to; a 3D
+    lhs fires cuBLASLt FP8 GEMMs for all of fwd/dgrad/wgrad (verified on H100
+    at the production attention shapes), so no flatten to 2D is needed.
+
+    The op's internal (custom-VJP) dots take no ``out_sharding``, so under the
+    explicit-sharding mesh both the forward dot (o/down contract a
+    model-sharded dim) and the weight-grad dot (contracts the token-sharded
+    dim) would raise ``ShardingTypeError``. Run the whole op under
+    ``auto_axes`` — GSPMD infers the collectives for forward and backward, as
+    the einsum path's AD did — and pin the output to the spec the bf16 einsum
+    produced so downstream sharding is unchanged.
+    """
+
+    def dot(op: Fp8DotGeneralOp, x: jax.Array, w: jax.Array) -> jax.Array:
+        return op(x, w, (((x.ndim - 1,), (0,)), ((), ())))
+
+    return auto_axes(dot, out_sharding=out_sharding)(op, x, w)
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    fp8_ops: AttnFp8Ops | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        fp8_ops = None
+        if cfg.fp8 is not None and cfg.fp8.dense:
+            fp8_ops = AttnFp8Ops.init(cfg.fp8.amax_history_length)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            fp8_ops=fp8_ops,
             cfg=cfg,
         )
 
@@ -331,9 +417,18 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        if self.fp8_ops is None:
+            q_proj = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+            k_proj = jnp.einsum("bsh,hd->bsd", x, self.w_k)
+            v_proj = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        else:
+            proj_spec = P(_BATCH_AXES, None, "model")
+            q_proj = _fp8_dense_dot(self.fp8_ops.q, x, self.w_q, out_sharding=proj_spec)
+            k_proj = _fp8_dense_dot(self.fp8_ops.k, x, self.w_k, out_sharding=proj_spec)
+            v_proj = _fp8_dense_dot(self.fp8_ops.v, x, self.w_v, out_sharding=proj_spec)
+        q = rearrange(q_proj, "... (n d) -> ... n d", d=head_dim)
+        k = rearrange(k_proj, "... (m d) -> ... m d", d=head_dim)
+        v = rearrange(v_proj, "... (m d) -> ... m d", d=head_dim)
 
         # Shift the second half of K's head_dim back by one position so the
         # query at position i sees K[i] on head_dim[:half] but K[i-1] on
@@ -395,7 +490,9 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        if self.fp8_ops is None:
+            return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        return _fp8_dense_dot(self.fp8_ops.o, attn_out, self.w_o, out_sharding=batch_spec)
 
 
 class RMSNorm(eqx.Module):
@@ -445,14 +542,26 @@ class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    fp8_ops: SharedMlpFp8Ops | None
 
     @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
+    def init(
+        hidden_dim: int,
+        intermediate_dim: int,
+        initializer_std: float,
+        *,
+        key: PRNGKeyArray,
+        fp8: GrugFp8Config | None = None,
+    ) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
+        fp8_ops = None
+        if fp8 is not None and fp8.dense:
+            fp8_ops = SharedMlpFp8Ops.init(fp8.amax_history_length)
         return DenseMLP(
             w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            fp8_ops=fp8_ops,
         )
 
     @named_call
@@ -469,9 +578,17 @@ class DenseMLP(eqx.Module):
 
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
-        up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        if self.fp8_ops is None:
+            gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
+            up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
+            out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        else:
+            hidden_spec = P(_BATCH_AXES, "model")
+            gate = _fp8_dense_dot(self.fp8_ops.gate, x_flat, self.w_gate, out_sharding=hidden_spec)
+            up = _fp8_dense_dot(self.fp8_ops.up, x_flat, self.w_up, out_sharding=hidden_spec)
+            out_flat = _fp8_dense_dot(
+                self.fp8_ops.down, activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec()
+            )
         # Reshard after the reshape so the shared-expert output carries the same
         # canonical batch sharding as the routed MoE output (MoEMLP reshards its
         # routed result identically). Splitting the fused
@@ -685,7 +802,7 @@ class Block(eqx.Module):
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key, fp8=cfg.fp8
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
