@@ -40,6 +40,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.training.training import temporary_checkpoint_base_path
+from rigging.filesystem import marin_prefix, prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
@@ -65,13 +66,23 @@ def build_grug_chat_data_config(
     chat_template: str,
     pack: bool | None = None,
     mixture_block_size: int = 2048,
+    cache_dir: str | None = None,
 ) -> LmDataConfig:
     """Assemble a chat-SFT ``LmDataConfig`` the Grug trainer can consume directly.
 
     Each component reads its HF dataset through a ``ChatLmDatasetFormat`` carrying the shared
     ``chat_template`` and ``mask_user_turns=True`` (assistant span only). ``pack=None`` uses
-    the format default (packing on); ``auto_build_caches`` builds each cache on first use.
+    the format default (packing on); ``auto_build_caches`` builds each cache on first use under
+    ``cache_dir`` (``_component_cache_dir`` appends ``/<slug>`` per component).
+
+    ``cache_dir`` is the tokenized-cache ROOT. It MUST be set -- levanter raises
+    ``No cache_dir provided for component <slug>`` if both the component- and config-level roots
+    are ``None``. When ``None`` it defaults to a stable, cluster-resolved root
+    (``<marin_prefix>/tokenized/grug_sft``) so the smoke and the real Job1/Job2 -- which share a
+    dataset slug + tokenizer + template -- reuse one cache instead of re-tokenizing.
     """
+    if cache_dir is None:
+        cache_dir = prefix_join(marin_prefix(), "tokenized/grug_sft")
     components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
     for d in datasets:
@@ -88,7 +99,7 @@ def build_grug_chat_data_config(
         weights[d.slug] = d.weight
     return LmDataConfig(
         tokenizer=tokenizer,
-        cache_dir=None,
+        cache_dir=cache_dir,
         chat_template=chat_template,
         enforce_eos=True,
         auto_build_caches=True,
