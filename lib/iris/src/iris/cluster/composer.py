@@ -113,9 +113,7 @@ def make_task_backend(
 
         # Empty topologies falls back to the CoreWeave-convention defaults.
         topologies = {
-            group_by: KueueTopologyBinding(
-                topo.node_label, topo.mode, topo.slice_size, topo.coarse_preferred_label or None
-            )
+            group_by: KueueTopologyBinding(topo.node_label, topo.mode, topo.coarse_preferred_label or None)
             for group_by, topo in kp.kueue.topologies.items()
         }
         # The LocalQueue name is derived from label_prefix, not configured; Kueue is

@@ -3,7 +3,7 @@
 
 import pytest
 from iris.cli.job import resolve_multinode_defaults
-from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
+from iris.cluster.platforms.k8s.coreweave_topology import balanced_rack_slice_size, gpu_gang_coscheduling_level
 
 
 @pytest.mark.parametrize(
@@ -54,3 +54,24 @@ def test_resolve_multinode_defaults_gpu(tpu, gpu, replicas, expected_replicas, e
 )
 def test_gpu_gang_coscheduling_level(variant, replicas, expected):
     assert gpu_gang_coscheduling_level(variant, replicas) == expected
+
+
+@pytest.mark.parametrize(
+    "num_tasks,slice_size",
+    [
+        # Spread evenly over the fewest racks (<= 16 nodes each): 24 -> 12+12, 48 -> 16+16+16.
+        (17, None),  # ceil(17/16)=2 racks, does not divide evenly -> rejected
+        (18, None),  # 2 racks of 9, but two 9-node slices fit one 18-node rack -> rejected
+        (20, 10),
+        (24, 12),
+        (32, 16),
+        (48, 16),
+        (64, 16),
+    ],
+)
+def test_balanced_rack_slice_size(num_tasks, slice_size):
+    if slice_size is None:
+        with pytest.raises(ValueError):
+            balanced_rack_slice_size(num_tasks)
+    else:
+        assert balanced_rack_slice_size(num_tasks) == slice_size

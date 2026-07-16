@@ -54,9 +54,9 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
-    SCHEDULABLE_RACK_NODES,
     KueueTopologyBinding,
     TopologyMode,
+    balanced_rack_slice_size,
 )
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -211,9 +211,9 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 nvlink.domain label, so this only binds on GB200 capacity).
 #   nvlink.domain.preferred  soft (preferred) on the SAME nvlink.domain label: pack into as few
 #                 whole NVLink domains as possible. Reachable only via explicit config/group_by.
-#   nvlink.domain.sliced  PodSet-slice: partition a multi-rack GB200 gang into
-#                 SCHEDULABLE_RACK_NODES-node slices, each hard-bound to its own nvlink.domain,
-#                 with a soft leafgroup preference so the racks cluster on one IB leaf group.
+#   nvlink.domain.sliced  PodSet-slice: partition a multi-rack GB200 gang into balanced per-rack
+#                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
+#                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
@@ -223,7 +223,7 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
     COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
     COSCHEDULE_NVLINK_DOMAIN_PREFERRED: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.PREFERRED),
     COSCHEDULE_NVLINK_DOMAIN_SLICED: KueueTopologyBinding(
-        CW_LABEL_NVLINK_DOMAIN, TopologyMode.SLICE_REQUIRED, SCHEDULABLE_RACK_NODES, CW_LABEL_LEAFGROUP
+        CW_LABEL_NVLINK_DOMAIN, TopologyMode.SLICE_REQUIRED, coarse_preferred_label=CW_LABEL_LEAFGROUP
     ),
 }
 
@@ -652,30 +652,26 @@ def _topology_request_annotations(
     PREFERRED/REQUIRED bind the whole gang to one ``node_label`` domain (soft/hard). For a hard
     nvlink.domain gang that exceeds one rack — which can never be placed and would hang forever —
     this raises instead (the CLI never emits it; the guard catches a programmatic client).
-    SLICE_REQUIRED partitions the gang into ``slice_size`` rack slices, each hard-bound to one
-    nvlink.domain, and pairs a soft coarse preference so the racks cluster on the IB fabric. The
-    one-slice-per-rack guarantee holds only for node-saturating pods and a slice size that two
-    of cannot fit one rack; both are validated here, along with a whole-number-of-slices count.
+    SLICE_REQUIRED partitions the gang into balanced per-rack slices (size from
+    ``balanced_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
+    preference so the racks cluster on the IB fabric. The one-slice-per-rack guarantee holds only
+    for node-saturating pods and a gang that splits into equal, more-than-half-a-rack slices;
+    both are validated here.
     """
     node_label = binding.node_label
     if binding.mode is TopologyMode.SLICE_REQUIRED:
-        slice_size = binding.slice_size
-        if slice_size is None or 2 * slice_size <= RACK_SIZE or slice_size > SCHEDULABLE_RACK_NODES:
-            raise PodManifestError(
-                f"Sliced topology {group_by!r} needs a slice size in ({RACK_SIZE // 2}, {SCHEDULABLE_RACK_NODES}] "
-                f"so two slices cannot share one {RACK_SIZE}-node rack; got {slice_size}."
-            )
         if gpu_count != NVL72_GPUS_PER_NODE:
             raise PodManifestError(
                 f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}, which requires node-saturating "
                 f"NVL72 pods ({NVL72_GPUS_PER_NODE} GPUs each) so one slice fills whole nodes; got gpu_count={gpu_count}"
             )
-        if num_tasks % slice_size != 0:
+        try:
+            slice_size = balanced_rack_slice_size(num_tasks)
+        except ValueError as e:
             raise PodManifestError(
-                f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}: num_tasks={num_tasks} must be a whole "
-                f"number of {slice_size}-node rack slices. Round to a multiple of {slice_size}, or set "
+                f"Coscheduled task {task_ref!r} on sliced level {group_by!r}: {e}. Round the gang size, or set "
                 f"group_by={COSCHEDULE_NVLINK_DOMAIN_PREFERRED!r} for loose (unbalanced) packing."
-            )
+            ) from e
         annotations = {_KUEUE_SLICE_REQUIRED_TOPOLOGY: node_label, _KUEUE_SLICE_SIZE: str(slice_size)}
         if binding.coarse_preferred_label:
             annotations[_KUEUE_PREFERRED_TOPOLOGY] = binding.coarse_preferred_label

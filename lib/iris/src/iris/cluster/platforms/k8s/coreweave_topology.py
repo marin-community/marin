@@ -80,10 +80,11 @@ COSCHEDULE_NVLINK_DOMAIN = "nvlink.domain"
 # gang spills across racks over InfiniBand. Reachable only via explicit config/group_by; the
 # CLI routes multi-rack GB200 to the sliced level below instead.
 COSCHEDULE_NVLINK_DOMAIN_PREFERRED = "nvlink.domain.preferred"
-# Multi-rack GB200: partition the gang into whole-rack slices, each slice hard-bound to one
-# nvlink.domain (Kueue's PodSet-slice feature). With slice size SCHEDULABLE_RACK_NODES and
-# 2*size > RACK_SIZE, two slices cannot share a rack, so the gang lands as an exact N racks x
-# SCHEDULABLE_RACK_NODES balanced layout instead of the unbalanced fill preferred would give.
+# Multi-rack GB200: partition the gang into per-rack slices, each slice hard-bound to one
+# nvlink.domain (Kueue's PodSet-slice feature). The slice size is computed per gang to spread it
+# evenly over the fewest racks (see balanced_rack_slice_size); because two slices exceed a rack,
+# each lands on its own nvlink.domain, giving an exact balanced layout instead of the unbalanced
+# fill preferred would give.
 COSCHEDULE_NVLINK_DOMAIN_SLICED = "nvlink.domain.sliced"
 
 
@@ -91,8 +92,8 @@ class TopologyMode(StrEnum):
     """How a coscheduling level's node label constrains Kueue placement.
 
     PREFERRED/REQUIRED bind the whole PodSet to one domain of the label as a soft hint or a
-    hard requirement. SLICE_REQUIRED instead partitions the PodSet into ``slice_size`` chunks
-    and hard-binds each chunk to one domain of the label (Kueue's PodSet-slice feature).
+    hard requirement. SLICE_REQUIRED instead partitions the PodSet into balanced per-rack slices
+    and hard-binds each slice to one domain of the label (Kueue's PodSet-slice feature).
     """
 
     PREFERRED = "preferred"
@@ -104,16 +105,39 @@ class TopologyMode(StrEnum):
 class KueueTopologyBinding:
     """The Kueue topology request a coscheduling ``group_by`` level maps to.
 
-    ``node_label`` is the Topology-CR level the constraint binds. For SLICE_REQUIRED,
-    ``slice_size`` is the pods-per-slice (each slice hard-bound to one ``node_label`` domain)
-    and ``coarse_preferred_label`` optionally adds a soft whole-PodSet preference at a coarser
-    level, so the slices also cluster near each other on the IB fabric.
+    ``node_label`` is the Topology-CR level the constraint binds. ``coarse_preferred_label``
+    optionally adds a soft whole-PodSet preference at a coarser level (used by SLICE_REQUIRED so
+    the per-rack slices also cluster near each other on the IB fabric). The SLICE_REQUIRED slice
+    size is not stored here — it is computed per gang from its node count (balanced_rack_slice_size).
     """
 
     node_label: str
     mode: TopologyMode
-    slice_size: int | None = None
     coarse_preferred_label: str | None = None
+
+
+def balanced_rack_slice_size(num_tasks: int, cap: int = SCHEDULABLE_RACK_NODES) -> int:
+    """Nodes per rack slice for a multi-rack NVL72 gang, balanced across the fewest racks.
+
+    Places the gang on ``ceil(num_tasks / cap)`` NVLink domains — the fewest that hold at most
+    ``cap`` nodes each — and splits it evenly, so every rack runs the same node count. Returns
+    that per-rack size (also Kueue's ``podset-slice-size``). Raises ``ValueError`` when the gang
+    cannot split into equal slices that each exceed half a rack, the condition under which two
+    slices could share one rack and the one-slice-per-rack guarantee would break.
+    """
+    num_racks = -(-num_tasks // cap)  # ceil
+    if num_tasks % num_racks:
+        raise ValueError(
+            f"{num_tasks} nodes do not divide evenly across {num_racks} racks (<= {cap} nodes each); "
+            f"use a gang size that is a multiple of {num_racks}"
+        )
+    slice_size = num_tasks // num_racks
+    if 2 * slice_size <= RACK_SIZE:
+        raise ValueError(
+            f"{num_tasks} nodes would place {num_racks} racks of {slice_size}, but two {slice_size}-node "
+            f"slices fit one {RACK_SIZE}-node rack, breaking one-slice-per-rack; use a larger gang"
+        )
+    return slice_size
 
 
 def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:

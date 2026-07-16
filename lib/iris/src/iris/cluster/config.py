@@ -595,7 +595,6 @@ class WorkerProviderConfig(_Config):
 class KueueTopology(_Config):
     node_label: str = ""
     mode: TopologyMode = TopologyMode.PREFERRED  # preferred (soft) / required (hard) / slice
-    slice_size: int | None = None  # pods per rack slice; required iff mode is SLICE_REQUIRED
     coarse_preferred_label: str = ""  # optional soft coarse pairing for a sliced binding
 
 
