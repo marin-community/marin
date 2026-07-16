@@ -22,19 +22,26 @@ LAUNCH-GATED NUMBERS (finalise before a real launch; see the experiment POLICY/S
   * ``_REVISION_*`` -- pin each HF dataset to a 7-char commit for a content-stable fingerprint.
   * ``_SFT_MUON_LR`` / ``_SFT_ADAM_LR`` -- no corpus-stated Grug SFT LR exists; first-pass values,
     validate in the smoke and confirm with the operator.
-  * Slice geometry (``_SLICE`` / ``_EXPERT_PARALLEL`` / ``_REPLICA_AXIS`` / ``_BATCH`` / ``_SEQ`` /
-    ``_PER_DEVICE_PARALLELISM``) -- 67B full-FT on v6e-32 at long context is memory-tight; confirm
-    feasibility (or escalate to v6e-128) before launch.
+  * GPU mesh geometry (``_NODES`` / ``_EXPERT_PARALLEL`` / ``_REPLICA_AXIS`` / ``_BATCH`` / ``_SEQ`` /
+    ``_PER_DEVICE_PARALLELISM``) -- 67B full-FT on H100x8 nodes at long context is memory-tight;
+    confirm feasibility (drop ``_SEQ`` or raise ``_NODES``) before launch.
   * Stage 2 needs the Delphi think/tool tokens as SINGLE ids in the tokenizer; ``marin_tokenizer``
     must be verified/prepared for those (Stage 1 plain chat is fine as-is).
 
-Submit (per stage, us-east5, preemptible; MARIN_PREFIX must be gs://marin-us-east5)::
+Compute = CoreWeave ``cw-us-east-02a`` H100 GPU cluster (8x H100-80GB + InfiniBand per node), the
+FSDP + ring-EP JAX/XLA path (mirrors ``experiments/grug/moe/launch_cw_scale.py``). The base
+checkpoint is read in-cluster from the CW ``s3://marin-us-east-02a`` (LOTA) mirror -- no cross-region
+port needed. The coordinator MUST run in-cluster (the Mac can't reach cwlota.com).
 
-    cd ~/Documents/marin && source secrets.env
-    uv run iris --cluster=marin job run --job-name grug-67b-sft-coord --region us-east5 \\
+Submit (per stage, cw-us-east-02a, preemptible; MARIN_PREFIX must be s3://marin-us-east-02a/marin;
+AWS creds auto-injected in-pod via the iris-task-env secret -- do NOT forward AWS_*)::
+
+    cd ~/Documents/marin && source secrets.env   # or "$DC_AGENT_SECRET_ENV"
+    export KUBECONFIG=~/.kube/coreweave-iris-gpu
+    uv run iris --cluster=cw-us-east-02a job run --job-name grug-67b-sft-smoke-coord \\
       --cpu 1 --memory 2G --extra cpu --priority interactive --max-retries 10 --no-wait \\
-      -e MARIN_PREFIX gs://marin-us-east5 -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
-      -- python -m experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage
+      -e MARIN_PREFIX s3://marin-us-east-02a/marin -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
+      -- python -m experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage smoke
 """
 
 import dataclasses
@@ -49,6 +56,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import (
     ChatDatasetSpec,
@@ -66,13 +74,20 @@ _QK_MULT: float = 1.3 * (0.1 * math.log(65_536 / 8_192) + 1.0)  # 1.5703, as tra
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
 _model_base = _heuristic.build_model_config(_DIM, seq_len=65_536)
 
-# --- Slice geometry (LAUNCH-GATED — v6e-32 committed; validate memory or escalate to v6e-128) ----
-_SLICE: str = "v6e-32"
-_EXPERT_PARALLEL: int = 8  # shard the 256 experts across 8 chips
-_REPLICA_AXIS: int = 1  # FSDP across the slice (params too large to replicate)
-_SEQ: int = 32_768  # SFT packed length. 64k is the cooled window; 32k for v6e-32 memory headroom.
-_BATCH: int = 32  # batch_shards = replica*data*expert = 1*4*8 = 32 -> per_device_parallelism = 1
-_PER_DEVICE_PARALLELISM: int = 1
+# --- GPU mesh geometry (COMPUTE PIVOT 2026-07-16: CoreWeave cw-us-east-02a H100x8 nodes) ----------
+# Each node = 8x H100-80GB + InfiniBand. Params are FSDP-sharded over the cross-node ``data`` axis;
+# the 256 routed experts are sharded 8-way over the intra-node NVLink ``expert`` axis (ring-EP).
+# Batch is sharded over (replica, data, expert); batch_shards = replica*data*expert = 1*N*8 = 8N
+# where N=_NODES (data absorbs the remaining 8*N/expert = N devices). _BATCH must be a multiple of 8N.
+_NODES: int = 4  # full-run gang size (H100x8 nodes) -> 32 GPUs; 8N=32 -> _BATCH multiple of 32
+_SMOKE_NODES: int = 2  # smoke gang (2 nodes) -> 16 GPUs; 8N=16 -> _SMOKE_BATCH multiple of 16
+_EXPERT_PARALLEL: int = 8  # shard the 256 experts across the 8 intra-node GPUs (ring-EP over NVLink)
+_REPLICA_AXIS: int = 1  # pure FSDP (one model copy sharded over all N*8 GPUs; no cross-node replicate)
+_SEQ: int = 8_192  # full-run SFT packed length (64k cooled window; 8k = near-zero padding + tput on H100)
+_SMOKE_SEQ: int = 4_096  # shorter packed length for the 2-node smoke (memory headroom + fast steps)
+_BATCH: int = 64  # full: multiple of 8N=32 (per_device_parallelism auto-derives to 2)
+_SMOKE_BATCH: int = 32  # smoke: multiple of 8N=16 (per_device auto-derives to 2)
+_PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards) given the mesh
 
 _model = dataclasses.replace(
     _model_base,
@@ -82,7 +97,11 @@ _model = dataclasses.replace(
     use_array_stacked_blocks=True,
     qk_mult=_QK_MULT,
     max_seq_len=_SEQ,  # training seq len = model.max_seq_len; RoPE is position-computed (no param change)
+    # H100 GPU attention backend. gpu_fa4_cute (NOT gpu_fa4_thd) because sliding_window=2048 is a SHORT
+    # window; thd only handles full-causal windows (canary_ferry.py maps thd -> window=2*seq to fake it).
+    attention_implementation="gpu_fa4_cute",
 )
+_smoke_model = dataclasses.replace(_model, max_seq_len=_SMOKE_SEQ)  # 2-node smoke: 4k packed length
 
 # --- Optimizer: FRESH SFT schedule (weights-only init resets it). First-pass LRs — see header. ---
 _SFT_MUON_LR: float = 2e-4
@@ -121,10 +140,11 @@ _JOB2_DATASET = ChatDatasetSpec(
 _JOB1_STEPS: int = 1000
 _JOB2_STEPS: int = 2000
 
-# Base checkpoint, co-located with the v6e pool (POLICY: MARIN_PREFIX=gs://marin-us-east5; pre-stage
-# step-42150 into this bucket via mirror:// before launch to avoid the CrossRegionGuardedFS block).
+# Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
+# cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). AWS creds are injected
+# in-pod via the iris-task-env secret; the tensorstore S3 reader lists step-42150 directly.
 _BASE_CKPT: str = (
-    "gs://marin-us-east5/grug/"
+    "s3://marin-us-east-02a/marin/grug/"
     "moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step39k-79ebf3/"
     "checkpoints/step-42150/"
 )
@@ -133,16 +153,26 @@ _JOB1_RUN_ID: str = "grug_67b_a2b_sft_s1_wildchat"
 _JOB2_RUN_ID: str = "grug_67b_a2b_sft_s2_thinking"
 
 
-def _tracker(run_id: str, stage: str) -> WandbConfig:
+def _tracker(run_id: str, stage: str, seq: int) -> WandbConfig:
     return WandbConfig(
         project="marin_moe_sft",
-        tags=["moe", "june_tpu", "67b_a2b", "sft", stage, f"seq{_SEQ}", _SLICE],
+        tags=["moe", "june_tpu", "67b_a2b", "sft", stage, f"seq{seq}", "cw-h100"],
         group="grug-67b-a2b-sft",
         name=None,
     )
 
 
-def _sft_config(ctx: StepContext, *, run_id: str, dataset: ChatDatasetSpec, init_from: str, steps: int, stage: str):
+def _sft_config(
+    ctx: StepContext,
+    *,
+    run_id: str,
+    dataset: ChatDatasetSpec,
+    init_from: str,
+    steps: int,
+    stage: str,
+    model: GrugModelConfig = _model,
+    batch_size: int = _BATCH,
+):
     data = build_grug_chat_data_config(
         datasets=[dataset],
         tokenizer=marin_tokenizer,
@@ -150,16 +180,16 @@ def _sft_config(ctx: StepContext, *, run_id: str, dataset: ChatDatasetSpec, init
         mixture_block_size=2048,
     )
     return GrugMoeSFTConfig(
-        model=_model,
+        model=model,
         data=data,
         output_path=ctx.output_path,
         run_id=run_id,
         resources=ctx.runtime_arg("train_resources"),
         steps=steps,
-        batch_size=_BATCH,
+        batch_size=batch_size,
         seed=0,
         mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=_tracker(run_id, stage),
+        tracker=_tracker(run_id, stage, model.max_seq_len),
         optimizer=_optimizer,
         init_from_path=init_from,
         expert_parallel=_EXPERT_PARALLEL,
@@ -191,7 +221,11 @@ def build_job1(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         run=run_grug_moe_sft_trial,
         build_config=build_config,
         deps=(),
-        runtime_args={"train_resources": ResourceConfig.with_tpu(_SLICE, preemptible=True)},
+        runtime_args={
+            "train_resources": ResourceConfig.with_gpu(
+                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=_NODES, preemptible=True
+            )
+        },
     )
 
 
@@ -211,11 +245,64 @@ def build_job2(job1: ArtifactStep[LevanterCheckpoint], *, version: str = "dev") 
         run=run_grug_moe_sft_trial,
         build_config=build_config,
         deps=(job1,),
-        runtime_args={"train_resources": ResourceConfig.with_tpu(_SLICE, preemptible=True)},
+        runtime_args={
+            "train_resources": ResourceConfig.with_gpu(
+                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=_NODES, preemptible=True
+            )
+        },
+    )
+
+
+_SMOKE_STEPS: int = 40
+
+
+def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+    """Stage-5 smoke: the real 67B on 2x H100x8 nodes (cw-us-east-02a), seq 4k, batch 32, wildchat,
+    weights-only init from step-42150, 40 steps + a mid-run native checkpoint save. Validates native
+    S3 ckpt load -> chat+packing -> weights-only init (step starts at 0) -> loss finite/downward ->
+    save, before committing to the 1-epoch Job1. (HF export is validated separately via the grug->HF
+    converter on the saved checkpoint.)"""
+
+    def build_config(ctx: StepContext) -> GrugMoeSFTConfig:
+        cfg = _sft_config(
+            ctx,
+            run_id="grug_67b_a2b_sft_smoke",
+            dataset=_JOB1_DATASET,
+            init_from=_BASE_CKPT,
+            steps=_SMOKE_STEPS,
+            stage="smoke",
+            model=_smoke_model,  # seq 4k
+            batch_size=_SMOKE_BATCH,  # 32 = multiple of 8*_SMOKE_NODES(16)
+        )
+        # Save a native checkpoint mid-smoke so the save path (and resume-on-preempt) is exercised.
+        return dataclasses.replace(cfg, save_interval_minutes=5, checkpoint_keep=[{"every": 20}])
+
+    return ArtifactStep(
+        name=user_namespaced_name("grug/grug_67b_a2b_sft_smoke", version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_sft_trial,
+        build_config=build_config,
+        deps=(),
+        runtime_args={
+            "train_resources": ResourceConfig.with_gpu(
+                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=_SMOKE_NODES, preemptible=True
+            )
+        },
     )
 
 
 if __name__ == "__main__":
-    job1 = build_job1()
-    job2 = build_job2(job1)
-    StepRunner().run([job2.lower()])
+    import sys
+
+    which = sys.argv[1] if len(sys.argv) > 1 else "2stage"
+    if which == "smoke":
+        StepRunner().run([build_smoke().lower()])
+    elif which == "job1":
+        StepRunner().run([build_job1().lower()])
+    elif which == "2stage":
+        job1 = build_job1()
+        job2 = build_job2(job1)
+        StepRunner().run([job2.lower()])
+    else:
+        raise SystemExit(f"unknown target {which!r}; use one of: smoke | job1 | 2stage")
