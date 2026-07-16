@@ -752,10 +752,15 @@ class IrisClient:
 
         if processes_per_task < 1:
             raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
-        # Nsight wraps first so the multigpu supervisor wraps *around* it: the nsys
-        # wrapper must sit in each child, where the per-child rank env exists and
-        # where the CUDA context actually lives. Wrapping the supervisor instead
-        # would fold every child into one report and defeat rank selection.
+        # Nsight wraps first so the multigpu supervisor wraps *around* it, putting the
+        # nsys wrapper in each child where the per-child rank env exists.
+        #
+        # Wrapping the supervisor is the viable alternative, not a broken one: nsys
+        # traces children, so one report would hold every local rank. It is rejected
+        # because tracing then covers every child unconditionally, which makes
+        # --nsys-ranks first (one GPU of eight) impossible, and because
+        # processes_per_task=1 has no supervisor to wrap — per-child is the one
+        # mechanism that serves both.
         if environment is not None and environment.nsys is not None:
             entrypoint = _wrap_entrypoint_for_nsys(entrypoint, resources, environment.nsys)
         if processes_per_task > 1:
