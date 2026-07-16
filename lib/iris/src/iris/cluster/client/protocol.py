@@ -93,6 +93,7 @@ class ClusterClient(Protocol):
         self,
         *,
         query: controller_pb2.Controller.JobQuery | None = None,
+        limit: int | None = None,
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]: ...
 

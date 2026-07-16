@@ -1,0 +1,140 @@
+{
+  "moe_implementation": "sonic",
+  "mp": "params=float32,compute=bfloat16,output=bfloat16",
+  "prompt": "The capital of France is",
+  "prompt_token_ids": [
+    791,
+    6864,
+    315,
+    9822,
+    374
+  ],
+  "tokenizer": "marin-community/marin-tokenizer",
+  "top_logprobs": [
+    {
+      "logprob": -0.2806415259838104,
+      "text": " Paris",
+      "token_id": 12366
+    },
+    {
+      "logprob": -2.968141555786133,
+      "text": " a",
+      "token_id": 264
+    },
+    {
+      "logprob": -3.581422805786133,
+      "text": " the",
+      "token_id": 279
+    },
+    {
+      "logprob": -4.452516555786133,
+      "text": " known",
+      "token_id": 3967
+    },
+    {
+      "logprob": -4.460329055786133,
+      "text": " also",
+      "token_id": 1101
+    },
+    {
+      "logprob": -4.472047805786133,
+      "text": " located",
+      "token_id": 7559
+    },
+    {
+      "logprob": -4.554079055786133,
+      "text": " one",
+      "token_id": 832
+    },
+    {
+      "logprob": -4.675172805786133,
+      "text": " not",
+      "token_id": 539
+    },
+    {
+      "logprob": -5.233766555786133,
+      "text": " an",
+      "token_id": 459
+    },
+    {
+      "logprob": -5.374391555786133,
+      "text": " home",
+      "token_id": 2162
+    },
+    {
+      "logprob": -5.499391555786133,
+      "text": " renowned",
+      "token_id": 37048
+    },
+    {
+      "logprob": -5.640016555786133,
+      "text": " often",
+      "token_id": 3629
+    },
+    {
+      "logprob": -5.765016555786133,
+      "text": " well",
+      "token_id": 1664
+    },
+    {
+      "logprob": -5.780641555786133,
+      "text": " mentioned",
+      "token_id": 9932
+    },
+    {
+      "logprob": -5.905641555786133,
+      "text": " widely",
+      "token_id": 13882
+    },
+    {
+      "logprob": -5.936891555786133,
+      "text": " situated",
+      "token_id": 31183
+    },
+    {
+      "logprob": -5.999391555786133,
+      "text": " considered",
+      "token_id": 6646
+    },
+    {
+      "logprob": -6.046266555786133,
+      "text": " called",
+      "token_id": 2663
+    },
+    {
+      "logprob": -6.046266555786133,
+      "text": " commonly",
+      "token_id": 17037
+    },
+    {
+      "logprob": -6.327516555786133,
+      "text": "\n",
+      "token_id": 198
+    },
+    {
+      "logprob": -6.530641555786133,
+      "text": " in",
+      "token_id": 304
+    },
+    {
+      "logprob": -6.546266555786133,
+      "text": " described",
+      "token_id": 7633
+    },
+    {
+      "logprob": -6.561891555786133,
+      "text": " now",
+      "token_id": 1457
+    },
+    {
+      "logprob": -6.827516555786133,
+      "text": " referred",
+      "token_id": 14183
+    },
+    {
+      "logprob": -6.843141555786133,
+      "text": " France",
+      "token_id": 9822
+    }
+  ]
+}

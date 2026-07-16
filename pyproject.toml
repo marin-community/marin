@@ -443,7 +443,6 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
-    "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "requires_cluster: mark tests that need a running iris cluster",
@@ -452,10 +451,11 @@ markers = [
 testpaths = ["tests", "experiments"]
 pythonpath = ["."]
 
-# Don't run TPU, slow, integration, data_integration, cluster-bound, or manual tests by default.
+# Don't run slow, integration, data_integration, cluster-bound, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
 # requires_cluster tests need a running iris cluster (local or remote);
 # manual tests are run by hand (e.g. live TPU smokes in a custom container).
-# All but manual are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster and not manual' --import-mode=importlib"
+# All but manual are run from dedicated CI workflows. Tests that need a TPU carry
+# @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present.
+addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not requires_cluster and not manual' --import-mode=importlib"

@@ -69,6 +69,11 @@ from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
 
+# Default page size for `iris job list`. The server sorts by submission date
+# descending, so this fetches the most recent jobs rather than walking the whole
+# jobs table (which would hit the controller's deep-offset cap on a busy cluster).
+DEFAULT_JOB_LIST_LIMIT = 50
+
 _STATE_MAP: dict[str, job_pb2.JobState] = {
     "pending": job_pb2.JOB_STATE_PENDING,
     "building": job_pb2.JOB_STATE_BUILDING,
@@ -1224,9 +1229,21 @@ def kick(ctx, target: tuple[str, ...], state: str, reason: str, stdin: bool, dry
     default=None,
     help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
 )
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=DEFAULT_JOB_LIST_LIMIT,
+    show_default=True,
+    help="Show at most this many of the most recent jobs. Raise it (with --state/--prefix to narrow) to see more.",
+)
 @click.pass_context
-def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
-    """List jobs with optional filtering."""
+def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
+    """List the most recent jobs with optional filtering.
+
+    Only the ``--limit`` most recently submitted matching jobs are fetched, so
+    the command stays fast on a busy cluster instead of scanning the whole jobs
+    table. Narrow with ``--state`` / ``--prefix`` to find older jobs.
+    """
     client = _remote_client(ctx)
 
     state_value: job_pb2.JobState | None = None
@@ -1237,7 +1254,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
         state_value = _STATE_MAP[state_lower]
 
-    jobs = client.list_jobs(state=state_value, prefix=prefix)
+    jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
@@ -1268,6 +1285,12 @@ def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
         rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
+
+    if len(jobs) >= limit:
+        click.echo(
+            f"\nShowing the {limit} most recent jobs. Raise --limit or narrow with --state/--prefix to see more.",
+            err=True,
+        )
 
 
 def _task_index(task_id: str) -> str:

@@ -12,14 +12,15 @@ import pytest
 from iris.cli.connect import open_iris_client
 from iris.client import IrisClient
 
-from . import june_67b_a2b
+from . import backend_parity, june_67b_a2b
 
 MARIN_ROOT = Path(__file__).resolve().parents[3]
 MARIN_GPU_CLUSTER = "cw-us-east-02a"
 VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
 
-# Iris serializes the direct test callable by value; register its shared test helper too.
+# Iris serializes the direct test callable by value; register its shared test helpers too.
 cloudpickle.register_pickle_by_value(june_67b_a2b)
+cloudpickle.register_pickle_by_value(backend_parity)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
