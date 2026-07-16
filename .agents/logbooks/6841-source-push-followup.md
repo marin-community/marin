@@ -79,7 +79,9 @@ avenue 7/10 land.
 | --- | --- | --- | --- |
 | SPF-001 | bf16 dy before reshard saves ≥4 ms with grad parity within bf16 tolerance | Running | fwd_bwd median vs 63.038 ms + parity check |
 | SPF-002 | Owner-sharded dx return (psum_scatter) saves ≥3 ms with dx parity | Running | fwd_bwd median (alone and stacked on SPF-001) |
-| SPF-003 | Tip gather grouping improves fused W13 vs 23.025 ms; zero-fill fix saves ≥2 ms on W13-bwd 62.17 ms | Running | target `semantic_permute_w13_pallas` + `semantic_fused_w13_backward_pallas` medians |
+| SPF-003a | Tip gather grouping improves fused W13 vs 23.025 ms | CONFIRMED (small): 22.769 ms, -1.11% | see SPF-003 entry |
+| SPF-003b | Zero-fill double-write fix saves ≥2 ms on fused W13-bwd | FALSIFIED: +0.32 ms vs control, bit-exact; discarded | see SPF-003 entry |
+| SPF-006 | Reduced-shape fused-W13 compare regression (valid_error_count 0 -> 5 -> 3) introduced in d2ce47ca35..088831b4b | Open (needs bisect) | reduced `semantic_permute_w13_compare` valid_error_count per commit |
 | SPF-004 | XLA gather-sum (or smem-staged kernel) reaches ≥1.5 TB/s effective on combine (vs 0.63) | Running | `bench_source_push_combine` stage time + bitwise determinism |
 | SPF-005 | Host-side plan build at target shape costs >2 ms/plan (likely ≫), making planner device-siding the top structural priority | CONFIRMED (~190x over threshold) | see SPF-005 entry: 380 ms plan build, ~1.85 s total public-path host work per plan |
 
@@ -137,3 +139,45 @@ planner under the staged forward) is the top structural priority for any
 production use of this path** — ahead of all kernel tuning. Caveats: dev-box
 CPU, not the pod host (GPU hosts add D2H/H2D syncs, likely worse); the 156 ms
 semantic-planner CPU number is a contrast point, not a GPU projection.
+
+## 2026-07-16 SPF-003 - Fused measurements: tip grouping +1.1% real; zero-fill fix falsified; compare regression found
+
+Branch `spf/003-fused-measurements` (final `ff398b51f`; tested fix at
+`a4952eccd`). All jobs cw-rno2a H100x8, canonical flags
+(`--rows-per-src-dst-capacity auto --plan-builder jax --separate-compile`;
+target warmup 1 / steps 3 / repeats 3; reduced compare EP8/T128/E4/topk2/cf4.0).
+Zero drops/overflows, no error rows.
+
+**Arm A (tip `26711f86e` grouped W13 raw gathers, no code change).** Job
+`/marin/spf003-arma-r3-26711f86`: target `semantic_permute_w13_pallas` median
+**22.769 ms / 75.45 useful** vs baseline 23.025 ms / 74.61 (`d2ce47ca35`) =
+**-0.257 ms (-1.11%)**, target checksum identical to baseline. Verdict: real
+but modest; the gather implementation remains ~2.7x off the 8.4 ms inbox
+floor.
+
+**Compare-gate regression (new, SPF-006).** Reduced
+`semantic_permute_w13_compare` shows `valid_error_count` = 3 at tip, 5 at
+`088831b4b` (pre-grouping), 0 at `d2ce47ca35` — a validity-flag regression vs
+the JAX reference introduced somewhere in the 72-commit
+`d2ce47ca35..088831b4b` segment (grouping itself moved 5 -> 3, so it is not
+the origin). z/h float diffs are bit-identical across all three commits
+(commit-independent bf16-boundary artifact per FUSED-MOE-003). Blocks
+promotion of anything from this branch segment until bisected.
+
+**Arm B (fused W13-bwd zero-fill double-write fix).** Fix `a4952eccd`
+(zero-fill only when `valid_rows == 0`; publication order untouched; local
+tests 11 passed). Reduced compare **bit-exact** (dx/dw13 diff 0.0). Target
+`semantic_fused_w13_backward_pallas`: fix median **63.249 ms** vs same-day tip
+control **62.933 ms** (job `/marin/spf003-armb-ctl-26711f86`) and 62.697 ms
+selected baseline — **slower, non-overlapping repeat ranges. FALSIFIED**: the
+~671 MB/rank duplicate NVLink zero-writes were fully overlapped; the added
+predicate costs ~0.3-0.5 ms. Reverted (`ff398b51f`).
+
+**Infra notes.** (1) Iris client `cuda_toolchain_setup_script` on main runs
+`uv pip install --offline --reinstall-package nvidia-cudnn-cu13` — fails
+outright on cold-cache nodes before the user command (killed two jobs);
+workaround: submit without client `--extra gpu`, sync in-task. (2) This
+worktree's iris predates cw-rno2a config and IRIS_USER (jobs landed under
+`/marin/`); submitted with the main-checkout client. (3) `/tmp/iris`
+port-lock dir owned by another user breaks the tunnel — manual
+`kubectl port-forward` + `--controller-url` works.
