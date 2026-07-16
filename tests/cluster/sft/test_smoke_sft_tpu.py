@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Manual TPU smoke of the generic ``sft_step`` launcher (not run in CI).
+"""TPU smoke of the generic ``sft_step`` launcher, on the standing Marin cluster.
 
 Proves the launcher end-to-end on a preemptible TPU slice with a trimmed spec: tiny public
 Qwen3-0.6B (the Delphi target arch), a small chat dataset, a Qwen3 chat template carrying the
@@ -9,20 +9,25 @@ Qwen3-0.6B (the Delphi target arch), a small chat dataset, a Qwen3 chat template
 resolves -> native ``transform_dataset_step`` tokenize/pack -> Levanter SFT (``initialize_from_hf``)
 runs a few steps -> HF export. It is not a real training run.
 
-Gated behind ``integration`` + ``requires_cluster`` so it never runs by default; launch it against
-a real cluster with::
+Marked ``cluster`` so it never runs by default; the ``marin-cluster-smoke`` workflow runs it. The
+``iris_client`` fixture binds the ``marin`` controller as the current Fray client, so ``StepRunner``
+submits there. Launch it on demand with::
 
-    uv run pytest tests/sft/test_smoke_sft_tpu.py -o addopts= -m '' -vv -s
+    uv run pytest tests/cluster/sft/test_smoke_sft_tpu.py \
+      -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
 
 PYTEST_DONT_REWRITE: the step dispatches serialized remote functions that must not depend on pytest.
 """
 from __future__ import annotations
 
 import pytest
+from iris.client import IrisClient
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.sft.launcher import DatasetSpec, SFTSpec, resources_from_accelerator, sft_step
+
+pytestmark = pytest.mark.cluster
 
 # Minimal Qwen3 chat template with the Levanter {% generation %} span wrapping the assistant turn
 # (header excluded, content + <|im_end|> included) — the completions-only supervised mask.
@@ -62,12 +67,9 @@ SMOKE_SPEC = SFTSpec(
 SMOKE_ACCELERATOR = "v6e-4"
 
 
-@pytest.mark.integration
-@pytest.mark.requires_cluster
-def test_smoke_sft_tpu() -> None:
+def test_smoke_sft_tpu(iris_client: IrisClient) -> None:
+    # iris_client binds the marin controller as the current Fray client, so StepRunner submits there.
+    # The slice is left region-unconstrained: the scheduler places it in any zone with v6e capacity,
+    # datasets are region-replicated, and the small tokenized cache + checkpoint land under MARIN_PREFIX.
     resources = resources_from_accelerator(SMOKE_ACCELERATOR)
     StepRunner().run([lower(sft_step(SMOKE_SPEC, resources))])
-
-
-if __name__ == "__main__":
-    test_smoke_sft_tpu()

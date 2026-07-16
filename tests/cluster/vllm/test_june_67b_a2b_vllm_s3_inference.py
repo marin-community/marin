@@ -6,7 +6,8 @@
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/vllm/e2e/test_june_67b_a2b_vllm_s3_inference.py -o addopts= -vv -s
+    uv run pytest tests/cluster/vllm/test_june_67b_a2b_vllm_s3_inference.py \
+      -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
 import logging
@@ -27,8 +28,7 @@ from iris.rpc import job_pb2
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import VllmEnvironment
 
-from .june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
-from .remote_job import run_remote_test_job
+from tests.cluster.vllm.june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ GPU_COUNT = 8
 MAX_PROBABILITY_ERROR = 0.008
 TOP_PROBABILITY_L1_ERROR = 0.012
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
+pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 
 
 # TODO(#7135): Replace this imperative overlay with marin-core[vllm-gpu]
@@ -151,9 +151,10 @@ def assert_vllm_logprobs_match_levanter(
 def test_h100_node_matches_levanter_logprobs(
     marin_gpu_client: IrisClient,
     vllm_attention_backend: str,
+    run_test_job,
 ) -> None:
     expected_inference = read_inference_golden(JUNE_67B_A2B.inference_golden_path)
-    run_remote_test_job(
+    run_test_job(
         marin_gpu_client,
         JobRequest(
             name=f"june-67b-vllm-logprobs-{uuid.uuid4().hex[:8]}",
