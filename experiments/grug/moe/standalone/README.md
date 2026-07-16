@@ -157,9 +157,13 @@ Two structural notes for reviewers:
 - **`ring` / `ring_cute` are the backends that work** (`ring_cute` adds the QuACK
   GEMMs under ring's dispatch: +0.4pp over `ring` at EP8 same-node; the rest of the
   EP tax is dispatch machinery, not GEMMs) (all-gather dispatch + psum-scatter combine over
-  NVLink). `ragged_all_to_all` is currently pathological on GPU: XLA lowers
-  `jax.lax.ragged_all_to_all` to `stream_executor::gpu::RaggedAllToAllKernelImpl`
-  (a peer-copy kernel bracketed by multi-GPU barriers) rather than NCCL, and that one
-  kernel is ~90% of device time (~297 ms/call, 104 calls/step at 26 layers) — a
-  ~15× step-time regression. It is included for completeness and as a reproducer of
-  the upstream XLA issue.
+  NVLink). `ragged_all_to_all` is pathological on GPU *at XLA's defaults*: the default
+  single-host lowering of `jax.lax.ragged_all_to_all` is XLA's own one-shot peer-copy
+  kernel (`stream_executor::gpu::RaggedAllToAllKernelImpl`, bracketed by multi-GPU
+  barriers), and that one kernel is ~90% of device time in our profile (~297 ms/call,
+  104 calls/step at 26 layers) — a ~15× step-time regression, corroborated by
+  [openxla/xla#33386](https://github.com/openxla/xla/issues/33386) (~2% of NVLink
+  bandwidth on this path). The same thunk has an NCCL send/recv path with true ragged
+  sizes behind `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`
+  (at the cost of a host sync + index all-to-all per call); we are measuring that
+  variant. The backend is included for completeness and as a reproducer.
