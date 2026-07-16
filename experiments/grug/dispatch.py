@@ -22,7 +22,9 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+# CE_ forwards CE_IMPL / CE_LIGER_CHUNK / CE_LIGER_UNROLL (read via os.environ at trace time in
+# levanter.grug.loss) so the chunked CE reaches the nested training tasks.
+_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
