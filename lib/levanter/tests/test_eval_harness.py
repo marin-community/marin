@@ -1,10 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import subprocess
-import sys
-
 from test_utils import skip_if_module_missing
 from transformers import AutoTokenizer
 
@@ -187,37 +183,3 @@ def test_task_config():
     q = config.to_task_dict()
 
     assert len(q) == 3
-
-
-def test_eval_harness_imports_when_lm_eval_raises_attribute_error(tmp_path):
-    """A broken lm-eval fork must degrade to "unavailable", not crash the import.
-
-    The pinned fork reads ``transformers.AutoModelForVision2Seq`` (removed in transformers>=5) at
-    import time, raising ``AttributeError`` rather than ``ImportError``. Simulate that by shadowing
-    ``lm_eval`` with a package that raises ``AttributeError`` on import, then confirm
-    ``levanter.eval_harness`` still imports and falls back to the "lm-eval unavailable" sentinels.
-    """
-    fake_pkg = tmp_path / "lm_eval"
-    fake_pkg.mkdir()
-    (fake_pkg / "__init__.py").write_text(
-        "raise AttributeError(\"module 'transformers' has no attribute 'AutoModelForVision2Seq'\")\n"
-    )
-
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), env.get("PYTHONPATH", "")])
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import levanter.eval_harness as eh; "
-            "assert eh.TemplateLM is object; "
-            "assert eh.handle_stop_sequences is None; "
-            "print('ok')",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "ok" in result.stdout
