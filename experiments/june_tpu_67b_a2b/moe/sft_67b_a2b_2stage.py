@@ -82,22 +82,23 @@ _model_base = _heuristic.build_model_config(_DIM, seq_len=65_536)
 # GEOMETRY (2026-07-16 decision): AdamH (not Muon) + tensor/model parallelism. Muon's Newton-Schulz
 # workspace is a ~21GiB REPLICATED per-device floor that never shards (num_layers=26 is coprime to any
 # expert-inclusive batch_shards), so it OOMs on H100 at any node count -> switched to AdamH (no NS).
-# bs=8 forces data=1 -> the extra nodes go on the MODEL axis (tensor parallel), which also shards the
-# seq32k activation/logits transient. Mesh = (replica=1, data=1, expert=8, model=_MODEL_PARALLEL) on
-# _NODES*8 = 40 GPUs. batch_shards = replica*data*expert = 8; _BATCH must be a multiple of 8.
-# model_axis=5 is the ONLY valid TP width >1: it must divide num_kv_heads=5 (prime) AND num_heads=20;
-# model in {2,4,8} is invalid (breaks the attention head split). Predicted per-device HBM ~52-56 GiB
-# (AdamH fp32, ~24 GiB headroom). See the experiment GEOMETRY_ANALYSIS.md + the TP out_sharding fix in model.py.
-_NODES: int = 5  # full-run gang: 5x H100x8 = 40 GPUs (model_axis=5)
-_SMOKE_NODES: int = 5  # smoke at the SAME target geometry (validates the tensor-parallel attention path)
+# PATH B (2026-07-16 operator decision): pure DATA-PARALLEL, model_axis=1. Tensor/model parallelism is
+# architecturally impossible for this model (model_axis>1 must divide num_kv_heads=5 [prime -> {1,5}] AND
+# vocab_size=128256 [vocab-parallel embed/lm_head], and 128256 % 5 != 0 -> no valid width >1). Since bs=8
+# would require TP (data=1), we run data-parallel with bs=8N instead. Mesh = (replica=1, data=N, expert=8,
+# model=1) on _NODES*8 GPUs; batch_shards = replica*data*expert = 8N; _BATCH = 8N -> per_device = 1.
+# The seq32k per-seq activation (~43 GiB, pd=1) doesn't shard across DP nodes, so N=8 (bs=64) is the
+# smallest gang that fits (~68 GiB/dev, AdamH fp32 + cut-CE); N<=4 OOMs. See GEOMETRY_ANALYSIS.md.
+_NODES: int = 8  # full-run gang: 8x H100x8 = 64 GPUs (data-parallel)
+_SMOKE_NODES: int = 8  # smoke at the SAME target geometry (the real HBM test at ~68 GiB/dev prediction)
 _EXPERT_PARALLEL: int = 8  # shard the 256 experts across the 8 intra-node GPUs (ring-EP over NVLink)
-_MODEL_PARALLEL: int = 5  # tensor/model parallel; MUST divide num_kv_heads=5 & num_heads=20 -> only {1,5}
-_REPLICA_AXIS: int = 1  # pure FSDP/TP (one model copy sharded over all 40 GPUs; no cross-node replicate)
+_MODEL_PARALLEL: int = 1  # NO tensor parallelism (architecturally impossible; see header)
+_REPLICA_AXIS: int = 1  # pure FSDP (one model copy sharded over all 64 GPUs; no cross-node replicate)
 _SEQ: int = 32_768  # full-run SFT packed length (operator target ctx_len=32k)
 _SMOKE_SEQ: int = 32_768  # smoke at the target seq len
-_BATCH: int = 8  # global batch (operator target bs=8); multiple of batch_shards=8; per_device -> 1
-_SMOKE_BATCH: int = 8  # smoke at the target global batch
-_PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards) = 8/8 = 1
+_BATCH: int = 64  # global batch = 8N = batch_shards (replica*data*expert = 1*8*8); per_device -> 1
+_SMOKE_BATCH: int = 64  # smoke at the target global batch
+_PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards); grug real pd = 64/64 = 1
 
 _model = dataclasses.replace(
     _model_base,
@@ -273,8 +274,8 @@ _SMOKE_STEPS: int = 8  # cheap validation: clear first jit_train_step at the tar
 
 
 def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 5x H100x8 nodes (cw-us-east-02a),
-    AdamH, expert=8 + model=5 (tensor parallel), replica=1, bs=8, seq=32768, per_device=1, few steps +
+    """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 8x H100x8 nodes (cw-us-east-02a),
+    AdamH, expert=8, model=1 (data-parallel), replica=1, bs=64, seq=32768, per_device=1, few steps +
     a mid-run native checkpoint save. Validates native S3 ckpt load -> chat+packing -> weights-only init
     (step starts at 0) -> the UNTESTED model_axis>1 path -> first jit_train_step with NO OOM (AdamH kills
     the ~21GiB Muon-NS floor) -> loss finite -> save, before committing to the 1-epoch Job1. (HF export
