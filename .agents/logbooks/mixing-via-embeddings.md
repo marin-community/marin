@@ -535,3 +535,21 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   refit. (Intermediate patch bug — stale TOTAL_STEPS — caught via p50=230 sanity check.)
 - Codex terminal-state: 5/8 conditions satisfied (remaining: report-number fidelity, panel
   variance, heteroskedasticity, budget-transfer, claim-tier separation in report v2).
+
+## 2026-07-16 validation batch 3 + report v1 (campaign continues)
+
+- **Heteroskedasticity: clean** (BF/BH-FDR across cluster/epoch/concentration groupings all
+  n.s.; only |resid|~predicted ρ=+0.106 — mild, not recommendation-changing). Codex cond. 6 ✓.
+- **Per-cluster-group δ (novel)**: no OOF gain over global δ (−0.0013, p=0.246) BUT fitted
+  half-lives are the first per-group repetition constants: code-adjacent R_D*≈9.0 vs web-text
+  ≈1.9 (matches practice lit directionally). Also: on zmacro the monotone δ-discount (+0.0345
+  over hist) BEATS hinge (+0.0269) for linear models — partially rehabilitates the
+  literature-form discount (macro_bpb noise had hidden it). Global δ=0.35 → R_D*≈1.9.
+- **Metric registry**: 63 tasks documented (registry.md + parquet). Hygiene ✓.
+- **Report v1**: workflow-built single-page HTML (datakit style), 19 skeptic findings fixed +
+  coordinator's own pass fixed f7 support-honesty (curves beyond observed per-bucket share now
+  dashed; validated: c22q0 max obs 0.12, c14q4 0.032 vs sweep to 0.30; anchor itself sits at
+  median train isolation). report/ mirrored to GCS.
+- Codex terminal-state: 7/8 conditions ✓ or in-hand; remaining: panel variance (runs pending
+  autoscale), budget-transfer tier (to be stated as unvalidated or probed with 3×10B runs),
+  claim-tier separation (report v2 next).
