@@ -21,7 +21,12 @@ https://github.com/stanford-crfm/lm-evaluation-harness
 
 Key integration points:
 - [`train_lm`][marin.experiment.train.train_lm] runs in-loop evaluations periodically and logs to W&B when an `EvalSuite` is provided.
-- [`default_eval`][experiments.evals.evals.default_eval] runs standalone harness evaluation after training (or on an existing checkpoint).
+- [`eval_step`][experiments.evals.evals.eval_step] builds one post-hoc eval artifact from an `EvalGroup`; combine groups and aggregate them with [`eval_report`][experiments.evals.evals.eval_report]. See [Running Evaluations with Marin](../tutorials/run-lm-evals.md).
+
+Post-hoc evals are composable artifacts: one `EvalGroup` (a task set plus a backend) becomes one
+`EvalResult` artifact addressed by `evaluation/{backend}/{model}/{group_id}`, so a pipeline picks up
+exactly the evals it needs and each is cached and reused. The in-loop `EvalSuite` and the post-hoc
+`EvalGroup`s draw from the same task menu.
 
 ### Task sets
 
@@ -29,7 +34,7 @@ Task sets are configured in [`task_configs.py`](https://github.com/marin-communi
 
 - `CORE_TASKS` is the default for in-loop and standalone harness evals.
 - `CORE_TASKS_PLUS_MMLU` extends `CORE_TASKS` with MMLU.
-- You can define custom task lists in `task_configs.py` and pass them to `default_eval`.
+- Named menus (`core_evals`, `key_evals`, `base_model_evals`) bundle task sets into `EvalGroup`s; you can also define custom task lists in `task_configs.py` and pass them to your own `EvalGroup`s.
 
 !!! note
 

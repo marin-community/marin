@@ -29,6 +29,10 @@ All builders return lazy `ArtifactStep[T]` handles (e.g. `ArtifactStep[Tokenized
 
 ## Evaluation
 
-::: experiments.evals.evals.default_eval
+::: experiments.evals.evals.EvalGroup
 
-::: experiments.evals.evals.default_key_evals
+::: experiments.evals.evals.eval_step
+
+::: experiments.evals.evals.eval_steps
+
+::: experiments.evals.evals.eval_report
