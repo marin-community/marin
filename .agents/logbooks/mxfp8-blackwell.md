@@ -288,3 +288,50 @@ author: mcwitt
 
 - Next action: MXFP8-001 on a B200 node (Schmidt cluster or GB200 east-08a;
   needs `--extra gpu` sync per cluster toolchain notes).
+
+### 2026-07-16 - MXFP8-001: dense microbench on GB200 — mxfp8 loses to bf16; per-tensor fp8 wins big
+
+- Hypothesis: MXFP8-H1 (dense `scaled_dot_general` >=1.2x vs bf16 on sm100).
+- Commit Hash: 6d3cf1a02 (harness), branch `research/mcwitt/7282-mxfp8-blackwell`.
+- Command: `iris --controller-url=http://localhost:10000 job run --user mwittmann
+  --gpu GB200x1 --enable-extra-resources --cpu 16 --memory 64g --extra gpu
+  --job-name mxfp8-001-dense-r3 -- python
+  experiments/grug/moe/standalone/bench_mxfp8_dense.py --out /tmp/bench_mxfp8_dense.json`
+  (cw-us-east-08a via kubectl port-forward tunnel; jobs r1/r2 were env/assert
+  fixes — r1 hit the `--offline` cuDNN reinstall bug, fixed by cherry-picking
+  #7031 = 0f3dae95d; r2's assert was too strict: XLA rewrites the lowered
+  `__op$block_scaled_dot` into `__cudnn$blockScaledDot` in the compiled HLO).
+- Config: 1x GB200 (sm100), jax 0.10.1, cuDNN 9.19.0.56, T=65536 tokens,
+  bf16 inputs, median of 50 iters after 10 warmup. fwd+bwd = grad wrt (x, w)
+  of sum(out^2).
+- Result (speedup vs bf16; bf16 abs at qkvo: 1471 TF/s fwd):
+
+  | shape | arm | fwd | fwd+bwd | err out/gx/gw |
+  |---|---|---|---|---|
+  | qkvo 2560x2560 | fp8_tensor | **1.352x** (1990 TF/s) | **1.607x** (2363 TF/s) | 4.3e-2/5.7e-2/3.5e-2 |
+  | qkvo 2560x2560 | mxfp8 | 0.996x | 0.813x | 3.8e-2/4.3e-2/2.8e-2 |
+  | shared_up 2560x1280 | fp8_tensor | 1.166x | 1.474x | |
+  | shared_up 2560x1280 | mxfp8 | 0.815x | 0.642x | |
+  | shared_down 1280x2560 | fp8_tensor | 1.321x | 1.493x | |
+  | shared_down 1280x2560 | mxfp8 | 0.966x | 0.666x | |
+
+- Interpretation (`exploratory`, single GPU/single run):
+  - The native mxfp8 path WORKS on GB200 (lowers to `__cudnn$blockScaledDot`,
+    errors slightly better than per-tensor fp8) but is SLOWER than bf16
+    everywhere, catastrophically so on bwd. The compiled HLO materializes
+    `f8e4m3fn[1,T,K/32,32]` block tensors — XLA emits standalone
+    quantize/scale kernels around the cuDNN GEMM; bwd re-quantizes g twice
+    (dgrad + wgrad legs). Overhead, not the GEMM, is the prime suspect.
+  - Per-tensor `Fp8DotGeneralOp` (the #7079 dense path, cuBLASLt) is
+    EXCELLENT on sm100: 1.35x fwd / 1.61x fwd+bwd at qkvo — better than its
+    H100 result (+19% at d4096). The already-merged dense path is the
+    Blackwell dense incumbent to beat.
+  - MXFP8-H1 as stated is FALSIFIED for the naive call; the open question is
+    GEMM-only throughput of `__cudnn$blockScaledDot` with precomputed scales
+    (`jax.nn.scaled_matmul`), which decides between "fix with fused
+    quantizer" and "cuDNN dense mxfp8 dead end".
+- Ops note: job output JSON lives on the pod's /tmp and dies with it — the
+  logs carry all numbers; future harness runs should print JSON to stdout.
+- Next action: MXFP8-001b — add a `mxfp8_prequant` arm (`scaled_matmul` with
+  precomputed quantized operands + scales, fwd-only) to isolate GEMM-only
+  throughput; keep per-tensor fp8 as the dense reference.
