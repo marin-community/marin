@@ -138,38 +138,55 @@ _OPTIMIZER = AdamConfig(
     warmup=1000,
 )
 
+
+@dataclass(frozen=True)
+class _Rung:
+    """One scale point of the ablation: the model and the budget it trains under.
+
+    Batch sizes are sized for one 141GB H200 with the template's per-block activation
+    checkpointing. On smaller devices override with --batch-size: batch 128 at the 130m
+    rung OOMs on a 95GB H100 (the train step allocates ~78GiB). Halving the batch halves
+    the token budget rather than doubling the steps -- all arms of a comparison must share
+    whatever value is used, and the A/B stays valid at any batch size.
+    """
+
+    model: GrugModelConfig
+    batch_size: int
+    steps: int
+
+
 # Two rungs. 130M is the iteration rung -- it turns around fast enough to iterate on, and it is
 # where a speedrun-scale result would show up if it transfers at all. 1.3B is the confirmation
 # rung: the VE table costs a fixed vocab x kv_width, so it shrinks as a fraction of the model as
 # the model grows, and the question worth the GPU-hours is whether the win shrinks with it.
-_MODELS = {
-    "130m": GrugModelConfig(
-        vocab_size=128_256,
-        hidden_dim=512,
-        intermediate_dim=1792,
-        num_layers=6,
-        num_heads=8,
-        num_kv_heads=8,
-        max_seq_len=_SEQ_LEN,
+_RUNGS = {
+    "130m": _Rung(
+        model=GrugModelConfig(
+            vocab_size=128_256,
+            hidden_dim=512,
+            intermediate_dim=1792,
+            num_layers=6,
+            num_heads=8,
+            num_kv_heads=8,
+            max_seq_len=_SEQ_LEN,
+        ),
+        batch_size=128,
+        steps=8_000,
     ),
-    "1.3b": GrugModelConfig(
-        vocab_size=128_256,
-        hidden_dim=2048,
-        intermediate_dim=5632,
-        num_layers=24,
-        num_heads=16,
-        num_kv_heads=16,
-        max_seq_len=_SEQ_LEN,
+    "1.3b": _Rung(
+        model=GrugModelConfig(
+            vocab_size=128_256,
+            hidden_dim=2048,
+            intermediate_dim=5632,
+            num_layers=24,
+            num_heads=16,
+            num_kv_heads=16,
+            max_seq_len=_SEQ_LEN,
+        ),
+        batch_size=32,
+        steps=12_000,
     ),
 }
-
-# Batch size and token budget per rung, sized for one 141GB H200 with the template's per-block
-# activation checkpointing. On smaller devices override with --batch-size: batch 128 at the 130m
-# rung OOMs on a 95GB H100 (the train step allocates ~78GiB). Halving the batch halves the token
-# budget rather than doubling the steps -- both arms must share whatever value is used, and the
-# A/B stays valid at any batch size.
-_BATCH_SIZE = {"130m": 128, "1.3b": 32}
-_STEPS = {"130m": 8_000, "1.3b": 12_000}
 
 
 @dataclass(frozen=True)
@@ -275,7 +292,6 @@ def build_grug_run_config(launch: GrugVeLaunchConfig) -> GrugRunConfig:
 
 
 def run_grug_ve_trial(config: GrugVeLaunchConfig) -> None:
-    """Build the full grug run config and dispatch the training job to Fray."""
     run_grug(build_grug_run_config(config))
 
 
@@ -298,17 +314,18 @@ def grug_ve_trial(
     """
     if arm not in ("ve", "base", "wide"):
         raise ValueError(f"arm must be 've', 'base', or 'wide', got {arm!r}")
-    if size not in _MODELS:
-        raise ValueError(f"size must be one of {tuple(_MODELS)}, got {size!r}")
+    if size not in _RUNGS:
+        raise ValueError(f"size must be one of {tuple(_RUNGS)}, got {size!r}")
 
-    model = _MODELS[size]
+    rung = _RUNGS[size]
+    model = rung.model
     if arm == "ve":
         model = dataclasses.replace(model, value_emb_lambda_init=_LAMBDA_INIT)
     elif arm == "wide":
         model = dataclasses.replace(model, intermediate_dim=_wide_intermediate_dim(model))
     train_data = fineweb_edu_10B_dataset()
     run_id = _resolve_run_id(f"grug-ve-{size}-{arm}")
-    resolved_batch_size = batch_size if batch_size is not None else _BATCH_SIZE[size]
+    resolved_batch_size = batch_size if batch_size is not None else rung.batch_size
     resolved_eval_batch_size = eval_batch_size if eval_batch_size is not None else resolved_batch_size
 
     def build_config(ctx: StepContext) -> GrugVeLaunchConfig:
@@ -318,7 +335,7 @@ def grug_ve_trial(
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
-            steps=_STEPS[size],
+            steps=rung.steps,
             batch_size=resolved_batch_size,
             # The same seed in both arms: control and treatment see the same data in the same
             # order and start from the same draw, so what separates them is not a seed.
@@ -358,7 +375,7 @@ def grug_ve_trial(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--arm", choices=("ve", "base", "wide"), default="ve")
-    parser.add_argument("--size", choices=tuple(_MODELS), default="130m")
+    parser.add_argument("--size", choices=tuple(_RUNGS), default="130m")
     parser.add_argument("--version", default="dev")
     parser.add_argument(
         "--batch-size",
