@@ -86,7 +86,9 @@ _REPLICA_AXIS: int = 1  # pure FSDP (one model copy sharded over all N*8 GPUs; n
 _SEQ: int = 8_192  # full-run SFT packed length (64k cooled window; 8k = near-zero padding + tput on H100)
 _SMOKE_SEQ: int = 4_096  # shorter packed length for the 2-node smoke (memory headroom + fast steps)
 _BATCH: int = 64  # full: multiple of 8N=32 (per_device_parallelism auto-derives to 2)
-_SMOKE_BATCH: int = 32  # smoke: multiple of 8N=16 (per_device auto-derives to 2)
+_SMOKE_BATCH: int = 16  # smoke: multiple of 8N=16 (per_device auto-derives to 1). Was 32: OOM'd on first
+# jit_train_step (24.36GiB step tile atop ~61GiB persistent state > 80GB H100). Halving batch halves the
+# activation tile (~24->~12GiB -> 61+12=73<80) while KEEPING seq=4096 for the thinking-content goal.
 _PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards) given the mesh
 
 _model = dataclasses.replace(
