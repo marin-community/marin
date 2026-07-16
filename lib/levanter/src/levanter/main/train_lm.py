@@ -152,6 +152,8 @@ def main(config: TrainLmConfig):
 
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
+            # Rebind so the Vocab axis below (built from ``len(tokenizer)``) reflects the padded vocab.
+            tokenizer = converter.tokenizer
 
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
@@ -162,6 +164,8 @@ def main(config: TrainLmConfig):
         converter = converter.replaced(tokenizer=tokenizer)
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
+            # Rebind so the Vocab axis below (built from ``len(tokenizer)``) reflects the padded vocab.
+            tokenizer = converter.tokenizer
     else:
         converter = None
 
