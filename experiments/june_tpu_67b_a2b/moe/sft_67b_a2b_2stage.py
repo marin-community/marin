@@ -151,9 +151,11 @@ _JOB2_DATASET = ChatDatasetSpec(
     messages_field="messages",
 )
 
-# --- Packed 1-epoch step counts (LAUNCH-GATED — recompute from each cache's shard ledger) --------
-# steps = total_tokens / seq_len / batch. Placeholders until the dry-run cache build reports tokens.
-_JOB1_STEPS: int = 1000
+# --- Packed 1-epoch step counts (steps = total_tokens / seq_len / batch) -------------------------
+# Job1 FINALIZED from the tokenized-cache ledger (2026-07-16): wildchat_386k train field_counts
+# input_ids = 538,878,179 tokens over 385,700 rows. 538_878_179 / (32768 * 64) = 256.96 -> 257 steps
+# (1 packed epoch at seq=32768, bs=64). Job2 still a placeholder (recompute from its cache before Stage 2).
+_JOB1_STEPS: int = 257
 _JOB2_STEPS: int = 2000
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
