@@ -14,6 +14,13 @@ def _reset_job_info():
     set_job_info(None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_config(monkeypatch, tmp_path):
+    """Shield tests from the developer's IRIS_USER and cwd .marin.yaml."""
+    monkeypatch.delenv("IRIS_USER", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
 def test_job_info_user_derives_from_task_id():
     info = JobInfo(task_id=JobName.from_wire("/alice/train/0"))
     assert info.user == "alice"
@@ -40,6 +47,48 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
 
     monkeypatch.setattr("getpass.getuser", _raise)
     assert resolve_job_user() == "root"
+
+
+def test_resolve_job_user_reads_iris_user_env(monkeypatch):
+    monkeypatch.setenv("IRIS_USER", "mwittmann")
+    monkeypatch.setattr("getpass.getuser", lambda: "local-user")
+    assert resolve_job_user() == "mwittmann"
+
+
+def test_resolve_job_user_current_job_info_beats_iris_user_env(monkeypatch):
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
+    monkeypatch.setenv("IRIS_USER", "mwittmann")
+    assert resolve_job_user() == "alice"
+
+
+def test_resolve_job_user_rejects_blank_iris_user_env(monkeypatch):
+    monkeypatch.setenv("IRIS_USER", "   ")
+    with pytest.raises(ValueError, match="IRIS_USER"):
+        resolve_job_user()
+
+
+def test_resolve_job_user_reads_marin_yaml_user(monkeypatch, tmp_path):
+    (tmp_path / ".marin.yaml").write_text("user: mwittmann\n")
+    monkeypatch.setattr("getpass.getuser", lambda: "local-user")
+    assert resolve_job_user() == "mwittmann"
+
+
+def test_resolve_job_user_iris_user_env_beats_marin_yaml(monkeypatch, tmp_path):
+    (tmp_path / ".marin.yaml").write_text("user: from-yaml\n")
+    monkeypatch.setenv("IRIS_USER", "from-env")
+    assert resolve_job_user() == "from-env"
+
+
+def test_resolve_job_user_ignores_marin_yaml_without_user_key(monkeypatch, tmp_path):
+    (tmp_path / ".marin.yaml").write_text("env:\n  WANDB_API_KEY: abc\n")
+    monkeypatch.setattr("getpass.getuser", lambda: "local-user")
+    assert resolve_job_user() == "local-user"
+
+
+def test_resolve_job_user_rejects_non_string_marin_yaml_user(tmp_path):
+    (tmp_path / ".marin.yaml").write_text("user: [not, a, string]\n")
+    with pytest.raises(ValueError, match=r"\.marin\.yaml"):
+        resolve_job_user()
 
 
 def test_worker_region_from_env(monkeypatch):

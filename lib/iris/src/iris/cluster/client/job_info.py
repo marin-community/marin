@@ -12,7 +12,9 @@ import logging
 import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 
+import yaml
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
@@ -135,8 +137,35 @@ def set_job_info(info: JobInfo | None) -> None:
     _job_info.set(info)
 
 
+def _configured_user() -> str | None:
+    """User from the ``IRIS_USER`` env var or the ``user:`` key in ``.marin.yaml``, if set."""
+    env_user = os.environ.get("IRIS_USER")
+    if env_user is not None:
+        if not env_user.strip():
+            raise ValueError("IRIS_USER must not be empty")
+        return env_user
+
+    marin_yaml = Path(".marin.yaml")
+    if not marin_yaml.exists():
+        return None
+    with open(marin_yaml) as f:
+        cfg = yaml.safe_load(f) or {}
+    user = cfg.get("user")
+    if user is None:
+        return None
+    if not isinstance(user, str) or not user.strip():
+        raise ValueError(f"Invalid `user:` in .marin.yaml: {user!r} (expected a non-empty string)")
+    return user
+
+
 def resolve_job_user(explicit_user: str | None = None) -> str:
-    """Resolve the submitting user for a new top-level job."""
+    """Resolve the submitting user for a new top-level job.
+
+    Resolution order: the explicit argument, the current job's user (when
+    submitting from inside a job), the ``IRIS_USER`` env var, the ``user:``
+    key in ``.marin.yaml`` (cwd-relative, like the CLI's env handling), the
+    OS user, and finally ``root``.
+    """
     if explicit_user is not None:
         if not explicit_user.strip():
             raise ValueError("Job user must not be empty")
@@ -145,6 +174,10 @@ def resolve_job_user(explicit_user: str | None = None) -> str:
     info = get_job_info()
     if info is not None:
         return info.user
+
+    configured = _configured_user()
+    if configured is not None:
+        return configured
 
     try:
         resolved = getpass.getuser()
