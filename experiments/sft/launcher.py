@@ -41,7 +41,6 @@ that has them).
 """
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -62,6 +61,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.instruction import (
     InstructionDatasetConfig,
@@ -159,7 +159,7 @@ def _data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
     weights: dict[str, float] = {}
     for dataset, cache_dir in zip(spec.datasets, dep_paths, strict=True):
         components[dataset.slug] = DatasetComponent(
-            source=UrlDatasetSourceConfig(train_urls=[os.path.join(cache_dir, "**/*.jsonl.gz")]),
+            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, "**/*.jsonl.gz")]),
             cache_dir=cache_dir,
             format=fmt,
             split="train",
@@ -191,15 +191,11 @@ def _optimizer(spec: SFTSpec) -> AdamConfig:
 
 
 def _trainer(spec: SFTSpec, *, gpu_allocator: bool) -> TrainerConfig:
-    """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator.
-
-    The cuda_async allocator is the resume-OOM defrag fix (marin #7115). It is GPU-only: passing
-    ``allocator:...`` to ``PJRT_Client_Create`` aborts the TPU backend, and JAX then falls back to
-    CPU. The decision is made from the run-time accelerator (never the fingerprint), so it does not
-    fork the artifact identity across devices.
-    """
+    """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
     jax_config = dict(DEFAULT_JAX_CONFIG)
     if gpu_allocator:
+        # The cuda_async allocator is the resume-OOM defrag fix (marin #7115), GPU-only: passing
+        # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
         train_batch_size=spec.batch_size,
@@ -262,11 +258,7 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
 
 
 def _train_job(pod_config: TrainLmOnPodConfig) -> None:
-    """The step's ``run``: dispatch the config as its own Fray training job.
-
-    Identical idiom to ``marin.experiment.train._train_job`` — ``remote(...)`` submits
-    ``run_levanter_train_lm`` and blocks; the SPMD launch is the Fray backend's job.
-    """
+    """The step's ``run``: dispatch the config as its own Fray training job."""
     remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
 
 
