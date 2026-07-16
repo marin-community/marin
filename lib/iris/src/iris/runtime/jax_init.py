@@ -225,13 +225,19 @@ def _initialize_supervised_jax(
         device_ids,
         coordinator,
     )
-    jax.distributed.initialize(coordinator, proc_count, proc_index, local_device_ids=device_ids)
+    jax.distributed.initialize(
+        coordinator,
+        proc_count,
+        proc_index,
+        local_device_ids=device_ids,
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+    )
 
 
 def initialize_jax(
     port: int = 8476,
     endpoint_name: str = "jax_coordinator",
-    poll_timeout: float = 300.0,
+    poll_timeout: float = _JAX_DIST_INIT_TIMEOUT,
     poll_interval: float = 2.0,
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
@@ -252,7 +258,10 @@ def initialize_jax(
             An explicit port is required because JAX's gRPC coordinator binds
             internally and does not expose the actual bound port.
         endpoint_name: Name under which the coordinator registers.
-        poll_timeout: Maximum seconds for non-coordinator tasks to wait.
+        poll_timeout: Maximum seconds for non-coordinator tasks to wait for the
+            coordinator endpoint to register. Defaults to ``_JAX_DIST_INIT_TIMEOUT``
+            so a slow coordinator host on a large-gang cold restart does not abort
+            the pollers before the JAX barrier itself gets its longer timeout.
         poll_interval: Initial backoff delay for polling (seconds).
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
