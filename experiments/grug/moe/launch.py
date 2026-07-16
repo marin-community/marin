@@ -209,9 +209,7 @@ def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterChe
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
     :func:`~marin.execution.lazy.lower`. Pinned components never re-tokenize; the
-    paloma/uncheatable suites are validation (weight 0). ``version`` defers to the ambient
-    :class:`~marin.execution.build_context.BuildContext` when omitted, so a driver
-    (:mod:`marin.experiment.cli`) sets it once for the whole run via ``--version``.
+    paloma/uncheatable suites are validation (weight 0).
     """
     name = "grug/4_10_baseline_moe"
     version = resolve_version(name, version)

@@ -197,9 +197,7 @@ def grug_base_trial(*, version: str | None = None) -> ArtifactStep[LevanterCheck
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
     :func:`~marin.execution.lazy.lower`. The paloma/uncheatable suites are validation
-    (weight 0). ``version`` defers to the ambient
-    :class:`~marin.execution.build_context.BuildContext` when omitted, so a driver
-    (:mod:`marin.experiment.cli`) sets it once for the whole run via ``--version``.
+    (weight 0).
     """
     name = "grug/base-trial"
     version = resolve_version(name, version)

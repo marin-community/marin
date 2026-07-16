@@ -129,11 +129,7 @@ def build_scale_model() -> GrugModelConfig:
 
 
 def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env.
-
-    ``version`` defers to the ambient :class:`~marin.execution.build_context.BuildContext` when
-    omitted, so a driver (:mod:`marin.experiment.cli`) sets it once via ``--version``.
-    """
+    """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env."""
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     replicas = env_int("SCALE_GPU_REPLICAS", 32)

@@ -371,11 +371,7 @@ _VALIDATION = [
 
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Grug MoE on the us-central2 datakit store with the mixture-3 two-phase bucket schedule.
-
-    ``version`` defers to the ambient :class:`~marin.execution.build_context.BuildContext` when
-    omitted, so a driver (:mod:`marin.experiment.cli`) sets it once via ``--version``.
-    """
+    """Grug MoE on the us-central2 datakit store with the mixture-3 two-phase bucket schedule."""
     name = f"grug/datakit_moe_mix_{_SLUG}"
     version = resolve_version(name, version)
 

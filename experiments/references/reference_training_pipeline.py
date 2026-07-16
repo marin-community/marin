@@ -57,11 +57,7 @@ _MODEL = GrugModelConfig(
 
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline.
-
-    ``version`` defers to the ambient :class:`~marin.execution.build_context.BuildContext` when
-    omitted, so a driver (:mod:`marin.experiment.cli`) sets it once via ``--version``.
-    """
+    """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
     name = "references/reference-pipeline"
     version = resolve_version(name, version)
     dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]

@@ -168,11 +168,7 @@ _run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_" f"seq{_SEQ}
 
 
 def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Build the vendored June TPU 67B cooldown run.
-
-    ``version`` defers to the ambient :class:`~marin.execution.build_context.BuildContext` when
-    omitted, so a driver (:mod:`marin.experiment.cli`) sets it once via ``--version``.
-    """
+    """Build the vendored June TPU 67B cooldown run."""
     name = f"grug/{_run_id}"
     version = resolve_version(name, version)
 
