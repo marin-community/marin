@@ -443,7 +443,7 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
-    "tpu_ci: mark tests that require a TPU; they self-skip when none is present (see tests/conftest.py)",
+    "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "requires_cluster: mark tests that need a running iris cluster",
@@ -458,9 +458,5 @@ pythonpath = ["."]
 # requires_cluster tests need a running iris cluster (local or remote);
 # manual tests are run by hand (e.g. live TPU smokes in a custom container).
 # All but manual are run from dedicated CI workflows.
-#
-# tpu_ci carries no '-m' filter: those tests detect the absence of a TPU and skip
-# themselves (see pytest_runtest_setup in tests/conftest.py), so the default suite
-# collects them and reports a clean skip on CPU while a TPU host runs them by just
-# pointing pytest at the file.
+# tpu_ci tests self-skip when no TPU is present (see pytest_runtest_setup in tests/conftest.py).
 addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not requires_cluster and not manual' --import-mode=importlib"
