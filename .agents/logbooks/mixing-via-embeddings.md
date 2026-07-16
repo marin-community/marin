@@ -432,3 +432,15 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   Hellinger kernel K=1000 per-phase; holdout confirms transfer at 0.72.
 - Verdict + full numbers: #7067 comment; artifacts on GCS grug/ prefix
   (holdout_readout.{json,md}, realized_vs_predicted.parquet).
+
+## 2026-07-15 hinge-on-zmacro check (post-holdout, train-CV only)
+
+- REFINES the phase-2 "epoch features inert" claim: on zmacro_english_20 (clean target),
+  hinge exposure features help the LINEAR model strongly (hist-ridge 0.7396 → 0.7701,
+  +0.030, 15/15 folds, p=1e-4) — macro_bpb's multilingual noise had masked this.
+- But the KERNEL does not benefit: product-kernel hell×hinge = 0.7673 vs 0.8147 alone
+  (−0.047, 0/15) — same dilution failure as kernel+quality. The kernel absorbs the
+  repetition signal implicitly via content-dose geometry.
+- Net: frozen primary (kernel, 0.8147) remains correct; epoch features matter for linear
+  surrogates and for interpretation; proposal-time epoch caps remain mandatory regardless.
+- Artifacts: scratch/mixture_features/grug/{hinge_zmacro_check.json, kernel_hinge_zmacro_check.json}.
