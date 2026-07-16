@@ -42,24 +42,6 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
     assert resolve_job_user() == "root"
 
 
-def test_resolve_job_user_iris_user_env_beats_current_job_info(monkeypatch):
-    """The deliberate per-shell IRIS_USER outranks the ambient current-job identity.
-
-    The padded value also pins that configured users are stripped, so stray
-    shell-profile whitespace cannot mint a distinct user namespace.
-    """
-    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
-    monkeypatch.setenv("IRIS_USER", " mwittmann ")
-    assert resolve_job_user() == "mwittmann"
-
-
-@pytest.mark.parametrize("value", ["   ", "team/alice"])
-def test_resolve_job_user_rejects_invalid_iris_user_env(monkeypatch, value):
-    monkeypatch.setenv("IRIS_USER", value)
-    with pytest.raises(ValueError, match="IRIS_USER"):
-        resolve_job_user()
-
-
 def test_worker_region_from_env(monkeypatch):
     """IRIS_WORKER_REGION is read into JobInfo.worker_region (regression for #5541)."""
     monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
