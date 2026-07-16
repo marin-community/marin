@@ -6,7 +6,8 @@
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/vllm/e2e/test_june_67b_a2b_hf_bf16_export.py -o addopts= -vv -s
+    uv run pytest tests/cluster/vllm/test_june_67b_a2b_hf_bf16_export.py \
+      -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
 import dataclasses
@@ -31,8 +32,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-
-from .june_67b_a2b import (
+from tests.cluster.vllm.june_67b_a2b import (
     JUNE_67B_A2B,
     VendoredTransformer,
     apply_pending_qb_betas,
@@ -40,11 +40,10 @@ from .june_67b_a2b import (
     load_checkpoint,
     read_executor_info,
 )
-from .remote_job import run_remote_test_job
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
+pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 
 
 def _decode_main_config(model_config: dict[str, Any]) -> GrugModelConfig:
@@ -133,8 +132,8 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
             assert actual_sha256 == JUNE_67B_A2B.export_sha256, actual_sha256
 
 
-def test_h100_node_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient) -> None:
-    run_remote_test_job(
+def test_h100_node_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient, run_test_job) -> None:
+    run_test_job(
         marin_gpu_client,
         JobRequest(
             name=f"june-67b-bf16-export-{uuid.uuid4().hex[:8]}",

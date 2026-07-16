@@ -12,37 +12,23 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
-from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
-from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
-# Templates that carry `{% generation %}` blocks, so assistant masks and message spans are both
-# well defined.
-_GENERATION_BLOCK_TEMPLATE_CASES = [
+# Assistant masks are derived from `{% generation %}` blocks, which no upstream template ships,
+# so only the templates Marin publishes can exercise the mask-dependent paths.
+_GENERATION_TAGGED_CASES = [
     (
         "marin",
         "marin-community/marin-tokenizer",
         MARIN_CHAT_TEMPLATE,
         {},
     ),
-    (
-        "llama3.1",
-        "meta-llama/Llama-3.1-8B",
-        LLAMA_3_1_CHAT_TEMPLATE,
-        {"tools": None},
-    ),
-    (
-        "qwen3",
-        "Qwen/Qwen3-8B",
-        QWEN_3_CHAT_TEMPLATE,
-        {"tools": None},
-    ),
 ]
 
-# Stock upstream templates ship no `{% generation %}` block, so assistant masks would be all zeros;
-# `apply_chat_template_with_masks` must reject them rather than silently return a useless mask
-# (issue #7237). `chat_template=None` uses each tokenizer's own stock template.
-_NO_GENERATION_BLOCK_TEMPLATE_CASES = [
+# Message spans are recovered from the rendered `messages` loop and need no generation tags,
+# so stock upstream templates are covered here as well.
+_MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
+    *_GENERATION_TAGGED_CASES,
     (
         "gemma3",
         "google/gemma-3-4b-it",
@@ -67,8 +53,8 @@ def _load_optional_tokenizer(name: str) -> MarinTokenizer:
 
 @pytest.mark.parametrize(
     "case_name,tokenizer_name,chat_template,template_kwargs",
-    _GENERATION_BLOCK_TEMPLATE_CASES,
-    ids=[case[0] for case in _GENERATION_BLOCK_TEMPLATE_CASES],
+    _MESSAGE_SPAN_REAL_TEMPLATE_CASES,
+    ids=[case[0] for case in _MESSAGE_SPAN_REAL_TEMPLATE_CASES],
 )
 def test_apply_chat_template_message_spans_real_templates(case_name, tokenizer_name, chat_template, template_kwargs):
     tokenizer = _load_optional_tokenizer(tokenizer_name)
@@ -99,31 +85,8 @@ def test_apply_chat_template_message_spans_real_templates(case_name, tokenizer_n
 
 @pytest.mark.parametrize(
     "case_name,tokenizer_name,chat_template,template_kwargs",
-    _NO_GENERATION_BLOCK_TEMPLATE_CASES,
-    ids=[case[0] for case in _NO_GENERATION_BLOCK_TEMPLATE_CASES],
-)
-def test_apply_chat_template_with_masks_rejects_stock_templates_without_generation_block(
-    case_name, tokenizer_name, chat_template, template_kwargs
-):
-    tokenizer = _load_optional_tokenizer(tokenizer_name)
-    conversation = [
-        {"role": "user", "content": f"{case_name} alpha prompt."},
-        {"role": "assistant", "content": f"{case_name} beta answer."},
-    ]
-
-    with pytest.raises(ValueError, match="generation"):
-        tokenizer.apply_chat_template_with_masks(
-            [conversation],
-            chat_template=chat_template,
-            return_message_spans=True,
-            **template_kwargs,
-        )
-
-
-@pytest.mark.parametrize(
-    "case_name,tokenizer_name,chat_template,template_kwargs",
-    _GENERATION_BLOCK_TEMPLATE_CASES,
-    ids=[case[0] for case in _GENERATION_BLOCK_TEMPLATE_CASES],
+    _GENERATION_TAGGED_CASES,
+    ids=[case[0] for case in _GENERATION_TAGGED_CASES],
 )
 def test_trace_chat_processor_labels_real_templates(case_name, tokenizer_name, chat_template, template_kwargs):
     tokenizer = _load_optional_tokenizer(tokenizer_name)

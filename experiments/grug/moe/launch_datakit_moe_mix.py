@@ -14,8 +14,9 @@ from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
@@ -369,8 +370,10 @@ _VALIDATION = [
 ]
 
 
-def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Grug MoE on the us-central2 datakit store with the mixture-3 two-phase bucket schedule."""
+    name = f"grug/datakit_moe_mix_{_SLUG}"
+    version = resolve_version(name, version)
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if ctx.is_fingerprint:
@@ -412,7 +415,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(f"grug/datakit_moe_mix_{_SLUG}", version),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
@@ -423,4 +426,4 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
 
 
 if __name__ == "__main__":
-    StepRunner().run([build().lower()])
+    experiment_main(build)()

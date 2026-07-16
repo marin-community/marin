@@ -859,6 +859,7 @@ class IrisClient:
         *,
         state: job_pb2.JobState | None = None,
         prefix: str | None = None,
+        limit: int | None = None,
     ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
@@ -872,6 +873,10 @@ class IrisClient:
             state: If provided, only return jobs in this state.
             prefix: If provided, only return jobs whose ``job_id`` (wire form,
                 e.g. ``"/alice/foo"``) starts with this string.
+            limit: If provided, return at most this many jobs (the most recent,
+                since the server sorts by submission date descending). ``None``
+                walks every matching job, which requires a filter narrow enough
+                to stay under the server's deep-offset cap.
 
         Returns:
             List of JobStatus matching the filters.
@@ -882,7 +887,7 @@ class IrisClient:
         if prefix:
             query.job_id_prefix = prefix
 
-        return list(self._cluster_client.list_jobs(query=query))
+        return list(self._cluster_client.list_jobs(query=query, limit=limit))
 
     def list_workers(
         self,

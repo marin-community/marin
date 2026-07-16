@@ -6,7 +6,8 @@
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/vllm/e2e/test_june_67b_a2b_levanter_inference.py -o addopts= -vv -s
+    uv run pytest tests/cluster/vllm/test_june_67b_a2b_levanter_inference.py \
+      -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
 import dataclasses
@@ -28,7 +29,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
 from levanter.utils.jax_utils import parameter_count
 
-from .june_67b_a2b import (
+from tests.cluster.vllm.june_67b_a2b import (
     JUNE_67B_A2B,
     InferenceGolden,
     VendoredTransformer,
@@ -38,7 +39,6 @@ from .june_67b_a2b import (
     read_executor_info,
     read_inference_golden,
 )
-from .remote_job import run_remote_test_job
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ JAX_COMPILATION_CACHE_DIR = (
     "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-42150-sonic-deterministic-v1"
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
+pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 
 
 @eqx.filter_jit
@@ -116,9 +116,9 @@ def assert_checkpoint_inference_matches_golden(expected_inference: InferenceGold
     )
 
 
-def test_h100_node_matches_levanter_inference_golden(marin_gpu_client: IrisClient) -> None:
+def test_h100_node_matches_levanter_inference_golden(marin_gpu_client: IrisClient, run_test_job) -> None:
     expected_inference = read_inference_golden(JUNE_67B_A2B.inference_golden_path)
-    run_remote_test_job(
+    run_test_job(
         marin_gpu_client,
         JobRequest(
             name=f"june-67b-checkpoint-inference-{uuid.uuid4().hex[:8]}",

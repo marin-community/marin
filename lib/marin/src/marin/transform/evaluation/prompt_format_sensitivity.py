@@ -18,6 +18,7 @@ from marin.datakit.ingestion_manifest import (
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
+from marin.transform.evaluation.continuation_records import render_continuation_target, render_support_and_query
 from rigging.filesystem import StoragePath, open_url
 from zephyr.writers import atomic_rename
 
@@ -464,32 +465,6 @@ PROMPT_FORMAT_TASKS: tuple[PromptFormatTask, ...] = (
 PROMPT_FORMAT_TASKS_BY_KEY = {task.key: task for task in PROMPT_FORMAT_TASKS}
 
 
-def render_prompt_format_input(
-    *,
-    task: PromptFormatTask,
-    template: PromptFormatTemplate,
-    heldout: PromptFormatExample,
-) -> str:
-    """Render five support examples and one unfinished held-out query."""
-
-    if len(task.support_examples) != PROMPT_FORMAT_NUM_FEWSHOT:
-        raise ValueError(f"{task.key} must have exactly {PROMPT_FORMAT_NUM_FEWSHOT} support examples")
-    header = f"Task: {task.title}\nInstruction: {task.description}\nFormat: {template.description}"
-    blocks = [header, *(template.renderer(example, True) for example in task.support_examples)]
-    blocks.append(template.renderer(heldout, False))
-    return "\n\n".join(blocks)
-
-
-def render_prompt_format_target(*, template: PromptFormatTemplate, heldout: PromptFormatExample) -> str:
-    """Render the scored continuation for an unfinished held-out query."""
-
-    unfinished = template.renderer(heldout, False)
-    finished = template.renderer(heldout, True)
-    if not finished.startswith(unfinished):
-        raise ValueError(f"{template.key} renderer must extend its unfinished held-out query")
-    return finished[len(unfinished) :]
-
-
 def prompt_format_record(task_key: str, template_key: str, heldout_index: int) -> dict[str, Any]:
     """Return one supervised target-only record for a task/template/held-out index."""
 
@@ -498,8 +473,10 @@ def prompt_format_record(task_key: str, template_key: str, heldout_index: int) -
     heldout = task.heldout_examples[heldout_index]
     return {
         "id": f"{task.key}/{template.key}/{heldout.example_id}",
-        "input": render_prompt_format_input(task=task, template=template, heldout=heldout),
-        "target": render_prompt_format_target(template=template, heldout=heldout),
+        "input": render_support_and_query(
+            task=task, template=template, heldout=heldout, num_fewshot=PROMPT_FORMAT_NUM_FEWSHOT
+        ),
+        "target": render_continuation_target(template=template, heldout=heldout),
         "source": "prompt_format_sensitivity_static",
         "provenance": {
             "task_key": task.key,
