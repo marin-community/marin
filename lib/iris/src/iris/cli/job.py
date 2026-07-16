@@ -39,7 +39,12 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_NVLINK_DOMAIN_SLICED,
+    NVL72_GPUS_PER_NODE,
+    balanced_rack_slice_size,
+    gpu_gang_coscheduling_level,
+)
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
@@ -496,7 +501,9 @@ def resolve_multinode_defaults(
     node slice bind HARD to ``nvlink.domain``; larger NVL72 gangs bind to
     ``nvlink.domain.sliced``, which partitions them into rack-sized slices placed one per
     NVLink domain (balanced N racks x 16); H100 and other GPUs coschedule on the soft
-    ``leafgroup`` IB level.
+    ``leafgroup`` IB level. A sliced gang whose size cannot split into equal, more-than-half-a-rack
+    slices, or whose pods are not node-saturating, is rejected here with a ``click.UsageError``
+    rather than deferred to a controller-side failure.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
@@ -510,8 +517,21 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            variant, _ = parse_gpu_spec(gpu)
+            variant, gpu_count = parse_gpu_spec(gpu)
             level = gpu_gang_coscheduling_level(variant, replicas)
+            if level == COSCHEDULE_NVLINK_DOMAIN_SLICED:
+                # Reject a knowably-unplaceable sliced gang at submit rather than let the
+                # controller terminal-fail it a round-trip later. Only the sliced level constrains
+                # size and per-node GPU count; smaller gangs and other GPUs are always placeable.
+                if gpu_count != NVL72_GPUS_PER_NODE:
+                    raise click.UsageError(
+                        f"A sliced multi-rack {variant} gang needs node-saturating pods "
+                        f"({NVL72_GPUS_PER_NODE} GPUs each so one slice fills whole nodes); got {gpu_count}."
+                    )
+                try:
+                    balanced_rack_slice_size(replicas)
+                except ValueError as e:
+                    raise click.UsageError(f"--replicas {replicas} for {variant}: {e}") from e
             return replicas, CoschedulingConfig(group_by=level)
         return replicas or 1, None
 

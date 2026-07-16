@@ -116,26 +116,32 @@ class KueueTopologyBinding:
     coarse_preferred_label: str | None = None
 
 
-def balanced_rack_slice_size(num_tasks: int, cap: int = SCHEDULABLE_RACK_NODES) -> int:
+def balanced_rack_slice_size(num_tasks: int) -> int:
     """Nodes per rack slice for a multi-rack NVL72 gang, balanced across the fewest racks.
 
-    Places the gang on ``ceil(num_tasks / cap)`` NVLink domains — the fewest that hold at most
-    ``cap`` nodes each — and splits it evenly, so every rack runs the same node count. Returns
-    that per-rack size (also Kueue's ``podset-slice-size``). Raises ``ValueError`` when the gang
-    cannot split into equal slices that each exceed half a rack, the condition under which two
-    slices could share one rack and the one-slice-per-rack guarantee would break.
+    Places the gang on ``ceil(num_tasks / SCHEDULABLE_RACK_NODES)`` NVLink domains — the fewest
+    that hold at most ``SCHEDULABLE_RACK_NODES`` nodes each — and splits it evenly, so every rack
+    runs the same node count. Returns that per-rack size (also Kueue's ``podset-slice-size``).
+    Raises ``ValueError`` when the gang cannot split into equal slices that each exceed half a
+    rack, the condition under which two slices could share one rack and the one-slice-per-rack
+    guarantee would break.
     """
-    num_racks = -(-num_tasks // cap)  # ceil
+    if num_tasks <= 0:
+        raise ValueError(f"gang size must be positive, got {num_tasks}")
+    num_racks = -(-num_tasks // SCHEDULABLE_RACK_NODES)  # ceil
+    min_rack_slice = RACK_SIZE // 2 + 1  # more than half a rack, so two slices can't share one
     if num_tasks % num_racks:
         raise ValueError(
-            f"{num_tasks} nodes do not divide evenly across {num_racks} racks (<= {cap} nodes each); "
-            f"use a gang size that is a multiple of {num_racks}"
+            f"{num_tasks} nodes do not divide evenly across {num_racks} racks "
+            f"(<= {SCHEDULABLE_RACK_NODES} nodes each); a multi-rack NVL72 gang must split into equal "
+            f"{min_rack_slice}-{SCHEDULABLE_RACK_NODES} node rack slices (e.g. 20, 24, 32, 48)"
         )
     slice_size = num_tasks // num_racks
-    if 2 * slice_size <= RACK_SIZE:
+    if slice_size < min_rack_slice:
         raise ValueError(
-            f"{num_tasks} nodes would place {num_racks} racks of {slice_size}, but two {slice_size}-node "
-            f"slices fit one {RACK_SIZE}-node rack, breaking one-slice-per-rack; use a larger gang"
+            f"{num_tasks} nodes would place {num_racks} racks of {slice_size}, but a rack slice must "
+            f"exceed half a rack ({min_rack_slice}+ of {RACK_SIZE} nodes) to keep one slice per rack; "
+            f"use a larger gang (e.g. 20, 24, 32, 48)"
         )
     return slice_size
 

@@ -54,6 +54,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
+    SCHEDULABLE_RACK_NODES,
     KueueTopologyBinding,
     TopologyMode,
     balanced_rack_slice_size,
@@ -98,7 +99,7 @@ class PodManifestError(ValueError):
 
     Raised for request-level validation failures in manifest construction: an
     unsupported container profile, a coscheduling group_by with no topology
-    mapping, an NVLink-domain gang larger than one rack, or an unsupported
+    mapping, an NVLink-domain gang larger than a rack's schedulable slice, or an unsupported
     constraint op. These are permanent — the identical request fails the same
     way on every retry — so ``sync`` fails the task terminally instead of
     treating it as a retryable worker loss and re-applying it every tick.
@@ -650,8 +651,9 @@ def _topology_request_annotations(
     """Kueue topology-request annotations for a coscheduled gang, per the binding's mode.
 
     PREFERRED/REQUIRED bind the whole gang to one ``node_label`` domain (soft/hard). For a hard
-    nvlink.domain gang that exceeds one rack — which can never be placed and would hang forever —
-    this raises instead (the CLI never emits it; the guard catches a programmatic client).
+    nvlink.domain gang that exceeds a rack's guaranteed-schedulable slice — which could sit
+    unschedulable whenever a rack is short a node — this raises instead (the CLI never emits it;
+    the guard catches a programmatic or stale client).
     SLICE_REQUIRED partitions the gang into balanced per-rack slices (size from
     ``balanced_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
     preference so the racks cluster on the IB fabric. The one-slice-per-rack guarantee holds only
@@ -677,11 +679,12 @@ def _topology_request_annotations(
             annotations[_KUEUE_PREFERRED_TOPOLOGY] = binding.coarse_preferred_label
         return annotations
     if binding.mode is TopologyMode.REQUIRED:
-        if node_label == CW_LABEL_NVLINK_DOMAIN and num_tasks > RACK_SIZE:
+        if node_label == CW_LABEL_NVLINK_DOMAIN and num_tasks > SCHEDULABLE_RACK_NODES:
             raise PodManifestError(
                 f"Coscheduled task {task_ref!r} requires a single {group_by!r} domain but num_tasks={num_tasks} "
-                f"exceeds the NVLink domain size ({RACK_SIZE} nodes, one NVL72 rack). A hard NVLink-domain gang "
-                f"cannot cross racks; request <= {RACK_SIZE} replicas or coschedule on a coarser level (e.g. leafgroup)."
+                f"exceeds the guaranteed-schedulable rack slice ({SCHEDULABLE_RACK_NODES} of an {RACK_SIZE}-node "
+                f"NVL72 rack). A hard NVLink-domain gang can hang if a rack is short a node; request "
+                f"<= {SCHEDULABLE_RACK_NODES} replicas, or use the sliced level for a larger balanced gang."
             )
         return {_KUEUE_REQUIRED_TOPOLOGY: node_label}
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}

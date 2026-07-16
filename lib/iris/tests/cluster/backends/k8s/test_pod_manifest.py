@@ -39,6 +39,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
+    SCHEDULABLE_RACK_NODES,
     KueueTopologyBinding,
     TopologyMode,
 )
@@ -1094,22 +1095,23 @@ def test_kueue_required_topology_for_nvlink_domain():
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
-def test_kueue_required_nvlink_gang_rejects_more_than_one_rack():
-    """A hard nvlink.domain gang cannot span racks: one NVL72 rack is one NVLink domain of
-    RACK_SIZE nodes, so a required gang larger than that is unschedulable and must fail fast
-    (the guard for the programmatic client; the CLI degrades hard NVLink gangs to soft below
-    RACK_SIZE, so it never emits one this large)."""
-    with pytest.raises(ValueError, match="NVLink domain size"):
+def test_kueue_required_nvlink_gang_rejects_above_schedulable_slice():
+    """A hard nvlink.domain gang larger than a rack's guaranteed-schedulable slice can hang
+    whenever the rack is short a node, so it must fail fast (the guard for a programmatic or
+    stale client; the CLI routes 17+ NVL72 replicas to the sliced level, never to a hard gang
+    this large)."""
+    with pytest.raises(ValueError, match="guaranteed-schedulable rack slice"):
         _build_pod_manifest(
-            _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain"),
+            _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES + 1, group_by="nvlink.domain"),
             pod_config(local_queue="iris-lq"),
         )
 
 
-def test_kueue_required_nvlink_gang_allows_full_rack():
-    """A hard nvlink.domain gang of exactly one full rack (RACK_SIZE nodes) is valid."""
+def test_kueue_required_nvlink_gang_allows_schedulable_slice():
+    """A hard nvlink.domain gang of exactly the guaranteed-schedulable rack slice
+    (SCHEDULABLE_RACK_NODES nodes) is the largest hard single-domain gang and is valid."""
     manifest = _build_pod_manifest(
-        _cosched_req("/job/task/0", num_tasks=RACK_SIZE, group_by="nvlink.domain"),
+        _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES, group_by="nvlink.domain"),
         pod_config(local_queue="iris-lq"),
     )
     assert manifest["metadata"]["annotations"][_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
@@ -1163,8 +1165,8 @@ def test_kueue_sliced_gang_rejects_uneven_split():
 
 def test_kueue_sliced_gang_rejects_slice_too_small():
     """A gang whose balanced slices would each be <= half a rack (18 -> two 9-node slices) lets
-    two slices share one rack, breaking one-slice-per-rack, so it is rejected."""
-    with pytest.raises(ValueError, match="one-slice-per-rack"):
+    two slices share one rack, breaking one slice per rack, so it is rejected."""
+    with pytest.raises(ValueError, match="must exceed half a rack"):
         _build_pod_manifest(_sliced_req("/job/task/0", num_tasks=18), pod_config(local_queue="iris-lq"))
 
 
@@ -1176,6 +1178,26 @@ def test_kueue_sliced_gang_requires_node_saturating_pods():
             _sliced_req("/job/task/0", num_tasks=32, gpu_count=1),
             pod_config(local_queue="iris-lq"),
         )
+
+
+def test_kueue_sliced_gang_without_coarse_preferred_omits_preferred_annotation():
+    """A sliced binding whose coarse_preferred_label is unset stamps only the slice request, no
+    whole-podset preferred topology."""
+    manifest = _build_pod_manifest(
+        _sliced_req("/job/task/0", num_tasks=32),
+        pod_config(
+            local_queue="iris-lq",
+            kueue_topologies={
+                "nvlink.domain.sliced": KueueTopologyBinding(
+                    "ds.coreweave.com/nvlink.domain", TopologyMode.SLICE_REQUIRED
+                )
+            },
+        ),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_SLICE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert annotations[_KUEUE_SLICE_SIZE] == "16"
+    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
 def test_kueue_preferred_topology_for_leafgroup():

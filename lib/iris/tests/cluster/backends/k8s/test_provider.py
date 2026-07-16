@@ -88,10 +88,11 @@ def test_sync_apply_error_yields_worker_failed(provider, k8s):
 def test_sync_invalid_manifest_fails_task_terminally(provider, k8s):
     """An unbuildable manifest -> terminal FAILED, not retryable WORKER_FAILED.
 
-    A programmatic client can stamp a required nvlink.domain gang larger than one
-    rack (the CLI caps it, direct RunTaskRequests do not). The manifest can never
-    be built, so retrying would rebuild the same broken request every tick and
-    wedge the reconcile loop. sync must fail the task terminally and keep going.
+    A programmatic client can stamp a required nvlink.domain gang larger than a rack's
+    guaranteed-schedulable slice (the CLI routes those to the sliced level, direct
+    RunTaskRequests do not). The manifest can never be built, so retrying would rebuild the
+    same broken request every tick and wedge the reconcile loop. sync must fail the task
+    terminally and keep going.
     """
     req = make_run_req("/test-job/0", num_tasks=RACK_SIZE + 1, coscheduling_group_by="nvlink.domain")
     batch = make_batch(tasks_to_run=[req])
@@ -100,7 +101,7 @@ def test_sync_invalid_manifest_fails_task_terminally(provider, k8s):
 
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_FAILED
-    assert "NVLink domain size" in result[0].error
+    assert "guaranteed-schedulable rack slice" in result[0].error
     # Nothing was created, and the tick was not aborted by the escaping error.
     assert k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true"}) == []
 
