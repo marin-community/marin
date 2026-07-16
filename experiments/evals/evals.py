@@ -28,6 +28,7 @@ from marin.evaluation.eval_result import (
     EvalResult,
     LevanterEvalResult,
     LmEvalHarnessResult,
+    ReportEntry,
     compile_eval_report,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
@@ -236,9 +237,7 @@ def eval_step(
 ) -> ArtifactStep[EvalResult]:
     """One eval group -> one typed ``EvalResult`` artifact, addressed by backend + model + group id.
 
-    ``version`` is explicit, or None to defer to the ambient BuildContext. The backend builders return
-    their concrete result types; ``ArtifactStep`` is invariant in that type, so the branch results are
-    widened to the ``EvalResult`` base here.
+    ``version`` is explicit, or None to defer to the ambient BuildContext.
     """
     if group.backend == Backend.LEVANTER:
         levanter_step = evaluate_levanter_lm_evaluation_harness(
@@ -253,6 +252,7 @@ def eval_step(
             env_vars=group.env_vars,
             version=version,
         )
+        # ArtifactStep is invariant in its artifact type, so widen the concrete result to the base.
         return cast("ArtifactStep[EvalResult]", levanter_step)
     if group.backend == Backend.LM_EVAL:
         lm_eval_step = evaluate_lm_evaluation_harness(
@@ -298,11 +298,11 @@ def eval_report(
     def build_config(ctx: StepContext) -> dict:
         return {
             "entries": [
-                {
-                    "path": ctx.artifact_path(result),
-                    "result_type": result_type_name(result.artifact_type),
-                    "label": result.name,
-                }
+                ReportEntry(
+                    path=ctx.artifact_path(result),
+                    result_type=result_type_name(result.artifact_type),
+                    label=result.name,
+                )
                 for result in results
             ],
             "out": ctx.output_path,

@@ -14,9 +14,9 @@ import json
 import fsspec
 import pytest
 from marin.evaluation.eval_result import (
-    EvalReport,
     LevanterEvalResult,
     LmEvalHarnessResult,
+    ReportEntry,
     compile_eval_report,
 )
 from marin.execution.artifact import result_type_name
@@ -92,12 +92,11 @@ def test_compile_eval_report_merges_across_backends(tmp_path):
     (lmeval_dir / "gsm8k_8shot" / "vllm" / "results_2026-07-16T00-00-00.json").write_text(json.dumps(_LM_EVAL_GSM8K))
 
     entries = [
-        {"path": str(levanter_dir), "result_type": result_type_name(LevanterEvalResult), "label": "mcq"},
-        {"path": str(lmeval_dir), "result_type": result_type_name(LmEvalHarnessResult), "label": "gen"},
+        ReportEntry(str(levanter_dir), result_type_name(LevanterEvalResult), "mcq"),
+        ReportEntry(str(lmeval_dir), result_type_name(LmEvalHarnessResult), "gen"),
     ]
     report = compile_eval_report(entries, str(report_dir))
 
-    assert isinstance(report, EvalReport)
     assert report.task_metrics == {
         "hellaswag": {"acc,none": 0.5, "acc_stderr,none": 0.01},
         "gsm8k": {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02},
@@ -117,8 +116,8 @@ def test_compile_eval_report_rejects_duplicate_task(tmp_path):
     (a / "results.json").write_text(json.dumps(_LEVANTER_RESULTS))
     (b / "results.json").write_text(json.dumps(_LEVANTER_RESULTS))  # same "hellaswag" key
     entries = [
-        {"path": str(a), "result_type": result_type_name(LevanterEvalResult), "label": "group_a"},
-        {"path": str(b), "result_type": result_type_name(LevanterEvalResult), "label": "group_b"},
+        ReportEntry(str(a), result_type_name(LevanterEvalResult), "group_a"),
+        ReportEntry(str(b), result_type_name(LevanterEvalResult), "group_b"),
     ]
     with pytest.raises(ValueError, match="duplicate task 'hellaswag'"):
         compile_eval_report(entries, str(tmp_path / "report"))

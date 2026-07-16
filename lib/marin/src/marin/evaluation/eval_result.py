@@ -20,6 +20,7 @@ dependency uniformly (``dep.artifact_type.raw_load(path).task_metrics()``) and m
 import functools
 import json
 import logging
+from dataclasses import dataclass
 
 from pydantic import Field
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
@@ -125,31 +126,42 @@ _EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {
 }
 
 
-def compile_eval_report(entries: list[dict], output_path: str) -> EvalReport:
+@dataclass(frozen=True)
+class ReportEntry:
+    """One result feeding :func:`compile_eval_report`.
+
+    ``path`` is the result's output directory, ``result_type`` selects the reader (see
+    :data:`_EVAL_RESULT_TYPES`), and ``label`` namespaces that result's averages.
+    """
+
+    path: str
+    result_type: str
+    label: str
+
+
+def compile_eval_report(entries: list[ReportEntry], output_path: str) -> EvalReport:
     """Read each result's metrics and merge them into one :class:`EvalReport`.
 
-    ``entries`` is one ``{"path", "result_type", "label"}`` per dependency: ``path`` is the result's
-    output directory, ``result_type`` selects the reader (see :data:`_EVAL_RESULT_TYPES`), and
-    ``label`` namespaces that result's averages. Writes ``report.json`` under ``output_path`` and
-    returns the typed report (its fields persist via the record).
+    Writes ``report.json`` under ``output_path`` and returns the typed report (its fields persist via
+    the record).
     """
     task_metrics: dict[str, dict[str, float]] = {}
     averages: dict[str, float] = {}
     for entry in entries:
-        reader = _EVAL_RESULT_TYPES.get(entry["result_type"])
+        reader = _EVAL_RESULT_TYPES.get(entry.result_type)
         if reader is None:
-            raise ValueError(f"no EvalResult reader for {entry['result_type']!r}; known: {sorted(_EVAL_RESULT_TYPES)}")
-        result = reader.raw_load(entry["path"])
+            raise ValueError(f"no EvalResult reader for {entry.result_type!r}; known: {sorted(_EVAL_RESULT_TYPES)}")
+        result = reader.raw_load(entry.path)
         for task, metrics in result.task_metrics().items():
             if task in task_metrics:
                 raise ValueError(
-                    f"duplicate task {task!r} while compiling the report (from {entry['label']!r}); two "
+                    f"duplicate task {task!r} while compiling the report (from {entry.label!r}); two "
                     "results evaluate the same task, so one would silently overwrite the other — give the "
                     "tasks distinct aliases or split them into separate reports"
                 )
             task_metrics[task] = metrics
         for average, value in result.averages().items():
-            averages[f"{entry['label']}/{average}"] = value
+            averages[f"{entry.label}/{average}"] = value
 
     report = EvalReport(task_metrics=task_metrics, averages=averages)
     StoragePath(prefix_join(output_path, _REPORT_FILE)).write_text(
