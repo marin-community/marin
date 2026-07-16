@@ -51,9 +51,10 @@ author: mcwitt
 
 ### Active
 
-- `MXFP8-H1`: dense GEMMs via `jax.nn.scaled_dot_general` (cuDNN block-scaled)
-  beat bf16 >=1.2x at grug dense shapes on B200 and can slot in behind the
-  `Fp8DotGeneralOp`-shaped interface. Next test: MXFP8-001 microbench.
+- `MXFP8-H1b`: the `__cudnn$blockScaledDot` GEMM itself beats bf16 at grug
+  dense shapes and MXFP8-001's slowdown is XLA-emitted quantize overhead,
+  fixable with a fused quantizer. Next test: MXFP8-001b `scaled_matmul`
+  prequant arm.
 - `MXFP8-H2`: an SM100 block-scaled grouped GEMM (CUTLASS via `cutlass_call`,
   reusing the fp8-ragged-cute FFI plumbing) beats bf16 ragged dot >=1.3x at
   canonical expert shapes. Next test: MXFP8-002 feasibility + bench.
@@ -74,7 +75,10 @@ author: mcwitt
 
 ### Falsified / Dead End
 
-(none)
+- `MXFP8-H1` (as stated): naive `jax.nn.scaled_dot_general` does NOT beat
+  bf16 dense on sm100 — 0.64-1.00x, while per-tensor `Fp8DotGeneralOp` gets
+  1.35-1.61x at the same shapes. Why stopped: MXFP8-001 (logbook entry
+  2026-07-16, job mxfp8-001-dense-r3). Superseded by `MXFP8-H1b`.
 
 ### Promoted
 
