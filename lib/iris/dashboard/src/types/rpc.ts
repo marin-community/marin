@@ -116,6 +116,9 @@ export interface TaskStatus {
   currentAttemptId?: number
   attempts?: TaskAttempt[]
   pendingReason?: string
+  // Human-readable status for a task waiting to run (e.g. the Kueue admission
+  // detail explaining why a BUILDING/pending k8s task has not been placed).
+  statusMessage?: string
   canBeScheduled?: boolean
   containerId?: string
   // No per-task failure/preemption count fields — derive them from `attempts`;

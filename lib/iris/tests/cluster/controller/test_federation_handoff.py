@@ -26,6 +26,7 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import (
     AVAILABILITY_METRIC_VERSION,
     WORKDIR_FILE_OFFLOAD_THRESHOLD,
@@ -45,6 +46,7 @@ from rigging.timing import Timestamp
 from ._test_support import ControllerTestState
 from .conftest import (
     MockController,
+    assign_task,
     dispatch_task,
     make_controller_state,
     make_direct_job_request,
@@ -55,6 +57,7 @@ from .conftest import (
     register_worker,
     transition_task,
 )
+from .transition_driver import commit_dispatch_updates
 
 # The parent authenticates to the peer as itself; the peer trusts it (like a
 # loopback admin) and attributes the job to the asserted owner_principal.
@@ -570,6 +573,67 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
             assert attempt_row.attempt_uid == peer_attempt.attempt_uid
             assert "~" not in attempt_row.attempt_uid
             assert reads.resolve_attempt_uids(tx, [AttemptUid(attempt_row.attempt_uid)]) == {}
+
+
+def _dispatch_building(peer_state, task_id: JobName, attempt_id: int, status_message: str | None) -> None:
+    """Land a direct-provider (k8s-style) BUILDING observation on the peer, carrying
+    ``status_message``. Models the K8sTaskProvider path (``record_updates``), which —
+    unlike the worker-observation wire — carries the message."""
+    with peer_state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_BUILDING,
+                    status_message=status_message,
+                )
+            ],
+            now=Timestamp.now(),
+        )
+
+
+def test_sync_mirrors_status_message_on_a_same_state_building_tick(tmp_path, log_client):
+    """A stuck-BUILDING task's reason reaches the hub even though it never changes
+    state. The peer sets status_message on a second BUILDING observation (same state
+    as the first) — the exact case the reconcile fast-path would drop. The change must
+    still append a federation changelog row, so the next sync mirrors it and the hub's
+    GetTaskStatus renders the reason (e.g. a Kueue admission verdict). Without the
+    changelog trigger the hub stays dark until the task's next real state change (its
+    timeout)."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-stuck"), None)
+        job_id = JobName.from_wire(response.job_id)
+        promote_queued_federation(manager, parent_state)
+
+        # Peer drives the task to BUILDING with no message, and the parent mirrors it.
+        worker = register_worker(peer_state, "w1", "w1:8080", job_pb2.WorkerMetadata(hostname="w1"))
+        (peer_task,) = query_tasks_for_job(peer_state, job_id)
+        assign_task(peer_state, peer_task, worker)
+        (peer_task,) = query_tasks_for_job(peer_state, job_id)
+        _dispatch_building(peer_state, peer_task.task_id, peer_task.current_attempt_id, None)
+        manager.sync_once()
+        (mirrored,) = query_tasks_for_job(parent_state, job_id)
+        assert mirrored.state == job_pb2.TASK_STATE_BUILDING
+        assert not parent_service.get_task_status(
+            controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
+        ).task.status_message
+
+        # Same state, new reason: BUILDING -> BUILDING carrying the admission verdict.
+        reason = 'Kueue workload wl-x: [QuotaReserved] (Pending): couldn\'t assign flavors; excluded: resource "cpu"'
+        _dispatch_building(peer_state, peer_task.task_id, peer_task.current_attempt_id, reason)
+        manager.sync_once()
+
+        task = parent_service.get_task_status(
+            controller_pb2.Controller.GetTaskStatusRequest(task_id=mirrored.task_id.to_wire()), None
+        ).task
+        assert task.state == job_pb2.TASK_STATE_BUILDING
+        assert task.status_message == reason
 
 
 def test_sync_mirrors_submit_time_and_preemptions_faithfully(tmp_path, log_client):

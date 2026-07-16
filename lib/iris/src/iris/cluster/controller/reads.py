@@ -1132,6 +1132,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_id,
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
+    tasks_table.c.status_message,
     tasks_table.c.backend_id,
     tasks_table.c.cluster,
 )
@@ -1169,6 +1170,7 @@ def _task_detail_from_row(row, counts: AttemptCounts) -> TaskDetailRow:
         current_worker_id=row.current_worker_id,
         current_worker_address=row.current_worker_address,
         container_id=row.container_id,
+        status_message=row.status_message,
         backend_id=str(row.backend_id or ""),
         cluster=str(row.cluster),
         peer_worker_label=row.peer_worker_label,

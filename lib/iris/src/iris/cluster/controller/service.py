@@ -298,6 +298,9 @@ class TaskWithAttempts:
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    # Backend status one-liner for a waiting/building task (why it is not running
+    # yet); None/"" when running or quiet. See tasks.status_message.
+    status_message: str | None
     backend_id: str
     cluster: str
     # Display worker identity for a federated task (the peer-side worker name from
@@ -328,6 +331,7 @@ class TaskWithAttempts:
             current_worker_id=row.current_worker_id,
             current_worker_address=row.current_worker_address,
             container_id=row.container_id,
+            status_message=row.status_message,
             backend_id=str(row.backend_id or ""),
             cluster=str(row.cluster),
             peer_worker_label=str(row.peer_worker_label or ""),
@@ -413,6 +417,8 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at_ms))
     if task.container_id:
         proto.container_id = task.container_id
+    if task.status_message:
+        proto.status_message = task.status_message
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]

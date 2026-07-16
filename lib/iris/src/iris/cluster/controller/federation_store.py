@@ -331,6 +331,7 @@ class ControllerFederationStore:
                 current_attempt_id=task.current_attempt_id,
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
+                status_message=task.status_message or None,
             )
             writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
             # The parent derives the federated task's counts from these mirrored

@@ -58,6 +58,7 @@ def make_task_backend(
     *,
     unreachable_grace: Duration,
     task_stats_table: Table | None = None,
+    task_event_table: Table | None = None,
     profile_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
     transition_reader: TransitionReader | None = None,
@@ -138,6 +139,7 @@ def make_task_backend(
             preempt_namespaces=list(kp.preempt_namespaces),
             priority_class_names=pod_priority_classes,
             task_stats_table=task_stats_table,
+            task_event_table=task_event_table,
             profile_table=profile_table,
             transition_reader=transition_reader,
         )
@@ -216,6 +218,7 @@ def make_backend(
             config,
             unreachable_grace=unreachable_grace,
             task_stats_table=log_stack.task_stats_table,
+            task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
             transition_reader=DbTransitionReader(db),
         )
@@ -228,6 +231,7 @@ def make_backend(
             config,
             unreachable_grace=unreachable_grace,
             task_stats_table=log_stack.task_stats_table,
+            task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
         )
 
@@ -268,6 +272,7 @@ def make_backend(
         config,
         unreachable_grace=unreachable_grace,
         task_stats_table=log_stack.task_stats_table,
+        task_event_table=log_stack.task_event_table,
         profile_table=log_stack.profile_table,
         autoscaler=autoscaler,
     )

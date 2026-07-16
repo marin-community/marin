@@ -917,6 +917,7 @@ def mirror_federated_task(
     current_attempt_id: int,
     worker_address: str,
     peer_worker_label: str,
+    status_message: str | None,
 ) -> None:
     """Upsert a mirrored federated task row (``cluster`` set to a peer, no worker FK).
 
@@ -945,6 +946,7 @@ def mirror_federated_task(
             current_attempt_id=current_attempt_id,
             current_worker_id=None,
             current_worker_address=worker_address,
+            status_message=status_message,
             backend_id="",
             cluster=peer_id,
             priority_neg_depth=0,
@@ -962,6 +964,7 @@ def mirror_federated_task(
                 "finished_at_ms": finished_at_ms,
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
+                "status_message": status_message,
                 "cluster": peer_id,
             },
         )
