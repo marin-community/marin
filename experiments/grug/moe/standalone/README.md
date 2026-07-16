@@ -2,8 +2,34 @@
 
 `grug_moe_mfu.py` is a self-contained MFU (Model FLOPs Utilization) benchmark for the
 grug MoE model from [issue #7012](https://github.com/marin-community/marin/issues/7012)
-(row-13 of #6979). It builds the model, runs a fixed number of train steps on
-**deterministic synthetic tokens**, and reports steady-state MFU on B200 GPUs.
+(the "row-13" configuration of #6979 — spelled out in full below, no need to chase the
+issues). It builds the model, runs a fixed number of train steps on **deterministic
+synthetic tokens**, and reports steady-state MFU on B200 GPUs.
+
+## The row-13 configuration
+
+Everything below is the script's defaults — running with only `--run-id`/`--output-dir`
+gives exactly this model. (`--hidden-dim 5120` is the only change behind the "d5120"
+rows.)
+
+| | |
+|---|---|
+| hidden dim | 2560 |
+| layers | 26 (decoder-only, pre-norm RMSNorm + gated norm) |
+| attention | MHA, 20 heads × head_dim 128 (no GQA), qk_mult 1.3 |
+| positional | half-RoPE; sliding window 2048 with NoPE on the long (global) layers |
+| MoE | every layer: 64 routed experts, top-4, + 1 always-on shared expert |
+| expert MLP | SwiGLU, intermediate dim 1280 (= hidden/2); shared expert identical |
+| router | linear (fp32 logits), sigmoid combine weights renormalized over top-k, QB bias (aux-loss-free load balancing, DeepSeek-v3-style) |
+| vocab | 128,256 (Llama-3 size), tied nothing (separate embed + lm_head) |
+| params | ≈18B total, ≈2.0B active per token (excl. embeddings) |
+| batch | 128 sequences × 4096 tokens = 524,288 tokens/step |
+| precision | params fp32, compute bf16 |
+| loss | next-token CE + z-loss 1e-4 |
+| optimizer | MuonH (Muon + AdamH hybrid; lr 1e-3, adam lr 1e-4, warmup 10%) |
+| remat | full recompute (`recompute_all`) |
+| analytic FLOPs | 5.68 GFLOP/token fwd (active-expert accounting), ×3 for fwd+bwd |
+| sharding | FSDP over the `data` axis; `--expert-parallelism N` moves experts to an `expert` axis (see below) |
 
 It imports only the `levanter.grug` kernels and `levanter.optim` — the model, optimizer
 (MuonH/AdamH), and train step are inlined, so there is no dependency on the marin
