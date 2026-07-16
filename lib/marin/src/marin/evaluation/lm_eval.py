@@ -10,6 +10,19 @@ from marin.inference.types import RunningModel
 LmEvalModelArgValue = str | int | float | bool
 
 
+def patch_transformers_for_lm_eval() -> None:
+    """Alias ``transformers.AutoModelForVision2Seq`` for the pinned lm-eval fork.
+
+    transformers>=5 removed ``AutoModelForVision2Seq``, but the pinned lm-eval fork still accesses it
+    at import time. We use lm-eval's task loading and API model classes, not that vision model, so
+    aliasing a placeholder lets the import resolve. Idempotent; call before importing ``lm_eval``.
+    """
+    import transformers  # noqa: PLC0415  # heavy import, only needed on the eval worker
+
+    if not hasattr(transformers, "AutoModelForVision2Seq"):
+        transformers.AutoModelForVision2Seq = transformers.AutoModel  # type: ignore[attr-defined]
+
+
 class LmEvalAdapter(StrEnum):
     """lm-eval OpenAI-compatible adapter names supported by the served runner."""
 
