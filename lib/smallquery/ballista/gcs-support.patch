@@ -1,0 +1,122 @@
+diff --git a/ballista-cli/Cargo.toml b/ballista-cli/Cargo.toml
+index e9aaa98..8cf6f9f 100644
+--- a/ballista-cli/Cargo.toml
++++ b/ballista-cli/Cargo.toml
+@@ -34,6 +34,9 @@ crate-type = ["cdylib", "rlib"]
+ [dependencies]
+ # CLI-only deps (DataFusion/Ballista) — gated by `cli` feature
+ ballista = { path = "../ballista/client", version = "54.0.0", features = ["standalone"], optional = true }
++# ballista-core provides the object-store registry helpers so the client resolves
++# gs://, s3://, etc. for CREATE EXTERNAL TABLE schema inference, matching the server.
++ballista-core = { path = "../ballista/core", version = "54.0.0", optional = true }
+ datafusion = { workspace = true, optional = true }
+ datafusion-cli = { workspace = true, optional = true }
+ rustyline = { version = "18.0.0", optional = true }
+@@ -82,7 +85,7 @@ tokio = { workspace = true, features = ["macros", "sync", "time"] }
+ default = ["cli", "tui"]
+ 
+ cli = [
+-    "dep:ballista", "dep:datafusion", "dep:datafusion-cli",
++    "dep:ballista", "dep:ballista-core", "dep:datafusion", "dep:datafusion-cli",
+     "dep:rustyline", "dep:mimalloc",
+ ]
+ 
+diff --git a/ballista-cli/src/main.rs b/ballista-cli/src/main.rs
+index da76724..340e8f8 100644
+--- a/ballista-cli/src/main.rs
++++ b/ballista-cli/src/main.rs
+@@ -25,10 +25,9 @@ use ballista_cli::{
+ };
+ use clap::Parser;
+ #[cfg(feature = "cli")]
+-use datafusion::{
+-    execution::SessionStateBuilder,
+-    prelude::{SessionConfig, SessionContext},
+-};
++use ballista_core::object_store::{S3Options, session_state_with_s3_support};
++#[cfg(feature = "cli")]
++use datafusion::prelude::{SessionConfig, SessionContext};
+ #[cfg(feature = "cli")]
+ use datafusion_cli::{
+     object_storage::instrumented::InstrumentedObjectStoreRegistry, print_options::MaxRows,
+@@ -134,8 +133,11 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+         env::set_current_dir(p)?;
+     };
+ 
+-    let mut ballista_config =
+-        SessionConfig::new_with_ballista().with_information_schema(true);
++    // S3Options carries the object-store registry config; adding it lets the client
++    // resolve gs://, s3://, etc. for CREATE EXTERNAL TABLE inference, like the server.
++    let mut ballista_config = SessionConfig::new_with_ballista()
++        .with_information_schema(true)
++        .with_option_extension(S3Options::default());
+ 
+     if let Some(batch_size) = args.batch_size {
+         ballista_config = ballista_config.with_batch_size(batch_size);
+@@ -144,10 +146,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+     let ctx = match (args.host, args.port) {
+         (Some(ref host), Some(port)) => {
+             let address = format!("df://{host}:{port}");
+-            let state = SessionStateBuilder::new()
+-                .with_config(ballista_config)
+-                .with_default_features()
+-                .build();
++            let state = session_state_with_s3_support(ballista_config)?;
+ 
+             // Distributed execution with Ballista Remote
+             SessionContext::remote_with_state(&address, state).await?
+@@ -157,10 +156,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+                 ballista_config =
+                     ballista_config.with_target_partitions(concurrent_tasks);
+             };
+-            let state = SessionStateBuilder::new()
+-                .with_config(ballista_config)
+-                .with_default_features()
+-                .build();
++            let state = session_state_with_s3_support(ballista_config)?;
+ 
+             // In-process execution with Ballista Standalone
+             SessionContext::standalone_with_state(state).await?
+diff --git a/ballista/core/Cargo.toml b/ballista/core/Cargo.toml
+index 7359183..80d8ab2 100644
+--- a/ballista/core/Cargo.toml
++++ b/ballista/core/Cargo.toml
+@@ -58,7 +58,7 @@ futures = { workspace = true }
+ itertools = "0.15"
+ log = { workspace = true }
+ md-5 = { version = "^0.11.0" }
+-object_store = { workspace = true, features = ["aws", "http"], optional = true }
++object_store = { workspace = true, features = ["aws", "http", "gcp"], optional = true }
+ parking_lot = { workspace = true }
+ prost = { workspace = true }
+ prost-types = { workspace = true }
+diff --git a/ballista/core/src/object_store.rs b/ballista/core/src/object_store.rs
+index ce0ea01..0d92fbd 100644
+--- a/ballista/core/src/object_store.rs
++++ b/ballista/core/src/object_store.rs
+@@ -35,6 +35,7 @@ use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+ use datafusion::execution::{SessionState, SessionStateBuilder};
+ use datafusion::prelude::SessionConfig;
+ use object_store::aws::AmazonS3Builder;
++use object_store::gcp::GoogleCloudStorageBuilder;
+ use object_store::http::HttpBuilder;
+ use object_store::local::LocalFileSystem;
+ use object_store::{ClientOptions, ObjectStore};
+@@ -161,6 +162,17 @@ impl ObjectStoreRegistry for CustomObjectStoreRegistry {
+ 
+                 Ok(Arc::new(s3store))
+             }
++            // Google Cloud Storage. Credentials resolve from the environment via
++            // Application Default Credentials (GCE/GKE metadata server, or the
++            // GOOGLE_SERVICE_ACCOUNT* env vars), so no config extension is needed.
++            "gs" | "gcs" => {
++                let bucket_name = Self::get_bucket_name(url)?;
++                let gcs = GoogleCloudStorageBuilder::from_env()
++                    .with_bucket_name(bucket_name)
++                    .build()?;
++
++                Ok(Arc::new(gcs))
++            }
+ 
+             _ => exec_err!("get_store - store not supported, url {}", url),
+         }

@@ -206,6 +206,7 @@ members = [
     "marin-levanter",
     "marin-rigging",
     "marin-root",
+    "marin-smallquery",
     "marin-zephyr",
 ]
 constraints = [
@@ -1452,6 +1453,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/64/a4/f71d9cf3a5ac257c993b5ca3f93df5f7fb395c725e7f1e6479d2514173c3/dataclasses_json-0.6.7.tar.gz", hash = "sha256:b6b3e528266ea45b9535223bc53ca645f5208833c29229e847b3f26a1cc55fc0", size = 32227, upload-time = "2024-06-09T16:20:19.103Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/be/d0d44e092656fe7a06b55e6103cbce807cdbdee17884a5367c68c9860853/dataclasses_json-0.6.7-py3-none-any.whl", hash = "sha256:0dbf33f26c8d5305befd61b39d2b3414e8a407bedc2834dea9b8d642666fb40a", size = 28686, upload-time = "2024-06-09T16:20:16.715Z" },
+]
+
+[[package]]
+name = "datafusion"
+version = "54.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "pyarrow" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/60/90/886f7e9cf827f07ebd60bd293e54e0a028a50dd49bbaef0ee42aae1981ea/datafusion-54.0.0.tar.gz", hash = "sha256:cfe7e8dfc026efc05824f49b53ad6a72caf5c2d6820759b6212a09e245a427ed", size = 276448, upload-time = "2026-06-29T11:19:34.816Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/58/4c5b981e3d9ade32a906c15a4941eef50c9b862781cdc14bf4dff48d026a/datafusion-54.0.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:946f55e48b8d523d7b4ac106bdf588b4493c2c66f81877d6952aafeaf7c3ec73", size = 39810553, upload-time = "2026-06-29T11:19:02.1Z" },
+    { url = "https://files.pythonhosted.org/packages/66/e5/5e4dbd42ce9a2affb3be90d9ab17cebde1a6f28b0d9fb4b83d612d5c8e42/datafusion-54.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:2a3bf43185c7e43e25242e5fb17b6a11b86bf976434c0bc493fdedbd9a080969", size = 37145255, upload-time = "2026-06-29T11:19:05.491Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/5e/dbb9e6e3e5006d34f295d7ac73f1302c8f2df140666402a06e6c55028edb/datafusion-54.0.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:9432bf162381e9282cbc74915b8b773895de18be836f7e3f6d0de4d981f24630", size = 38853856, upload-time = "2026-06-29T11:19:08.732Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/81/e69008e3479f4d0134875bc4ae39503bedcd55ca2597e71392c963c651b4/datafusion-54.0.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3bcd4d213fa74710e75e6e182cc468c2bdbc5ffc74a08c8155d414fbbfa1b3f6", size = 41050149, upload-time = "2026-06-29T11:19:12.108Z" },
+    { url = "https://files.pythonhosted.org/packages/61/d4/8ba6e3fe3291c9ccc94b5ca3ec3c1fbcbfbe5ece5ffb965e4550844e2c56/datafusion-54.0.0-cp310-abi3-win_amd64.whl", hash = "sha256:b934e097e1bdca7d5768a81ac1bc4a1812cb459269f8b1a5d892a5d930f18376", size = 43444869, upload-time = "2026-06-29T11:19:15.963Z" },
 ]
 
 [[package]]
@@ -5223,6 +5242,7 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-levanter" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-smallquery" },
     { name = "marin-zephyr" },
     { name = "watchdog" },
 ]
@@ -5238,8 +5258,46 @@ requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
+    { name = "marin-smallquery", editable = "lib/smallquery" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
+]
+
+[[package]]
+name = "marin-smallquery"
+version = "0.1.0"
+source = { editable = "lib/smallquery" }
+dependencies = [
+    { name = "click" },
+    { name = "datafusion" },
+    { name = "marin-iris" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.0" },
+    { name = "datafusion", specifier = ">=40.0.0" },
+    { name = "marin-iris", editable = "lib/iris" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]

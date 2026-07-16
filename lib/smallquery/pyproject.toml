@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-smallquery"
+version = "0.1.0"
+description = "Distributed SQL on Iris via DataFusion-Ballista (PoC)."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "marin-iris",
+    "click>=8.0",
+    "datafusion>=40.0.0",
+]
+
+[project.scripts]
+smallquery = "smallquery.deploy:cli"
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-timeout",
+]
+dev = [
+    { include-group = "test" },
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smallquery"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["src/smallquery"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+timeout = 60
+addopts = "--import-mode=importlib"
