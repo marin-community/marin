@@ -109,6 +109,8 @@ def build_scale_model() -> GrugModelConfig:
     while num_heads % num_kv_heads != 0:
         num_kv_heads -= 1
     intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
+    # Shared (always-on) expert width. Defaults to the full model dim (2x a routed expert).
+    shared_intermediate_dim = env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
@@ -127,7 +129,7 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
         intermediate_dim=intermediate_dim,
-        shared_expert_intermediate_dim=intermediate_dim,
+        shared_expert_intermediate_dim=shared_intermediate_dim,
         num_experts=env_int("SCALE_NUM_EXPERTS", 128),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
@@ -186,7 +188,9 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu(gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+    )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
