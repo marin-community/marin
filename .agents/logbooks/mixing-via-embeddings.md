@@ -475,6 +475,16 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   67B-A2B 10T hero run (up since 07-13), preemptible v4 zone-stocked-out. Requests
   are healthy, zero cost while pending, auto-start when capacity frees; options in
   seedpanel_monitor.md (wait / ask for 80 of 2048 chips / do NOT switch hardware).
+- **21:35 UTC (rav directive): TPU panel STOPPED** (all 11 jobs killed, 10 queued
+  resources autoscaler-cleaned to 0) and retargeted to GB200 on cw-us-east-08a via
+  federated submit. New launcher `experiments/grug/moe/launch_mve_seedpanel_b200.py`
+  (same swarm constants by import; CW-mirror data paths; no in-training validation;
+  B200-numerics caveat accepted). **BLOCKED at 08a federation admission**: this VM
+  submits as `ravwojdyla@rav-openathena.iam.gserviceaccount.com`, not matched by
+  `allowed_submitters: ["*@openathena.ai", "wg0420@princeton.edu"]`
+  (cw-us-east-08a.yaml); direct route also closed (no 08a kubeconfig, IP-locked
+  surface). Smoke + panel commands ready in seedpanel_monitor.md; needs rav:
+  admit the SA, or submit from an admitted identity, or drop creds here.
 - Per-task evals are POST-HOC (lm-eval logprob harness, 1 results.json per (run,task),
   60-task readout set ⊂ 150 dirs/run at `gs://marin-us-central2/evaluation/grug_logprob/`);
   harness vendored to `experiments/grug/moe/eval_logprob.py` (from swarm-branch, adapted:
