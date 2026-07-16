@@ -160,6 +160,7 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--num-experts` / `--num-experts-per-token` | 64 / 4 | MoE experts, top-k |
 | `--batch-size` / `--seq-len` | 128 / 4096 | global batch, sequence length |
 | `--steps` / `--warmup-steps` | 20 / 8 | total steps, warmup excluded from the median |
+| `--profile-dir` | off | write a `jax.profiler` trace of steady-state steps 10–12 (process 0 only) |
 
 ## What it measures
 

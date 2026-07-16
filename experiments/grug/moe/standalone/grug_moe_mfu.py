@@ -2039,6 +2039,9 @@ __all__ = [
 _B200_BF16_PEAK_FLOPS = 2.25e15
 _H100_BF16_PEAK_FLOPS = 9.89e14
 _BATCH_AXES = ("replica_dcn", "data", "expert")
+# Steady-state step window traced by --profile-dir (inclusive; past the default 8 warmup steps).
+_PROFILE_START_STEP = 10
+_PROFILE_STOP_STEP = 12
 
 
 def _maybe_initialize_distributed() -> None:
@@ -2099,6 +2102,14 @@ def _parse():
         ),
     )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
+    p.add_argument(
+        "--profile-dir",
+        default=None,
+        help=(
+            f"write a jax.profiler trace of steps {_PROFILE_START_STEP}-{_PROFILE_STOP_STEP} "
+            "(process 0 only) to this directory"
+        ),
+    )
     return p.parse_args()
 
 
@@ -2167,12 +2178,16 @@ def main():
 
         state = init(jax.random.PRNGKey(0))
         for step in range(a.steps):
+            if a.profile_dir and is_main_process and step == _PROFILE_START_STEP:
+                jax.profiler.start_trace(a.profile_dir)
             batch = _make_batch(a.batch_size, a.seq_len, model.vocab_size, step, mesh)
             t0 = time.perf_counter()
             state, sm, _w = train_step(state, batch, compute_watch=False)
             loss = sm["train/loss"]
             jax.block_until_ready(loss)
             dur = time.perf_counter() - t0
+            if a.profile_dir and is_main_process and step == _PROFILE_STOP_STEP:
+                jax.profiler.stop_trace()
             s = int(state.step) - 1
             eps = a.batch_size / dur
             achieved = flops_per_example * eps
