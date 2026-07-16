@@ -67,8 +67,8 @@ def test_unused_overrides_flags_names_never_consulted():
     assert codex.unused_overrides() == frozenset({"typo"})
 
 
-def test_codex_rejects_malformed_versions():
-    with pytest.raises(ValueError, match="calendar version"):
-        VersionCodex(default="v1")
+def test_codex_reports_which_override_is_malformed():
+    # The version grammar itself is covered by validate_version's tests; here we only pin that the
+    # codex validates overrides and names the offending one, so a bad --override is legible.
     with pytest.raises(ValueError, match="override 'a'"):
         VersionCodex(default="dev", overrides={"a": "not-a-version"})
