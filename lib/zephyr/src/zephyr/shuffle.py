@@ -188,8 +188,11 @@ class _SidecarSlice:
     avg_item_bytes: float
 
 
-def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
+def _read_sidecar_slice(fs: Any, fs_path: str, path: str, shard_key: str) -> _SidecarSlice | None:
     """Read one sidecar and extract only the fields for ``shard_key``.
+
+    ``fs``/``fs_path`` are the pre-resolved filesystem and native path for
+    ``path``'s sidecar, shared across workers (see the caller).
 
     Returns ``None`` if the sidecar has no ranges for this shard. The parsed
     dict is released when this function returns. Once we confirm this shard
@@ -204,7 +207,6 @@ def _read_sidecar_slice(path: str, shard_key: str) -> _SidecarSlice | None:
     for small sidecars, and msgpack decodes bytes directly.
     """
     meta_path = _scatter_meta_path(path)
-    fs, fs_path = url_to_fs(meta_path)
     meta = _sidecar_decoder().decode(fs.cat_file(fs_path))
     ranges_raw = meta.get("shards", {}).get(shard_key)
     if not ranges_raw:
@@ -237,8 +239,18 @@ def _read_sidecar_slices_parallel(scatter_paths: list[str], target_shard: int) -
     """
     shard_key = str(target_shard)
     ordered: list[_SidecarSlice | None] = [None] * len(scatter_paths)
+    # Resolve the filesystem on this thread so all workers share one instance.
+    # fsspec caches filesystem instances per thread id, so calling url_to_fs
+    # inside each worker would build a separate botocore client per thread
+    # (~12MB each, kept alive by fsspec's strong-ref cache) and log a
+    # "Found credentials" line per thread. Every sidecar shares one endpoint,
+    # so one filesystem serves them all; only the stripped path differs.
+    resolved = [url_to_fs(_scatter_meta_path(p)) for p in scatter_paths]
     with concurrent.futures.ThreadPoolExecutor(max_workers=_SIDECAR_READ_CONCURRENCY) as pool:
-        futures = {pool.submit(_read_sidecar_slice, p, shard_key): i for i, p in enumerate(scatter_paths)}
+        futures = {
+            pool.submit(_read_sidecar_slice, fs, fs_path, p, shard_key): i
+            for i, (p, (fs, fs_path)) in enumerate(zip(scatter_paths, resolved, strict=True))
+        }
         for fut in concurrent.futures.as_completed(futures):
             idx = futures[fut]
             ordered[idx] = fut.result()

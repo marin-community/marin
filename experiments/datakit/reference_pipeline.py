@@ -302,16 +302,21 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
             pip_dependency_groups=["datakit"],
         ),
     )
+    # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
+    # is reproducible independent of which node (and how many physical cores) the
+    # single-process training pod lands on (marin#6798).
+    n_threads = int(scale.train_centroids_resources.cpu)
     return StepSpec(
         name="datakit/cluster/train_centroids",
         deps=[sample_step],
-        hash_attrs={"k_train": cluster.k_train, "k_views": list(cluster.k_views), "v": 1},
+        hash_attrs={"k_train": cluster.k_train, "k_views": list(cluster.k_views), "n_threads": n_threads, "v": 1},
         fn=remote(
             lambda output_path, sp=sample_step.output_path: train_centroids(
                 output_path=output_path,
                 sample_path=sp,
                 k_train=cluster.k_train,
                 k_views=cluster.k_views,
+                n_threads=n_threads,
             ),
             resources=scale.train_centroids_resources,
             pip_dependency_groups=["datakit"],
