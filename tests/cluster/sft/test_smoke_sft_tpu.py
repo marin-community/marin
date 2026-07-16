@@ -27,7 +27,7 @@ from iris.client import IrisClient
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 
-from experiments.sft.launcher import DatasetSpec, SFTSpec, resources_from_accelerator, sft_step
+from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, resources_from_accelerator, sft_step
 
 pytestmark = pytest.mark.cluster
 
@@ -54,8 +54,7 @@ _SMOKE_DATA = DatasetSpec(
 SMOKE_SPEC = SFTSpec(
     name="checkpoints/smoke-sft-tpu-qwen3-0p6b",
     version="2026.07.15-dev",  # -dev = always rebuild (no cache reuse)
-    model_ref="Qwen/Qwen3-0.6B",  # tiny public Qwen3 -> initialize_from_hf
-    tokenizer_path="Qwen/Qwen3-0.6B",
+    model=HFModel("Qwen/Qwen3-0.6B"),  # tiny public Qwen3, used verbatim -> initialize_from_hf
     chat_template=QWEN3_SMOKE_CHAT_TEMPLATE,
     datasets=[_SMOKE_DATA],
     seq_len=1024,

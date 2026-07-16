@@ -57,6 +57,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -93,13 +94,56 @@ class DatasetSpec:
 
 
 @dataclass(frozen=True)
+class HFModel:
+    """A base model + tokenizer used verbatim: an HF hub id or a staged directory.
+
+    Both are passed straight to Levanter (``initialize_from_hf`` and the data tokenizer), which
+    resolves hub ids and fsspec paths alike. Use this when no preparation is needed.
+    ``tokenizer_path`` defaults to ``model_ref`` (the common case).
+    """
+
+    model_ref: str
+    tokenizer_path: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedModel:
+    """A base model produced by a preparation :class:`ArtifactStep` (e.g. the Delphi reserved-slot
+    rename + embedding reinit). ``sft_step`` adds ``step`` as a dependency and resolves both
+    ``initialize_from_hf`` and the tokenizer to its output directory.
+    """
+
+    step: ArtifactStep[Artifact]
+
+
+# How the base checkpoint + tokenizer are sourced: verbatim, or built by a preparation step.
+ModelSource = HFModel | PreparedModel
+
+
+def _model_deps(model: ModelSource) -> tuple[ArtifactStep, ...]:
+    """The preparation step, if the model is built by one, else no dependencies."""
+    return (model.step,) if isinstance(model, PreparedModel) else ()
+
+
+def _model_refs(model: ModelSource, ctx: StepContext) -> tuple[str, str]:
+    """Resolve ``(initialize_from_hf, tokenizer)`` for the model source.
+
+    A :class:`PreparedModel` resolves both to its step's output path (a pulled value, so the
+    accelerator/prefix never bears on identity); an :class:`HFModel` uses its literal ids.
+    """
+    if isinstance(model, PreparedModel):
+        path = ctx.artifact_path(model.step)
+        return path, path
+    return model.model_ref, model.tokenizer_path or model.model_ref
+
+
+@dataclass(frozen=True)
 class SFTSpec:
     """A full chat-SFT run. The chat template is a parameter, so Delphi is just one instance."""
 
     name: str  # artifact name, e.g. "checkpoints/delphi-1e22-magpie-warmup-levanter-sft"
     version: str  # calver "2026.07.15"; a "-dev" suffix opts out of the cache (always rebuild)
-    model_ref: str  # HF id or prepared-checkpoint dir -> initialize_from_hf
-    tokenizer_path: str  # tokenizer dir (Delphi: the prepared single-id think/tool tokenizer)
+    model: ModelSource  # HFModel (verbatim) or PreparedModel (built by a preparation step)
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec]  # the instruction mixture
     # Levanter model registry key. Selects the HF-checkpoint converter class; use_hf_model_config
@@ -148,11 +192,12 @@ def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
     )
 
 
-def _data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
+def _data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
     """One cache-backed chat component per dataset, weighted by ``spec.datasets``.
 
     ``dep_paths`` are the resolved ``transform_dataset_step`` outputs, aligned with
-    ``spec.datasets``; Levanter builds the chat caches from them at train time.
+    ``spec.datasets``; Levanter builds the chat caches from them at train time. ``tokenizer`` is
+    the resolved model tokenizer (a hub id/dir, or the prepared checkpoint's output path).
     """
     fmt = _chat_format(spec)
     components: dict[str, DatasetComponent] = {}
@@ -166,7 +211,7 @@ def _data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
         )
         weights[dataset.slug] = dataset.weight
     return LmDataConfig(
-        tokenizer=spec.tokenizer_path,
+        tokenizer=tokenizer,
         chat_template=spec.chat_template,  # data-level default; the component format overrides it
         enforce_eos=True,
         auto_build_caches=True,
@@ -217,18 +262,24 @@ def _trainer(spec: SFTSpec, *, gpu_allocator: bool) -> TrainerConfig:
     )
 
 
-def build_sft_train_config(spec: SFTSpec, dep_paths: Sequence[str], *, gpu_allocator: bool) -> TrainLmConfig:
-    """Assemble the identity-bearing ``TrainLmConfig`` for ``spec`` (full-FT chat, init-from-HF)."""
+def build_sft_train_config(
+    spec: SFTSpec, dep_paths: Sequence[str], *, init_ref: str, tokenizer: str, gpu_allocator: bool
+) -> TrainLmConfig:
+    """Assemble the identity-bearing ``TrainLmConfig`` for ``spec`` (full-FT chat, init-from-HF).
+
+    ``init_ref`` and ``tokenizer`` are the resolved model source (a hub id/dir, or the prepared
+    checkpoint's output path); see :func:`_model_refs`.
+    """
     # use_hf_model_config re-derives the arch from the checkpoint, so only the model config *class*
     # matters here — it selects the HF converter (LevConfigClass). Its fields would be discarded.
     model = LmConfig.get_choice_class(spec.model_type)()
     return TrainLmConfig(
-        data=_data_config(spec, dep_paths),
+        data=_data_config(spec, dep_paths, tokenizer),
         model=model,
         optimizer=_optimizer(spec),
         trainer=_trainer(spec, gpu_allocator=gpu_allocator),
         train_seq_len=spec.seq_len,
-        initialize_from_hf=spec.model_ref,
+        initialize_from_hf=init_ref,
         use_hf_model_config=True,
         # Qwen (and others) pad the embedding vocab past the tokenizer's for TPU efficiency
         # (Qwen3: model 151936 vs tokenizer 151669). Without this the Vocab axis is built from
@@ -270,14 +321,18 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
     allocator is likewise resolved from the run-time accelerator, keeping the fingerprint
     device-agnostic.
     """
-    deps = _dataset_deps(spec)
+    dataset_deps = _dataset_deps(spec)
+    deps = (*_model_deps(spec.model), *dataset_deps)
 
     def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
         run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
         gpu_allocator = not ctx.is_fingerprint and isinstance(run_resources.device, GpuConfig)
-        dep_paths = [ctx.artifact_path(dep) for dep in deps]
+        dep_paths = [ctx.artifact_path(dep) for dep in dataset_deps]
+        init_ref, tokenizer = _model_refs(spec.model, ctx)
         return TrainLmOnPodConfig(
-            train_config=build_sft_train_config(spec, dep_paths, gpu_allocator=gpu_allocator),
+            train_config=build_sft_train_config(
+                spec, dep_paths, init_ref=init_ref, tokenizer=tokenizer, gpu_allocator=gpu_allocator
+            ),
             resources=run_resources,
             output_path=ctx.output_path,
             auto_build_caches=True,
