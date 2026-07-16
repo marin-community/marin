@@ -29,10 +29,10 @@ median over steps 8–19).
 
 ## Requirements
 
-This benchmark needs the **grug-Blackwell levanter stack** (the `sonic_cute` QuACK kernel
-and the FA4 CuTeDSL attention backend), which lives on the `sonic-cute-moe-b200` branch —
-it is **not on `main`**. Run it from a branch based on `sonic-cute-moe-b200` (e.g.
-`rav-moe-repro-v1`); a `main`-based checkout will fail to import the kernels.
+This benchmark needs the **grug-Blackwell levanter stack**. This branch is current
+`main` plus the `sonic_cute` QuACK grouped-GEMM backend (not yet upstreamed); the FA4
+CuTeDSL attention backend and the expert-parallel MoE backends are already on `main`.
+Run it from this branch — a plain `main` checkout lacks `sonic_cute`.
 
 - **GPU:** NVIDIA SM100 (B200). `sonic_cute` and `gpu_fa4_cute` are SM100 kernels.
 - **Environment:**

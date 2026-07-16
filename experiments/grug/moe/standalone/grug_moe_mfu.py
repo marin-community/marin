@@ -1127,7 +1127,7 @@ __all__ = [
 from dataclasses import dataclass
 
 import jax.numpy as jnp
-from levanter.optim import OptimizerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.optim.grugmuon import _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
@@ -1461,7 +1461,7 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from jax.sharding import Mesh
 from jax.tree_util import register_dataclass
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
