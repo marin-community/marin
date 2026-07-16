@@ -94,6 +94,15 @@ dispatching tokens is cheaper than FSDP-all-gathering expert weights every layer
 and **`ragged_all_to_all_cute` is flat in EP degree** (dispatch volume is
 independent of EP size), crossing above `ring_cute` at EP16.
 
+The 32-way memory headroom also cashes the remat tax (`--remat-mode`, with the
+slim `_expert_mlp` residuals): at d2560, `none` fits and is the best number —
+`ring_cute` EP4 **15.0%** (vs 14.8% `all_but_moe`, 14.3% `recompute_all`); at
+d5120, `none` OOMs and `all_but_moe` gives **16.9%** (`ring_cute` EP8, vs 16.2%
+`recompute_all`). The slim residuals alone cost ~0.3pp under `recompute_all`
+(backward re-gathers with no memory dividend), so pair them with
+`all_but_moe`/`none`. All EP arms above use the default `recompute_all` unless
+stated.
+
 ## Requirements
 
 This benchmark needs the **grug-Blackwell levanter stack**. This branch is current
@@ -161,6 +170,7 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--batch-size` / `--seq-len` | 128 / 4096 | global batch, sequence length |
 | `--steps` / `--warmup-steps` | 20 / 8 | total steps, warmup excluded from the median |
 | `--profile-dir` | off | write a `jax.profiler` trace of steady-state steps 10–12 (process 0 only) |
+| `--remat-mode` | `recompute_all` | `recompute_all` / `save_moe` / `all_but_moe` (attention+norms checkpointed, MoE live) / `none` |
 
 ## What it measures
 
