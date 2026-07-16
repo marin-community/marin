@@ -12,23 +12,16 @@ from levanter.data.text.trace_chat import (
 )
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
-from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 # Assistant masks are derived from `{% generation %}` blocks, which no upstream template ships,
-# so only templates Marin vendors or publishes can exercise the mask-dependent paths.
+# so only the templates Marin publishes can exercise the mask-dependent paths.
 _GENERATION_TAGGED_CASES = [
     (
         "marin",
         "marin-community/marin-tokenizer",
         MARIN_CHAT_TEMPLATE,
         {},
-    ),
-    (
-        "qwen3",
-        "Qwen/Qwen3-8B",
-        QWEN_3_CHAT_TEMPLATE,
-        {"tools": None},
     ),
 ]
 
