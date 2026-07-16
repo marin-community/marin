@@ -513,7 +513,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 # requires max_seq_len; at runtime every registered choice is a concrete config
                 # that supplies a default, so the no-arg construction is safe.
                 instance = v()  # pyrefly: ignore[missing-argument]
-                if instance.hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
+                # Building a candidate converter loads that model's default reference tokenizer, and
+                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
+                # access. A candidate whose converter cannot even be built is not the target model, so
+                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
+                try:
+                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
+                except Exception:
+                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
+                    continue
+                if candidate_hf_config_name == config_class.__name__:
                     LevConfigClass = v
                     break
         else:
