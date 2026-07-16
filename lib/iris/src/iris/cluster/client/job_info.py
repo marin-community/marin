@@ -150,11 +150,6 @@ def resolve_job_user(explicit_user: str | None = None) -> str:
 
     Resolution order: the explicit argument, the ``IRIS_USER`` env var, the
     current job's user, the OS user, and finally ``root``.
-
-    Submissions made from inside a job normally become child jobs named
-    under the parent — ``IrisClient.submit`` does not consult this resolver
-    there — so the current-job branch is a fallback for direct callers. The
-    deliberate ``IRIS_USER`` outranks that ambient identity.
     """
     if explicit_user is not None:
         return _validate_user(explicit_user, "Job user")
