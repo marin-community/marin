@@ -48,6 +48,11 @@ kubernetes_provider:
   host_network: true              # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal GPU nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
+  kueue:
+    # Mandatory on the K8s backend: every pod is admitted through Kueue. The
+    # ClusterQueue + ResourceFlavors are admin-provisioned out of band
+    # (scripts/install_kueue.py --with-queues --cpu-flavor-node-label ...).
+    cluster_queue: iris-cq
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

@@ -13,6 +13,11 @@ helpers below seed the minimal ``TokenizedCache`` record a built dataset would l
 real run materializes the datasets first, as build dependencies) before assembling.
 """
 
+import json
+import math
+from pathlib import Path
+
+import pytest
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim.config import AdamConfig
@@ -46,6 +51,16 @@ def _seed_caches(train: ArtifactStep, prefix: str) -> None:
                     config={"tokenizer": _TOKENIZER, "format": {"text_key": "text"}},
                 )
             )
+
+
+def _seed_train_tokens(train: ArtifactStep, prefix: str, total_tokens: int) -> None:
+    """Write the ``train`` split's ``.stats.json`` a built cache dep would leave, so
+    ``num_train_epochs`` can read its token total offline (as ``TokenizedCache.num_train_tokens``)."""
+    for dep in train.deps:
+        if dep.artifact_type is TokenizedCache:
+            stats_dir = Path(dep.path(prefix)) / "train"
+            stats_dir.mkdir(parents=True, exist_ok=True)
+            (stats_dir / ".stats.json").write_text(json.dumps({"total_tokens": total_tokens, "total_elements": 1}))
 
 
 def _assemble(train: ArtifactStep, prefix: str):
@@ -154,6 +169,80 @@ def test_lowers_to_a_runnable_graph():
     assert spec.name == "checkpoints/unit"
     # The corpus dependency is lowered into the graph.
     assert any(dep.name == "corpus" for dep in spec.deps)
+
+
+def _build_epochs(*, datasets, num_train_epochs):
+    return train_lm(
+        name="checkpoints/unit",
+        model=_MODEL,
+        optimizer=_OPTIMIZER,
+        datasets=datasets,
+        batch_size=8,
+        seq_len=128,
+        num_train_epochs=num_train_epochs,
+        z_loss_weight=1e-4,
+        evals=None,
+        resources=_RESOURCES,
+        version=_V,
+    )
+
+
+def test_num_train_epochs_resolves_steps_from_token_count(tmp_path):
+    prefix = str(tmp_path)
+    corpus = _corpus()
+    train = _build_epochs(datasets={corpus: 1.0}, num_train_epochs=3)
+    _seed_train_tokens(train, prefix, total_tokens=4096)
+
+    # A pass over the tokens is 4096 / (seq_len 128 * batch 8) = 4 steps; 3 epochs -> 12 steps.
+    # This is derived from the packed token total, not from any hand-set num_train_steps.
+    tc = _assemble(train, prefix).train_config
+    assert tc.trainer.num_train_steps == math.ceil(3 * 4096 / (128 * 8)) == 12
+
+
+def test_num_train_epochs_rounds_up_a_partial_final_batch(tmp_path):
+    prefix = str(tmp_path)
+    corpus = _corpus()
+    train = _build_epochs(datasets={corpus: 1.0}, num_train_epochs=1)
+    # One token past four full batches must still be covered, so the count rounds up to 5.
+    _seed_train_tokens(train, prefix, total_tokens=128 * 8 * 4 + 1)
+
+    tc = _assemble(train, prefix).train_config
+    assert tc.trainer.num_train_steps == 5
+
+
+def test_num_train_epochs_is_part_of_the_run_identity(tmp_path):
+    corpus = _corpus()
+    one = _build_epochs(datasets={corpus: 1.0}, num_train_epochs=1)
+    two = _build_epochs(datasets={corpus: 1.0}, num_train_epochs=2)
+    # The token total is unknown at fingerprint time, but the epoch count still distinguishes runs
+    # so a 1-epoch and a 2-epoch run do not collide on one checkpoint.
+    assert one.fingerprint() != two.fingerprint()
+
+
+@pytest.mark.parametrize("num_train_steps,num_train_epochs", [(50, 2), (None, None)])
+def test_exactly_one_of_steps_or_epochs_is_required(num_train_steps, num_train_epochs):
+    with pytest.raises(ValueError, match="Exactly one of num_train_steps or num_train_epochs"):
+        train_lm(
+            name="checkpoints/unit",
+            model=_MODEL,
+            optimizer=_OPTIMIZER,
+            datasets={_corpus(): 1.0},
+            batch_size=8,
+            seq_len=128,
+            num_train_steps=num_train_steps,
+            num_train_epochs=num_train_epochs,
+            z_loss_weight=1e-4,
+            evals=None,
+            resources=_RESOURCES,
+            version=_V,
+        )
+
+
+def test_num_train_epochs_rejects_a_mixture():
+    a = tokenized("a", source="org/a", tokenizer=_TOKENIZER, version=_V)
+    b = tokenized("b", source="org/b", tokenizer=_TOKENIZER, version=_V)
+    with pytest.raises(ValueError, match="single training dataset"):
+        _build_epochs(datasets={a: 0.5, b: 0.5}, num_train_epochs=1)
 
 
 def test_dev_checkpoints_are_per_user_while_datasets_stay_shared(tmp_path, monkeypatch):

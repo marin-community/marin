@@ -687,6 +687,10 @@ _root.addHandler(_handler)
 _root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
+# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
 workdir = os.environ["IRIS_WORKDIR"]
 

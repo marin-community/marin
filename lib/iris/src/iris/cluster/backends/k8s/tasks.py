@@ -722,17 +722,24 @@ def _build_pod_manifest(
         "labels": labels,
     }
 
-    # Kueue gang admission for coscheduled jobs. Coscheduling requires Kueue:
-    # there is no non-Kueue colocation fallback, so a coscheduled job dispatched
-    # to a cluster where Kueue is not configured is a misconfiguration.
-    kueue_enabled = bool(run_req.coscheduling.group_by)
-    if kueue_enabled and not config.local_queue:
-        raise ValueError(
-            f"Coscheduled task {run_req.task_id!r} (group_by={run_req.coscheduling.group_by!r}) "
-            "requires Kueue gang admission, but Kueue is not configured. Install Kueue "
-            "(lib/iris/scripts/install_kueue.py) and set kubernetes_provider.kueue.cluster_queue."
-        )
-    if kueue_enabled:
+    # Every pod is admitted through Kueue: its accounting and preemption arbitrate
+    # all capacity. A GPU pod that bypassed Kueue would hold nodes Kueue can neither
+    # count in its topology bookkeeping nor select as a preemption victim, silently
+    # defeating priority preemption of lower-priority gangs; CPU-only pods route
+    # through it too, matching the cw-cpu ResourceFlavor. The composer enforces a
+    # configured LocalQueue for the K8s backend, so this is always set.
+    assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
+    labels[_KUEUE_QUEUE_NAME] = config.local_queue
+    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
+    # An unmapped band is not left unranked: Kueue derives the Workload's priority
+    # from the pod's own PriorityClass (spec.priorityClassName), so the
+    # iris-{production,interactive,batch} bands already order the queue. Iris never
+    # invents a WorkloadPriorityClass name (a missing one is rejected).
+    wpc = config.kueue_priority_classes.get(run_req.priority)
+    if wpc:
+        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    is_gang = bool(run_req.coscheduling.group_by)
+    if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
         # unmapped value is a misconfiguration: it would gang atomically but
@@ -747,14 +754,8 @@ def _build_pod_manifest(
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        labels[_KUEUE_QUEUE_NAME] = config.local_queue
         # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
-        # Stamp the WorkloadPriorityClass only when the cluster maps this band:
-        # an unmapped band gets Kueue's default priority, never an invented name.
-        wpc = config.kueue_priority_classes.get(run_req.priority)
-        if wpc:
-            labels[_KUEUE_PRIORITY_CLASS] = wpc
         node_label, required = topo
         anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
         metadata["annotations"] = {
@@ -807,11 +808,13 @@ def _build_pod_manifest(
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
 
-    # Skip activeDeadlineSeconds for Kueue-gated pods: k8s counts it from pod
-    # creation, including time spent SchedulingGated waiting for admission, so
-    # a gang that waits on the autoscaler could hit DeadlineExceeded before it
-    # ever runs. The controller's own timeout accounting governs these.
-    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not kueue_enabled:
+    # Skip activeDeadlineSeconds for gangs only: k8s counts it from pod creation,
+    # including time a gang spends SchedulingGated while it waits for the autoscaler
+    # to provision every node, so a large gang could hit DeadlineExceeded before it
+    # ever runs. Single pods admit quickly and, on a K8s-only cluster, this is their
+    # only timeout enforcement (the controller's execution-timeout scan runs only for
+    # worker-daemon backends), so they keep the deadline.
+    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to
@@ -998,19 +1001,28 @@ _GANG_GC_MAX_AGE_SECONDS = 60
 _PREEMPT_INTERVAL_SECONDS = 30
 
 
-def _has_gated_gang_pods(pods: list[dict]) -> bool:
-    """True when any Kueue gang pod is still held by a scheduling gate.
+def _has_gated_gpu_pods(pods: list[dict]) -> bool:
+    """True when any GPU-requesting pod is still held by a Kueue scheduling gate.
 
-    Kueue's webhook gates every pod carrying the queue-name label and removes
-    the gate only on Workload admission, so a surviving gate means the gang is
-    still waiting for capacity.
+    Kueue's webhook gates every pod carrying the queue-name label and removes the
+    gate only on Workload admission, so a surviving gate on a GPU pod — a gang member
+    or a single-pod GPU job, both of which now route through Kueue — means it is still
+    waiting for GPU capacity, the signal to evict foreign preemptible blockers holding
+    that capacity.
     """
     for pod in pods:
-        if _KUEUE_POD_GROUP_NAME not in pod.get("metadata", {}).get("labels", {}):
+        if not pod.get("spec", {}).get("schedulingGates"):
             continue
-        if pod.get("spec", {}).get("schedulingGates"):
+        if _pod_gpu_request(pod) > 0:
             return True
     return False
+
+
+def _run_req_gpu_count(run_req: job_pb2.RunTaskRequest) -> int:
+    """GPU count a task requests (0 for CPU-only), used to gate blocker eviction."""
+    if not run_req.HasField("resources") or not run_req.resources.HasField("device"):
+        return 0
+    return get_gpu_count(run_req.resources.device)
 
 
 def _pod_gpu_request(pod: dict) -> int:
@@ -1610,11 +1622,12 @@ class K8sTaskProvider:
         and continue to run on an idle cluster (the controller never gates a
         cluster backend's reconcile on having work) so orphaned pods are reaped.
         """
-        # Free GPU capacity for incoming gangs before their pods are created:
-        # Kueue TAS computes node capacity at admission, so blockers must be
-        # gone (or terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(r.coscheduling.group_by for r in request.tasks_to_run):
-            self._evict_preemptible_blockers(reason="coscheduled gang submission", force=True)
+        # Free GPU capacity for any incoming GPU pod before it is created (gang
+        # member or single-pod GPU job — both route through Kueue): Kueue TAS
+        # computes node capacity at admission, so blockers must be gone (or
+        # terminating) by the time it evaluates the new Workload.
+        if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
+            self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
 
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
@@ -1649,9 +1662,10 @@ class K8sTaskProvider:
         )
 
         # Blockers can also appear AFTER submission (health checks target any
-        # idle GPU node), so keep evicting while a gang waits for admission.
-        if self.preempt_namespaces and _has_gated_gang_pods(managed_pods):
-            self._evict_preemptible_blockers(reason="gang pods held SchedulingGated awaiting Kueue admission")
+        # idle GPU node), so keep evicting while any GPU pod waits gated for
+        # Kueue admission.
+        if self.preempt_namespaces and _has_gated_gpu_pods(managed_pods):
+            self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
         for run_req in request.tasks_to_run:
@@ -1667,13 +1681,10 @@ class K8sTaskProvider:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
 
-        if self.local_queue:
-            try:
-                workloads = self.kubectl.list_json(K8sResource.WORKLOADS)
-            except Exception as e:
-                logger.warning("Failed to query Kueue workloads: %s", e)
-                workloads = []
-        else:
+        try:
+            workloads = self.kubectl.list_json(K8sResource.WORKLOADS)
+        except Exception as e:
+            logger.warning("Failed to query Kueue workloads: %s", e)
             workloads = []
 
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)

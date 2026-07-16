@@ -43,6 +43,8 @@ def provider(k8s, task_stats_table):
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
+        # Kueue is mandatory on the K8s backend, so every provider carries a LocalQueue.
+        local_queue="iris-lq",
         task_stats_table=task_stats_table,
         resource_poll_interval=0.05,
         cluster_scan_interval=0.0,
@@ -62,9 +64,11 @@ def kueue_provider(k8s):
 def pod_config(
     namespace: str = "iris",
     default_image: str = "myrepo/iris:latest",
+    local_queue: str = "iris-lq",
     **kwargs,
 ) -> PodConfig:
-    return PodConfig(namespace=namespace, default_image=default_image, **kwargs)
+    # Kueue is mandatory on the K8s backend, so a LocalQueue is always configured.
+    return PodConfig(namespace=namespace, default_image=default_image, local_queue=local_queue, **kwargs)
 
 
 def make_run_req(

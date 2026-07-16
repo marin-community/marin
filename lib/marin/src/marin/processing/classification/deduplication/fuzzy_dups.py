@@ -288,6 +288,13 @@ def compute_fuzzy_dups_attrs(
         :class:`FuzzyDupsAttrData` describing per-source attr directories,
         the shared MinHash params, and aggregated counters.
 
+    Canonical selection is deterministic (the min content-hash per component) and
+    reproducible across executor counts: ``connected_components`` sorts each LSH
+    bucket by ``id_norm`` so the graph topology does not depend on shuffle order.
+    If CC does not converge within ``cc_max_iterations`` the result is still
+    deterministic but *incomplete* (some near-dup clusters stay split); a warning
+    is logged and the caller can raise ``cc_max_iterations`` for complete dedup.
+
     Raises:
         ValueError: If inputs is empty or input params disagree.
         FileNotFoundError: If any input ``attr_dir`` is missing parquet shards.
@@ -333,8 +340,19 @@ def compute_fuzzy_dups_attrs(
         resume=cc_resume,
     )
     if not converged:
-        # TODO (rav): log the number of changed nodes?
-        logger.warning("Connected components did not converge")
+        # A non-converged CC is still deterministic and reproducible across
+        # runs/executor counts (the bucket group_by sorts by id_norm, pinning the
+        # graph topology -- see connected_components), but it is *incomplete*: some
+        # true duplicate-clusters remain split across several component_ids, each
+        # keeping its own local-min canonical, so a few extra near-dups survive.
+        # Warn rather than fail -- callers that cap iterations get a stable,
+        # under-deduped result; raise cc_max_iterations for complete dedup (see
+        # marin#6798).
+        logger.warning(
+            "Connected components did not converge within cc_max_iterations=%d; dedup is deterministic but "
+            "incomplete (some near-dup clusters remain split). Raise cc_max_iterations for complete dedup.",
+            cc_max_iterations,
+        )
 
     ctx.put(_SHARED_ENTRIES_KEY, entries)
     aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")

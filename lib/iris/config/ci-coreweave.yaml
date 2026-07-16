@@ -22,6 +22,11 @@ kubernetes_provider:
   host_network: true
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
+  kueue:
+    # The K8s backend admits every pod through Kueue. ClusterQueue + ResourceFlavors
+    # are admin-provisioned out of band (scripts/install_kueue.py --with-queues
+    # --cpu-flavor-node-label ...); Iris reconciles the namespaced LocalQueue.
+    cluster_queue: iris-cq
 
 controller:
   image: ghcr.io/marin-community/iris-controller:latest

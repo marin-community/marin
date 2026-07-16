@@ -228,6 +228,15 @@ iris cluster vm status                          # scale groups with slice counts
 
 Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
 
+`get-scheduler-state`'s `running_buckets` is a **live DB projection** (tasks where
+`state=RUNNING AND current_worker_id IS NOT NULL`), not an independent in-memory set.
+It is self-consistent within a single call but **skews across separate RPC calls** on
+a busy cluster — a task can move workers between two calls seconds apart. Do not
+diagnose a "worker running a task the tasks-table doesn't show" by diffing
+`running_buckets` against a *separately-timed* `iris query`; that mismatch is snapshot
+skew, not a leak. To check for a genuine leak, use one atomic query (e.g. RUNNING
+tasks whose `current_worker_id` is absent from `workers`).
+
 ## SQL Queries
 
 The controller exposes its SQLite DB via RPC:
@@ -239,7 +248,7 @@ iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f csv
 
 **Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.
 
-State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 7=WORKER_FAILED, 8=UNSCHEDULABLE, 9=ASSIGNED (tasks only), 10=PREEMPTED (tasks only).
+State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 7=WORKER_FAILED, 8=UNSCHEDULABLE, 9=ASSIGNED (tasks only), 10=PREEMPTED (tasks only), 11=COSCHED_FAILED (tasks only — a coscheduled sibling bounced when its gang-mate went down; terminal, not charged preemption budget), 12=MISSING.
 
 ### Sharp edges
 
@@ -265,13 +274,26 @@ SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
 WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
 ```
 
-Controller audit events (`event=<kind> action=<action> entity=<id> ...`) are
-emitted as structured `logger.info` lines — query them through
-`iris process logs` with a substring filter, not via SQL. Example:
+Controller audit events (`event=<action> entity=<id> trigger=<trigger> <k=v ...>`)
+are emitted as structured `logger.info` lines — query them through
+`iris process logs` with its **built-in `--substring` filter**, not via SQL.
+
+**`process logs` has no `--since` flag** (its only options are `-t/--target`,
+`--level`, `-f/--follow`, `--max-lines`, `--substring`). Do **not** pipe the raw
+output through `grep` — an unrecognized `--since` is dropped and a post-hoc `grep`
+over the default window silently returns nothing. Filter server-side instead:
 
 ```bash
-iris process logs --since 24h | grep 'event=worker_failed'
+iris process logs --substring='event=worker_failed' --max-lines 200
+iris process logs --substring='<slice-or-worker-or-job-id>' --max-lines 40   # trace one entity's whole lifecycle
 ```
+
+Useful event names (the `action` passed to `log_event`): `worker_registered`,
+`worker_failing`, `worker_pruned`, `assignment_queued`, `task_preempted`,
+`task_unschedulable`, `task_timeout`, `job_submitted`, `slice_ready`,
+`slice_pruned`, `reconcile_rpc_failed`. `task_preempted` records
+`reason=Preempted by <preemptor-task-id>`, so substring-tracing a victim shows
+exactly which higher-priority job evicted it.
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
@@ -438,14 +460,6 @@ subpath and does not reach the controller's finelog server.
 | Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
 | Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
-
-## Known Bugs
-
-1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detect by joining `workers` against active tasks in `task_attempts`.
-
-2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
-
----
 
 ## GCP (TPU) Operations
 

@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 import jinja2
 import jinja2.ext
@@ -35,6 +35,7 @@ from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from rigging.filesystem import fetch_file_atomic, filesystem, open_url
+from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 logger = logging.getLogger(__name__)
@@ -196,14 +197,28 @@ class _GenerationStripExtension(jinja2.ext.Extension):
         return caller()
 
 
+def _tojson(
+    x: Any, ensure_ascii: bool = False, indent: int | None = None, separators: Any = None, sort_keys: bool = False
+) -> str:
+    """`tojson` filter matching HF's chat-template environment.
+
+    jinja2's built-in `tojson` HTML-escapes and defaults to `sort_keys=True`, so tool
+    schemas and tool-call arguments serialize with reordered keys and `\\uXXXX` escapes.
+    HF renders JSON in insertion order without HTML escaping; input_ids and the rendered
+    string only match HF when this filter does the same.
+    """
+    return json.dumps(x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
+
+
 def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
     """Create a jinja2 environment matching HF's template rendering settings."""
     env = jinja2.sandbox.SandboxedEnvironment(
         undefined=jinja2.StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
-        extensions=extensions,
+        extensions=[jinja2.ext.loopcontrols, *extensions],
     )
+    env.filters["tojson"] = _tojson
     # jinja2 types globals narrowly from its DEFAULT_NAMESPACE; pyrefly rejects assigning
     # other callables. Update via the mapping interface, which accepts t.Any values.
     env.globals.update(
@@ -362,8 +377,121 @@ def _chat_template_messages(
     ]
 
 
+class _StrippedRender(NamedTuple):
+    """Sentinel-free render text with the char spans recovered from the removed sentinels.
+
+    `text` is byte-for-byte the string HF renders. `generation_spans` and `message_spans`
+    are half-open char ranges in `text`'s coordinates, ready to map onto tokens via the
+    encoding's char->token map.
+    """
+
+    text: str
+    generation_spans: list[tuple[int, int]]
+    message_spans: list[tuple[int, int]]
+
+
+def _strip_sentinels(rendered: str, num_messages: int) -> _StrippedRender:
+    """Recover the sentinel-free render plus generation and per-message char spans."""
+    parts = re.split(
+        (
+            f"({re.escape(_GENERATION_SENTINEL_START)}|"
+            f"{re.escape(_GENERATION_SENTINEL_END)}|"
+            f"{_MESSAGE_SENTINEL_RE.pattern})"
+        ),
+        rendered,
+    )
+
+    clean: list[str] = []
+    position = 0
+    generation_spans: list[tuple[int, int]] = []
+    generation_start: int | None = None
+    message_starts: dict[int, int] = {}
+    message_spans = [(0, 0) for _ in range(num_messages)]
+
+    for part in parts:
+        if part == _GENERATION_SENTINEL_START:
+            generation_start = position
+            continue
+        if part == _GENERATION_SENTINEL_END:
+            if generation_start is not None:
+                generation_spans.append((generation_start, position))
+                generation_start = None
+            continue
+        if _MESSAGE_SENTINEL_RE.fullmatch(part):
+            if part.startswith(_MESSAGE_SENTINEL_START):
+                index = _message_sentinel_index(part, _MESSAGE_SENTINEL_START)
+                if index < num_messages:
+                    message_starts[index] = position
+            else:
+                index = _message_sentinel_index(part, _MESSAGE_SENTINEL_END)
+                start = message_starts.pop(index, position)
+                if index < num_messages:
+                    message_spans[index] = (start, position)
+            continue
+        if not part:
+            continue
+        clean.append(part)
+        position += len(part)
+
+    return _StrippedRender("".join(clean), generation_spans, message_spans)
+
+
+def _assistant_mask_from_generation_spans(
+    encoding: HfEncoding, num_tokens: int, generation_spans: list[tuple[int, int]]
+) -> list[int]:
+    """Mark tokens whose characters fall inside a `{% generation %}` span.
+
+    Mirrors transformers' assistant-mask extraction: each generation char span maps to
+    tokens via `char_to_token(start)` and `char_to_token(end - 1)`, marking the closed
+    token range. A `None` start (span dropped by truncation) stops processing, matching HF;
+    a `None` end (only the tail was truncated) marks through the final token. `end_token`
+    is checked against `None` explicitly so a span ending at token 0 marks just that token.
+    """
+    mask = [0] * num_tokens
+    for start_char, end_char in generation_spans:
+        start_token = encoding.char_to_token(start_char)
+        end_token = encoding.char_to_token(end_char - 1)
+        if start_token is None:
+            break
+        for token_index in range(start_token, end_token + 1 if end_token is not None else num_tokens):
+            mask[token_index] = 1
+    return mask
+
+
+def _message_token_spans(
+    encoding: HfEncoding, num_tokens: int, message_char_spans: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Convert per-message char spans to half-open token spans via the char->token map.
+
+    Messages the template drops from its loop (e.g. a system message hoisted out of
+    `{% for %}`) keep a `(0, 0)` span; leading such spans are backfilled to cover the
+    rendered prefix so downstream label projection has a contiguous cover.
+    """
+    spans: list[tuple[int, int]] = []
+    for start_char, end_char in message_char_spans:
+        if start_char == end_char:
+            spans.append((0, 0))
+            continue
+        start_token = encoding.char_to_token(start_char)
+        end_token = encoding.char_to_token(end_char - 1)
+        if start_token is None:
+            spans.append((0, 0))
+        else:
+            spans.append((start_token, end_token + 1 if end_token is not None else num_tokens))
+
+    observed = [(start, end) for start, end in spans if start != end]
+    if observed:
+        first_observed_start = observed[0][0]
+        for index, span in enumerate(spans):
+            if span == (0, 0) and index < len(spans) - 1:
+                spans[index] = (0, first_observed_start)
+            else:
+                break
+    return spans
+
+
 def _apply_chat_template_with_masks(
-    tokenizer: "MarinTokenizer",
+    tokenizer: "HfMarinTokenizer",
     conversations: list[list[dict[str, str]]],
     *,
     chat_template: str | None = None,
@@ -372,10 +500,14 @@ def _apply_chat_template_with_masks(
 ) -> dict[str, Any]:
     """Render chat templates for batched conversations and return token-level masks.
 
-    The returned `assistant_masks` mark tokens rendered inside `{% generation %}` blocks.
-    When `return_message_spans` is set, the returned `message_spans` list contains
-    half-open token spans `(start, end)` for each source message after chat-template rendering.
-    These spans are used by trace-labeled evals to project per-message labels onto the exact
+    The full rendered string is tokenized once and `{% generation %}` char spans are mapped
+    onto tokens via the encoding's char->token map, so `input_ids` and `assistant_masks`
+    match `transformers.apply_chat_template(..., return_assistant_tokens_mask=True)`,
+    including BPE merges that cross a generation boundary.
+
+    When `return_message_spans` is set, the returned `message_spans` list contains half-open
+    token spans `(start, end)` for each source message after chat-template rendering. These
+    spans are used by trace-labeled evals to project per-message labels onto the exact
     rendered prompt tokens, including role headers and tool-call formatting.
     """
     template_str = chat_template or tokenizer.chat_template
@@ -400,61 +532,14 @@ def _apply_chat_template_with_masks(
             **kwargs,
         )
 
-        ids: list[int] = []
-        mask: list[int] = []
-        is_assistant = False
-        message_starts: dict[int, int] = {}
-        message_spans = [(0, 0) for _ in conversation]
+        stripped = _strip_sentinels(rendered, len(conversation))
+        encoding = tokenizer._tokenizer.encode(stripped.text, add_special_tokens=False)
+        ids = list(encoding.ids)
 
-        parts = re.split(
-            (
-                f"({re.escape(_GENERATION_SENTINEL_START)}|"
-                f"{re.escape(_GENERATION_SENTINEL_END)}|"
-                f"{_MESSAGE_SENTINEL_RE.pattern})"
-            ),
-            rendered,
-        )
-
-        # Each segment is encoded independently. BPE merges that would span a
-        # sentinel boundary are lost, which can produce slightly different token
-        # IDs at the boundary vs encoding the full string. This matches HF's
-        # AssistantTracker behavior which has the same limitation.
-        for part in parts:
-            if part == _GENERATION_SENTINEL_START:
-                is_assistant = True
-                continue
-            if part == _GENERATION_SENTINEL_END:
-                is_assistant = False
-                continue
-            if _MESSAGE_SENTINEL_RE.fullmatch(part):
-                if part.startswith(_MESSAGE_SENTINEL_START):
-                    message_index = _message_sentinel_index(part, _MESSAGE_SENTINEL_START)
-                    if message_index < len(message_spans):
-                        message_starts[message_index] = len(ids)
-                else:
-                    message_index = _message_sentinel_index(part, _MESSAGE_SENTINEL_END)
-                    start = message_starts.pop(message_index, len(ids))
-                    if message_index < len(message_spans):
-                        message_spans[message_index] = (start, len(ids))
-                continue
-            if not part:
-                continue
-            segment_ids = tokenizer.encode(part, add_special_tokens=False)
-            ids.extend(segment_ids)
-            mask.extend([1 if is_assistant else 0] * len(segment_ids))
-
-        if return_message_spans:
-            observed_spans = [(start, end) for start, end in message_spans if start != end]
-            if observed_spans:
-                first_observed_start = observed_spans[0][0]
-                for index, span in enumerate(message_spans):
-                    if span == (0, 0) and index < len(message_spans) - 1:
-                        message_spans[index] = (0, first_observed_start)
-                    else:
-                        break
-            all_message_spans.append(message_spans)
         all_ids.append(ids)
-        all_masks.append(mask)
+        all_masks.append(_assistant_mask_from_generation_spans(encoding, len(ids), stripped.generation_spans))
+        if return_message_spans:
+            all_message_spans.append(_message_token_spans(encoding, len(ids), stripped.message_spans))
 
     result: dict[str, Any] = {"input_ids": all_ids, "assistant_masks": all_masks}
     if return_message_spans:

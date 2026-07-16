@@ -35,6 +35,7 @@ from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import (
     NEMOTRON_PRETRAINING_LEGAL_V1,
@@ -157,6 +158,11 @@ def all_sources() -> dict[str, DatakitSource]:
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        (
+            "nemotron_code_v2/content",
+            nemotron_code_v2_content_normalize_steps,
+            120.254379519,
+        ),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),

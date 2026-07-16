@@ -92,6 +92,12 @@ def generate_id(text: str) -> str:
     return format(dupekit.hash_xxh3_128(text.encode("utf-8")), "032x")
 
 
+def _text_from_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
@@ -119,7 +125,7 @@ def _make_normalize_fn(
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
-        text = str(record[text_field])
+        text = _text_from_value(record[text_field])
 
         # --- source_id (skip silently if id_field absent) ---
         source_id = record.get(id_field)
@@ -332,7 +338,7 @@ def _build_pipeline(
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
-        if text is None or str(text).strip() == "":
+        if text is None or _text_from_value(text).strip() == "":
             counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
             return False
         return True
@@ -521,7 +527,6 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
-
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(
