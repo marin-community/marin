@@ -22,6 +22,7 @@ except ModuleNotFoundError as _e:  # quack-kernels (and its torch dep) are optio
             f"moe_implementation='sonic_cute' requires quack-kernels and torch: {_sonic_cute_error}"
         ) from _sonic_cute_error
 
+
 _MOE_LOCAL_FNS = {
     "scatter": _moe_mlp_local_scatter,
     "sonic": _moe_mlp_local_sonic,

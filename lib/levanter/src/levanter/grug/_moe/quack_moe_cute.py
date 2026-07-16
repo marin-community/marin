@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Vendored CuTeDSL→JAX shim for QuACK's SM100 gated grouped GEMM (SonicMoE kernel).
 
 Mirrors David's `_fa4_cute_backend.py` pattern: build a thin ``@cute.jit`` launcher
@@ -11,8 +14,6 @@ A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
 from __future__ import annotations
 
-import importlib
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -68,8 +69,17 @@ def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clu
     return launcher
 
 
-def quack_gated_grouped_gemm(x_sort, w_gate_up, cu_seqlens, *, activation="swiglu",
-                             tile_mn=(256, 128), cluster_mnk=(2, 1, 1), max_swizzle=8, return_preact=False):
+def quack_gated_grouped_gemm(
+    x_sort,
+    w_gate_up,
+    cu_seqlens,
+    *,
+    activation="swiglu",
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    return_preact=False,
+):
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
 
     x_sort: [M, K] tokens sorted by expert. w_gate_up: [E, K, 2N]. cu_seqlens: [E+1] int32.
@@ -85,19 +95,23 @@ def quack_gated_grouped_gemm(x_sort, w_gate_up, cu_seqlens, *, activation="swigl
     except Exception:
         max_active_clusters = 148  # B200 SM-count fallback for host-side lowering tests
     launcher = _build_launcher(
-        a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk,
-        activation=activation, max_active_clusters=max_active_clusters, max_swizzle=max_swizzle,
+        a_dtype=a_dtype,
+        tile_mn=tile_mn,
+        cluster_mnk=cluster_mnk,
+        activation=activation,
+        max_active_clusters=max_active_clusters,
+        max_swizzle=max_swizzle,
     )
     ts = cjax.TensorSpec
     # divisibility is in physical-dim order (contiguous dim gets the vector width).
     # B is physically [E,K,2N] but the kernel wants it as [K,2N,E] (expert = trailing
     # batch/L mode); express that with mode=(1,2,0) rather than a physical transpose.
-    a_spec = ts(divisibility=(1, 8), static=False)              # [M,K] k-major
+    a_spec = ts(divisibility=(1, 8), static=False)  # [M,K] k-major
     # B is physically [E,K,2N]; kernel wants n-major logical [2N,K,E] (leading_dim 0).
     b_spec = ts(mode=(2, 1, 0), divisibility=(1, 1, 8), static=False)
-    cu_spec = ts(static=False)                                  # [E+1] int32
-    d_spec = ts(divisibility=(1, 8), static=False)              # [M,2N] n-major
-    p_spec = ts(divisibility=(1, 8), static=False)              # [M,N]  n-major
+    cu_spec = ts(static=False)  # [E+1] int32
+    d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
+    p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
     call = cjax.cutlass_call(
         launcher,
         output_shape_dtype=(
@@ -119,12 +133,12 @@ from quack.gemm_default_epi import GemmDefaultSm100, GemmDefaultEpiMixin  # noqa
 def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD):
-        gemm = GemmDefaultSm100(_ACC, a_dtype, tile_mn, cluster_mnk,
-                                gather_A=False, use_clc_persistence=False)
+        gemm = GemmDefaultSm100(_ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=False)
         epi_args = GemmDefaultEpiMixin.EpilogueArguments()
         scheduler_args = make_scheduler_args(max_active_clusters, max_swizzle, None)
         varlen_args = make_varlen_args(mCuSeqlens, None, None)
         gemm(mA, mB, mD, None, epi_args, scheduler_args, varlen_args, stream)
+
     return launcher
 
 
@@ -141,8 +155,9 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
         mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     except Exception:
         mac = 148
-    launcher = _build_plain_launcher(a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk,
-                                     max_active_clusters=mac, max_swizzle=max_swizzle)
+    launcher = _build_plain_launcher(
+        a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk, max_active_clusters=mac, max_swizzle=max_swizzle
+    )
     ts = cjax.TensorSpec
     a_spec = ts(divisibility=(1, 8), static=False)
     b_spec = ts(mode=_bmode, divisibility=(1, 1, 8), static=False)
