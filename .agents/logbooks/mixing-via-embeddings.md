@@ -469,7 +469,12 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
 - Launched as Iris parent `/rav/rav-mve-seedpanel-20260716-092949` (us-central2-b) →
   10 × non-preemptible v4-8 children `grug-train-rav_mve_seedpanel_{00..09}`; W&B
   marin_moe group `rav_mve_seedpanel`; outputs
-  `gs://marin-us-central2/users/rav/grug/rav_mve_seedpanel_NN/dev/`. ETA ~4.6 days.
+  `gs://marin-us-central2/users/rav/grug/rav_mve_seedpanel_NN/dev/`. ETA ~4.6 days
+  once scheduled. **10:37 UTC: capacity-blocked** — all 10 v4-8 queued resources
+  `WAITING_FOR_RESOURCES`; the entire v4 reservation is held by Larry's v4-2048
+  67B-A2B 10T hero run (up since 07-13), preemptible v4 zone-stocked-out. Requests
+  are healthy, zero cost while pending, auto-start when capacity frees; options in
+  seedpanel_monitor.md (wait / ask for 80 of 2048 chips / do NOT switch hardware).
 - Per-task evals are POST-HOC (lm-eval logprob harness, 1 results.json per (run,task),
   60-task readout set ⊂ 150 dirs/run at `gs://marin-us-central2/evaluation/grug_logprob/`);
   harness vendored to `experiments/grug/moe/eval_logprob.py` (from swarm-branch, adapted:
