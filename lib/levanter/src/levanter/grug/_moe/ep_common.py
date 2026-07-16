@@ -44,8 +44,13 @@ def _quack_expert_mlp_fn(
         # output row is defined.
         group_sizes = group_sizes.at[-1].add(x_dispatch.shape[0] - jnp.sum(group_sizes, dtype=jnp.int32))
         cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+        # EP dispatch produces x_dispatch via collectives, so there is no cheap
+        # (x, token_dispatch) re-gather like the local path — pass identity hints.
+        # x_dispatch stays a residual, but the slim vjp still drops h (recomputed
+        # from gu) and stores the expert weights FSDP-sharded.
+        token_hint = jnp.arange(x_dispatch.shape[0], dtype=jnp.int32)
         return tree_checkpoint_name(
-            quack_expert_mlp(x_dispatch, w13_il, moe_w2_local, group_sizes, cu),
+            quack_expert_mlp(x_dispatch, w13_il, moe_w2_local, group_sizes, cu, x_dispatch, token_hint),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
 
