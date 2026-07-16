@@ -48,6 +48,7 @@ from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERAT
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
     COSCHEDULE_NVLINK_DOMAIN,
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED,
     CW_LABEL_LEAFGROUP,
     CW_LABEL_NVLINK_DOMAIN,
     RACK_SIZE,
@@ -198,6 +199,9 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 #                 (H100 InfiniBand deployments).
 #   nvlink.domain hard (required): one GB200 NVLink domain (H100 has no
 #                 nvlink.domain label, so this only binds on GB200 capacity).
+#   nvlink.domain.preferred  soft (preferred) on the SAME nvlink.domain label: a GB200 gang
+#                 too large for one rack, so Kueue packs it into as few whole NVLink domains
+#                 as possible instead of demanding a single (impossible) domain.
 # A cluster whose Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
@@ -205,6 +209,7 @@ _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
     COSCHEDULE_LEAFGROUP: (CW_LABEL_LEAFGROUP, False),
     COSCHEDULE_NVLINK_DOMAIN: (CW_LABEL_NVLINK_DOMAIN, True),
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED: (CW_LABEL_NVLINK_DOMAIN, False),
 }
 
 # Finest topology level (one node), the last level in both CoreWeave Topology CRs. The
@@ -786,8 +791,9 @@ def _build_pod_manifest(
         # A hard single-NVLink-domain gang cannot span racks: one NVL72 rack is one NVLink
         # domain of RACK_SIZE nodes, so a required nvlink.domain gang larger than that can
         # never be placed and would sit unschedulable forever. Reject it at build time with a
-        # clear message instead (the CLI already caps NVLink gangs at RACK_SIZE; this guards
-        # the programmatic client that stamps group_by directly).
+        # clear message instead. The CLI never emits this — a multi-rack GB200 gang gets the
+        # soft nvlink.domain.preferred level — so this guards a programmatic client that stamps
+        # the hard nvlink.domain level directly for more than one rack.
         if required and node_label == CW_LABEL_NVLINK_DOMAIN and run_req.num_tasks > RACK_SIZE:
             raise PodManifestError(
                 f"Coscheduled task {run_req.task_id!r} requires a single {group_by!r} domain but "

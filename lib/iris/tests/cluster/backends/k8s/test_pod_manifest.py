@@ -1107,6 +1107,20 @@ def test_kueue_required_nvlink_gang_allows_full_rack():
     assert manifest["metadata"]["annotations"][_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
 
 
+def test_kueue_preferred_nvlink_gang_packs_multi_rack():
+    """A multi-rack GB200 gang uses the SOFT nvlink.domain.preferred level: it binds the
+    nvlink.domain label as a PREFERRED (not required) topology, so Kueue packs the replicas
+    into as few whole NVLink domains as possible instead of demanding one (impossible) domain.
+    It is admitted for a gang larger than one rack rather than rejected."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain.preferred"),
+        pod_config(local_queue="iris-lq"),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
+
+
 def test_kueue_preferred_topology_for_leafgroup():
     """group_by=leafgroup -> preferred (soft) leafgroup topology."""
     manifest = _build_pod_manifest(_cosched_req("/job/task/0", group_by="leafgroup"), pod_config(local_queue="iris-lq"))

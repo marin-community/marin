@@ -55,6 +55,11 @@ def is_rack_based(instance_type: str) -> bool:
 # label + hard/soft mode), and the installer all share one vocabulary.
 COSCHEDULE_LEAFGROUP = "leafgroup"
 COSCHEDULE_NVLINK_DOMAIN = "nvlink.domain"
+# Soft variant that binds the SAME nvlink.domain label as a preference rather than a hard
+# requirement, for a GB200 gang too large to fit one rack. Kueue packs the replicas into as
+# few whole NVLink domains (racks) as possible, so GPUs within a rack keep NVLink while the
+# gang spills across racks over InfiniBand.
+COSCHEDULE_NVLINK_DOMAIN_PREFERRED = "nvlink.domain.preferred"
 
 
 def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
@@ -64,12 +69,16 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     single NVLink domain of ``RACK_SIZE`` nodes. A gang that fits inside one rack binds HARD
     to ``nvlink.domain`` (``podset-required-topology``) so every replica shares the rack's
     NVLink fabric — the reason NVL72 exists. A gang larger than one rack cannot fit a single
-    NVLink domain (NVLink does not cross racks), so it falls back to the InfiniBand
-    ``leafgroup`` level, exactly like H100.
+    NVLink domain (NVLink does not cross racks), so it binds SOFT to the same level
+    (``nvlink.domain.preferred`` -> ``podset-preferred-topology``): Kueue packs the replicas
+    into as few whole NVLink domains as possible, keeping NVLink within each rack while the
+    gang spills across racks over InfiniBand.
 
     H100 and every non-NVL72 GPU carry no ``nvlink.domain`` label, so they always coschedule
     on ``leafgroup`` (soft IB colocation), which is the behavior this preserves for them.
     """
-    if is_rack_based(gpu_variant) and replicas <= RACK_SIZE:
-        return COSCHEDULE_NVLINK_DOMAIN
+    if is_rack_based(gpu_variant):
+        if replicas <= RACK_SIZE:
+            return COSCHEDULE_NVLINK_DOMAIN
+        return COSCHEDULE_NVLINK_DOMAIN_PREFERRED
     return COSCHEDULE_LEAFGROUP
