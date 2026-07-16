@@ -52,8 +52,9 @@ from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
@@ -127,8 +128,12 @@ def build_scale_model() -> GrugModelConfig:
     )
 
 
-def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env."""
+def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env.
+
+    ``version`` defers to the ambient :class:`~marin.execution.build_context.BuildContext` when
+    omitted, so a driver (:mod:`marin.experiment.cli`) sets it once via ``--version``.
+    """
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     replicas = env_int("SCALE_GPU_REPLICAS", 32)
@@ -220,8 +225,10 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             checkpointer=checkpointer,
         )
 
+    step_name = f"{OUTPUT_SUBDIR}/{name}-{run_id}"
+    version = resolve_version(step_name, version)
     return ArtifactStep(
-        name=user_namespaced_name(f"{OUTPUT_SUBDIR}/{name}-{run_id}", version),
+        name=user_namespaced_name(step_name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
@@ -232,4 +239,4 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
 
 
 if __name__ == "__main__":
-    StepRunner().run([build_scale_checkpoint().lower()])
+    experiment_main(build_scale_checkpoint)()
