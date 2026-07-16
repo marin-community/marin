@@ -140,7 +140,14 @@ def compile_eval_report(entries: list[dict], output_path: str) -> EvalReport:
         if reader is None:
             raise ValueError(f"no EvalResult reader for {entry['result_type']!r}; known: {sorted(_EVAL_RESULT_TYPES)}")
         result = reader.raw_load(entry["path"])
-        task_metrics.update(result.task_metrics())
+        for task, metrics in result.task_metrics().items():
+            if task in task_metrics:
+                raise ValueError(
+                    f"duplicate task {task!r} while compiling the report (from {entry['label']!r}); two "
+                    "results evaluate the same task, so one would silently overwrite the other — give the "
+                    "tasks distinct aliases or split them into separate reports"
+                )
+            task_metrics[task] = metrics
         for average, value in result.averages().items():
             averages[f"{entry['label']}/{average}"] = value
 

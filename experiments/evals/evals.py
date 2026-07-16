@@ -57,7 +57,27 @@ logger = logging.getLogger(__name__)
 # Eval steps defer their version to the ambient BuildContext (see marin.experiment.cli): a driver
 # supplies it via --version, so nothing here hardcodes a calendar version.
 
-EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
+# lm-eval's ``code_eval`` metric (humaneval) executes model-generated code; the harness refuses to run
+# it unless this is set on the worker, and the coordinator's env does not propagate to iris children.
+HUMANEVAL_ENV = {"HF_ALLOW_CODE_EVAL": "1"}
+
+# Marin optional-dependency extras installed on the eval worker. The vLLM backend is TPU-only (it
+# shells out to the ``tpu-inference`` vllm CLI); the Levanter backend is JAX and runs on TPU or GPU,
+# so its extras follow the device.
+VLLM_EVAL_GROUPS = ["eval", "vllm", "tpu"]
+_LEVANTER_EVAL_GROUPS: dict[str, list[str]] = {
+    "tpu": ["eval", "tpu"],
+    "gpu": ["eval", "gpu"],
+    "cpu": ["eval", "cpu"],
+}
+
+
+def _levanter_dependency_groups(resources: ResourceConfig) -> list[str]:
+    """The marin extras a Levanter eval worker installs, keyed by the resource's device kind."""
+    groups = _LEVANTER_EVAL_GROUPS.get(resources.device.kind)
+    if groups is None:
+        raise ValueError(f"no Levanter eval dependency group for device kind {resources.device.kind!r}")
+    return groups
 
 
 class Backend(StrEnum):
@@ -109,7 +129,7 @@ def evaluate_lm_evaluation_harness(
     env_vars: dict[str, str] | None = None,
     version: str | None = None,
 ) -> ArtifactStep[LmEvalHarnessResult]:
-    """A vLLM lm-eval-harness eval of one task group -> :class:`LmEvalHarnessResult`.
+    """A vLLM lm-eval-harness eval of one task group -> :class:`LmEvalHarnessResult`. TPU-only.
 
     Args:
         model_name: Name of the model.
@@ -123,6 +143,11 @@ def evaluate_lm_evaluation_harness(
             coordinator's ``os.environ`` does not propagate to iris-spawned children.
         version: Explicit version, or None to defer to the ambient BuildContext.
     """
+    if resource_config is not None and resource_config.device.kind == "gpu":
+        raise ValueError(
+            "the vLLM lm-eval backend is TPU-only (tpu-inference); run generation evals on TPU, or "
+            "use the Levanter backend on GPU"
+        )
     deps = (model,)
     name = f"evaluation/lm_evaluation_harness/{model_name}/{task_group_id}"
 
@@ -148,7 +173,7 @@ def evaluate_lm_evaluation_harness(
         run=remote(
             evaluate,
             resources=resource_config,
-            pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
+            pip_dependency_groups=VLLM_EVAL_GROUPS,
             env_vars=env_vars,
         ),
         build_config=build_config,
@@ -165,13 +190,14 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
+    env_vars: dict[str, str] | None = None,
     version: str | None = None,
 ) -> ArtifactStep[LevanterEvalResult]:
     """A Levanter lm-eval-harness eval of one task group -> :class:`LevanterEvalResult`.
 
     The Levanter evaluator writes a single top-level ``results.json``, so ``resolve(...).averages()``
-    reads the cross-task scores without touching the directory layout. ``version`` is explicit, or
-    None to defer to the ambient BuildContext.
+    reads the cross-task scores without touching the directory layout. ``env_vars`` sets env on the
+    child iris worker. ``version`` is explicit, or None to defer to the ambient BuildContext.
     """
     logger.info(f"Running levanter evals on the following tasks: {evals}")
     deps = (model,)
@@ -194,7 +220,12 @@ def evaluate_levanter_lm_evaluation_harness(
         name=name,
         version=resolve_version(name, version),
         artifact_type=LevanterEvalResult,
-        run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+        run=remote(
+            evaluate,
+            resources=resource_config,
+            pip_dependency_groups=_levanter_dependency_groups(resource_config),
+            env_vars=env_vars,
+        ),
         build_config=build_config,
         deps=deps,
     )
@@ -219,6 +250,7 @@ def eval_step(
             max_eval_instances=group.max_eval_instances,
             apply_chat_template=group.apply_chat_template,
             discover_latest_checkpoint=group.discover_latest_checkpoint,
+            env_vars=group.env_vars,
             version=version,
         )
         return cast("ArtifactStep[EvalResult]", levanter_step)
@@ -314,6 +346,7 @@ def key_evals(resources: ResourceConfig | None = None, max_eval_instances: int |
             id="key_generation",
             engine_kwargs=DEFAULT_LM_EVAL_MODEL_KWARGS,
             max_eval_instances=max_eval_instances,
+            env_vars=HUMANEVAL_ENV,  # KEY_GENERATION_TASKS includes humaneval (code_eval)
         ),
         EvalGroup(
             tasks=KEY_MULTIPLE_CHOICE_TASKS,

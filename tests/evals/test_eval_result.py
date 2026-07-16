@@ -12,6 +12,7 @@ an eval.
 import json
 
 import fsspec
+import pytest
 from marin.evaluation.eval_result import (
     EvalReport,
     LevanterEvalResult,
@@ -106,3 +107,18 @@ def test_compile_eval_report_merges_across_backends(tmp_path):
     # The human-readable report.json is written alongside.
     written = json.loads((report_dir / "report.json").read_text())
     assert written["task_metrics"]["gsm8k"] == {"exact_match,none": 0.3, "exact_match_stderr,none": 0.02}
+
+
+def test_compile_eval_report_rejects_duplicate_task(tmp_path):
+    """Two results carrying the same task key must fail loudly, not silently drop one."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "results.json").write_text(json.dumps(_LEVANTER_RESULTS))
+    (b / "results.json").write_text(json.dumps(_LEVANTER_RESULTS))  # same "hellaswag" key
+    entries = [
+        {"path": str(a), "result_type": result_type_name(LevanterEvalResult), "label": "group_a"},
+        {"path": str(b), "result_type": result_type_name(LevanterEvalResult), "label": "group_b"},
+    ]
+    with pytest.raises(ValueError, match="duplicate task 'hellaswag'"):
+        compile_eval_report(entries, str(tmp_path / "report"))
