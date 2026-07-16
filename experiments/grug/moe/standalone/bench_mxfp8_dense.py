@@ -30,7 +30,8 @@ import time
 import jax
 import jax.numpy as jnp
 from haliax.quantization import Fp8DotGeneralOp
-from jax.nn import get_scaled_dot_general_config, scaled_dot_general
+from jax._src.cudnn.scaled_matmul_stablehlo import quantize
+from jax.nn import get_scaled_dot_general_config, scaled_dot_general, scaled_matmul
 
 # (label, K, N): row-13 d2560 dense GEMMs. q/k/v/o are all 2560x2560
 # (20 heads x head_dim 128, MHA); shared expert is 2560<->1280.
@@ -132,15 +133,39 @@ def main():
                 "err_gx": rel_frob(gx, ref_gx),
                 "err_gw": rel_frob(gw, ref_gw),
             }
+        # MXFP8-001b: GEMM-only throughput — scaled_matmul on operands quantized
+        # OUTSIDE the timed region, to separate the __cudnn$blockScaledDot call
+        # from XLA's quantize kernels. Also time the quantize step itself.
+        cfg = MXFP8_CONFIGS[0]
+        x3 = x.reshape(1, a.tokens, k)
+        wt3 = jnp.ascontiguousarray(w.T).reshape(1, n, k)  # rhs is (B, N, K), contract dim last
+        quant = jax.jit(lambda t: quantize(t, cfg))
+        xq, xs = jax.block_until_ready(quant(x3))
+        wq, ws = jax.block_until_ready(quant(wt3))
+        pm = jax.jit(lambda xq, wq, xs, ws: scaled_matmul(xq, wq, xs, ws, preferred_element_type=jnp.bfloat16))
+        t_pm = timed(pm, (xq, wq, xs, ws), a.iters, a.warmup)
+        t_qx = timed(quant, (x3,), a.iters, a.warmup)
+        out_pm = pm(xq, wq, xs, ws).reshape(a.tokens, n)
+        shape_res["mxfp8_prequant"] = {
+            "fwd_ms": t_pm * 1e3,
+            "fwd_tfs": flops_fwd / t_pm / 1e12,
+            "quantize_x_ms": t_qx * 1e3,
+            "err_out": rel_frob(out_pm, ref_out),
+        }
+
         base = shape_res["bf16"]
         print(f"\n== {label} (T={a.tokens}) ==")
         for arm, r in shape_res.items():
-            print(
-                f"  {arm:10s} fwd {r['fwd_ms']:7.3f} ms ({r['fwd_tfs']:7.1f} TF/s, {base['fwd_ms']/r['fwd_ms']:.3f}x)"
-                f"  fwd+bwd {r['fwdbwd_ms']:7.3f} ms ({r['fwdbwd_tfs']:7.1f} TF/s,"
-                f" {base['fwdbwd_ms']/r['fwdbwd_ms']:.3f}x)"
-                f"  err out/gx/gw {r['err_out']:.2e}/{r['err_gx']:.2e}/{r['err_gw']:.2e}"
-            )
+            line = f"  {arm:14s} fwd {r['fwd_ms']:7.3f} ms ({r['fwd_tfs']:7.1f} TF/s, {base['fwd_ms']/r['fwd_ms']:.3f}x)"
+            if "fwdbwd_ms" in r:
+                line += (
+                    f"  fwd+bwd {r['fwdbwd_ms']:7.3f} ms ({r['fwdbwd_tfs']:7.1f} TF/s,"
+                    f" {base['fwdbwd_ms']/r['fwdbwd_ms']:.3f}x)"
+                    f"  err out/gx/gw {r['err_out']:.2e}/{r['err_gx']:.2e}/{r['err_gw']:.2e}"
+                )
+            else:
+                line += f"  quantize_x {r['quantize_x_ms']:.3f} ms  err out {r['err_out']:.2e}"
+            print(line)
         results["shapes"][label] = shape_res
 
     with open(a.out, "w") as f:
