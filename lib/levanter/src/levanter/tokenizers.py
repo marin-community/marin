@@ -285,12 +285,14 @@ def _chat_template_parts(chat_template: str) -> list[tuple[str, str, list[tuple[
     return parts
 
 
-def _has_generation_block(chat_template: str) -> bool:
+def chat_template_has_generation_block(chat_template: str) -> bool:
     """Whether the template contains a `{% generation %}` block tag.
 
-    Uses Jinja's lexer rather than a regex so whitespace-control forms
-    (`{%- generation %}`, `{%+ generation +%}`) are recognized exactly as the
-    Jinja environment would parse them.
+    Assistant masks are derived from these blocks, so a template without one can only ever produce
+    an all-zero mask. Consumers that use the masks as a loss signal check this up front.
+
+    Uses Jinja's lexer rather than a regex so whitespace-control forms (`{%- generation %}`,
+    `{%+ generation +%}`) are recognized exactly as the Jinja environment would parse them.
     """
     return any(
         part_type == "block" and _block_name(block_tokens) == "generation"
@@ -527,13 +529,9 @@ def _apply_chat_template_with_masks(
     if template_str is None:
         raise ValueError(f"Tokenizer {tokenizer.name_or_path} has no chat template")
 
-    if not _has_generation_block(template_str):
-        raise ValueError(
-            f"Chat template for {tokenizer.name_or_path} has no `{{% generation %}}` block, so assistant "
-            "masks would be all zeros and no assistant tokens would be labeled for loss. Use a template "
-            "with `{% generation %}` markers (e.g. marin-community/marin-tokenizer)."
-        )
-
+    # A template with no `{% generation %}` block yields an all-zero assistant mask but still
+    # produces valid message spans, so this primitive does not reject it. Processors that consume
+    # the mask as a loss signal (ChatProcessor, TraceChatProcessor) require the block up front.
     render_template = _instrument_message_loop(template_str) if return_message_spans else template_str
     env = _make_jinja_env([_GenerationSentinelExtension])
     compiled = env.from_string(render_template)

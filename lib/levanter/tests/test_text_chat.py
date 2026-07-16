@@ -342,19 +342,32 @@ NO_GENERATION_TEMPLATE = """{{ bos_token }}
 """
 
 
-def test_chat_template_with_masks_rejects_template_without_generation_block(tokenizer: MarinTokenizer):
+def test_chat_template_with_masks_tolerates_template_without_generation_block(tokenizer: MarinTokenizer):
+    # The primitive is also used for message-span extraction, which needs no generation block, so
+    # it returns an all-zero mask rather than raising. Mask consumers enforce the block themselves.
     conversation = [
         {"role": "user", "content": "alpha prompt."},
         {"role": "assistant", "content": "beta answer."},
     ]
 
+    result = tokenizer.apply_chat_template_with_masks([conversation], chat_template=NO_GENERATION_TEMPLATE)
+
+    assert not any(result["assistant_masks"][0])
+
+
+def test_chat_processor_rejects_template_without_generation_block(tokenizer: MarinTokenizer):
     with pytest.raises(ValueError, match="generation"):
-        tokenizer.apply_chat_template_with_masks([conversation], chat_template=NO_GENERATION_TEMPLATE)
+        ChatProcessor(tokenizer, chat_template=NO_GENERATION_TEMPLATE, mask_user_turns=True)
+
+
+def test_trace_chat_processor_rejects_template_without_generation_block(tokenizer: MarinTokenizer):
+    with pytest.raises(ValueError, match="generation"):
+        TraceChatProcessor(tokenizer, chat_template=NO_GENERATION_TEMPLATE, loss_tags=("assistant",))
 
 
 # Jinja allows `+` whitespace-control markers on block tags (`{%+ generation +%}`), which the
 # environment parses as a generation block just like `{% generation %}`. The generation-block
-# check must recognize it rather than reject a valid template.
+# detection must recognize it rather than reject a valid template.
 PLUS_CONTROL_GENERATION_TEMPLATE = """{{ bos_token }}
 {%- for message in messages -%}
 <|start_header_id|>{{ message['role'] }}<|end_header_id|>
@@ -368,7 +381,7 @@ PLUS_CONTROL_GENERATION_TEMPLATE = """{{ bos_token }}
 """
 
 
-def test_chat_template_with_masks_accepts_plus_control_generation_block(tokenizer: MarinTokenizer):
+def test_chat_template_with_masks_labels_plus_control_generation_block(tokenizer: MarinTokenizer):
     conversation = [
         {"role": "user", "content": "alpha prompt."},
         {"role": "assistant", "content": "beta answer."},
@@ -378,6 +391,11 @@ def test_chat_template_with_masks_accepts_plus_control_generation_block(tokenize
 
     mask = result["assistant_masks"][0]
     assert any(m == 1 for m in mask), "assistant content inside the plus-control generation block should be labeled"
+
+
+def test_chat_processor_accepts_plus_control_generation_block(tokenizer: MarinTokenizer):
+    # Regression: the generation-block check must accept `+` whitespace-control blocks.
+    ChatProcessor(tokenizer, chat_template=PLUS_CONTROL_GENERATION_TEMPLATE, mask_user_turns=True)
 
 
 def test_trace_chat_processor_labels_generation_masked_tool_spans(tokenizer: MarinTokenizer):

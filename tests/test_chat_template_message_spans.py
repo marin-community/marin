@@ -43,6 +43,10 @@ _MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
     ),
 ]
 
+# Stock upstream templates ship no generation block, so mask-consuming processors must reject them
+# up front rather than silently emit all-zero assistant labels.
+_NO_GENERATION_TEMPLATE_CASES = _MESSAGE_SPAN_REAL_TEMPLATE_CASES[len(_GENERATION_TAGGED_CASES) :]
+
 
 def _load_optional_tokenizer(name: str) -> MarinTokenizer:
     try:
@@ -131,3 +135,20 @@ def test_trace_chat_processor_labels_real_templates(case_name, tokenizer_name, c
     assert "result" in observation_text
     assert "3" in observation_text
     assert f"{case_name} final answer is done." in final_text
+
+
+@pytest.mark.parametrize(
+    "case_name,tokenizer_name,chat_template,template_kwargs",
+    _NO_GENERATION_TEMPLATE_CASES,
+    ids=[case[0] for case in _NO_GENERATION_TEMPLATE_CASES],
+)
+def test_trace_chat_processor_rejects_stock_templates_without_generation_block(
+    case_name, tokenizer_name, chat_template, template_kwargs
+):
+    tokenizer = _load_optional_tokenizer(tokenizer_name)
+    with pytest.raises(ValueError, match="generation"):
+        TraceChatProcessor(
+            tokenizer,
+            chat_template=chat_template,
+            loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
+        )

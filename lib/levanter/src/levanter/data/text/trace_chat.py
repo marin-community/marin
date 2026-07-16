@@ -35,7 +35,7 @@ from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.text.datasets import _resolve_pack_config
 from levanter.data.text.examples import GrugAttentionMask, LabeledLmExample, LossLabelSpec
 from levanter.store.cache import CacheOptions, TreeCache
-from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 
 TRACE_LABEL_DONT_SCORE = 0
@@ -375,6 +375,14 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
 
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
+
+        # Assistant loss labels are placed only where the assistant mask is set, so a template with
+        # no `{% generation %}` block would silently leave every assistant token unlabeled.
+        if not chat_template_has_generation_block(self.chat_template):
+            raise ValueError(
+                "Chat template must contain {% generation %} to indicate the position of the assistant "
+                "message; without it assistant tokens are never labeled for loss."
+            )
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[dict]:
         out: list[dict] = []
