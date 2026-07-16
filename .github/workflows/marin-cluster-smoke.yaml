@@ -90,9 +90,10 @@ jobs:
     # expensive, so this is opt-in on manual dispatch only — never nightly.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_gpu }}
     runs-on: ubuntu-latest
-    # Above the three vLLM e2es' summed per-test timeout so the runner is not killed mid-test; the
-    # run_test_job fixture terminates the H100 job on interruption within that window.
-    timeout-minutes: 150
+    # Above the vLLM/Snowball e2es' summed per-test timeout markers (~220 min worst case) plus install
+    # overhead, so the runner is not killed mid-test; the run_test_job fixture terminates the H100 job
+    # on interruption within that window.
+    timeout-minutes: 240
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -122,12 +123,14 @@ jobs:
           chmod 600 ~/.kube/coreweave-iris
 
       - name: Run CoreWeave GPU cluster smokes
-        # No S3 creds here: the vLLM S3 e2e streams weights from CoreWeave AI Object Storage inside
-        # the job, which reads them from the cluster's task-env secret. Runner env is not forwarded
-        # to the job (only create_environment's HF_TOKEN/WANDB_API_KEY are).
+        # No S3 creds here: the vLLM parity e2es stream the 67B weights from CoreWeave AI Object
+        # Storage inside the job, which reads them from the cluster's task-env secret. Runner env is
+        # not forwarded to the job (only create_environment's HF_TOKEN/WANDB_API_KEY are).
+        # No --timeout: each test carries its own pytest.mark.timeout, so the per-test markers govern
+        # (the TPU job overrides only because its evalchemy/sft tests carry no marker).
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           uv run pytest tests/cluster/vllm \
             -m cluster -o "addopts=" --import-mode=importlib \
-            -v -s --log-cli-level=INFO --tb=short --timeout=3600
+            -v -s --log-cli-level=INFO --tb=short

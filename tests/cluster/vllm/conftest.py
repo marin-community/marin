@@ -11,12 +11,13 @@ and registers the shared checkpoint helper for by-value pickling.
 import cloudpickle
 import pytest
 
-from tests.cluster.vllm import june_67b_a2b
+from tests.cluster.vllm import backend_parity, june_67b_a2b
 
 VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
 
-# Iris serializes the direct test callable by value; register its shared test helper too.
+# Iris serializes the direct test callable by value; register its shared test helpers too.
 cloudpickle.register_pickle_by_value(june_67b_a2b)
+cloudpickle.register_pickle_by_value(backend_parity)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
