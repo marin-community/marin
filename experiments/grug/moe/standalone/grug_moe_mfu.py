@@ -11,7 +11,10 @@ No real data -- deterministic synthetic tokens. Regenerate via rav/merge_minimal
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import math
+import os
 import time
 from pathlib import Path
 
@@ -20,6 +23,17 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+
+# Import TransformerEngine's JAX bindings before the Levanter/Haliax imports so TE's ep FFI
+# handlers (e.g. te_ep_prepare_ffi) register with XLA before the JAX backend is initialized by
+# Levanter's import side effects. Only the nccl_ep backend needs TE; the import is optional
+# everywhere else (e.g. Blackwell sonic_cute runs without TE 2.17 installed).
+try:
+    import transformer_engine.jax
+    import transformer_engine.jax.ep  # noqa: F401
+except ImportError:
+    pass
+
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax.sharding import NamedSharding
@@ -187,6 +201,13 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+
+# NCCL_EP (TransformerEngine HybridEP) runtime state, populated by main() when
+# --moe-implementation nccl_ep. The concrete (replica_dcn, data, expert, model)
+# mesh and the per-rank recv capacity are read inside the jitted model by
+# _moe_mlp_nccl_ep; ep_bootstrap must have run once under the same mesh.
+_NCCL_EP_MESH: jax.sharding.Mesh | None = None
+_NCCL_EP_RECV_CAP: int = 0
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -667,6 +688,90 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     )
 
 
+def _moe_mlp_nccl_ep(
+    x_flat: Float[Array, "T D"],
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_gate: jax.Array,
+    w_up: jax.Array,
+    w_down: jax.Array,
+    *,
+    num_experts: int,
+) -> jax.Array:
+    """Routed-expert MoE via TransformerEngine NCCL_EP (HybridEP) dispatch/combine.
+
+    Multi-controller, one process per GPU. Maps grug's ``expert`` mesh axis to TE's
+    EP axis and (``replica_dcn``, ``data``) to TE's DP axis. ``x_flat`` is ``[T, D]``
+    batch-sharded over ``(replica_dcn, data, expert)``; it is reshaped to
+    ``[num_procs, T_local, D]`` so dispatch axis 0 is the compound (dp, ep) rank.
+    Experts use grug's separate-weight GLU (``w_gate``/``w_up`` ``[E, D, I]``,
+    ``w_down`` ``[E, I, D]``). ``ep_bootstrap`` must have run once under the active
+    mesh + ``MeshResource``. Returns routed output ``[T, D]``.
+    """
+    import transformer_engine.jax.ep as te_ep  # optional dep: imported only for the nccl_ep backend
+
+    mesh = _NCCL_EP_MESH
+    T, D = x_flat.shape
+    K = selected_experts.shape[1]
+    moe_dim = w_down.shape[1]
+    ep_size = mesh.shape["expert"]
+    dp_size = mesh.shape["replica_dcn"] * mesh.shape["data"]
+    num_procs = dp_size * ep_size
+    T_local = T // num_procs
+    NLE = num_experts // ep_size
+    recv_cap = _NCCL_EP_RECV_CAP
+
+    ep3 = P(_BATCH_AXES, None, None)  # [num_procs, ., .] sharded over (replica_dcn, data, expert)
+    ep2 = P(_BATCH_AXES, None)
+    kernel_spec = P("expert", None, None, None)  # experts sharded on the ep-rank axis only
+
+    cfg = te_ep.EpLayerConfig(top_k=K, dispatch_output_per_expert_alignment=16)
+
+    tokens = reshard(x_flat.reshape(num_procs, T_local, D), ep3)
+    idx = reshard(selected_experts.reshape(num_procs, T_local, K), ep3)
+    cw = reshard(combine_weights.reshape(num_procs, T_local, K), ep3)
+
+    recv, recv_w, handle_mem, transport = te_ep.ep_dispatch(cfg, idx, tokens, cw, recv_cap)
+    recv = reshard(recv, ep3)  # [num_procs, recv_pr, D]
+    recv_w = reshard(recv_w, ep2)
+
+    recv_pr = recv.shape[1]
+    slots = recv_pr // NLE
+    wg = reshard(w_gate.reshape(ep_size, NLE, D, moe_dim), kernel_spec)
+    wu = reshard(w_up.reshape(ep_size, NLE, D, moe_dim), kernel_spec)
+    wd = reshard(w_down.reshape(ep_size, NLE, moe_dim, D), kernel_spec)
+
+    # Dense per-expert GLU over padded capacity slots (recv is grouped by local expert).
+    # Split the compound (dp,ep) rank axis: dp = (replica_dcn, data), ep = expert, so the
+    # einsum batch axis (ep) shares the expert-only sharding of the ep-sharded weights.
+    grouped_spec = P(("replica_dcn", "data"), "expert", None, None, None)
+    # Splitting the sharded rank axis into (dp, ep) *and* the slot axis into (NLE, slots) at once is
+    # ambiguous on an Explicit mesh; pin the output sharding so XLA keeps ep on the expert axis.
+    grouped = jax.lax.reshape(recv, (dp_size, ep_size, NLE, slots, D), out_sharding=grouped_spec)
+    gate = jnp.einsum("p e n s d, e n d i -> p e n s i", grouped, wg.astype(grouped.dtype))
+    up = jnp.einsum("p e n s d, e n d i -> p e n s i", grouped, wu.astype(grouped.dtype))
+    hidden = reshard(jax.nn.silu(gate) * up, grouped_spec)
+    out = jnp.einsum("p e n s i, e n i d -> p e n s d", hidden, wd.astype(hidden.dtype))
+    # Inverse merge (dp,ep)->rank and (NLE,slots)->recv_pr; pin the compound (dp,ep) sharding.
+    expert_out = jax.lax.reshape(out, (num_procs, recv_pr, D), out_sharding=ep3)
+
+    # ep_combine is an unweighted scatter-sum: fold the per-slot combine weight in
+    # here and zero the padded slots (recv_w == 0) before the combine.
+    mask = (recv_w != 0).astype(jnp.float32)[..., None]
+    weighted = (expert_out.astype(jnp.float32) * recv_w[..., None] * mask).astype(expert_out.dtype)
+    weighted = reshard(weighted, ep3)
+
+    combined = te_ep.ep_combine(
+        cfg,
+        handle_mem,
+        transport,
+        weighted,
+        num_local_tokens=(num_procs, T_local),
+        out_sharding=(_BATCH_AXES, None, None),
+    )
+    return combined.reshape(T, D)
+
+
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights."""
 
@@ -751,14 +856,26 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat, dropped_assignments = self.expert_mlp(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
-        )
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+        if self.cfg.moe_implementation == "nccl_ep":
+            routed_flat = _moe_mlp_nccl_ep(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                self.expert_mlp.w_gate,
+                self.expert_mlp.w_up,
+                self.expert_mlp.w_down,
+                num_experts=self.cfg.num_experts,
+            )
+            router_stats["capacity_overflow"] = jnp.zeros((), dtype=jnp.float32)
+        else:
+            routed_flat, dropped_assignments = self.expert_mlp(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=True,
+            )
+            router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -808,18 +925,26 @@ class Block(eqx.Module):
         use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
         disable_long_rope: bool = False,
+        remat_attn: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
         # lax.cond so the body has a uniform shape across scan iterations: long layers use
         # the full causal mask (and may PKO / drop RoPE); short layers use the sliding-window
         # mask, never PKO, and always RoPE.
-        attn_out = jax.lax.cond(
-            jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
-            operand=None,
-        )
-        x = x + attn_out
+        def _attn_residual(xx: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+            attn_in = self.attn_gated_norm(self.rms_attn(xx))
+            attn_out = jax.lax.cond(
+                jnp.asarray(use_long_mask, dtype=jnp.bool_),
+                lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
+                lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
+                operand=None,
+            )
+            return xx + attn_out
+
+        # `remat_attn` checkpoints ONLY the attention residual and leaves the MoE outside any
+        # checkpoint. The DeepEP dispatch/combine FFI is `has_side_effect=True`, which
+        # jax.checkpoint's partial-eval rejects; keeping the MoE out of the remat'd region is
+        # the way to run DeepEP under gradient checkpointing (at the cost of saving MoE acts).
+        x = eqx.filter_checkpoint(_attn_residual)(x) if remat_attn else _attn_residual(x)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -924,6 +1049,16 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
+        def _maybe_ckpt(fn):
+            # "none" skips checkpointing entirely (keep all activations, no backward recompute);
+            # "recompute_all"/"save_moe" checkpoint the block/layer with the chosen policy.
+            return fn if cfg.remat_mode == "none" else eqx.filter_checkpoint(fn, policy=remat_policy)
+
+        # DeepEP's dispatch/combine FFI is has_side_effect=True, which jax.checkpoint's partial-eval
+        # rejects. For deepep we therefore checkpoint only the attention residual (inside Block via
+        # remat_attn) and keep the MoE outside any checkpoint, rather than remat'ing the whole block.
+        moe_outside_remat = cfg.moe_implementation == "deepep" and cfg.remat_mode != "none"
+
         if self.blocks is not None:
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
@@ -931,9 +1066,14 @@ class Transformer(eqx.Module):
                 is_last = i == num_blocks - 1
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
-                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
-                )
+                if moe_outside_remat:
+                    hidden, router_stats = block(
+                        hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope, remat_attn=True
+                    )
+                else:
+                    hidden, router_stats = _maybe_ckpt(block)(
+                        hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
+                    )
                 moe_router_stats.append(router_stats)
             router_metrics = {
                 "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
@@ -954,7 +1094,17 @@ class Transformer(eqx.Module):
                 scan_inputs: tuple[Block, Bool[Array, ""]],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                if moe_outside_remat:
+                    return layer(
+                        carry_hidden,
+                        short_mask,
+                        long_mask,
+                        layer_use_long_mask,
+                        False,
+                        cfg.disable_long_rope,
+                        remat_attn=True,
+                    )
+                return _maybe_ckpt(layer)(
                     carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
                 )
 
@@ -1127,7 +1277,7 @@ __all__ = [
 from dataclasses import dataclass
 
 import jax.numpy as jnp
-from levanter.optim import OptimizerConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.optim.grugmuon import _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
@@ -1461,7 +1611,7 @@ import levanter.callbacks as callbacks
 import levanter.tracker
 from jax.sharding import Mesh
 from jax.tree_util import register_dataclass
-from levanter.optim import AdamConfig, OptimizerConfig
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -2028,6 +2178,7 @@ __all__ = [
 _B200_BF16_PEAK_FLOPS = 2.25e15
 _H100_BF16_PEAK_FLOPS = 9.89e14
 _BATCH_AXES = ("replica_dcn", "data", "expert")
+_PROFILE_TRACE_STEPS = 1  # steady steps to trace; 1 keeps trace.json.gz untruncated (~1 step = all kernels once)
 
 
 def _parse():
@@ -2043,9 +2194,42 @@ def _parse():
     p.add_argument("--num-experts", type=int, default=64)
     p.add_argument("--num-experts-per-token", type=int, default=4)
     p.add_argument("--head-dim", type=int, default=128)
+    p.add_argument(
+        "--num-kv-heads", type=int, default=0, help="GQA KV-head count; 0 = full MHA (num_kv_heads = num_heads)"
+    )
     p.add_argument("--num-gpus", type=int, default=8)
     p.add_argument("--moe-implementation", default="sonic")
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
+    p.add_argument("--expert-axis-size", type=int, default=1, help="EP degree; 1 = EP1 (pure FSDP)")
+    p.add_argument(
+        "--capacity-factor",
+        type=float,
+        default=1.25,
+        help="NCCL_EP per-expert recv capacity as a multiple of expected balanced load.",
+    )
+    p.add_argument("--max-num-sms", type=int, default=0, help="NCCL_EP kernel SM budget (0=auto)")
+    p.add_argument(
+        "--blocks",
+        choices=["auto", "stacked", "unrolled"],
+        default="auto",
+        help="Layer layout: 'stacked' (one lax.scan body, fast compile), 'unrolled' (per-layer "
+        "subgraphs), or 'auto' (stacked, except unrolled for nccl_ep's per-layer EpLayerConfig).",
+    )
+    p.add_argument(
+        "--remat-mode",
+        default="recompute_all",
+        choices=["recompute_all", "save_moe", "none"],
+        help="gradient checkpointing: recompute_all (baseline), save_moe, or none (no recompute)",
+    )
+    p.add_argument("--profile", action="store_true", help="capture an xprof trace over a few steady steps")
+    p.add_argument("--muon-ns-steps", type=int, default=5, help="MuonH Newton-Schulz iterations (baseline 5)")
+    # Manual multi-controller (1 process per GPU) — required for NCCL_EP. Each rank runs this
+    # script; jax.distributed coordinates and local_device_ids=[process_id] pins one GPU per rank.
+    p.add_argument(
+        "--coordinator-address", default=None, help="jax.distributed coordinator host:port (1-proc/GPU multi-controller)"
+    )
+    p.add_argument("--num-processes", type=int, default=1)
+    p.add_argument("--process-id", type=int, default=0)
     return p.parse_args()
 
 
@@ -2062,56 +2246,152 @@ def _make_batch(bs, seq_len, vocab, step, mesh):
 
 
 def main():
-    jax.config.update("jax_threefry_partitionable", True)
     a = _parse()
+    # Manual 1-proc/GPU multi-controller (for NCCL_EP): each rank runs this script with an explicit
+    # jax.distributed coordinator; local_device_ids=[process_id] pins exactly one GPU to this rank.
+    if a.coordinator_address:
+        jax.distributed.initialize(
+            coordinator_address=a.coordinator_address,
+            num_processes=a.num_processes,
+            process_id=a.process_id,
+            local_device_ids=[a.process_id],
+        )
+        print(
+            f"MC process_count={jax.process_count()} process_index={jax.process_index()} "
+            f"device_count={jax.device_count()} local={jax.local_device_count()}",
+            flush=True,
+        )
+    # Multi-controller JAX under `iris job run --replicas N` (one process per node, 8 local GPUs):
+    # task 0 registers the coordinator in the iris endpoint registry, tasks 1..N-1 poll. Must run
+    # before any jax backend use. No-op / skipped for a single-task job (and outside iris entirely).
+    elif int(os.environ.get("IRIS_NUM_TASKS", "1")) > 1:
+        from iris.runtime.jax_init import initialize_jax
+
+        initialize_jax()
+        print(
+            f"MN process_count={jax.process_count()} process_index={jax.process_index()} "
+            f"device_count={jax.device_count()} local={jax.local_device_count()}",
+            flush=True,
+        )
+    jax.config.update("jax_threefry_partitionable", True)
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     nh = a.hidden_dim // a.head_dim
+    n_kv = a.num_kv_heads or nh
+    if nh % n_kv != 0:
+        raise ValueError(f"num_heads={nh} must be divisible by num_kv_heads={n_kv} for GQA")
     inter = a.hidden_dim // 2
     model = GrugModelConfig(
         vocab_size=128256,
         hidden_dim=a.hidden_dim,
         num_layers=a.num_layers,
         num_heads=nh,
-        num_kv_heads=nh,
+        num_kv_heads=n_kv,
         head_dim=a.head_dim,
         intermediate_dim=inter,
         shared_expert_intermediate_dim=inter,
         num_experts=a.num_experts,
         num_experts_per_token=a.num_experts_per_token,
         max_seq_len=a.seq_len,
-        sliding_window=2048,
+        sliding_window=a.seq_len,
         initializer_std=0.5 / (a.hidden_dim**0.5),
         qk_mult=1.3,
         attention_implementation=a.attention_implementation,
         moe_implementation=a.moe_implementation,
-        use_array_stacked_blocks=True,
+        # NCCL_EP defaults to unrolled layers (each gets its own EpLayerConfig); 'stacked' folds
+        # them into one lax.scan body (much faster compile) — valid because the ep handle_mem is a
+        # per-iteration value, not per-layer static state. Override with --blocks.
+        use_array_stacked_blocks=(a.blocks == "stacked" if a.blocks != "auto" else a.moe_implementation != "nccl_ep"),
         disable_pko=True,
-        remat_mode="recompute_all",
+        remat_mode=a.remat_mode,
     )
-    optimizer = GrugMoeMuonHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
+    optimizer = GrugMoeMuonHConfig(
+        learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1, backend_steps=a.muon_ns_steps
+    )
     mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     opt = optimizer.build(a.steps)
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
     flops_per_example, flops_summary = _compute_flops(model_config=model)
     peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
-    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    mesh = compact_grug_mesh(expert_axis_size=a.expert_axis_size, replica_axis_size=1)
     metrics = []
     tps = a.batch_size * a.seq_len
-    with set_mesh(mesh):
+
+    # NCCL_EP: publish the concrete mesh + per-rank recv capacity for _moe_mlp_nccl_ep,
+    # and set up TE's MeshResource + one-time ep_bootstrap under the mesh guard.
+    nccl_ep = a.moe_implementation == "nccl_ep"
+    ep_guard: contextlib.AbstractContextManager = contextlib.nullcontext()
+    if nccl_ep:
+        import transformer_engine.jax.ep as te_ep
+        from transformer_engine.jax.ep import ep_bootstrap
+        from transformer_engine.jax.sharding import MeshResource, global_shard_guard
+
+        # TE's ep dispatch/combine call with_sharding_constraint to pin output shardings, which
+        # asserts (rather than reshards) on grug's Explicit-axis mesh. Route TE's wsc through
+        # jax.sharding.reshard so it establishes the sharding on the Explicit mesh instead.
+        _te_orig_wsc = te_ep.with_sharding_constraint
+
+        def _wsc_or_reshard(arr, sharding):
+            try:
+                return _te_orig_wsc(arr, sharding)
+            except AssertionError as exc:
+                if "Explicit" not in str(exc):
+                    raise
+                return reshard(arr, sharding)
+
+        te_ep.with_sharding_constraint = _wsc_or_reshard
+
+        global _NCCL_EP_MESH, _NCCL_EP_RECV_CAP
+        ep_size = mesh.shape["expert"]
+        dp_size = mesh.shape["replica_dcn"] * mesh.shape["data"]
+        num_procs = dp_size * ep_size
+        t_local = (a.batch_size * a.seq_len) // num_procs
+        nle = a.num_experts // ep_size
+        # Per-expert capacity = capacity_factor * expected tokens/expert, aligned to 16.
+        expected_per_expert = num_procs * t_local * a.num_experts_per_token / a.num_experts
+        slots_per_expert = max(16, math.ceil(a.capacity_factor * expected_per_expert / 16) * 16)
+        _NCCL_EP_MESH = mesh
+        _NCCL_EP_RECV_CAP = nle * slots_per_expert
+        ep_guard = global_shard_guard(MeshResource(dp_resource="data", ep_resource="expert"))
+        print(
+            f"NCCL_EP dp={dp_size} ep={ep_size} num_procs={num_procs} T_local={t_local} "
+            f"NLE={nle} slots/expert={slots_per_expert} recv_cap={_NCCL_EP_RECV_CAP}",
+            flush=True,
+        )
+
+    with set_mesh(mesh), ep_guard:
+        if nccl_ep:
+            ep_bootstrap(
+                world_size=num_procs,
+                rank=a.process_id,
+                num_experts=a.num_experts,
+                max_tokens_per_rank=t_local,
+                recv_capacity_per_rank=_NCCL_EP_RECV_CAP,
+                hidden_dim=a.hidden_dim,
+                max_num_sms=a.max_num_sms,
+            )
 
         @jax.jit
         def init(rng):
             return initial_state(model, optimizer=opt, mp=mp, key=rng, ema_beta=None)
 
         state = init(jax.random.PRNGKey(0))
+        trace_stop = min(a.warmup_steps + _PROFILE_TRACE_STEPS, a.steps) - 1
+        profiling = False
         for step in range(a.steps):
             batch = _make_batch(a.batch_size, a.seq_len, model.vocab_size, step, mesh)
+            if a.profile and step == a.warmup_steps:
+                jax.profiler.start_trace(str(out / "xprof"))
+                profiling = True
             t0 = time.perf_counter()
-            state, sm, _w = train_step(state, batch, compute_watch=False)
-            loss = sm["train/loss"]
-            jax.block_until_ready(loss)
+            with jax.profiler.StepTraceAnnotation("train", step_num=step):
+                state, sm, _w = train_step(state, batch, compute_watch=False)
+                loss = sm["train/loss"]
+                jax.block_until_ready(loss)
             dur = time.perf_counter() - t0
+            if profiling and step == trace_stop:
+                jax.profiler.stop_trace()
+                profiling = False
             s = int(state.step) - 1
             eps = a.batch_size / dur
             achieved = flops_per_example * eps
@@ -2140,6 +2420,7 @@ def main():
             "num_gpus": a.num_gpus,
         },
         "steady_median_mfu_b200": med([m["mfu_b200"] for m in steady]),
+        "steady_median_mfu_h100_equiv": med([m["mfu_h100_equiv"] for m in steady]),
         "steady_median_achieved_tflops": (
             None if not steady else med([m["achieved_flops_per_second"] for m in steady]) / 1e12
         ),
