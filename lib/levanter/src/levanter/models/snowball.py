@@ -775,73 +775,91 @@ def snowball_from_state_dict(
     m = template
     m = eqx.tree_at(lambda t: t.token_embed, m, _reshard_for_init(g("model.embed_tokens.weight"), Pembed_vocab))
     m = eqx.tree_at(lambda t: t.embed_norm.weight, m, g("model.embed_norm.weight"))
-    m = eqx.tree_at(lambda t: t.embed_gated_norm.w_down, m, _r(_T(g("model.embed_gated_norm.down_proj.weight"))))
-    m = eqx.tree_at(lambda t: t.embed_gated_norm.w_up, m, _r(_T(g("model.embed_gated_norm.up_proj.weight"))))
+    m = eqx.tree_at(
+        lambda t: t.embed_gated_norm.w_down, m, _reshard_replicated(_T(g("model.embed_gated_norm.down_proj.weight")))
+    )
+    m = eqx.tree_at(
+        lambda t: t.embed_gated_norm.w_up, m, _reshard_replicated(_T(g("model.embed_gated_norm.up_proj.weight")))
+    )
     m = eqx.tree_at(lambda t: t.final_norm.weight, m, g("model.norm.weight"))
-    m = eqx.tree_at(lambda t: t.final_gated_norm.w_down, m, _r(_T(g("model.final_gated_norm.down_proj.weight"))))
-    m = eqx.tree_at(lambda t: t.final_gated_norm.w_up, m, _r(_T(g("model.final_gated_norm.up_proj.weight"))))
+    m = eqx.tree_at(
+        lambda t: t.final_gated_norm.w_down, m, _reshard_replicated(_T(g("model.final_gated_norm.down_proj.weight")))
+    )
+    m = eqx.tree_at(
+        lambda t: t.final_gated_norm.w_up, m, _reshard_replicated(_T(g("model.final_gated_norm.up_proj.weight")))
+    )
     m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
 
     for i in range(len(m.blocks)):
         p = f"model.layers.{i}"
         m = eqx.tree_at(lambda t, i=i: t.blocks[i].rms_attn.weight, m, g(f"{p}.input_layernorm.weight"))
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn_gated_norm.w_down, m, _r(_T(g(f"{p}.attn_gated_norm.down_proj.weight")))
+            lambda t, i=i: t.blocks[i].attn_gated_norm.w_down,
+            m,
+            _reshard_replicated(_T(g(f"{p}.attn_gated_norm.down_proj.weight"))),
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn_gated_norm.w_up, m, _r(_T(g(f"{p}.attn_gated_norm.up_proj.weight")))
+            lambda t, i=i: t.blocks[i].attn_gated_norm.w_up,
+            m,
+            _reshard_replicated(_T(g(f"{p}.attn_gated_norm.up_proj.weight"))),
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_q, m, _rp(_T(g(f"{p}.self_attn.q_proj.weight")), P("data", "model"))
+            lambda t, i=i: t.blocks[i].attn.w_q, m, _reshard(_T(g(f"{p}.self_attn.q_proj.weight")), P("data", "model"))
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_k, m, _rp(_T(g(f"{p}.self_attn.k_proj.weight")), P("data", "model"))
+            lambda t, i=i: t.blocks[i].attn.w_k, m, _reshard(_T(g(f"{p}.self_attn.k_proj.weight")), P("data", "model"))
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_v, m, _rp(_T(g(f"{p}.self_attn.v_proj.weight")), P("data", "model"))
+            lambda t, i=i: t.blocks[i].attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), P("data", "model"))
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_o, m, _rp(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", "data"))
+            lambda t, i=i: t.blocks[i].attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", "data"))
         )
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].attn.attn_gate, m, _r(_T(g(f"{p}.self_attn.attn_gate.weight"))))
+        m = eqx.tree_at(
+            lambda t, i=i: t.blocks[i].attn.attn_gate, m, _reshard_replicated(_T(g(f"{p}.self_attn.attn_gate.weight")))
+        )
         m = eqx.tree_at(lambda t, i=i: t.blocks[i].rms_mlp.weight, m, g(f"{p}.post_attention_layernorm.weight"))
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_down, m, _r(_T(g(f"{p}.mlp_gated_norm.down_proj.weight")))
+            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_down,
+            m,
+            _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.down_proj.weight"))),
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_up, m, _r(_T(g(f"{p}.mlp_gated_norm.up_proj.weight")))
+            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_up,
+            m,
+            _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.up_proj.weight"))),
         )
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router, m, _r(_T(g(f"{p}.mlp.router.weight"))))
+        m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
         m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_gate,
             m,
-            _rp(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+            _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_up,
             m,
-            _rp(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+            _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_down,
             m,
-            _rp(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+            _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].shared.w_gate,
             m,
-            _rp(_T(g(f"{p}.shared_expert.gate_proj.weight")), P("data", "model")),
+            _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P("data", "model")),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].shared.w_up,
             m,
-            _rp(_T(g(f"{p}.shared_expert.up_proj.weight")), P("data", "model")),
+            _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P("data", "model")),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].shared.w_down,
             m,
-            _rp(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", "data")),
+            _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", "data")),
         )
     return m
 
@@ -850,11 +868,11 @@ _EXPERT_GATE_UP_SPEC = P("expert", "data", "model")
 _EXPERT_DOWN_SPEC = P("expert", "model", "data")
 
 
-def _r(arr: jax.Array) -> jax.Array:
+def _reshard_replicated(arr: jax.Array) -> jax.Array:
     return _reshard_for_init(arr, P(None, None))
 
 
-def _rp(arr: jax.Array, spec: P) -> jax.Array:
+def _reshard(arr: jax.Array, spec: P) -> jax.Array:
     return _reshard_for_init(arr, spec)
 
 

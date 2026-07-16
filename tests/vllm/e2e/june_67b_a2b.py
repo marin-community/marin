@@ -12,7 +12,6 @@ import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 from levanter.checkpoint import load_checkpoint as load_levanter_checkpoint
 from rigging.filesystem import StoragePath
 
@@ -74,31 +73,6 @@ class InferenceGolden:
 
 def read_inference_golden(path: Path) -> InferenceGolden:
     return draccus.decode(InferenceGolden, json.loads(path.read_text()))
-
-
-# Cross-implementation parity bound, shared by the Snowball 67B gates. The golden's top logprobs sit
-# on a 1/32 grid with exact ties, so a probability-error bound (the vLLM export test's bound) is the
-# meaningful check; a bit-exact / exact-rank comparison is the wrong bar for a graph reimplementation.
-GOLDEN_MAX_PROBABILITY_ERROR = 0.008
-
-
-def score_next_token_against_golden(logprobs: np.ndarray, golden: InferenceGolden) -> tuple[np.ndarray, float]:
-    """Score per-device next-token logprobs against the golden's top tokens, rank-independently.
-
-    Args:
-        logprobs: ``[batch, vocab]`` log-softmax of the next-token logits (one row per device).
-        golden: the frozen inference golden.
-
-    Returns ``(greedy_ids, max_probability_error)``: the argmax token per device, and the largest
-    probability error between Snowball's logprob for each golden token and the golden's own logprob.
-    Insensitive to the bf16 reordering of the golden's exact-tied tail tokens.
-    """
-    golden_ids = np.asarray([entry.token_id for entry in golden.top_logprobs])
-    golden_logprobs = np.asarray([entry.logprob for entry in golden.top_logprobs])
-    greedy_ids = logprobs.argmax(axis=-1)
-    mine_at_golden = logprobs[:, golden_ids]  # [batch, len(top_logprobs)]
-    max_probability_error = float(np.max(np.abs(np.exp(mine_at_golden) - np.exp(golden_logprobs)[None, :])))
-    return greedy_ids, max_probability_error
 
 
 def read_executor_info() -> dict[str, Any]:

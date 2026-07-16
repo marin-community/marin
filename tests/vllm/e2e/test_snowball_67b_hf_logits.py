@@ -41,13 +41,8 @@ from levanter.models.snowball import SnowballLMHeadModel
 from levanter.tokenizers import load_tokenizer
 from levanter.utils.jax_utils import parameter_count
 
-from .june_67b_a2b import (
-    GOLDEN_MAX_PROBABILITY_ERROR,
-    JUNE_67B_A2B,
-    InferenceGolden,
-    read_inference_golden,
-    score_next_token_against_golden,
-)
+from .backend_parity import LEVANTER_MAX_PROBABILITY_ERROR, parity_from_logprob_row
+from .june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
 from .remote_job import run_remote_test_job
 
 logger = logging.getLogger(__name__)
@@ -112,22 +107,21 @@ def assert_snowball_hf_export_matches_golden(golden: InferenceGolden) -> None:
     logprobs = np.asarray(jax.device_get(logprobs))
 
     # Greedy-token match + rank-independent probability parity on the golden's token set (insensitive
-    # to the bf16 tie reordering, meaningful against a real regression).
-    greedy_ids, max_prob_error = score_next_token_against_golden(logprobs, golden)
-    golden_greedy = golden.top_logprobs[0].token_id
+    # to the bf16 tie reordering, meaningful against a real regression), one row per device.
+    parities = [parity_from_logprob_row(golden, row) for row in logprobs]
     logger.info(
         "Snowball HF-export inference: %s",
         {
             "hf_load_seconds": load_elapsed,
             "logical_gib": logical_gib,
             "compile_and_inference_seconds": infer_elapsed,
-            "greedy_token": tokenizer.decode([int(greedy_ids[0])]),
-            "max_probability_error_vs_golden": max_prob_error,
+            "greedy_token": tokenizer.decode([parities[0].greedy_token_id]),
+            "max_probability_error_vs_golden": max(p.max_probability_error for p in parities),
         },
     )
     # Rank 0 sits 3.98 nats clear of rank 1, so the greedy token must match on every device.
-    np.testing.assert_array_equal(greedy_ids, np.broadcast_to(golden_greedy, greedy_ids.shape))
-    assert max_prob_error <= GOLDEN_MAX_PROBABILITY_ERROR, max_prob_error
+    for parity in parities:
+        parity.assert_matches(max_probability_error=LEVANTER_MAX_PROBABILITY_ERROR)
 
 
 def test_snowball_h100_hf_export_matches_golden(marin_gpu_client: IrisClient) -> None:

@@ -262,7 +262,7 @@ def test_snowball_rejects_off_recipe(overrides, message):
         SnowballConfig.from_hf_config(hf)
 
 
-def test_snowball_load_path_multidevice_sharding(tmp_path):
+def test_snowball_load_path_multidevice_sharding():
     """The load-path forward must survive a data-sharded mesh (regression for the 67B router_bias).
 
     ``g()``-loaded leaves (norm weights, router_bias) inherit the sharding of the incoming state
