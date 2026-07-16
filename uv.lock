@@ -197,6 +197,7 @@ fork-strategy = "fewest"
 members = [
     "marin-core",
     "marin-ducky",
+    "marin-dupekit",
     "marin-finelog",
     "marin-fray",
     "marin-haliax",
@@ -4616,7 +4617,7 @@ requires-dist = [
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math", "api", "ifeval"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "luxical", marker = "extra == 'datakit'" },
-    { name = "marin-dupekit", marker = "extra == 'dedup'", specifier = ">=0.1.2.dev202606060824" },
+    { name = "marin-dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
@@ -4769,14 +4770,67 @@ test = [
 
 [[package]]
 name = "marin-dupekit"
-version = "0.1.2.dev202607010930"
+version = "0.1.2"
+source = { editable = "lib/dupekit" }
+dependencies = [
+    { name = "marin-dupekit-native" },
+]
+
+[package.optional-dependencies]
+benchmark = [
+    { name = "pytest-benchmark" },
+    { name = "pytest-memray" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-dupekit-native", specifier = ">=0.1.2.dev0" },
+    { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
+    { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
+]
+provides-extras = ["benchmark"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "huggingface-hub" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
+name = "marin-dupekit-native"
+version = "0.1.3.dev202607162252"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b0/f6/dcdffb0a599f3741e88d6fd0ce556cc2ce030f90807f31c29a59bbb47cf4/marin_dupekit-0.1.2.dev202607010930.tar.gz", hash = "sha256:8830ae170f01b6fc9fddfc39fe29d77bacab0aaebbaf6f1848a7cc5b77680290", size = 29902, upload-time = "2026-07-01T09:36:46.448Z" }
+dependencies = [
+    { name = "pyarrow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/08/79/c182b3483a7ab08086d738c12bd6d4e08cff81b3895f3b8858b1e04c6438/marin_dupekit_native-0.1.3.dev202607162252.tar.gz", hash = "sha256:31a1efef191d96df32e62377a0587cda5bd47a2fd76c49706070b32feedfbcf4", size = 22401, upload-time = "2026-07-16T22:58:18.454Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/a7/646f30562d207aa027f03c95605ed4c0ede413b993d1f0579683676c4666/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:5ca40b90728127268bc6bd38985a795319b91db553ba6f67d8f24d845e8bf9cc", size = 4580721, upload-time = "2026-07-01T09:36:38.895Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/75/23642d2f71f37a5486375e87e3ce140097ffe3aa37fb25db05b5bb3b5f83/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0dc850f498c6056f5bafaac3ad81872f067324ab45893c8d8509c18eae59b1ab", size = 4192370, upload-time = "2026-07-01T09:36:41.144Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/d6/5d1f46582dcf867ef770cb093062107edb95d9d9c0268f8a324423f6cb20/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2473d4b67939a57b3cbdb393c3b7772c50b6b24efb040682dd1c1130293e9f9f", size = 4413413, upload-time = "2026-07-01T09:36:43.029Z" },
-    { url = "https://files.pythonhosted.org/packages/11/8c/c2c333fde146c77bc4a4a74b059c4c2e2f9d2234ba3c44b1e66011fa6028/marin_dupekit-0.1.2.dev202607010930-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:6bdaf183bfbfdd7e7e8577891db763357ff6d43aaf81b6b3daa957c8b71f5392", size = 4755070, upload-time = "2026-07-01T09:36:44.78Z" },
+    { url = "https://files.pythonhosted.org/packages/08/50/5b9b758042503fa769d54a4837ba60930ea7d46026f794dfe0a28eb3267d/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:1fd976670745af81d2dc6ca2342fcb58b7ca64acf653074e50ca89f50228964b", size = 4527051, upload-time = "2026-07-16T22:58:09.948Z" },
+    { url = "https://files.pythonhosted.org/packages/37/9d/b1e41b78b1998e1db4b5401ec2296674dec47cd18863d31649799f6708e4/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:f76b76e4b5cd1e54d503e5d1179f2539345cea4c96e48ec5c1180b885de8e78c", size = 4181539, upload-time = "2026-07-16T22:58:12.236Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/5c/ad51d1b69080a7e0e7f08db35b8998efbd20cb2e41e3155f1a701ad1270a/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3d5f8c3aeaef51a4ea7ae2ec01dca252153ec45ca157c02400de6c5d5ba9ba5a", size = 4393264, upload-time = "2026-07-16T22:58:14.1Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/91/95a22b88d94c1ce44808e30790dc88b6484d25fd982901f23926a9d9d2bd/marin_dupekit_native-0.1.3.dev202607162252-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:3b194b43728954f03a2015546faadc6049eca2ce4a65d30547bb783f54529e14", size = 4723816, upload-time = "2026-07-16T22:58:15.969Z" },
 ]
 
 [[package]]
@@ -5453,7 +5507,7 @@ dependencies = [
 requires-dist = [
     { name = "marin-core", editable = "lib/marin" },
     { name = "marin-ducky", editable = "lib/ducky" },
-    { name = "marin-dupekit", specifier = ">=0.1.2.dev202606060824" },
+    { name = "marin-dupekit", editable = "lib/dupekit" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
@@ -5744,6 +5798,31 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "memray"
+version = "1.19.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "rich" },
+    { name = "textual" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/96/04/5b886a36df947599e0f37cd46e6e44e565299815f044e2303ab2ae9f8870/memray-1.19.3.tar.gz", hash = "sha256:4e0fb29ff0a50c0ec9dc84294d8f2c83419feba561a37628b304c2ae4fe73d03", size = 2417089, upload-time = "2026-04-08T18:49:32.409Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/79/095c09f62f2ca527e4b5e71c38e7c9686f06c15a39f69f691428c45bae83/memray-1.19.3-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:dcbfa513332366544a2fdc74f0e385f3a11a2233ca9de5aac986e396ce0a2293", size = 2185040, upload-time = "2026-04-08T18:48:05.98Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/26/8328966c9b1cecbf43e8c96a210178f68fb1df8a62dd4f1735158aa6610b/memray-1.19.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4df9b00262fe48485c2afc4a52c88640d729d3bf999b3c633052d40c0ee970d1", size = 2163887, upload-time = "2026-04-08T18:48:07.455Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/eb/6ed7c46c2e6aec4d18926662114e88ba557f2e88c50fd5737b7989d67f3c/memray-1.19.3-cp312-cp312-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:4a710509a5728a6f3b79eca615b538f9fa20452b21c0ba5265bdfb5fd4ff5f1d", size = 9743964, upload-time = "2026-04-08T18:48:09.213Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/60/668ad1dd30744564ef2d3e444bf39e10c41f1820240e949d0a3fadea9101/memray-1.19.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:578349f78268d2561275c4fb78c7ebe215f5264ad408d46207795ae58ec5d79e", size = 10013567, upload-time = "2026-04-08T18:48:11.513Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/aa/e5e969d50e57ef3ae41c6996626381afe3c9933d1924844d326f05240596/memray-1.19.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fbbe64058ea329e7ff4f2c8067e6400b7db7d44a3f897a36c21f1a54e9b0c1ee", size = 9387646, upload-time = "2026-04-08T18:48:13.803Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/ea/b23b30e31f365687004df304b9e46f19de4f5b860e78b363dd5d51f618f9/memray-1.19.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:1a60d44b18ac5c1f6dde15e5d5f2dc75b5dfa55f450b5b682bbb1274564bcb41", size = 12237978, upload-time = "2026-04-08T18:48:16.478Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/fd/e5637a682cb0af3b9e79017b98b8db5f4bf65c24d9e9fea10dec2495ca13/memray-1.19.3-cp313-cp313-macosx_10_14_x86_64.whl", hash = "sha256:1c7474aa70145eb2be1479b5465022d41a01467dbe4f8487d4fb4c3d38fd6ba9", size = 2184361, upload-time = "2026-04-08T18:48:18.775Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/08/fcd190a9de788363856d475b595b8a831fefc5c0ee282d27e849dda57d1c/memray-1.19.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:ee7f3f0e3f7ee4f5c82692f886ffbabddc885bc9ab3a507732a1aa2155e16ed1", size = 2162568, upload-time = "2026-04-08T18:48:20.691Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/8f/72d70d93f911974652e19f50024142ca674cb19d4f34a91cb2b2b3e065af/memray-1.19.3-cp313-cp313-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:c1842b2a0033ca44d11c40c9afd5b6a8a29f00e53ea151da4bb81f6dfd194b79", size = 9743474, upload-time = "2026-04-08T18:48:22.544Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/ed/d2390f02d978e31666f2821574940f553f27fd1cf38003b592038441a9b8/memray-1.19.3-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:51bea540d8a79c83720bc74d5f9508911572dd77b5fb0fc46d2fe287d96a2dc7", size = 10012845, upload-time = "2026-04-08T18:48:25.455Z" },
+    { url = "https://files.pythonhosted.org/packages/34/0f/78eb8d0973e11d0780fabbd048cab184bd4f28788f211d6d7eb97aed7d04/memray-1.19.3-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:502b07e65a972c3d47e39b0c9f706189f8b667953f68f80672f0537d2ffd9633", size = 9391464, upload-time = "2026-04-08T18:48:28.192Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/b7/e209d3fa09f096d7d4b7dd3be7948cc36879aa1ef75a349cf88a7ad74d00/memray-1.19.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:e9dc493402446ff495edaa90c6b587a32ace14e2d4a022051458b535a029cada", size = 12244789, upload-time = "2026-04-08T18:48:30.418Z" },
 ]
 
 [[package]]
@@ -8659,6 +8738,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-benchmark"
+version = "5.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py-cpuinfo" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/34/9f732b76456d64faffbef6232f1f9dbec7a7c4999ff46282fa418bd1af66/pytest_benchmark-5.2.3.tar.gz", hash = "sha256:deb7317998a23c650fd4ff76e1230066a76cb45dcece0aca5607143c619e7779", size = 341340, upload-time = "2025-11-09T18:48:43.215Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/29/e756e715a48959f1c0045342088d7ca9762a2f509b945f362a316e9412b7/pytest_benchmark-5.2.3-py3-none-any.whl", hash = "sha256:bc839726ad20e99aaa0d11a127445457b4219bdb9e80a1afc4b51da7f96b0803", size = 45255, upload-time = "2025-11-09T18:48:39.765Z" },
+]
+
+[[package]]
 name = "pytest-flakefinder"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -8681,6 +8773,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8c/c9/93ad2ba2413057ee694884b88cf7467a46c50c438977720aeac26e73fdb7/pytest-forked-1.6.0.tar.gz", hash = "sha256:4dafd46a9a600f65d822b8f605133ecf5b3e1941ebb3588e943b4e3eb71a5a3f", size = 9977, upload-time = "2023-02-12T23:22:27.544Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/af/9c0bda43e486a3c9bf1e0f876d0f241bc3f229d7d65d09331a0868db9629/pytest_forked-1.6.0-py3-none-any.whl", hash = "sha256:810958f66a91afb1a1e2ae83089d8dc1cd2437ac96b12963042fbb9fb4d16af0", size = 4897, upload-time = "2023-02-12T23:22:26.022Z" },
+]
+
+[[package]]
+name = "pytest-memray"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "memray" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6f/c2/6d2f0311f388afade90d78fa686d82ca95cd653a1b29ce512ebc39f0f3b4/pytest_memray-1.9.0.tar.gz", hash = "sha256:022562a3c738f7849ae8677c3607029be2c1c79043964a96680d987993da6257", size = 245117, upload-time = "2026-07-01T21:37:07.138Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/64/c0f61cf15e517eab1a1fa9e0d62c5add36bddd818bb6922e7c37f29b88c1/pytest_memray-1.9.0-py3-none-any.whl", hash = "sha256:bc8b413b4872d09fa2f462b551b7fb7cabf358b55307dafa40d7340b2f3d9d9a", size = 19687, upload-time = "2026-07-01T21:37:05.565Z" },
 ]
 
 [[package]]
