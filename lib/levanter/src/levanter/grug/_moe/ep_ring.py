@@ -17,16 +17,8 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
 )
-from levanter.grug._moe.ep_common import _prefix_cap_counts
+from levanter.grug._moe.ep_common import _prefix_cap_counts, _quack_expert_mlp_fn
 from levanter.grug.sharding import _batch_axes
-
-try:
-    from levanter.grug._moe.sonic_cute import _expert_mlp as _quack_expert_mlp
-    from levanter.grug._moe.sonic_cute import _interleave_gate_up
-except ModuleNotFoundError as _e:  # quack-kernels (and its torch dep) are optional
-    _ring_cute_error = _e
-    _quack_expert_mlp = None
-    _interleave_gate_up = None
 
 
 def _ring_local(
@@ -172,19 +164,7 @@ def _moe_mlp_ep_ring_cute_local(
     SwiGLU is fused into the QuACK gated GEMM, so ``activation_fn`` is unused
     (same contract as the ``sonic_cute`` local backend).
     """
-    if _quack_expert_mlp is None:
-        raise ModuleNotFoundError(
-            f"moe_implementation='ring_cute' requires quack-kernels and torch: {_ring_cute_error}"
-        ) from _ring_cute_error
-
-    def expert_mlp_fn(x_dispatch: jax.Array, group_sizes: jax.Array) -> jax.Array:
-        moe_dim = moe_w2_local.shape[1]
-        w13_il = _interleave_gate_up(moe_w13_local, moe_dim)
-        cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
-        return tree_checkpoint_name(
-            _quack_expert_mlp(x_dispatch, w13_il, moe_w2_local, group_sizes, cu),
-            _CHECKPOINT_DISPATCH_OUTPUT,
-        )
+    expert_mlp_fn = _quack_expert_mlp_fn(moe_w13_local, moe_w2_local, implementation="ring_cute")
 
     return _ring_local(
         x_local,
