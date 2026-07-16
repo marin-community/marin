@@ -99,8 +99,7 @@ def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.
     n = len(tf.blocks)
     for i, block in enumerate(tf.blocks):
         is_long = i % 4 == 3 or i == n - 1
-        layer_mask = long if is_long else short
-        hidden = block(hidden, layer_mask, is_long)
+        hidden = block(hidden, short, long, is_long)
         outs.append(hidden)
     outs.append(tf.final_gated_norm(tf.final_norm(hidden)))
     return outs
