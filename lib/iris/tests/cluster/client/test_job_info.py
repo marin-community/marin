@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iris.cluster.client import job_info
 from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
 from iris.cluster.types import JobName
 
@@ -13,17 +12,6 @@ def _reset_job_info():
     set_job_info(None)
     yield
     set_job_info(None)
-
-
-@pytest.fixture(autouse=True)
-def _local_marin_yaml(monkeypatch, tmp_path):
-    """Point the resolver's .marin.yaml at this test's tmp_path.
-
-    Suite-wide isolation from the developer's real config lives in
-    tests/conftest.py (session-scoped); this re-points the path per test so
-    tests can write their own config files.
-    """
-    monkeypatch.setattr(job_info, "MARIN_CONFIG_PATH", tmp_path / ".marin.yaml")
 
 
 def test_job_info_user_derives_from_task_id():
@@ -67,45 +55,10 @@ def test_resolve_job_user_iris_user_env_beats_current_job_info(monkeypatch):
     assert resolve_job_user() == "mwittmann"
 
 
-def test_resolve_job_user_current_job_info_beats_marin_yaml(tmp_path):
-    """A .marin.yaml riding along in a job bundle must not re-attribute in-job submissions."""
-    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
-    (tmp_path / ".marin.yaml").write_text("user: mwittmann\n")
-    assert resolve_job_user() == "alice"
-
-
-def test_resolve_job_user_reads_marin_yaml_user(monkeypatch, tmp_path):
-    (tmp_path / ".marin.yaml").write_text("user: mwittmann\n")
-    monkeypatch.setattr("getpass.getuser", lambda: "local-user")
-    assert resolve_job_user() == "mwittmann"
-
-
-def test_resolve_job_user_ignores_marin_yaml_without_user_key(monkeypatch, tmp_path):
-    """Existing .marin.yaml files that only configure env: keep OS-user attribution."""
-    (tmp_path / ".marin.yaml").write_text("env:\n  WANDB_API_KEY: abc\n")
-    monkeypatch.setattr("getpass.getuser", lambda: "local-user")
-    assert resolve_job_user() == "local-user"
-
-
 @pytest.mark.parametrize("value", ["   ", "team/alice"])
 def test_resolve_job_user_rejects_invalid_iris_user_env(monkeypatch, value):
     monkeypatch.setenv("IRIS_USER", value)
     with pytest.raises(ValueError, match="IRIS_USER"):
-        resolve_job_user()
-
-
-@pytest.mark.parametrize(
-    "content",
-    [
-        "user: [not, a, string]\n",
-        "user: team/alice\n",
-        "user: [unclosed\n",  # YAML syntax error must surface as ValueError naming the file
-        "[]\n",  # falsey non-mapping document must not be treated as an empty config
-    ],
-)
-def test_resolve_job_user_rejects_invalid_marin_yaml_user(tmp_path, content):
-    (tmp_path / ".marin.yaml").write_text(content)
-    with pytest.raises(ValueError, match=r"\.marin\.yaml"):
         resolve_job_user()
 
 
