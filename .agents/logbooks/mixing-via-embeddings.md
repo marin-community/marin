@@ -475,3 +475,12 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   (eval_logprob.py, vendored) over final checkpoints. Launch in progress.
 - Also corrected: "525M-token proxies" phrasing in prior entries/memo — these are 100B-token
   runs; the scale-extrapolation caveat weakens accordingly (the swarm IS at substantial budget).
+
+## 2026-07-16 corrected-f epoch re-check (validation campaign, batch R3)
+
+- With TRUE phase fractions 0.7987/0.2013 (asserted; p50 max-epoch 9.65): hinge features still
+  help the linear model, **+0.0269, 15/15 folds, p=1e-4** (old-f +0.0304 — finding robust to
+  the budget correction). Note: an intermediate patch bug (fractions divided by stale
+  TOTAL_STEPS=2003 → 24×-inflated epochs) produced an invalid +0.0347 run — caught by the
+  p50=230 sanity contradiction, discarded, batch-2 worker warned before propagation.
+- Kernel-side (concat-ARD) redo with true f: in batch-2 worker.
