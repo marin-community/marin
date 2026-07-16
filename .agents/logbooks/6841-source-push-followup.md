@@ -81,7 +81,7 @@ avenue 7/10 land.
 | SPF-002 | Owner-sharded dx return (psum_scatter) saves ≥3 ms with dx parity | Running | fwd_bwd median (alone and stacked on SPF-001) |
 | SPF-003 | Tip gather grouping improves fused W13 vs 23.025 ms; zero-fill fix saves ≥2 ms on W13-bwd 62.17 ms | Running | target `semantic_permute_w13_pallas` + `semantic_fused_w13_backward_pallas` medians |
 | SPF-004 | XLA gather-sum (or smem-staged kernel) reaches ≥1.5 TB/s effective on combine (vs 0.63) | Running | `bench_source_push_combine` stage time + bitwise determinism |
-| SPF-005 | Host-side plan build at target shape costs >2 ms/plan (likely ≫), making planner device-siding the top structural priority | Running | wall-clock of `build_source_push_plan` + inputs-from-plan + route-inverse, 10 reps, CPU |
+| SPF-005 | Host-side plan build at target shape costs >2 ms/plan (likely ≫), making planner device-siding the top structural priority | CONFIRMED (~190x over threshold) | see SPF-005 entry: 380 ms plan build, ~1.85 s total public-path host work per plan |
 
 ## 2026-07-16 SPF-000 - Kickoff: review fan-out
 
@@ -96,3 +96,44 @@ External context: 2026-07-15 expert call (NVIDIA/Dao-lab) recommends
 SM-carveout specialization (persistent SM-capped comm kernels + independently
 launched GEMMs) over comm-into-GEMM fusion; consistent with the measured fused
 ceiling in FUSED-MOE-129.
+
+## 2026-07-16 SPF-005 - Host planner cost at target shape: 380 ms/plan, 1.85 s public path (CONFIRMED, ~190x threshold)
+
+CPU-only measurement (no GPU jobs). Script
+`/home/marin/.claude/jobs/84d3f127/tmp/spf005_plan_cost.py`, run via
+`uv run --package marin-levanter --group test python <script>` from the
+worktree root (jax 0.10.1 CPU, numpy 2.3.5, 32 vCPU). 2 warmup + 10 reps,
+target shape EP8/T32768/topk4/E32/H2560/cf1.25, `roughly_balanced` seed 0,
+rough_balanced_216 capacity (entries_per_rank=288, block_m=64), routing built
+with the bench harness's own helpers.
+
+| Component | median ms | p90 |
+|---|---:|---:|
+| `build_source_push_plan` (entries=288) | 379.9 | 409.8 |
+| `build_source_push_plan` (entries=auto, public path) | 389.0 | 423.0 |
+| `make_source_push_forward_plan_inputs_from_plan` (total) | 90.5 | 92.0 |
+| — `_make_route_inverse` | 63.9 | 65.9 |
+| — send/recv meta + row bases + h-row weights | ~17.5 | — |
+| `source_push_mlp_route_table_from_plan` (public path) | 1372.6 | 1380.4 |
+| semantic JAX planner, jitted steady state (CPU) | 156.0 | 159.7 |
+
+Totals: public staged path ≈ **1852 ms host work per plan**; plan build alone
+= 27.4x the 13.876 ms device forward and 6.0x the 63.038 ms fwd+bwd. Per
+`source_push_public.py:94-110` the plan, inputs, and route table are rebuilt
+unconditionally per call, and `_STATIC_PUBLIC_ROUTE_ERROR`
+(`source_push_public.py:36-40`) forces concrete routing at Python time — fresh
+routing per microbatch x per MoE layer means this host work is fully
+serializing in real training. The only cache (`_STAGED_FORWARD_CALL_CACHE`,
+`source_push_forward.py:98`) caches compiled callables, not plans. Dominant
+costs: the per-(src x dst x expert) mask scan (`source_push_plan.py:636-662`)
+and the route-table builder's Python triple-loop scatter.
+
+Interpretation: every published #6841 benchmark number times steady-state
+kernels with a prebuilt plan; on the public API the host planner would
+dominate device time by 6-30x. The JAX-native semantic planner
+(`build_source_push_plan_semantic_jax`) already runs in-jit at ~1.3-1.5 ms on
+GPU (era-1 logbook), so **device-siding the planner (or wiring the semantic
+planner under the staged forward) is the top structural priority for any
+production use of this path** — ahead of all kernel tuning. Caveats: dev-box
+CPU, not the pod host (GPU hosts add D2H/H2D syncs, likely worse); the 156 ms
+semantic-planner CPU number is a contrast point, not a GPU projection.
