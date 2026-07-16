@@ -345,6 +345,7 @@ class _SubdomainProxyMiddleware:
             sub_path=request.url.path.lstrip("/"),
             proxy_prefix="",
             address=resolved.address,
+            timeout_seconds=resolved.timeout_seconds,
         )
         await response(scope, receive, send)
 
@@ -475,6 +476,7 @@ class ControllerDashboard:
                     encoded_name=encoded_name,
                     sub_path=sub_path,
                     proxy_prefix=proxy_prefix,
+                    timeout_seconds=resolved.timeout_seconds,
                 )
             return await self._endpoint_proxy.dispatch(
                 request,
@@ -482,6 +484,7 @@ class ControllerDashboard:
                 sub_path=sub_path,
                 proxy_prefix=proxy_prefix,
                 address=resolved.address,
+                timeout_seconds=resolved.timeout_seconds,
             )
 
         # The proxy routes are @public so the route-annotation middleware does

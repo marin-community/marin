@@ -8,6 +8,26 @@ finelog:
   config: marin
 dashboard_url: https://iris.oa.dev
 
+# Infrastructure-as-code provisioning (see infra/iac). Iris carries this as an opaque dict;
+# iac.config owns the typed schema. The GCP arm's first resources are the reserved
+# federation-egress static IPs: the marin / marin-dev controllers' egress, which the CoreWeave
+# controllers' ipAllowList admits (mirrored as iac.config.MARIN_FEDERATION_EGRESS_SOURCES /
+# FEDERATION_ALLOW_SOURCES in install_cw_network.py). Name/IP/region confirmed against the live
+# reservations (EXTERNAL, us-central1, in use); adoption imports them, so the pinned IPs are
+# never reassigned. iris-marin-dev-fed-egress is marin-dev's egress, colocated here for now.
+provisioning:
+  provider: gcp
+  gcp:
+    project: hai-gcp-models
+    addresses:
+      # description must match the live reservation exactly — it is immutable, so any drift
+      # forces a replace that releases the pinned IP. The dev reservation has no description.
+      - name: iris-marin-fed-egress
+        region: us-central1
+        address: 34.27.183.11
+        description: "Static egress for the marin Iris controller; allowlisted at the CoreWeave federation ingress"
+      - { name: iris-marin-dev-fed-egress, region: us-central1, address: 35.254.13.19 }
+
 platform:
   label_prefix: marin
   gcp:
@@ -68,6 +88,8 @@ peers:
     controller_address: https://iris-cw-rno2a.oa.dev
   cw-us-east-02a:
     controller_address: https://iris-cw-us-east-02a.oa.dev
+  cw-us-east-08a:
+    controller_address: https://iris-cw-us-east-08a.oa.dev
 
 worker_provider: {}
 

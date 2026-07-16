@@ -4,7 +4,7 @@
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 from draccus import PluginRegistry
@@ -167,7 +167,7 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template: str | None = None
     system_prompt: str | None = None
     chat_template_kwargs: str | None = "chat_template_kwargs"
-    pack: bool | int | Literal["pad"] | None = None  # None => default pack behavior (currently pack)
+    pack: bool | int | None = None  # None => default pack behavior (currently pack)
     mask_user_turns: bool = True
 
     def build_preprocessor(

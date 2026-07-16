@@ -11,6 +11,7 @@ on the ``FederationStore`` protocol.
 """
 
 import logging
+import uuid
 
 from rigging.timing import Duration, Timestamp
 
@@ -155,6 +156,8 @@ class ControllerFederationStore:
                 peer_id=spec.peer_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.QUEUED_HANDOFF),
+                # Each admission is a new incarnation; every re-drive repeats its nonce.
+                handoff_nonce=uuid.uuid4().hex,
             )
         return HandoffAdmission.ADMITTED
 
@@ -190,6 +193,7 @@ class ControllerFederationStore:
                         request=reconstruct_launch_job_request(
                             job, workdir_files=reads.get_workdir_files(tx, handle.job_id)
                         ),
+                        handoff_nonce=handle.handoff_nonce,
                     )
                 )
         return pending
@@ -327,6 +331,7 @@ class ControllerFederationStore:
                 current_attempt_id=task.current_attempt_id,
                 worker_address=task.worker_address,
                 peer_worker_label=task.worker_id or task.worker_address,
+                status_message=task.status_message or None,
             )
             writes.mirror_federated_attempts(cur, task_id=local_task_id, attempts=task.attempts)
             # The parent derives the federated task's counts from these mirrored

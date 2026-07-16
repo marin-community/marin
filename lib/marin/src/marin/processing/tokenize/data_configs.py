@@ -4,7 +4,6 @@
 import logging
 from dataclasses import replace
 from functools import lru_cache
-from typing import Literal
 
 from levanter.data.text.datasets import (
     DEFAULT_LM_DATA_SHUFFLE,
@@ -47,7 +46,7 @@ def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
     return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
 
 
-def with_pack(data: LmDataConfig, pack: bool | int | Literal["pad"]) -> LmDataConfig:
+def with_pack(data: LmDataConfig, pack: bool | int) -> LmDataConfig:
     """Override the packing strategy on every cache-backed component of a mixture.
 
     Packing is a load-time view over the tokenized cache, so this re-tokenizes nothing.

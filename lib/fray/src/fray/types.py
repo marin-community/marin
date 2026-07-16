@@ -11,11 +11,28 @@ not a per-task resource requirement).
 
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Literal
 
+import humanfriendly
+
 from fray.device_flops import device_flops as _device_flops
+
+
+def _scale_byte_size(size: str, factor: float) -> str:
+    """Scale a human-readable byte size, preserving compact binary unit suffixes."""
+    if factor == 1.0:
+        return size
+    scaled = humanfriendly.parse_size(size, binary=True) * factor
+    for suffix, unit in (("t", 1024**4), ("g", 1024**3), ("m", 1024**2), ("k", 1024)):
+        if scaled >= unit:
+            value = scaled / unit
+            if abs(value - round(value)) < 1e-9:
+                return f"{round(value)}{suffix}"
+            return f"{value:g}{suffix}"
+    return f"{round(scaled)}B"
+
 
 # ---------------------------------------------------------------------------
 # TPU topology
@@ -400,6 +417,39 @@ class ResourceConfig:
         if isinstance(self.device, CpuConfig):
             return 100e9
         return self.device_flops(dtype) * self.chip_count()
+
+    def scale(
+        self,
+        factor: float | None = None,
+        /,
+        *,
+        cpu: float | None = None,
+        ram: float | None = None,
+        disk: float | None = None,
+    ) -> "ResourceConfig":
+        """Return a copy with cpu/ram/disk multiplied by the given factors.
+
+        ``rc.scale(2)`` multiplies cpu, ram, and disk by 2; ``rc.scale(0.5)``
+        halves all three. Keyword args ``cpu``, ``ram``, and ``disk`` are
+        multiplicative factors for individual dimensions (e.g. ``cpu=0.5``
+        halves CPU); omitted dimensions keep their current value. ``factor``
+        cannot be combined with keyword factors.
+        """
+        if factor is not None and (cpu is not None or ram is not None or disk is not None):
+            raise ValueError("Pass either a single factor or cpu/ram/disk keyword factors, not both.")
+        if factor is not None:
+            cpu_factor = ram_factor = disk_factor = factor
+        else:
+            cpu_factor = 1.0 if cpu is None else cpu
+            ram_factor = 1.0 if ram is None else ram
+            disk_factor = 1.0 if disk is None else disk
+
+        return replace(
+            self,
+            cpu=self.cpu * cpu_factor,
+            ram=_scale_byte_size(self.ram, ram_factor),
+            disk=_scale_byte_size(self.disk, disk_factor),
+        )
 
     @staticmethod
     def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> "ResourceConfig":

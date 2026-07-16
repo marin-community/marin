@@ -171,7 +171,7 @@ class Olmo2Config(HFCompatConfig):
             **config_overrides,
         )
 
-    # config narrows the base's model_type to its own concrete head class (LSP narrowing; mypy flags the same)
+    # config narrows the base's model_type to its own concrete head class (LSP narrowing; pyrefly flags the same)
     @property
     def model_type(self) -> Type["Olmo2LMHeadModel"]:  # pyrefly: ignore[bad-override]
         return Olmo2LMHeadModel

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from iris.cluster.composer import make_task_backend
 from iris.cluster.config import (
     BackendConfig,
     ControllerVmConfig,
@@ -2134,3 +2135,14 @@ class TestBackendsConfig:
                 "device-type": {"gpu"},
                 "device-variant": {"h100"},
             }
+
+
+def test_make_task_backend_requires_kueue_for_k8s_backend():
+    """Kueue is mandatory on the K8s backend (every pod is admitted through it), so building
+    one without a configured cluster_queue fails fast rather than stamping empty queue labels."""
+    config = IrisClusterConfig(
+        platform=PlatformConfig(label_prefix="iris"),
+        kubernetes_provider=KubernetesProviderConfig(),  # no kueue.cluster_queue
+    )
+    with pytest.raises(ValueError, match=r"kueue\.cluster_queue"):
+        make_task_backend(config, unreachable_grace=Duration.from_seconds(1))

@@ -83,6 +83,23 @@ def _is_docker_infra_error(stderr: str) -> bool:
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
 
 
+def _run_docker(cmd: list[str], *, operation: str) -> str:
+    """Run a docker CLI command and return its stripped stdout.
+
+    On non-zero exit, raises ``ContainerInfraError`` when the stderr matches a
+    known transient infrastructure failure (see ``_is_docker_infra_error``) and
+    ``RuntimeError`` otherwise. ``operation`` names the action for the error
+    message (e.g. ``"create container"`` -> ``"Failed to create container"``).
+    """
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr
+        if _is_docker_infra_error(stderr):
+            raise ContainerInfraError(f"Failed to {operation} (infra): {stderr}")
+        raise RuntimeError(f"Failed to {operation}: {stderr}")
+    return result.stdout.strip()
+
+
 @dataclass(frozen=True)
 class _DockerProfileDispatch:
     """``ProfileDispatch`` backed by ``docker exec`` into a task container.
@@ -726,33 +743,11 @@ exec {quoted_cmd}
         logger.info("Creating container: %s", " ".join(cmd[:20]))
         logger.debug("Full docker create command: %s", cmd)
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr
-            if _is_docker_infra_error(stderr):
-                raise ContainerInfraError(f"Failed to create container (infra): {stderr}")
-            raise RuntimeError(f"Failed to create container: {stderr}")
-
-        return result.stdout.strip()
+        return _run_docker(cmd, operation="create container")
 
     def _docker_start(self, container_id: str) -> None:
         """Start a Docker container."""
-        result = subprocess.run(
-            ["docker", "start", container_id],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr
-            if _is_docker_infra_error(stderr):
-                raise ContainerInfraError(f"Failed to start container (infra): {stderr}")
-            raise RuntimeError(f"Failed to start container: {stderr}")
+        _run_docker(["docker", "start", container_id], operation="start container")
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
@@ -920,17 +915,7 @@ class DockerRuntime:
                 return
 
             logger.info("Pulling image %s", image)
-            result = subprocess.run(
-                ["docker", "pull", image],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                stderr = result.stderr
-                if _is_docker_infra_error(stderr):
-                    raise ContainerInfraError(f"Failed to pull image {image} (infra): {stderr}")
-                raise RuntimeError(f"Failed to pull image {image}: {stderr}")
+            _run_docker(["docker", "pull", image], operation=f"pull image {image}")
 
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)

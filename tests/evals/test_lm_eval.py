@@ -10,6 +10,7 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
 
 from experiments.evals.task_configs import EvalTaskConfig
+from tests.test_utils import skip_if_no_tpu
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ def model_config():
     return config
 
 
-@pytest.mark.tpu_ci
+@skip_if_no_tpu
 def test_lm_eval_harness_levanter(current_date_time, model_config):
     mmlu_config = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
     config = EvaluationConfig(
@@ -47,7 +48,7 @@ def test_lm_eval_harness_levanter(current_date_time, model_config):
     evaluate(config=config)
 
 
-@pytest.mark.tpu_ci
+@skip_if_no_tpu
 def test_lm_eval_harness(current_date_time, model_config):
     gsm8k_config = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
     config = EvaluationConfig(

@@ -82,7 +82,7 @@ class MistralConfig(LlamaConfig):
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
     HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
 
-    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; mypy flags the same)
+    # config-reuse subclass narrows to its own HF config/model type (LSP narrowing; pyrefly flags the same)
     def hf_checkpoint_converter(  # pyrefly: ignore[bad-override]
         self, ref_checkpoint: Optional[str] = None
     ) -> HFCheckpointConverter["MistralConfig"]:  # type: ignore

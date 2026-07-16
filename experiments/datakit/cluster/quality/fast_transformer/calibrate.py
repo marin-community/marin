@@ -29,7 +29,8 @@ import pyarrow.parquet as pq
 from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.quality.fast_transformer.scorer import BUCKET_EDGES, load_pooled_scorer, score_bme
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.scorer import load_pooled_scorer, score_bme
 
 logger = logging.getLogger(__name__)
 

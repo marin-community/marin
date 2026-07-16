@@ -130,6 +130,6 @@ Notes:
 - After the full experiment runs, use `ArtifactStep.adopt(name, version, source=...)`
   to reference heavy completed artifacts as pre-existing data. This keeps them
   visible in the dependency graph while preventing accidental re-execution.
-- When possible, use the standard helpers (e.g., `train_lm`, `default_eval`) if
+- When possible, use the standard helpers (e.g., `train_lm`, `eval_steps`) if
   the configuration details are orthogonal to the aspect being varied in the
   experiment.

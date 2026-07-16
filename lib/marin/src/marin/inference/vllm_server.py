@@ -411,7 +411,15 @@ class VllmEnvironment:
         return _native_diagnostics(self.vllm_server, max_lines=max_lines)
 
 
-def _default_jax_compilation_cache_dir() -> str:
+# Cache aggressively for iterative bring-up workflows: every compilation is worth keeping, and
+# a serve of the same model on the same slice should not pay for the compile twice. Both serving
+# backends key off these — vLLM through its subprocess environment, Levanter through jax.config.
+JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = -1
+JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS = 2
+
+
+def default_jax_compilation_cache_dir() -> str:
+    """Persistent XLA/JAX compilation cache shared by every serving backend on this slice."""
     return f"{marin_prefix()}/compilation-cache"
 
 
@@ -434,14 +442,13 @@ def _vllm_env() -> dict[str, str]:
     Starts from ``os.environ`` and applies the canonical defaults.
     """
     env = dict(os.environ)
-    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
+    cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", default_jax_compilation_cache_dir())
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     env.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
     # TPU vLLM uses XLA compilation caches; this env var is the one it keys off.
     env.setdefault("VLLM_XLA_CACHE_PATH", cache_dir)
-    # Cache aggressively for iterative bring-up workflows.
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")
-    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2")
+    env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", str(JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES))
+    env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", str(JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS))
     for key, default in _VLLM_ENV_DEFAULTS:
         env.setdefault(key, default)
     return env

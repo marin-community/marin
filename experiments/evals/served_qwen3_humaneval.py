@@ -42,8 +42,7 @@ from marin.inference.vllm import (
 )
 from rigging.log_setup import configure_logging
 
-# These match the repo's existing TPU generation-eval recipe in
-# experiments/exp1337_eval_suite.py.
+# Inherited TPU vLLM settings from the repo's generation-eval recipes.
 # TODO(yonromai): double-check whether all inherited TPU vLLM settings are still needed.
 VLLM_WORKER_ENV_VARS: dict[str, str] = {
     # Keep vLLM's API server and engine in one process so the TPU is claimed once.

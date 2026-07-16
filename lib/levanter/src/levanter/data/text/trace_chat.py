@@ -32,6 +32,7 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.sharded_datasource import ShardedDataSource
+from levanter.data.text.datasets import _resolve_pack_config
 from levanter.data.text.examples import GrugAttentionMask, LabeledLmExample, LossLabelSpec
 from levanter.store.cache import CacheOptions, TreeCache
 from levanter.tokenizers import MarinTokenizer
@@ -226,7 +227,7 @@ class TraceChatEvaluationFormat:
     chat_template: str | None = None
     system_prompt: str | None = None
     chat_template_kwargs: str | None = "chat_template_kwargs"
-    pack: bool | int | Literal["pad"] | None = None
+    pack: bool | int | None = None
     loss_tags: tuple[str, ...] = (
         "assistant",
         "assistant_text",
@@ -328,15 +329,13 @@ def dataset_for_trace_chat_format(
     *,
     block_cross_document_attention: bool = True,
 ) -> TraceChatDataset:
-    pack = trace_format.pack
-    if pack == "pad":
-        raise NotImplementedError("Padding mode not yet implemented.")
-    max_segments = 64 if pack is True or pack is None else int(pack)
+    pack = True if trace_format.pack is None else trace_format.pack
+    max_segments, slice_strategy = _resolve_pack_config(pack, packed_slice_strategy=trace_format.slice_strategy)
     return TraceChatDataset(
         cache,
         Pos,
         max_segments_per_example=max_segments,
-        slice_strategy=trace_format.slice_strategy,
+        slice_strategy=slice_strategy,
         block_cross_document_attention=block_cross_document_attention,
     )
 

@@ -17,12 +17,9 @@ from typing import cast
 import numpy as np
 import pytest
 
-from experiments.datakit.cluster.quality.fast_transformer.calibrate import (
-    BUCKET_EDGES,
-    calibration_knots,
-    fit_cutpoints,
-)
-from experiments.datakit.cluster.quality.fast_transformer.score import _output_paths, _source_of, _systematic_take
+from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES
+from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
+from experiments.datakit.cluster.quality.fast_transformer.score import _systematic_take
 from experiments.datakit.cluster.quality.fast_transformer.scorer import CHUNK_CHARS, PooledScorer, score_bme
 
 
@@ -135,27 +132,3 @@ def test_systematic_sample_is_deterministic_and_hits_target_fraction():
         assert kept == [i for i in range(1000) if _systematic_take(i, pct)]
         # ~pct of records, evenly spaced
         assert abs(len(kept) / 1000 - pct) < 0.01
-
-
-# ---------- score: source recovered from the input file path ----------
-
-
-def test_output_paths_nest_under_source_only_when_sharing_a_prefix():
-    # several sources share one prefix -> nest under <source>/ to keep them apart
-    main, samp = _output_paths("s3://b/scored", "cp/foodista", "part-0.parquet", nest_by_source=True)
-    assert main == "s3://b/scored/cp/foodista/outputs/main/part-0.parquet"
-    assert samp == "s3://b/scored/cp/foodista/outputs/samples/part-0.parquet"
-    # single source: the prefix is already that source's dir (e.g. a per-source step),
-    # so write straight under it -- no redundant <source>/ nesting
-    main1, samp1 = _output_paths("s3://b/scored/cp/foodista", "cp/foodista", "part-0.parquet", nest_by_source=False)
-    assert main1 == "s3://b/scored/cp/foodista/outputs/main/part-0.parquet"
-    assert samp1 == "s3://b/scored/cp/foodista/outputs/samples/part-0.parquet"
-
-
-def test_source_of_recovers_multi_segment_source_from_path():
-    sp = "s3://bucket/marin/datakit/sample_100b_abc"
-    # source may itself contain slashes (e.g. finepdfs/spa_Latn) -> split only on /outputs/main/
-    assert _source_of(f"{sp}/cp/foodista/outputs/main/part-0.parquet", sp) == "cp/foodista"
-    assert _source_of(f"{sp}/finepdfs/spa_Latn/outputs/main/data-00003.parquet", sp) == "finepdfs/spa_Latn"
-    # trailing slash on the prefix must not change the recovered source
-    assert _source_of(f"{sp}/hplt_v3/outputs/main/x.parquet", sp + "/") == "hplt_v3"

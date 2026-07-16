@@ -7,6 +7,7 @@ import gzip
 import json
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
@@ -84,6 +85,29 @@ def test_custom_text_field(tmp_path: Path, write_jsonl_gz):
     results = _read_all_parquet(output_dir)
     assert results[0]["text"] == "Document body here"
     assert "body" not in results[0]
+
+
+def test_binary_text_field_decoded_as_utf8(tmp_path: Path):
+    """Binary Parquet content becomes text rather than a Python bytes representation."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    pq.write_table(
+        pa.table({"sha1_git": ["abc"], "content": [b"hello \xff"]}),
+        input_dir / "data.parquet",
+    )
+
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        text_field="content",
+        id_field="sha1_git",
+        bare=True,
+    )
+
+    assert _read_all_parquet(output_dir) == [
+        {"id": generate_id("hello \ufffd"), "text": "hello \ufffd", "source_id": "abc"}
+    ]
 
 
 def test_custom_id_field(tmp_path: Path, write_jsonl_gz):

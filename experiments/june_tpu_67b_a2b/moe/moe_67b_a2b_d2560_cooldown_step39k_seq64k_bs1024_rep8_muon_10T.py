@@ -36,7 +36,11 @@ Submit (us-central2, production, --no-preemptible)::
     WANDB_KEY=$(python3 -c "import os; print(os.environ['WANDB_API_KEY'])") && \\
     .venv/bin/iris --cluster=marin job run --no-wait --region us-central2 \\
         --priority production --no-preemptible -e WANDB_API_KEY "$WANDB_KEY" \\
-        -- python -m experiments.june_tpu_67b_a2b.moe.moe_67b_a2b_d2560_cooldown_step39k_seq64k_bs1024_rep8_muon_10T
+        -- python -m experiments.june_tpu_67b_a2b.moe.moe_67b_a2b_d2560_cooldown_step39k_seq64k_bs1024_rep8_muon_10T \\
+           --version 2026.07.16 --run
+
+``--version`` sets the checkpoint version (required) and ``--run`` builds it; without ``--run`` the
+lowered plan is printed. Pin a calendar version for a run to keep; pass ``--version dev`` to iterate.
 """
 
 import dataclasses
@@ -45,8 +49,9 @@ import math
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
@@ -162,8 +167,10 @@ _optimizer = GrugMoeMuonHResumeConfig(
 _run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_" f"seq{_SEQ}_sw2k_v4_2048_muon_cooldown_step39k"
 
 
-def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Build the vendored June TPU 67B cooldown run."""
+    name = f"grug/{_run_id}"
+    version = resolve_version(name, version)
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig2xBS:
         if ctx.is_fingerprint:
@@ -245,7 +252,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name=user_namespaced_name(f"grug/{_run_id}", version),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial_2x_bs,
@@ -256,4 +263,4 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
 
 
 if __name__ == "__main__":
-    StepRunner().run([build().lower()])
+    experiment_main(build)()
