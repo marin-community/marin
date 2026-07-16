@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, username_segment
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, sanitize_username, username_segment
 
 
 def test_str_clean_shows_commit_branch_user():
@@ -36,6 +36,20 @@ def test_username_segment_sanitizes_email_to_a_clean_distinct_segment(monkeypatc
     monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
     monkeypatch.setattr("rigging.provenance._getuser", lambda: "Russell.Power@gmail.com")
     assert username_segment() == "russell-power"
+
+
+def test_sanitize_username_canonicalizes_arbitrary_spellings():
+    # The canonical user-id spelling for attribution tables: domain dropped, lowercased,
+    # non [a-z0-9_-] collapsed to '-'. Distinct users must stay distinct.
+    assert sanitize_username("Russell.Power@gmail.com") == "russell-power"
+    assert sanitize_username("ryan.williams") == "ryan-williams"
+    assert sanitize_username("rw") == "rw"
+
+
+def test_sanitize_username_raises_when_nothing_usable_remains():
+    # Same fail-fast contract as username_segment: never yield an empty/shared segment.
+    with pytest.raises(RuntimeError):
+        sanitize_username("@@..")
 
 
 def test_username_segment_raises_when_unresolvable(monkeypatch):

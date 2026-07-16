@@ -220,17 +220,32 @@ _USER_SEGMENT_RE = re.compile(r"[^a-z0-9_-]+")
 _MACHINE_LOGINS = frozenset({"root", "runner", "ubuntu", "exedev"})
 
 
+def sanitize_username(raw: str) -> str:
+    """Reduce a raw login spelling to the canonical path-safe user segment.
+
+    An email-like login drops its domain but keeps the whole local name
+    (``russell.power@host`` → ``russell-power``), and the result is lowercased with any
+    remaining character collapsed to ``-``. The full local name is kept so distinct users stay
+    distinct. This spelling is the canonical user id wherever a username appears in a path or
+    attribution table. Raises ``RuntimeError`` if nothing usable remains.
+    """
+    name = raw.strip()
+    if "@" in name:
+        name = name.split("@", 1)[0]
+    segment = _USER_SEGMENT_RE.sub("-", name.lower()).strip("-")
+    if not segment:
+        raise RuntimeError(f"username {raw!r} did not sanitize to a usable path segment")
+    return segment
+
+
 def username_segment() -> str:
     """The current user as a path-safe segment, for per-user artifact namespacing.
 
     Resolves the same user that stamps provenance ``built_by``: the launch identity carried
     in ``MARIN_PROVENANCE`` when present — so a remote worker namespaces under the submitting
-    human, not its own OS login — otherwise the local OS login. The raw name is reduced to a
-    clean segment: an email-like login drops its domain but keeps the whole local name
-    (``russell.power@host`` → ``russell-power``), and the result is lowercased with any
-    remaining character collapsed to ``-``. The full local name is kept so distinct users stay
-    distinct. Raises ``RuntimeError`` if no username resolves — per-user namespacing must never
-    silently fall back to a shared bucket.
+    human, not its own OS login — otherwise the local OS login. The raw name is reduced via
+    :func:`sanitize_username`. Raises ``RuntimeError`` if no username resolves — per-user
+    namespacing must never silently fall back to a shared bucket.
     """
     launch = _provenance_from_env()
     raw = (launch.built_by if launch is not None else None) or _getuser()
@@ -239,12 +254,7 @@ def username_segment() -> str:
             "cannot resolve a username for per-user namespacing "
             "(no launch provenance built_by, and getpass.getuser found none)"
         )
-    name = raw.strip()
-    if "@" in name:
-        name = name.split("@", 1)[0]
-    segment = _USER_SEGMENT_RE.sub("-", name.lower()).strip("-")
-    if not segment:
-        raise RuntimeError(f"username {raw!r} did not sanitize to a usable path segment")
+    segment = sanitize_username(raw)
     if segment in _MACHINE_LOGINS:
         logger.warning(
             "per-user namespace resolved to machine login %r — the launching human's identity "
