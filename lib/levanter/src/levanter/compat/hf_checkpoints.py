@@ -496,6 +496,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @staticmethod
     def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
+        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
+        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
+        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
+        # inside `_infer_config_class` needs those imports to have already run.
+        LmConfig.get_known_choices()
         config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
         tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
 
