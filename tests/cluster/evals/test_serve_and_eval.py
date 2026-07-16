@@ -42,7 +42,6 @@ def test_serve_and_eval_smoke(iris_client: IrisClient, smoke_region: str) -> Non
     out_path = f"gs://marin-{smoke_region}/tmp/eval7267-serve-and-eval-smoke/qwen3-0p6b"
     config = EvalchemyEvalConfig(
         model="Qwen/Qwen3-0.6B",
-        model_name="qwen3-0p6b-smoke",
         tasks=SMOKE_TASKS,
         out_path=out_path,
         serve=ServeSpec(backend="vllm", tpu_type="v6e-4", region=smoke_region),

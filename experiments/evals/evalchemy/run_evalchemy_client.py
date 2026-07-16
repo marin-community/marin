@@ -85,7 +85,9 @@ def main() -> None:
     if not tasks:
         raise SystemExit("run_evalchemy_client requires at least one task")
 
-    out_path = config["out_path"]
+    out_path = config["out_path"].rstrip("/")
+    # Raw fsspec, not rigging's StoragePath: the eval image carries only fsspec/gcsfs, not rigging.
+    # out_path is region-local (the eval child is pinned to the serve region), so no cross-region copy.
     out_fs, _ = fsspec.core.url_to_fs(out_path)
     for task in tasks:
         with tempfile.TemporaryDirectory() as local_out:
@@ -94,7 +96,7 @@ def main() -> None:
             cmd = build_command(config, task, local_out, sys.executable)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             subprocess.run(cmd, check=True)
-            out_fs.put(local_out, os.path.join(out_path, task["dir"]), recursive=True)
+            out_fs.put(local_out, f"{out_path}/{task['dir']}", recursive=True)
     print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
 
 

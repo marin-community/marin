@@ -6,8 +6,7 @@
 The eval is decoupled from the model backend by an OpenAI-compatible URL (issue #4827): a marin-serve
 child job (``VllmBackend`` or ``LevanterBackend``, on a TPU/GPU slice) exposes an endpoint, and an
 evalchemy child job (the ``:evalchemy-tpu`` container on a CPU slice) hits it with
-``eval.eval --model local-completions``. Evalchemy is the sole eval client; the lm-eval-harness
-backends were removed in #7267.
+``eval.eval --model local-completions``. Evalchemy is the sole eval client.
 
 Topology — one parent orchestrator job spawns two children::
 
@@ -25,7 +24,7 @@ whose synced venv can deserialize a cloudpickled callable, so it uses ``Entrypoi
 The eval child runs in the ``:evalchemy-tpu`` image, whose default interpreter is a bare python with
 no cloudpickle -- only ``/opt/openthoughts/.venv`` carries ``eval``/``lm_eval``/``fsspec`` -- so it
 runs :mod:`experiments.evals.evalchemy.run_evalchemy_client` as a plain *command* under that
-interpreter, with its config passed as JSON in an env var (issue #7267).
+interpreter, with its config passed as JSON in an env var.
 
 Top-level imports are kept light on purpose: the serve child's ``VllmBackend``/``LevanterBackend``
 construction (which pulls levanter + vLLM) happens lazily inside :func:`_serve_for_eval`, so the CPU
@@ -118,7 +117,6 @@ class EvalchemyEvalConfig:
 
     model: str
     """HF repo id or object-store (``gs://``) path of the model to serve and eval."""
-    model_name: str
     tasks: tuple[EvalTaskConfig, ...]
     out_path: str
     serve: ServeSpec = field(default_factory=ServeSpec)
@@ -140,7 +138,25 @@ class EvalchemyEvalConfig:
 # --------------------------------------------------------------------------------------------------
 
 
-def _serve_for_eval(params: dict) -> None:
+@dataclass(frozen=True)
+class _ServeParams:
+    """The serve child's inputs, cloudpickled into it. Flattened from ``ServeSpec`` so the child never
+    imports this module's serving-stack helpers just to read a config."""
+
+    model: str
+    endpoint_name: str
+    backend: str
+    tpu_type: str | None
+    gpu_type: str | None
+    gpu_count: int | None
+    dtype: str
+    max_model_len: int | None
+    tensor_parallel_size: int | None
+    timeout_hours: float
+    startup_timeout_seconds: int
+
+
+def _serve_for_eval(params: _ServeParams) -> None:
     """Serve-child entrypoint: construct the backend + quick-serve config and serve until stopped.
 
     Runs in the marin task image on the serving slice. Imports the serving stack lazily so the CPU
@@ -157,25 +173,24 @@ def _serve_for_eval(params: dict) -> None:
     from rigging.log_setup import configure_logging  # noqa: PLC0415  # lazy: only needed in the serve child
 
     configure_logging()
-    backend_name = params["backend"]
-    if backend_name == "vllm":
-        backend = VllmBackend(startup_timeout_seconds=params["startup_timeout_seconds"])
-    elif backend_name == "levanter":
+    if params.backend == "vllm":
+        backend = VllmBackend(startup_timeout_seconds=params.startup_timeout_seconds)
+    elif params.backend == "levanter":
         backend = LevanterBackend()
     else:
-        raise ValueError(f"unknown serve backend {backend_name!r}; use 'vllm' or 'levanter'")
+        raise ValueError(f"unknown serve backend {params.backend!r}; use 'vllm' or 'levanter'")
 
     config = QuickServeConfig(
-        model=params["model"],
-        endpoint_name=params["endpoint_name"],
+        model=params.model,
+        endpoint_name=params.endpoint_name,
         backend=backend,
-        tpu_type=params["tpu_type"],
-        gpu_type=params["gpu_type"],
-        gpu_count=params["gpu_count"],
-        dtype=params["dtype"],
-        max_model_len=params["max_model_len"],
-        tensor_parallel_size=params["tensor_parallel_size"],
-        timeout_hours=params["timeout_hours"],
+        tpu_type=params.tpu_type,
+        gpu_type=params.gpu_type,
+        gpu_count=params.gpu_count,
+        dtype=params.dtype,
+        max_model_len=params.max_model_len,
+        tensor_parallel_size=params.tensor_parallel_size,
+        timeout_hours=params.timeout_hours,
     )
     serve_in_job(config)
 
@@ -209,19 +224,19 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
 
     run_id = uuid.uuid4().hex[:8]
     endpoint_name = f"/serve/eval-{run_id}"
-    params = {
-        "model": model,
-        "endpoint_name": endpoint_name,
-        "backend": spec.backend,
-        "tpu_type": spec.tpu_type,
-        "gpu_type": spec.gpu_type,
-        "gpu_count": spec.gpu_count,
-        "dtype": spec.dtype,
-        "max_model_len": spec.max_model_len,
-        "tensor_parallel_size": spec.tensor_parallel_size,
-        "timeout_hours": SERVE_TIMEOUT_HOURS,
-        "startup_timeout_seconds": int(ENDPOINT_READY_TIMEOUT_SECONDS),
-    }
+    params = _ServeParams(
+        model=model,
+        endpoint_name=endpoint_name,
+        backend=spec.backend,
+        tpu_type=spec.tpu_type,
+        gpu_type=spec.gpu_type,
+        gpu_count=spec.gpu_count,
+        dtype=spec.dtype,
+        max_model_len=spec.max_model_len,
+        tensor_parallel_size=spec.tensor_parallel_size,
+        timeout_hours=SERVE_TIMEOUT_HOURS,
+        startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
+    )
     constraints = [region_constraint([spec.region])] if spec.region else None
 
     serve_job = client.submit(

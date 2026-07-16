@@ -162,10 +162,9 @@ rl = [
     "verifiers==0.1.5",
 ]
 
-# The EleutherAI lm-eval-harness fork (and the runtime-clone evalchemy `EvalchemyEvaluator`) were
-# removed in #7267: the pinned fork breaks on transformers>=5, and downstream evals now run through
-# the evalchemy fork inside its own `:evalchemy-tpu` container against a served OpenAI URL, so no
-# lm-eval lives in the marin repo venv. See experiments/evals/evals.py.
+# No lm-eval / evalchemy extra: the pinned lm-eval-harness fork breaks on transformers>=5. Downstream
+# evals run the evalchemy fork inside its own `:evalchemy-tpu` container against a served OpenAI URL,
+# so no lm-eval lives in the marin repo venv. See experiments/evals/evals.py.
 
 vizier = [
     "google-vizier[jax]",

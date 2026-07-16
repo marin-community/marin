@@ -26,7 +26,6 @@ _ENDPOINT = ServedEndpoint(base_url="http://10.0.0.1:30000/v1", model_id="Qwen/Q
 def _config(**overrides) -> EvalchemyEvalConfig:
     base = dict(
         model="Qwen/Qwen3-0.6B",
-        model_name="qwen3",
         tasks=(EvalTaskConfig("arc_easy", 0), EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_cot")),
         out_path="gs://bucket/evals/qwen3/core",
         serve=ServeSpec(region="us-east5"),

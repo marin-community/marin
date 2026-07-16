@@ -14,7 +14,7 @@ Every group runs through the evalchemy path (:mod:`experiments.evals.evalchemy.s
 model is served once as an OpenAI-compatible endpoint (marin-serve: vLLM or Levanter), the evalchemy
 fork evaluates the tasks against that URL, and the server is torn down. The eval is decoupled from the
 model backend by the URL (issue #4827), so multiple-choice and generation tasks run the same way — no
-separate JAX-logprob backend. The lm-eval-harness marin backends were removed in #7267.
+separate JAX-logprob backend.
 
 The task menus (``core_evals`` / ``key_evals`` / ``base_model_evals``) are data — lists of
 ``EvalGroup`` — drawn from :mod:`experiments.evals.task_configs`, the same task menu the in-loop
@@ -137,7 +137,6 @@ def evaluate_evalchemy(
             model_path = discover_hf_checkpoints(model_path)[-1]
         return EvalchemyEvalConfig(
             model=model_path,
-            model_name=model_name,
             tasks=tuple(evals),
             out_path=ctx.output_path,
             serve=serve,
