@@ -74,6 +74,26 @@ per-GPU absolute throughput is +11% over B200):
 `--capacity-factor 1.0`; raising it costs ≈0.7pp per +0.25 (padding) and buys drop
 headroom.
 
+**32 GPUs** (8 nodes × 4 GB200, one gang / one NVLink domain, multi-node entry
+point below; sharding spans all 32 GPUs — no replica axis — so per-GPU batch is
+4 sequences, the memory-realistic production operating point):
+
+| config (32 GPUs) | `--moe-implementation` | EP | MFU (B200 conv.) | step |
+|---|---|---|---|---|
+| row-13 | `sonic_cute` | 1 | 13.2% | 0.94 s |
+| row-13, EP | `ring_cute` | 4 / 8 / 16 / 32 | **14.3** / 13.5 / 11.8 / 9.5% | 0.87–1.30 s |
+| row-13, EP | `ring` | 8 | 12.8% | 0.97 s |
+| row-13, EP | `ragged_all_to_all_cute` + NCCL flag | 4 / 8 / 16 / 32 | 12.1 / 12.2 / 12.3 / **12.3%** | ~1.01 s |
+| row-13, EP | `ragged_all_to_all` + NCCL flag | 8 | 11.7% | 1.06 s |
+| d5120 | `sonic_cute` | 1 | 13.9% | 3.02 s |
+| d5120, EP | `ring_cute` | 8 | **16.2%** | 2.60 s |
+
+Two regime changes vs the single-node numbers: at 32-way sharding **EP is a net
+win** (ring_cute EP4 beats the EP1 control by +1.2pp; +2.3pp at d5120/EP8) because
+dispatching tokens is cheaper than FSDP-all-gathering expert weights every layer,
+and **`ragged_all_to_all_cute` is flat in EP degree** (dispatch volume is
+independent of EP size), crossing above `ring_cute` at EP16.
+
 ## Requirements
 
 This benchmark needs the **grug-Blackwell levanter stack**. This branch is current
