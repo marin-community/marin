@@ -7,6 +7,7 @@ Supports reading from local filesystems, cloud storage (gs://, s3://) and Huggin
 """
 
 import fnmatch
+import io
 import logging
 import zipfile
 from collections.abc import Iterator
@@ -20,6 +21,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import vortex
+import zstandard as zstd
 from rigging.filesystem import open_url, url_to_fs
 
 from zephyr import counters
@@ -165,29 +167,43 @@ except ImportError:
 
 @contextmanager
 def open_file(file_path: str, mode: str = "rb"):
-    """Open `file_path` with sensible defaults for compression and caching."""
+    """Open ``file_path`` with sensible defaults for compression and caching.
 
-    compression = None
-    if file_path.endswith(".gz"):
-        compression = "gzip"
-    elif file_path.endswith((".zst", ".zstd")):
-        compression = "zstd"
-    elif file_path.endswith(".xz"):
-        compression = "xz"
-
+    ``.zst`` / ``.zstd`` are decompressed with the ``zstandard`` package
+    directly — matching the writer (``writers._open_write_stream``) and the rest
+    of zephyr — rather than through fsspec's compression registry, whose zstd
+    backend depends on stdlib ``compression.zstd`` (Python 3.14+) or
+    ``backports.zstd``, neither of which zephyr requires. ``.gz`` / ``.xz`` use
+    fsspec's built-in, stdlib-backed codecs.
+    """
     # Use url_to_fs + fs.open so that block_size/cache_type reach the file
     # opener (AbstractBufferedFile) rather than the filesystem constructor.
     # fsspec.open() routes all **kwargs to the FS constructor, where S3's
     # AioSession rejects unknown kwargs like block_size.
     fs, resolved_path = url_to_fs(file_path)
-    with fs.open(
-        resolved_path,
-        mode,
-        block_size=_READ_BLOCK_SIZE,
-        cache_type=_READ_CACHE_TYPE,
-        cache_options={"maxblocks": _READ_MAX_BLOCKS},
-        compression=compression,
-    ) as f:
+    read_kwargs = {
+        "block_size": _READ_BLOCK_SIZE,
+        "cache_type": _READ_CACHE_TYPE,
+        "cache_options": {"maxblocks": _READ_MAX_BLOCKS},
+    }
+
+    if file_path.endswith((".zst", ".zstd")):
+        # Open the raw compressed bytes (keeping the prefetch cache) and
+        # decompress with zstandard. read_across_frames handles files written as
+        # multiple concatenated zstd frames. Text modes are wrapped so callers
+        # iterating lines get ``str``, matching fsspec's ``rt`` semantics.
+        with fs.open(resolved_path, "rb", **read_kwargs) as raw_f:
+            reader = zstd.ZstdDecompressor().stream_reader(raw_f, read_across_frames=True)
+            yield reader if "b" in mode else io.TextIOWrapper(reader, encoding="utf-8")
+        return
+
+    compression = None
+    if file_path.endswith(".gz"):
+        compression = "gzip"
+    elif file_path.endswith(".xz"):
+        compression = "xz"
+
+    with fs.open(resolved_path, mode, compression=compression, **read_kwargs) as f:
         yield f
 
 
