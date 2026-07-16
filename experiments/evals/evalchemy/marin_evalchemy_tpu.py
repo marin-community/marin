@@ -82,6 +82,10 @@ class EvalSpec:
     version: str = "2026.07.15"  # bump / "-dev" = force-reeval (OT-Agent force-reeval analog)
     tpu_type: str = "v6e-4"  # eval default matches eval-agentic-launch-iris (--tpu v6e-4)
     image: str = EVALCHEMY_IMAGE
+    # Pin the TPU slice to a region (e.g. "us-east5"); None lets the scheduler place it. Set it when
+    # submitting off-cluster (e.g. CI) to colocate the slice with its artifacts and avoid cross-region
+    # I/O -- there is no coordinator region to inherit off-cluster.
+    region: str | None = None
 
 
 def _tasks(spec: EvalSpec) -> list[str]:
@@ -134,7 +138,7 @@ def evalchemy_tpu_step(spec: EvalSpec) -> ArtifactStep[Artifact]:
     override, ``fray.types``); resources are a runtime arg -> excluded from the fingerprint, so
     re-pinning the image/slice never forks identity.
     """
-    resources = ResourceConfig.with_tpu(spec.tpu_type, image=spec.image)
+    resources = ResourceConfig.with_tpu(spec.tpu_type, image=spec.image, regions=[spec.region] if spec.region else None)
 
     def build_config(ctx: StepContext) -> dict:
         return {

@@ -22,6 +22,7 @@ reach the cluster the fixtures skip rather than error:
 """
 
 import contextlib
+import dataclasses
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 from rigging.auth import IapCredentialsUnavailable
+from rigging.filesystem import load_cluster_config, use_data_config
 from rigging.timing import Duration
 
 # kubernetes ships with iris[controller]. A kube-fronted cluster (CoreWeave) needs it to discover
@@ -61,6 +63,9 @@ MARIN_ROOT = Path(__file__).resolve().parents[2]
 # The standing GCP cluster (TPU pools) and the standing CoreWeave cluster (H100).
 MARIN_TPU_CLUSTER = "marin"
 MARIN_GPU_CLUSTER = "cw-us-east-02a"
+
+# Region the TPU smokes pin. v6e lives in us-east5-b, so the slice and its artifacts colocate here.
+MARIN_SMOKE_REGION = "us-east5"
 
 
 @contextlib.contextmanager
@@ -95,6 +100,22 @@ def iris_client() -> Iterator[IrisClient]:
     with open_cluster_client(MARIN_TPU_CLUSTER) as client:
         with set_current_client(FrayIrisClient.from_iris_client(client)):
             yield client
+
+
+@pytest.fixture
+def smoke_region() -> Iterator[str]:
+    """The region the TPU smokes pin, as the single source of truth for colocation.
+
+    The test pins the slice to this region (``ResourceConfig.regions``); this fixture binds the
+    storage root to the same ``gs://marin-<region>`` for the duration, so ``marin_prefix()`` resolves
+    output paths there and the job reads and writes region-locally -- no cross-region I/O. Binding the
+    ``DataConfig`` root (rather than exporting ``MARIN_PREFIX``) keeps the region the only knob and
+    still resolves on a metadata-less CI runner, where ``marin_prefix()`` would otherwise fall back to
+    a local path.
+    """
+    config = dataclasses.replace(load_cluster_config(), root=f"gs://marin-{MARIN_SMOKE_REGION}")
+    with use_data_config(config):
+        yield MARIN_SMOKE_REGION
 
 
 @pytest.fixture

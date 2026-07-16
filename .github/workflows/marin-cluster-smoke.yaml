@@ -34,12 +34,9 @@ jobs:
     # submitted job (no finalizer), but those are preemptible v6e-4 slices, so any orphan is
     # self-limiting.
     timeout-minutes: 100
-    env:
-      # A GitHub-hosted runner has no GCP metadata, so marin_prefix() can't self-resolve to a regional
-      # bucket (it would fall back to /tmp/marin, local per pod). The multi-step SFT smoke shares data
-      # between its tokenize and train pods through this prefix, so it must be a real shared GCS path.
-      # The TPU slice is left region-unconstrained (see the tests); any marin-<region> bucket works.
-      MARIN_PREFIX: gs://marin-us-east5
+    # No MARIN_PREFIX here: the smokes pin a single region (smoke_region in tests/cluster/conftest.py)
+    # that binds both the TPU slice and the storage root, so the job reads and writes region-locally
+    # without a hand-maintained prefix env var.
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

@@ -20,6 +20,8 @@ PYTEST_DONT_REWRITE: the step dispatches serialized remote functions that must n
 """
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 from iris.client import IrisClient
 from marin.execution.lazy import lower
@@ -67,9 +69,9 @@ SMOKE_SPEC = SFTSpec(
 SMOKE_ACCELERATOR = "v6e-4"
 
 
-def test_smoke_sft_tpu(iris_client: IrisClient) -> None:
+def test_smoke_sft_tpu(iris_client: IrisClient, smoke_region: str) -> None:
     # iris_client binds the marin controller as the current Fray client, so StepRunner submits there.
-    # The slice is left region-unconstrained: the scheduler places it in any zone with v6e capacity,
-    # datasets are region-replicated, and the small tokenized cache + checkpoint land under MARIN_PREFIX.
-    resources = resources_from_accelerator(SMOKE_ACCELERATOR)
+    # smoke_region pins the slice to a region and binds the storage root to the same region, so the
+    # multi-step run (tokenize -> train -> export) shares its cache and reads/writes region-locally.
+    resources = dataclasses.replace(resources_from_accelerator(SMOKE_ACCELERATOR), regions=(smoke_region,))
     StepRunner().run([lower(sft_step(SMOKE_SPEC, resources))])

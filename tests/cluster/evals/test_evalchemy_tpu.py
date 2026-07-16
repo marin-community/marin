@@ -10,12 +10,14 @@ and it emits a score. Tiny public Qwen3-0.6B model, single seed, one task.
 It drives a live Iris TPU job with a custom container, so it is marked ``cluster`` and deselected by
 default (see ``pyproject.toml`` addopts); the ``marin-cluster-smoke`` workflow runs it. The
 ``iris_client`` fixture binds the ``marin`` controller as the current Fray client, so ``StepRunner``
-submits there. Run it on demand once you have cluster credentials and MARIN_PREFIX/HF_TOKEN set:
+submits there. Run it on demand once you have cluster credentials and HF_TOKEN set:
 
     uv run pytest tests/cluster/evals/test_evalchemy_tpu.py \
       -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
 """
 from __future__ import annotations
+
+import dataclasses
 
 import pytest
 from iris.client import IrisClient
@@ -41,8 +43,9 @@ SMOKE_SPEC = EvalSpec(
 )
 
 
-def test_evalchemy_tpu_smoke(iris_client: IrisClient) -> None:
+def test_evalchemy_tpu_smoke(iris_client: IrisClient, smoke_region: str) -> None:
     # iris_client binds the marin controller as the current Fray client, so StepRunner submits there.
-    # The slice is left region-unconstrained: the scheduler places it in any zone with v6e capacity,
-    # datasets are region-replicated, and the tiny eval output lands under MARIN_PREFIX.
-    StepRunner().run([lower(evalchemy_tpu_step(SMOKE_SPEC))])
+    # smoke_region pins the slice to a region and binds the storage root to the same region, so the
+    # job reads and writes region-locally -- no cross-region I/O.
+    spec = dataclasses.replace(SMOKE_SPEC, region=smoke_region)
+    StepRunner().run([lower(evalchemy_tpu_step(spec))])

@@ -32,8 +32,10 @@ So `-m cluster` is a no-op on a machine without credentials.
 ## Running locally
 
 ```bash
-# TPU smokes against the marin cluster (needs a login or ambient GCP creds):
-MARIN_PREFIX=gs://marin-us-east5 HF_TOKEN=... WANDB_API_KEY=... \
+# TPU smokes against the marin cluster (needs a login or ambient GCP creds).
+# No MARIN_PREFIX: the tests pin a region (smoke_region) that binds both the slice
+# and the storage root.
+HF_TOKEN=... WANDB_API_KEY=... \
   uv run pytest tests/cluster/evals tests/cluster/sft \
     -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
 
