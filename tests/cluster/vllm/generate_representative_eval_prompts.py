@@ -18,8 +18,7 @@ from rigging.filesystem import StoragePath
 TOKENIZER_NAME = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 ARTIFACT_PREFIX = "s3://marin-us-east-02a/marin/test-data/vllm/e2e/representative-eval-prompts"
-RESOURCE_DIR = Path(__file__).parent / "resources"
-SELECTORS_PATH = RESOURCE_DIR / "representative_eval_prompt_selectors.json"
+SELECTORS_PATH = Path(__file__).parent / "resources" / "representative_eval_prompt_selectors.json"
 
 logger = logging.getLogger(__name__)
 
