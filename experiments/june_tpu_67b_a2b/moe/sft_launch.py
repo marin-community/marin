@@ -152,6 +152,25 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
 
     initialize_from = latest_checkpoint_path(config.init_from_path)
 
+    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, model) mesh for
+    # the actual compute (train.py), but the TrainerConfig still derives ``data_axis_size`` (and thus the
+    # batch-divisibility check + per_device_parallelism) from THIS MeshConfig. With only ``expert``
+    # declared, the model-parallel slices get absorbed as ``replica_dcn`` (a batch axis) -> data_axis_size
+    # = num_slices, which rejects e.g. bs=8 on model_axis=5 ("train_batch_size (8) must be divisible by
+    # per_device_parallelism * data_axis_size (1, 5)"). For model_axis>1, declare ``model`` as the DCN
+    # (cross-slice) axis and map the batch axis to the true Grug batch shards (replica_dcn, data, expert)
+    # so data_axis_size == expert_axis_size and per_device resolves correctly. model_axis==1 keeps the
+    # original single-axis MeshConfig byte-identically.
+    _model_axis = config.grug_trainer.model_axis_size
+    if _model_axis > 1:
+        mesh_config = MeshConfig(
+            axes={"expert": config.expert_parallel, "data": 1, "replica": 1},
+            dcn_axes={"model": _model_axis, "replica_dcn": config.grug_trainer.replica_axis_size or 1},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
+        )
+    else:
+        mesh_config = MeshConfig(axes={"expert": config.expert_parallel})
+
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -162,7 +181,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": config.expert_parallel}),
+        mesh=mesh_config,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=config.checkpointer
