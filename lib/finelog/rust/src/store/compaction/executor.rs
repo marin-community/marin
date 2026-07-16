@@ -188,9 +188,30 @@ fn apply_merge(
     let mut consumed: Vec<&SegmentRow> = Vec::new();
     let mut input_arrow_bytes: i64 = 0;
     for inp in &job.inputs {
+        // An input we cannot read is one we can never merge, and failing the tick
+        // would replan the identical job every check_interval and wedge the level
+        // for good. Route around it instead: as the run's head it is promoted by
+        // rename (the branch below), and otherwise it ends the prefix and becomes
+        // the next tick's head. Either way it moves and compaction stays live.
+        // Only the READ is forgiven — a projection or sort failure is a schema bug
+        // and still propagates.
+        let raw = match read_segment_batches(Path::new(&inp.path)) {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(
+                    path = %inp.path,
+                    error = %e,
+                    "unreadable merge input; promoting it past the merge"
+                );
+                if consumed.is_empty() {
+                    return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
+                }
+                break;
+            }
+        };
         let mut batches: Vec<RecordBatch> = Vec::new();
         let mut batch_bytes: i64 = 0;
-        for b in read_segment_batches(Path::new(&inp.path))? {
+        for b in raw {
             let projected_batch = project_to_schema(&b, arrow_schema)
                 .map_err(|e| StatsError::Internal(format!("project merge input: {e}")))?;
             let sorted = sort_batch_by(&projected_batch, &sort_cols)
@@ -548,6 +569,42 @@ mod tests {
         .unwrap();
         assert_eq!(swap.removed.len(), 3);
         assert_eq!(swap.added.max_seq, max2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An unreadable input must not fail the tick. The planner would hand back
+    /// the identical job every `check_interval`, so propagating the read error
+    /// would wedge the level permanently on one corrupt file — the very failure
+    /// the memory ceiling exists to prevent. It is promoted past the merge
+    /// instead, and its readable neighbours still compact.
+    #[test]
+    fn unreadable_input_is_promoted_past_the_merge_not_propagated() {
+        let dir = tempdir("unreadable");
+        let (p_bad, min_bad, max_bad) = repeated_line_segment(&dir, 1, 100);
+        let (p_good, min_good, max_good) = repeated_line_segment(&dir, 101, 100);
+        std::fs::write(&p_bad, b"this is not a parquet file").unwrap();
+
+        let job = CompactionJob {
+            inputs: vec![
+                row_for(&p_bad.to_string_lossy(), 0, min_bad, max_bad, 100),
+                row_for(&p_good.to_string_lossy(), 0, min_good, max_good, 100),
+            ],
+            output_level: 1,
+            output_min_seq: min_bad,
+        };
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
+            (None, None)
+        })
+        .expect("an unreadable input must not fail the tick");
+        assert!(
+            swap.bump_rename.is_some(),
+            "the unreadable head is renamed past, not merged"
+        );
+        assert_eq!(swap.removed, vec![p_bad.to_string_lossy().to_string()]);
+        assert!(
+            Path::new(&p_good).exists(),
+            "its readable neighbour stays live to compact next tick"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
