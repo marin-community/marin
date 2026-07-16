@@ -47,39 +47,24 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
     assert resolve_job_user() == "root"
 
 
-def test_resolve_job_user_reads_iris_user_env(monkeypatch):
-    monkeypatch.setenv("IRIS_USER", "mwittmann")
+def test_resolve_job_user_reads_and_strips_iris_user_env(monkeypatch):
+    monkeypatch.setenv("IRIS_USER", " mwittmann ")
     monkeypatch.setattr("getpass.getuser", lambda: "local-user")
     assert resolve_job_user() == "mwittmann"
 
 
 def test_resolve_job_user_iris_user_env_beats_current_job_info(monkeypatch):
+    """A deliberate per-shell identity survives shared dev pods (which are Iris jobs)."""
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
     monkeypatch.setenv("IRIS_USER", "mwittmann")
     assert resolve_job_user() == "mwittmann"
 
 
 def test_resolve_job_user_current_job_info_beats_marin_yaml(tmp_path):
+    """A .marin.yaml riding along in a job bundle must not re-attribute in-job submissions."""
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
     (tmp_path / ".marin.yaml").write_text("user: mwittmann\n")
     assert resolve_job_user() == "alice"
-
-
-def test_resolve_job_user_strips_iris_user_env(monkeypatch):
-    monkeypatch.setenv("IRIS_USER", " mwittmann ")
-    assert resolve_job_user() == "mwittmann"
-
-
-def test_resolve_job_user_rejects_blank_iris_user_env(monkeypatch):
-    monkeypatch.setenv("IRIS_USER", "   ")
-    with pytest.raises(ValueError, match="IRIS_USER"):
-        resolve_job_user()
-
-
-def test_resolve_job_user_rejects_slash_in_iris_user_env(monkeypatch):
-    monkeypatch.setenv("IRIS_USER", "team/alice")
-    with pytest.raises(ValueError, match="IRIS_USER"):
-        resolve_job_user()
 
 
 def test_resolve_job_user_reads_marin_yaml_user(monkeypatch, tmp_path):
@@ -88,33 +73,30 @@ def test_resolve_job_user_reads_marin_yaml_user(monkeypatch, tmp_path):
     assert resolve_job_user() == "mwittmann"
 
 
-def test_resolve_job_user_iris_user_env_beats_marin_yaml(monkeypatch, tmp_path):
-    (tmp_path / ".marin.yaml").write_text("user: from-yaml\n")
-    monkeypatch.setenv("IRIS_USER", "from-env")
-    assert resolve_job_user() == "from-env"
-
-
 def test_resolve_job_user_ignores_marin_yaml_without_user_key(monkeypatch, tmp_path):
+    """Existing .marin.yaml files that only configure env: keep OS-user attribution."""
     (tmp_path / ".marin.yaml").write_text("env:\n  WANDB_API_KEY: abc\n")
     monkeypatch.setattr("getpass.getuser", lambda: "local-user")
     assert resolve_job_user() == "local-user"
 
 
-def test_resolve_job_user_rejects_non_string_marin_yaml_user(tmp_path):
-    (tmp_path / ".marin.yaml").write_text("user: [not, a, string]\n")
-    with pytest.raises(ValueError, match=r"\.marin\.yaml"):
+@pytest.mark.parametrize("value", ["   ", "team/alice"])
+def test_resolve_job_user_rejects_invalid_iris_user_env(monkeypatch, value):
+    monkeypatch.setenv("IRIS_USER", value)
+    with pytest.raises(ValueError, match="IRIS_USER"):
         resolve_job_user()
 
 
-def test_resolve_job_user_rejects_slash_in_marin_yaml_user(tmp_path):
-    (tmp_path / ".marin.yaml").write_text("user: team/alice\n")
-    with pytest.raises(ValueError, match=r"\.marin\.yaml"):
-        resolve_job_user()
-
-
-def test_resolve_job_user_reports_malformed_marin_yaml(tmp_path):
-    """A YAML syntax error surfaces as ValueError naming the file, not a raw yaml.YAMLError."""
-    (tmp_path / ".marin.yaml").write_text("user: [unclosed\n")
+@pytest.mark.parametrize(
+    "content",
+    [
+        "user: [not, a, string]\n",
+        "user: team/alice\n",
+        "user: [unclosed\n",  # YAML syntax error must surface as ValueError naming the file
+    ],
+)
+def test_resolve_job_user_rejects_invalid_marin_yaml_user(tmp_path, content):
+    (tmp_path / ".marin.yaml").write_text(content)
     with pytest.raises(ValueError, match=r"\.marin\.yaml"):
         resolve_job_user()
 
