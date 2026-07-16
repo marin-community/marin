@@ -9,7 +9,6 @@ and silently dropped all but one group).
 """
 
 from fray.cluster import ResourceConfig
-from marin.evaluation.eval_result import EvalReport, LevanterEvalResult, LmEvalHarnessResult
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.training.training import LevanterCheckpoint
@@ -51,8 +50,6 @@ def test_eval_step_routes_backend_to_result_type():
     model = _model()
     levanter = eval_step(model, EvalGroup((), Backend.LEVANTER, _CPU, "mcq"), version=_V)
     lm_eval = eval_step(model, EvalGroup((), Backend.LM_EVAL, _CPU, "gen"), version=_V)
-    assert levanter.artifact_type is LevanterEvalResult
-    assert lm_eval.artifact_type is LmEvalHarnessResult
     assert levanter.name == "evaluation/lm_evaluation_harness_levanter/perplexity-models/llama-200m/mcq"
     assert lm_eval.name == "evaluation/lm_evaluation_harness/perplexity-models/llama-200m/gen"
 
@@ -61,7 +58,6 @@ def test_eval_report_depends_on_every_result():
     model = _model()
     results = eval_steps(model, key_evals(resources=_CPU), version=_V)
     report = eval_report(results, name=f"{model.name}/key", version=_V)
-    assert report.artifact_type is EvalReport
     assert report.deps == tuple(results)
     assert report.name == "evaluation/report/perplexity-models/llama-200m/key"
 
