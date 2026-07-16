@@ -41,7 +41,7 @@ from pydantic import BaseModel
 from rigging.filesystem import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
+from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -250,10 +250,11 @@ def compute_fuzzy_dups_attrs(
     output_path: str,
     cc_max_iterations: int = 10,
     cc_resume: bool = False,
-    max_parallelism: int,
+    max_parallelism: int = MAX_WORKERS_PER_JOB,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
-    map_workers_per_actor: int | None = None,
+    map_task_resources: ResourceConfig | None = None,
+    reduce_task_resources: ResourceConfig | None = None,
 ) -> FuzzyDupsAttrData:
     """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
@@ -276,12 +277,23 @@ def compute_fuzzy_dups_attrs(
             ``<output_path>/outputs/source_NNN/``.
         cc_max_iterations: Max iterations for connected components.
         max_parallelism: Worker count for the ZephyrContext.
-        worker_resources: Per-worker resource request.
+        worker_resources: Per-worker resource request. Required when
+            ``map_task_resources`` is set.
         coordinator_resources: Coordinator resource request.
+        map_task_resources: ResourceConfig for map-stage tasks.
+        reduce_task_resources: ResourceConfig for reduce-stage tasks (e.g.
+            the per-shard ``group_by`` writer).
 
     Returns:
         :class:`FuzzyDupsAttrData` describing per-source attr directories,
         the shared MinHash params, and aggregated counters.
+
+    Canonical selection is deterministic (the min content-hash per component) and
+    reproducible across executor counts: ``connected_components`` sorts each LSH
+    bucket by ``id_norm`` so the graph topology does not depend on shuffle order.
+    If CC does not converge within ``cc_max_iterations`` the result is still
+    deterministic but *incomplete* (some near-dup clusters stay split); a warning
+    is logged and the caller can raise ``cc_max_iterations`` for complete dedup.
 
     Raises:
         ValueError: If inputs is empty or input params disagree.
@@ -305,8 +317,10 @@ def compute_fuzzy_dups_attrs(
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_workers_per_actor is not None:
-        ctx_kwargs["map_workers_per_actor"] = map_workers_per_actor
+    if map_task_resources is not None:
+        ctx_kwargs["map_task_resources"] = map_task_resources
+    if reduce_task_resources is not None:
+        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
     ctx = ZephyrContext(**ctx_kwargs)
 
     # Cap shard count at max_parallelism. Each group reads its attr files
@@ -326,8 +340,19 @@ def compute_fuzzy_dups_attrs(
         resume=cc_resume,
     )
     if not converged:
-        # TODO (rav): log the number of changed nodes?
-        logger.warning("Connected components did not converge")
+        # A non-converged CC is still deterministic and reproducible across
+        # runs/executor counts (the bucket group_by sorts by id_norm, pinning the
+        # graph topology -- see connected_components), but it is *incomplete*: some
+        # true duplicate-clusters remain split across several component_ids, each
+        # keeping its own local-min canonical, so a few extra near-dups survive.
+        # Warn rather than fail -- callers that cap iterations get a stable,
+        # under-deduped result; raise cc_max_iterations for complete dedup (see
+        # marin#6798).
+        logger.warning(
+            "Connected components did not converge within cc_max_iterations=%d; dedup is deterministic but "
+            "incomplete (some near-dup clusters remain split). Raise cc_max_iterations for complete dedup.",
+            cc_max_iterations,
+        )
 
     ctx.put(_SHARED_ENTRIES_KEY, entries)
     aggregator = _make_per_shard_writer(output_path, counter_prefix="dedup/fuzzy/document")

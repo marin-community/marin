@@ -1,16 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 from draccus import PluginRegistry
 
 from levanter.data._preprocessor import BatchProcessor
-from levanter.tokenizers import MarinTokenizer
+from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 from ._batch_tokenizer import BatchTokenizer
 
@@ -167,7 +166,7 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template: str | None = None
     system_prompt: str | None = None
     chat_template_kwargs: str | None = "chat_template_kwargs"
-    pack: bool | int | Literal["pad"] | None = None  # None => default pack behavior (currently pack)
+    pack: bool | int | None = None  # None => default pack behavior (currently pack)
     mask_user_turns: bool = True
 
     def build_preprocessor(
@@ -283,9 +282,9 @@ class ChatProcessor(BatchProcessor[dict, dict]):
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
 
-        if mask_user_turns and not re.search(r"\{%-?\s*generation\s*-?%}", self.chat_template):
+        if mask_user_turns and not chat_template_has_generation_block(self.chat_template):
             raise ValueError(
-                "Chat template must contain {%generation%} to indicate the position of the assistant message "
+                "Chat template must contain {% generation %} to indicate the position of the assistant message "
                 "if mask_user_turns is True."
             )
 

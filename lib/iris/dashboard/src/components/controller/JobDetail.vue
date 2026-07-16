@@ -5,6 +5,7 @@ import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import { useBackends } from '@/composables/useBackends'
+import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
 import {
   LOCAL_CLUSTER, isFederated,
   type JobStatus, type TaskStatus, type LaunchJobRequest, type JobQuery,
@@ -55,7 +56,7 @@ const loadingChildJobs = ref<Set<string>>(new Set())
 const loading = ref(true)
 const error = ref<string | null>(null)
 const profilingTaskId = ref<string | null>(null)
-const copiedName = ref(false)
+const { copied: copiedName, copy: copyToClipboard } = useCopyToClipboard()
 const taskSearch = ref('')
 const stateFilter = ref('')
 
@@ -89,12 +90,10 @@ function toggleChildSort(col: ChildSortColumn) {
   }
 }
 
-async function copyJobName() {
+function copyJobName() {
   const name = job.value?.name
   if (!name) return
-  await navigator.clipboard.writeText(name)
-  copiedName.value = true
-  setTimeout(() => { copiedName.value = false }, 1500)
+  copyToClipboard(name)
 }
 
 // -- Fetch --

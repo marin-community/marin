@@ -28,8 +28,9 @@ from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
@@ -191,13 +192,15 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_grug(build_grug_run_config(config))
 
 
-def grug_base_trial(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def grug_base_trial(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """The base grug trial on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
     :func:`~marin.execution.lazy.lower`. The paloma/uncheatable suites are validation
     (weight 0).
     """
+    name = "grug/base-trial"
+    version = resolve_version(name, version)
     nem = nemotron_datasets(tokenizer=llama3_tokenizer)
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
     train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
@@ -246,7 +249,7 @@ def grug_base_trial(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]
         )
 
     return ArtifactStep(
-        name=user_namespaced_name("grug/base-trial", version),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,
@@ -257,4 +260,4 @@ def grug_base_trial(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]
 
 
 if __name__ == "__main__":
-    StepRunner().run([grug_base_trial().lower()])
+    experiment_main(grug_base_trial)()

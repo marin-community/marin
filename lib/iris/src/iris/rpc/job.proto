@@ -235,6 +235,14 @@ message TaskStatus {
   iris.time.Timestamp submitted_at = 27;
 
   reserved 28;  // was: preemption_count — derived from attempts (see iris.cluster.controller.attempt_counts)
+
+  // Backend status one-liner for a waiting/building task: the current human-readable
+  // reason it is not yet running (e.g. the Kubernetes pod's container-waiting reason
+  // or the Kueue admission verdict for a SchedulingGated pod). Empty once the task is
+  // running or when the backend has nothing to say. Distinct from pending_reason,
+  // which is scheduler/autoscaler diagnostics for a PENDING task. Persisted on the
+  // task row so it survives to the dashboard and mirrors across federation.
+  string status_message = 29;
 }
 
 // Record of a single task execution attempt

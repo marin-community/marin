@@ -984,6 +984,13 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
         return reads.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
 
 
+def assign_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
+    """Assign a task to a worker (creates the attempt, leaves it ASSIGNED) without
+    driving it to RUNNING — so a caller can land its own BUILDING/terminal update."""
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+
+
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
@@ -1014,6 +1021,7 @@ def transition_task(
     *,
     error: str | None = None,
     exit_code: int | None = None,
+    status_message: str | None = None,
 ) -> object:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
@@ -1046,6 +1054,7 @@ def transition_task(
                             new_state=new_state,
                             error=error,
                             exit_code=exit_code,
+                            status_message=status_message,
                         )
                     ],
                 )

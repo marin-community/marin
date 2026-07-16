@@ -4,8 +4,6 @@
 import logging
 import os
 
-import numpy as np
-
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.store.cache import CacheMetadata, CacheOptions, TreeCache, build_or_load_cache
 from levanter.tokenizers import MarinTokenizer
@@ -55,9 +53,3 @@ def load_lm_dataset_cache(
         options=CacheMetadata(preprocessor_metadata=processor.metadata),
     )
     return cache
-
-
-def cached_token_count(cache_path: str, field: str = "input_ids") -> int:
-    """Return the total number of tokens stored in a finished TreeCache."""
-    cache = TreeCache.load(cache_path, {field: np.zeros((0,), dtype=np.int32)})
-    return cache.flat_field_length(field)

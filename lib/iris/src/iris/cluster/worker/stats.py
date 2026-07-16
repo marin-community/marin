@@ -29,6 +29,7 @@ from iris.rpc import job_pb2
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
 TASK_STATUS_NAMESPACE = "iris.task_status"
+TASK_EVENT_NAMESPACE = "iris.task_event"
 
 # Task status rows are only useful while a task is still running — once
 # the job ends the data is dead weight on the finelog server. Cap the
@@ -36,6 +37,15 @@ TASK_STATUS_NAMESPACE = "iris.task_status"
 # Worker / task stats keep the cluster-wide defaults so historical
 # resource-usage queries continue to work.
 TASK_STATUS_STORAGE_POLICY = StoragePolicy(
+    max_bytes=100 * 1024 * 1024,
+    max_age_seconds=3600,
+)
+
+# Scheduling/admission events are a diagnostic history read only while a job is
+# alive (and briefly after, to explain a failure). The producer already
+# deduplicates on the verdict so the row count per attempt is small; a short
+# retention keeps the timeline cheap on the finelog server.
+TASK_EVENT_STORAGE_POLICY = StoragePolicy(
     max_bytes=100 * 1024 * 1024,
     max_age_seconds=3600,
 )
@@ -139,6 +149,33 @@ class TaskStatusRow:
     ts: datetime
     status_text_detail_md: str
     status_text_summary_md: str
+
+
+@dataclass
+class TaskEventRow:
+    """One scheduling/admission event observed for a task attempt.
+
+    The "event log for every job": a backend appends a row each time the
+    diagnostic verdict for a not-yet-running attempt changes (Kueue admission
+    denial, image-pull failure, unschedulable), so the dashboard can render the
+    sequence of reasons behind a wait. Read newest-first, filtered by attempt.
+
+    Fields mirror a Kubernetes event so a future producer can relay real events
+    unchanged: ``type`` is the severity (``Warning``/``Normal``), ``reason`` the
+    short code, ``source`` the emitting layer (e.g. ``k8s/kueue``), ``count`` the
+    repeat multiplicity.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    task_id: str
+    attempt_id: int
+    ts: datetime
+    type: str
+    reason: str
+    message: str
+    source: str
+    count: int
 
 
 def build_worker_stat(

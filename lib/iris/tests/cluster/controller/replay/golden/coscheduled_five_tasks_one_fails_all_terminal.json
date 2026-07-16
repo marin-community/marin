@@ -151,6 +151,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
       "state": 11,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/cosched5-job/0",
       "task_index": 0
@@ -174,6 +175,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
       "state": 11,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/cosched5-job/1",
       "task_index": 1
@@ -197,6 +199,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
       "state": 5,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/cosched5-job/2",
       "task_index": 2
@@ -220,6 +223,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
       "state": 11,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/cosched5-job/3",
       "task_index": 3
@@ -243,6 +247,7 @@
       "priority_root_submitted_ms": 1704067200000,
       "started_at_ms": 1704067200000,
       "state": 11,
+      "status_message": null,
       "submitted_at_ms": 1704067200000,
       "task_id": "/test-user/cosched5-job/4",
       "task_index": 4

@@ -29,6 +29,7 @@ from iris.cluster.backends.k8s.tasks import (
 )
 from iris.cluster.controller.backend import TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.types import JobName
 from iris.cluster.worker.stats import IrisTaskStat
@@ -82,6 +83,27 @@ def test_sync_apply_error_yields_worker_failed(provider, k8s):
 
     assert len(result) == 1
     assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+
+
+def test_sync_invalid_manifest_fails_task_terminally(provider, k8s):
+    """An unbuildable manifest -> terminal FAILED, not retryable WORKER_FAILED.
+
+    A programmatic client can stamp a required nvlink.domain gang larger than a rack's
+    guaranteed-schedulable slice (the CLI routes those to the sliced level, direct
+    RunTaskRequests do not). The manifest can never be built, so retrying would rebuild the
+    same broken request every tick and wedge the reconcile loop. sync must fail the task
+    terminally and keep going.
+    """
+    req = make_run_req("/test-job/0", num_tasks=RACK_SIZE + 1, coscheduling_group_by="nvlink.domain")
+    batch = make_batch(tasks_to_run=[req])
+
+    result = provider.sync(batch)
+
+    assert len(result) == 1
+    assert result[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert "guaranteed-schedulable rack slice" in result[0].error
+    # Nothing was created, and the tick was not aborted by the escaping error.
+    assert k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true"}) == []
 
 
 def test_redrive_does_not_recreate_running_pod(provider, k8s):
@@ -1213,10 +1235,13 @@ def _seed_blocker_pod(
 
 
 def _gang_reqs(num_tasks: int = 2) -> list[job_pb2.RunTaskRequest]:
-    return [
-        make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=num_tasks, coscheduling_group_by="leafgroup")
-        for i in range(num_tasks)
-    ]
+    reqs = []
+    for i in range(num_tasks):
+        req = make_run_req(f"/gang/task/{i}", attempt_id=0, num_tasks=num_tasks, coscheduling_group_by="leafgroup")
+        # Gangs are GPU workloads; the GPU request is what makes blocker eviction fire.
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+        reqs.append(req)
+    return reqs
 
 
 def test_gang_submit_evicts_preemptible_gpu_blocker(preempt_provider, k8s):
@@ -1246,14 +1271,25 @@ def test_gang_submit_spares_non_blocker_pods(preempt_provider, k8s):
     assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace("other-ns")] == ["unconfigured-ns"]
 
 
-def test_non_gang_submit_does_not_evict(preempt_provider, k8s):
-    """Plain (non-coscheduled) submissions never reach the kube-scheduler gated;
-    they trigger no eviction."""
+def test_cpu_submit_does_not_evict(preempt_provider, k8s):
+    """A CPU-only submission needs no GPU capacity, so it triggers no blocker eviction."""
     _seed_blocker_pod(k8s, _PREEMPT_NS, "blocker")
 
     preempt_provider.sync(make_batch(tasks_to_run=[make_run_req("/plain-job/0")]))
 
     assert [p["metadata"]["name"] for p in k8s.list_pods_in_namespace(_PREEMPT_NS)] == ["blocker"]
+
+
+def test_single_pod_gpu_submit_evicts_blocker(preempt_provider, k8s):
+    """A non-coscheduled GPU job now routes through Kueue and is gated too, so it also
+    frees the GPU capacity blockers hold — eviction is not gated on coscheduling."""
+    _seed_blocker_pod(k8s, _PREEMPT_NS, "nhc-verify-0")
+
+    req = make_run_req("/gpu-job/0", num_tasks=1)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    preempt_provider.sync(make_batch(tasks_to_run=[req]))
+
+    assert k8s.list_pods_in_namespace(_PREEMPT_NS) == []
 
 
 def test_reconcile_evicts_blockers_while_gang_gated(preempt_provider, k8s):

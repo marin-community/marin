@@ -60,7 +60,7 @@ def ensure_parent_dir(path: str) -> None:
 @contextmanager
 def _open_write_stream(fs, resolved_path: str, output_path: str):
     """Open a binary write stream with compression inferred from ``output_path``."""
-    if output_path.endswith(".zst"):
+    if output_path.endswith((".zst", ".zstd")):
         cctx = zstd.ZstdCompressor(level=2, threads=1)
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
             with cctx.stream_writer(raw_f) as f:

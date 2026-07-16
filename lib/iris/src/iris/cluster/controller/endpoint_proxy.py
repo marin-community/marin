@@ -23,8 +23,9 @@ In both cases the encoded name maps to an Iris endpoint name with ``.``
 proxy resolves the name via a caller-supplied ``resolve: (name) ->
 address | None`` callable, then forwards method, path, query string, and
 filtered headers to the upstream's ``address``. Bodies are streamed in
-both directions with no size cap; the only backstop is
-:data:`PROXY_TIMEOUT_SECONDS`.
+both directions with no size cap; the only backstop is the upstream timeout
+(:data:`PROXY_TIMEOUT_SECONDS` by default, or a per-endpoint override the caller
+passes to :meth:`EndpointProxy.dispatch`).
 
 Hop-by-hop headers, ``Cookie`` / ``Set-Cookie``, and ``Authorization`` are
 stripped (in both directions for cookies; client -> upstream for
@@ -78,7 +79,16 @@ logger = logging.getLogger(__name__)
 EndpointResolver = Callable[[str], str | None]
 
 PROXY_ROUTE = "/proxy/{endpoint_name:str}/{sub_path:path}"
-PROXY_TIMEOUT_SECONDS: float = 30.0
+
+# Fallback upstream timeout for an endpoint that registers no override. Well above
+# a web round trip because the proxy also fronts model servers, where a single
+# non-streaming completion sends no bytes until the whole generation is done and
+# runs for minutes. Endpoints override it via PROXY_TIMEOUT_METADATA_KEY.
+PROXY_TIMEOUT_SECONDS: float = 120.0
+
+# Connect stays short whatever the read budget, so an unreachable upstream fails
+# fast with a 502 instead of hanging for the full read timeout.
+PROXY_CONNECT_TIMEOUT_SECONDS: float = 30.0
 
 # Methods exposed via the proxy. CONNECT and TRACE are intentionally absent —
 # CONNECT has no meaningful proxy semantics here, TRACE is a recurring source
@@ -126,6 +136,13 @@ _HTTPX_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=0)
 # How much of a rejected upstream's response body is echoed back as the proxy's
 # error detail. Bounds the buffering an upstream can force on the controller.
 _MAX_UPSTREAM_ERROR_DETAIL_BYTES = 2048
+
+
+def _build_timeout(seconds: float) -> httpx.Timeout:
+    """Give reads/writes/pool the full ``seconds`` budget but cap connect (see
+    :data:`PROXY_CONNECT_TIMEOUT_SECONDS`), honoring a per-endpoint budget smaller
+    than the cap."""
+    return httpx.Timeout(seconds, connect=min(seconds, PROXY_CONNECT_TIMEOUT_SECONDS))
 
 
 async def _read_error_detail(response: httpx.Response) -> str:
@@ -249,17 +266,26 @@ async def _send_upstream(
     """Forward ``request`` to ``upstream_url``, returning the streaming upstream response.
 
     ``kind`` labels the upstream in error text ("Upstream" for a direct pod, "Peer" for a
-    federated hop) and ``name`` identifies the target (endpoint name / peer id). A transport
-    failure raises :class:`_UpstreamError` carrying the terminal 502/504 the caller relays; a
-    401 does too, folded to a 502 with the upstream body appended — the upstream refused *this
-    controller*, not the browser (whose Authorization is stripped), so relaying the challenge
-    verbatim would misfire the dashboard's login modal. A bodyless request forwards no body.
+    federated hop) and ``name`` identifies the target (endpoint name / peer id). ``timeout_seconds``
+    is the per-request upstream budget (endpoint override or proxy default) applied to this hop and
+    named in the 504 text. A transport failure raises :class:`_UpstreamError` carrying the terminal
+    502/504 the caller relays; a 401 does too, folded to a 502 with the upstream body appended — the
+    upstream refused *this controller*, not the browser (whose Authorization is stripped), so relaying
+    the challenge verbatim would misfire the dashboard's login modal. A bodyless request forwards no
+    body.
     """
     body = request.stream() if _request_has_body(request) else None
-    upstream_req = client.build_request(request.method, upstream_url, headers=forward_headers, content=body)
+    upstream_req = client.build_request(
+        request.method, upstream_url, headers=forward_headers, content=body, timeout=_build_timeout(timeout_seconds)
+    )
     try:
         upstream_resp = await client.send(upstream_req, stream=True)
-    except (httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+    except httpx.ConnectTimeout as exc:
+        # Connect has its own (shorter) budget, so name that one, not the read budget.
+        connect_budget = min(timeout_seconds, PROXY_CONNECT_TIMEOUT_SECONDS)
+        logger.warning("Proxy connect timeout for %s: %s", name, exc)
+        raise _UpstreamError(f"{kind} connect timeout after {connect_budget:g}s", status_code=504) from exc
+    except httpx.ReadTimeout as exc:
         logger.warning("Proxy timeout for %s: %s", name, exc)
         raise _UpstreamError(f"{kind} timeout after {timeout_seconds:g}s", status_code=504) from exc
     except httpx.HTTPError as exc:
@@ -304,7 +330,7 @@ class EndpointProxy:
         self._resolve = resolve
         self._timeout_seconds = timeout_seconds
         self._client = httpx.AsyncClient(
-            timeout=timeout_seconds,
+            timeout=_build_timeout(timeout_seconds),
             follow_redirects=False,
             limits=_HTTPX_LIMITS,
         )
@@ -321,6 +347,7 @@ class EndpointProxy:
         sub_path: str,
         proxy_prefix: str,
         address: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> Response:
         """Forward ``request`` to ``encoded_name`` and stream the response back.
 
@@ -335,6 +362,9 @@ class EndpointProxy:
         authorized) the endpoint — authorization and forwarding must use the
         same resolution. When omitted, the endpoint is resolved via the
         injected ``resolve`` callable, using the same decode.
+
+        ``timeout_seconds`` overrides the upstream timeout for this one request
+        (the endpoint's registered override); ``None`` uses the proxy default.
         """
         if address is None:
             slashed, bare = proxy_name_to_endpoint_names(encoded_name)
@@ -373,7 +403,7 @@ class EndpointProxy:
                 forward_headers,
                 name=encoded_name,
                 kind="Upstream",
-                timeout_seconds=self._timeout_seconds,
+                timeout_seconds=timeout_seconds if timeout_seconds is not None else self._timeout_seconds,
             )
         except _UpstreamError as exc:
             return exc.as_response()
@@ -431,7 +461,9 @@ class FederatedEndpointProxy:
         self._peer_address = peer_address
         self._mint_token = mint_token
         self._timeout_seconds = timeout_seconds
-        self._client = httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False, limits=_HTTPX_LIMITS)
+        self._client = httpx.AsyncClient(
+            timeout=_build_timeout(timeout_seconds), follow_redirects=False, limits=_HTTPX_LIMITS
+        )
 
     async def close(self) -> None:
         """Close the underlying httpx.AsyncClient. Idempotent."""
@@ -445,11 +477,15 @@ class FederatedEndpointProxy:
         encoded_name: str,
         sub_path: str,
         proxy_prefix: str,
+        timeout_seconds: float | None = None,
     ) -> Response:
         """Forward ``request`` to the peer controller's ``/proxy/<encoded_name>``.
 
         ``proxy_prefix`` is this hop's browser-facing prefix, forwarded so the child
         (and pod) build URLs the browser can follow back through this controller.
+
+        ``timeout_seconds`` is the endpoint's override (carried on the mirror row) so
+        this parent hop waits as long as the child hop will; ``None`` uses the default.
         """
         base = self._peer_address(peer_id)
         if base is None:
@@ -476,7 +512,7 @@ class FederatedEndpointProxy:
                 forward_headers,
                 name=peer_id,
                 kind="Peer",
-                timeout_seconds=self._timeout_seconds,
+                timeout_seconds=timeout_seconds if timeout_seconds is not None else self._timeout_seconds,
             )
         except _UpstreamError as exc:
             return exc.as_response()

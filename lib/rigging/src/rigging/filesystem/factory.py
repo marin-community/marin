@@ -7,11 +7,13 @@
 ``fsspec.core.url_to_fs``, ``fsspec.open``, and ``fsspec.filesystem`` that
 automatically wrap GCS filesystems in a :class:`CrossRegionGuardedFS` and inject
 finite botocore timeouts into S3/R2 filesystems (#6487). ``atomic_rename``
-provides write-and-rename semantics via a sibling temp key.
+provides write-and-rename semantics via a sibling temp key, and
+``fetch_file_atomic`` downloads a remote file to a local path the same way.
 """
 
 import contextlib
 import logging
+import os
 import uuid
 from collections.abc import Generator
 from typing import Any, cast
@@ -199,4 +201,31 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
         # creating it) so we tolerate any rm error and re-raise the original.
         with contextlib.suppress(Exception):
             fs.rm(temp_path)
+        raise
+
+
+def fetch_file_atomic(src_url: str, dest_path: str) -> bool:
+    """Fetch ``src_url`` down to local ``dest_path`` atomically via a unique temp sibling.
+
+    ``dest_path`` never holds a partial file — a concurrent reader sees the previous
+    complete file or the new one, and a fetch killed midway leaves only an orphaned temp
+    file instead of poisoning the destination (e.g. a shared cache). The unique temp name
+    keeps concurrent fetches of the same destination from clobbering each other's
+    in-flight files.
+
+    Returns ``False`` if the source does not exist; re-raises all other errors.
+    """
+    tmp = unique_temp_path(dest_path)
+    try:
+        with open_url(src_url, "rb") as src:
+            data = src.read()
+        with open(tmp, "wb") as dst:
+            dst.write(data)
+        os.replace(tmp, dest_path)
+        return True
+    except FileNotFoundError:
+        return False
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
         raise
