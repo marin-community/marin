@@ -662,7 +662,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; set it or manage the log server via `finelog deploy` directly"
         )
     return cfg.finelog.config
 
@@ -1611,6 +1611,5 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
 
 def _print_summary(succeeded: int, failures: int, remaining: int, offset: int):
     click.echo(
-        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining "
-        f"(aborted at worker {offset + 1})"
+        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining (aborted at worker {offset + 1})"
     )
