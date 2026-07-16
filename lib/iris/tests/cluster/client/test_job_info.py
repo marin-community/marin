@@ -42,16 +42,14 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
     assert resolve_job_user() == "root"
 
 
-def test_resolve_job_user_reads_and_strips_iris_user_env(monkeypatch):
-    monkeypatch.setenv("IRIS_USER", " mwittmann ")
-    monkeypatch.setattr("getpass.getuser", lambda: "local-user")
-    assert resolve_job_user() == "mwittmann"
-
-
 def test_resolve_job_user_iris_user_env_beats_current_job_info(monkeypatch):
-    """The deliberate per-shell IRIS_USER outranks the ambient current-job identity."""
+    """The deliberate per-shell IRIS_USER outranks the ambient current-job identity.
+
+    The padded value also pins that configured users are stripped, so stray
+    shell-profile whitespace cannot mint a distinct user namespace.
+    """
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
-    monkeypatch.setenv("IRIS_USER", "mwittmann")
+    monkeypatch.setenv("IRIS_USER", " mwittmann ")
     assert resolve_job_user() == "mwittmann"
 
 
