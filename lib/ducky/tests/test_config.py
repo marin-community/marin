@@ -110,13 +110,6 @@ def test_allowed_buckets_parsed_from_env(monkeypatch):
     assert config.allowed_buckets == ("gs://marin-", "s3://marin-")
 
 
-def test_max_cache_entries_default_and_override(monkeypatch):
-    _set(monkeypatch, _BASE_ENV)
-    assert DuckyConfig.from_environment().max_cache_entries == 2048
-    _set(monkeypatch, {"DUCKY_MAX_CACHE_ENTRIES": "8192"})
-    assert DuckyConfig.from_environment().max_cache_entries == 8192
-
-
 def test_persist_cache_defaults_on_and_parses_falsey(monkeypatch):
     _set(monkeypatch, _BASE_ENV)
     assert DuckyConfig.from_environment().persist_cache is True

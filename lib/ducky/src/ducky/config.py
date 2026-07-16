@@ -149,16 +149,6 @@ class DuckyConfig:
     """How many queries run at once. Each gets its own DuckDB cursor (sharing the instance's
     secrets/settings); they share the host's thread pool and memory budget."""
 
-    max_cache_entries: int = 2048
-    """LRU capacity of the in-memory result cache (identical-SQL → prior result). The workload
-    is heavily repeat-query (historically ~60% of submissions re-run an earlier exact SQL) and
-    dominated by high-latency object-store scans, so a hit turns a multi-second re-scan into an
-    instant reply. Each entry is cheap — it holds only the capped preview plus the spilled
-    result's GCS path (the full result already lives in the scratch bucket), not the full
-    result — so this can be large on the big-RAM host without meaningful memory cost. Sized well
-    above the distinct-query working set between restarts; the cache is process-local and drops
-    on restart."""
-
     query_timeout: int = 600
     """Hard per-query wall-clock limit (seconds). A query exceeding it is interrupted and
     fails — so a runaway (e.g. a recursive glob over millions of objects) frees its slot
@@ -167,8 +157,8 @@ class DuckyConfig:
     result_ttl_days: int = 7
     """Retention of spilled results: ducky never deletes them — the scratch bucket's lifecycle
     rule does — but ducky reads this to bound cache reuse against that reaping. It's the max age of
-    a persistent-cache hit (a sidecar older than this is ignored, since its spilled result may
-    already be gone) and, as ``result_ttl_days * 86400``, the in-memory result cache's TTL."""
+    a cache hit: a sidecar older than this is ignored, since its spilled result may already be
+    reaped."""
 
     persist_cache: bool = True
     """Whether to back the in-memory result cache with a restart-survivable tier in the scratch
@@ -247,7 +237,6 @@ class DuckyConfig:
             max_concurrent_queries=int(
                 os.environ.get(f"{_ENV_PREFIX}MAX_CONCURRENT_QUERIES", cls.max_concurrent_queries)
             ),
-            max_cache_entries=int(os.environ.get(f"{_ENV_PREFIX}MAX_CACHE_ENTRIES", cls.max_cache_entries)),
             spill_directory=os.environ.get(f"{_ENV_PREFIX}SPILL_DIR", cls.spill_directory),
             spill_limit=os.environ.get(f"{_ENV_PREFIX}SPILL_LIMIT", cls.spill_limit),
             query_timeout=int(os.environ.get(f"{_ENV_PREFIX}QUERY_TIMEOUT", cls.query_timeout)),
