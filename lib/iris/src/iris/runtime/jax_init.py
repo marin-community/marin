@@ -32,6 +32,12 @@ from iris.runtime.multigpu import (
 logger = logging.getLogger(__name__)
 
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
+# JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
+# preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
+# GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
+# whole gang. Give cold gang-init more slack; a longer timeout only affects how long a
+# genuinely-stuck init waits.
+_JAX_DIST_INIT_TIMEOUT = 1800
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -311,7 +317,11 @@ def initialize_jax(
         # Best-effort cleanup: if the process crashes, the controller's
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        jax.distributed.initialize(
+            coordinator, job_info.num_tasks, task_index, initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        )
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
-        jax.distributed.initialize(coordinator, job_info.num_tasks, task_index)
+        jax.distributed.initialize(
+            coordinator, job_info.num_tasks, task_index, initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        )
