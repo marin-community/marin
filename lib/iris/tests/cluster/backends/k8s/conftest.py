@@ -3,9 +3,11 @@
 
 import pytest
 from iris.cluster.backends.k8s.tasks import (
+    _KUEUE_POD_GROUP_NAME,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
+    _TASK_CONTAINER_NAME,
     K8sTaskProvider,
     PodConfig,
 )
@@ -117,6 +119,67 @@ def make_batch(
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )
+
+
+# A Kueue admission message for an over-large GPU request (cpu=160 on 128-vCPU
+# H100 nodes under InfiniBand TAS): the whole pod cannot fit one node, so every
+# node is excluded and the workload never reserves quota. The motivating incident
+# for the status_message / iris.task_event diagnostics.
+KUEUE_UNADMITTED_MSG = (
+    "couldn't assign flavors to pod set main: topology \"infiniband\" doesn't allow to "
+    'fit any of 1 pod(s). Total nodes: 32; excluded: resource "cpu": 32'
+)
+
+
+def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
+    """A Pending pod blocked on a Kueue scheduling gate (no container has started)."""
+    return {
+        "metadata": {"name": name, "labels": {_KUEUE_POD_GROUP_NAME: pod_group}},
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [],
+            "conditions": [
+                {
+                    "type": "PodScheduled",
+                    "status": "False",
+                    "reason": "SchedulingGated",
+                    "message": "Scheduling is blocked due to non-empty scheduling gates",
+                }
+            ],
+        },
+    }
+
+
+def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -> dict:
+    """A Workload Kueue has evaluated and declined: QuotaReserved=False with a reason."""
+    return {
+        "metadata": {"name": name},
+        "spec": {"queueName": "cw-use02a-lq"},
+        "status": {"conditions": [{"type": "QuotaReserved", "status": "False", "reason": "Pending", "message": msg}]},
+    }
+
+
+def unevaluated_workload(name: str = "wl-abc") -> dict:
+    """A Workload Kueue has not yet ruled on — no QuotaReserved condition."""
+    return {"metadata": {"name": name}, "spec": {"queueName": "cw-use02a-lq"}, "status": {}}
+
+
+def imagepull_pod(name: str = "iris-job-0-0") -> dict:
+    """A Pending pod whose task container is stuck in ImagePullBackOff."""
+    return {
+        "metadata": {"name": name},
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [
+                {
+                    "name": _TASK_CONTAINER_NAME,
+                    "state": {
+                        "waiting": {"reason": "ImagePullBackOff", "message": 'Back-off pulling image "ghcr.io/nope"'}
+                    },
+                }
+            ],
+        },
+    }
 
 
 def make_pod(name: str, phase: str, exit_code: int | None = None, reason: str = "", message: str = "") -> dict:

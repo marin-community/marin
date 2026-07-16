@@ -11,7 +11,6 @@ opaque "Building 18m"."""
 from iris.cluster.backends.k8s.tasks import (
     _EVENT_SOURCE_CONTAINER,
     _EVENT_SOURCE_KUEUE,
-    _KUEUE_POD_GROUP_NAME,
     _LABEL_ATTEMPT_ID,
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -27,71 +26,23 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName
 
-from .conftest import FakeStatsTable, make_batch, make_kueue_provider
-
-# The real Kueue message an over-large GPU request produces (cpu=160 on 128-vCPU
-# H100 nodes under InfiniBand TAS) — the motivating incident.
-_KUEUE_UNADMITTED_MSG = (
-    "couldn't assign flavors to pod set main: topology \"infiniband\" doesn't allow to "
-    'fit any of 1 pod(s). Total nodes: 32; excluded: resource "cpu": 32'
+from .conftest import (
+    KUEUE_UNADMITTED_MSG,
+    FakeStatsTable,
+    gated_pod,
+    imagepull_pod,
+    make_batch,
+    make_kueue_provider,
+    unadmitted_workload,
+    unevaluated_workload,
 )
-
-
-def _gated_pod(pod_group: str = "wl-abc") -> dict:
-    return {
-        "metadata": {"name": "iris-job-0-0", "labels": {_KUEUE_POD_GROUP_NAME: pod_group}},
-        "status": {
-            "phase": "Pending",
-            "containerStatuses": [],
-            "conditions": [
-                {
-                    "type": "PodScheduled",
-                    "status": "False",
-                    "reason": "SchedulingGated",
-                    "message": "Scheduling is blocked due to non-empty scheduling gates",
-                }
-            ],
-        },
-    }
-
-
-def _unadmitted_workload(name: str = "wl-abc", msg: str = _KUEUE_UNADMITTED_MSG) -> dict:
-    """A Workload Kueue has evaluated and declined (QuotaReserved=False, with a reason)."""
-    return {
-        "metadata": {"name": name},
-        "spec": {"queueName": "cw-use02a-lq"},
-        "status": {"conditions": [{"type": "QuotaReserved", "status": "False", "reason": "Pending", "message": msg}]},
-    }
-
-
-def _unevaluated_workload(name: str = "wl-abc") -> dict:
-    """A Workload Kueue has not yet ruled on — no QuotaReserved condition."""
-    return {"metadata": {"name": name}, "spec": {"queueName": "cw-use02a-lq"}, "status": {}}
-
-
-def _imagepull_pod() -> dict:
-    return {
-        "metadata": {"name": "iris-job-0-0"},
-        "status": {
-            "phase": "Pending",
-            "containerStatuses": [
-                {
-                    "name": "task",
-                    "state": {
-                        "waiting": {"reason": "ImagePullBackOff", "message": 'Back-off pulling image "ghcr.io/nope"'}
-                    },
-                }
-            ],
-        },
-    }
-
 
 # --- _pod_event classification -------------------------------------------------
 
 
 def test_pod_event_classifies_blocked_kueue_admission_as_warning():
     """A gated pod whose Workload Kueue has declined is a Warning from k8s/kueue."""
-    ev = _pod_event(_gated_pod(), _unadmitted_workload())
+    ev = _pod_event(gated_pod(), unadmitted_workload())
     assert ev is not None
     assert ev.source == _EVENT_SOURCE_KUEUE
     assert ev.reason == "SchedulingGated"
@@ -102,14 +53,14 @@ def test_pod_event_classifies_blocked_kueue_admission_as_warning():
 def test_pod_event_gated_but_not_yet_evaluated_is_normal():
     """A freshly gated pod Kueue has not ruled on yet is Normal, not an alarm —
     only a positively-declined admission (QuotaReserved=False) reads as Warning."""
-    ev = _pod_event(_gated_pod(), _unevaluated_workload())
+    ev = _pod_event(gated_pod(), unevaluated_workload())
     assert ev is not None
     assert ev.source == _EVENT_SOURCE_KUEUE
     assert ev.severity == "Normal"
 
 
 def test_pod_event_image_pull_is_container_warning():
-    ev = _pod_event(_imagepull_pod(), None)
+    ev = _pod_event(imagepull_pod(), None)
     assert ev is not None
     assert ev.source == _EVENT_SOURCE_CONTAINER
     assert ev.reason == "ImagePullBackOff"
@@ -135,9 +86,9 @@ def test_event_log_writes_once_per_verdict_and_dedups_message_drift():
     log = TaskEventLog(table)
     key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(_gated_pod(), _unadmitted_workload()))
-    drifted = _unadmitted_workload(msg=_KUEUE_UNADMITTED_MSG.replace("Total nodes: 32", "Total nodes: 40"))
-    log.observe(key, _pod_event(_gated_pod(), drifted))
+    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+    drifted = unadmitted_workload(msg=KUEUE_UNADMITTED_MSG.replace("Total nodes: 32", "Total nodes: 40"))
+    log.observe(key, _pod_event(gated_pod(), drifted))
     log.observe(key, None)  # pod momentarily quiet — no row, verdict retained
 
     rows = [r for w in table.writes for r in w]
@@ -151,8 +102,8 @@ def test_event_log_appends_a_row_when_the_verdict_changes():
     log = TaskEventLog(table)
     key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(_gated_pod(), _unadmitted_workload()))
-    log.observe(key, _pod_event(_imagepull_pod(), None))
+    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+    log.observe(key, _pod_event(imagepull_pod(), None))
 
     rows = [r for w in table.writes for r in w]
     assert [(r.reason, r.source) for r in rows] == [
@@ -168,9 +119,9 @@ def test_event_log_retain_forgets_gone_attempts():
     log = TaskEventLog(table)
     key = ("/job/0", 0)
 
-    log.observe(key, _pod_event(_gated_pod(), _unadmitted_workload()))
+    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
     log.retain(set())  # attempt gone
-    log.observe(key, _pod_event(_gated_pod(), _unadmitted_workload()))
+    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
 
     rows = [r for w in table.writes for r in w]
     assert len(rows) == 2
@@ -182,9 +133,8 @@ def test_event_log_retain_forgets_gone_attempts():
 def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
     """Seed a SchedulingGated, Kueue-unadmitted pod + its Workload, discoverable by sync()."""
     pod_group = _pod_group_name(task_id, attempt_id)
-    pod = _gated_pod(pod_group)
+    pod = gated_pod(name=_pod_name(task_id, attempt_id), pod_group=pod_group)
     pod["kind"] = "Pod"
-    pod["metadata"]["name"] = _pod_name(task_id, attempt_id)
     pod["metadata"]["labels"].update(
         {
             _LABEL_MANAGED: "true",
@@ -194,7 +144,7 @@ def _seed_gated_task(k8s, task_id: JobName, attempt_id: int = 0) -> None:
         }
     )
     k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
-    k8s.seed_resource(K8sResource.WORKLOADS, pod_group, _unadmitted_workload(pod_group))
+    k8s.seed_resource(K8sResource.WORKLOADS, pod_group, unadmitted_workload(pod_group))
 
 
 def test_sync_writes_the_kueue_verdict_to_the_event_log(k8s):
