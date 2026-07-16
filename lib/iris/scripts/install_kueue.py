@@ -40,22 +40,19 @@ Both variants:
      ``ds.coreweave.com/nvlink.domain``).
   4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavors
      (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes, and
-     ``cw-cpu``) + ClusterQueue. The ClusterQueue enables priority preemption within
-     the queue (``preemption.withinClusterQueue: LowerPriority``): a higher-priority
-     Workload evicts lower-priority admitted ones when it cannot otherwise be admitted
-     — including when TAS cannot place it on real nodes (topology pressure), which is
-     how a higher-priority gang reclaims capacity from running lower-priority gangs.
-     Quota stays non-binding, so the pressure signal is TAS, not quota. Because Iris
-     now routes *every* pod through Kueue (not just gangs), CPU-only pods need a flavor
-     to match, so ``cw-cpu`` is always provisioned. By default it carries NO node
-     selector, so a CPU pod admitted to it gets no nodeSelector injected and stays free
-     to schedule on any node: it prefers CPU nodes (GPU nodes carry a soft
-     ``PreferNoSchedule`` taint) but reuses idle GPU nodes when CPU capacity is full,
-     rather than being fenced onto CPU-only capacity. Pass ``--cpu-flavor-node-label
-     KEY=VALUE`` to instead pin ``cw-cpu`` to specific CPU nodes. The namespaced
-     LocalQueue is NOT created here: Iris reconciles its own (``{label_prefix}-lq``)
-     at controller start (``K8sControllerProvider.ensure_kueue_queues``), binding it
-     to this ClusterQueue via ``kubernetes_provider.kueue.cluster_queue``.
+     the selector-less ``cw-cpu``) + ClusterQueue. Every pod routes through Kueue, so
+     both flavors are always provisioned; ``--cpu-flavor-node-label KEY=VALUE`` pins
+     ``cw-cpu`` to specific CPU nodes instead of leaving it selector-less (flavor
+     routing: ``lib/iris/docs/coreweave.md``). The ClusterQueue enables priority
+     preemption within the queue (``preemption.withinClusterQueue: LowerPriority``):
+     a higher-priority Workload evicts lower-priority admitted ones when it cannot
+     otherwise be admitted — including when TAS cannot place it on real nodes
+     (topology pressure), which is how a higher-priority gang reclaims capacity from
+     running lower-priority gangs. Quota stays non-binding, so the pressure signal is
+     TAS, not quota. The namespaced LocalQueue is NOT created here: Iris reconciles its
+     own (``{label_prefix}-lq``) at controller start
+     (``K8sControllerProvider.ensure_kueue_queues``), binding it to this ClusterQueue
+     via ``kubernetes_provider.kueue.cluster_queue``.
 
 NB on Kueue version: TAS-aware preemption is version-sensitive. On too-old a Kueue
 a ClusterQueue that combines a topology-bound flavor with a ``preemption`` stanza
@@ -244,10 +241,9 @@ def run_install(
     Idempotent. Prints the plan and returns without mutating the cluster unless
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
-    ``--with-queues`` always provisions the cw-cpu ResourceFlavor (CPU pods route
-    through Kueue too and need a flavor to match). ``cpu_flavor_node_label`` is an
-    optional ``(key, value)`` node label that pins cw-cpu to specific CPU nodes; when
-    omitted, cw-cpu carries no node selector so CPU pods can reuse idle GPU nodes.
+    ``--with-queues`` always provisions the cw-cpu ResourceFlavor;
+    ``cpu_flavor_node_label`` as ``(key, value)`` pins it to specific CPU nodes,
+    otherwise it is selector-less.
     ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
     namespace) — never widen this to system namespaces on a shared cluster.
     """
@@ -448,8 +444,8 @@ def _parse_node_label(spec: str) -> tuple[str, str]:
     "--cpu-flavor-node-label",
     default=None,
     metavar="KEY=VALUE",
-    help="Optional node label pinning the cw-cpu ResourceFlavor to specific CPU nodes. --with-queues "
-    "always provisions cw-cpu; omit this to leave it selector-less so CPU pods can reuse idle GPU nodes.",
+    help="Optional node label pinning the cw-cpu ResourceFlavor to specific CPU nodes; omit to leave "
+    "it selector-less. --with-queues always provisions cw-cpu.",
 )
 @click.option(
     "--pod-namespace",

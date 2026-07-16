@@ -9,10 +9,6 @@ Iris namespace), the `infiniband` + `multinode-nvlink-ib` Topology CRs, the `cw-
 `cw-cpu` ResourceFlavors, the ClusterQueue, the `iris-system` PriorityClass, and the out-of-band
 pin of the kueue-controller-manager to that PriorityClass. Manifest shapes come from the shared
 `iris.cluster.platforms.k8s.kueue_manifests` builders, so IaC and the script render identically.
-
-`cw-cpu` is selector-less: every pod on the k8s backend routes through Kueue, and a CPU-only
-pod admitted to `cw-cpu` gets no nodeSelector injected, so it can reuse idle GPU nodes rather
-than being fenced onto CPU-only capacity.
 """
 
 from dataclasses import dataclass

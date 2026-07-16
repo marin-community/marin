@@ -421,10 +421,25 @@ uv run python lib/iris/scripts/install_kueue.py --variant coreweave \
   --kubeconfig <kubeconfig> --with-queues --apply
 ```
 
-This installs the CoreWeave `cks-kueue` chart, the Topology CRs, and the
-cluster-scoped `cw-ib` ResourceFlavor + `iris-cq` ClusterQueue. Iris reconciles
-its namespaced LocalQueue (`{label_prefix}-lq`) at controller start, bound via
-`kubernetes_provider.kueue.cluster_queue`.
+This installs the CoreWeave `cks-kueue` chart, the Topology CRs, the
+cluster-scoped `cw-ib` + `cw-cpu` ResourceFlavors, and the `iris-cq` ClusterQueue.
+Iris reconciles its namespaced LocalQueue (`{label_prefix}-lq`) at controller
+start, bound via `kubernetes_provider.kueue.cluster_queue`.
+
+**Flavor routing.** Every pod on the k8s backend routes through Kueue (not just
+gangs), so `iris-cq` carries two flavors in one resourceGroup:
+
+- **`cw-ib`** selects InfiniBand nodes (`backend.coreweave.cloud/flavor=infiniband`)
+  and binds the `infiniband` Topology for TAS. GPU pods request `nvidia.com/gpu` +
+  `rdma/ib` and match here.
+- **`cw-cpu`** (listed first) zeroes the `nvidia.com/gpu` and `rdma/ib` quota, so a
+  GPU pod can never be admitted under it and falls through to `cw-ib`, while a
+  CPU-only pod matches `cw-cpu`. It is **selector-less** by default — its spec is
+  empty, so Kueue injects no `nodeSelector` and the admitted CPU pod stays
+  schedulable on any node. It prefers CPU nodes (GPU nodes carry a soft
+  `PreferNoSchedule` taint) but reuses idle GPU nodes when CPU capacity is full,
+  instead of being fenced onto CPU-only capacity. Pass `--cpu-flavor-node-label
+  KEY=VALUE` to pin `cw-cpu` to specific CPU nodes instead.
 
 **Never install Kueue with unscoped admission webhooks on a CoreWeave cluster.**
 The script scopes them to the `iris` namespace (`--pod-namespace`); the chart
