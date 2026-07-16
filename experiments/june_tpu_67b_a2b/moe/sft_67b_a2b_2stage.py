@@ -84,13 +84,15 @@ _model_base = _heuristic.build_model_config(_DIM, seq_len=65_536)
 # expert-inclusive batch_shards), so it OOMs on H100 at any node count -> switched to AdamH (no NS).
 # bs=8 forces data=1 -> the extra nodes go on the MODEL axis (tensor parallel), which also shards the
 # seq32k activation/logits transient. Mesh = (replica=1, data=1, expert=8, model=_MODEL_PARALLEL) on
-# _NODES*8 = 32 GPUs. batch_shards = replica*data*expert = 8; _BATCH must be a multiple of 8.
-# Predicted per-device HBM ~52-56 GiB (AdamH fp32, ~24 GiB headroom). See the experiment GEOMETRY_ANALYSIS.md.
-_NODES: int = 4  # full-run gang: 4x H100x8 = 32 GPUs
-_SMOKE_NODES: int = 4  # smoke at the SAME target geometry (validates the untested model_axis>1 path)
+# _NODES*8 = 40 GPUs. batch_shards = replica*data*expert = 8; _BATCH must be a multiple of 8.
+# model_axis=5 is the ONLY valid TP width >1: it must divide num_kv_heads=5 (prime) AND num_heads=20;
+# model in {2,4,8} is invalid (breaks the attention head split). Predicted per-device HBM ~52-56 GiB
+# (AdamH fp32, ~24 GiB headroom). See the experiment GEOMETRY_ANALYSIS.md + the TP out_sharding fix in model.py.
+_NODES: int = 5  # full-run gang: 5x H100x8 = 40 GPUs (model_axis=5)
+_SMOKE_NODES: int = 5  # smoke at the SAME target geometry (validates the tensor-parallel attention path)
 _EXPERT_PARALLEL: int = 8  # shard the 256 experts across the 8 intra-node GPUs (ring-EP over NVLink)
-_MODEL_PARALLEL: int = 4  # tensor/model parallel over the cross-node axis; data absorbs 32/(1*8*4)=1
-_REPLICA_AXIS: int = 1  # pure FSDP/TP (one model copy sharded over all 32 GPUs; no cross-node replicate)
+_MODEL_PARALLEL: int = 5  # tensor/model parallel; MUST divide num_kv_heads=5 & num_heads=20 -> only {1,5}
+_REPLICA_AXIS: int = 1  # pure FSDP/TP (one model copy sharded over all 40 GPUs; no cross-node replicate)
 _SEQ: int = 32_768  # full-run SFT packed length (operator target ctx_len=32k)
 _SMOKE_SEQ: int = 32_768  # smoke at the target seq len
 _BATCH: int = 8  # global batch (operator target bs=8); multiple of batch_shards=8; per_device -> 1
@@ -271,8 +273,8 @@ _SMOKE_STEPS: int = 8  # cheap validation: clear first jit_train_step at the tar
 
 
 def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 4x H100x8 nodes (cw-us-east-02a),
-    AdamH, expert=8 + model=4 (tensor parallel), replica=1, bs=8, seq=32768, per_device=1, few steps +
+    """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 5x H100x8 nodes (cw-us-east-02a),
+    AdamH, expert=8 + model=5 (tensor parallel), replica=1, bs=8, seq=32768, per_device=1, few steps +
     a mid-run native checkpoint save. Validates native S3 ckpt load -> chat+packing -> weights-only init
     (step starts at 0) -> the UNTESTED model_axis>1 path -> first jit_train_step with NO OOM (AdamH kills
     the ~21GiB Muon-NS floor) -> loss finite -> save, before committing to the 1-epoch Job1. (HF export
