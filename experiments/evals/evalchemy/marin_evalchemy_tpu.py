@@ -5,8 +5,9 @@
 
 The eval BACKEND is the ``marin-community/evalchemy`` FORK (@ ``a84543c`` main HEAD; bundles MATH500/AIME24/
 gsm8k + the boxed-answer graders + the ``eval/lm_eval_compat.py`` shim; lm-eval EleutherAI v0.4.12),
-invoked as ``eval.eval`` INSIDE a pinned ``:evalchemy-tpu`` container on a TPU pod. This launcher does
-NOT import marin's ``experiments/evals`` — the container is the portability boundary. The vLLM engine is
+invoked as ``eval.eval`` INSIDE a pinned ``:evalchemy-tpu`` container on a TPU pod. Although it lives
+under ``experiments/evals`` it does NOT import marin's existing eval harness there
+(``evals.py``/``task_configs.py``) — the container is the portability boundary. The vLLM engine is
 ``vllm-tpu==0.20.0`` REUSED from the OT-Agent ``:tpu`` base image (the known-good version the
 ``eval-agentic-launch-iris`` TPU path already runs on) — no unproven TPU port.
 
@@ -25,7 +26,7 @@ RUN (CPU coordinator dispatches the eval sub-job into the :evalchemy-tpu contain
     uv run iris --cluster=marin job run --job-name eval-<run> --region us-east5 \
       --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \
       -e MARIN_PREFIX gs://marin-us-east5 -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \
-      -- python -m experiments.evalchemy_tpu.marin_evalchemy_tpu
+      -- python -m experiments.evals.evalchemy.marin_evalchemy_tpu
 """
 from __future__ import annotations
 
