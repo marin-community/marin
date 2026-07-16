@@ -2490,7 +2490,11 @@ def main():
         t_local = (a.batch_size * a.seq_len) // num_procs
         nle = a.num_experts // ep_size
         # Per-expert capacity = capacity_factor * expected tokens/expert, aligned to 16.
-        expected_per_expert = num_procs * t_local * a.num_experts_per_token / a.num_experts
+        # Expected load is per EP GROUP: each dp replica is an independent ep_size-rank group
+        # with its own expert copies, so a given expert only receives from its group's ep_size
+        # ranks (ep_size * t_local tokens), NOT all num_procs. Using num_procs oversizes recv_cap
+        # by dp_size at multi-rack (dp>1) — the replicated-recv OOM driver at two racks.
+        expected_per_expert = ep_size * t_local * a.num_experts_per_token / a.num_experts
         slots_per_expert = max(16, math.ceil(a.capacity_factor * expected_per_expert / 16) * 16)
         _NCCL_EP_MESH = mesh
         _NCCL_EP_RECV_CAP = nle * slots_per_expert
