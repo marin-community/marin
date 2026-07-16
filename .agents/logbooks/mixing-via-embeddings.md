@@ -445,6 +445,37 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   surrogates and for interpretation; proposal-time epoch caps remain mandatory regardless.
 - Artifacts: scratch/mixture_features/grug/{hinge_zmacro_check.json, kernel_hinge_zmacro_check.json}.
 
+## 2026-07-16 grug seed-repeat noise panel LAUNCHED (top ask of the validation memo)
+
+- **CORRECTION of a logbook/config premise**: the 840 swarm runs did NOT train
+  2003 steps × 32 × 8192 = 525M tok (that number came from re-deriving the CURRENT
+  launcher's May-Recipe heuristic). Ground truth from the runs' own `.executor_info`
+  (verified identical on runs 000000/000108/000419/000736/000839 at
+  `gs://marin-us-central2/grug/swarm_fisher_dsp_d512_*`): **47,759 steps × batch 512 ×
+  seq 4096 = 100.158B tok/run**, phase boundary step **38,144** (f = **0.7987/0.2013**,
+  not 0.767/0.233), mixture_block 32,768, target_budget 10.372e12 (exp/target = 0.97%),
+  model = d512/6L/4H/1KV/**64 experts**/interm 256/**seq 4096**/sliding 4096/router_z 1e-3,
+  optimizer = **GrugMoeAdamHConfig** (lr 0.012962, adam_lr 0.0029913, warmup 0.1, clip 1.0,
+  min_lr 0.0, beta2 0.98412), seed 0 everywhere, 250,674 tok/s @ MFU 14.9% on v4-8
+  (~111 h/run). ⚠ downstream: phase-2/DSP epoch features used f=0.767/0.233 — phase-1
+  f is ~16% rel. off; worth a sensitivity re-check.
+- **Panel** (rav authorized ~1,110 v4-8-h): 10 runs, exact swarm config, anchor mixture =
+  `launch_datakit_moe_mix._BUCKET_PHASE_WEIGHTS` (mixture-3) unchanged, seeds 1000–1009
+  via the single TrainerConfig.seed knob (init + shuffle + epoch-subset vary together;
+  slice-after-shuffle ⇒ variable-subset flavor). Launcher
+  `experiments/grug/moe/launch_mve_seedpanel.py` (dry-run parity asserts vs executor_info);
+  known deltas documented in its docstring (last-block long-attention on current code;
+  disable_long_rope=False restores swarm-era all-layer RoPE; no PKO either way).
+- Launched as Iris parent `/rav/rav-mve-seedpanel-20260716-092949` (us-central2-b) →
+  10 × non-preemptible v4-8 children `grug-train-rav_mve_seedpanel_{00..09}`; W&B
+  marin_moe group `rav_mve_seedpanel`; outputs
+  `gs://marin-us-central2/users/rav/grug/rav_mve_seedpanel_NN/dev/`. ETA ~4.6 days.
+- Per-task evals are POST-HOC (lm-eval logprob harness, 1 results.json per (run,task),
+  60-task readout set ⊂ 150 dirs/run at `gs://marin-us-central2/evaluation/grug_logprob/`);
+  harness vendored to `experiments/grug/moe/eval_logprob.py` (from swarm-branch, adapted:
+  no legacy layout, capacity raise post-load). Eval + readout plan, monitoring commands,
+  abort/resume: `scratch/mixture_features/grug/seedpanel_monitor.md`.
+
 ## 2026-07-16 codex-collaborative validation (rigor vs PR 2393, epoching, literature)
 
 - Two codex exec review rounds + its 3 prescribed analyses + lit review; memo:
@@ -484,3 +515,23 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   TOTAL_STEPS=2003 → 24×-inflated epochs) produced an invalid +0.0347 run — caught by the
   p50=230 sanity contradiction, discarded, batch-2 worker warned before propagation.
 - Kernel-side (concat-ARD) redo with true f: in batch-2 worker.
+
+## 2026-07-16 validation batch 2 (codex round-3 prescriptions) — 5/5 complete
+
+- **Calibration (f8)**: kernel OOF near-affine (slope 1.020, intercept 0.003, pooled ρ 0.822);
+  best-quintile within-rank ρ 0.330 vs 0.333 EXPECTED from range restriction — tail weakness is
+  noise, not miscalibration. Good for shortlisting; weak for fine top-ordering.
+- **LODO-by-cluster (f9)**: real extrapolation penalty — median 0.682 (IQR 0.49–0.71) vs 0.853
+  size-matched random-group control; worst-3: c28 0.067, c16 0.333, c18 0.370; only 17/35
+  clusters ever dominate a run (design centers on token prior). Kernel partly
+  interpolation-dependent — reported including failures.
+- **Selection stability (f10)**: exact top-1 mixture unstable (42% bootstrap match, 8 winners);
+  CLUSTER-level profile robust (top-5 Jaccard 0.760 bootstrap / 0.933 jackknife; c05,c30 100%).
+  → recommend mixtures at cluster granularity.
+- **Negative control (f11)**: clean — label permutations give max |ρ| 0.249 anywhere (chance
+  order statistic) vs real 0.815; pipeline manufactures no structure.
+- **Corrected-f propagation (f12)**: epoch_table_corrected.parquet; landscape p50 9.74→9.65;
+  concat-ARD margin holds (+0.0038, 11/15, p=0.0054); DSP rescale-absorption documented, no
+  refit. (Intermediate patch bug — stale TOTAL_STEPS — caught via p50=230 sanity check.)
+- Codex terminal-state: 5/8 conditions satisfied (remaining: report-number fidelity, panel
+  variance, heteroskedasticity, budget-transfer, claim-tier separation in report v2).
