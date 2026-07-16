@@ -46,6 +46,7 @@ top-4 + shared expert):
 | d5120 variant | 5120 | `sonic_cute` (QuACK SM100 CuTeDSL) | 1 | **~17.9%** |
 | row-13 | 2560 | `sonic_cute` | 1 | ~15.1% |
 | row-13, EP | 2560 | `ring` | 2 / 4 / 8 | ~13.3 / 13.4 / 12.9% |
+| row-13, EP | 2560 | `ring_cute` (ring dispatch + QuACK GEMMs) | 8 | **~13.9%** |
 | row-13, EP | 2560 | `ragged_all_to_all` | 2 / 4 / 8 | ~1.0 / 1.8 / 3.2% |
 
 The d5120/`sonic_cute` number was validated clean-room (fresh clone + fresh venv) at
@@ -153,7 +154,9 @@ Two structural notes for reviewers:
   kernel instead (measured 397–859 TF/s at these shapes vs 1,470–1,560 TF/s for tuned
   QuACK). That GEMM gap plus dispatch overhead accounts for most of the EP tax
   (15.1% → ~13%).
-- **`ring` is the backend that works** (all-gather dispatch + psum-scatter combine over
+- **`ring` / `ring_cute` are the backends that work** (`ring_cute` adds the QuACK
+  GEMMs under ring's dispatch: +0.4pp over `ring` at EP8 same-node; the rest of the
+  EP tax is dispatch machinery, not GEMMs) (all-gather dispatch + psum-scatter combine over
   NVLink). `ragged_all_to_all` is currently pathological on GPU: XLA lowers
   `jax.lax.ragged_all_to_all` to `stream_executor::gpu::RaggedAllToAllKernelImpl`
   (a peer-copy kernel bracketed by multi-GPU barriers) rather than NCCL, and that one
