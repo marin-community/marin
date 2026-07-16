@@ -49,9 +49,14 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_LEAFGROUP,
     COSCHEDULE_NVLINK_DOMAIN,
     COSCHEDULE_NVLINK_DOMAIN_PREFERRED,
+    COSCHEDULE_NVLINK_DOMAIN_SLICED,
     CW_LABEL_LEAFGROUP,
     CW_LABEL_NVLINK_DOMAIN,
+    NVL72_GPUS_PER_NODE,
     RACK_SIZE,
+    SCHEDULABLE_RACK_NODES,
+    KueueTopologyBinding,
+    TopologyMode,
 )
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -179,10 +184,15 @@ _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
+# PodSet-slice request: partition the pod group into podset-slice-size chunks, each hard-bound
+# to one domain of the named level. Kueue >= 0.13 (feature under TopologyAwareScheduling).
+_KUEUE_SLICE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-slice-required-topology"
+_KUEUE_SLICE_SIZE = "kueue.x-k8s.io/podset-slice-size"
 # Per-pod ordinal within the gang. Kueue's TAS plain-pod-group path uses it to
 # assign each pod a topology domain rank; basic gang admission does not need it,
-# but stamping it is harmless and required once a podset-topology annotation is
-# present. Sourced from the task ordinal (JobName.task_index).
+# but stamping it is required for slice membership to be rank-contiguous (slice k = pod indices
+# [k*size, (k+1)*size)); without it the ungater assigns domains arbitrarily. Sourced from the
+# task ordinal (JobName.task_index).
 _KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
 # Pod finalizer Kueue's webhook stamps on admitted gang pods. Kueue only
 # strips it for pods it considers accounted for; on teardown Iris removes it
@@ -190,26 +200,31 @@ _KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
 # pod-group Workload (Kueue rebuilds it from surviving labeled pods).
 _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 
-# CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
-# label, required?). Used only when the cluster config leaves topologies unset.
-# group_by names the ACTUAL topology level the gang runs against (a convention,
-# not a portable abstraction — CoreWeave names leak by design). The keys are the
-# levels in CoreWeave's Kueue Topology CRs (see scripts/install_kueue.py):
+# CoreWeave-convention fallback for KueueConfig.topologies: group_by -> KueueTopologyBinding.
+# Used only when the cluster config leaves topologies unset. group_by names the ACTUAL topology
+# level the gang runs against (a convention, not a portable abstraction — CoreWeave names leak
+# by design). The keys are the levels in CoreWeave's Kueue Topology CRs (see
+# scripts/install_kueue.py):
 #   leafgroup     soft (preferred): multi-node IB colocation on one leaf group
 #                 (H100 InfiniBand deployments).
 #   nvlink.domain hard (required): one GB200 NVLink domain (H100 has no
 #                 nvlink.domain label, so this only binds on GB200 capacity).
-#   nvlink.domain.preferred  soft (preferred) on the SAME nvlink.domain label: a GB200 gang
-#                 too large for one rack, so Kueue packs it into as few whole NVLink domains
-#                 as possible instead of demanding a single (impossible) domain.
+#   nvlink.domain.preferred  soft (preferred) on the SAME nvlink.domain label: pack into as few
+#                 whole NVLink domains as possible. Reachable only via explicit config/group_by.
+#   nvlink.domain.sliced  PodSet-slice: partition a multi-rack GB200 gang into
+#                 SCHEDULABLE_RACK_NODES-node slices, each hard-bound to its own nvlink.domain,
+#                 with a soft leafgroup preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
 # Kueue), so a band is stamped only when the config maps it explicitly.
-_CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
-    COSCHEDULE_LEAFGROUP: (CW_LABEL_LEAFGROUP, False),
-    COSCHEDULE_NVLINK_DOMAIN: (CW_LABEL_NVLINK_DOMAIN, True),
-    COSCHEDULE_NVLINK_DOMAIN_PREFERRED: (CW_LABEL_NVLINK_DOMAIN, False),
+_CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
+    COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
+    COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.PREFERRED),
+    COSCHEDULE_NVLINK_DOMAIN_SLICED: KueueTopologyBinding(
+        CW_LABEL_NVLINK_DOMAIN, TopologyMode.SLICE_REQUIRED, SCHEDULABLE_RACK_NODES, CW_LABEL_LEAFGROUP
+    ),
 }
 
 # Finest topology level (one node), the last level in both CoreWeave Topology CRs. The
@@ -411,9 +426,9 @@ class PodConfig:
     # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
     # stamped (Kueue uses its default priority); Iris never invents class names.
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
-    # coscheduling group_by -> (node label, required?). Defaults to CoreWeave
+    # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
-    kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
     # PriorityBand -> Kubernetes PriorityClass name. Sets spec.priorityClassName.
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
@@ -629,6 +644,53 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
     return ctx
 
 
+def _topology_request_annotations(
+    binding: KueueTopologyBinding, *, group_by: str, num_tasks: int, gpu_count: int, task_ref: str
+) -> dict[str, str]:
+    """Kueue topology-request annotations for a coscheduled gang, per the binding's mode.
+
+    PREFERRED/REQUIRED bind the whole gang to one ``node_label`` domain (soft/hard). For a hard
+    nvlink.domain gang that exceeds one rack — which can never be placed and would hang forever —
+    this raises instead (the CLI never emits it; the guard catches a programmatic client).
+    SLICE_REQUIRED partitions the gang into ``slice_size`` rack slices, each hard-bound to one
+    nvlink.domain, and pairs a soft coarse preference so the racks cluster on the IB fabric. The
+    one-slice-per-rack guarantee holds only for node-saturating pods and a slice size that two
+    of cannot fit one rack; both are validated here, along with a whole-number-of-slices count.
+    """
+    node_label = binding.node_label
+    if binding.mode is TopologyMode.SLICE_REQUIRED:
+        slice_size = binding.slice_size
+        if slice_size is None or 2 * slice_size <= RACK_SIZE or slice_size > SCHEDULABLE_RACK_NODES:
+            raise PodManifestError(
+                f"Sliced topology {group_by!r} needs a slice size in ({RACK_SIZE // 2}, {SCHEDULABLE_RACK_NODES}] "
+                f"so two slices cannot share one {RACK_SIZE}-node rack; got {slice_size}."
+            )
+        if gpu_count != NVL72_GPUS_PER_NODE:
+            raise PodManifestError(
+                f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}, which requires node-saturating "
+                f"NVL72 pods ({NVL72_GPUS_PER_NODE} GPUs each) so one slice fills whole nodes; got gpu_count={gpu_count}"
+            )
+        if num_tasks % slice_size != 0:
+            raise PodManifestError(
+                f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}: num_tasks={num_tasks} must be a whole "
+                f"number of {slice_size}-node rack slices. Round to a multiple of {slice_size}, or set "
+                f"group_by={COSCHEDULE_NVLINK_DOMAIN_PREFERRED!r} for loose (unbalanced) packing."
+            )
+        annotations = {_KUEUE_SLICE_REQUIRED_TOPOLOGY: node_label, _KUEUE_SLICE_SIZE: str(slice_size)}
+        if binding.coarse_preferred_label:
+            annotations[_KUEUE_PREFERRED_TOPOLOGY] = binding.coarse_preferred_label
+        return annotations
+    if binding.mode is TopologyMode.REQUIRED:
+        if node_label == CW_LABEL_NVLINK_DOMAIN and num_tasks > RACK_SIZE:
+            raise PodManifestError(
+                f"Coscheduled task {task_ref!r} requires a single {group_by!r} domain but num_tasks={num_tasks} "
+                f"exceeds the NVLink domain size ({RACK_SIZE} nodes, one NVL72 rack). A hard NVLink-domain gang "
+                f"cannot cross racks; request <= {RACK_SIZE} replicas or coschedule on a coarser level (e.g. leafgroup)."
+            )
+        return {_KUEUE_REQUIRED_TOPOLOGY: node_label}
+    return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -785,26 +847,14 @@ def _build_pod_manifest(
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
+        # Per-pod ordinal within the gang (0..total-1). Kueue's TAS assigns each pod a domain
+        # rank from it; for the sliced level it makes slice membership rank-contiguous.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
-        node_label, required = topo
-        # A hard single-NVLink-domain gang cannot span racks: one NVL72 rack is one NVLink
-        # domain of RACK_SIZE nodes, so a required nvlink.domain gang larger than that can
-        # never be placed and would sit unschedulable forever. Reject it at build time with a
-        # clear message instead. The CLI never emits this — a multi-rack GB200 gang gets the
-        # soft nvlink.domain.preferred level — so this guards a programmatic client that stamps
-        # the hard nvlink.domain level directly for more than one rack.
-        if required and node_label == CW_LABEL_NVLINK_DOMAIN and run_req.num_tasks > RACK_SIZE:
-            raise PodManifestError(
-                f"Coscheduled task {run_req.task_id!r} requires a single {group_by!r} domain but "
-                f"num_tasks={run_req.num_tasks} exceeds the NVLink domain size ({RACK_SIZE} nodes, "
-                "one NVL72 rack). A hard NVLink-domain gang cannot cross racks; request "
-                f"<= {RACK_SIZE} replicas or coschedule on a coarser level (e.g. leafgroup)."
-            )
-        anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
         metadata["annotations"] = {
             _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
-            anno_key: node_label,
+            **_topology_request_annotations(
+                topo, group_by=group_by, num_tasks=run_req.num_tasks, gpu_count=gpu_count, task_ref=run_req.task_id
+            ),
         }
     elif gpu_count > 0:
         # A non-coscheduled GPU pod still lands on the topology-aware cw-ib flavor, which
@@ -1541,7 +1591,7 @@ class K8sTaskProvider:
     env_secret_name: str = ""
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
-    kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
     # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
     # when it has gang work for Kueue. Empty disables the feature; see

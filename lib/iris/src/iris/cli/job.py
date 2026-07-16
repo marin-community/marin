@@ -493,9 +493,10 @@ def resolve_multinode_defaults(
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
     TPU slice. For GPUs with replicas > 1, the coscheduling level is derived from
     the GPU variant: NVL72 (GB200/GB300) gangs that fit a rack's guaranteed-schedulable
-    node slice bind HARD to ``nvlink.domain``; larger NVL72 gangs bind SOFT to the same
-    level (``nvlink.domain.preferred``) so Kueue packs them into whole racks; H100 and
-    other GPUs coschedule on the soft ``leafgroup`` IB level.
+    node slice bind HARD to ``nvlink.domain``; larger NVL72 gangs bind to
+    ``nvlink.domain.sliced``, which partitions them into rack-sized slices placed one per
+    NVLink domain (balanced N racks x 16); H100 and other GPUs coschedule on the soft
+    ``leafgroup`` IB level.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.

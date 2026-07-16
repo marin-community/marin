@@ -5,7 +5,7 @@
 
 These keys are the levels in CoreWeave's Kueue Topology CRs and the node
 selectors that three sites must agree on: the K8s task provider stamps
-``podset-{required,preferred}-topology`` annotations naming them
+``podset-{required,preferred,slice-required}-topology`` annotations naming them
 (``providers/k8s/tasks.py``), the install script declares them as Topology
 levels + ResourceFlavor selectors (``scripts/install_kueue.py``), and the kind
 smoke stamps them onto synthetic nodes so TAS resolves the same layout it would
@@ -15,6 +15,9 @@ those three sites cannot drift.
 Names leak CoreWeave conventions by design: ``group_by`` reflects the actual
 topology the gang runs against, it is not a portable abstraction.
 """
+
+from dataclasses import dataclass
+from enum import StrEnum
 
 # InfiniBand fabric hierarchy, coarse -> fine. A leafgroup is one IB
 # leaf-switch group (soft/preferred multi-node colocation); superpod and fabric
@@ -43,6 +46,13 @@ CW_LABEL_NVLINK_DOMAIN = "ds.coreweave.com/nvlink.domain"
 RACK_SIZE = 18
 NVL72_INSTANCE_PREFIXES = ("gb200", "gb300")
 
+# GPUs on one NVL72 compute tray (gb200-4x / gb300-4x). A gang whose pods each request this
+# many GPUs is node-saturating: one pod per node, so pod count == node count and the rack-slice
+# capacity arithmetic (a 16-pod slice fills 16 whole nodes) holds. A sub-node NVL72 pod would
+# let multiple slices share a rack, silently voiding one-slice-per-rack; the sliced level
+# rejects it.
+NVL72_GPUS_PER_NODE = 4
+
 # CoreWeave keeps only this many of a rack's RACK_SIZE nodes schedulable at once; the rest
 # absorb host failures and maintenance. A hard single-nvlink.domain gang can therefore only be
 # guaranteed placement up to this size. A larger gang would need every node in one rack healthy
@@ -67,8 +77,43 @@ COSCHEDULE_NVLINK_DOMAIN = "nvlink.domain"
 # Soft variant that binds the SAME nvlink.domain label as a preference rather than a hard
 # requirement, for a GB200 gang too large to fit one rack. Kueue packs the replicas into as
 # few whole NVLink domains (racks) as possible, so GPUs within a rack keep NVLink while the
-# gang spills across racks over InfiniBand.
+# gang spills across racks over InfiniBand. Reachable only via explicit config/group_by; the
+# CLI routes multi-rack GB200 to the sliced level below instead.
 COSCHEDULE_NVLINK_DOMAIN_PREFERRED = "nvlink.domain.preferred"
+# Multi-rack GB200: partition the gang into whole-rack slices, each slice hard-bound to one
+# nvlink.domain (Kueue's PodSet-slice feature). With slice size SCHEDULABLE_RACK_NODES and
+# 2*size > RACK_SIZE, two slices cannot share a rack, so the gang lands as an exact N racks x
+# SCHEDULABLE_RACK_NODES balanced layout instead of the unbalanced fill preferred would give.
+COSCHEDULE_NVLINK_DOMAIN_SLICED = "nvlink.domain.sliced"
+
+
+class TopologyMode(StrEnum):
+    """How a coscheduling level's node label constrains Kueue placement.
+
+    PREFERRED/REQUIRED bind the whole PodSet to one domain of the label as a soft hint or a
+    hard requirement. SLICE_REQUIRED instead partitions the PodSet into ``slice_size`` chunks
+    and hard-binds each chunk to one domain of the label (Kueue's PodSet-slice feature).
+    """
+
+    PREFERRED = "preferred"
+    REQUIRED = "required"
+    SLICE_REQUIRED = "slice"
+
+
+@dataclass(frozen=True)
+class KueueTopologyBinding:
+    """The Kueue topology request a coscheduling ``group_by`` level maps to.
+
+    ``node_label`` is the Topology-CR level the constraint binds. For SLICE_REQUIRED,
+    ``slice_size`` is the pods-per-slice (each slice hard-bound to one ``node_label`` domain)
+    and ``coarse_preferred_label`` optionally adds a soft whole-PodSet preference at a coarser
+    level, so the slices also cluster near each other on the IB fabric.
+    """
+
+    node_label: str
+    mode: TopologyMode
+    slice_size: int | None = None
+    coarse_preferred_label: str | None = None
 
 
 def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
@@ -78,11 +123,13 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     single NVLink domain of ``RACK_SIZE`` nodes, of which CoreWeave keeps only
     ``SCHEDULABLE_RACK_NODES`` schedulable at once. A gang that fits the guaranteed-schedulable
     slice of one rack binds HARD to ``nvlink.domain`` (``podset-required-topology``) so every
-    replica shares the rack's NVLink fabric — the reason NVL72 exists. A larger gang binds SOFT
-    to the same level (``nvlink.domain.preferred`` -> ``podset-preferred-topology``): Kueue
-    packs the replicas into as few whole NVLink domains as possible, keeping NVLink within each
-    rack while the gang spills across racks over InfiniBand. Binding a larger gang hard would
-    demand a fully healthy rack and could leave it unschedulable whenever a rack is down a node.
+    replica shares the rack's NVLink fabric — the reason NVL72 exists. Binding a rack-sized gang
+    hard would demand a fully healthy rack and could leave it unschedulable whenever a rack is
+    down a node, so that is the largest hard single-domain gang.
+
+    A larger gang binds to ``nvlink.domain.sliced``: the gang is partitioned into
+    ``SCHEDULABLE_RACK_NODES``-node slices, each hard-bound to its own nvlink.domain, so it lands
+    as an exact N racks x SCHEDULABLE_RACK_NODES balanced layout (see ``COSCHEDULE_NVLINK_DOMAIN_SLICED``).
 
     H100 and every non-NVL72 GPU carry no ``nvlink.domain`` label, so they always coschedule
     on ``leafgroup`` (soft IB colocation), which is the behavior this preserves for them.
@@ -90,5 +137,5 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     if is_rack_based(gpu_variant):
         if replicas <= SCHEDULABLE_RACK_NODES:
             return COSCHEDULE_NVLINK_DOMAIN
-        return COSCHEDULE_NVLINK_DOMAIN_PREFERRED
+        return COSCHEDULE_NVLINK_DOMAIN_SLICED
     return COSCHEDULE_LEAFGROUP

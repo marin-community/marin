@@ -38,6 +38,7 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
+from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
 from iris.rpc import job_pb2
@@ -111,7 +112,12 @@ def make_task_backend(
             pod_priority_classes[band] = pc_name
 
         # Empty topologies falls back to the CoreWeave-convention defaults.
-        topologies = {group_by: (topo.node_label, topo.required) for group_by, topo in kp.kueue.topologies.items()}
+        topologies = {
+            group_by: KueueTopologyBinding(
+                topo.node_label, topo.mode, topo.slice_size, topo.coarse_preferred_label or None
+            )
+            for group_by, topo in kp.kueue.topologies.items()
+        }
         # The LocalQueue name is derived from label_prefix, not configured; Kueue is
         # mandatory (checked above), so it is always set.
         local_queue = local_queue_name(label_prefix)

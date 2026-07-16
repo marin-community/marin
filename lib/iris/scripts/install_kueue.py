@@ -116,9 +116,11 @@ from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_pr
 _WEBHOOK_WARMUP_RETRIES = 6
 _WEBHOOK_WARMUP_DELAY = 5.0
 
-# Upstream Kueue OCI helm chart (kind / generic clusters).
+# Upstream Kueue OCI helm chart (kind / generic clusters). Pinned >= 0.13 for the PodSet-slice
+# TAS feature (multi-rack GB200 nvlink.domain.sliced placement); 0.18 also carries the
+# IsTAS()-recognition fix for slice-only pod groups (upstream #10282, patched in 0.16/0.17).
 UPSTREAM_CHART = "oci://registry.k8s.io/kueue/charts/kueue"
-UPSTREAM_DEFAULT_VERSION = "0.11.0"
+UPSTREAM_DEFAULT_VERSION = "0.18.0"
 
 
 # --------------------------------------------------------------------------
