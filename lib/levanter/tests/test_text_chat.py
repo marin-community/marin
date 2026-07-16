@@ -334,6 +334,24 @@ def test_chat_template_with_masks_returns_message_spans(tokenizer: MarinTokenize
     assert '{"result": 5}' in tool_text
 
 
+NO_GENERATION_TEMPLATE = """{{ bos_token }}
+{%- for message in messages -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{{ message['content'] | trim }}<|eot_id|>
+{%- endfor -%}
+"""
+
+
+def test_chat_template_with_masks_rejects_template_without_generation_block(tokenizer: MarinTokenizer):
+    conversation = [
+        {"role": "user", "content": "alpha prompt."},
+        {"role": "assistant", "content": "beta answer."},
+    ]
+
+    with pytest.raises(ValueError, match="generation"):
+        tokenizer.apply_chat_template_with_masks([conversation], chat_template=NO_GENERATION_TEMPLATE)
+
+
 def test_trace_chat_processor_labels_generation_masked_tool_spans(tokenizer: MarinTokenizer):
     processor = TraceChatProcessor(
         tokenizer,
