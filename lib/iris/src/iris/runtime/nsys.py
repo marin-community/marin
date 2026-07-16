@@ -44,7 +44,7 @@ from pathlib import Path
 from types import FrameType
 from typing import NoReturn
 
-import fsspec.core
+from rigging.filesystem import StoragePath
 
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, nsys_bin_glob
@@ -180,13 +180,17 @@ def report_path(output_dir: Path, rank: Rank, scope: NsysScope) -> Path:
     return output_dir / f"{unit}{rank.global_rank:05d}-{socket.gethostname()}"
 
 
-def upload_report(report: Path, output_uri: str) -> str:
-    """Copy *report* into the *output_uri* directory and return the destination URI.
+def upload_report(report: Path, output_uri: str) -> StoragePath:
+    """Copy *report* into the *output_uri* directory and return where it landed.
 
-    Streamed rather than read into memory: a report can be hundreds of MB.
+    Streamed rather than read in one piece: a report can be hundreds of MB. The
+    destination is a ``StoragePath`` so the join is structural (a trailing separator on
+    the URI cannot double up) and the write routes through rigging's guarded factory,
+    which is what puts a finite timeout on an S3 write — an unbounded one would wedge
+    the task after the profiled work is already done.
     """
-    destination = f"{output_uri.rstrip('/')}/{report.name}"
-    with open(report, "rb") as src, fsspec.core.open(destination, "wb") as dst:
+    destination = StoragePath(output_uri) / report.name
+    with open(report, "rb") as src, destination.open("wb") as dst:
         shutil.copyfileobj(src, dst)
     return destination
 

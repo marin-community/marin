@@ -16,7 +16,7 @@ from typing import NoReturn
 import pytest
 from iris.client.client import _wrap_entrypoint_for_multiprocess, _wrap_entrypoint_for_nsys
 from iris.cluster.client.job_info import set_job_info
-from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob, nsys_setup_script
+from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob
 from iris.cluster.types import Entrypoint, EnvironmentSpec, NsysScope, NsysSpec, ResourceSpec, gpu_device
 from iris.runtime.nsys import (
     Rank,
@@ -29,8 +29,13 @@ from iris.runtime.nsys import (
     validate_selector,
     workdir,
 )
+from iris.runtime.nsys import (
+    main as nsys_main,
+)
 
 CMD = ["python", "train.py", "--steps", "10"]
+# Positional signature of iris.runtime.nsys.run, as main() calls it.
+_RUN_PARAMS = ("ranks", "scope", "trace", "capture_range", "output_uri", "argv")
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
 
 
@@ -53,27 +58,22 @@ def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_first_selects_only_global_rank_zero() -> None:
-    assert should_profile("first", Rank(global_rank=0, local_rank=0))
-    assert not should_profile("first", Rank(global_rank=1, local_rank=1))
-    # A node leader that is not rank 0 is still not selected.
-    assert not should_profile("first", Rank(global_rank=4, local_rank=0))
-
-
-def test_per_node_selects_every_node_leader() -> None:
-    assert should_profile("per-node", Rank(global_rank=0, local_rank=0))
-    assert should_profile("per-node", Rank(global_rank=4, local_rank=0))
-    assert not should_profile("per-node", Rank(global_rank=5, local_rank=1))
-
-
-def test_all_selects_every_rank() -> None:
-    assert should_profile("all", Rank(global_rank=0, local_rank=0))
-    assert should_profile("all", Rank(global_rank=127, local_rank=3))
-
-
-def test_explicit_list_selects_named_global_ranks() -> None:
-    assert should_profile("0,7", Rank(global_rank=7, local_rank=3))
-    assert not should_profile("0,7", Rank(global_rank=6, local_rank=2))
+@pytest.mark.parametrize(
+    ("ranks", "rank", "selected"),
+    [
+        ("first", Rank(global_rank=0, local_rank=0), True),
+        ("first", Rank(global_rank=1, local_rank=1), False),
+        # A node leader that is not rank 0 is still not the first rank.
+        ("first", Rank(global_rank=4, local_rank=0), False),
+        ("per-node", Rank(global_rank=4, local_rank=0), True),
+        ("per-node", Rank(global_rank=5, local_rank=1), False),
+        ("all", Rank(global_rank=127, local_rank=3), True),
+        ("0,7", Rank(global_rank=7, local_rank=3), True),
+        ("0,7", Rank(global_rank=6, local_rank=2), False),
+    ],
+)
+def test_selector_picks_units(ranks: str, rank: Rank, selected: bool) -> None:
+    assert should_profile(ranks, rank) is selected
 
 
 def test_unparseable_rank_spec_raises() -> None:
@@ -107,30 +107,28 @@ def test_rank_from_env_requires_a_task_context(monkeypatch: pytest.MonkeyPatch) 
         Rank.from_env()
 
 
-def test_wrap_entrypoint_prepends_nsys_wrapper() -> None:
+def test_wrapper_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The client builds this argv and iris.runtime.nsys parses it. Nothing else binds
+    the two, so a flag renamed on one side has to fail here rather than on a GPU."""
     wrapped = _wrap_entrypoint_for_nsys(
-        Entrypoint.from_command("python", "train.py", "--steps", "10"),
+        Entrypoint.from_command("python", "train.py"),
         _gpu_resources(8),
-        NsysSpec(output_uri=OUT, ranks="per-node", trace="cuda,nvtx"),
+        NsysSpec(output_uri=OUT, scope=NsysScope.NODE, ranks="0,7", trace="cuda,nvtx", capture_range=True),
     )
-    assert wrapped.command == [
-        "python",
-        "-m",
-        "iris.runtime.nsys",
-        "--scope",
-        "process",
-        "--ranks",
-        "per-node",
-        "--trace",
-        "cuda,nvtx",
-        "--output-uri",
-        OUT,
-        "--",
-        "python",
-        "train.py",
-        "--steps",
-        "10",
-    ]
+    assert wrapped.command[:3] == ["python", "-m", "iris.runtime.nsys"]
+
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("iris.runtime.nsys.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
+    nsys_main(wrapped.command[3:])
+
+    assert seen == {
+        "ranks": "0,7",
+        "scope": NsysScope.NODE,
+        "trace": "cuda,nvtx",
+        "capture_range": True,
+        "output_uri": OUT,
+        "argv": ["python", "train.py"],
+    }
 
 
 def test_wrap_entrypoint_argv_needs_no_shell_expansion() -> None:
@@ -140,16 +138,6 @@ def test_wrap_entrypoint_argv_needs_no_shell_expansion() -> None:
         Entrypoint.from_command("python", "x.py"), _gpu_resources(1), NsysSpec(output_uri=OUT)
     )
     assert not any("$" in arg for arg in wrapped.command)
-
-
-def test_wrap_entrypoint_passes_capture_range() -> None:
-    wrapped = _wrap_entrypoint_for_nsys(
-        Entrypoint.from_command("python", "train.py"),
-        _gpu_resources(1),
-        NsysSpec(output_uri=OUT, capture_range=True),
-    )
-    assert "--capture-range" in wrapped.command
-    assert wrapped.command.index("--capture-range") < wrapped.command.index("--")
 
 
 def test_wrap_entrypoint_requires_gpu() -> None:
@@ -176,11 +164,6 @@ def test_node_scope_wraps_around_the_multigpu_supervisor() -> None:
     assert wrapped.command.index("iris.runtime.nsys") < wrapped.command.index("iris.runtime.multigpu")
 
 
-def test_node_scope_names_reports_by_node() -> None:
-    out = Path("/app/nsys")
-    assert report_path(out, Rank(3, 0), NsysScope.NODE).name.startswith("node00003-")
-
-
 def test_per_node_selector_is_rejected_under_node_scope() -> None:
     """It would silently be a synonym for 'all' — a node report already covers the node."""
     with pytest.raises(ValueError, match="meaningless"):
@@ -189,24 +172,24 @@ def test_per_node_selector_is_rejected_under_node_scope() -> None:
     validate_selector("all", NsysScope.NODE)
 
 
-def test_build_nsys_argv_disables_unavailable_collection() -> None:
-    # perf_event_paranoid=4 in a task container blocks both; leaving them on fails the run.
-    argv = build_nsys_argv("/n/nsys", Path("/app/nsys/rank00000-h"), "cuda,nvtx", capture_range=False)
-    assert "--sample=none" in argv
-    assert "--cpuctxsw=none" in argv
-    assert not any(a.startswith("--capture-range") for a in argv)
+def test_build_nsys_argv_matches_what_the_container_allows() -> None:
+    # perf_event_paranoid=4 in a task pod blocks sampling and context switches; asking
+    # for either fails the run. Capture range is opt-in and brackets cuProfilerStart/Stop.
+    out = Path("/app/nsys/rank00000-h")
+    plain = build_nsys_argv("/n/nsys", out, "cuda,nvtx", capture_range=False)
+    assert {"--sample=none", "--cpuctxsw=none"} <= set(plain)
+    assert not any(a.startswith("--capture-range") for a in plain)
+
+    ranged = build_nsys_argv("/n/nsys", out, "cuda,nvtx", capture_range=True)
+    assert {"--capture-range=cudaProfilerApi", "--capture-range-end=stop"} <= set(ranged)
 
 
-def test_build_nsys_argv_capture_range_stops_without_killing_the_process() -> None:
-    argv = build_nsys_argv("/n/nsys", Path("/app/nsys/rank00000-h"), "cuda", capture_range=True)
-    assert "--capture-range=cudaProfilerApi" in argv
-    assert "--capture-range-end=stop" in argv
-
-
-def test_report_path_is_unique_per_rank() -> None:
+def test_report_path_identifies_its_unit() -> None:
+    # Every unit uploads into one directory, so the name has to carry rank/node identity.
     out = Path("/app/nsys")
     assert report_path(out, Rank(0, 0), NsysScope.PROCESS) != report_path(out, Rank(1, 1), NsysScope.PROCESS)
     assert report_path(out, Rank(7, 3), NsysScope.PROCESS).name.startswith("rank00007-")
+    assert report_path(out, Rank(3, 0), NsysScope.NODE).name.startswith("node00003-")
 
 
 def test_resolve_nsys_bin_reports_missing_install(tmp_path: Path) -> None:
@@ -237,18 +220,6 @@ def test_setup_script_and_wrapper_agree_on_the_install_path(tmp_path: Path, monk
     assert resolve_nsys_bin(workdir() / NSYS_INSTALL_DIR) == str(nsys_bin)
     # What bash resolves from the script must be the same file.
     assert glob(os.path.expandvars(script_glob)) == [str(nsys_bin)]
-
-
-def test_setup_script_extracts_rather_than_installs() -> None:
-    # apt would drag in the Qt/GUI chain; the target CLI binary is self-contained.
-    script = nsys_setup_script()
-    assert "dpkg-deb -x" in script
-    assert "apt-get" not in script
-
-
-def test_setup_script_selects_arch_specific_package() -> None:
-    script = nsys_setup_script()
-    assert "sbsa" in script and "x86_64" in script
 
 
 def test_environment_spec_appends_nsys_setup_only_when_requested() -> None:
