@@ -106,18 +106,20 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
-    # Blackwell B200 / GB200 (per-GPU). NVIDIA publishes tensor peaks with a 2x
+    # Liquid-cooled GB200 (NVL72) per-GPU. NVIDIA publishes tensor peaks with a 2x
     # sparsity factor; divide by 2 for the dense peak (same convention as h100).
-    # source: NVIDIA GB200 NVL72 / B200 datasheet.
+    # bf16 dense = 2.5 PFLOPS/GPU (NVL72 = 360 PFLOPS FP16/BF16 with sparsity / 72 GPUs
+    # = 5 PFLOPS/GPU sparse -> 2.5 dense), ~2.5x an H100.
+    # source: https://www.nvidia.com/en-us/data-center/gb200-nvl72/
     "gb200": {
         "fp64": 40e12,
         "fp32": 80e12,
-        "tf32": 1.1e15 / 2,
-        "fp16": 2.25e15 / 2,
-        "bf16": 2.25e15 / 2,
-        "fp8": 4.5e15 / 2,
-        "int8": 4.5e15 / 2,
-        "int4": 9e15 / 2,
+        "tf32": 2.5e15 / 2,
+        "fp16": 5e15 / 2,
+        "bf16": 5e15 / 2,
+        "fp8": 10e15 / 2,
+        "int8": 10e15 / 2,
+        "int4": 20e15 / 2,
     },
     # source: https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf
     "v100": {
