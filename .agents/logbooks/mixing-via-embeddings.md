@@ -553,3 +553,17 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
 - Codex terminal-state: 7/8 conditions ✓ or in-hand; remaining: panel variance (runs pending
   autoscale), budget-transfer tier (to be stated as unvalidated or probed with 3×10B runs),
   claim-tier separation (report v2 next).
+
+## 2026-07-16 report v2 + codex terminal verdict
+
+- Report v2: robustness section (f8–f14) + four-tier claim table (codex cond. 8); 30/30
+  spot-checks; self-contained 3.16MB; GCS report/ mirror. v1 f-string caption bug caught+fixed.
+- **Codex round 4 declares terminal**: "Nothing material remains validatable without new data";
+  tier placements accepted with two scoping constraints (single-δ tier-A = linear-surrogate
+  clean-target setting only; qsplit240 semantic margin = own scale only — both already worded
+  so); clerical audit passed (no seed-variance prose leakage; extrapolation marking visible;
+  tier-A rows sourced). Final assessment on record: "rigorously bounded rather than
+  overclaimed... defensible if it preserves those boundaries exactly."
+- Codex reviews 1–4 archived to grug/codex_review*.txt (+GCS).
+- Remaining campaign work is new-data-gated: seed panel (children pending autoscale),
+  optional 3×10B budget-transfer probes, panel readout → SNR + tier-B resolution.
