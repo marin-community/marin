@@ -82,7 +82,8 @@ avenue 7/10 land.
 | SPF-003a | Tip gather grouping improves fused W13 vs 23.025 ms | CONFIRMED (small): 22.769 ms, -1.11% | see SPF-003 entry |
 | SPF-003b | Zero-fill double-write fix saves ≥2 ms on fused W13-bwd | FALSIFIED: +0.32 ms vs control, bit-exact; discarded | see SPF-003 entry |
 | SPF-006 | Reduced-shape fused-W13 compare regression (valid_error_count 0 -> 5 -> 3) introduced in d2ce47ca35..088831b4b | Open (needs bisect) | reduced `semantic_permute_w13_compare` valid_error_count per commit |
-| SPF-004 | XLA gather-sum (or smem-staged kernel) reaches ≥1.5 TB/s effective on combine (vs 0.63) | Running | `bench_source_push_combine` stage time + bitwise determinism |
+| SPF-004 | XLA gather-sum reaches ≥1.5 TB/s effective on combine | CONFIRMED: 0.481 ms / 1745 GB/s, bitwise-identical to kernel; ADOPT | see SPF-004 entry |
+| SPF-007 | Staged w2_return stage regressed 4.05 -> 7.08 ms between 89f3267fc (2026-07-03) and branch head | Open (needs bisect) | staged_host_sync w2_return stage time per commit |
 | SPF-005 | Host-side plan build at target shape costs >2 ms/plan (likely ≫), making planner device-siding the top structural priority | CONFIRMED (~190x over threshold) | see SPF-005 entry: 380 ms plan build, ~1.85 s total public-path host work per plan |
 
 ## 2026-07-16 SPF-000 - Kickoff: review fan-out
@@ -181,3 +182,40 @@ worktree's iris predates cw-rno2a config and IRIS_USER (jobs landed under
 `/marin/`); submitted with the main-checkout client. (3) `/tmp/iris`
 port-lock dir owned by another user breaks the tunnel — manual
 `kubectl port-forward` + `--controller-url` works.
+
+## 2026-07-16 SPF-004 - Combine: plain XLA beats the Pallas kernel, bitwise-identical; W2-return regressed at head
+
+Branch `spf/004-combine-roofline` (final `8b5e2038a`; combine mode at
+`2ece2c284`, W2 hoist at `65629623e`). Jobs on cw-us-east-02a H100x8
+(this branch's iris predates cw-rno2a), 216 profile, seed 0.
+
+**Combine (adopt).** New opt-in `combine_mode="xla_gather_sum"`
+(`source_push_combine.py`): flat row-granularity `jnp.take` + fixed-slot-order
+f32 sum mirroring the kernel's arithmetic exactly. Job
+`/marin/spf004-combine-2ece2c284`: baseline `direct_gather_sum` median
+**0.5852 ms (1433 GB/s)**; `xla_gather_sum` median **0.4807 ms (1745 GB/s)**,
+bitwise-deterministic across 3 runs and **bitwise-identical to the kernel
+output**. Decision rule (≥1.5 TB/s) met. Note: the 1.338 ms/0.63 TB/s review
+premise was stale — the head kernel already runs 0.585 ms standalone (~0.92 ms
+in stage context); the XLA path still wins -18% and deletes a Pallas kernel.
+
+**W2-return regression discovered (SPF-007).** The staged forward's w2_return
+stage measures **7.077 ms at head** (`/marin/spf004-w2base-2ece2c284`,
+staged_host_sync, roughly_balanced cf1.25) vs the logged 4.050 ms at
+`89f3267fc` (2026-07-03) — a ~75% stage regression from branch drift, larger
+than every S-tier win combined. Needs a bisect.
+
+**W2 from_h weight-copy hoist (keep).** Route-weight tile staged once before
+the k-loop (mirroring the compact variant): w2_return median 7.077 -> **6.803
+ms (-3.87%)**, total staged forward 16.724 -> 16.516 ms. Full-forward
+`--check` reports max_abs_diff=512.0 **bit-identically on baseline and hoist**
+(pre-existing target-shape reference limitation — historical gates all ran
+`--no-check`; another correctness-debt item). H100 pytest: same 2 pre-existing
+failures before and after (one is the avenue-9 in_specs bug), 102 passed; no
+new failures.
+
+**Infra.** Iris auto-tunnel port-lock dir `/tmp/iris` owned by another user →
+PermissionError swallowed per-port (`iris/cluster/backends/types.py:70-97`);
+manual `kubectl port-forward` workaround. Worker pytest needs explicit
+`uv pip install pytest pytest-xdist` after the cudnn pin; plain re-sync skews
+jax/pallas.
