@@ -676,12 +676,10 @@ impl Namespace {
             return Ok(());
         }
         let output_min_seq = l0.iter().map(|r| r.min_seq).min().expect("non-empty");
-        let output_max_seq = l0.iter().map(|r| r.max_seq).max().expect("non-empty");
         let job = CompactionJob {
             inputs: l0,
             output_level: 1,
             output_min_seq,
-            output_max_seq,
         };
         self.run_one_job(&dir, &job)
     }

@@ -90,12 +90,10 @@ fn take_until_target<'a>(run: &[&'a SegmentRow], target: i64) -> Vec<&'a Segment
 
 fn build_job(run: Vec<&SegmentRow>, output_level: i32) -> CompactionJob {
     let output_min_seq = run.iter().map(|s| s.min_seq).min().expect("run non-empty");
-    let output_max_seq = run.iter().map(|s| s.max_seq).max().expect("run non-empty");
     CompactionJob {
         inputs: run.into_iter().cloned().collect(),
         output_level,
         output_min_seq,
-        output_max_seq,
     }
 }
 

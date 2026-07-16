@@ -211,9 +211,9 @@ fn apply_merge(
         }
     }
 
-    // A lone input that busts the ceiling has nothing to merge with: promote it
-    // by rename instead, so an oversized segment costs no merge memory and does
-    // not wedge its level.
+    // One input has nothing to merge with — whether it busted the ceiling alone
+    // or merely left no room for the next input. Promote it by rename instead,
+    // so it costs no merge memory and its level still advances.
     if consumed.len() == 1 {
         drop(projected);
         return apply_level_bump(consumed[0], job.output_level, dir, input_key_bounds);
@@ -414,7 +414,6 @@ mod tests {
             ],
             output_level: 1,
             output_min_seq: 1,
-            output_max_seq: 6,
         };
         // typed key bounds per input.
         let bounds = |path: &str| -> (Option<i64>, Option<i64>) {
@@ -520,7 +519,6 @@ mod tests {
             ],
             output_level: 1,
             output_min_seq: min0,
-            output_max_seq: max2,
         };
 
         // A ceiling holding two of the three segments.
@@ -568,7 +566,6 @@ mod tests {
             ],
             output_level: 1,
             output_min_seq: min0,
-            output_max_seq: max1,
         };
         let swap = run_job(&job, &dir, &schema(), Some("key"), &[], 1, |_| (None, None)).unwrap();
         assert!(swap.bump_rename.is_some(), "must degenerate to a rename");
@@ -613,7 +610,6 @@ mod tests {
             ],
             output_level: 1,
             output_min_seq: 1,
-            output_max_seq: n + 1,
         };
         let bounds = |_: &str| (Some(1), Some(n));
         let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
@@ -649,7 +645,6 @@ mod tests {
             inputs: vec![input],
             output_level: 3,
             output_min_seq: 1,
-            output_max_seq: 2,
         };
         let bounds = |_: &str| (Some(10), Some(20));
         let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
@@ -715,7 +710,6 @@ mod tests {
             ],
             output_level: 1,
             output_min_seq: 1,
-            output_max_seq: 2,
         };
         let swap = run_job(&job, &dir, &log, Some("key"), &["data"], i64::MAX, |_| {
             (None, None)
@@ -829,7 +823,6 @@ mod tests {
             ],
             output_level: 1,
             output_min_seq: 1,
-            output_max_seq: 2,
         };
         let swap = run_job(&job, &dir, &wide, Some("key"), &[], i64::MAX, |_| {
             (None, None)

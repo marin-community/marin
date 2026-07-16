@@ -81,10 +81,13 @@ impl CompactionConfig {
 }
 
 /// One pending merge: `inputs.len()` segments -> one `output_level` segment.
+///
+/// `output_min_seq` names the output file. There is no `output_max_seq`: the
+/// executor may consume only a prefix of `inputs`, so the output's upper bound
+/// is whatever that prefix spans and is folded there, not predicted here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionJob {
     pub inputs: Vec<SegmentRow>,
     pub output_level: i32,
     pub output_min_seq: i64,
-    pub output_max_seq: i64,
 }
