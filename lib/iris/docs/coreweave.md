@@ -441,6 +441,33 @@ gangs), so `iris-cq` carries two flavors in one resourceGroup:
   instead of being fenced onto CPU-only capacity. Pass `--cpu-flavor-node-label
   KEY=VALUE` to pin `cw-cpu` to specific CPU nodes instead.
 
+**GB200 NVLink-domain placement.** NVL72 nodes (GB200/GB300, `gb200-4x` — 4
+Blackwell GPUs each) carry `ds.coreweave.com/nvlink.domain`; one NVL72 rack is one
+NVLink domain of 18 physical nodes, of which CoreWeave keeps only **16 schedulable
+at once** (the rest absorb host failures and maintenance — a floor, not a cap).
+Iris picks a placement level per multi-node GB200 gang from its replica count:
+
+- **≤ 16 nodes** bind **hard** to a single `nvlink.domain`
+  (`podset-required-topology`) — the whole gang shares one rack's NVLink fabric.
+  16 is the largest hard single-domain gang; binding a 17–18-node gang hard would
+  demand a fully-healthy rack and could sit unschedulable whenever one is short a
+  node.
+- **> 16 nodes** use Kueue **PodSet slices** (`podset-slice-required-topology:
+  nvlink.domain` + a computed `podset-slice-size`). The gang is split evenly over
+  the fewest racks that hold ≤ 16 nodes each, and each slice is hard-bound to its
+  own NVLink domain, so it lands as an exact **balanced N-rack layout**: 24 → 12+12,
+  32 → 16+16, 48 → 16+16+16. Because two slices always exceed a rack (each is more
+  than half of 18), no two share a rack. A soft `leafgroup` preference is paired so
+  the racks also cluster on one IB leaf group.
+
+The sliced level requires **node-saturating pods** (one pod = one whole `gb200-4x`
+node = 4 GPUs) so a slice fills whole nodes, and a gang size that splits into equal,
+more-than-half-a-rack slices — sizes that cannot (e.g. 17, 18, 40) are rejected at
+submit. PodSet slices need **Kueue ≥ 0.13**; use **0.18+** for the `IsTAS()`
+recognition fix for slice-only pod groups (upstream #10282). On an older Kueue the
+slice annotations are silently ignored and a multi-rack gang degrades to a soft
+leafgroup gang with no per-rack NVLink guarantee.
+
 **Never install Kueue with unscoped admission webhooks on a CoreWeave cluster.**
 The script scopes them to the `iris` namespace (`--pod-namespace`); the chart
 default intercepts pod CREATEs in every namespace fail-closed, including the
@@ -746,6 +773,18 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
+- **A controller restart can CrashLoop on a stale node-local state DB.** The
+  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
+  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
+  different CPU node. If that node holds a corrupt leftover state DB from an earlier
+  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
+  trusts it (skips the checkpoint restore) and crashes with `database disk image is
+  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
+  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
+  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
+  checkpoint makes a stale node restore the clean checkpoint, and landing back on
+  the current controller node reuses its good DB. A persistently bad node needs its
+  `local_state_dir/db` wiped so startup falls back to the checkpoint.
 
 Cold-start timings:
 
