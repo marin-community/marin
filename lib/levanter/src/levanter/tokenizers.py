@@ -152,9 +152,6 @@ class MarinTokenizer(Protocol):
 # Sentinel used to mark generation (assistant) boundaries in rendered templates.
 _GENERATION_SENTINEL_START = "__MARIN_GEN_START_7f3a9c__"
 _GENERATION_SENTINEL_END = "__MARIN_GEN_END_7f3a9c__"
-# Matches a `{% generation %}` block tag (optional whitespace-trim markers). Assistant masks are
-# derived from these blocks; a template without them can only ever produce an all-zero mask.
-_GENERATION_TAG_RE = re.compile(r"\{%-?\s*generation\s*-?%\}")
 _MESSAGE_SENTINEL_START = "__MARIN_MSG_START_7f3a9c_"
 _MESSAGE_SENTINEL_END = "__MARIN_MSG_END_7f3a9c_"
 _MESSAGE_INDEX_ATTR = "marin_message_index"
@@ -286,6 +283,19 @@ def _chat_template_parts(chat_template: str) -> list[tuple[str, str, list[tuple[
         parts.append(("text", value, []))
 
     return parts
+
+
+def _has_generation_block(chat_template: str) -> bool:
+    """Whether the template contains a `{% generation %}` block tag.
+
+    Uses Jinja's lexer rather than a regex so whitespace-control forms
+    (`{%- generation %}`, `{%+ generation +%}`) are recognized exactly as the
+    Jinja environment would parse them.
+    """
+    return any(
+        part_type == "block" and _block_name(block_tokens) == "generation"
+        for part_type, _, block_tokens in _chat_template_parts(chat_template)
+    )
 
 
 def _message_sentinel_template(prefix: str, loop_variable: str) -> str:
@@ -517,7 +527,7 @@ def _apply_chat_template_with_masks(
     if template_str is None:
         raise ValueError(f"Tokenizer {tokenizer.name_or_path} has no chat template")
 
-    if not _GENERATION_TAG_RE.search(template_str):
+    if not _has_generation_block(template_str):
         raise ValueError(
             f"Chat template for {tokenizer.name_or_path} has no `{{% generation %}}` block, so assistant "
             "masks would be all zeros and no assistant tokens would be labeled for loss. Use a template "
