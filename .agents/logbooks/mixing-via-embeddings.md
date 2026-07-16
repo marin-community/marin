@@ -444,3 +444,17 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
 - Net: frozen primary (kernel, 0.8147) remains correct; epoch features matter for linear
   surrogates and for interpretation; proposal-time epoch caps remain mandatory regardless.
 - Artifacts: scratch/mixture_features/grug/{hinge_zmacro_check.json, kernel_hinge_zmacro_check.json}.
+
+## 2026-07-16 codex-collaborative validation (rigor vs PR 2393, epoching, literature)
+
+- Two codex exec review rounds + its 3 prescribed analyses + lit review; memo:
+  scratch/mixture_features/grug/validation_memo.md (+GCS). Issue comment on #7067.
+- Rigor: exceeds 2393 on pre-registration/controls/replication; short on repeat-panel noise,
+  heteroskedasticity, metric registry. Top ask: ~10-run grug seed-repeat panel.
+- Epoching: computation confirmed; discount = Muennighoff functional form (δ=0.10⇒R_D*≈9);
+  concat-ARD BEATS plain kernel (+0.0049, p=0.0015) — product-kernel negative was
+  architectural; knots {1,4,16} going forward; per-phase cap w_j ≤ 4·T_j/(f_p·budget).
+- Selection bootstrap (B=200): no winner's curse (optimism −0.011); holdout drop = 1.3–1.6 SE
+  (p≈0.08) — consistent with noise (corrected from an erroneous −0.62 SE read).
+- Corrected-claims register in memo (semantic value = qsplit240-only; kernel absorbs MOST of
+  epoching; H3 replicates "not cost-effective" not "not needed").
