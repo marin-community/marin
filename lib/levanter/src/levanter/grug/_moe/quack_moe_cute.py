@@ -86,7 +86,6 @@ def quack_gated_grouped_gemm(
     Returns postact [M, N].
     """
     M, K = x_sort.shape
-    E = w_gate_up.shape[0]
     N2 = w_gate_up.shape[2]
     N = N2 // 2
     a_dtype = _cute_dtype(x_sort.dtype)

@@ -99,7 +99,7 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--run-id` | *required* | run label |
 | `--output-dir` | *required* | where `metrics_summary.json` is written |
 | `--hidden-dim` | 2560 | model width (2560 = row-13, 5120 = Will's variant) |
-| `--moe-implementation` | `sonic` | local: `sonic` (XLA ragged-dot), `sonic_cute` (QuACK SM100), `scatter`; expert-parallel: `ring`, `ragged_all_to_all` |
+| `--moe-implementation` | `sonic` | local: `sonic` (XLA ragged-dot), `sonic_cute` (QuACK SM100), `scatter`; expert-parallel: `ring`, `ring_cute` (ring dispatch + QuACK GEMMs), `ragged_all_to_all` |
 | `--expert-parallelism` | 1 | expert mesh axis size; >1 requires an expert-parallel `--moe-implementation` |
 | `--attention-implementation` | `gpu_fa4_cute` | FlashAttention-4 CuTeDSL backend |
 | `--num-gpus` | 8 | GPUs to shard across |

@@ -2052,8 +2052,9 @@ def _parse():
         help=(
             "Size of the expert mesh axis. 1 = EP1 + FSDP (params shard over the data axis; "
             "local MoE backends: sonic / sonic_cute / scatter). >1 shards experts over the "
-            "expert axis and requires an expert-parallel backend: --moe-implementation ring "
-            "(recommended) or ragged_all_to_all (currently pathological on GPU; see README)."
+            "expert axis and requires an expert-parallel backend: --moe-implementation ring_cute "
+            "(QuACK GEMMs, recommended), ring, or ragged_all_to_all (currently pathological "
+            "on GPU; see README)."
         ),
     )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
