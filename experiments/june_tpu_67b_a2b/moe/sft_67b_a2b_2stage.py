@@ -295,14 +295,19 @@ def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
 if __name__ == "__main__":
     import sys
 
+    # Usage: python -m ...sft_67b_a2b_2stage [smoke|job1|2stage] [version]
+    # The optional version (default "dev") namespaces the executor output dir, so a re-run under a
+    # fresh version gets a distinct output path (avoids racing a prior coordinator's StepRunner on
+    # the same step-status file).
     which = sys.argv[1] if len(sys.argv) > 1 else "2stage"
+    version = sys.argv[2] if len(sys.argv) > 2 else "dev"
     if which == "smoke":
-        StepRunner().run([build_smoke().lower()])
+        StepRunner().run([build_smoke(version=version).lower()])
     elif which == "job1":
-        StepRunner().run([build_job1().lower()])
+        StepRunner().run([build_job1(version=version).lower()])
     elif which == "2stage":
-        job1 = build_job1()
-        job2 = build_job2(job1)
+        job1 = build_job1(version=version)
+        job2 = build_job2(job1, version=version)
         StepRunner().run([job2.lower()])
     else:
         raise SystemExit(f"unknown target {which!r}; use one of: smoke | job1 | 2stage")
