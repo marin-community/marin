@@ -18,7 +18,6 @@ from pathlib import Path
 
 import click
 import humanfriendly
-import yaml
 from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
@@ -26,6 +25,7 @@ from tabulate import tabulate
 from iris.cli.connect import iris_client_for_ctx, require_controller_url
 from iris.client import IrisClient
 from iris.client.client import Job, JobFailedError
+from iris.cluster.client.job_info import load_marin_config
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
     Constraint,
@@ -150,13 +150,10 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
         Merged environment variables
     """
     env_vars: dict[str, str] = {}
-    marin_yaml = Path(".marin.yaml")
-    if marin_yaml.exists():
-        with open(marin_yaml) as f:
-            cfg = yaml.safe_load(f) or {}
-        if isinstance(cfg.get("env"), dict):
-            for k, v in cfg["env"].items():
-                env_vars[str(k)] = "" if v is None else str(v)
+    cfg = load_marin_config()
+    if isinstance(cfg.get("env"), dict):
+        for k, v in cfg["env"].items():
+            env_vars[str(k)] = "" if v is None else str(v)
 
     for key in ("HF_TOKEN", "WANDB_API_KEY"):
         if key not in env_vars and os.environ.get(key):

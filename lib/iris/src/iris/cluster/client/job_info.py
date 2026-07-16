@@ -137,6 +137,20 @@ def set_job_info(info: JobInfo | None) -> None:
     _job_info.set(info)
 
 
+MARIN_CONFIG_PATH = Path(".marin.yaml")
+
+
+def load_marin_config() -> dict:
+    """Load the cwd-relative ``.marin.yaml`` user config, or ``{}`` when absent."""
+    if not MARIN_CONFIG_PATH.exists():
+        return {}
+    with open(MARIN_CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f) or {}
+    if not isinstance(cfg, dict):
+        raise ValueError(f"{MARIN_CONFIG_PATH} must be a YAML mapping, got {type(cfg).__name__}")
+    return cfg
+
+
 def _configured_user() -> str | None:
     """User from the ``IRIS_USER`` env var or the ``user:`` key in ``.marin.yaml``, if set."""
     env_user = os.environ.get("IRIS_USER")
@@ -145,12 +159,7 @@ def _configured_user() -> str | None:
             raise ValueError("IRIS_USER must not be empty")
         return env_user
 
-    marin_yaml = Path(".marin.yaml")
-    if not marin_yaml.exists():
-        return None
-    with open(marin_yaml) as f:
-        cfg = yaml.safe_load(f) or {}
-    user = cfg.get("user")
+    user = load_marin_config().get("user")
     if user is None:
         return None
     if not isinstance(user, str) or not user.strip():
