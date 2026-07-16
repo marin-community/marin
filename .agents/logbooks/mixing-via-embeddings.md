@@ -572,3 +572,35 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
 - Codex reviews 1–4 archived to grug/codex_review*.txt (+GCS).
 - Remaining campaign work is new-data-gated: seed panel (children pending autoscale),
   optional 3×10B budget-transfer probes, panel readout → SNR + tier-B resolution.
+
+## 2026-07-16 histogram sample-size sensitivity (20k vs 50k vs 100k) — 20k stays the default
+
+- While the seed panel is capacity-blocked: 10 probe buckets (3 concentrated / 4 mid /
+  3 diffuse incl tail) x n {20k,50k,100k} x seeds {0,1} = 60 zephyr tasks on cw-rno2a via a
+  parametrized clone of the proven histogram path (`grug_sample_size_zephyr.py` + launcher;
+  frozen basis + bandwidth, `bucket_rng(bucket, seed)` with seed=0 == production). Map wall
+  ~6 min on 30 CPU workers; job `/rav/iris-run-launch_grug_sample_size_zephyr-20260716-105134`
+  SUCCEEDED; outputs + summary.json on CW `…/v0/sample_size/`, summary also printed to the job
+  log (this VM has no CW creds) -> `grug/sample_size_sensitivity.json`.
+- **Determinism PASS**: all 10 (n=20k, seed=0) histograms reproduce the July production parts
+  bit-for-bit (max |dfrac| = 0.0).
+- **The floor does NOT scale 1/sqrt(n)**: median Hellinger log-log slope **-0.19** (iid theory
+  -0.5), two buckets backwards — support discovery (occupied cells grow ~2-4x from 20k->100k;
+  heavy-tailed cell masses) + token-weight heavy tails (single-pair floor estimates are noisy,
+  c11q2 dips 0.87 at 50k). cos floor improves materially ONLY for diffuse buckets (class median
+  0.65->0.83; c05q1 0.67->0.92); reaching cos 0.99 extrapolates to ~1.2M docs (c05q1) or worse
+  (c01q3 slope -0.20) — brute-force n is the wrong lever.
+- **Bias check clean**: same-seed 20k-vs-100k distances <= independent-noise prediction on all
+  clean buckets — 20k is unbiased, just noisy. K40 floor >= 0.973 at 20k everywhere (>=0.998 at
+  100k); tail is population-exhausted by 100k (~83k docs = enumeration, overlap 0.62).
+- **RECOMMENDATION: keep 20k docs/bucket default.** Two targeted upgrades: (1) enumerate tiny
+  populations (tail); (2) for the 14/168 diffuse buckets (occ>=500) average 2-4 seed-replicates
+  at 20k (noise is zero-bias seed variance; also yields per-bucket floors) instead of raising n.
+  Read fine-grained diffuse V-column comparisons against measured floors.
+- CW-mirror 20k floors differ per-bucket from July gs floors in both directions (c05q1 0.669 vs
+  0.809) — single-pair variance + store-order drift (see mirror-drift entry), classes unchanged.
+- Ops: one finished task's report wedged the coordinator at 59/60 for ~14 min (outputs all
+  written); `iris job kick <worker-task> --state preempted` re-dispatched -> idempotent skip ->
+  instant finish. Same pattern as the zephyr lost-report gotcha; kick is the cheap unwedge.
+- Deliverables: `grug/sample_size_sensitivity.{md,json}`, `report/figs3/f15_sample_size.png`
+  (+ manifest3), builder `report/build_f15.py`. No commits/posts (per directive).
