@@ -57,6 +57,20 @@ def _tiny_config(**overrides) -> SnowballConfig:
     return SnowballConfig(**base)
 
 
+def _device_batched_ids(vocab_size: int, pos_len: int) -> hax.NamedArray:
+    """One identical sequence per device: a ``(batch=device_count, position)`` token grid.
+
+    The grug forward data-parallelizes over the batch axis, so the batch must divide the mesh's
+    ``data`` axis. A single unbatched sequence (batch=1) only lowers on one device; on a multi-device
+    mesh (e.g. the multi-chip TPU CI) it cannot shard. Batching to the device count matches how the
+    real model is scored (one prompt per device) and keeps these tests valid on any device count.
+    """
+    Batch = Axis("batch", jax.device_count())
+    Pos = Axis("position", pos_len)
+    row = jnp.arange(pos_len, dtype=jnp.int32) % vocab_size
+    return hax.named(jnp.broadcast_to(row, (Batch.size, Pos.size)), (Batch, Pos))
+
+
 def test_snowball_registered_and_no_arg_constructible():
     choices = LmConfig.get_known_choices()
     assert "snowball" in choices
@@ -167,8 +181,7 @@ def test_snowball_state_dict_roundtrip_is_exact():
         sd = src.to_state_dict()
         dst = dst.from_state_dict(sd)
 
-        Pos = Axis("position", 10)
-        ids = hax.named(jnp.arange(10, dtype=jnp.int32) % cfg.vocab_size, (Pos,))
+        ids = _device_batched_ids(cfg.vocab_size, 10)
         run = hax.named_jit(lambda m, x: m(x))
         src_logits = np.asarray(run(src, ids).array)
         dst_logits = np.asarray(run(dst, ids).array)
@@ -209,8 +222,7 @@ def test_snowball_load_pretrained_machinery_is_exact():
         template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=jax.random.key(0))
         loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
 
-        Pos = Axis("position", 8)
-        ids = hax.named(jnp.arange(8, dtype=jnp.int32) % cfg.vocab_size, (Pos,))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
         run = hax.named_jit(lambda m, x: m(x))
         src_logits = np.asarray(run(src, ids).array)
         loaded_logits = np.asarray(run(loaded, ids).array)
@@ -221,8 +233,7 @@ def test_snowball_forward_shapes_and_finite():
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
-        Pos = Axis("position", 8)
-        ids = hax.named(jnp.arange(8, dtype=jnp.int32) % cfg.vocab_size, (Pos,))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
