@@ -1090,7 +1090,8 @@ def test_kueue_required_topology_for_nvlink_domain():
 def test_kueue_required_nvlink_gang_rejects_more_than_one_rack():
     """A hard nvlink.domain gang cannot span racks: one NVL72 rack is one NVLink domain of
     RACK_SIZE nodes, so a required gang larger than that is unschedulable and must fail fast
-    (the guard for the programmatic client; the CLI already caps NVLink gangs at RACK_SIZE)."""
+    (the guard for the programmatic client; the CLI degrades hard NVLink gangs to soft below
+    RACK_SIZE, so it never emits one this large)."""
     with pytest.raises(ValueError, match="NVLink domain size"):
         _build_pod_manifest(
             _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain"),

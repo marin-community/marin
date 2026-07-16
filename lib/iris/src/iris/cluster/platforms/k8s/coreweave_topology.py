@@ -37,10 +37,19 @@ CW_LABEL_NVLINK_DOMAIN = "ds.coreweave.com/nvlink.domain"
 # declared by rack count (spec.targetRacks) and do NOT autoscale — CoreWeave rejects both a
 # partial rack and the autoscaler on rack-based instances. Every other instance type is
 # node-based (spec.targetNodes + autoscaling). See docs.coreweave.com nvl72 instance docs.
-# One NVL72 rack is also exactly one NVLink domain (RACK_SIZE nodes share the rack's NVLink
-# switch), so RACK_SIZE doubles as the hard upper bound on a single-nvlink.domain gang.
+# One NVL72 rack is also exactly one NVLink domain: RACK_SIZE nodes share the rack's NVLink
+# switch, so RACK_SIZE is the physical size of a single nvlink.domain and the unit racks are
+# provisioned in.
 RACK_SIZE = 18
 NVL72_INSTANCE_PREFIXES = ("gb200", "gb300")
+
+# CoreWeave keeps only this many of a rack's RACK_SIZE nodes schedulable at once; the rest
+# absorb host failures and maintenance. A hard single-nvlink.domain gang can therefore only be
+# guaranteed placement up to this size. A larger gang would need every node in one rack healthy
+# at the same moment, so binding it hard could leave it unschedulable indefinitely — above this
+# size a gang binds the nvlink.domain label softly instead. This is the hard upper bound on a
+# single-nvlink.domain gang, distinct from the physical RACK_SIZE.
+SCHEDULABLE_RACK_NODES = 16
 
 
 def is_rack_based(instance_type: str) -> bool:
@@ -66,19 +75,20 @@ def gpu_gang_coscheduling_level(gpu_variant: str, replicas: int) -> str:
     """The Kueue topology level a multi-node GPU gang of ``replicas`` nodes should bind to.
 
     NVL72 (GB200/GB300) nodes carry ``ds.coreweave.com/nvlink.domain`` and one rack is a
-    single NVLink domain of ``RACK_SIZE`` nodes. A gang that fits inside one rack binds HARD
-    to ``nvlink.domain`` (``podset-required-topology``) so every replica shares the rack's
-    NVLink fabric — the reason NVL72 exists. A gang larger than one rack cannot fit a single
-    NVLink domain (NVLink does not cross racks), so it binds SOFT to the same level
-    (``nvlink.domain.preferred`` -> ``podset-preferred-topology``): Kueue packs the replicas
-    into as few whole NVLink domains as possible, keeping NVLink within each rack while the
-    gang spills across racks over InfiniBand.
+    single NVLink domain of ``RACK_SIZE`` nodes, of which CoreWeave keeps only
+    ``SCHEDULABLE_RACK_NODES`` schedulable at once. A gang that fits the guaranteed-schedulable
+    slice of one rack binds HARD to ``nvlink.domain`` (``podset-required-topology``) so every
+    replica shares the rack's NVLink fabric — the reason NVL72 exists. A larger gang binds SOFT
+    to the same level (``nvlink.domain.preferred`` -> ``podset-preferred-topology``): Kueue
+    packs the replicas into as few whole NVLink domains as possible, keeping NVLink within each
+    rack while the gang spills across racks over InfiniBand. Binding a larger gang hard would
+    demand a fully healthy rack and could leave it unschedulable whenever a rack is down a node.
 
     H100 and every non-NVL72 GPU carry no ``nvlink.domain`` label, so they always coschedule
     on ``leafgroup`` (soft IB colocation), which is the behavior this preserves for them.
     """
     if is_rack_based(gpu_variant):
-        if replicas <= RACK_SIZE:
+        if replicas <= SCHEDULABLE_RACK_NODES:
             return COSCHEDULE_NVLINK_DOMAIN
         return COSCHEDULE_NVLINK_DOMAIN_PREFERRED
     return COSCHEDULE_LEAFGROUP
