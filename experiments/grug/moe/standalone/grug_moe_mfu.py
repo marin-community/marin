@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import inspect
 import json
 import math
 import os
@@ -169,8 +170,18 @@ from typing import Literal
 import equinox as eqx
 import jax.scipy as jsp
 from einops import rearrange
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, tree_checkpoint_name
 from haliax.nn import ArrayStacked
+from haliax.nn.ragged_dot import ragged_dot
+
+try:
+    # QuACK SM100 cutlass grouped SwiGLU GEMM (custom_vjp; shard_map-safe) — much faster than the
+    # Pallas Triton ragged_dot on Blackwell. Optional: needs quack-kernels + cutlass-dsl.
+    from levanter.grug._moe.sonic_cute import _expert_mlp as _quack_expert_mlp
+    from levanter.grug._moe.sonic_cute import _interleave_gate_up as _quack_interleave_gate_up
+except ImportError:
+    _quack_expert_mlp = None
+    _quack_interleave_gate_up = None
 from jax import random
 from jax.sharding import get_abstract_mesh, reshard
 
@@ -185,6 +196,12 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+)
+from levanter.grug._moe.common import (
+    _CHECKPOINT_DISPATCH_INPUT,
+    _CHECKPOINT_DISPATCH_OUTPUT,
+    _CHECKPOINT_EXPERT_HIDDEN,
+    _CHECKPOINT_MOE_OUTPUT,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -208,6 +225,8 @@ _ROUTING_RENORM_SUM = 2.5
 # _moe_mlp_nccl_ep; ep_bootstrap must have run once under the same mesh.
 _NCCL_EP_MESH: jax.sharding.Mesh | None = None
 _NCCL_EP_RECV_CAP: int = 0
+_NCCL_EP_RAGGED: bool = False
+_NCCL_EP_QUACK: bool = False
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -688,6 +707,108 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     )
 
 
+def _warmup_nccl_ep(mesh, num_procs, t_local, hidden_dim, top_k, num_experts, recv_cap):
+    """Force eager, synchronized creation of the EP NCCL communicator.
+
+    Runs one tiny ep_dispatch immediately after ep_bootstrap so ncclCommInitRank
+    happens while ranks are still barrier-aligned (see the call site for why the
+    lazy trace-time init fails cross-node). Inputs are throwaway; only the side
+    effect of building+caching the comm matters.
+    """
+    import transformer_engine.jax.ep as te_ep  # optional dep: nccl_ep backend only
+
+    # Keep the warmup dispatch TINY so its jit compiles fast: the NCCL bootstrap-root
+    # listener spawned by ep_bootstrap (ncclGetUniqueId) times out, so ncclCommInitRank
+    # must fire soon after. A large warmup's slow compile lets the root go stale and the
+    # cross-node connect is refused. The comm is sized by ep_bootstrap's max_tokens_per_rank
+    # regardless of this TL, so 256 tokens still creates the full-size comm train_step reuses.
+    tl = min(256, t_local)
+    ep3 = P(_BATCH_AXES, None, None)
+    r = jax.process_index()
+    key = jax.random.PRNGKey(r)
+
+    # recv_cap must equal the comm's bootstrap recv_capacity (a smaller one -> NCCL invalid argument).
+    # But summing the full [num_procs, recv_cap, D] recv forces it to materialize replicated and OOMs
+    # (~193 GiB at dp=2/capfac=3). Return the tiny token_counts instead: the dispatch still executes
+    # (triggering ncclCommInitRank) without gathering recv.
+    def _mk(local, shape):
+        return jax.make_array_from_process_local_data(NamedSharding(mesh, ep3), np.asarray(local), shape)
+
+    tokens = _mk(jax.random.normal(key, (1, tl, hidden_dim), dtype=jnp.bfloat16), (num_procs, tl, hidden_dim))
+    idx = _mk(jax.random.randint(key, (1, tl, top_k), 0, num_experts, dtype=jnp.int32), (num_procs, tl, top_k))
+    cw = _mk(jax.random.uniform(key, (1, tl, top_k), dtype=jnp.float32), (num_procs, tl, top_k))
+    cfg = te_ep.EpLayerConfig(top_k=top_k, dispatch_output_per_expert_alignment=16)
+
+    @jax.jit
+    def _dispatch(idx, tokens, cw):
+        _recv, _recv_w, _hm, tc = te_ep.ep_dispatch(cfg, idx, tokens, cw, recv_cap)
+        return tc.astype(jnp.float32).sum()
+
+    jax.block_until_ready(_dispatch(idx, tokens, cw))
+
+
+def _ragged_expert_glu(recv, recv_w, wg, wu, wd, *, mesh, nle, slots, use_quack=False):
+    """Ragged per-expert GLU over ACTUAL tokens, replacing the dense-over-capacity einsum.
+
+    ``recv`` is ``[num_procs, recv_pr, D]`` (recv_pr = nle*slots), padded to ``slots`` per local
+    expert with real tokens contiguous at the FRONT of each expert's slot block (verified against
+    the TE dispatch layout). Per device: compact the padded tokens to a packed buffer, run two
+    ``ragged_dot`` grouped matmuls sized by the actual per-expert counts, then scatter back to the
+    padded layout ``ep_combine`` expects. Compute scales with real tokens, not padded capacity —
+    unlike the dense einsum which pays for every capacity slot.
+    """
+    recv_pr = nle * slots
+    ep3 = P(_BATCH_AXES, None, None)
+    ep2 = P(_BATCH_AXES, None)
+    kspec = P("expert", None, None, None)
+
+    def _local(recv_l, recv_w_l, wg_l, wu_l, wd_l):
+        recv_l = recv_l[0]  # [recv_pr, D]
+        recv_w_l = recv_w_l[0]  # [recv_pr]
+        wg_l, wu_l, wd_l = wg_l[0], wu_l[0], wd_l[0]  # [nle, D, I] / [nle, I, D]
+        d = recv_l.shape[1]
+        if use_quack:
+            # QuACK SM100 cutlass grouped SwiGLU directly over the PADDED slot blocks — no
+            # compaction. Each expert's group is its full `slots` block (cu = slot boundaries);
+            # padding rows compute from padded recv and are masked out by recv_w before combine.
+            # At the low capacity_factor dp=1/dp=2 use, paying ~capacity_factor x compute on a fast
+            # cutlass GEMM is far cheaper than the gather/scatter the packed path needs (~279ms).
+            moe_dim = wg_l.shape[-1]
+            w13_il = _quack_interleave_gate_up(jnp.concatenate([wg_l, wu_l], axis=-1), moe_dim).astype(recv_l.dtype)
+            cu = jnp.arange(0, recv_pr + 1, slots, dtype=jnp.int32)  # [nle+1] fixed slot-block bounds
+            gs = jnp.full((nle,), slots, dtype=jnp.int32)  # every group is a full slot block
+            out = _quack_expert_mlp(recv_l, w13_il, wd_l.astype(recv_l.dtype), gs, cu)  # [recv_pr, D]
+            return out.reshape(1, recv_pr, d)
+        # ragged (Triton) path: compact padded -> packed by real counts, then grouped GEMM.
+        counts = (recv_w_l != 0).astype(jnp.int32).reshape(nle, slots).sum(axis=1)  # [nle] real tokens/expert
+        cum = jnp.cumsum(counts)  # inclusive; cum[-1] = total real
+        offsets = cum - counts  # exclusive cumsum: packed start of each expert
+        p = jnp.arange(recv_pr)
+        e_of_p = jnp.clip(jnp.searchsorted(cum, p, side="right"), 0, nle - 1)
+        src = e_of_p * slots + (p - offsets[e_of_p])
+        packed = jnp.where((p < cum[-1])[:, None], recv_l[src], 0).astype(recv_l.dtype)
+        packed = tree_checkpoint_name(packed, _CHECKPOINT_DISPATCH_INPUT)
+        rimpl = os.environ.get("SCALE_RAGGED_IMPL", "auto")  # auto|triton|xla|megablox
+        gate = ragged_dot(packed, wg_l.astype(packed.dtype), counts, implementation=rimpl)
+        up = ragged_dot(packed, wu_l.astype(packed.dtype), counts, implementation=rimpl)
+        hidden = tree_checkpoint_name((jax.nn.silu(gate) * up).astype(packed.dtype), _CHECKPOINT_EXPERT_HIDDEN)
+        out = ragged_dot(hidden, wd_l.astype(hidden.dtype), counts, implementation=rimpl)  # [recv_pr, D]
+        q = jnp.arange(recv_pr)
+        qe, qt = q // slots, q % slots
+        padded = jnp.where((qt < counts[qe])[:, None], out[offsets[qe] + qt], 0).astype(recv_l.dtype)
+        return padded.reshape(1, recv_pr, d)
+
+    # Per-device compute is fully local (no cross-device dep), so disable the replication check.
+    # The kwarg was renamed check_rep -> check_vma across jax versions; pass whichever exists.
+    sm_kwargs = {"mesh": mesh, "in_specs": (ep3, ep2, kspec, kspec, kspec), "out_specs": ep3}
+    if "check_vma" in inspect.signature(shard_map).parameters:
+        sm_kwargs["check_vma"] = False
+    elif "check_rep" in inspect.signature(shard_map).parameters:
+        sm_kwargs["check_rep"] = False
+    expert_out = shard_map(_local, **sm_kwargs)(recv, recv_w, wg, wu, wd)
+    return tree_checkpoint_name(expert_out, _CHECKPOINT_DISPATCH_OUTPUT)
+
+
 def _moe_mlp_nccl_ep(
     x_flat: Float[Array, "T D"],
     selected_experts: jax.Array,
@@ -732,6 +853,14 @@ def _moe_mlp_nccl_ep(
     cw = reshard(combine_weights.reshape(num_procs, T_local, K), ep3)
 
     recv, recv_w, handle_mem, transport = te_ep.ep_dispatch(cfg, idx, tokens, cw, recv_cap)
+    # Tag *every* dispatch output, not just the tokens: under a save_only_these_names remat
+    # policy this is what stops the backward from re-running ep_dispatch. handle_mem and
+    # transport must be saved too — leaving them untagged makes the recompute re-issue the
+    # collective just to rebuild them, and HybridEP's dispatch/combine is a paired protocol
+    # over persistent shared buffers, so a second dispatch against the same handle corrupts it.
+    recv, recv_w, handle_mem, transport = tree_checkpoint_name(
+        (recv, recv_w, handle_mem, transport), _CHECKPOINT_DISPATCH_INPUT
+    )
     recv = reshard(recv, ep3)  # [num_procs, recv_pr, D]
     recv_w = reshard(recv_w, ep2)
 
@@ -741,19 +870,25 @@ def _moe_mlp_nccl_ep(
     wu = reshard(w_up.reshape(ep_size, NLE, D, moe_dim), kernel_spec)
     wd = reshard(w_down.reshape(ep_size, NLE, moe_dim, D), kernel_spec)
 
-    # Dense per-expert GLU over padded capacity slots (recv is grouped by local expert).
-    # Split the compound (dp,ep) rank axis: dp = (replica_dcn, data), ep = expert, so the
-    # einsum batch axis (ep) shares the expert-only sharding of the ep-sharded weights.
-    grouped_spec = P(("replica_dcn", "data"), "expert", None, None, None)
-    # Splitting the sharded rank axis into (dp, ep) *and* the slot axis into (NLE, slots) at once is
-    # ambiguous on an Explicit mesh; pin the output sharding so XLA keeps ep on the expert axis.
-    grouped = jax.lax.reshape(recv, (dp_size, ep_size, NLE, slots, D), out_sharding=grouped_spec)
-    gate = jnp.einsum("p e n s d, e n d i -> p e n s i", grouped, wg.astype(grouped.dtype))
-    up = jnp.einsum("p e n s d, e n d i -> p e n s i", grouped, wu.astype(grouped.dtype))
-    hidden = reshard(jax.nn.silu(gate) * up, grouped_spec)
-    out = jnp.einsum("p e n s i, e n i d -> p e n s d", hidden, wd.astype(hidden.dtype))
-    # Inverse merge (dp,ep)->rank and (NLE,slots)->recv_pr; pin the compound (dp,ep) sharding.
-    expert_out = jax.lax.reshape(out, (num_procs, recv_pr, D), out_sharding=ep3)
+    if _NCCL_EP_RAGGED:
+        # Ragged per-expert GLU over ACTUAL tokens (packed by count), not padded capacity.
+        expert_out = _ragged_expert_glu(recv, recv_w, wg, wu, wd, mesh=mesh, nle=NLE, slots=slots, use_quack=_NCCL_EP_QUACK)
+    else:
+        # Dense per-expert GLU over padded capacity slots (recv is grouped by local expert).
+        # Split the compound (dp,ep) rank axis: dp = (replica_dcn, data), ep = expert, so the
+        # einsum batch axis (ep) shares the expert-only sharding of the ep-sharded weights.
+        grouped_spec = P(("replica_dcn", "data"), "expert", None, None, None)
+        # Splitting the sharded rank axis into (dp, ep) *and* the slot axis into (NLE, slots) at once
+        # is ambiguous on an Explicit mesh; pin the output sharding so XLA keeps ep on the expert axis.
+        grouped = jax.lax.reshape(recv, (dp_size, ep_size, NLE, slots, D), out_sharding=grouped_spec)
+        gate = jnp.einsum("p e n s d, e n d i -> p e n s i", grouped, wg.astype(grouped.dtype))
+        up = jnp.einsum("p e n s d, e n d i -> p e n s i", grouped, wu.astype(grouped.dtype))
+        hidden = tree_checkpoint_name(reshard(jax.nn.silu(gate) * up, grouped_spec), _CHECKPOINT_EXPERT_HIDDEN)
+        out = jnp.einsum("p e n s i, e n i d -> p e n s d", hidden, wd.astype(hidden.dtype))
+        # Inverse merge (dp,ep)->rank and (NLE,slots)->recv_pr; pin the compound (dp,ep) sharding.
+        expert_out = tree_checkpoint_name(
+            jax.lax.reshape(out, (num_procs, recv_pr, D), out_sharding=ep3), _CHECKPOINT_DISPATCH_OUTPUT
+        )
 
     # ep_combine is an unweighted scatter-sum: fold the per-slot combine weight in
     # here and zero the padded slots (recv_w == 0) before the combine.
@@ -769,6 +904,7 @@ def _moe_mlp_nccl_ep(
         num_local_tokens=(num_procs, T_local),
         out_sharding=(_BATCH_AXES, None, None),
     )
+    combined = tree_checkpoint_name(combined, _CHECKPOINT_MOE_OUTPUT)
     return combined.reshape(T, D)
 
 
@@ -2181,6 +2317,22 @@ _BATCH_AXES = ("replica_dcn", "data", "expert")
 _PROFILE_TRACE_STEPS = 1  # steady steps to trace; 1 keeps trace.json.gz untruncated (~1 step = all kernels once)
 
 
+def _cuda_profiler():
+    """Return a cudaProfilerStart/Stop pair, or no-ops when cuda-python is unavailable.
+
+    Pairs with ``nsys profile --capture-range=cudaProfilerApi --capture-range-end=stop``
+    so the report holds only the steady steps rather than setup and JIT compilation.
+    """
+    try:
+        from cuda.bindings import runtime as cudart
+    except ImportError:
+        try:
+            from cuda import cudart  # older cuda-python layout
+        except ImportError:
+            return (lambda: None), (lambda: None)
+    return cudart.cudaProfilerStart, cudart.cudaProfilerStop
+
+
 def _parse():
     p = argparse.ArgumentParser()
     p.add_argument("--run-id", required=True)
@@ -2202,12 +2354,25 @@ def _parse():
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument("--expert-axis-size", type=int, default=1, help="EP degree; 1 = EP1 (pure FSDP)")
     p.add_argument(
+        "--replica-axis-size",
+        type=int,
+        default=1,
+        help="Replica/DDP degree (cross-rack data parallel). data axis (FSDP) = world/(replica*expert). "
+        "Set to #racks so one model copy shards within a rack (NVLink FSDP) and gradients all-reduce across racks (IB).",
+    )
+    p.add_argument(
         "--capacity-factor",
         type=float,
         default=1.25,
         help="NCCL_EP per-expert recv capacity as a multiple of expected balanced load.",
     )
     p.add_argument("--max-num-sms", type=int, default=0, help="NCCL_EP kernel SM budget (0=auto)")
+    p.add_argument(
+        "--expert-glu",
+        choices=["dense", "ragged", "quack"],
+        default="dense",
+        help="NCCL_EP expert GLU: 'dense' (einsum over padded capacity), 'ragged' (Triton grouped GEMM), or 'quack' (SM100 cutlass grouped GEMM).",
+    )
     p.add_argument(
         "--blocks",
         choices=["auto", "stacked", "unrolled"],
@@ -2222,6 +2387,12 @@ def _parse():
         help="gradient checkpointing: recompute_all (baseline), save_moe, or none (no recompute)",
     )
     p.add_argument("--profile", action="store_true", help="capture an xprof trace over a few steady steps")
+    p.add_argument(
+        "--cuda-profiler-range",
+        action="store_true",
+        help="cudaProfilerStart/Stop around the steady steps, to pair with "
+        "`nsys profile --capture-range=cudaProfilerApi` (keeps clone/pip/compile out of the report).",
+    )
     p.add_argument("--muon-ns-steps", type=int, default=5, help="MuonH Newton-Schulz iterations (baseline 5)")
     # Manual multi-controller (1 process per GPU) — required for NCCL_EP. Each rank runs this
     # script; jax.distributed coordinates and local_device_ids=[process_id] pins one GPU per rank.
@@ -2280,6 +2451,78 @@ def main():
     n_kv = a.num_kv_heads or nh
     if nh % n_kv != 0:
         raise ValueError(f"num_heads={nh} must be divisible by num_kv_heads={n_kv} for GQA")
+
+    mesh = compact_grug_mesh(expert_axis_size=a.expert_axis_size, replica_axis_size=a.replica_axis_size)
+
+    # NCCL_EP: bootstrap the EP communicator IMMEDIATELY after JAX init, BEFORE building the model.
+    # ncclCommInitRank fires at compile time of the first ep_dispatch; run here (right after the
+    # init barrier) all ranks reach it tightly synced. Deferred until after model construction,
+    # accumulated per-rank skew makes the compile-time init miss NCCL's hardcoded ~63s bootstrap
+    # connect window -> cross-node "connection refused". (Bisected 2026-07-16: every component works
+    # when the bootstrap is early; only a late bootstrap fails.)
+    nccl_ep = a.moe_implementation == "nccl_ep"
+    if nccl_ep:
+        import transformer_engine.jax.ep as te_ep
+        from transformer_engine.jax.ep import ep_bootstrap
+        from transformer_engine.jax.sharding import MeshResource, global_shard_guard
+
+        # TE's ep dispatch/combine call with_sharding_constraint to pin output shardings, which
+        # asserts (rather than reshards) on grug's Explicit-axis mesh. Route TE's wsc through
+        # jax.sharding.reshard so it establishes the sharding on the Explicit mesh instead.
+        _te_orig_wsc = te_ep.with_sharding_constraint
+
+        def _wsc_or_reshard(arr, sharding):
+            try:
+                return _te_orig_wsc(arr, sharding)
+            except AssertionError as exc:
+                if "Explicit" not in str(exc):
+                    raise
+                return reshard(arr, sharding)
+
+        te_ep.with_sharding_constraint = _wsc_or_reshard
+
+        global _NCCL_EP_MESH, _NCCL_EP_RECV_CAP, _NCCL_EP_RAGGED, _NCCL_EP_QUACK
+        _NCCL_EP_RAGGED = a.expert_glu in ("ragged", "quack")
+        _NCCL_EP_QUACK = a.expert_glu == "quack"
+        ep_size = mesh.shape["expert"]
+        dp_size = mesh.shape["replica_dcn"] * mesh.shape["data"]
+        num_procs = dp_size * ep_size
+        t_local = (a.batch_size * a.seq_len) // num_procs
+        nle = a.num_experts // ep_size
+        # Per-expert capacity = capacity_factor * expected tokens/expert, aligned to 16.
+        expected_per_expert = num_procs * t_local * a.num_experts_per_token / a.num_experts
+        slots_per_expert = max(16, math.ceil(a.capacity_factor * expected_per_expert / 16) * 16)
+        _NCCL_EP_MESH = mesh
+        _NCCL_EP_RECV_CAP = nle * slots_per_expert
+        # Store the MeshResource, not a guard instance: a global_shard_guard is single-use
+        # (its generator can be entered once), and it is needed for two separate `with` blocks
+        # (bootstrap here + the training loop below). Build a fresh guard at each entry.
+        ep_mesh_resource = MeshResource(dp_resource="data", ep_resource="expert")
+        print(
+            f"NCCL_EP dp={dp_size} ep={ep_size} num_procs={num_procs} T_local={t_local} "
+            f"NLE={nle} slots/expert={slots_per_expert} recv_cap={_NCCL_EP_RECV_CAP}",
+            flush=True,
+        )
+        # The EP-group rank must be this process's GLOBAL rank. Under multi-node iris the launcher
+        # supplies it via IRIS_MULTIGPU_PROCESS_INDEX (consumed by initialize_jax), not --process-id,
+        # so read jax.process_index() rather than a.process_id — otherwise every rank bootstraps as
+        # rank 0 and ncclCommInitRank cannot form the bootstrap ring (cross-node connect refused).
+        ep_rank = jax.process_index()
+        with set_mesh(mesh), global_shard_guard(ep_mesh_resource):
+            ep_bootstrap(
+                world_size=num_procs,
+                rank=ep_rank,
+                num_experts=a.num_experts,
+                max_tokens_per_rank=t_local,
+                recv_capacity_per_rank=_NCCL_EP_RECV_CAP,
+                hidden_dim=a.hidden_dim,
+                max_num_sms=a.max_num_sms,
+            )
+            _warmup_nccl_ep(
+                mesh, num_procs, t_local, a.hidden_dim, a.num_experts_per_token, a.num_experts, _NCCL_EP_RECV_CAP
+            )
+            print(f"NCCL_EP warmup dispatch OK rank={ep_rank}", flush=True)
+
     inter = a.hidden_dim // 2
     model = GrugModelConfig(
         vocab_size=128256,
@@ -2313,63 +2556,11 @@ def main():
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
     flops_per_example, flops_summary = _compute_flops(model_config=model)
     peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
-    mesh = compact_grug_mesh(expert_axis_size=a.expert_axis_size, replica_axis_size=1)
     metrics = []
     tps = a.batch_size * a.seq_len
 
-    # NCCL_EP: publish the concrete mesh + per-rank recv capacity for _moe_mlp_nccl_ep,
-    # and set up TE's MeshResource + one-time ep_bootstrap under the mesh guard.
-    nccl_ep = a.moe_implementation == "nccl_ep"
-    ep_guard: contextlib.AbstractContextManager = contextlib.nullcontext()
-    if nccl_ep:
-        import transformer_engine.jax.ep as te_ep
-        from transformer_engine.jax.ep import ep_bootstrap
-        from transformer_engine.jax.sharding import MeshResource, global_shard_guard
-
-        # TE's ep dispatch/combine call with_sharding_constraint to pin output shardings, which
-        # asserts (rather than reshards) on grug's Explicit-axis mesh. Route TE's wsc through
-        # jax.sharding.reshard so it establishes the sharding on the Explicit mesh instead.
-        _te_orig_wsc = te_ep.with_sharding_constraint
-
-        def _wsc_or_reshard(arr, sharding):
-            try:
-                return _te_orig_wsc(arr, sharding)
-            except AssertionError as exc:
-                if "Explicit" not in str(exc):
-                    raise
-                return reshard(arr, sharding)
-
-        te_ep.with_sharding_constraint = _wsc_or_reshard
-
-        global _NCCL_EP_MESH, _NCCL_EP_RECV_CAP
-        ep_size = mesh.shape["expert"]
-        dp_size = mesh.shape["replica_dcn"] * mesh.shape["data"]
-        num_procs = dp_size * ep_size
-        t_local = (a.batch_size * a.seq_len) // num_procs
-        nle = a.num_experts // ep_size
-        # Per-expert capacity = capacity_factor * expected tokens/expert, aligned to 16.
-        expected_per_expert = num_procs * t_local * a.num_experts_per_token / a.num_experts
-        slots_per_expert = max(16, math.ceil(a.capacity_factor * expected_per_expert / 16) * 16)
-        _NCCL_EP_MESH = mesh
-        _NCCL_EP_RECV_CAP = nle * slots_per_expert
-        ep_guard = global_shard_guard(MeshResource(dp_resource="data", ep_resource="expert"))
-        print(
-            f"NCCL_EP dp={dp_size} ep={ep_size} num_procs={num_procs} T_local={t_local} "
-            f"NLE={nle} slots/expert={slots_per_expert} recv_cap={_NCCL_EP_RECV_CAP}",
-            flush=True,
-        )
-
-    with set_mesh(mesh), ep_guard:
-        if nccl_ep:
-            ep_bootstrap(
-                world_size=num_procs,
-                rank=a.process_id,
-                num_experts=a.num_experts,
-                max_tokens_per_rank=t_local,
-                recv_capacity_per_rank=_NCCL_EP_RECV_CAP,
-                hidden_dim=a.hidden_dim,
-                max_num_sms=a.max_num_sms,
-            )
+    train_guard = global_shard_guard(ep_mesh_resource) if nccl_ep else contextlib.nullcontext()
+    with set_mesh(mesh), train_guard:
 
         @jax.jit
         def init(rng):
@@ -2378,8 +2569,13 @@ def main():
         state = init(jax.random.PRNGKey(0))
         trace_stop = min(a.warmup_steps + _PROFILE_TRACE_STEPS, a.steps) - 1
         profiling = False
+        prof_start, prof_stop = _cuda_profiler()
+        cuda_profiling = False
         for step in range(a.steps):
             batch = _make_batch(a.batch_size, a.seq_len, model.vocab_size, step, mesh)
+            if a.cuda_profiler_range and step == a.warmup_steps:
+                prof_start()  # nsys --capture-range=cudaProfilerApi collects only from here
+                cuda_profiling = True
             if a.profile and step == a.warmup_steps:
                 jax.profiler.start_trace(str(out / "xprof"))
                 profiling = True
@@ -2392,6 +2588,9 @@ def main():
             if profiling and step == trace_stop:
                 jax.profiler.stop_trace()
                 profiling = False
+            if cuda_profiling and step == trace_stop:
+                prof_stop()
+                cuda_profiling = False
             s = int(state.step) - 1
             eps = a.batch_size / dur
             achieved = flops_per_example * eps

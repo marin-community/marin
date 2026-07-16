@@ -12,7 +12,6 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 """
 
 from collections.abc import Callable
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -24,7 +23,6 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
-    _CHECKPOINT_EXPERT_HIDDEN,
     _prepare_moe_dispatch,
     _zero_dropped_assignments,
 )

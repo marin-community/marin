@@ -4,7 +4,25 @@
 import jax
 import numpy as np
 from jax import P
-from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstract_mesh, get_mesh, reshard
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstract_mesh, get_mesh
+from jax.sharding import reshard as _jax_reshard
+
+
+def reshard(x: jax.Array, shardings: NamedSharding | PartitionSpec) -> jax.Array:
+    """``jax.sharding.reshard``, degrading to ``with_sharding_constraint`` on Auto/Manual meshes.
+
+    ``jax.sharding.reshard`` requires Explicit axis types. The NCCL_EP backend runs the grug
+    model on an Auto (GSPMD) mesh (TransformerEngine's ep dispatch/combine need reshard-style
+    sharding constraints), where ``reshard`` rejects Auto axis names. Fall back to a sharding
+    constraint there, which performs the equivalent reshard. Pure passthrough on Explicit meshes.
+    """
+    try:
+        return _jax_reshard(x, shardings)
+    except ValueError as e:
+        if "Auto or Manual" not in str(e):
+            raise
+        return jax.lax.with_sharding_constraint(x, shardings)
+
 
 # Convenience shorthand for batch sharding. Keep this aligned with Levanter's
 # default distributed batch mapping, which includes the cross-slice axis.

@@ -31,8 +31,9 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
-from levanter.data.text import BlockShuffleConfig
-from levanter.optim import GrugMuonConfig, OptimizerConfig
+from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.optim.config import OptimizerConfig
+from levanter.optim.grugmuon import GrugMuonConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
