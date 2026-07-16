@@ -97,6 +97,26 @@ def test_event_log_writes_once_per_verdict_and_dedups_message_drift():
     assert rows[0].count == 1
 
 
+def test_event_log_records_a_severity_upgrade_under_the_same_reason():
+    """A gated pod first seen before Kueue evaluates its Workload is Normal; once
+    Kueue declines the same Workload it flips to Warning while (source, reason)
+    stays (k8s/kueue, SchedulingGated). That actionable Warning must still record —
+    the dedup keys on severity too, so the admission denial is never suppressed."""
+    table = FakeStatsTable()
+    log = TaskEventLog(table)
+    key = ("/job/0", 0)
+
+    log.observe(key, _pod_event(gated_pod(), unevaluated_workload()))
+    log.observe(key, _pod_event(gated_pod(), unadmitted_workload()))
+
+    rows = [r for w in table.writes for r in w]
+    assert [(r.reason, r.source, r.type) for r in rows] == [
+        ("SchedulingGated", _EVENT_SOURCE_KUEUE, "Normal"),
+        ("SchedulingGated", _EVENT_SOURCE_KUEUE, "Warning"),
+    ]
+    assert "couldn't assign flavors" in rows[1].message
+
+
 def test_event_log_appends_a_row_when_the_verdict_changes():
     table = FakeStatsTable()
     log = TaskEventLog(table)

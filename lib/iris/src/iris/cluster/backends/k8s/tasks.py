@@ -1581,22 +1581,24 @@ class TaskEventLog:
     verdicts come from the pod/workload lists ``sync`` already fetches.
     ``observe`` is called once per tracked attempt per cycle with the attempt's
     current verdict (or ``None`` when the pod is running/quiet); a row is written
-    only when the ``(source, reason)`` verdict *changes*, so a pod wedged in one
-    state produces a single row, not one per poll. ``retain`` drops dedup state
-    for attempts no longer polled so a retried attempt (new ``attempt_id``)
-    starts clean and the map stays bounded.
+    only when the ``(source, reason, severity)`` verdict *changes*, so a pod
+    wedged in one state produces a single row, not one per poll — but a severity
+    upgrade (e.g. a gated pod Kueue later declines flips Normal→Warning under the
+    same source/reason) is a change and does record the actionable row. ``retain``
+    drops dedup state for attempts no longer polled so a retried attempt (new
+    ``attempt_id``) starts clean and the map stays bounded.
     """
 
     def __init__(self, task_event_table: Table):
         self._table = task_event_table
-        # (task_id_wire, attempt_id) -> last written (source, reason) verdict.
-        self._last_verdict: dict[tuple[str, int], tuple[str, str]] = {}
+        # (task_id_wire, attempt_id) -> last written (source, reason, severity) verdict.
+        self._last_verdict: dict[tuple[str, int], tuple[str, str, str]] = {}
 
     def observe(self, key: tuple[str, int], event: _PodEvent | None) -> None:
         """Record ``event`` for the attempt ``key`` if its verdict has changed."""
         if event is None:
             return
-        verdict = (event.source, event.reason)
+        verdict = (event.source, event.reason, event.severity)
         if self._last_verdict.get(key) == verdict:
             return
         self._last_verdict[key] = verdict
