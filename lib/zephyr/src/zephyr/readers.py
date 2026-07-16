@@ -170,7 +170,7 @@ def open_file(file_path: str, mode: str = "rb"):
     compression = None
     if file_path.endswith(".gz"):
         compression = "gzip"
-    elif file_path.endswith(".zst"):
+    elif file_path.endswith((".zst", ".zstd")):
         compression = "zstd"
     elif file_path.endswith(".xz"):
         compression = "xz"
