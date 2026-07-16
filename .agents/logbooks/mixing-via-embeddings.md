@@ -458,3 +458,20 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   (p≈0.08) — consistent with noise (corrected from an erroneous −0.62 SE read).
 - Corrected-claims register in memo (semantic value = qsplit240-only; kernel absorbs MOST of
   epoching; H3 replicates "not cost-effective" not "not needed").
+
+## 2026-07-16 CORRECTION: grug swarm budget was mis-derived; seed panel launched at true config
+
+- **The 840 swarm runs trained 100.16B tokens each** (47,759 steps × 512 × 4096, ~112h on
+  v4-8, verified from .executor_info + tracker_metrics.jsonl of 5 sampled run dirs), NOT the
+  2003×32×8192=525M the phase-2 Stage-B derived from the CURRENT launcher heuristic (the swarm
+  used Will's older heuristic: 64 experts, seq 4096, warmup 0.1 — current-branch heuristic does
+  not reproduce it). Phase boundary step 38,144 → fractions **0.7987/0.2013** (we used
+  0.767/0.233; phase-1 off ~16% rel). mixture_block 32,768. target_budget matched (10.37T).
+- Epoch-sensitive analyses being re-checked with corrected f (per-phase uniform rescale ×1.04 /
+  ×0.86; DSP absorbs most of it in fitted rho; hinge knots are not scale-invariant → re-run).
+- All 840 runs used seed 0 → seed panel genuinely missing data. **rav approved the faithful
+  panel**: 10 × 100.16B-token runs at exact verified config (~1,110 v4-8-hours), seeds 1000..1009,
+  anchor = launch_datakit_moe_mix's mixture-3, evals = post-hoc lm-eval logprob harness
+  (eval_logprob.py, vendored) over final checkpoints. Launch in progress.
+- Also corrected: "525M-token proxies" phrasing in prior entries/memo — these are 100B-token
+  runs; the scale-extrapolation caveat weakens accordingly (the swarm IS at substantial budget).
