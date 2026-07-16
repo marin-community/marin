@@ -54,6 +54,24 @@ The d5120/`sonic_cute` number was validated clean-room (fresh clone + fresh venv
 measured sequentially on one 8×B200 node with this script's methodology (steady-state
 median over steps 8–19).
 
+The same ladder on a **4×GB200** node (per-GPU load is 2× the 8-GPU runs; MFU below is
+still the script's B200-peak convention — multiply by 0.9 for GB200's 2.5 PFLOP/s peak;
+per-GPU absolute throughput is +11% over B200):
+
+| config (4×GB200) | `--moe-implementation` | EP | MFU (B200 conv.) | step |
+|---|---|---|---|---|
+| row-13 | `sonic_cute` | 1 | **17.0%** | 5.84 s |
+| row-13, EP | `ring` | 2 / 4 | 14.9 / 14.9% | 6.66 s |
+| row-13, EP | `ring_cute` | 2 / 4 | **16.8 / 16.3%** | 5.92 / 6.09 s |
+| row-13, EP | `ragged_all_to_all` (XLA defaults) | 4 | 1.9% | 52.8 s |
+| row-13, EP | `ragged_all_to_all` + NCCL-path flag | 4 | 14.4–14.5% | 6.9 s |
+| row-13, EP | `ragged_all_to_all_cute` + NCCL-path flag | 4 | **15.8%** | 6.28 s |
+
+"NCCL-path flag" = `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`
+(see the expert-parallelism notes below). EP arms use the script's default
+`--capacity-factor 1.0`; raising it costs ≈0.7pp per +0.25 (padding) and buys drop
+headroom.
+
 ## Requirements
 
 This benchmark needs the **grug-Blackwell levanter stack**. This branch is current
@@ -100,8 +118,9 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--run-id` | *required* | run label |
 | `--output-dir` | *required* | where `metrics_summary.json` is written |
 | `--hidden-dim` | 2560 | model width (2560 = row-13, 5120 = Will's variant) |
-| `--moe-implementation` | `sonic` | local: `sonic` (XLA ragged-dot), `sonic_cute` (QuACK SM100), `scatter`; expert-parallel: `ring`, `ring_cute` (ring dispatch + QuACK GEMMs), `ragged_all_to_all` |
+| `--moe-implementation` | `sonic` | local: `sonic` (XLA ragged-dot), `sonic_cute` (QuACK SM100), `scatter`; expert-parallel: `ring`, `ring_cute`, `ragged_all_to_all`, `ragged_all_to_all_cute` (`_cute` = QuACK GEMMs under the same dispatch) |
 | `--expert-parallelism` | 1 | expert mesh axis size; >1 requires an expert-parallel `--moe-implementation` |
+| `--capacity-factor` | 1.0 | EP per-shard capacity multiplier; 1.0 = exact average (drops on imbalance, zero padding) |
 | `--attention-implementation` | `gpu_fa4_cute` | FlashAttention-4 CuTeDSL backend |
 | `--num-gpus` | 8 | GPUs to shard across |
 | `--num-layers` | 26 | decoder layers |
@@ -148,22 +167,31 @@ routed-expert MLP dispatches tokens to the shards that own their experts.
 
 Two structural notes for reviewers:
 
-- The QuACK grouped GEMM (`sonic_cute`) is currently a **local-only** backend: with
-  `--expert-parallelism > 1` the model requires an expert-parallel backend (`ring` or
-  `ragged_all_to_all`), and those run their local grouped GEMMs through a Pallas-Triton
-  kernel instead (measured 397–859 TF/s at these shapes vs 1,470–1,560 TF/s for tuned
-  QuACK). That GEMM gap plus dispatch overhead accounts for most of the EP tax
-  (15.1% → ~13%).
-- **`ring` / `ring_cute` are the backends that work** (`ring_cute` adds the QuACK
-  GEMMs under ring's dispatch: +0.4pp over `ring` at EP8 same-node; the rest of the
-  EP tax is dispatch machinery, not GEMMs) (all-gather dispatch + psum-scatter combine over
-  NVLink). `ragged_all_to_all` is pathological on GPU *at XLA's defaults*: the default
+- The plain EP backends (`ring`, `ragged_all_to_all`) run their local grouped GEMMs
+  through a Pallas-Triton kernel (measured 397–859 TF/s at these shapes vs 1,470–1,560
+  TF/s for tuned QuACK). The `_cute` variants (`ring_cute`, `ragged_all_to_all_cute`)
+  close most of that gap by running `sonic_cute`'s QuACK expert MLP (fused-SwiGLU gated
+  GEMM + down GEMM, custom_vjp with QuACK dh/dx backward) under the same dispatch — the
+  seam is a plain `expert_mlp_fn(x_dispatch, group_sizes)` callable
+  (`_quack_expert_mlp_fn` in `lib/levanter/src/levanter/grug/_moe/ep_common.py`). The
+  remaining EP tax is dispatch machinery: all-gather / a2a legs, capacity `top_k`,
+  scatter-add, and (at `--capacity-factor` > 1) padding.
+- **`ring` / `ring_cute` are the best-measured backends on one NVLink domain**
+  (all-gather dispatch + psum-scatter combine; `_cute` adds the QuACK GEMMs under the
+  same dispatch via an `expert_mlp_fn` seam — +0.4pp at EP8/8×B200, +1.4pp at
+  EP4/4×GB200 where local GEMMs are bigger).
+- `ragged_all_to_all` is pathological *at XLA's defaults only*: the default
   single-host lowering of `jax.lax.ragged_all_to_all` is XLA's own one-shot peer-copy
   kernel (`stream_executor::gpu::RaggedAllToAllKernelImpl`, bracketed by multi-GPU
   barriers), and that one kernel is ~90% of device time in our profile (~297 ms/call,
-  104 calls/step at 26 layers) — a ~15× step-time regression, corroborated by
+  104 calls/step at 26 layers) — a ~15–28× step-time regression, corroborated by
   [openxla/xla#33386](https://github.com/openxla/xla/issues/33386) (~2% of NVLink
   bandwidth on this path). The same thunk has an NCCL send/recv path with true ragged
-  sizes behind `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`
-  (at the cost of a host sync + index all-to-all per call); we are measuring that
-  variant. The backend is included for completeness and as a reproducer.
+  sizes behind `--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`:
+  measured, it recovers a2a from 1.9% to 14.4%, and `ragged_all_to_all_cute` (QuACK
+  GEMMs under a2a) reaches 15.8% — still behind `ring_cute` single-node because the
+  NCCL path pays a host sync + index all-to-all per call, but the natural multi-node
+  vehicle (multi-host a2a always takes the NCCL path, and unlike ring it never
+  all-gathers unrouted tokens). The zero-copy variant flag
+  (`--xla_gpu_experimental_ragged_all_to_all_zero_copy`) is a measured no-op on the
+  pathological path.
