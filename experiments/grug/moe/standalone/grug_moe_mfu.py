@@ -266,6 +266,10 @@ class GrugModelConfig:
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    """Expert-parallel dispatch capacity multiplier (EP backends only). Per-shard
+    capacity = ceil(capacity_factor * assignments / ep_size); assignments beyond it
+    are dropped, so 1.0 trades token drops for zero padding headroom."""
     use_array_stacked_blocks: bool = False
     """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run them
     through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one scan body so
@@ -696,7 +700,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.capacity_factor,
             ),
             cfg=cfg,
         )
@@ -2057,6 +2061,15 @@ def _parse():
             "on GPU; see README)."
         ),
     )
+    p.add_argument(
+        "--capacity-factor",
+        type=float,
+        default=_DEFAULT_EP_CAPACITY_FACTOR,
+        help=(
+            "EP dispatch capacity multiplier (per-shard capacity = ceil(cf * assignments / ep_size)); "
+            "overflow assignments are dropped. Default 1.0 = zero padding headroom, drops on any imbalance."
+        ),
+    )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     return p.parse_args()
 
@@ -2097,6 +2110,7 @@ def main():
         qk_mult=1.3,
         attention_implementation=a.attention_implementation,
         moe_implementation=a.moe_implementation,
+        capacity_factor=a.capacity_factor,
         use_array_stacked_blocks=True,
         disable_pko=True,
         remat_mode="recompute_all",
