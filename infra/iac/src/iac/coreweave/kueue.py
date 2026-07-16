@@ -5,9 +5,9 @@
 
 Reproduces what `lib/iris/scripts/install_kueue.py --with-queues` installs, so an already-
 installed cluster adopts with no change: the `cks-kueue` Helm release (webhooks scoped to the
-Iris namespace), the `infiniband` + `multinode-nvlink-ib` Topology CRs, the `cw-ib`
-ResourceFlavor, the ClusterQueue, the `iris-system` PriorityClass, and the out-of-band pin of
-the kueue-controller-manager to that PriorityClass. Manifest shapes come from the shared
+Iris namespace), the `infiniband` + `multinode-nvlink-ib` Topology CRs, the `cw-ib` and
+`cw-cpu` ResourceFlavors, the ClusterQueue, the `iris-system` PriorityClass, and the out-of-band
+pin of the kueue-controller-manager to that PriorityClass. Manifest shapes come from the shared
 `iris.cluster.platforms.k8s.kueue_manifests` builders, so IaC and the script render identically.
 """
 
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_kubernetes as k8s
 from iris.cluster.platforms.k8s.kueue_manifests import (
+    CPU_RESOURCE_FLAVOR_NAME,
     CW_REPO_URL,
     OPERATOR_NS,
     RELEASE_DEFAULT,
@@ -23,6 +24,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     TOPOLOGIES,
     build_cks_values,
     build_cluster_queue,
+    build_cpu_resource_flavor,
     build_resource_flavor,
     build_topology_cr,
 )
@@ -117,6 +119,17 @@ class KueueAddon(pulumi.ComponentResource):
             opts=child_opts(RESOURCE_FLAVOR_NAME, depends_on=[release, *topologies]),
         )
 
+        # The selector-less cw-cpu flavor CPU-only pods match (they route through Kueue too).
+        cpu_flavor_manifest = build_cpu_resource_flavor()
+        cpu_resource_flavor = k8s.apiextensions.CustomResource(
+            "cpu-resource-flavor",
+            api_version=cpu_flavor_manifest["apiVersion"],
+            kind=cpu_flavor_manifest["kind"],
+            metadata=cpu_flavor_manifest["metadata"],
+            spec=cpu_flavor_manifest["spec"],
+            opts=child_opts(CPU_RESOURCE_FLAVOR_NAME, depends_on=[release]),
+        )
+
         queue_manifest = build_cluster_queue(args.cluster_queue)
         k8s.apiextensions.CustomResource(
             "cluster-queue",
@@ -124,7 +137,7 @@ class KueueAddon(pulumi.ComponentResource):
             kind=queue_manifest["kind"],
             metadata=queue_manifest["metadata"],
             spec=queue_manifest["spec"],
-            opts=child_opts(args.cluster_queue, depends_on=[release, resource_flavor]),
+            opts=child_opts(args.cluster_queue, depends_on=[release, resource_flavor, cpu_resource_flavor]),
         )
 
         # The iris-system PriorityClass and the manager's pin to it.
