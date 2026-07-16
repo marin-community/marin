@@ -46,11 +46,12 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.evals import eval_report, eval_steps, key_evals
 
-# Adopt a pre-existing checkpoint as a typed handle (no copy, no recompute).
+# Adopt a pre-existing checkpoint as a typed handle (no copy, no recompute). A relative source
+# resolves against the local bucket (MARIN_PREFIX, set by iris); pass an absolute gs:// path to pin.
 model = ArtifactStep.adopt(
     "perplexity-models/llama-200m",
     "2026.06.30",
-    "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+    "gcsfuse_mount/perplexity-models/llama-200m",
     kind=LevanterCheckpoint,
 )
 
@@ -113,14 +114,21 @@ Each individual result is an `EvalResult` with the same accessors: `LevanterEval
 
 ## 4. Run the repository example scripts
 
-The checked-in examples track real usage and are the safest starting points:
+The checked-in examples track real usage and are the safest starting points. They are
+deferred-version CLIs (see `marin.experiment.cli`): `--version` supplies the run-wide version, the
+plan prints without `--run`, and `--run` builds it.
 
 ```bash
-uv run python experiments/evals/run_key_evals.py
-uv run python experiments/evals/run_base_model_evals.py
+# print the plan (no build)
+uv run python -m experiments.evals.run_key_evals --version dev
+# build it; --limit caps examples per task for a fast cluster smoke
+uv run python -m experiments.evals.run_key_evals --version dev --run --limit 5
+uv run python -m experiments.evals.run_base_model_evals --version 2026.07.16 --run
 ```
 
-They adopt a checkpoint, build the suite, compile a report, and log results to W&B.
+They adopt a checkpoint, build the suite, compile a report, and log results to W&B. `--version dev`
+resolves the eval artifacts to a mutable version that rebuilds every run — pass a calendar version to
+pin a run.
 
 ## Parameter reference
 

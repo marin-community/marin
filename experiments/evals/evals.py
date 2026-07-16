@@ -34,6 +34,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
 from marin.execution.artifact import Artifact, result_type_name
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.inference.vllm_server import validate_vllm_mode_env
@@ -53,8 +54,8 @@ from experiments.evals.task_configs import (
 
 logger = logging.getLogger(__name__)
 
-# One CalVer for the eval-step recipe. Bump to re-evaluate every model under the new recipe.
-EVAL_VERSION = "2026.07.16"
+# Eval steps defer their version to the ambient BuildContext (see marin.experiment.cli): a driver
+# supplies it via --version, so nothing here hardcodes a calendar version.
 
 EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
 
@@ -106,6 +107,7 @@ def evaluate_lm_evaluation_harness(
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
     env_vars: dict[str, str] | None = None,
+    version: str | None = None,
 ) -> ArtifactStep[LmEvalHarnessResult]:
     """A vLLM lm-eval-harness eval of one task group -> :class:`LmEvalHarnessResult`.
 
@@ -119,8 +121,10 @@ def evaluate_lm_evaluation_harness(
         env_vars: Extra env vars for the child iris worker. Needed for vLLM-on-TPU bring-up (e.g.
             ``VLLM_ENABLE_V1_MULTIPROCESSING=0``) and code-eval tasks (``HF_ALLOW_CODE_EVAL=1``); the
             coordinator's ``os.environ`` does not propagate to iris-spawned children.
+        version: Explicit version, or None to defer to the ambient BuildContext.
     """
     deps = (model,)
+    name = f"evaluation/lm_evaluation_harness/{model_name}/{task_group_id}"
 
     def build_config(ctx: StepContext) -> EvaluationConfig:
         return EvaluationConfig(
@@ -138,8 +142,8 @@ def evaluate_lm_evaluation_harness(
         )
 
     return ArtifactStep(
-        name=f"evaluation/lm_evaluation_harness/{model_name}/{task_group_id}",
-        version=EVAL_VERSION,
+        name=name,
+        version=resolve_version(name, version),
         artifact_type=LmEvalHarnessResult,
         run=remote(
             evaluate,
@@ -161,14 +165,17 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
+    version: str | None = None,
 ) -> ArtifactStep[LevanterEvalResult]:
     """A Levanter lm-eval-harness eval of one task group -> :class:`LevanterEvalResult`.
 
     The Levanter evaluator writes a single top-level ``results.json``, so ``resolve(...).averages()``
-    reads the cross-task scores without touching the directory layout.
+    reads the cross-task scores without touching the directory layout. ``version`` is explicit, or
+    None to defer to the ambient BuildContext.
     """
     logger.info(f"Running levanter evals on the following tasks: {evals}")
     deps = (model,)
+    name = f"evaluation/lm_evaluation_harness_levanter/{model_name}/{task_group_id}"
 
     def build_config(ctx: StepContext) -> EvaluationConfig:
         return EvaluationConfig(
@@ -184,8 +191,8 @@ def evaluate_levanter_lm_evaluation_harness(
         )
 
     return ArtifactStep(
-        name=f"evaluation/lm_evaluation_harness_levanter/{model_name}/{task_group_id}",
-        version=EVAL_VERSION,
+        name=name,
+        version=resolve_version(name, version),
         artifact_type=LevanterEvalResult,
         run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
         build_config=build_config,
@@ -193,11 +200,14 @@ def evaluate_levanter_lm_evaluation_harness(
     )
 
 
-def eval_step(model: ArtifactStep[LevanterCheckpoint], group: EvalGroup) -> ArtifactStep[EvalResult]:
+def eval_step(
+    model: ArtifactStep[LevanterCheckpoint], group: EvalGroup, *, version: str | None = None
+) -> ArtifactStep[EvalResult]:
     """One eval group -> one typed ``EvalResult`` artifact, addressed by backend + model + group id.
 
-    The backend builders return their concrete result types; ``ArtifactStep`` is invariant in that
-    type, so the branch results are widened to the ``EvalResult`` base here.
+    ``version`` is explicit, or None to defer to the ambient BuildContext. The backend builders return
+    their concrete result types; ``ArtifactStep`` is invariant in that type, so the branch results are
+    widened to the ``EvalResult`` base here.
     """
     if group.backend == Backend.LEVANTER:
         levanter_step = evaluate_levanter_lm_evaluation_harness(
@@ -209,6 +219,7 @@ def eval_step(model: ArtifactStep[LevanterCheckpoint], group: EvalGroup) -> Arti
             max_eval_instances=group.max_eval_instances,
             apply_chat_template=group.apply_chat_template,
             discover_latest_checkpoint=group.discover_latest_checkpoint,
+            version=version,
         )
         return cast("ArtifactStep[EvalResult]", levanter_step)
     if group.backend == Backend.LM_EVAL:
@@ -223,29 +234,34 @@ def eval_step(model: ArtifactStep[LevanterCheckpoint], group: EvalGroup) -> Arti
             apply_chat_template=group.apply_chat_template,
             discover_latest_checkpoint=group.discover_latest_checkpoint,
             env_vars=group.env_vars,
+            version=version,
         )
         return cast("ArtifactStep[EvalResult]", lm_eval_step)
     raise ValueError(f"unknown eval backend {group.backend!r}")
 
 
-def eval_steps(model: ArtifactStep[LevanterCheckpoint], groups: Sequence[EvalGroup]) -> list[ArtifactStep[EvalResult]]:
+def eval_steps(
+    model: ArtifactStep[LevanterCheckpoint], groups: Sequence[EvalGroup], *, version: str | None = None
+) -> list[ArtifactStep[EvalResult]]:
     """Build one ``eval_step`` per group. A convenience over a list comprehension, not an abstraction."""
-    return [eval_step(model, group) for group in groups]
+    return [eval_step(model, group, version=version) for group in groups]
 
 
 def eval_report(
     results: Sequence[ArtifactStep[EvalResult]],
     *,
     name: str,
-    version: str = EVAL_VERSION,
+    version: str | None = None,
 ) -> ArtifactStep[EvalReport]:
     """Aggregate a suite's ``EvalResult`` artifacts into one :class:`EvalReport`.
 
     A CPU step depending on every result. It reads each result's metrics through the typed accessor
     (one code path across backends) and writes the merged per-task metrics + averages. ``name`` is the
-    report's identity segment (``evaluation/report/{name}``), e.g. ``f"{model.name}/key"``.
+    report's identity segment (``evaluation/report/{name}``), e.g. ``f"{model.name}/key"``. ``version``
+    is explicit, or None to defer to the ambient BuildContext.
     """
     deps = tuple(results)
+    step_name = f"evaluation/report/{name}"
 
     def build_config(ctx: StepContext) -> dict:
         return {
@@ -264,8 +280,8 @@ def eval_report(
         return compile_eval_report(config["entries"], config["out"])
 
     return ArtifactStep(
-        name=f"evaluation/report/{name}",
-        version=version,
+        name=step_name,
+        version=resolve_version(step_name, version),
         artifact_type=EvalReport,
         run=run,
         build_config=build_config,
@@ -284,8 +300,11 @@ def core_evals(resources: ResourceConfig | None = None) -> list[EvalGroup]:
     return [EvalGroup(tasks=CORE_TASKS, backend=Backend.LEVANTER, resources=resources, id="core")]
 
 
-def key_evals(resources: ResourceConfig | None = None) -> list[EvalGroup]:
-    """The key-evals bundle: generation tasks (lm-eval) + multiple-choice tasks (Levanter)."""
+def key_evals(resources: ResourceConfig | None = None, max_eval_instances: int | None = None) -> list[EvalGroup]:
+    """The key-evals bundle: generation tasks (lm-eval) + multiple-choice tasks (Levanter).
+
+    ``max_eval_instances`` caps examples per task — pass a small value for a fast cluster smoke.
+    """
     resources = resources or ResourceConfig.with_tpu("v6e-8")
     return [
         EvalGroup(
@@ -294,12 +313,14 @@ def key_evals(resources: ResourceConfig | None = None) -> list[EvalGroup]:
             resources=resources,
             id="key_generation",
             engine_kwargs=DEFAULT_LM_EVAL_MODEL_KWARGS,
+            max_eval_instances=max_eval_instances,
         ),
         EvalGroup(
             tasks=KEY_MULTIPLE_CHOICE_TASKS,
             backend=Backend.LEVANTER,
             resources=resources,
             id="key_multiple_choice",
+            max_eval_instances=max_eval_instances,
         ),
     ]
 
@@ -374,9 +395,13 @@ def evaluate_harbor(
     n_concurrent: int = 4,
     env: str = "local",
     agent_kwargs: dict | None = None,
+    artifact_version: str | None = None,
 ) -> ArtifactStep[Artifact]:
     """
     Evaluate on ANY Harbor dataset from the registry.
+
+    ``version`` is the Harbor dataset version (part of the artifact name); ``artifact_version`` is the
+    eval step's own version (explicit, or None to defer to the ambient BuildContext).
 
     No custom adapters needed! Harbor's registry handles all datasets generically.
 
@@ -443,9 +468,10 @@ def evaluate_harbor(
             generation_params=generation_params,
         )
 
+    harbor_name = f"evaluation/harbor/{model_name}-{dataset}-{version}"
     return ArtifactStep(
-        name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        version=EVAL_VERSION,
+        name=harbor_name,
+        version=resolve_version(harbor_name, artifact_version),
         artifact_type=Artifact,
         run=remote(
             evaluate,

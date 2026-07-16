@@ -83,13 +83,14 @@ class LmEvalHarnessResult(EvalResult):
 
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
-        fs = url_to_fs(self.path, use_listings_cache=False)[0]
-        result_files = sorted(fs.glob(prefix_join(self.path, "**/results_*.json")))
+        # StoragePath.glob reattaches the protocol to each match; a bare fs.glob result drops the
+        # gs:// prefix and would reopen as a local path.
+        result_files = sorted(StoragePath(prefix_join(self.path, "**/results_*.json")).glob(), key=str)
         if not result_files:
             raise FileNotFoundError(f"no lm-eval results_*.json under {self.path}")
         metrics: dict[str, dict[str, float]] = {}
         for result_file in result_files:
-            payload = json.loads(StoragePath(result_file).read_text())
+            payload = json.loads(result_file.read_text())
             for task, task_metrics in payload.get("results", {}).items():
                 metrics[task] = _numeric(task_metrics)
         return metrics
