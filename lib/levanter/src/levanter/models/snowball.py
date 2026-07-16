@@ -32,7 +32,7 @@ from jax import core, random
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 import haliax as hax
 from haliax import Axis, NamedArray
@@ -187,6 +187,12 @@ class SnowballConfig(HFCompatConfig):
     @property
     def model_type(self) -> Type["SnowballLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return SnowballLMHeadModel
+
+    @property
+    def requires_explicit_mesh_axes(self) -> bool:
+        # Snowball reshards every leaf and activation with jax.sharding.reshard(out_sharding=...)
+        # over raw Grug PartitionSpecs, which only lower under an AxisType.Explicit mesh.
+        return True
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "SnowballConfig":
@@ -484,7 +490,10 @@ class SnowballMoEMLP(eqx.Module):
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + self.router_bias
+        # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
+        # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
+        # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
+        biased_logits = router_logits + unshard(self.router_bias)
         # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
@@ -532,10 +541,23 @@ class SnowballBlock(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: Float[Array, "B S D"], mask: AttentionMask, disable_rope: bool = False
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask,
+        long_mask: AttentionMask,
+        use_long: Bool[Array, ""],
     ) -> Float[Array, "B S D"]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, disable_rope=disable_rope)
+        # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
+        # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
+        # sliding-window mask and keep RoPE. Both branches are the same shape.
+        attn_out = jax.lax.cond(
+            jnp.asarray(use_long, dtype=jnp.bool_),
+            lambda _: self.attn(attn_in, long_mask, disable_rope=True),
+            lambda _: self.attn(attn_in, short_mask, disable_rope=False),
+            operand=None,
+        )
+        x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out = self.mlp(mlp_in) + self.shared(mlp_in)
         return x + mlp_out
@@ -584,12 +606,20 @@ class SnowballTransformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=_bspec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
+        # Scan the layers instead of a Python loop so XLA plans HBM for ONE layer's MoE expert
+        # buffers at a time. Unrolling keeps every layer's buffers live simultaneously (temp scales
+        # linearly with depth), which OOMs the 67B on 8xH100. The stacked blocks + per-layer long
+        # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
         num_blocks = len(self.blocks)
-        for i, block in enumerate(self.blocks):
-            is_long = i % 4 == 3 or i == num_blocks - 1
-            layer_mask = long_mask if is_long else short_mask
-            # June recipe: long layers disable RoPE (NoPE); PKO is disabled everywhere.
-            hidden = block(hidden, layer_mask, is_long)
+        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
+        idx = jnp.arange(num_blocks)
+        long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
+
+        def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
+            layer, use_long = layer_and_flag
+            return layer(carry, short_mask, long_mask, use_long), None
+
+        hidden, _ = jax.lax.scan(_scan_layer, hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
 
 

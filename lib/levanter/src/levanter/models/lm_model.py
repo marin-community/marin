@@ -169,6 +169,18 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
         return Axis("position", self.max_seq_len)
 
     @property
+    def requires_explicit_mesh_axes(self) -> bool:
+        """Whether this model's forward/sharding needs an ``AxisType.Explicit`` device mesh.
+
+        Models that reshard with ``jax.sharding.reshard(..., out_sharding=)`` over named
+        ``PartitionSpec``s (e.g. Snowball/Grug) require explicit mesh axes. The default
+        haliax named-axis partitioning does not, so this is ``False`` for most models.
+        Consumers that build the mesh (e.g. the marin-serve Levanter backend) read this to
+        decide whether to set ``TrainerConfig.use_explicit_mesh_axes``.
+        """
+        return False
+
+    @property
     @abc.abstractmethod
     def Embed(self) -> Axis:
         pass
