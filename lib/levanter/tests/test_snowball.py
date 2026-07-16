@@ -52,6 +52,10 @@ def _tiny_config(**overrides) -> SnowballConfig:
         qk_mult=1.37,
         layer_norm_eps=1e-5,
         initializer_std=0.02,
+        # These are model-graph correctness tests at tiny seq lengths (8-10). Force the portable,
+        # numerically-exact reference kernel so they run identically on CPU/GPU/TPU; the platform
+        # default would pick TPU Splash, which requires the KV length to be a multiple of 128.
+        attention_implementation="reference",
     )
     base.update(overrides)
     return SnowballConfig(**base)
