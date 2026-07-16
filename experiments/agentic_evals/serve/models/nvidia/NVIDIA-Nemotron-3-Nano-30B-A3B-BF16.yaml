@@ -1,0 +1,15 @@
+max_model_len: 32768
+trust_remote_code: true
+tool_call_parser: qwen3_coder
+reasoning_parser: nano_v3
+model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+subsystems:
+  eval:
+    conda_env: otagent2-fix
+    tensor_parallel_size: 2
+    swap_space: 32
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --reasoning-parser-plugin ${DCFT}/eval/configs/nano_v3_reasoning_parser.py
+      --chat-template ${DCFT}/eval/configs/nemotron_chat_template.jinja --enable-prefix-caching
+      --override-generation-config {"temperature":0.6,"top_p":0.95}

@@ -1,0 +1,7 @@
+max_model_len: 32768
+model: R2E-Gym/R2EGym-32B-Agent
+subsystems:
+  eval:
+    tensor_parallel_size: 2
+    swap_space: 32
+    extra_args: --enable-prefix-caching

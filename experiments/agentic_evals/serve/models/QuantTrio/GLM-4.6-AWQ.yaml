@@ -1,0 +1,13 @@
+max_model_len: 32768
+trust_remote_code: true
+model: QuantTrio/GLM-4.6-AWQ
+subsystems:
+  eval:
+    conda_env: otagent2-fix
+    tensor_parallel_size: 4
+    swap_space: 8
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-expert-parallel --enable-prefix-caching --enable-chunked-prefill
+      --max-num-seqs 64 --max-num-batched-tokens 32768 --dtype bfloat16 --kv-cache-dtype
+      fp8

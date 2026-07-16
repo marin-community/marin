@@ -1,0 +1,7 @@
+trust_remote_code: true
+model: SWE-Lego/SWE-Lego-Qwen3-8B
+subsystems:
+  eval:
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-prefix-caching --override-generation-config {"temperature":0.0,"top_p":1.0,"top_k":-1}

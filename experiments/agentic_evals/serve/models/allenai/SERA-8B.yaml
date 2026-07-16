@@ -1,0 +1,11 @@
+max_model_len: 32768
+trust_remote_code: true
+tool_call_parser: hermes
+model: allenai/SERA-8B
+subsystems:
+  eval:
+    tensor_parallel_size: 1
+    swap_space: 32
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enforce-eager --disable-cascade-attn --seed 42

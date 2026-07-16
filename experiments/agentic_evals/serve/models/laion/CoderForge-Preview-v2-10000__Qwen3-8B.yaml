@@ -1,0 +1,6 @@
+tool_call_parser: hermes
+model: laion/CoderForge-Preview-v2-10000__Qwen3-8B
+subsystems:
+  eval:
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}

@@ -1,0 +1,10 @@
+agent_parser: xml
+auto_snapshot: true
+config_yaml: dcagent_eval_config_no_override.yaml
+datasets:
+- DCAgent/swebench-verified
+error_threshold: 20
+log_suffix: swebench_full
+n_concurrent: 32
+slurm_time: '48:00:00'
+vllm_max_retries: 10

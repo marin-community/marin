@@ -1,0 +1,6 @@
+datasets:
+- DCAgent/dev_set_71_tasks
+error_threshold: 10
+log_suffix: v1
+n_concurrent: 32
+vllm_max_retries: 10

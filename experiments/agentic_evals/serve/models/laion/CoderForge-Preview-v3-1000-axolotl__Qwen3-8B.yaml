@@ -1,0 +1,9 @@
+trust_remote_code: true
+tool_call_parser: hermes
+reasoning_parser: qwen3
+model: laion/CoderForge-Preview-v3-1000-axolotl__Qwen3-8B
+subsystems:
+  eval:
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-prefix-caching

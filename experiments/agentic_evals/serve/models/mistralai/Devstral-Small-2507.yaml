@@ -1,0 +1,9 @@
+max_model_len: 32768
+tool_call_parser: mistral
+model: mistralai/Devstral-Small-2507
+subsystems:
+  eval:
+    tensor_parallel_size: 2
+    swap_space: 32
+    extra_args: --tokenizer-mode mistral --config-format mistral --load-format mistral
+      --enable-prefix-caching

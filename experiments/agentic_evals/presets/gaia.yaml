@@ -1,0 +1,8 @@
+auto_snapshot: true
+config_yaml: dcagent_eval_config_no_override.yaml
+datasets:
+- DCAgent/gaia_127
+error_threshold: 10
+log_suffix: gaia
+n_concurrent: 32
+vllm_max_retries: 20

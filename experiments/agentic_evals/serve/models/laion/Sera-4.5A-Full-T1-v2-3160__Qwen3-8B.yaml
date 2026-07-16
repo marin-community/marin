@@ -1,0 +1,9 @@
+trust_remote_code: true
+tool_call_parser: hermes
+reasoning_parser: qwen3
+model: laion/Sera-4.5A-Full-T1-v2-3160__Qwen3-8B
+subsystems:
+  eval:
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-prefix-caching

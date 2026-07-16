@@ -1,0 +1,6 @@
+trust_remote_code: true
+tool_call_parser: hermes
+model: SWE-bench/SWE-agent-LM-7B
+subsystems:
+  eval:
+    extra_args: --enable-prefix-caching

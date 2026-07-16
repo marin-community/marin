@@ -1,0 +1,8 @@
+auto_snapshot: true
+config_yaml: dcagent_eval_config_no_override.yaml
+datasets:
+- DCAgent/dev_set_v2
+error_threshold: 10
+log_suffix: v2
+n_concurrent: 32
+vllm_max_retries: 10

@@ -1,0 +1,10 @@
+max_model_len: 32768
+trust_remote_code: true
+model: zai-org/GLM-4.7-Flash
+subsystems:
+  eval:
+    tensor_parallel_size: 2
+    swap_space: 32
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-prefix-caching

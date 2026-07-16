@@ -1,0 +1,55 @@
+patterns:
+- match: (?i)qwen3\.5
+  profiles:
+  - default
+  conda_env: otagent2-fix
+  trust_remote_code: true
+  max_model_len: 32768
+  # NOTE: no swap_space — this qwen3.5 profile is served on TPU (tpu-inference),
+  # whose api_server does NOT accept --swap-space (CPU KV offload is a GPU-only
+  # concept). Injecting it makes vLLM exit with "unrecognized arguments:
+  # --swap-space", breaking all marin TPU datagen serving. GPU-served models set
+  # swap_space in their own datagen yaml (datagen-config wins over the pattern).
+  extra_args: --enable-prefix-caching
+- match: (?i)(?:32b.*(131k|-lc)|(131k|-lc).*32b)
+  profiles:
+  - default
+  trust_remote_code: true
+  tensor_parallel_size: 2
+  max_model_len: 131072
+  swap_space: 32
+  hf_overrides: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}}'
+  extra_args: --enable-prefix-caching
+- match: (?i)3[02][Bb]
+  profiles:
+  - default
+  trust_remote_code: true
+  tensor_parallel_size: 4
+  max_model_len: 32768
+  swap_space: 32
+  extra_args: --enable-prefix-caching --enforce-eager
+- match: 131k|-lc$
+  profiles:
+  - default
+  trust_remote_code: true
+  max_model_len: 131072
+  swap_space: 32
+  hf_overrides: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}}'
+  extra_args: --enable-prefix-caching
+- match: (?i)32[Bb]
+  profiles:
+  - gh200
+  - gh200-65k
+  trust_remote_code: true
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  swap_space: 32
+  extra_args: --enable-prefix-caching
+- match: .*
+  profiles:
+  - gh200
+  - gh200-65k
+  trust_remote_code: true
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  extra_args: --enable-prefix-caching

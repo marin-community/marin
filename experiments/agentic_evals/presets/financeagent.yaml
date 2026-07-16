@@ -1,0 +1,9 @@
+agent_envs: SERPAPI_API_KEY,SEC_EDGAR_API_KEY,MODEL_FOR_TOOLS=openai/gpt-5.2,MODEL_API_KEY=OPENAI_API_KEY
+auto_snapshot: true
+config_yaml: dcagent_eval_config_no_override.yaml
+datasets:
+- DCAgent/financeagent_terminal
+error_threshold: 10
+log_suffix: finance
+n_concurrent: 16
+vllm_max_retries: 20

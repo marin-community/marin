@@ -1,0 +1,23 @@
+max_model_len: 32768
+trust_remote_code: true
+limit_mm_per_prompt: '{"image":0,"video":0}'
+model: Qwen/Qwen3.6-35B-A3B
+subsystems:
+  eval:
+    conda_env: eval-qwen35
+    tensor_parallel_size: 2
+    data_parallel_size: 2
+    swap_space: 32
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-prefix-caching
+    variants:
+      gh200:
+        tensor_parallel_size: 1
+        max_model_len: 32768
+        swap_space: 32
+        trust_remote_code: true
+        limit_mm_per_prompt: '{"image":0,"video":0}'
+        agent_kwargs:
+        - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+        extra_args: --enable-prefix-caching --max-num-seqs 512

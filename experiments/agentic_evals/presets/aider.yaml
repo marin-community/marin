@@ -1,0 +1,8 @@
+auto_snapshot: true
+config_yaml: dcagent_eval_config_no_override.yaml
+datasets:
+- DCAgent2/aider_polyglot
+error_threshold: 20
+log_suffix: aider
+n_concurrent: 32
+vllm_max_retries: 10

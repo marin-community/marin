@@ -1,0 +1,25 @@
+max_model_len: 32768
+trust_remote_code: true
+tool_call_parser: hermes
+reasoning_parser: qwen3
+model: Qwen/Qwen3-32B
+subsystems:
+  eval:
+    tensor_parallel_size: 2
+    swap_space: 32
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
+    extra_args: --enable-prefix-caching
+    variants:
+      gh200:
+        tensor_parallel_size: 1
+        max_model_len: 32768
+        swap_space: 32
+        trust_remote_code: true
+        extra_args: --enable-prefix-caching
+      gh200-65k:
+        tensor_parallel_size: 1
+        max_model_len: 32768
+        swap_space: 32
+        trust_remote_code: true
+        extra_args: --enable-prefix-caching

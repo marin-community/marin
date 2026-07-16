@@ -1,0 +1,9 @@
+agent_parser: xml
+auto_snapshot: true
+config_yaml: dcagent_eval_config_no_override.yaml
+datasets:
+- DCAgent2/swebench-verified-random-100-folders
+error_threshold: 20
+log_suffix: swebench
+n_concurrent: 32
+vllm_max_retries: 10

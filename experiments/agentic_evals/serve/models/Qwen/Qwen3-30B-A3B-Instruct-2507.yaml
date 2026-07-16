@@ -1,0 +1,8 @@
+max_model_len: 32768
+trust_remote_code: true
+model: Qwen/Qwen3-30B-A3B-Instruct-2507
+subsystems:
+  eval:
+    tensor_parallel_size: 2
+    swap_space: 32
+    extra_args: --enable-prefix-caching

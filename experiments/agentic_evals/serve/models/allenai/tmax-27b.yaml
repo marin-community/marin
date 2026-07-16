@@ -1,0 +1,11 @@
+max_model_len: 32768
+limit_mm_per_prompt: '{"image":0,"video":0}'
+model: allenai/tmax-27b
+subsystems:
+  eval:
+    conda_env: eval-qwen35
+    tensor_parallel_size: 2
+    data_parallel_size: 2
+    swap_space: 32
+    agent_kwargs:
+    - extra_body={"chat_template_kwargs":{"enable_thinking":true}}
