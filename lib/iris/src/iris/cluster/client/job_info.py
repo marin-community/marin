@@ -146,9 +146,11 @@ def load_marin_config() -> dict:
         return {}
     with open(MARIN_CONFIG_PATH) as f:
         try:
-            cfg = yaml.safe_load(f) or {}
+            cfg = yaml.safe_load(f)
         except yaml.YAMLError as exc:
             raise ValueError(f"Failed to parse {MARIN_CONFIG_PATH}: {exc}") from exc
+    if cfg is None:
+        return {}
     if not isinstance(cfg, dict):
         raise ValueError(f"{MARIN_CONFIG_PATH} must be a YAML mapping, got {type(cfg).__name__}")
     return cfg
@@ -178,12 +180,15 @@ def resolve_job_user(explicit_user: str | None = None) -> str:
     """Resolve the submitting user for a new top-level job.
 
     Resolution order: the explicit argument, the ``IRIS_USER`` env var, the
-    current job's user (when submitting from inside a job, e.g. a dev pod),
-    the ``user:`` key in ``.marin.yaml`` (cwd-relative, like the CLI's env
-    handling), the OS user, and finally ``root``. The env var outranks the
-    enclosing job so a deliberate per-shell identity survives shared dev
-    pods; the config file does not, so a ``.marin.yaml`` that rides along in
-    a job bundle cannot re-attribute submissions made from inside the job.
+    current job's user, the ``user:`` key in ``.marin.yaml`` (cwd-relative,
+    like the CLI's env handling), the OS user, and finally ``root``.
+
+    Submissions made from inside a job normally become child jobs named
+    under the parent — ``IrisClient.submit`` does not consult this resolver
+    there — so the current-job branch is a fallback for direct callers. The
+    deliberate ``IRIS_USER`` outranks that ambient identity; ``.marin.yaml``
+    ranks below it so a config file riding along in a job bundle cannot
+    re-attribute such calls.
     """
     if explicit_user is not None:
         return _validate_user(explicit_user, "Job user")

@@ -191,15 +191,19 @@ def local_iris_client():
         client.shutdown()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_marin_user_config(monkeypatch, tmp_path):
-    """Shield tests from the developer's IRIS_USER and cwd .marin.yaml.
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_marin_user_config(tmp_path_factory):
+    """Shield the suite from the developer's IRIS_USER and cwd .marin.yaml.
 
     resolve_job_user consults both when naming submitted jobs; without this,
     a developer's local user config changes job names across the whole suite.
+    Session-scoped so module-scoped fixtures that submit jobs are covered too.
     """
-    monkeypatch.delenv("IRIS_USER", raising=False)
-    monkeypatch.setattr(job_info, "MARIN_CONFIG_PATH", tmp_path / ".marin.yaml")
+    mp = pytest.MonkeyPatch()
+    mp.delenv("IRIS_USER", raising=False)
+    mp.setattr(job_info, "MARIN_CONFIG_PATH", tmp_path_factory.mktemp("marin-user-config") / ".marin.yaml")
+    yield
+    mp.undo()
 
 
 @pytest.fixture(autouse=True)

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from iris.cluster.client import job_info
 from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
 from iris.cluster.types import JobName
 
@@ -14,9 +15,15 @@ def _reset_job_info():
     set_job_info(None)
 
 
-# IRIS_USER and .marin.yaml isolation is suite-wide: the autouse
-# _isolate_marin_user_config fixture in tests/conftest.py points
-# MARIN_CONFIG_PATH at <tmp_path>/.marin.yaml, so tests below write there.
+@pytest.fixture(autouse=True)
+def _local_marin_yaml(monkeypatch, tmp_path):
+    """Point the resolver's .marin.yaml at this test's tmp_path.
+
+    Suite-wide isolation from the developer's real config lives in
+    tests/conftest.py (session-scoped); this re-points the path per test so
+    tests can write their own config files.
+    """
+    monkeypatch.setattr(job_info, "MARIN_CONFIG_PATH", tmp_path / ".marin.yaml")
 
 
 def test_job_info_user_derives_from_task_id():
@@ -54,7 +61,7 @@ def test_resolve_job_user_reads_and_strips_iris_user_env(monkeypatch):
 
 
 def test_resolve_job_user_iris_user_env_beats_current_job_info(monkeypatch):
-    """A deliberate per-shell identity survives shared dev pods (which are Iris jobs)."""
+    """The deliberate per-shell IRIS_USER outranks the ambient current-job identity."""
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/train/0")))
     monkeypatch.setenv("IRIS_USER", "mwittmann")
     assert resolve_job_user() == "mwittmann"
@@ -93,6 +100,7 @@ def test_resolve_job_user_rejects_invalid_iris_user_env(monkeypatch, value):
         "user: [not, a, string]\n",
         "user: team/alice\n",
         "user: [unclosed\n",  # YAML syntax error must surface as ValueError naming the file
+        "[]\n",  # falsey non-mapping document must not be treated as an empty config
     ],
 )
 def test_resolve_job_user_rejects_invalid_marin_yaml_user(tmp_path, content):
