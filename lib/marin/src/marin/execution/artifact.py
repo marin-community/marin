@@ -176,8 +176,8 @@ class ArtifactRecord(BaseModel):
 
 
 # The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable
-# revisions on the same day), shared by the lazy layer (``validate_version``) and
-# ``marin.publish``. Keep it here so callers agree on version identity without importing ``lazy``.
+# revisions on the same day). Kept here, beside ``validate_version``, so callers agree on version
+# identity without importing ``lazy``.
 CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 
 
@@ -186,24 +186,28 @@ def is_mutable_version(version: str) -> bool:
     return version == "dev" or version.endswith("-dev")
 
 
+def validate_path_segment(label: str, value: str) -> None:
+    """A ``name``/``version`` is a single path segment: non-empty, no URL scheme, no ``..``, no
+    leading/trailing slash. A malformed one is a caller bug, not a silent malformed path."""
+    if not value:
+        raise ValueError(f"{label} must be non-empty")
+    if "://" in value or urlparse(value).scheme:
+        raise ValueError(f"{label} {value!r} must not contain a URL scheme")
+    if ".." in value:
+        raise ValueError(f"{label} {value!r} must not contain '..'")
+    if value.startswith("/") or value.endswith("/"):
+        raise ValueError(f"{label} {value!r} must not start or end with '/'")
+
+
 def validate_version(version: str) -> None:
     """Validate an artifact version string, raising :class:`ValueError` if malformed.
 
-    A version is a path segment (non-empty, no URL scheme, no ``..``, no leading/trailing slash)
-    that is either a calendar version ``YYYY.MM.DD`` (optionally ``YYYY.MM.DD.N``) or a mutable
-    ``dev``/``<label>-dev``. ``v1``-style tags are rejected: an artifact's version is the author's
-    explicit statement of "when this recipe was frozen", not an opaque label. Shared by
-    ``lazy.ArtifactStep`` and the :class:`~marin.execution.build_context.VersionCodex`, so a
-    version drawn from the codex is validated the same way as a literal one.
+    A version is a path segment that is either a calendar version ``YYYY.MM.DD`` (optionally
+    ``YYYY.MM.DD.N``) or a mutable ``dev``/``<label>-dev``. ``v1``-style tags are rejected: an
+    artifact's version is the author's explicit statement of "when this recipe was frozen", not an
+    opaque label.
     """
-    if not version:
-        raise ValueError("version must be non-empty")
-    if "://" in version or urlparse(version).scheme:
-        raise ValueError(f"version {version!r} must not contain a URL scheme")
-    if ".." in version:
-        raise ValueError(f"version {version!r} must not contain '..'")
-    if version.startswith("/") or version.endswith("/"):
-        raise ValueError(f"version {version!r} must not start or end with '/'")
+    validate_path_segment("version", version)
     if is_mutable_version(version):
         return
     if not CALVER_RE.match(version):

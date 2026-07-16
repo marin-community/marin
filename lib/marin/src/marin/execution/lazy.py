@@ -34,7 +34,6 @@ import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar, cast
-from urllib.parse import urlparse
 
 from rigging.filesystem import marin_prefix, marin_region, prefix_join, url_to_fs
 from rigging.provenance import Provenance
@@ -49,6 +48,7 @@ from marin.execution.artifact import (
     FingerprintMismatchError,
     is_mutable_version,
     result_type_name,
+    validate_path_segment,
     validate_version,
     write_record,
 )
@@ -58,21 +58,6 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T", bound=Artifact)
-
-
-def _validate_segment(label: str, value: str) -> None:
-    """A ``name`` is a path segment: non-empty, no ``..``, no leading/trailing slash, no URL
-    scheme. A malformed one is a caller bug, not a silent malformed path. (A ``version`` is
-    checked by :func:`~marin.execution.artifact.validate_version`, which adds this on top of the
-    calendar/mutable grammar.)"""
-    if not value:
-        raise ValueError(f"{label} must be non-empty")
-    if "://" in value or urlparse(value).scheme:
-        raise ValueError(f"{label} {value!r} must not contain a URL scheme")
-    if ".." in value:
-        raise ValueError(f"{label} {value!r} must not contain '..'")
-    if value.startswith("/") or value.endswith("/"):
-        raise ValueError(f"{label} {value!r} must not start or end with '/'")
 
 
 @dataclass(frozen=True)
@@ -218,7 +203,7 @@ class ArtifactStep(Generic[T]):
     ``None`` to opt out."""
 
     def __post_init__(self) -> None:
-        _validate_segment("name", self.name)
+        validate_path_segment("name", self.name)
         validate_version(self.version)
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
