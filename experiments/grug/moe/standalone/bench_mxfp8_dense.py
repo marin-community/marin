@@ -23,6 +23,7 @@ Usage: python bench_mxfp8_dense.py [--tokens 65536] [--iters 50] [--out out.json
 
 import argparse
 import json
+import re
 import statistics
 import time
 
@@ -109,8 +110,16 @@ def main():
             fwd = jax.jit(dot)
             bwd = jax.jit(fwd_bwd(dot))
             if arm == "mxfp8":
-                hlo = fwd.lower(x, w).compile().as_text()
-                assert "block_scaled_dot" in hlo, "mxfp8 arm did not lower to __op$block_scaled_dot"
+                lowered = fwd.lower(x, w)
+                # The custom call must be present at lowering time; after XLA
+                # optimization it may be rewritten (e.g. into a cuDNN fusion),
+                # so log the compiled custom-call targets rather than assert.
+                assert "block_scaled_dot" in lowered.as_text(), "mxfp8 arm did not lower to __op$block_scaled_dot"
+                compiled = lowered.compile().as_text()
+                targets = sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled)))
+                fp8_ops = sorted(set(re.findall(r"\b(\S*(?:block_scaled|blockScaled|f8)\S*)\b", compiled)))[:8]
+                print(f"  [mxfp8] compiled custom calls: {targets}")
+                print(f"  [mxfp8] fp8-ish compiled symbols: {fp8_ops}")
             t_fwd = timed(fwd, (x, w), a.iters, a.warmup)
             t_bwd = timed(bwd, (x, w), a.iters, a.warmup)
             gx, gw = bwd(x, w)
