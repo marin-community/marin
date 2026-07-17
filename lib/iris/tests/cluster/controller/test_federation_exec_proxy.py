@@ -61,6 +61,7 @@ class _ProxyPeerConnection:
         self._service = service
         self.profile_calls = 0
         self.exec_calls = 0
+        self.status_calls = 0
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         return []
@@ -95,6 +96,11 @@ class _ProxyPeerConnection:
         self.exec_calls += 1
         with identity_scope(_PEER_IDENTITY):
             return self._service.exec_in_container(request, None)
+
+    def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
+        self.status_calls += 1
+        with identity_scope(_PEER_IDENTITY):
+            return self._service.get_process_status(request, None)
 
 
 def _make_service(
@@ -239,6 +245,30 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         (call,) = peer_service._controller.provider.exec_in_container.call_args_list
         assert call.args[0].task_id == job_id.task(0).to_wire()
         assert call.args[1].task_id == job_id.task(0).to_wire()
+
+
+def test_process_status_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
+        job_id = _handoff_and_mirror_running_task(parent_service, parent_state, peer_state, manager)
+
+        peer_service._controller.provider.get_process_status.return_value = job_pb2.GetProcessStatusResponse(
+            process_info=job_pb2.ProcessInfo(pid=1, thread_count=7)
+        )
+        resp = parent_service.get_process_status(
+            job_pb2.GetProcessStatusRequest(target=job_id.task(0).to_wire()),
+            None,
+        )
+
+        # The status could only have come from the peer's backend.
+        assert resp.process_info.thread_count == 7
+        # The federated task was never dispatched to the parent's local fallback backend.
+        parent_service._controller.provider.get_process_status.assert_not_called()
+        # The peer resolved the task under the same, cluster-invariant job id.
+        (call,) = peer_service._controller.provider.get_process_status.call_args_list
+        assert call.args[0].task_id == job_id.task(0).to_wire()
 
 
 def test_exec_forwards_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):

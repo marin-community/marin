@@ -39,7 +39,7 @@ from iris.cluster.controller.backend import (
     BackendCapability,
     BackendRuntime,
     DeviceCapacity,
-    ProviderUnsupportedError,
+    ProviderError,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
@@ -1892,6 +1892,121 @@ class _K8sProfileDispatch:
             logger.warning("SIGCONT sweep failed for pod %s: %s", self.pod_name, e)
 
 
+# Reads the task pod's PID-1 vitals from /proc in one exec, mirroring how profiling
+# reaches the pod (kubectl exec into the ``task`` container). Emits marker-delimited
+# raw file contents; parsing (including the two CPU samples) happens controller-side
+# in ``_parse_pod_proc_status``. The 0.5s gap between the two /proc/1/stat reads is the
+# CPU sampling interval; a container whose sleep rejects fractions just yields ~0 cpu.
+_POD_PROC_STATUS_SCRIPT = r"""
+echo "@@hostname"; cat /proc/sys/kernel/hostname 2>/dev/null
+echo "@@uptime1"; cat /proc/uptime 2>/dev/null
+echo "@@stat1"; cat /proc/1/stat 2>/dev/null
+sleep 0.5 2>/dev/null || sleep 1
+echo "@@uptime2"; cat /proc/uptime 2>/dev/null
+echo "@@stat2"; cat /proc/1/stat 2>/dev/null
+echo "@@statm"; cat /proc/1/statm 2>/dev/null
+echo "@@threads"; grep -i '^Threads:' /proc/1/status 2>/dev/null
+echo "@@fds"; ls /proc/1/fd 2>/dev/null | wc -l
+echo "@@memtotal"; grep -i '^MemTotal:' /proc/meminfo 2>/dev/null
+echo "@@nproc"; nproc 2>/dev/null
+echo "@@clktck"; getconf CLK_TCK 2>/dev/null
+echo "@@pagesize"; getconf PAGE_SIZE 2>/dev/null
+"""
+# kubectl-exec overhead plus the in-pod sampling sleep; a task-pod /proc read is quick.
+_POD_PROC_STATUS_TIMEOUT = 15
+
+
+def _proc_int(text: str, default: int = 0) -> int:
+    try:
+        return int(text.strip())
+    except (ValueError, AttributeError):
+        return default
+
+
+def _stat_fields_after_comm(raw: str) -> list[str]:
+    """Fields of ``/proc/PID/stat`` starting at ``state`` (field 3).
+
+    The ``comm`` field (2) is parenthesized and may itself contain spaces or
+    parens, so index from the last ``)`` rather than splitting the whole line.
+    Returned index ``i`` is stat field ``i + 3``.
+    """
+    rclose = raw.rfind(")")
+    return raw[rclose + 2 :].split() if rclose != -1 else []
+
+
+def _parse_pod_proc_status(output: str) -> job_pb2.ProcessInfo:
+    """Parse ``_POD_PROC_STATUS_SCRIPT`` output into a ``ProcessInfo`` for PID 1.
+
+    Reports the OS-level vitals of the pod's main process (the task command).
+    Daemon-specific fields the worker path fills from its own interpreter
+    (``python_version``, build ``provenance``) have no pod equivalent and are left
+    unset. ``cpu_millicores`` is the instantaneous rate across the two samples;
+    ``thread_count`` is the kernel task count, not a Python-level count.
+    """
+    sections: dict[str, str] = {}
+    key: str | None = None
+    buf: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("@@"):
+            if key is not None:
+                sections[key] = "\n".join(buf).strip()
+            key, buf = line[2:], []
+        else:
+            buf.append(line)
+    if key is not None:
+        sections[key] = "\n".join(buf).strip()
+
+    clk_tck = _proc_int(sections.get("clktck", ""), 100) or 100
+    page_size = _proc_int(sections.get("pagesize", ""), 4096) or 4096
+
+    def _uptime(section: str) -> float:
+        try:
+            return float(sections.get(section, "").split()[0])
+        except (ValueError, IndexError):
+            return 0.0
+
+    def _cpu_ticks(fields: list[str]) -> int:
+        # utime (field 14) + stime (field 15) => indices 11, 12 after comm.
+        return _proc_int(fields[11]) + _proc_int(fields[12]) if len(fields) >= 13 else 0
+
+    stat1 = _stat_fields_after_comm(sections.get("stat1", ""))
+    stat2 = _stat_fields_after_comm(sections.get("stat2", ""))
+    uptime1, uptime2 = _uptime("uptime1"), _uptime("uptime2")
+
+    interval = uptime2 - uptime1
+    cpu_millicores = 0
+    if interval > 0 and stat1 and stat2:
+        cpu_millicores = max(0, round((_cpu_ticks(stat2) - _cpu_ticks(stat1)) / clk_tck / interval * 1000))
+
+    uptime_ms = 0
+    if len(stat1) >= 20 and uptime1 > 0:
+        # starttime is field 22 => index 19 after comm.
+        uptime_ms = max(0, round((uptime1 - _proc_int(stat1[19]) / clk_tck) * 1000))
+
+    statm = sections.get("statm", "").split()
+    vms = _proc_int(statm[0]) * page_size if len(statm) >= 1 else 0
+    rss = _proc_int(statm[1]) * page_size if len(statm) >= 2 else 0
+
+    threads_line = sections.get("threads", "")
+    thread_count = _proc_int(threads_line.split(":")[-1]) if ":" in threads_line else 0
+
+    mem_parts = sections.get("memtotal", "").split()  # "MemTotal:  N kB"
+    mem_total = _proc_int(mem_parts[1]) * 1024 if len(mem_parts) >= 2 else 0
+
+    return job_pb2.ProcessInfo(
+        hostname=sections.get("hostname", ""),
+        pid=1,
+        uptime_ms=uptime_ms,
+        memory_rss_bytes=rss,
+        memory_vms_bytes=vms,
+        cpu_millicores=cpu_millicores,
+        thread_count=thread_count,
+        open_fd_count=_proc_int(sections.get("fds", "")),
+        memory_total_bytes=mem_total,
+        cpu_count=_proc_int(sections.get("nproc", "")),
+    )
+
+
 @dataclass
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
@@ -2261,7 +2376,20 @@ class K8sTaskProvider:
         target: TaskTarget,
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
-        raise ProviderUnsupportedError("K8s backend does not support per-process status")
+        """Report the task pod's PID-1 vitals, collected via ``kubectl exec``.
+
+        There is no worker daemon in the pod, so — like profiling — this reaches
+        the task container directly and reads ``/proc`` for the main process's
+        memory, cpu, thread, and fd counters. Logs are served separately via
+        FetchLogs, so ``log_entries`` stays empty.
+        """
+        pod_name = _pod_name(JobName.from_wire(target.task_id), target.attempt_id)
+        result = self.kubectl.exec(
+            pod_name, ["sh", "-c", _POD_PROC_STATUS_SCRIPT], container="task", timeout=_POD_PROC_STATUS_TIMEOUT
+        )
+        if result.returncode != 0:
+            raise ProviderError(f"process status exec in pod {pod_name} failed: {result.stderr.strip() or 'no output'}")
+        return job_pb2.GetProcessStatusResponse(process_info=_parse_pod_proc_status(result.stdout or ""))
 
     def close(self) -> None:
         if self._resource_collector is not None:

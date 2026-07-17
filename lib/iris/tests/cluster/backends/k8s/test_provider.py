@@ -27,7 +27,7 @@ from iris.cluster.backends.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.controller.backend import TaskTarget
+from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
@@ -526,6 +526,43 @@ def test_profile_threads_via_kubectl_exec(provider, k8s):
 
     assert not resp.error
     assert b"Thread 0x7f00" in resp.profile_data
+
+
+def test_get_process_status_reads_pod_proc_via_kubectl_exec(provider, k8s):
+    """get_process_status execs the /proc reader into the task pod and parses vitals."""
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    stdout = (
+        "@@hostname\ntask-0\n@@uptime1\n500.0 0\n"
+        "@@stat1\n1 (python) S 0 1 1 0 -1 0 0 0 0 0 100 50 0 0 20 0 5 0 1000 0\n"
+        "@@uptime2\n500.5 0\n"
+        "@@stat2\n1 (python) S 0 1 1 0 -1 0 0 0 0 0 100 50 0 0 20 0 5 0 1000 0\n"
+        "@@statm\n0 0\n@@threads\nThreads:\t5\n@@fds\n9\n"
+        "@@memtotal\nMemTotal: 0 kB\n@@nproc\n4\n@@clktck\n100\n@@pagesize\n4096\n"
+    )
+    k8s.set_exec_response(pod_name, _success_cp(stdout=stdout))
+
+    resp = provider.get_process_status(
+        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+        job_pb2.GetProcessStatusRequest(target="/job/0"),
+    )
+
+    assert resp.process_info.thread_count == 5
+    assert resp.process_info.open_fd_count == 9
+    assert resp.process_info.cpu_count == 4
+
+
+def test_get_process_status_raises_on_exec_failure(provider, k8s):
+    """A failed kubectl exec surfaces as ProviderError (mapped to UNAVAILABLE upstream)."""
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _failure_cp(stderr="container not running"))
+
+    with pytest.raises(ProviderError, match="process status exec"):
+        provider.get_process_status(
+            TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+            job_pb2.GetProcessStatusRequest(target="/job/0"),
+        )
 
 
 def test_profile_threads_with_locals(provider, k8s):
