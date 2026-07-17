@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from fray.types import ANY_REGION, ResourceConfig
+from fray.types import ResourceConfig
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalRun, run_lm_eval
 from marin.execution.lazy import Artifact, ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -20,7 +20,6 @@ _EVAL_PARENT_RESOURCES = ResourceConfig.with_cpu(
     cpu=0.5,
     ram="6g",
     disk="16g",
-    regions=[ANY_REGION],
     preemptible=False,
 )
 
