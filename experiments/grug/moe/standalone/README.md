@@ -103,6 +103,20 @@ d5120, `none` OOMs and `all_but_moe` gives **16.9%** (`ring_cute` EP8, vs 16.2%
 `all_but_moe`/`none`. All EP arms above use the default `recompute_all` unless
 stated.
 
+At the 64-GPU reference config (d5120, 48 layers, batch 1024, seq 4096;
+`--replica-axis-size 2` so each 32-GPU replica group holds one FSDP+EP model
+copy, 16 seq/GPU): `sonic_cute` EP1 20.2%, **`ring_cute` EP4 20.8%** (best),
+`ragged_all_to_all_cute` EP8 19.1%, `ragged_all_to_all` EP8 18.8%. EP's margin
+over EP1 compresses to +0.6pp — the larger per-GPU batch amortizes the FSDP
+weight all-gathers. `all_but_moe`/`none` OOM at this scale (439 GiB–1.6 TiB step
+temporaries); `recompute_all` is the only viable remat mode. Known bug: ring
+backends at EP≥8 with batch 1024 (and `ragged_all_to_all_cute` at EP16) fail at
+the first step with `Failed to load in-memory CUBIN … CUDA_ERROR_INVALID_VALUE`
+— for the ring family the boundary is the EP-group token all-gather (`x_global`
+in `ep_ring.py`) crossing 2³¹ elements. The allocator choice
+(`XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` vs default `bfc`) is an exact tie on
+this benchmark at the reference config.
+
 ## Requirements
 
 This benchmark needs the **grug-Blackwell levanter stack**. This branch is current
@@ -139,10 +153,13 @@ The script joins one JAX mesh across a multi-node gang automatically. Under an i
 gang job (`iris job run --replicas N`, one task per node), task 0 registers its
 `jax.distributed` coordinator address in the iris endpoint registry and the other
 tasks poll for it — no hand-rolled rendezvous. Pass `--num-gpus` = total GPUs across
-all nodes; the script fails fast on a mismatch. Sharding spans the whole fleet: FSDP
-(the `data` axis) covers all GPUs (there is no replica axis), and
-`--expert-parallelism` may exceed the per-node GPU count (e.g. EP16 on 8 nodes × 4
-GPUs). Only process 0 prints per-step metrics and writes `metrics_summary.json`.
+all nodes; the script fails fast on a mismatch. Sharding spans the whole fleet by
+default: FSDP (the `data` axis) covers all GPUs, and `--expert-parallelism` may
+exceed the per-node GPU count (e.g. EP16 on 8 nodes × 4 GPUs). For fleets larger
+than one model copy, `--replica-axis-size R` adds pure data parallelism outside
+the FSDP+EP copy (parameters replicated across `R` replica groups; e.g. 64 GPUs
+with `R=2` = two 32-GPU copies). Only process 0 prints per-step metrics and
+writes `metrics_summary.json`.
 
 Compilation dominates the first run (~10–15 min cold for d5120/`sonic_cute`). Set a
 persistent XLA cache to amortize it across runs:
@@ -162,6 +179,7 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--hidden-dim` | 2560 | model width (2560 = row-13, 5120 = Will's variant) |
 | `--moe-implementation` | `sonic` | local: `sonic` (XLA ragged-dot), `sonic_cute` (QuACK SM100), `scatter`; expert-parallel: `ring`, `ring_cute`, `ragged_all_to_all`, `ragged_all_to_all_cute` (`_cute` = QuACK GEMMs under the same dispatch) |
 | `--expert-parallelism` | 1 | expert mesh axis size; >1 requires an expert-parallel `--moe-implementation` |
+| `--replica-axis-size` | 1 | pure-DP replica groups outside the FSDP+EP model copy (`num_gpus / R` GPUs per copy) |
 | `--capacity-factor` | 1.0 | EP per-shard capacity multiplier; 1.0 = exact average (drops on imbalance, zero padding) |
 | `--attention-implementation` | `gpu_fa4_cute` | FlashAttention-4 CuTeDSL backend |
 | `--num-gpus` | 8 | total GPUs to shard across (all nodes; asserted against the joined mesh) |
