@@ -671,3 +671,58 @@ author: mcwitt
     group size %128 — real skewed routing violates this; our kernel has no
     such restriction.
 - Next action: awaiting MXFP8-004a (cudnn-frontend fused kernels).
+
+### 2026-07-16 - MXFP8-004a: cudnn-frontend fused kernels green — layer 1.39x vs full bf16, gate met
+
+- Hypothesis: MXFP8-H8 (vendored fused kernels reach layer-quad >=1.2x).
+- Commit Hash: aa998a01f (vendor + adapter) .. cf979bb4c (bench/baselines);
+  all pushed. Vendored from NVIDIA/cudnn-frontend @ 3041f3e88 (MIT) into
+  `experiments/grug/moe/standalone/mxfp8_fused/`: grouped_gemm_swiglu_quant,
+  grouped_gemm_dswiglu_quant, grouped_gemm_quant, wgrad + newer scheduler/
+  utils revisions, torch stripped, driven via cutlass_call.
+- Command: jobs `/mwittmann/mxfp8-004a-g1..g11` (g11 definitive full quad).
+- Pin bump NOT needed: a 6-site `atomicrmw_compat` shim runs upstream code on
+  stock 4.5.2 — and the arm64 cu13 wheel already has the 4.6-style signature
+  AT version 4.5.2 (wheel heterogeneity across arches at the same version!).
+- Correctness (3 configs): swiglu_quant h/h_col/sfh_row/sfh_col BIT-EXACT vs
+  our corrected reference (fastmath-silu concern did not materialize);
+  dswiglu_quant likewise bit-exact, dSwiGLU cross-validated vs jax.vjp; quant/
+  wgrad legs 6e-6..3.6e-5 rel-frob. Fused discrete col-SF layout is
+  byte-identical to our build_sf_wgrad layout — fused outputs feed wgrad with
+  zero glue.
+- Result (g11, M=262144, E=64, REAL gated shapes D2560/F1280 — w13 output is
+  2F=2560 wide, so numbers are NOT comparable to the earlier half-width
+  6.95 ms baseline):
+
+  | leg | ms | TF/s |
+  |---|---|---|
+  | fwd w13 SwiGLU+dual-quant | 1.500 | 2291 |
+  | fwd w2 (bf16 out) | 0.929 | 1849 |
+  | dgrad-w2 + dSwiGLU + dual-quant | 1.381 | 1244 |
+  | dgrad w13 (bf16 out) | 1.327 | 2589 |
+  | wgrad w13 / w2 | 1.427 / 0.784 | 2408 / 2191 |
+  | + remaining producers (x, g2 dual-quant, CuTe) | 1.429 | |
+  | **total** | **8.777** | |
+
+  Baselines (same node): bf16 6-GEMM 9.893 ms; full bf16 layer incl. XLA
+  SwiGLU/dSwiGLU 12.220 ms. **Speedups: 1.39x vs full bf16 layer / 1.13x vs
+  strict 6-GEMM / 1.35x gemm-only.** Gate >=1.2x MET on the honest full-layer
+  accounting (the fused pipeline subsumes the elementwise work bf16 pays
+  separately); 1.13-1.18x across nodes vs the GEMM-only yardstick.
+- Remaining costs, ranked: (1) the dswiglu leg (1244 TF/s — C-read +
+  dual-store epilogue), (2) the x/g2 dual-quant producers (1.43 ms — foldable
+  upstream into attention/dgrad epilogues), (3) best-tiler notes: swiglu/
+  dswiglu/gemm (256,256) c(2,1), wgrad (256,256) c(2,2) [2868/2452 TF/s].
+- New gotchas (durable): arm64 vs x86 cutlass-dsl wheels DIFFER at the same
+  4.5.2 version (smoke both); cutlass_call compile failures on the FFI thread
+  are process-fatal — probe risky kernels in a subprocess (002c quantizer
+  fails libNVVM on ~3/4 of nodes; the fused kernels compiled everywhere —
+  all-inline-PTX); same kernel measures ~25% faster after compile-idle than
+  in-sequence (report in-sequence); quant kernel needs d_col=d even with
+  generate_sfd=False.
+- Interpretation (`exploratory`): H8 CONFIRMED. MXFP8 grouped now delivers a
+  real layer-level win in the per-tensor class, with identified headroom
+  (dswiglu epilogue, upstream producer folding).
+- Next action: MXFP8-004c — wire `MxFp8RaggedDotOp` on the fused kernels
+  (256-padded routing) into the grug MoE op path; then MXFP8-005 full-step
+  MFU.
