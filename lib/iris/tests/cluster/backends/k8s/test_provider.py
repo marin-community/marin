@@ -22,8 +22,10 @@ from iris.cluster.backends.k8s.tasks import (
     _POD_NOT_FOUND_GRACE_CYCLES,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    PeriodicProfiler,
     ResourceCollector,
     _pod_name,
+    _ProfileTarget,
     _sanitize_label_value,
     _task_hash,
 )
@@ -31,13 +33,14 @@ from iris.cluster.controller.backend import TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
+from iris.cluster.runtime.profile import ProfileTrigger
 from iris.cluster.types import JobName
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 
-from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
+from .conftest import FakeStatsTable, make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -654,6 +657,125 @@ def test_profile_kubectl_exec_failure_returns_error(provider, k8s):
 
     assert resp.error
     assert "container not running" in resp.error
+
+
+# ---------------------------------------------------------------------------
+# Periodic thread-dump profiling (k8s has no worker daemon to run the GCE loop)
+# ---------------------------------------------------------------------------
+
+
+def _stopped_profiler(k8s, profile_table) -> PeriodicProfiler:
+    """A PeriodicProfiler with its background loop stopped, so tests can drive
+    collect_once() synchronously (the ResourceCollector unit-test pattern)."""
+    profiler = PeriodicProfiler(k8s, profile_table, poll_interval=60.0)
+    profiler.close()
+    return profiler
+
+
+def test_periodic_profiler_writes_thread_dump_rows(k8s):
+    """A tracked running pod is dumped and recorded as a periodic thread profile."""
+    profile_table = FakeStatsTable()
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x1 (active+gil)\n  train.py:99 all_to_all"))
+
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods({("/job/0", 0): _ProfileTarget("/job/0", 0, pod_name, "node-a")})
+    profiler.collect_once()
+
+    rows = [row for batch in profile_table.writes for row in batch]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.source == "/job/0"
+    assert row.attempt_id == 0
+    assert row.trigger == ProfileTrigger.PERIODIC.value
+    assert row.type == "thread"
+    assert row.vm_id == "k8s/node-a"
+    assert b"all_to_all" in row.profile_data
+
+
+def test_periodic_profiler_vm_id_falls_back_to_pod_name(k8s):
+    """An unscheduled pod (no nodeName) still gets a k8s/ vm_id from its pod name."""
+    profile_table = FakeStatsTable()
+    pod_name = _pod_name(JobName.from_wire("/job/0"), 0)
+    populate_pod(k8s, pod_name, "Running")
+    k8s.set_exec_response(pod_name, _success_cp(stdout="Thread 0x1\n  main.py:1"))
+
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods({("/job/0", 0): _ProfileTarget("/job/0", 0, pod_name, "")})
+    profiler.collect_once()
+
+    rows = [row for batch in profile_table.writes for row in batch]
+    assert rows[0].vm_id == f"k8s/{pod_name}"
+
+
+def test_periodic_profiler_skips_pods_whose_dump_fails(k8s):
+    """A pod whose py-spy dump fails is skipped, not written, and does not abort
+    the cycle for its siblings."""
+    profile_table = FakeStatsTable()
+    good_pod = _pod_name(JobName.from_wire("/job/0"), 0)
+    bad_pod = _pod_name(JobName.from_wire("/job/1"), 0)
+    populate_pod(k8s, good_pod, "Running")
+    populate_pod(k8s, bad_pod, "Running")
+    k8s.set_exec_response(good_pod, _success_cp(stdout="Thread 0x1\n  main.py:1"))
+    k8s.set_exec_response(bad_pod, _failure_cp(stderr="py-spy: No such process (os error 3)"))
+
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods(
+        {
+            ("/job/0", 0): _ProfileTarget("/job/0", 0, good_pod, "node-a"),
+            ("/job/1", 0): _ProfileTarget("/job/1", 0, bad_pod, "node-b"),
+        }
+    )
+    profiler.collect_once()
+
+    rows = [row for batch in profile_table.writes for row in batch]
+    assert {row.source for row in rows} == {"/job/0"}, "only the pod that dumped cleanly is recorded"
+
+
+def test_periodic_profiler_no_targets_writes_nothing(k8s):
+    """With no running pods declared, a cycle is a no-op."""
+    profile_table = FakeStatsTable()
+    profiler = _stopped_profiler(k8s, profile_table)
+    profiler.set_pods({})
+    profiler.collect_once()
+
+    assert profile_table.writes == []
+
+
+def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
+    """After reconcile registers the running set, the background profiler loop
+    dumps only the running pod (not the terminal one) into iris.profile."""
+    profile_table = FakeStatsTable()
+    provider = K8sTaskProvider(
+        kubectl=k8s,
+        namespace="iris",
+        default_image="myrepo/iris:latest",
+        cache_dir="/cache",
+        local_queue="iris-lq",
+        profile_table=profile_table,
+        profile_poll_interval=0.05,
+        cluster_scan_interval=0.0,
+    )
+    try:
+        running = RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)
+        terminal = RunningTaskEntry(task_id=JobName.from_wire("/job/done"), attempt_id=0)
+        running_pod = _pod_name(running.task_id, running.attempt_id)
+        terminal_pod = _pod_name(terminal.task_id, terminal.attempt_id)
+        populate_pod(k8s, running_pod, "Running")
+        populate_pod(k8s, terminal_pod, "Succeeded")
+        k8s.set_exec_response(running_pod, _success_cp(stdout="Thread 0x1\n  train.py:1"))
+
+        provider.sync(make_batch(running_tasks=[running, terminal]))
+        # The loop samples every registered pod each cycle, so once a row lands a
+        # full cycle has run — the terminal pod's absence is real, not a race.
+        wait_for_condition(lambda: bool(profile_table.writes), timeout=Duration.from_seconds(5.0))
+
+        rows = [row for batch in list(profile_table.writes) for row in batch]
+        assert {row.source for row in rows} == {"/job/run"}, "only the running pod should be dumped"
+        assert all(row.trigger == ProfileTrigger.PERIODIC.value for row in rows)
+    finally:
+        provider.close()
 
 
 # ---------------------------------------------------------------------------

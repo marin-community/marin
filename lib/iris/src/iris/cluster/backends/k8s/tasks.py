@@ -16,6 +16,7 @@ import shlex
 import threading
 import time
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -88,6 +89,8 @@ from iris.cluster.runtime.env import (
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
+    IrisProfile,
+    ProfileTrigger,
     build_profile_row,
     capture_cpu,
     capture_memory_attach,
@@ -1784,6 +1787,116 @@ class ResourceCollector:
         self._thread.join(timeout=5)
 
 
+# Periodic thread-dump cadence, 10 minutes to match the GCE/TPU worker cadence.
+DEFAULT_PROFILE_POLL_INTERVAL = 600.0
+# Cap on concurrent kubectl exec streams a single capture cycle opens, so a large
+# gang is dumped near-simultaneously without exhausting the controller's k8s
+# connection pool.
+DEFAULT_PROFILE_MAX_CONCURRENCY = 8
+
+
+@dataclass(frozen=True)
+class _ProfileTarget:
+    """Identity one periodic thread dump needs: the task/attempt the row is
+    attributed to, the pod to exec into, and the node for the ``k8s/<node>``
+    vm_id (falling back to the pod name when the pod is not yet scheduled)."""
+
+    task_id: str
+    attempt_id: int
+    pod_name: str
+    node_name: str
+
+
+class PeriodicProfiler:
+    """Dumps each running task pod's threads every ``poll_interval`` and appends
+    one ``trigger="periodic"`` ``iris.profile`` row per pod.
+
+    The reconcile loop declares the running-pod set via ``set_pods()``; captures
+    then run on a background thread, off the reconcile path, on a bounded pool so
+    a whole gang is dumped near-simultaneously. Thread dumps rather than CPU
+    samples: a hung process samples no CPU, but a thread dump shows where each
+    rank is blocked.
+    """
+
+    def __init__(
+        self,
+        kubectl: K8sService,
+        profile_table: Table,
+        *,
+        poll_interval: float = DEFAULT_PROFILE_POLL_INTERVAL,
+        max_concurrency: int = DEFAULT_PROFILE_MAX_CONCURRENCY,
+    ):
+        self._kubectl = kubectl
+        self._table = profile_table
+        self._poll_interval = poll_interval
+        self._max_concurrency = max(1, max_concurrency)
+        self._targets: dict[tuple[str, int], _ProfileTarget] = {}
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="periodic-profiler")
+        self._thread.start()
+
+    def set_pods(self, targets: dict[tuple[str, int], _ProfileTarget]) -> None:
+        """Declare the authoritative set of running pods to profile."""
+        with self._lock:
+            self._targets = dict(targets)
+
+    def _run(self) -> None:
+        # Wait one interval before the first pass so freshly-started pods have
+        # begun running (and py-spy is importable in the task venv) before the
+        # first attach; wait() returns True only when close() sets the event.
+        while not self._stop.wait(timeout=self._poll_interval):
+            self.collect_once()
+
+    def collect_once(self) -> None:
+        """Dump every tracked pod once and append one profile row per pod.
+
+        Runs each ``poll_interval`` on the background thread; also the unit of
+        collection tests drive directly.
+        """
+        with self._lock:
+            snapshot = list(self._targets.values())
+        if not snapshot:
+            return
+        workers = min(self._max_concurrency, len(snapshot))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="k8s-profile") as pool:
+            rows = [row for row in pool.map(self._capture, snapshot) if row is not None]
+        if not rows:
+            return
+        try:
+            self._table.write(rows)
+        except Exception:
+            logger.debug("PeriodicProfiler: write to iris.profile failed", exc_info=True)
+
+    def _capture(self, target: _ProfileTarget) -> IrisProfile | None:
+        """Dump one pod's threads; returns the row, or None on any failure.
+
+        A pod whose venv lacks py-spy, or that vanished between reconcile and
+        capture, fails here and is skipped rather than aborting the cycle.
+        """
+        dispatch = _K8sProfileDispatch(self._kubectl, target.pod_name)
+        try:
+            data = capture_threads(dispatch, pid="1")
+        except Exception as e:
+            logger.debug("PeriodicProfiler: thread dump failed for pod %s: %s", target.pod_name, e)
+            return None
+        if not data:
+            return None
+        return build_profile_row(
+            source=target.task_id,
+            attempt_id=target.attempt_id,
+            vm_id=f"k8s/{target.node_name or target.pod_name}",
+            duration_seconds=0,
+            profile_type=job_pb2.ProfileType(threads=job_pb2.ThreadsProfile(locals=False)),
+            profile_data=data,
+            trigger=ProfileTrigger.PERIODIC,
+        )
+
+    def close(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
 class TaskEventLog:
     """Appends scheduling/admission events to the ``iris.task_event`` namespace.
 
@@ -1956,6 +2069,10 @@ class K8sTaskProvider:
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
     # metrics list per tick covers every managed pod (see ResourceCollector).
     resource_poll_interval: float = 15.0
+    # Cadence at which PeriodicProfiler dumps each running pod's threads to
+    # iris.profile (trigger=periodic), so a silently hung collective is caught in
+    # the profile timeline even though nothing polls a k8s pod otherwise.
+    profile_poll_interval: float = DEFAULT_PROFILE_POLL_INTERVAL
     # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
     # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
     # but these LISTs run at most once per cluster_scan_interval to bound kubectl
@@ -1976,6 +2093,7 @@ class K8sTaskProvider:
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
+    _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _node_stats_collector: NodeStatsCollector | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
@@ -1995,6 +2113,17 @@ class K8sTaskProvider:
                 poll_interval=self.resource_poll_interval,
             )
         return self._resource_collector
+
+    def _ensure_periodic_profiler(self) -> PeriodicProfiler | None:
+        if self.profile_table is None:
+            return None
+        if self._periodic_profiler is None:
+            self._periodic_profiler = PeriodicProfiler(
+                self.kubectl,
+                self.profile_table,
+                poll_interval=self.profile_poll_interval,
+            )
+        return self._periodic_profiler
 
     def _ensure_node_stats_collector(self) -> NodeStatsCollector | None:
         if self.worker_stats_table is None:
@@ -2266,6 +2395,8 @@ class K8sTaskProvider:
     def close(self) -> None:
         if self._resource_collector is not None:
             self._resource_collector.close()
+        if self._periodic_profiler is not None:
+            self._periodic_profiler.close()
         if self._node_stats_collector is not None:
             self._node_stats_collector.close()
 
@@ -2665,6 +2796,8 @@ class K8sTaskProvider:
         if not running:
             if self._resource_collector is not None:
                 self._resource_collector.set_pods({})
+            if self._periodic_profiler is not None:
+                self._periodic_profiler.set_pods({})
             if self._task_event_log is not None:
                 self._task_event_log.retain(set())
             return []
@@ -2686,6 +2819,9 @@ class K8sTaskProvider:
         # appended directly to iris.task by the collector; the controller no
         # longer multiplexes them through TaskUpdate.
         resource_pods: dict[tuple[str, int], str] = {}
+        # Same running set, carrying the node name so the periodic profiler can
+        # stamp the k8s/<node> vm_id without a per-pod GET.
+        profile_targets: dict[tuple[str, int], _ProfileTarget] = {}
         event_log = self._ensure_task_event_log()
 
         for entry in running:
@@ -2730,6 +2866,12 @@ class K8sTaskProvider:
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
                 resource_pods[event_key] = pod_name
+                profile_targets[event_key] = _ProfileTarget(
+                    task_id=entry.task_id.to_wire(),
+                    attempt_id=entry.attempt_id,
+                    pod_name=pod_name,
+                    node_name=pod.get("spec", {}).get("nodeName", "") or "",
+                )
             if event_log is not None:
                 event_log.observe(event_key, _pod_event(pod, workload))
 
@@ -2738,6 +2880,9 @@ class K8sTaskProvider:
         resource_collector = self._ensure_resource_collector()
         if resource_collector is not None:
             resource_collector.set_pods(resource_pods)
+        periodic_profiler = self._ensure_periodic_profiler()
+        if periodic_profiler is not None:
+            periodic_profiler.set_pods(profile_targets)
         if event_log is not None:
             event_log.retain({(entry.task_id.to_wire(), entry.attempt_id) for entry in running})
 
