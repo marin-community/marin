@@ -40,6 +40,12 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_DATA          slimpajama (default) | datakit. slimpajama is the fast MFU/
+                        throughput dataset; datakit uses the two-phase datakit store
+                        mixture (marin_prefix-rooted, phase 1 at 80% of steps).
+    SCALE_OPTIMIZER     adam (default) | adamh | muonh. muonh runs Newton-Schulz on
+                        2D/3D/4D weight matrices; all use linear LR decay to 5% of
+                        peak with 1% warmup.
     RUN_ID              unique run identifier
 """
 
@@ -64,9 +70,11 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
+from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -103,18 +111,16 @@ _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, p
 
 
 def build_scale_model() -> GrugModelConfig:
-    """~90B-total / ~5B-active sparse MoE (overridable via SCALE_* env vars)."""
+    """Model config from the May-Recipe heuristic, with explicit architecture + backend overrides.
+
+    The heuristic (``MoeHeuristic.build_model_config``) sizes hidden/layers/heads/intermediate and
+    sets ``initializer_std = 0.5 / sqrt(hidden_dim)``. We override the routed-expert count and top-k
+    (the heuristic leaves the ``GrugModelConfig`` default 256/4) plus the runtime/backend knobs the
+    heuristic does not set (attention/MoE impl, scan, remat, head_dim, sliding window).
+    """
     hidden_dim = env_int("SCALE_HIDDEN_DIM", 3072)
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
-    num_heads = hidden_dim // HEAD_DIM
-    # ~4:1 grouped-query attention; back off to the nearest divisor of num_heads.
-    num_kv_heads = max(1, num_heads // 4)
-    while num_heads % num_kv_heads != 0:
-        num_kv_heads -= 1
-    intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
-    # Shared (always-on) expert width. Defaults to the full model dim (2x a routed expert).
-    shared_intermediate_dim = env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
@@ -125,19 +131,15 @@ def build_scale_model() -> GrugModelConfig:
     moe_implementation = resolve_moe_implementation(moe_impl_env) if moe_impl_env else None
     attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
     attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
-    return GrugModelConfig(
+    base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    return dataclasses.replace(
+        base,
         vocab_size=VOCAB_SIZE,
-        hidden_dim=hidden_dim,
-        num_layers=env_int("SCALE_NUM_LAYERS", 48),
-        num_heads=num_heads,
-        num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
-        intermediate_dim=intermediate_dim,
-        shared_expert_intermediate_dim=shared_intermediate_dim,
-        num_experts=env_int("SCALE_NUM_EXPERTS", 128),
+        num_layers=env_int("SCALE_NUM_LAYERS", 48),
+        num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
-        max_seq_len=seq_len,
-        sliding_window=seq_len,
+        shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
@@ -210,20 +212,42 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
 
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
 
-    # SCALE_OPTIMIZER selects the optimizer: "muonh" (Newton-Schulz on 2D/3D/4D weight matrices,
-    # incl. the 4D [L,E,D,I] expert stacks under scanned layers), "adamh", or the default Adam.
-    lr = float(os.environ.get("SCALE_LR") or SCALE_OPTIMIZER.learning_rate)
-    opt_name = os.environ.get("SCALE_OPTIMIZER", "adam").lower()
+    # LR from the May-Recipe heuristic: it scales the peak with (tokens x hidden_dim) and sets
+    # muonh_lr = 13/3 * adam_lr, linear decay to 5% of peak, 1% warmup. SCALE_OPTIMIZER picks the
+    # family ("muonh" uses the heuristic config directly; "adamh"/"adam" use its adam_lr). SCALE_LR
+    # overrides the peak. SCALE_MAX_LR caps the heuristic peak (heuristic default cap 0.05).
+    total_tokens = float(steps * batch_size * model.max_seq_len)
+    max_lr = float(os.environ.get("SCALE_MAX_LR", "0.05"))
+    heuristic = MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=max_lr).build_optimizer_config(
+        batch_size=batch_size, tokens=total_tokens, hidden_dim=model.hidden_dim, seq_len=model.max_seq_len
+    )
+    schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
+    lr_override = os.environ.get("SCALE_LR")
+    opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
     optimizer: OptimizerConfig
     if opt_name in ("muonh", "grug_moe_muonh"):
-        optimizer = GrugMoeMuonHConfig(learning_rate=lr, adam_lr=lr)
+        optimizer = (
+            dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
+            if lr_override
+            else heuristic
+        )
     elif opt_name in ("adamh", "grug_moe_adamh"):
-        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr)
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
     else:
-        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr)
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
+    print(
+        f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
+        f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "
+        f"peak override SCALE_LR={lr_override or 'none'}",
+        flush=True,
+    )
 
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
-    slim = slimpajama_6b_dataset()
+    # SCALE_DATA=datakit uses the two-phase datakit store mixture; default is SlimPajama.
+    use_datakit = os.environ.get("SCALE_DATA", "slimpajama").lower() == "datakit"
+    slim = None if use_datakit else slimpajama_6b_dataset()
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
@@ -237,9 +261,22 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
             )
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
+        if use_datakit:
+            # Two-phase datakit store mixture (phase 1 begins at 80% of steps). Bucket cache dirs
+            # are relative and rooted at marin_prefix() -> the local CoreWeave bucket, so there is
+            # no cross-region I/O and no hardcoded bucket names.
+            data = datakit_data_config(
+                total_steps=steps,
+                batch_size=batch_size,
+                max_seq_len=model.max_seq_len,
+                enable_simulated_epoching=False,
+                val_components={},
+            )
+        else:
+            data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
         return GrugMoeLaunchConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=data,
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
@@ -264,7 +301,7 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=(slim,),
+        deps=() if use_datakit else (slim,),
         runtime_args={"train_resources": resources},
     )
 
