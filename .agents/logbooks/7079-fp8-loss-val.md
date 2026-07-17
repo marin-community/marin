@@ -106,7 +106,34 @@ findings and pivots:
   interaction (e.g. state-donation defeated by callback references); the
   standalone bench harness on the merged tree would discriminate.
 
-**Final shape (round 6): 1 node/arm, EP8, batch 16**, 0.95 +
-`cuda_malloc_async`, 16 H100 total — halves activation scratch so both arms
-have headroom. ~65k tokens/step; ~1.9B tokens/arm in the ~7h budget, still
-above the 1.44B that resolved 0.01-level deltas in #6486.
+**Final shape (rounds 6-9): 1 node/arm, EP8, batch 16**, 16 H100 total —
+halves activation scratch so both arms have headroom. Three more hazards
+eliminated on the way:
+
+- `cuda_malloc_async` seemed implicated in an NCCL clique-acquire stall
+  (round 6) — but round 7/8 reproduced the stall *without* it on three
+  different nodes, exonerating both the allocator and the hardware.
+- The real trigger: **the 10-minute async time-checkpoint save deadlocks the
+  bf16 run against the training step's collectives** (every stall sits at the
+  first save; smoke9 stepped cleanly at 1.0 s/step until the save fired at
+  step ~9, then hung forever). fp8-smoke5's "step-10 OOM" also coincides with
+  the first save. fp8-smoke7 survived its save — the hazard is
+  timing-dependent. Mitigation for the throwaway validation runs:
+  `FP8VAL_CHECKPOINTS=local` (cw_scale's node-local mode, no periodic saves).
+- bf16 also stalls at NCCL comm-init with `XLA_PYTHON_CLIENT_MEM_FRACTION`
+  0.95 but is fine at 0.90 (prealloc starving NCCL buffers); fp8 needs 0.95
+  and runs fine there. Full runs use the per-arm proven fraction (numerics
+  unaffected by pool size).
+
+Measured B16 throughput: fp8 ~73.5k tok/s (0.89 s/step, smoke7 full 40
+steps); bf16 ~65k tok/s (1.0 s/step, smoke9 pre-save steps).
+
+### FP8VAL-003 — full A/B launched (2026-07-17 13:32 UTC)
+
+`/mwittmann/fp8val-bf16-full1` and `/mwittmann/fp8val-fp8-full1`, 24000 steps
+× B16 × seq 4096 = **1.57B tokens/arm** (≥ the 1.44B that resolved 0.01-level
+deltas in #6486), full MuonH schedule (warmup 2400 steps, cosine-free linear…
+schedule per `GrugMoeMuonHConfig` defaults, cooldown to 0), seed 0, identical
+data order. Expected: bf16 ~6.7h + compile, fp8 ~6h. Per-step `train/loss` in
+job logs via `fp8val.metrics` json_logger; trajectories to be harvested and
+attached to the issue at completion.
