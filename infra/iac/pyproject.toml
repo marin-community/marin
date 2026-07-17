@@ -12,6 +12,7 @@ dependencies = [
     "pulumi-kubernetes>=4.18,<5",
     "pulumi-gcp>=9,<10",
     "pulumi-docker-build>=0.0.8,<1",
+    "pulumi-cloudflare>=6,<7",
     "marin-iris",
     "marin-rigging",
 ]

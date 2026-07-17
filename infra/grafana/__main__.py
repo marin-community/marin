@@ -15,8 +15,13 @@ GCP/Docker providers live; `uv sync --all-packages` first. See README.md.
 import os
 
 import pulumi
+import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs
+
+# Cloud Run serves every custom domain from this fixed Google frontend; the mapping resource
+# routes the host to the service, and the DNS CNAME points the host at the frontend.
+CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 
 # Kept in lockstep with the bridge's config.py, which pins the same project for the finelog
 # VM lookup — deploying elsewhere while still reading hai-gcp-models would silently break.
@@ -51,6 +56,34 @@ def main() -> None:
     )
     pulumi.export("url", service.uri)
     pulumi.export("image", service.image_ref)
+
+    # Optional vanity domain. `custom_domain` is the host (grafana.oa.dev); `dns_zone_id`
+    # is its Cloudflare zone. Cloud Run terminates TLS and IAP itself, so the CNAME stays
+    # DNS-only (unproxied) — a Cloudflare proxy would break managed-cert issuance.
+    custom_domain = config.get("custom_domain")
+    if custom_domain:
+        dns_zone_id = config.require("dns_zone_id")
+        gcp.cloudrun.DomainMapping(
+            "grafana-domain",
+            name=custom_domain,
+            location=REGION,
+            metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
+            spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=SERVICE),
+            opts=pulumi.ResourceOptions(
+                provider=provider,
+                import_=f"locations/{REGION}/namespaces/{PROJECT}/domainmappings/{custom_domain}",
+            ),
+        )
+        cloudflare.DnsRecord(
+            "grafana-dns",
+            zone_id=dns_zone_id,
+            name=custom_domain,
+            type="CNAME",
+            content=CLOUD_RUN_FRONTEND,
+            ttl=1,  # 1 = automatic
+            proxied=False,
+        )
+        pulumi.export("custom_domain", f"https://{custom_domain}")
 
 
 main()
