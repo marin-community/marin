@@ -7,10 +7,10 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
-
 from rigging.filesystem import StoragePath
 
 PROMPT_BUCKET_MAX_TOKENS = (256, 1024, 4096, 16384, 32768)
@@ -79,7 +79,7 @@ def parse_representative_goldens(raw: bytes) -> tuple[RepresentativeGolden, ...]
         token_ids = [score.token_id for score in scores]
         if len(token_ids) != len(set(token_ids)):
             raise ValueError(f"Representative golden {case_id} has duplicate token IDs")
-        if any(left.logprob < right.logprob for left, right in zip(scores, scores[1:], strict=False)):
+        if any(left.logprob < right.logprob for left, right in pairwise(scores)):
             raise ValueError(f"Representative golden {case_id} scores are not sorted by descending logprob")
         cases.append(RepresentativeGolden(id=case_id, top_logprobs=scores))
 
@@ -124,8 +124,7 @@ def parse_prompt_fixture(
         if not prompt_token_ids:
             raise ValueError(f"Representative prompt {case_id} is empty")
         if any(
-            isinstance(token_id, bool) or not isinstance(token_id, int) or token_id < 0
-            for token_id in prompt_token_ids
+            isinstance(token_id, bool) or not isinstance(token_id, int) or token_id < 0 for token_id in prompt_token_ids
         ):
             raise ValueError(f"Representative prompt {case_id} has an invalid token ID")
         cases.append(

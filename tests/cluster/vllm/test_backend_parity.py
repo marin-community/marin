@@ -8,6 +8,7 @@ import pytest
 
 from tests.cluster.vllm.backend_parity import parity_from_logprob_map, parity_from_logprob_row
 from tests.cluster.vllm.representative_eval import TokenScore
+from tests.cluster.vllm.test_snowball_backend_parity import _vllm_job
 
 
 def test_backend_parity_distinguishes_exact_winner_and_distribution_contracts() -> None:
@@ -90,8 +91,6 @@ def test_backend_parity_rejects_missing_golden_tokens() -> None:
 
 
 def test_vllm_parity_job_enables_batch_invariant_execution() -> None:
-    from tests.cluster.vllm.test_snowball_backend_parity import _vllm_job
-
     request = _vllm_job((), "FLASH_ATTN")
 
     assert request.environment.env_vars["VLLM_BATCH_INVARIANT"] == "1"
