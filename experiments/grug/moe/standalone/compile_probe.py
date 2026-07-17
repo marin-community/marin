@@ -176,32 +176,41 @@ def _report_dump_buffers(top_n: int) -> None:
     if not cands:
         print(f"PROBE_DUMP: no buffer-assignment files under {dump_dir}")
         return
-    path = cands[0]
     bytes_per = {"f32": 4, "bf16": 2, "s32": 4, "u32": 4, "f8e4m3fn": 1, "f8e5m2": 1, "u8": 1, "s8": 1, "pred": 1}
-    byshape: collections.Counter = collections.Counter()
-    counts: collections.Counter = collections.Counter()
-    ops: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
-    with open(path) as f:
-        for line in f:
-            m = re.search(r"value: <\d+ ([\w.\-]+) @\d+>.*: *([a-z0-9]+)\[([\d,]*)\]", line)
-            if not m:
-                continue
-            op, dt, dims = m.groups()
-            elems = 1
-            for d in dims.split(","):
-                if d:
+    for path in cands[:2]:
+        byshape: collections.Counter = collections.Counter()
+        counts: collections.Counter = collections.Counter()
+        ops: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+        with open(path) as f:
+            for line in f:
+                m = re.search(r"([a-z0-9]+)\[([\d,]+)\]\{", line)
+                if not m:
+                    continue
+                dt, dims = m.groups()
+                elems = 1
+                for d in dims.split(","):
                     elems *= int(d)
-            size = elems * bytes_per.get(dt, 4)
-            if size < 256 * 2**20:
-                continue
-            shape = f"{dt}[{dims}]"
-            byshape[shape] += size
-            counts[shape] += 1
-            ops[shape][re.sub(r"[.\d]+$", "", op)] += 1
-    print(f"PROBE_DUMP file={os.path.basename(path)}")
-    for shape, s in byshape.most_common(top_n):
-        top_ops = ",".join(f"{o}x{c}" for o, c in ops[shape].most_common(3))
-        print(f"  {s / 2**30:9.2f} GiB  n={counts[shape]:5d}  {shape}  [{top_ops}]", flush=True)
+                size = elems * bytes_per.get(dt, 4)
+                if size < 256 * 2**20:
+                    continue
+                shape = f"{dt}[{dims}]"
+                mop = re.search(r"<\d+ ([\w.\-]+)[ @]", line)
+                op = re.sub(r"[.\d]+$", "", mop.group(1)) if mop else line.strip().split(" ")[0][:30]
+                byshape[shape] += size
+                counts[shape] += 1
+                ops[shape][op] += 1
+        print(f"PROBE_DUMP file={os.path.basename(path)} matched={sum(counts.values())}")
+        if not byshape:
+            with open(path) as f:
+                for i, line in enumerate(f):
+                    if i >= 5:
+                        break
+                    print(f"  RAW: {line.rstrip()[:200]}")
+            continue
+        for shape, s in byshape.most_common(top_n):
+            top_ops = ",".join(f"{o}x{c}" for o, c in ops[shape].most_common(3))
+            print(f"  {s / 2**30:9.2f} GiB  n={counts[shape]:5d}  {shape}  [{top_ops}]", flush=True)
+        break
 
 
 if __name__ == "__main__":
