@@ -135,3 +135,13 @@ def test_routes_are_reachable_under_a_fail_closed_auth_middleware():
     assert client.get("/metrics").status_code == 200
     assert client.get("/health").status_code == 200
     assert client.get("/").status_code == 200
+
+
+def test_status_survives_a_scrape_and_is_replaced_not_appended(client):
+    telltale.set_status("first")
+    telltale.set_status("second")
+
+    body = client.get("/").text
+
+    assert "second" in body
+    assert "first" not in body

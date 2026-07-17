@@ -65,6 +65,8 @@ class TelltaleTracker(Tracker):
     def log(self, metrics: typing.Mapping[str, Any], *, step: Optional[int], commit: Optional[bool] = None):
         if step is not None:
             self._step.set(step)
+            loss = metrics.get("train/loss")
+            telltale.set_status(f"step {step}" + (f", train/loss {loss}" if loss is not None else ""))
         self._mirror(metrics)
 
     def log_summary(self, metrics: dict[str, Any]):
