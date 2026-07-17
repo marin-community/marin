@@ -135,11 +135,12 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
 ///   DuckDB's late materialization reads zero blobs for a non-matching key. This
 ///   is the dominant cost in the dashboard's profile-history query.
 ///
-/// The compat UDFs (`prefix`/`regexp_matches`/`contains`) are registered so the
-/// corpus and FetchLogs resolve them, and the [`PrefixRangeRewrite`] analyzer
-/// rule rewrites starts-with predicates to expose a prunable key range to the
-/// planner (so both FetchLogs and the generic Query API prune row groups on the
-/// `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
+/// The scalar UDFs (`prefix`/`regexp_matches`/`contains` and the `json_*`
+/// extraction family — see [`crate::query::udf`]) are registered so the corpus,
+/// FetchLogs, and JSON-label queries resolve them, and the [`PrefixRangeRewrite`]
+/// analyzer rule rewrites starts-with predicates to expose a prunable key range
+/// to the planner (so both FetchLogs and the generic Query API prune row groups
+/// on the `[key, seq]`-sorted segments — see [`crate::query::optimizer`]).
 ///
 /// The context runs on a shared, memory-bounded `RuntimeEnv` (see
 /// [`shared_runtime_env`]) so a pathological query fails cleanly rather than
