@@ -133,13 +133,42 @@ def run_full(m: int, k: int):
         print(f"FAIL v5_full ({m}x{k}): {type(e).__name__}: {_fail_detail(e)}", flush=True)
 
 
+def print_env():
+    """Node/toolchain diagnostics: the same probe PASSes and FAILs across jobs
+    (g3 all-pass vs g4 v1-fail), so suspicion is node- or toolchain-resolution
+    dependence of the libNVVM the DSL invokes."""
+    import socket
+    import subprocess
+
+    print(f"hostname: {socket.gethostname()}", flush=True)
+    for cmd in (
+        ["nvidia-smi", "--query-gpu=driver_version,name", "--format=csv,noheader"],
+        ["sh", "-c", "ls -d /usr/local/cuda* 2>/dev/null"],
+        ["sh", "-c", "echo LD_LIBRARY_PATH=$LD_LIBRARY_PATH; echo CUDA_TOOLKIT_PATH=$CUDA_TOOLKIT_PATH"],
+        ["sh", "-c", "which ptxas; ptxas --version | tail -1"],
+    ):
+        try:
+            print(subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.strip(), flush=True)
+        except Exception as e:  # noqa: BLE001 - diagnostics only
+            print(f"(diag {cmd[0]} failed: {e})", flush=True)
+    try:
+        from cuda import pathfinder
+
+        for lib in ("nvvm",):
+            print(f"libnvvm: {pathfinder.load_nvidia_dynamic_lib(lib).abs_path}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"(pathfinder failed: {e})", flush=True)
+
+
 def main():
     ensure_blackwell_arch()
     print(f"device: {jax.devices()[0].device_kind}, cutlass {cutlass.__version__}", flush=True)
+    print_env()
     for level, name in ((1, "v1_cvt"), (2, "v2_shuffle"), (3, "v3_e8m0"), (4, "v4_scalebyte")):
         run_probe(level, name)
-    # Shape scan: g2 failed at (8192, 2560) while (512, 128) passes (job g3).
-    for m, k in ((512, 128), (512, 2560), (8192, 128), (2048, 2560), (8192, 1280), (8192, 2560), (262144, 2560)):
+    # Shape scan: g2 failed at (8192, 2560) while (512, 128) passed on g3's
+    # node; g4's node failed v1 at (512, 128) -- node dependence suspected.
+    for m, k in ((512, 128), (8192, 2560), (262144, 2560)):
         run_full(m, k)
 
 
