@@ -47,6 +47,7 @@ from levanter.grug._moe.source_push_plan import (
 
 
 KERNEL_NAME = "source_push_w2_return"
+W2_PIPELINE_STAGES = 2
 RETURN_COPY_KERNEL_NAME = "source_push_w2_return_copy"
 DIRECT_RETURN_KERNEL_NAME = "source_push_w2_return_direct"
 W2_RETURN_MODE_DESTINATION_LOCAL = "destination_local"
@@ -689,24 +690,23 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
                             route_ready_barrier,
                         )
 
-                        @pl.loop(0, k_tiles)
-                        def _k_loop(kk) -> None:
+                        def _copy_k_tile(kk, stage) -> None:
                             k_start = kk * config.block_k
                             mgpu.copy_gmem_to_smem(
                                 h_ref.at[
                                     pl.ds(row_start, config.block_m),
                                     pl.ds(k_start, config.block_k),
                                 ],
-                                gate_smem,
-                                ready_barrier,
+                                gate_smem.at[stage],
+                                ready_barrier.at[stage],
                             )
                             mgpu.copy_gmem_to_smem(
                                 h_ref.at[
                                     pl.ds(row_start, config.block_m),
                                     pl.ds(config.intermediate_dim + k_start, config.block_k),
                                 ],
-                                up_smem,
-                                ready_barrier,
+                                up_smem.at[stage],
+                                ready_barrier.at[stage],
                             )
                             mgpu.copy_gmem_to_smem(
                                 w_down_ref.at[
@@ -714,16 +714,31 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
                                     pl.ds(k_start, config.block_k),
                                     pl.ds(n_tile * config.block_n, config.block_n),
                                 ],
-                                w_down_smem,
-                                ready_barrier,
+                                w_down_smem.at[stage],
+                                ready_barrier.at[stage],
                             )
-                            mgpu.barrier_wait(ready_barrier)
-                            activation_smem[:, :] = (
-                                _silu(gate_smem[:, :].astype(jnp.float32)) * up_smem[:, :].astype(jnp.float32)
+
+                        _copy_k_tile(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32))
+
+                        @pl.loop(0, k_tiles)
+                        def _k_loop(kk) -> None:
+                            stage = kk % W2_PIPELINE_STAGES
+                            mgpu.barrier_wait(ready_barrier.at[stage])
+                            activation_stage = activation_smem.at[stage]
+                            activation_stage[:, :] = (
+                                _silu(gate_smem.at[stage][:, :].astype(jnp.float32))
+                                * up_smem.at[stage][:, :].astype(jnp.float32)
                             ).astype(activation_smem.dtype)
                             mgpu.commit_smem()
-                            mgpu.wgmma(acc_ref, activation_smem, w_down_smem)
-                            mgpu.wgmma_wait(0)
+                            mgpu.wgmma(acc_ref, activation_stage, w_down_smem.at[stage])
+
+                            @pl.when(kk + 1 < k_tiles)
+                            def _prefetch_next_k_tile() -> None:
+                                # The older wgmma group owns the stage about to be reused.
+                                mgpu.wgmma_wait(1)
+                                _copy_k_tile(kk + 1, (kk + 1) % W2_PIPELINE_STAGES)
+
+                        mgpu.wgmma_wait(0)
 
                         # Route scaling moves to the fp32 accumulator: the weight is per-row, so
                         # (diag(w) @ A) @ W2 == diag(w) @ (A @ W2), and the k-loop drops both the
@@ -743,12 +758,14 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
 
                     return pl.run_scoped(
                         smem_scope,
-                        gate_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
-                        up_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
+                        gate_smem=_wgmma_smem((W2_PIPELINE_STAGES, config.block_m, config.block_k), h_ref.dtype),
+                        up_smem=_wgmma_smem((W2_PIPELINE_STAGES, config.block_m, config.block_k), h_ref.dtype),
                         route_weight_smem=mgpu.SMEM((config.block_m,), dtype=h_route_weights_ref.dtype),
-                        activation_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
-                        w_down_smem=_wgmma_smem((config.block_k, config.block_n), w_down_ref.dtype),
-                        ready_barrier=mgpu.Barrier(num_arrivals=3),
+                        activation_smem=_wgmma_smem((W2_PIPELINE_STAGES, config.block_m, config.block_k), h_ref.dtype),
+                        w_down_smem=_wgmma_smem(
+                            (W2_PIPELINE_STAGES, config.block_k, config.block_n), w_down_ref.dtype
+                        ),
+                        ready_barrier=mgpu.Barrier(num_arrivals=3, num_barriers=W2_PIPELINE_STAGES),
                         route_ready_barrier=mgpu.Barrier(num_arrivals=1),
                     )
 
@@ -925,8 +942,7 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
                             weight_ready_barrier,
                         )
 
-                        @pl.loop(0, k_tiles)
-                        def _k_loop(kk) -> None:
+                        def _copy_k_tile(kk, stage) -> None:
                             k_start = kk * config.block_k
                             mgpu.copy_gmem_to_smem(
                                 h_ref.at[
@@ -934,8 +950,8 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
                                     pl.ds(row_start, config.block_m),
                                     pl.ds(k_start, config.block_k),
                                 ],
-                                gate_smem,
-                                tile_ready_barrier,
+                                gate_smem.at[stage],
+                                tile_ready_barrier.at[stage],
                             )
                             mgpu.copy_gmem_to_smem(
                                 h_ref.at[
@@ -943,8 +959,8 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
                                     pl.ds(row_start, config.block_m),
                                     pl.ds(config.intermediate_dim + k_start, config.block_k),
                                 ],
-                                up_smem,
-                                tile_ready_barrier,
+                                up_smem.at[stage],
+                                tile_ready_barrier.at[stage],
                             )
                             mgpu.copy_gmem_to_smem(
                                 w_down_ref.at[
@@ -952,16 +968,31 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
                                     pl.ds(k_start, config.block_k),
                                     pl.ds(n_tile * config.block_n, config.block_n),
                                 ],
-                                w_down_smem,
-                                tile_ready_barrier,
+                                w_down_smem.at[stage],
+                                tile_ready_barrier.at[stage],
                             )
-                            mgpu.barrier_wait(tile_ready_barrier)
-                            activation_smem[:, :] = (
-                                _silu(gate_smem[:, :].astype(jnp.float32)) * up_smem[:, :].astype(jnp.float32)
+
+                        _copy_k_tile(jnp.asarray(0, jnp.int32), jnp.asarray(0, jnp.int32))
+
+                        @pl.loop(0, k_tiles)
+                        def _k_loop(kk) -> None:
+                            stage = kk % W2_PIPELINE_STAGES
+                            mgpu.barrier_wait(tile_ready_barrier.at[stage])
+                            activation_stage = activation_smem.at[stage]
+                            activation_stage[:, :] = (
+                                _silu(gate_smem.at[stage][:, :].astype(jnp.float32))
+                                * up_smem.at[stage][:, :].astype(jnp.float32)
                             ).astype(activation_smem.dtype)
                             mgpu.commit_smem()
-                            mgpu.wgmma(acc_ref, activation_smem, w_down_smem)
-                            mgpu.wgmma_wait(0)
+                            mgpu.wgmma(acc_ref, activation_stage, w_down_smem.at[stage])
+
+                            @pl.when(kk + 1 < k_tiles)
+                            def _prefetch_next_k_tile() -> None:
+                                # The older wgmma group owns the stage about to be reused.
+                                mgpu.wgmma_wait(1)
+                                _copy_k_tile(kk + 1, (kk + 1) % W2_PIPELINE_STAGES)
+
+                        mgpu.wgmma_wait(0)
 
                         # Route scaling moves to the fp32 accumulator: the weight is per-row, so
                         # (diag(w) @ A) @ W2 == diag(w) @ (A @ W2), and the k-loop drops one
@@ -981,13 +1012,15 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
 
                     return pl.run_scoped(
                         smem_scope,
-                        gate_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
-                        up_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
+                        gate_smem=_wgmma_smem((W2_PIPELINE_STAGES, config.block_m, config.block_k), h_ref.dtype),
+                        up_smem=_wgmma_smem((W2_PIPELINE_STAGES, config.block_m, config.block_k), h_ref.dtype),
                         route_weight_smem=mgpu.SMEM((config.block_m,), dtype=h_route_weights_ref.dtype),
-                        activation_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
-                        w_down_smem=_wgmma_smem((config.block_k, config.block_n), w_down_ref.dtype),
+                        activation_smem=_wgmma_smem((W2_PIPELINE_STAGES, config.block_m, config.block_k), h_ref.dtype),
+                        w_down_smem=_wgmma_smem(
+                            (W2_PIPELINE_STAGES, config.block_k, config.block_n), w_down_ref.dtype
+                        ),
                         weight_ready_barrier=mgpu.Barrier(num_arrivals=1),
-                        tile_ready_barrier=mgpu.Barrier(num_arrivals=3),
+                        tile_ready_barrier=mgpu.Barrier(num_arrivals=3, num_barriers=W2_PIPELINE_STAGES),
                     )
 
                 output = pl.run_scoped(
