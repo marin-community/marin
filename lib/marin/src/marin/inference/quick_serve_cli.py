@@ -20,10 +20,11 @@ expose the same OpenAI API through the same dashboard, so serving one model unde
 pointing one client at both endpoints compares them directly.
 
 ``--gpu`` and ``--tpu`` are mutually exclusive (the default is TPU ``v6e-8``). On the vLLM GPU
-path stock CUDA vLLM is provisioned in an isolated ``uv`` tool env at ``--vllm-version``; on the
-vLLM TPU path, a marin checkout serves vLLM from the workspace lock, and outside a checkout (or
-with ``--isolated-vllm``) from an isolated ``uv`` tool env holding Marin's forked TPU vLLM. The
-Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
+path CUDA vLLM is provisioned in an isolated ``uv`` tool env — stock PyPI vLLM at ``--vllm-version``,
+or Marin's vLLM fork with ``--vllm-source marin-fork`` (needed for Marin-custom architectures like
+grug_moe); on the vLLM TPU path, a marin checkout serves vLLM from the workspace lock, and outside a
+checkout (or with ``--isolated-vllm``) from an isolated ``uv`` tool env holding Marin's forked TPU
+vLLM. The Levanter backend needs no vLLM at all: it serves from the worker venv's JAX.
 
 ``--cluster`` selects the controller to submit to; ``--target-cluster`` federates the job to a
 named peer. The slice's tensor-parallel size and (for clamped-RoPE models) max sequence length are
@@ -65,7 +66,12 @@ from rigging.timing import Duration
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
 from marin.inference.serving_backend import LevanterBackend, ServingBackend, VllmBackend
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
-from marin.inference.vllm_server import WORKER_PYTHON_VERSION
+from marin.inference.vllm_server import (
+    WORKER_PYTHON_VERSION,
+    IsolatedCudaVllm,
+    IsolatedTpuVllm,
+    VllmType,
+)
 
 # vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
 _WORKER_EXTRAS = ("tpu", "vllm")
@@ -88,6 +94,7 @@ _ENDPOINT_READY_POLL_SECONDS = 5.0
 # value the user actually typed counts (hence the ParameterSource check in _reject_foreign_flags).
 _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
+    "vllm_source": "--vllm-source",
     "vllm_args": "--vllm-arg",
     "isolated_vllm": "--isolated-vllm",
     "max_num_batched_tokens": "--max-num-batched-tokens",
@@ -128,6 +135,7 @@ def _resolve_serving_plan(
     isolated_vllm: bool,
     task_image: str | None,
     cuda_vllm_version: str,
+    vllm_source: VllmType,
     vllm: VllmBackend,
     levanter: LevanterBackend,
     extras: tuple[str, ...],
@@ -139,6 +147,8 @@ def _resolve_serving_plan(
     venv carries the accelerator's JAX and nothing else; vLLM runs as a subprocess, either from the
     workspace lock or from an isolated uv-tool env.
     """
+    if vllm_source is VllmType.MARIN_FORK and (gpu is None or backend != "vllm"):
+        raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
     if gpu is not None:
         if not in_checkout:
             raise click.ClickException(
@@ -157,7 +167,11 @@ def _resolve_serving_plan(
         # Provision CUDA vLLM in an isolated uv-tool env unless the operator brought a prebuilt
         # --task-image, which is expected to ship its own vLLM on PATH.
         if task_image is None:
-            vllm = replace(vllm, vllm_version=cuda_vllm_version)
+            if vllm_source is VllmType.MARIN_FORK:
+                launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+            else:
+                launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=cuda_vllm_version)
+            vllm = replace(vllm, launcher=launcher)
         return ServingPlan(vllm, device, (*_GPU_WORKER_EXTRAS, *extras), gpu_type=gpu_type, gpu_count=gpu_count)
 
     topology = get_tpu_topology(tpu)
@@ -174,7 +188,9 @@ def _resolve_serving_plan(
         # it from (or when explicitly requested); otherwise serve the workspace TPU-vLLM from the
         # lock. The worker venv always needs the `tpu` extra for the serving glue's jax/libtpu; the
         # `vllm` extra is only for the in-workspace build.
-        vllm = replace(vllm, tpu_vllm_ref=vllm_fork_ref(), tpu_inference_ref=tpu_inference_fork_ref())
+        vllm = replace(
+            vllm, launcher=IsolatedTpuVllm(vllm_ref=vllm_fork_ref(), tpu_inference_ref=tpu_inference_fork_ref())
+        )
         return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
     return ServingPlan(vllm, device, (*_WORKER_EXTRAS, *extras), tpu_type=tpu)
 
@@ -354,6 +370,15 @@ def _mint_and_print_capability_url(
     "(ignored on the TPU path and when --task-image is set).",
 )
 @click.option(
+    "--vllm-source",
+    "vllm_source",
+    type=click.Choice(["upstream", "marin-fork"]),
+    default="upstream",
+    show_default=True,
+    help="GPU vLLM source: 'upstream' (stock PyPI vLLM at --vllm-version) or 'marin-fork' "
+    "(Marin's vLLM fork; required for Marin-custom architectures like grug_moe).",
+)
+@click.option(
     "--extra",
     "extras",
     multiple=True,
@@ -404,6 +429,7 @@ def main(
     max_retries_preemption: int,
     vllm_args: tuple[str, ...],
     vllm_version: str,
+    vllm_source: str,
     extras: tuple[str, ...],
     task_image: str | None,
     wait: bool,
@@ -436,6 +462,7 @@ def main(
 
     endpoint_access = EndpointAccess.Value(f"ENDPOINT_ACCESS_{access.upper()}")
 
+    vllm_source_enum = VllmType.MARIN_FORK if vllm_source == "marin-fork" else VllmType.UPSTREAM
     plan = _resolve_serving_plan(
         backend=backend,
         tpu=tpu,
@@ -444,6 +471,7 @@ def main(
         isolated_vllm=isolated_vllm,
         task_image=task_image,
         cuda_vllm_version=vllm_version,
+        vllm_source=vllm_source_enum,
         vllm=VllmBackend(
             max_num_batched_tokens=max_num_batched_tokens,
             # The in-job vLLM boot budget must cover the same window the client waits, so raising

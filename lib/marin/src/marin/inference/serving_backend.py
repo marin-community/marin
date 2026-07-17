@@ -39,8 +39,6 @@ from marin.inference.quick_serve_dashboard import BackgroundServer, bind_serving
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
-    IsolatedCudaVllm,
-    IsolatedTpuVllm,
     VllmEnvironment,
     VllmLauncher,
     WorkspaceVllm,
@@ -140,21 +138,15 @@ class VllmServedModel:
 class VllmBackend:
     """Serve the model with vLLM, launched as a subprocess.
 
-    The launcher decides which vLLM runs: the one already on the venv/image ``PATH``, or a stock
-    CUDA / Marin-forked TPU vLLM provisioned in a throwaway uv-tool env (see
-    :meth:`select_launcher`).
+    ``launcher`` decides which vLLM runs: ``None`` serves the ``vllm`` already on the venv/image
+    ``PATH`` (:class:`~marin.inference.vllm_server.WorkspaceVllm`) — the workspace TPU-vLLM stack or
+    a prebuilt ``--task-image``. Pass :class:`~marin.inference.vllm_server.IsolatedCudaVllm` for GPU
+    serving (stock or the Marin fork) or :class:`~marin.inference.vllm_server.IsolatedTpuVllm` for
+    the checkout-free TPU fork.
     """
 
     name: str = "vllm"
-    vllm_version: str | None = None
-    """When set, provision stock CUDA vLLM at this exact version in an isolated uv-tool env — the
-    GPU serving path. ``None`` serves from the vLLM already on the venv/image ``PATH``: the
-    workspace TPU-vLLM stack, or a prebuilt ``--task-image``."""
-    tpu_vllm_ref: str | None = None
-    """When set (with ``tpu_inference_ref``), provision Marin's forked TPU vLLM in an isolated
-    uv-tool env — the checkout-free TPU serving path."""
-    tpu_inference_ref: str | None = None
-    """``uvx --with`` requirement for the tpu-inference fork; paired with ``tpu_vllm_ref``."""
+    launcher: VllmLauncher | None = None
     max_num_batched_tokens: int = 512
     """Prefill batch size. Kept modest because the TPU paged-attention kernel's on-chip (VMEM)
     scratch grows with this; large values overflow VMEM at compile."""
@@ -164,13 +156,7 @@ class VllmBackend:
     """Raw flags forwarded verbatim to ``vllm serve``."""
 
     def select_launcher(self) -> VllmLauncher:
-        if self.vllm_version:
-            return IsolatedCudaVllm(version=self.vllm_version)
-        if self.tpu_vllm_ref:
-            if not self.tpu_inference_ref:
-                raise ValueError("tpu_vllm_ref requires tpu_inference_ref (the tpu-inference fork).")
-            return IsolatedTpuVllm(vllm_ref=self.tpu_vllm_ref, tpu_inference_ref=self.tpu_inference_ref)
-        return WorkspaceVllm()
+        return self.launcher or WorkspaceVllm()
 
     @contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:

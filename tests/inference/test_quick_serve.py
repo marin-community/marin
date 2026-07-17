@@ -39,7 +39,14 @@ from marin.inference.serving_backend import (
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
-from marin.inference.vllm_server import IsolatedCudaVllm, IsolatedTpuVllm, WorkspaceVllm
+from marin.inference.tpu_vllm_pins import vllm_fork_ref
+from marin.inference.vllm_server import (
+    WORKER_PYTHON_VERSION,
+    IsolatedCudaVllm,
+    IsolatedTpuVllm,
+    VllmType,
+    WorkspaceVllm,
+)
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -89,32 +96,47 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_vllm_backend_gpu_provisions_isolated_cuda_vllm():
-    assert VllmBackend(vllm_version="0.25.0").select_launcher() == IsolatedCudaVllm(version="0.25.0")
+def test_isolated_cuda_vllm_upstream_command_and_env():
+    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version="0.25.0")
+    assert launcher.command() == [
+        "uvx",
+        "--from",
+        "vllm[runai]==0.25.0",
+        "--python",
+        WORKER_PYTHON_VERSION,
+        "--torch-backend",
+        "cu128",
+        "vllm",
+    ]
+    assert launcher.env() == {}
+
+
+def test_isolated_cuda_vllm_marin_fork_command_and_env():
+    launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+    cmd = launcher.command()
+    assert cmd[:3] == ["uvx", "--from", vllm_fork_ref()]
+    assert "--torch-backend" in cmd and cmd[cmd.index("--torch-backend") + 1] == "cu130"
+    assert "runai-model-streamer[s3]==0.16.0" in cmd
+    env = launcher.env()
+    assert env["VLLM_USE_PRECOMPILED"] == "1"
+    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert "AWS_CONFIG_FILE" in env
+
+
+def test_isolated_cuda_vllm_upstream_requires_version():
+    with pytest.raises(ValueError, match="requires an explicit vLLM version"):
+        IsolatedCudaVllm(source=VllmType.UPSTREAM)
 
 
 def test_vllm_backend_falls_back_to_workspace_without_version():
-    # The TPU path (no version) and a --task-image GPU path (image ships its own vLLM)
-    # both serve from the vLLM already on PATH.
+    # No launcher (the TPU path, or a --task-image GPU path whose image ships its own vLLM) serves
+    # from the vLLM already on PATH.
     assert VllmBackend().select_launcher() == WorkspaceVllm()
 
 
-def test_vllm_backend_tpu_isolated_from_refs():
-    backend = VllmBackend(
-        tpu_vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
-        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
-    )
-    assert backend.select_launcher() == IsolatedTpuVllm(
-        vllm_ref="vllm @ git+https://github.com/marin-community/vllm.git@abc",
-        tpu_inference_ref="tpu-inference @ git+https://github.com/marin-community/tpu-inference.git@def",
-    )
-
-
-def test_vllm_backend_tpu_ref_requires_tpu_inference():
-    # A vLLM fork without its tpu-inference runtime would boot a broken TPU server; fail
-    # at launch-selection time instead.
-    with pytest.raises(ValueError, match="tpu_inference_ref"):
-        VllmBackend(tpu_vllm_ref="vllm @ git+...@abc").select_launcher()
+def test_vllm_backend_returns_its_composed_launcher():
+    launcher = IsolatedTpuVllm(vllm_ref="vllm @ git+...@abc", tpu_inference_ref="tpu-inference @ git+...@def")
+    assert VllmBackend(launcher=launcher).select_launcher() is launcher
 
 
 def test_levanter_max_seq_len_defaults_within_the_models_window():
@@ -189,6 +211,7 @@ def _plan(**overrides):
         "isolated_vllm": False,
         "task_image": None,
         "cuda_vllm_version": "0.25.0",
+        "vllm_source": VllmType.UPSTREAM,
         "vllm": VllmBackend(),
         "levanter": LevanterBackend(),
         "extras": (),
@@ -217,22 +240,32 @@ def test_resolve_serving_plan_picks_the_worker_extras_the_backend_needs(override
     assert plan.worker_extras == worker_extras
 
 
-def test_resolve_serving_plan_pins_cuda_vllm_only_on_the_gpu_path():
-    # A CUDA version on the TPU path would launch CUDA vLLM on a TPU slice.
-    gpu = _plan(gpu="H100x8").backend
-    assert gpu.select_launcher() == IsolatedCudaVllm(version="0.25.0")
-    assert _plan().backend.select_launcher() == WorkspaceVllm()
-    # A prebuilt --task-image is expected to ship its own vLLM, so nothing is provisioned.
+def test_gpu_plan_defaults_to_upstream_launcher():
+    plan = _plan(gpu="H100x8")
+    assert plan.backend.launcher == IsolatedCudaVllm(source=VllmType.UPSTREAM, version="0.25.0")
+
+
+def test_gpu_plan_marin_fork_selects_fork_launcher():
+    plan = _plan(gpu="H100x8", vllm_source=VllmType.MARIN_FORK)
+    assert plan.backend.launcher == IsolatedCudaVllm(source=VllmType.MARIN_FORK)
+
+
+def test_gpu_plan_task_image_serves_workspace_vllm():
+    # A prebuilt --task-image ships its own vLLM on PATH, so no launcher is provisioned.
+    assert _plan(gpu="H100x8", task_image="img").backend.launcher is None
     assert _plan(gpu="H100x8", task_image="img").backend.select_launcher() == WorkspaceVllm()
 
 
-def test_resolve_serving_plan_isolates_vllm_outside_a_checkout():
-    # No checkout to build the TPU-vLLM fork from, so it has to come from a pinned uvx env.
-    backend = _plan(in_checkout=False).backend
-    assert isinstance(backend, VllmBackend)
-    assert backend.tpu_vllm_ref and backend.tpu_inference_ref
-    # In a checkout it serves the workspace vLLM instead.
-    assert _plan().backend.tpu_vllm_ref is None
+def test_tpu_plan_isolates_vllm_outside_a_checkout():
+    # No checkout to build the TPU-vLLM fork from, so it comes from a pinned uvx env; in a checkout
+    # it serves the workspace vLLM instead.
+    assert isinstance(_plan(in_checkout=False).backend.select_launcher(), IsolatedTpuVllm)
+    assert isinstance(_plan().backend.select_launcher(), WorkspaceVllm)
+
+
+def test_marin_fork_requires_gpu():
+    with pytest.raises(click.ClickException, match="requires --gpu"):
+        _plan(vllm_source=VllmType.MARIN_FORK)  # default tpu path
 
 
 def test_resolve_serving_plan_rejects_multihost_slices():

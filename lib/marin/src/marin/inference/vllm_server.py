@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -20,6 +21,7 @@ import requests
 from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.inference.tpu_vllm_pins import vllm_fork_ref
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -33,6 +35,9 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
 # worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
 WORKER_PYTHON_VERSION = "3.12"
+# Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
+# vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
+_RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
 
 
 class VllmLauncher(Protocol):
@@ -61,38 +66,84 @@ class WorkspaceVllm:
         return {}
 
 
+class VllmType(StrEnum):
+    """Which CUDA vLLM :class:`IsolatedCudaVllm` provisions."""
+
+    UPSTREAM = "upstream"  # stock PyPI vLLM — any architecture upstream vLLM knows
+    MARIN_FORK = "marin_fork"  # marin-community/vllm — for Marin-custom archs (e.g. grug_moe)
+
+
 @dataclass(frozen=True)
 class IsolatedCudaVllm:
     """Run CUDA vLLM from a throwaway uv-managed environment via ``uvx``.
 
-    GPU serving pins CUDA vLLM here instead of in the Marin workspace lockfile:
-    vLLM is only ever a ``vllm serve`` subprocess, so ``uvx`` provisions it — and
-    its torch/CUDA wheel tree — in a cached, isolated environment that never
-    enters Marin's own resolution. Bumping the version is therefore just a string,
-    with no workspace re-lock. The ``[runai]`` extra keeps gs://-checkpoint
-    streaming working, at parity with the TPU path.
+    One launcher, two sources (see :class:`VllmType`):
+
+    - ``UPSTREAM`` — stock ``vllm[runai]==<version>`` on the cu128 torch backend. Serves any
+      architecture upstream vLLM knows; this is the ``marin-serve --gpu`` default.
+    - ``MARIN_FORK`` — Marin's vLLM fork (pinned by ``tool.uv.sources.vllm`` via
+      :func:`~marin.inference.tpu_vllm_pins.vllm_fork_ref`), needed to serve Marin-custom
+      architectures upstream cannot load (e.g. ``grug_moe``). Built with ``VLLM_USE_PRECOMPILED``
+      on the cu130 backend, with the Run:ai streamer added and virtual-hosted S3 addressing set
+      for the CoreWeave object store.
+
+    GPU serving pins CUDA vLLM here instead of the workspace lockfile: vLLM is only ever a
+    ``vllm serve`` subprocess, so ``uvx`` provisions it — and its torch/CUDA wheel tree — in a
+    cached, isolated env that never enters Marin's resolution. Bumping upstream is just the
+    version string; bumping the fork is a one-line ``tool.uv.sources.vllm`` edit.
     """
 
-    version: str
+    source: VllmType = VllmType.UPSTREAM
+    version: str | None = None
+    """Exact PyPI pin; required for ``UPSTREAM``, ignored for ``MARIN_FORK`` (the fork pin comes
+    from ``tool.uv.sources.vllm``)."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
-    # uv's PyTorch index selector; stock vLLM (>=0.25) targets torch 2.11 / CUDA 13.
-    torch_backend: str = "cu128"
+
+    def __post_init__(self) -> None:
+        if self.source is VllmType.UPSTREAM and not self.version:
+            raise ValueError("IsolatedCudaVllm(UPSTREAM) requires an explicit vLLM version.")
 
     def command(self) -> list[str]:
+        if self.source is VllmType.MARIN_FORK:
+            from_spec, torch_backend, extra = vllm_fork_ref(), "cu130", ["--with", _RUNAI_STREAMER_REQUIREMENT]
+        else:
+            from_spec, torch_backend, extra = f"vllm[runai]=={self.version}", "cu128", []
         return [
             "uvx",
             "--from",
-            f"vllm[runai]=={self.version}",
+            from_spec,
+            *extra,
             "--python",
             self.python_version,
             "--torch-backend",
-            self.torch_backend,
+            torch_backend,
             "vllm",
         ]
 
     def env(self) -> dict[str, str]:
+        if self.source is VllmType.MARIN_FORK:
+            return {
+                "VLLM_USE_PRECOMPILED": "1",
+                "VLLM_USE_FLASHINFER_SAMPLER": "0",
+                "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
+            }
         return {}
+
+
+def _write_virtual_hosted_s3_config() -> str:
+    """Write a boto3 config forcing virtual-hosted S3 addressing and return its path.
+
+    boto3's S3 addressing style can only be set from a config file (no env var), and the CoreWeave
+    object store rejects the default path-style requests. The fork's Run:ai streamer reads it via
+    ``AWS_CONFIG_FILE``, so :meth:`IsolatedCudaVllm.env` points that at this file. Rewritten on every
+    call (once per serve, cheap) rather than reused: a truncated leftover from a crash mid-write would
+    otherwise be kept and silently re-enable the path-style addressing the store rejects.
+    """
+    path = os.path.join(tempfile.gettempdir(), "marin-vllm-virtual-hosted-s3.conf")
+    with open(path, "w") as handle:
+        handle.write("[default]\ns3 =\n    addressing_style = virtual\n")
+    return path
 
 
 @dataclass(frozen=True)
