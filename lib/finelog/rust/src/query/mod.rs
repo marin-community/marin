@@ -1,7 +1,7 @@
 //! DataFusion read engine.
 //!
 //! `make_ctx()` builds a `SessionContext` configured to match DuckDB's result
-//! shape (Utf8 strings, DuckDB parsing dialect) with the compat UDFs registered.
+//! shape (Utf8 strings, DuckDB parsing dialect) with the scalar UDFs registered.
 //! `run_query_over()` registers every live namespace as a `TableProvider`, runs
 //! the user SQL under a SELECT-only gate (see `read_only_sql_options`), collects
 //! the result, and deregisters — the body of the `StatsService::Query` handler.
@@ -153,7 +153,7 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().execution.parquet.reorder_filters = true;
     let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
-    udf::register_compat_udfs(&ctx);
+    udf::register_scalar_udfs(&ctx);
     ctx
 }
 

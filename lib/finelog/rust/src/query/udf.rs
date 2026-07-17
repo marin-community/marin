@@ -59,7 +59,7 @@ use serde_json::Value as JsonValue;
 
 /// Register the finelog scalar UDFs (`prefix`, `regexp_matches`, `contains`, and
 /// the `json_*` extraction family) on `ctx`.
-pub fn register_compat_udfs(ctx: &datafusion::prelude::SessionContext) {
+pub fn register_scalar_udfs(ctx: &datafusion::prelude::SessionContext) {
     ctx.register_udf(prefix_udf());
     ctx.register_udf(regexp_matches_udf());
     ctx.register_udf(contains_udf());
@@ -529,7 +529,7 @@ mod tests {
         )
         .unwrap();
         let ctx = SessionContext::new();
-        register_compat_udfs(&ctx);
+        register_scalar_udfs(&ctx);
         ctx.register_batch("t", batch).unwrap();
         ctx.sql(&format!("SELECT {proj} AS m FROM t ORDER BY id"))
             .await
@@ -767,7 +767,7 @@ mod tests {
         )
         .unwrap();
         let ctx = SessionContext::new();
-        register_compat_udfs(&ctx);
+        register_scalar_udfs(&ctx);
         ctx.register_batch("probes", batch).unwrap();
 
         // WHERE + GROUP BY over the extracted key, ordered for a stable assert.
@@ -961,7 +961,7 @@ mod tests {
         )
         .unwrap();
         let ctx = SessionContext::new();
-        register_compat_udfs(&ctx);
+        register_scalar_udfs(&ctx);
         ctx.register_batch("t", batch).unwrap();
         ctx.sql(&format!("SELECT {proj} AS out FROM t ORDER BY id"))
             .await
