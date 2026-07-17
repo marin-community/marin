@@ -225,3 +225,10 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   Implication for all future NCCL_EP jobs: **every rank's pod needs the JIT
   toolchain env**, and first-bootstrap latency includes an nvcc compile
   (cached under the JIT cache dir afterward).
+- **PASSED** (`/mwittmann/ncclep-smoke3`): all **13 TE EP tests green** in
+  17.7 s on 4×GB200, one process per GPU (dp2×ep2) — bootstrap, primitive
+  round trips, `ep_dispatch`/`ep_combine` custom_vjp closed-form gradient
+  checks, and the HLO reshard guard (no XLA collectives outside the EP FFI).
+  TE core DT_NEEDED verified all-cu13. **NCCL_EP runs on this stack.**
+  H-microbench arms now in flight: EP4 single-node + EP8 across 2 nodes
+  (first cross-node NCCL_EP over MNNVL).
