@@ -31,9 +31,9 @@ A/B); shared academic B200/B300 Slurm cluster for single-node kernel work.
 
 | ID | Hypothesis | Status |
 | --- | --- | --- |
-| SPB-001 | Census + gate: enough of the #6841 staged semantic path runs on GB200 (planner, transport, XLA combine; which Pallas kernels lower on sm_100) to measure staged source-push forward at the #7279 shapes vs ring_cute/a2a_cute bests; source-push reduces the ~48% collective share | OPEN — first experiment |
-| SPB-002 | Tuned Blackwell compute epilogues (unblock #6933 swizzle assertion or CuTeDSL via `cutlass_call` per #7282) close the gap to fused local compute | BLOCKED on SPB-001 gate |
-| SPB-003 | Device-side planner removes the ~380 ms/plan host gate (SPF-005 carry-over) | BLOCKED on SPB-001 gate |
+| SPB-001 | Census + gate: enough of the #6841 staged semantic path runs on GB200 (planner, transport, XLA combine; which Pallas kernels lower on sm_100) to measure staged source-push forward at the #7279 shapes vs ring_cute/a2a_cute bests; source-push reduces the ~48% collective share | CLOSED 2026-07-17 — census GREEN (staged path runs on sm_100/aarch64), gate FALSIFIED (1.98× slower best-case, ~530× honest API; see part 3/4 entries) |
+| SPB-002 | Tuned Blackwell compute epilogues (unblock #6933 swizzle assertion or CuTeDSL via `cutlass_call` per #7282) close the gap to fused local compute | MOOT — compute stages already at 1.4–1.7 PF/s, only 14% of path time |
+| SPB-003 | Device-side planner removes the ~380 ms/plan host gate (SPF-005 carry-over) | MOOT — planner measured 14.2 s/call at production routing volume, but even plan-free execution loses the gate |
 
 ## Entries
 
@@ -153,3 +153,66 @@ Ops note: the full-shape (65k tokens/rank) `bench_blackwell_source_push_forward_
 run OOM-killed the 128 GB pod (fp32 host reference arrays), which took down
 the dev-gpu holder task and the reservation. Re-allocated with `--memory
 240GB`; anatomy runs at 32k tokens/rank.
+
+### 2026-07-17 — SPB-001 (part 4): anatomy + verdict — GATE FAILS, thread ends
+
+Per-stage anatomy at 32768 tokens/rank (same shape otherwise; second holder
+`/mwittmann/dev-gpu-mwittmann-spb-b200-2`, `--memory 240GB`;
+`bench_blackwell_source_push_forward_smoke --stage-timing`, #6933-tuned knobs:
+send=4, worker=32, slots=24, blocks 64/128/128, groups/job=2, entries 640):
+
+| stage | median | share of stage sum |
+| --- | --- | --- |
+| input_prepare | 20.31 ms | 57% |
+| destination_x_transport | 4.57 ms | 13% (298 GB/s effective) |
+| w13 | 4.02 ms | 11% (1.73 PF/s) |
+| w2 | 2.50 ms | 7% (1.39 PF/s) |
+| return_transport | 2.85 ms | 8% |
+| combine | 1.44 ms | 4% |
+| stage sum | 35.7 ms | |
+| end-to-end steady state | 46.9 ms | (+11 ms stage-glue/sync overhead) |
+
+Same-shape jitted `ring_cute`: **13.96 ms** (738 TFLOP/s/rank). Scaling check:
+ring_cute is linear in tokens (14.0→27.0 ms for 32k→65k); source-push is
+sub-linear (46.9→53.5 ms) — fixed marshalling/sync overhead dominates it.
+
+Findings:
+
+1. **Compute is NOT the problem.** The #6933-tuned upstream Mosaic
+   `blackwell_ragged_dot` kernels run at 1.4–1.7 PF/s on sm_100 — SPB-002
+   (better compute epilogues) has almost nothing to win: w13+w2 are only
+   6.5 ms of a 46.9 ms path.
+2. **The staged path loses on marshalling and serialization**: 57% of stage
+   time is `input_prepare` (device-side raw-token pack before transport), and
+   ~11 ms more is stage-sync glue. Peer transport itself (7.4 ms at ~300 GB/s)
+   is fine but can't be overlapped with compute — `staged_device_sync`
+   serializes stages, and the fused persistent peer-ref kernels that would
+   overlap are unsupported in Blackwell warpgroup lowering (#6933).
+3. **Perfect-overlap floor** max(compute 6.5, transport 7.4) ≈ 7.4 ms < ring_cute
+   14.0 ms is real on paper, but reaching it requires exactly the machinery
+   Blackwell doesn't support (fused persistent kernels) plus a device-side
+   planner (host planner ≈ 14.2 s/call at 65k tokens/rank, SPB-003). #7279's
+   hypothesis 1 (chunked-pipeline decomposition in XLA-land) targets the same
+   overlap headroom without either blocker.
+4. Smoke-bench tolerance note: at cf 1.0 the smoke's internal reference
+   fails its 2.0 max-abs output tolerance (max |Δ| 256, mean 12.1) while
+   H-group diffs are tiny (max 1.0, mean 0.017) and dropped counts match the
+   public backends exactly (589) — consistent with a drop-set mismatch
+   between the smoke's reference and the staged path at capacity, not a
+   kernel numerics bug (the cf 1.25 public compare in part 2 matched at bf16
+   noise with dropped_route_delta 0). Not chased further given the verdict.
+
+**Verdict: SPB-001 gate FAILS.** Best-case (preplanned, tuned) staged
+source-push forward is 1.98× ring_cute at the production shape (53.5 vs
+27.0 ms) and 3.4× at 32k (46.9 vs 14.0 ms); the honest API is ~530× (host
+planner). Per the issue's stop criterion, the source-push thread on B200 ends
+here; the ~48% collective headroom belongs to #7279's other avenues (chunked
+pipeline, overlap, leg reduction).
+
+## Hypothesis queue (final)
+
+| ID | Hypothesis | Status |
+| --- | --- | --- |
+| SPB-001 | Staged source-push beats ring_cute/a2a_cute at #7279 shapes | FALSIFIED — 1.98× slower best-case, ~530× honest API |
+| SPB-002 | Tuned Blackwell compute epilogues close the gap | MOOT — compute already 1.4–1.7 PF/s, only 14% of path time |
+| SPB-003 | Device-side planner removes host-plan gate | MOOT for this thread — planner is 14.2 s/call at production routing volume, but even plan-free execution loses the gate |
