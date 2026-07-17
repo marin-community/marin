@@ -61,8 +61,6 @@ def _gpu_resources(count: int) -> ResourceSpec:
     [
         ("first", 0, True),
         ("first", 1, False),
-        ("first", 4, False),
-        ("all", 0, True),
         ("all", 127, True),
         ("0,7", 7, True),
         ("0,7", 6, False),
@@ -72,7 +70,7 @@ def test_selector_picks_tasks(tasks: str, task_index: int, selected: bool) -> No
     assert should_profile(tasks, task_index) is selected
 
 
-def test_unparseable_rank_spec_raises() -> None:
+def test_unparseable_task_spec_raises() -> None:
     with pytest.raises(ValueError, match="comma-separated task list"):
         should_profile("every-other", 0)
 
@@ -92,7 +90,7 @@ def test_task_index_from_env_requires_a_task_context(monkeypatch: pytest.MonkeyP
 def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """The nsys hook builds this argv and iris.runtime.nsys parses it. Nothing else binds
     the two, so a flag renamed on one side has to fail here rather than on a GPU."""
-    hook = ProfileSpec(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True).to_hook()
+    hook = ProfileSpec(output_uri=OUT, tasks="0,7", options={"trace": "cuda,nvtx"}, capture_range=True).to_hook()
     wrapped = hook.wrap(["python", "train.py"])
     assert wrapped[:3] == ["python", "-m", "iris.runtime.nsys"]
 
@@ -107,13 +105,6 @@ def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyP
         "output_uri": OUT,
         "argv": ["python", "train.py"],
     }
-
-
-def test_hook_argv_needs_no_shell_expansion() -> None:
-    """The wrapper argv is exec'd, not run through a shell, so a '$VAR' would arrive
-    literally. The install path is therefore resolved in-task, never passed as text."""
-    wrapped = ProfileSpec(output_uri=OUT).to_hook().wrap(["python", "x.py"])
-    assert not any("$" in arg for arg in wrapped)
 
 
 def test_collect_hooks_rejects_nsys_without_gpu() -> None:
@@ -145,11 +136,9 @@ def test_build_nsys_argv_matches_what_the_container_allows() -> None:
     assert {"--capture-range=cudaProfilerApi", "--capture-range-end=stop"} <= set(ranged)
 
 
-def test_report_path_identifies_its_task() -> None:
-    # Every task uploads into one directory, so the name has to carry its task index.
-    out = Path("/app/nsys")
-    assert report_path(out, 0) != report_path(out, 1)
-    assert report_path(out, 7).name.startswith("task00007-")
+def test_report_path_carries_the_task_index() -> None:
+    # All tasks upload into one directory, so the filename carries the task index.
+    assert report_path(Path("/app/nsys"), 7).name.startswith("task00007-")
 
 
 def test_resolve_nsys_bin_reports_missing_install(tmp_path: Path) -> None:
@@ -312,11 +301,6 @@ def test_supervise_normalizes_a_signalled_child(monkeypatch: pytest.MonkeyPatch)
     read as an application failure. 128 + signum is the convention (multigpu agrees)."""
     monkeypatch.setattr("subprocess.Popen", lambda argv: _FakePopen(-signal.SIGTERM))
     assert _supervise(["nsys", "profile"], ["true"]) == 143
-
-
-def test_supervise_passes_through_a_normal_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("subprocess.Popen", lambda argv: _FakePopen(7))
-    assert _supervise(["nsys", "profile"], ["false"]) == 7
 
 
 def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:

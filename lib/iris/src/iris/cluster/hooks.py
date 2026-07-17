@@ -30,6 +30,11 @@ from iris.cluster.setup_scripts import nsys_setup_script
 _NSYS_MODULE = "iris.runtime.nsys"
 _MULTIGPU_MODULE = "iris.runtime.multigpu"
 
+# nsys ``--trace`` default: CUDA kernels + NVTX ranges + cuBLAS. NCCL shows up as CUDA
+# kernels plus its own NVTX ranges. CPU sampling and GPU metrics need privileges an
+# unprivileged task container lacks, so they are never enabled.
+NSYS_DEFAULT_TRACE = "cuda,nvtx,cublas"
+
 
 @runtime_checkable
 class TaskHook(Protocol):

@@ -20,6 +20,7 @@ import click
 import humanfriendly
 import yaml
 from rigging.credentials import ClientCredentials
+from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -39,6 +40,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.hooks import NSYS_DEFAULT_TRACE
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -1018,10 +1020,10 @@ Examples:
     "--profile-output",
     default=None,
     help=(
-        "Directory URI for the reports; required with --profile. Must be storage the job's "
-        "cluster can write (note that under --target-cluster that is the peer, not this one). "
-        "Reports are lost otherwise: the task workdir does not outlive the pod. Prefer a "
-        "TTL'd temp prefix, e.g. s3://marin-us-east-02a/tmp/ttl=30d/rav/nsys."
+        "Directory URI for the reports. Defaults to the job cluster's lifecycle-cleaned temp "
+        "bucket (tmp/ttl=30d/iris-profiles/<job>). Must be storage the job's cluster can write, "
+        "so it is required with --target-cluster (that storage is the peer's, not this one). "
+        "Reports are lost if it does not outlive the pod: the task workdir does not."
     ),
 )
 @click.option(
@@ -1036,9 +1038,9 @@ Examples:
 )
 @click.option(
     "--profile-trace",
-    default=ProfileSpec.trace,
+    default=NSYS_DEFAULT_TRACE,
     show_default=True,
-    help="nsys --trace value. NCCL appears as CUDA kernels plus its own NVTX ranges.",
+    help="nsys --trace value (backend-specific). NCCL appears as CUDA kernels plus its own NVTX ranges.",
 )
 @click.option(
     "--profile-capture-range",
@@ -1099,27 +1101,38 @@ def run(
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
     if no_sync and sync_package:
         raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
+
+    command = list(cmd)
+    if not command:
+        raise click.UsageError("No command provided after --")
+
     if profile and no_sync:
         raise click.UsageError("--profile installs its profiler during setup; it cannot be combined with --no-sync.")
-    if profile and not profile_output:
-        raise click.UsageError("--profile requires --profile-output; a report left in the task workdir is discarded.")
     if profile_output and not profile:
         raise click.UsageError("--profile-output has no effect without --profile.")
+    if profile and not profile_output:
+        if target_cluster:
+            raise click.UsageError(
+                "--profile-output is required with --target-cluster: the report lands on the peer's "
+                "storage, which only the caller knows how to address."
+            )
+        # Default to the job's cluster temp bucket (lifecycle-cleaned under tmp/ttl=Nd/),
+        # keyed on the job name so a run's reports are findable and self-expiring.
+        job_name = job_name or generate_job_name(command)
+        source = config.storage.remote_state_dir if config else None
+        profile_output = marin_temp_bucket(30, prefix=f"iris-profiles/{job_name}", source_prefix=source or None)
+        logger.info(f"--profile-output defaulted to {profile_output}")
     profile_spec = (
         ProfileSpec(
             backend=ProfileBackend(profile),
             output_uri=profile_output,
             tasks=profile_tasks,
-            trace=profile_trace,
             capture_range=profile_capture_range,
+            options={"trace": profile_trace},
         )
-        if profile and profile_output
+        if profile
         else None
     )
-
-    command = list(cmd)
-    if not command:
-        raise click.UsageError("No command provided after --")
 
     submit_argv = redact_submit_argv(list(sys.argv))
 

@@ -17,8 +17,8 @@ import hashlib
 import os
 import sys
 import urllib.parse
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
@@ -28,7 +28,7 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.hooks import NsysHook, TaskHook
+from iris.cluster.hooks import NSYS_DEFAULT_TRACE, NsysHook, TaskHook
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -735,33 +735,39 @@ class ProfileSpec:
     Attributes:
         output_uri: Directory URI each profiled task uploads its report to (any
             fsspec target the *task* can reach, e.g. ``s3://bucket/tmp/ttl=30d/nsys``).
-            Required, and deliberately not defaulted: the task workdir is an emptyDir,
-            so a report that is not uploaded is destroyed with the pod, and only the
-            caller knows which storage the job's cluster can actually write — under
+            The task workdir is an emptyDir, so a report that is not uploaded is
+            destroyed with the pod. The CLI defaults this to the job cluster's temp
+            bucket (``marin_temp_bucket``); it stays required at the API level because
+            only the caller knows which storage the job's cluster can write — under
             ``--target-cluster`` the submitting cluster's storage is the wrong answer.
         backend: Which profiler to run (see ``ProfileBackend``).
         tasks: Which tasks write a report, selected by task index: ``first``, ``all``,
             or a comma-separated list (e.g. ``0,7``). Reports are never merged, so
             tracing every task of a large job is rarely what you want.
-        trace: The nsys ``--trace`` value. CPU sampling and GPU metrics are never
-            enabled: the task container lacks the privileges for either.
         capture_range: Collect only between ``cuProfilerStart``/``cuProfilerStop``
             instead of for the whole run. Keeps compilation out of the report, and
             is how multi-task captures are aligned — tasks must bracket the same
             step, since aligning on wall-clock leaves the windows disjoint. The
             application must call the API, or nothing is collected.
+        options: Backend-specific knobs, kept out of the generic spec. nsys reads
+            ``trace`` (its ``--trace`` value); other keys are ignored by it.
     """
 
     output_uri: str
     backend: ProfileBackend = ProfileBackend.NSYS
     tasks: str = "first"
-    trace: str = "cuda,nvtx,cublas"
     capture_range: bool = False
+    options: Mapping[str, str] = field(default_factory=dict)
 
     def to_hook(self) -> TaskHook:
         """Build the launch-wrapping hook for this backend. Device-agnostic; the caller
         validates device/output compatibility (see ``iris.client.client.collect_hooks``)."""
-        return NsysHook(output_uri=self.output_uri, tasks=self.tasks, trace=self.trace, capture_range=self.capture_range)
+        return NsysHook(
+            output_uri=self.output_uri,
+            tasks=self.tasks,
+            trace=self.options.get("trace", NSYS_DEFAULT_TRACE),
+            capture_range=self.capture_range,
+        )
 
 
 @dataclass
