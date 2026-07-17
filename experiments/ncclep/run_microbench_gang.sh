@@ -14,30 +14,33 @@
 #     bash experiments/ncclep/run_microbench_gang.sh --ep 8 --backward
 set -euxo pipefail
 
-NCCL_RUNTIME_VERSION=${NCCL_RUNTIME_VERSION:-2.30.7}
-WHEEL_SRC=${WHEEL_SRC:-s3://marin-us-east-02a/marin/scratch/mwittmann/ncclep/wheels/}
+STASH=${STASH:-s3://marin-us-east-02a/marin/scratch/mwittmann/ncclep}
 WORK=${WORK:-/tmp/ncclep-mb}
 BENCH_ARGS=("$@")
 mkdir -p "$WORK"
 REPO_ROOT=$(pwd)
 
+pushd "$WORK"
+source "$REPO_ROOT/experiments/ncclep/cuda_wheels_env.sh"
+
 uv pip install s3fs
-(cd "$WORK" && python - "$WHEEL_SRC" <<'EOF'
+python - "$STASH" <<'EOF'
 import os, sys
 import s3fs
 fs = s3fs.S3FileSystem(endpoint_url=os.environ.get("AWS_ENDPOINT_URL"))
-whls = sorted(fs.glob(sys.argv[1].rstrip("/") + "/*.whl"))
-assert whls, f"no wheels under {sys.argv[1]}"
+stash = sys.argv[1].rstrip("/")
+whls = sorted(fs.glob(stash + "/wheels/*.whl"))
+assert whls, f"no wheels under {stash}/wheels/"
 fs.get(whls[-1], os.path.basename(whls[-1]))
 print("fetched", whls[-1])
+fs.get(stash + "/jit/nccl-ep-jit-headers.tgz", "nccl-ep-jit-headers.tgz")
 EOF
-)
-uv pip install "$WORK"/transformer_engine*.whl "nvidia-nccl-cu13==${NCCL_RUNTIME_VERSION}"
-uv pip install flax || true
-
-SP=$(python -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
-NCCL_LIB_DIR=$(dirname "$(find "$SP" -name 'libnccl.so.2' | head -1)")
-export LD_LIBRARY_PATH="${NCCL_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+uv pip install ./transformer_engine*.whl
+mkdir -p jit-include && tar -C jit-include -xzf nccl-ep-jit-headers.tgz
+export NCCL_EP_JIT_SOURCE_DIR="$WORK/jit-include/nccl_ep"
+export NCCL_EP_JIT_BUILD_INCLUDE_DIR="$WORK/jit-include"
+export NCCL_EP_JIT_LOG=1
+popd
 
 export XLA_FLAGS="--xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_graph_min_graph_size=1"
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}

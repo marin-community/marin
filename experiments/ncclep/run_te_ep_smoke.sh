@@ -3,10 +3,11 @@
 # dp2 x ep2 over 4 GPUs, one process per GPU) on a GB200 node (issue #7331,
 # NCCLEP-003).
 #
-# Installs the stashed TE wheel (built by build_te_wheel.sh), upgrades runtime
-# NCCL to the EP minimum, fetches the matching TE test file, and launches it
-# with a localhost coordinator — TE's own launch shape, minus the PYTHONPATH
-# override (which would shadow the installed wheel with the sourceless tree).
+# Installs the stashed TE wheel, sets up the pip-wheel CUDA toolchain (NCCL EP
+# JIT-compiles device kernels at bootstrap → runtime needs nvcc + CUDA headers
+# + the stashed JIT header tree), and launches TE's test with a localhost
+# coordinator — TE's own launch shape, minus the PYTHONPATH override (which
+# would shadow the installed wheel with the sourceless tree).
 #
 #   iris --cluster=marin job run --user mwittmann --target-cluster cw-us-east-08a \
 #     --gpu GB200x4 --enable-extra-resources --cpu 32 --memory 128g \
@@ -14,32 +15,36 @@
 set -euxo pipefail
 
 TE_SHA=${TE_SHA:-68493d2d55ac37e540301467b278bdb1c2019e81}
-NCCL_RUNTIME_VERSION=${NCCL_RUNTIME_VERSION:-2.30.7}
-WHEEL_SRC=${WHEEL_SRC:-s3://marin-us-east-02a/marin/scratch/mwittmann/ncclep/wheels/}
+STASH=${STASH:-s3://marin-us-east-02a/marin/scratch/mwittmann/ncclep}
 WORK=${WORK:-/tmp/ncclep-smoke}
 TEST_TIMEOUT_S=${TEST_TIMEOUT_S:-300}
+REPO_ROOT=$(pwd)
 mkdir -p "$WORK"
 cd "$WORK"
 
-echo "=== fetch + install TE wheel ==="
+echo "=== toolchain env (JIT needs nvcc + headers) ==="
+source "$REPO_ROOT/experiments/ncclep/cuda_wheels_env.sh"
+
+echo "=== fetch + install TE wheel and JIT headers ==="
 uv pip install s3fs
-python - "$WHEEL_SRC" <<'EOF'
+python - "$STASH" <<'EOF'
 import os, sys
 import s3fs
 fs = s3fs.S3FileSystem(endpoint_url=os.environ.get("AWS_ENDPOINT_URL"))
-whls = sorted(fs.glob(sys.argv[1].rstrip("/") + "/*.whl"))
-assert whls, f"no wheels under {sys.argv[1]}"
-src = whls[-1]
-dst = os.path.basename(src)
-fs.get(src, dst)
-print("fetched", src, "->", dst)
+stash = sys.argv[1].rstrip("/")
+whls = sorted(fs.glob(stash + "/wheels/*.whl"))
+assert whls, f"no wheels under {stash}/wheels/"
+fs.get(whls[-1], os.path.basename(whls[-1]))
+print("fetched", whls[-1])
+fs.get(stash + "/jit/nccl-ep-jit-headers.tgz", "nccl-ep-jit-headers.tgz")
+print("fetched JIT headers")
 EOF
-uv pip install ./transformer_engine*.whl "nvidia-nccl-cu13==${NCCL_RUNTIME_VERSION}"
-uv pip install flax || true
+uv pip install ./transformer_engine*.whl
+mkdir -p jit-include && tar -C jit-include -xzf nccl-ep-jit-headers.tgz
+export NCCL_EP_JIT_SOURCE_DIR="$WORK/jit-include/nccl_ep"
+export NCCL_EP_JIT_BUILD_INCLUDE_DIR="$WORK/jit-include"
+export NCCL_EP_JIT_LOG=1
 
-SP=$(python -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
-NCCL_LIB_DIR=$(dirname "$(find "$SP" -name 'libnccl.so.2' | head -1)")
-export LD_LIBRARY_PATH="${NCCL_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 python -c "import ctypes; l=ctypes.CDLL('libnccl.so.2'); v=ctypes.c_int(); l.ncclGetVersion(ctypes.byref(v)); print('runtime nccl', v.value); assert v.value >= 23004"
 TE_CORE=$(find "$(python -c 'import transformer_engine, os; print(os.path.dirname(transformer_engine.__file__))')" -name 'libtransformer_engine.so*' | head -1)
 readelf -d "$TE_CORE" | grep NEEDED
