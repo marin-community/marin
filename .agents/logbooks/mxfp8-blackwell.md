@@ -637,3 +637,37 @@ author: mcwitt
 - MXFP8-004b (parallel, cheap): bench TE 2.15+ te.jax grouped_dense MXFP8 at
   our shapes on a pod — the NVIDIA-tuned narrow-N datapoint; time-boxed
   (arm64 install risk).
+
+### 2026-07-16 - MXFP8-004b: TE grouped_dense MXFP8 baseline — our kernels at parity or ahead of cuBLAS
+
+- Hypothesis: reference datapoint for H8 (NVIDIA-tuned narrow-N grouped MXFP8).
+- Commit Hash: 97cf4ac0b (bench_te_grouped.py + run_te_bench.sh install recipe
+  + bench_te_grouped_gb200.json).
+- Command: jobs `/mwittmann/mxfp8-004b-g1..g6` (g6 clean); TE 2.16.0 on
+  aarch64 = cu13 wheel + metapackage + jax-glue sdist compiled on-pod (~105 s,
+  needs synthetic CUDA_HOME from pip header wheels + libnccl link; 2.16.0 is
+  the LAST version with an aarch64 cu13 wheel). Pod: cuBLASLt 13.4.1 (>=13.3
+  MXFP8-grouped gate met), CUDA 13.0, cuDNN 9.19.
+- Result (M=262144, E=64 uniform, median 50):
+
+  | arm | w13 | w2 |
+  |---|---|---|
+  | TE mxfp8 gemm-only (pre-quantized) | 2085 TF/s | 1950 TF/s |
+  | TE mxfp8 fwd incl. quantize | 1230 | 1414 |
+  | TE mxfp8 fwd+bwd | 1499 | 1606 |
+  | TE bf16 fwd / fwd+bwd | 1310 / 1172 | 1323 / 1218 |
+
+  Numerics: mxfp8 fwd 3.7e-2 vs f32 ref; dgrad/wgrad 5.7e-2 vs TE bf16 grads
+  (TE uses an e5m2 cotangent per its HYBRID-compatible path).
+- Interpretation (`exploratory`):
+  - Our CuTeDSL kernels (2130/2027 fwd, 2041/2112 dgrad, 2209/2214 wgrad) are
+    at PARITY on w13 fwd and 4-12% AHEAD elsewhere vs NVIDIA-tuned cuBLAS
+    grouped MXFP8 at our narrow-N shapes — no free GEMM upside left in TE;
+    cuBLAS-via-TE is a legitimate fallback, not an upgrade.
+  - TE e2e mxfp8 fwd+bwd = 1.28-1.32x its own bf16, with the fwd leg
+    quantize-bound (mxfp8 fwd barely beats bf16 fwd) — independent
+    confirmation of the fusion thesis.
+  - Constraint worth remembering: TE V2 MXFP8 grouped requires K, N AND every
+    group size %128 — real skewed routing violates this; our kernel has no
+    such restriction.
+- Next action: awaiting MXFP8-004a (cudnn-frontend fused kernels).
