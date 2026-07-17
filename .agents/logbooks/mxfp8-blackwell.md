@@ -888,3 +888,33 @@ author: mcwitt
     collective work (EP16/32 CUBIN bug, EP32 SPMD-remat OOM) lives on
     #7012/#7279, not this thread.
 - Next action: launch MXFP8-006 (production-shape ladder).
+
+### 2026-07-17 - MXFP8-006 prep: d5120 tile tune clean + first multi-node gang green
+
+- Hypothesis: the fused kernels and the wired op carry to the production
+  shape (d5120/F2560, E_local=8 under EP8) and to multi-node gangs.
+- Commit Hash: e1f400e13 (gang init via `iris.runtime.jax_init.initialize_jax`
+  in the MFU harness; no-op single-process), 4ff2d1198
+  (`--d-model/--f-dim/--experts` on bench_mxfp8_fused.py).
+- Command: jobs `/mwittmann/mxfp8-006-tune1` (GB200x1, `--d-model 5120
+  --f-dim 2560 --experts 8 --tokens 262144 --ablate`) and
+  `/mwittmann/mxfp8-006-smoke2n` (2x GB200x4 gang, d2560/L13/B64 EP8 ring,
+  bf16 + mxfp8 chained, 10 steps).
+- Result (tune1, M=262144): all six legs pass correctness at the new shape
+  (relfrob 1.2e-5..9.9e-4); swiglu 2434 / gemm_w2 2440 / dswiglu 1648 /
+  gemm_w13 2484 / wgrad_w13 2393 / wgrad_w2 2554 TF/s — throughput UP vs the
+  d2560 shape (bigger K); ablation confirms the 004a default tilers
+  ((256,256) c(2,1); wgrad c(2,2)) remain best — no re-pin needed. dswiglu
+  is still the laggard leg.
+- Result (smoke2n): gang init works (process 0/2 + 1/2, 4 local devices
+  each); cross-node EP8 ring clean, NO CUBIN error at this size; bf16
+  10.93% vs mxfp8 11.50% MFU (B200-conv) even at the smoke config; mxfp8
+  loss tracks bf16 to ~5e-3 over 10 steps (10.9 loss class). mxfp8 arm
+  compile ~15 min (916 s first step).
+- Interpretation: no kernel-side blocker for the production shape; the
+  EP>=8-ring CUBIN hazard (#7012 B200MFU-032) did not appear at 2 nodes —
+  still unprobed at 8-node buffer sizes.
+- Next action: `/mwittmann/mxfp8-006-ladder` submitted — 8x GB200x4 (32
+  GPUs), d5120/L48/E64/K4, B512 (16 seq/GPU), EP8 ring, recompute_all,
+  MuonH, arms bf16(+trace) -> mxfp8(+trace) -> per-tensor-dense -> mxfp8+
+  save-qweights, 20 steps each.
