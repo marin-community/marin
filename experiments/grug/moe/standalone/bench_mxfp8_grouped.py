@@ -215,17 +215,11 @@ def run_case(
         fwd_fn = jax.jit(lambda a, b, asf, bsf, o: mxfp8_grouped_mm(a, asf, b, bsf, o, mma_tiler_mnk=mma_tiler))
         out = bench_kernel("mxfp8_fwd", fwd_fn, (x_q, w_fwd_q, x_sf, w_sf, offs), (m, n))
 
-        x_deq = dequantize_mxfp8(x_q, x_scales)
-        w_deq = jnp.swapaxes(dequantize_mxfp8(w_fwd_q, w_fwd_scales), 1, 2)  # (E, K, N)
-        ref = ragged_reference(x_deq, w_deq, group_sizes)
-        check("mxfp8_fwd", out, ref)
-        err_quant = rel_frob(out, ragged_reference(x.astype(jnp.float32), jnp.asarray(w, jnp.float32), group_sizes))
-        res["errors"]["mxfp8_fwd"]["vs_unquantized"] = err_quant
-        print(f"  mxfp8_fwd err(vs unquantized) {err_quant:.2e}", flush=True)
-        del x_q, x_scales, w_fwd_q, w_fwd_scales, x_sf, w_sf, out, x_deq, w_deq, ref
-
-        # bf16 baselines (fwd only; dgrad/wgrad have identical FLOPs and the
-        # dense yardstick is layout-insensitive).
+        # bf16 baselines BEFORE the memory-heavy f32 reference work: the
+        # ragged_dot lowering allocates an 80 GiB (M, E, N) f32 intermediate
+        # and OOMs on a reference-fragmented pool (job mxfp8-002b-g1). fwd
+        # only; dgrad/wgrad have identical FLOPs and the dense yardstick is
+        # layout-insensitive.
         ragged_fn = jax.jit(lambda xx, ww, gg: jax.lax.ragged_dot(xx, ww, gg, preferred_element_type=jnp.bfloat16))
         t = timed(ragged_fn, (x, w, gs_dev), iters, warmup)
         res["arms"]["bf16_ragged"] = {"ms": t * 1e3, "tfs": flops / t / 1e12}
@@ -236,6 +230,15 @@ def run_case(
         t = timed(dense_fn, (x, w_dense), iters, warmup)
         res["arms"]["bf16_dense"] = {"ms": t * 1e3, "tfs": flops / t / 1e12}
         print_arm(label, "bf16_dense", res["arms"]["bf16_dense"])
+
+        x_deq = dequantize_mxfp8(x_q, x_scales)
+        w_deq = jnp.swapaxes(dequantize_mxfp8(w_fwd_q, w_fwd_scales), 1, 2)  # (E, K, N)
+        ref = ragged_reference(x_deq, w_deq, group_sizes)
+        check("mxfp8_fwd", out, ref)
+        err_quant = rel_frob(out, ragged_reference(x.astype(jnp.float32), jnp.asarray(w, jnp.float32), group_sizes))
+        res["errors"]["mxfp8_fwd"]["vs_unquantized"] = err_quant
+        print(f"  mxfp8_fwd err(vs unquantized) {err_quant:.2e}", flush=True)
+        del x_q, x_scales, w_fwd_q, w_fwd_scales, x_sf, w_sf, out, x_deq, w_deq, ref
 
     # -------------------------------------------------------------- dgrad --
     # dx[M, K] = g[M, N] @ w^T[E, N, K]: 2Dx3D with contraction N; g quantized
