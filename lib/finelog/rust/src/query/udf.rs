@@ -28,6 +28,11 @@
 //! - `json_length(text) -> bigint` — element count of a top-level JSON array or
 //!   object.
 //!
+//! The `json_*` document argument is duck-typed: it may be a `Utf8` column of
+//! JSON text or a native `Map<Utf8,Utf8>` column, so a query keeps working
+//! unchanged if a column migrates from a JSON string to a map (a map value is
+//! treated as the equivalent JSON string value).
+//!
 //! NULL semantics: every UDF returns NULL when any argument is NULL (DuckDB's
 //! scalar NULL propagation). The `json_get*` extractors additionally return NULL
 //! when `text` is not a JSON object, the key is absent, or the value's JSON type
@@ -41,12 +46,14 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBuilder, Int64Builder, PrimitiveBuilder, StringArray,
-    StringBuilder,
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Builder, Int64Builder, MapArray,
+    StringArray, StringBuilder,
 };
-use arrow::datatypes::{ArrowPrimitiveType, DataType, Float64Type, Int64Type};
+use arrow::datatypes::DataType;
 use datafusion::error::{DataFusionError, Result as DFResult};
-use datafusion::logical_expr::{create_udf, ColumnarValue, ScalarUDF, Volatility};
+use datafusion::logical_expr::{
+    create_udf, ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 use regex::Regex;
 use serde_json::Value as JsonValue;
 
@@ -56,52 +63,39 @@ pub fn register_compat_udfs(ctx: &datafusion::prelude::SessionContext) {
     ctx.register_udf(prefix_udf());
     ctx.register_udf(regexp_matches_udf());
     ctx.register_udf(contains_udf());
-    ctx.register_udf(json_get_udf());
-    ctx.register_udf(json_get_int_udf());
-    ctx.register_udf(json_get_float_udf());
-    ctx.register_udf(json_get_bool_udf());
-    ctx.register_udf(json_contains_udf());
-    ctx.register_udf(json_length_udf());
+    for kind in [
+        JsonKind::Get,
+        JsonKind::GetInt,
+        JsonKind::GetFloat,
+        JsonKind::GetBool,
+        JsonKind::Contains,
+        JsonKind::Length,
+    ] {
+        ctx.register_udf(ScalarUDF::from(JsonUdf::new(kind)));
+    }
 }
 
-/// Coerce a `ColumnarValue` to a string array of length `n`, returning a
-/// borrowed `StringArray`. Scalars are broadcast.
-fn to_string_array(value: &ColumnarValue, n: usize) -> DFResult<ArrayRef> {
-    let arr = value.clone().into_array(n)?;
+/// Cast an already-materialized array to `Utf8` (a cheap clone when it already
+/// is). A non-castable type (e.g. `Map`) is a caller error.
+fn array_as_utf8(arr: &ArrayRef) -> DFResult<ArrayRef> {
     if arr.data_type() == &DataType::Utf8 {
-        Ok(arr)
+        Ok(Arc::clone(arr))
     } else {
-        arrow::compute::cast(&arr, &DataType::Utf8)
+        arrow::compute::cast(arr, &DataType::Utf8)
             .map_err(|e| DataFusionError::Execution(format!("expected string argument: {e}")))
     }
 }
 
-/// Borrow an `ArrayRef` known to hold `Utf8` (produced by [`to_string_array`]) as
-/// a `StringArray`.
+/// Coerce a `ColumnarValue` to a `Utf8` array of length `n` (scalars broadcast).
+fn to_string_array(value: &ColumnarValue, n: usize) -> DFResult<ArrayRef> {
+    array_as_utf8(&value.clone().into_array(n)?)
+}
+
+/// Borrow an `ArrayRef` known to hold `Utf8` as a `StringArray`.
 fn as_str(arr: &ArrayRef) -> &StringArray {
     arr.as_any()
         .downcast_ref::<StringArray>()
         .expect("cast to Utf8 yields StringArray")
-}
-
-/// Resolve a 1-arg UDF call to its row count and argument as a `Utf8` array of
-/// that length. Shared prologue for the unary string kernels below.
-fn resolve_unary_string_arg(args: &[ColumnarValue], name: &str) -> DFResult<(usize, ArrayRef)> {
-    if args.len() != 1 {
-        return Err(DataFusionError::Execution(format!(
-            "{name} expects 1 argument, got {}",
-            args.len()
-        )));
-    }
-    let n = args
-        .iter()
-        .find_map(|a| match a {
-            ColumnarValue::Array(arr) => Some(arr.len()),
-            ColumnarValue::Scalar(_) => None,
-        })
-        .unwrap_or(1);
-    let arg = to_string_array(&args[0], n)?;
-    Ok((n, arg))
 }
 
 /// Resolve a 2-arg UDF call to its row count and both arguments as `Utf8` arrays
@@ -143,87 +137,6 @@ fn binary_string_bool(
             out.append_null();
         } else {
             out.append_value(op(lhs.value(i), rhs.value(i))?);
-        }
-    }
-    Ok(ColumnarValue::Array(Arc::new(out.finish())))
-}
-
-/// Like [`binary_string_bool`], but the op returns `Option<String>`: `None`
-/// yields SQL NULL for that row (in addition to the NULL propagated when either
-/// input is NULL), so the result is a nullable `Utf8` array.
-fn binary_string_to_string(
-    args: &[ColumnarValue],
-    name: &str,
-    op: impl Fn(&str, &str) -> Option<String>,
-) -> DFResult<ColumnarValue> {
-    let (n, lhs, rhs) = resolve_binary_string_args(args, name)?;
-    let (lhs, rhs) = (as_str(&lhs), as_str(&rhs));
-    let mut out = StringBuilder::new();
-    for i in 0..n {
-        if lhs.is_null(i) || rhs.is_null(i) {
-            out.append_null();
-        } else {
-            out.append_option(op(lhs.value(i), rhs.value(i)));
-        }
-    }
-    Ok(ColumnarValue::Array(Arc::new(out.finish())))
-}
-
-/// Like [`binary_string_to_string`], but the op yields an Arrow primitive
-/// (`Int64`/`Float64`): `None` is SQL NULL for that row.
-fn binary_string_to_primitive<T: ArrowPrimitiveType>(
-    args: &[ColumnarValue],
-    name: &str,
-    op: impl Fn(&str, &str) -> Option<T::Native>,
-) -> DFResult<ColumnarValue> {
-    let (n, lhs, rhs) = resolve_binary_string_args(args, name)?;
-    let (lhs, rhs) = (as_str(&lhs), as_str(&rhs));
-    let mut out = PrimitiveBuilder::<T>::with_capacity(n);
-    for i in 0..n {
-        if lhs.is_null(i) || rhs.is_null(i) {
-            out.append_null();
-        } else {
-            out.append_option(op(lhs.value(i), rhs.value(i)));
-        }
-    }
-    Ok(ColumnarValue::Array(Arc::new(out.finish())))
-}
-
-/// Like [`binary_string_to_string`], but the op yields `Option<bool>`: `None` is
-/// SQL NULL for that row (distinct from a non-null `false`).
-fn binary_string_to_bool(
-    args: &[ColumnarValue],
-    name: &str,
-    op: impl Fn(&str, &str) -> Option<bool>,
-) -> DFResult<ColumnarValue> {
-    let (n, lhs, rhs) = resolve_binary_string_args(args, name)?;
-    let (lhs, rhs) = (as_str(&lhs), as_str(&rhs));
-    let mut out = BooleanBuilder::with_capacity(n);
-    for i in 0..n {
-        if lhs.is_null(i) || rhs.is_null(i) {
-            out.append_null();
-        } else {
-            out.append_option(op(lhs.value(i), rhs.value(i)));
-        }
-    }
-    Ok(ColumnarValue::Array(Arc::new(out.finish())))
-}
-
-/// Unary counterpart of [`binary_string_to_primitive`] for `Int64` results:
-/// the op maps the single string argument to `Option<i64>` (`None` is SQL NULL).
-fn unary_string_to_int(
-    args: &[ColumnarValue],
-    name: &str,
-    op: impl Fn(&str) -> Option<i64>,
-) -> DFResult<ColumnarValue> {
-    let (n, arg) = resolve_unary_string_arg(args, name)?;
-    let arg = as_str(&arg);
-    let mut out = Int64Builder::with_capacity(n);
-    for i in 0..n {
-        if arg.is_null(i) {
-            out.append_null();
-        } else {
-            out.append_option(op(arg.value(i)));
         }
     }
     Ok(ColumnarValue::Array(Arc::new(out.finish())))
@@ -285,11 +198,11 @@ fn json_object_value(text: &str, key: &str) -> Option<JsonValue> {
     }
 }
 
-/// Text rendering of [`json_object_value`]: a JSON string unquoted, other scalars
-/// and nested arrays/objects as their compact JSON form, an explicit JSON `null`
-/// as SQL NULL.
-fn json_get_value(text: &str, key: &str) -> Option<String> {
-    match json_object_value(text, key)? {
+/// Render a resolved JSON value as text for `json_get`: a JSON string unquoted,
+/// other scalars and nested arrays/objects as their compact JSON form, an
+/// explicit JSON `null` as SQL NULL.
+fn json_value_as_text(value: JsonValue) -> Option<String> {
+    match value {
         JsonValue::Null => None,
         JsonValue::String(s) => Some(s),
         other => Some(other.to_string()),
@@ -306,85 +219,278 @@ fn json_length_value(text: &str) -> Option<i64> {
     }
 }
 
-fn json_get_udf() -> ScalarUDF {
-    create_udf(
-        "json_get",
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Utf8,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            binary_string_to_string(args, "json_get", json_get_value)
-        }),
-    )
+/// Per-row outcome of a `json_*` document + key lookup. Distinguishes a NULL
+/// input cell (NULL output for every function) from an input that is present but
+/// has no value at the key (NULL for the getters, `false` for `json_contains`).
+enum Resolved {
+    /// The document or the key cell is SQL NULL.
+    InputNull,
+    /// Inputs are present, but the document is not a JSON object / the key is
+    /// absent from the object or map.
+    Absent,
+    /// The value at the key. For a `Map<Utf8,Utf8>` it is a `String` (or `Null`
+    /// for a null map value); for a JSON document it is the raw JSON value.
+    Value(JsonValue),
 }
 
-fn json_get_int_udf() -> ScalarUDF {
-    create_udf(
-        "json_get_int",
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Int64,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            binary_string_to_primitive::<Int64Type>(args, "json_get_int", |text, key| {
-                json_object_value(text, key)?.as_i64()
+impl Resolved {
+    fn from_object_value(v: Option<JsonValue>) -> Self {
+        match v {
+            Some(jv) => Resolved::Value(jv),
+            None => Resolved::Absent,
+        }
+    }
+}
+
+/// Look up `key` in row `row` of a `Map<Utf8,Utf8>` column.
+fn map_lookup(
+    keys: &StringArray,
+    values: &StringArray,
+    offsets: &[i32],
+    row: usize,
+    key: &str,
+) -> Resolved {
+    let (start, end) = (offsets[row] as usize, offsets[row + 1] as usize);
+    for j in start..end {
+        if !keys.is_null(j) && keys.value(j) == key {
+            return Resolved::Value(if values.is_null(j) {
+                JsonValue::Null
+            } else {
+                JsonValue::String(values.value(j).to_string())
+            });
+        }
+    }
+    Resolved::Absent
+}
+
+/// Which `json_*` function a [`JsonUdf`] implements; fixes its name, arity, and
+/// Arrow return type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum JsonKind {
+    Get,
+    GetInt,
+    GetFloat,
+    GetBool,
+    Contains,
+    Length,
+}
+
+impl JsonKind {
+    fn udf_name(self) -> &'static str {
+        match self {
+            JsonKind::Get => "json_get",
+            JsonKind::GetInt => "json_get_int",
+            JsonKind::GetFloat => "json_get_float",
+            JsonKind::GetBool => "json_get_bool",
+            JsonKind::Contains => "json_contains",
+            JsonKind::Length => "json_length",
+        }
+    }
+
+    fn return_type(self) -> DataType {
+        match self {
+            JsonKind::Get => DataType::Utf8,
+            JsonKind::GetInt | JsonKind::Length => DataType::Int64,
+            JsonKind::GetFloat => DataType::Float64,
+            JsonKind::GetBool | JsonKind::Contains => DataType::Boolean,
+        }
+    }
+
+    fn arity(self) -> usize {
+        match self {
+            JsonKind::Length => 1,
+            _ => 2,
+        }
+    }
+}
+
+/// A duck-typed `json_*` scalar UDF. The document argument may be a `Utf8` column
+/// of JSON text or a native `Map<Utf8,Utf8>` column, so a query keeps working if
+/// a column's physical type migrates from a JSON string to a map. The `any`
+/// signature admits either; the actual type is inspected per call.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct JsonUdf {
+    kind: JsonKind,
+    signature: Signature,
+}
+
+impl JsonUdf {
+    fn new(kind: JsonKind) -> Self {
+        Self {
+            kind,
+            signature: Signature::any(kind.arity(), Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for JsonUdf {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        self.kind.udf_name()
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(self.kind.return_type())
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let n = args.number_rows;
+        let args = args.args;
+        if args.len() != self.kind.arity() {
+            return Err(DataFusionError::Execution(format!(
+                "{} expects {} argument(s), got {}",
+                self.kind.udf_name(),
+                self.kind.arity(),
+                args.len()
+            )));
+        }
+        if let JsonKind::Length = self.kind {
+            return json_length_column(&args[0], n);
+        }
+        let doc = args[0].clone().into_array(n)?;
+        let key = to_string_array(&args[1], n)?;
+        json_get_column(self.kind, &doc, as_str(&key), n)
+    }
+}
+
+/// Evaluate a 2-arg `json_*` accessor over `doc` (a `Utf8` JSON or
+/// `Map<Utf8,Utf8>` column) and `key`, dispatching on the document's physical
+/// type and building the kind's output array.
+fn json_get_column(
+    kind: JsonKind,
+    doc: &ArrayRef,
+    key: &StringArray,
+    n: usize,
+) -> DFResult<ColumnarValue> {
+    let out = match doc.data_type() {
+        DataType::Map(_, _) => {
+            let map = doc
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .expect("Map DataType downcasts to MapArray");
+            let keys = as_str(map.keys());
+            let values = as_str(map.values());
+            let offsets = map.value_offsets();
+            build_json_output(kind, n, |i| {
+                if map.is_null(i) || key.is_null(i) {
+                    Resolved::InputNull
+                } else {
+                    map_lookup(keys, values, offsets, i, key.value(i))
+                }
             })
-        }),
-    )
-}
-
-fn json_get_float_udf() -> ScalarUDF {
-    create_udf(
-        "json_get_float",
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Float64,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            binary_string_to_primitive::<Float64Type>(args, "json_get_float", |text, key| {
-                json_object_value(text, key)?.as_f64()
+        }
+        _ => {
+            let text = array_as_utf8(doc)?;
+            let text = as_str(&text);
+            build_json_output(kind, n, |i| {
+                if text.is_null(i) || key.is_null(i) {
+                    Resolved::InputNull
+                } else {
+                    Resolved::from_object_value(json_object_value(text.value(i), key.value(i)))
+                }
             })
-        }),
-    )
+        }
+    };
+    Ok(ColumnarValue::Array(out))
 }
 
-fn json_get_bool_udf() -> ScalarUDF {
-    create_udf(
-        "json_get_bool",
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Boolean,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            binary_string_to_bool(args, "json_get_bool", |text, key| {
-                json_object_value(text, key)?.as_bool()
-            })
-        }),
-    )
+/// Build the output array for a 2-arg `json_*` kind from a per-row [`Resolved`].
+fn build_json_output(kind: JsonKind, n: usize, resolve: impl Fn(usize) -> Resolved) -> ArrayRef {
+    match kind {
+        JsonKind::Get => {
+            let mut b = StringBuilder::new();
+            for i in 0..n {
+                match resolve(i) {
+                    Resolved::Value(jv) => b.append_option(json_value_as_text(jv)),
+                    _ => b.append_null(),
+                }
+            }
+            Arc::new(b.finish())
+        }
+        JsonKind::GetInt => {
+            let mut b = Int64Builder::with_capacity(n);
+            for i in 0..n {
+                match resolve(i) {
+                    Resolved::Value(jv) => b.append_option(jv.as_i64()),
+                    _ => b.append_null(),
+                }
+            }
+            Arc::new(b.finish())
+        }
+        JsonKind::GetFloat => {
+            let mut b = Float64Builder::with_capacity(n);
+            for i in 0..n {
+                match resolve(i) {
+                    Resolved::Value(jv) => b.append_option(jv.as_f64()),
+                    _ => b.append_null(),
+                }
+            }
+            Arc::new(b.finish())
+        }
+        JsonKind::GetBool => {
+            let mut b = BooleanBuilder::with_capacity(n);
+            for i in 0..n {
+                match resolve(i) {
+                    Resolved::Value(jv) => b.append_option(jv.as_bool()),
+                    _ => b.append_null(),
+                }
+            }
+            Arc::new(b.finish())
+        }
+        JsonKind::Contains => {
+            let mut b = BooleanBuilder::with_capacity(n);
+            for i in 0..n {
+                match resolve(i) {
+                    Resolved::InputNull => b.append_null(),
+                    Resolved::Absent => b.append_value(false),
+                    Resolved::Value(_) => b.append_value(true),
+                }
+            }
+            Arc::new(b.finish())
+        }
+        JsonKind::Length => unreachable!("json_length is unary; handled by json_length_column"),
+    }
 }
 
-fn json_contains_udf() -> ScalarUDF {
-    create_udf(
-        "json_contains",
-        vec![DataType::Utf8, DataType::Utf8],
-        DataType::Boolean,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            // Total predicate: a non-object or absent key is `false`, not NULL.
-            binary_string_bool(args, "json_contains", |text, key| {
-                Ok(json_object_value(text, key).is_some())
-            })
-        }),
-    )
-}
-
-fn json_length_udf() -> ScalarUDF {
-    create_udf(
-        "json_length",
-        vec![DataType::Utf8],
-        DataType::Int64,
-        Volatility::Immutable,
-        Arc::new(|args: &[ColumnarValue]| {
-            unary_string_to_int(args, "json_length", json_length_value)
-        }),
-    )
+/// Evaluate `json_length` over a `Utf8` JSON or `Map<Utf8,Utf8>` column.
+fn json_length_column(arg: &ColumnarValue, n: usize) -> DFResult<ColumnarValue> {
+    let arr = arg.clone().into_array(n)?;
+    let mut b = Int64Builder::with_capacity(n);
+    match arr.data_type() {
+        DataType::Map(_, _) => {
+            let map = arr
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .expect("Map DataType downcasts to MapArray");
+            let offsets = map.value_offsets();
+            for i in 0..n {
+                if map.is_null(i) {
+                    b.append_null();
+                } else {
+                    b.append_value(i64::from(offsets[i + 1] - offsets[i]));
+                }
+            }
+        }
+        _ => {
+            let text = array_as_utf8(&arr)?;
+            let text = as_str(&text);
+            for i in 0..n {
+                if text.is_null(i) {
+                    b.append_null();
+                } else {
+                    b.append_option(json_length_value(text.value(i)));
+                }
+            }
+        }
+    }
+    Ok(ColumnarValue::Array(Arc::new(b.finish())))
 }
 
 #[cfg(test)]
@@ -807,5 +913,174 @@ mod tests {
             eval("json_contains", vec![Some(r#"{"k":1}"#)], vec![None]).await,
             vec![None]
         );
+    }
+
+    /// One `Map<Utf8,Utf8>` cell for [`run_map_udf`]: `None` is a NULL map cell,
+    /// `Some(entries)` is a map of `(key, Option<value>)` pairs (a `None` value
+    /// is a null map value).
+    type MapRow<'a> = Option<Vec<(&'a str, Option<&'a str>)>>;
+
+    /// Register `(id, m, r)` with a native `Map<Utf8,Utf8>` column `m` and run
+    /// `SELECT {proj} AS out FROM t ORDER BY id`.
+    async fn run_map_udf(
+        proj: &str,
+        docs: Vec<MapRow<'_>>,
+        keys: Vec<Option<&str>>,
+    ) -> Vec<RecordBatch> {
+        use arrow::array::MapBuilder;
+        let n = docs.len();
+        let mut mb = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        for row in docs {
+            match row {
+                None => mb.append(false).unwrap(),
+                Some(entries) => {
+                    for (k, v) in entries {
+                        mb.keys().append_value(k);
+                        match v {
+                            Some(val) => mb.values().append_value(val),
+                            None => mb.values().append_null(),
+                        }
+                    }
+                    mb.append(true).unwrap();
+                }
+            }
+        }
+        let map = mb.finish();
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("m", map.data_type().clone(), true),
+            Field::new("r", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..n as i64)) as ArrayRef,
+                Arc::new(map) as ArrayRef,
+                Arc::new(StringArray::from(keys)) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let ctx = SessionContext::new();
+        register_compat_udfs(&ctx);
+        ctx.register_batch("t", batch).unwrap();
+        ctx.sql(&format!("SELECT {proj} AS out FROM t ORDER BY id"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn json_get_reads_a_native_map_column() {
+        // Duck-typed over a Map<Utf8,Utf8>: json_get returns the value string; an
+        // absent key, a NULL map cell, and a null map value all yield NULL.
+        let m = Some(vec![("scope", Some("fleet")), ("region", Some("us-east"))]);
+        let got = column::<StringArray, _>(
+            &run_map_udf(
+                "json_get(m, r)",
+                vec![
+                    m.clone(),
+                    m.clone(),
+                    Some(vec![("scope", Some("local"))]),
+                    None,
+                    Some(vec![("region", None)]),
+                ],
+                vec![
+                    Some("scope"),
+                    Some("region"),
+                    Some("region"),
+                    Some("scope"),
+                    Some("region"),
+                ],
+            )
+            .await,
+            |c, i| c.value(i).to_string(),
+        );
+        assert_eq!(got, vec![some("fleet"), some("us-east"), None, None, None]);
+    }
+
+    #[tokio::test]
+    async fn json_contains_on_a_native_map_column() {
+        let got = column::<BooleanArray, _>(
+            &run_map_udf(
+                "json_contains(m, r)",
+                vec![
+                    Some(vec![("a", Some("x")), ("z", None)]),
+                    Some(vec![("a", Some("x")), ("z", None)]),
+                    Some(vec![("a", Some("x"))]),
+                    None,
+                ],
+                vec![Some("a"), Some("z"), Some("missing"), Some("a")],
+            )
+            .await,
+            |c, i| c.value(i),
+        );
+        // Present key -> true (a null value still counts); absent -> false; NULL
+        // map cell -> NULL.
+        assert_eq!(got, vec![Some(true), Some(true), Some(false), None]);
+    }
+
+    #[tokio::test]
+    async fn json_length_on_a_native_map_column() {
+        let got = column::<Int64Array, _>(
+            &run_map_udf(
+                "json_length(m)",
+                vec![
+                    Some(vec![("a", Some("1")), ("b", Some("2"))]),
+                    Some(vec![]),
+                    None,
+                ],
+                vec![None, None, None],
+            )
+            .await,
+            |c, i| c.value(i),
+        );
+        assert_eq!(got, vec![Some(2), Some(0), None]);
+    }
+
+    #[tokio::test]
+    async fn json_get_int_on_a_map_is_null_because_values_are_strings() {
+        // A Map<Utf8,Utf8> value is a JSON string, so the typed getters (which do
+        // not coerce strings) are NULL — cast `json_get(...)` for a number.
+        let got = column::<Int64Array, _>(
+            &run_map_udf(
+                "json_get_int(m, r)",
+                vec![Some(vec![("n", Some("5"))])],
+                vec![Some("n")],
+            )
+            .await,
+            |c, i| c.value(i),
+        );
+        assert_eq!(got, vec![None]);
+    }
+
+    #[tokio::test]
+    async fn json_get_is_transparent_across_string_and_map_columns() {
+        // The point of duck-typing: identical results whether the column is a
+        // JSON string or a native map, so a query survives the migration.
+        let from_string = eval_str(
+            "json_get",
+            vec![
+                Some(r#"{"region":"us-east"}"#),
+                Some(r#"{"region":"us-west"}"#),
+            ],
+            vec![Some("region"), Some("region")],
+        )
+        .await;
+        let from_map = column::<StringArray, _>(
+            &run_map_udf(
+                "json_get(m, r)",
+                vec![
+                    Some(vec![("region", Some("us-east"))]),
+                    Some(vec![("region", Some("us-west"))]),
+                ],
+                vec![Some("region"), Some("region")],
+            )
+            .await,
+            |c, i| c.value(i).to_string(),
+        );
+        assert_eq!(from_string, from_map);
+        assert_eq!(from_string, vec![some("us-east"), some("us-west")]);
     }
 }
