@@ -918,3 +918,54 @@ author: mcwitt
   GPUs), d5120/L48/E64/K4, B512 (16 seq/GPU), EP8 ring, recompute_all,
   MuonH, arms bf16(+trace) -> mxfp8(+trace) -> per-tensor-dense -> mxfp8+
   save-qweights, 20 steps each.
+
+### 2026-07-17 - MXFP8-006 ladder attempt 1: step-0 OOM (851.61 GiB temp arena) — killed, diagnosing off-gang
+
+- Hypothesis: the MXFP8-005 stack runs unchanged at the production shape
+  (d5120/L48/E64/K4, B512 = 16 seq/GPU, 8x GB200x4, EP8 ring,
+  recompute_all).
+- Commit Hash: 0d728ba89 (compile_probe.py added after the failure).
+- Command: `/mwittmann/mxfp8-006-ladder` (8 replicas GB200x4, 4 chained
+  arms). Full log harvested post-mortem (job killed 21:40 UTC).
+- Result: NOT a compile hang. ARM-bf16 compiled in ~30 min (18:57->19:29
+  UTC incl. init) then died at step 0:
+  `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 851.61GiB`
+  (the whole jit_train_step temp arena; pool is 138 GiB at the 0.75 mem
+  fraction). The watched "3 h compile" was ARM-mxfp8 (chain continued past
+  the failure); its compile emitted nothing for 83 min before the kill —
+  mxfp8-arm compile length at 32-way is its own open question (CuTe
+  subprocess probes run at trace time). All four arms would have OOM'd.
+- Off-gang diagnosis so far (compile_probe.py — AOT lower+compile with
+  abstract avals + real output shardings, prints memory_analysis, never
+  executes; runs on CPU fake devices or small GPU gangs):
+  - CPU probe (32 fake devices, reference attention): temp 627.99 GiB at
+    B32/L48, 163.07 GiB at B32/L12 — linear in L (12.9 GiB/layer),
+    near-flat in B. BUT the buffer dump shows the CPU arena is dominated
+    by `f32[40,4096,4096]` reference-attention score matrices — a probe
+    artifact (GPU runs FA4, no S^2 buffers). CPU probes of this graph
+    CANNOT stand in for GPU memory behavior unless attention is excluded;
+    recorded as a probe-fidelity gotcha.
+  - GPU probes in flight on 2-node gangs (real FA4/backend, B128 = same
+    16 seq/GPU): `/mwittmann/mxfp8-006-probe2n` (EP8 default vs
+    latency-hiding-scheduler-off A/B) and `/mwittmann/mxfp8-006-probe2nb`
+    (EP2/EP4 — at 8 GPUs EP8 degenerates to data=1, but the failing
+    32-GPU mesh was (data=4, expert=8) and the SPMD "involuntary full
+    rematerialization" reshards fire on the data axis).
+- Structural facts recorded while reading the branch model: the layer
+  stack is a Python for-loop of 48 individually-`eqx.filter_checkpoint`ed
+  blocks (NO lax.scan on this branch); nothing data-forces remat-forwards
+  to serialize in the backward, so scheduler-driven concurrent remat is a
+  live hypothesis alongside SPMD reshard synthesis. Suspect list also
+  includes MuonH NS whitening (must gather full weight matrices; no data
+  dependence between per-weight updates -> XLA free to gather all at
+  once; batch-independent, ∝ params ≈ the observed arena class).
+- Ops notes: parallel session switched the shared checkout to
+  research/mcwitt/7331-nccl-ep mid-day — this thread now works from a git
+  worktree at ~/projects/marin-7282 with PYTHONPATH prepended over the
+  venv editables (same class of hazard as B200MFU-014's stale-editable
+  incident). Log reads against RUNNING jobs kept light per the 2026-07-17
+  wedge finding (heavy reads freeze the training process); `--no-tail`
+  reads from the log HEAD, not the tail — use plain `--max-lines N` for
+  tails.
+- Next action: read GPU probe memory_analysis; identify the arena owner;
+  fix; re-probe; only then relaunch the ladder.
