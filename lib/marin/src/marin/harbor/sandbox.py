@@ -20,6 +20,7 @@ import contextlib
 import tempfile
 import uuid
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from harbor.models.task.config import EnvironmentConfig
@@ -29,12 +30,19 @@ from harbor.models.trial.paths import TrialPaths
 from marin.harbor.iris_environment import IrisEnvironment
 
 
+@dataclass(frozen=True)
+class EnvironmentSpec:
+    config: EnvironmentConfig
+    environment_dir: Path
+    name: str
+
+
 def resolve_environment_spec(
     task_dir: Path | str | None,
     docker_image: str | None,
     empty_environment_dir: Path,
-) -> tuple[EnvironmentConfig, Path, str]:
-    """Resolve (env config, environment dir, name) from a task dir or bare image.
+) -> EnvironmentSpec:
+    """Resolve the sandbox environment spec from a task dir or bare image.
 
     Exactly one of ``task_dir`` or ``docker_image`` must be given.
     ``empty_environment_dir`` is used as the environment dir for the bare-image
@@ -44,10 +52,10 @@ def resolve_environment_spec(
         raise ValueError("Pass exactly one of task_dir or docker_image.")
     if task_dir is not None:
         task = Task(task_dir, disable_verification=True)
-        return task.config.environment, Path(task.paths.environment_dir), task.short_name
+        return EnvironmentSpec(task.config.environment, Path(task.paths.environment_dir), task.short_name)
     assert docker_image is not None
     name = docker_image.rsplit("/", 1)[-1].split(":")[0]
-    return EnvironmentConfig(docker_image=docker_image), empty_environment_dir, name
+    return EnvironmentSpec(EnvironmentConfig(docker_image=docker_image), empty_environment_dir, name)
 
 
 @contextlib.asynccontextmanager
@@ -87,7 +95,7 @@ async def iris_sandbox(
     """
     with contextlib.ExitStack() as stack:
         empty_dir = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="iris-sandbox-env-")))
-        env_config, environment_dir, environment_name = resolve_environment_spec(task_dir, docker_image, empty_dir)
+        spec = resolve_environment_spec(task_dir, docker_image, empty_dir)
 
         if trial_dir is None:
             trial_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="iris-sandbox-trial-"))
@@ -95,11 +103,11 @@ async def iris_sandbox(
         trial_paths.mkdir()
 
         env = IrisEnvironment(
-            environment_dir=environment_dir,
-            environment_name=environment_name,
-            session_id=f"{name or environment_name}__{uuid.uuid4().hex[:8]}",
+            environment_dir=spec.environment_dir,
+            environment_name=spec.name,
+            session_id=f"{name or spec.name}__{uuid.uuid4().hex[:8]}",
             trial_paths=trial_paths,
-            task_env_config=env_config,
+            task_env_config=spec.config,
             override_cpus=cpus,
             override_memory_mb=memory_mb,
             override_storage_mb=storage_mb,

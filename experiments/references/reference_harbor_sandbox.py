@@ -35,12 +35,15 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.namespacing import user_namespaced_name
 from marin.harbor.sandbox import iris_sandbox
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
 CLUSTER = "marin"
 EPISODES = 3
+# Where the verifier writes its score inside the sandbox; test.sh and the
+# downloader below must agree on it.
+REWARD_PATH = "/logs/verifier/reward.txt"
 
 _TASK_TOML = """\
 schema_version = "1.1"
@@ -73,13 +76,13 @@ mkdir -p /app
 echo "Hello, world!" > /app/hello.txt
 """
 
-_TEST_SH = """\
+_TEST_SH = f"""\
 #!/bin/bash
-mkdir -p /logs/verifier
+mkdir -p {os.path.dirname(REWARD_PATH)}
 if grep -q "Hello, world!" /app/hello.txt; then
-  echo 1 > /logs/verifier/reward.txt
+  echo 1 > {REWARD_PATH}
 else
-  echo 0 > /logs/verifier/reward.txt
+  echo 0 > {REWARD_PATH}
 fi
 """
 
@@ -114,7 +117,7 @@ async def _run_episode(task_dir: Path, cluster: str, index: int) -> float:
 
         with tempfile.TemporaryDirectory() as tmp:
             reward_path = Path(tmp) / "reward.txt"
-            await sandbox.download_file("/logs/verifier/reward.txt", reward_path)
+            await sandbox.download_file(REWARD_PATH, reward_path)
             reward = float(reward_path.read_text())
     logger.info("episode %d reward=%s", index, reward)
     return reward
@@ -129,8 +132,8 @@ def run_hello_world(config: HelloWorldConfig) -> None:
             return list(await asyncio.gather(*episodes))
 
     rewards = asyncio.run(run())
-    with open_url(os.path.join(config.output_path, "results.json"), "w") as f:
-        json.dump({"rewards": rewards, "mean_reward": sum(rewards) / len(rewards)}, f, indent=2)
+    results = {"rewards": rewards, "mean_reward": sum(rewards) / len(rewards)}
+    (StoragePath(config.output_path) / "results.json").write_text(json.dumps(results, indent=2))
 
 
 def build(*, version: str = "dev") -> ArtifactStep[Artifact]:

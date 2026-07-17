@@ -3,15 +3,11 @@
 
 """Harbor environment backend that runs each sandbox as an Iris job.
 
-The sandbox *is* the Iris task container: the task's prebuilt ``docker_image``
-is submitted as the job's ``task_image`` with a ``sleep infinity`` entrypoint,
-and all interaction goes through the controller's ``ExecInContainer`` RPC.
-No docker-in-docker and no elevated container profile is required. CPU-only
-resource requests carry no device or preemptible constraint, so sandboxes
-bin-pack onto spare host CPUs of preemptible TPU workers.
-
-Only prebuilt-image tasks (``[environment] docker_image = ...``) are
-supported; Dockerfile/compose builds are not.
+Each sandbox runs as its own CPU-only Iris job on cluster workers (bin-packed
+onto spare host CPU, TPU hosts included), needing no docker socket and no
+elevated container profile. Only prebuilt-image tasks
+(``[environment] docker_image = ...``) are supported; Dockerfile/compose
+builds are not.
 
 Usage:
     harbor trials start -p <task-dir> -a oracle \\
@@ -79,8 +75,8 @@ class IrisEnvironment(BaseEnvironment):
                 be scheduled and reach RUNNING.
         """
         super().__init__(*args, **kwargs)
-        if cluster is None and controller_url is None:
-            raise ValueError("IrisEnvironment requires a `cluster` or `controller_url` kwarg.")
+        if (cluster is None) == (controller_url is None):
+            raise ValueError("IrisEnvironment requires exactly one of `cluster` or `controller_url`.")
         self._cluster = cluster
         self._controller_url = controller_url
         self._scheduling_timeout = int(scheduling_timeout_sec)
