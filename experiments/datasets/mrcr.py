@@ -44,12 +44,16 @@ class MrcrTransformConfig:
     output_path: str
 
 
+def _mrcr_format() -> ChatLmDatasetFormat:
+    return ChatLmDatasetFormat(chat_template=_MRCR_CHAT_TEMPLATE, pack=True, slice_strategy="right")
+
+
 class MrcrTokenizedCache(TokenizedCache):
     """MRCR cache consumed as packed, right-sliced tagged-eval examples."""
 
     @property
     def format(self) -> ChatLmDatasetFormat:
-        return ChatLmDatasetFormat(chat_template=_MRCR_CHAT_TEMPLATE, pack=True, slice_strategy="right")
+        return _mrcr_format()
 
 
 def _render_prompt(messages: list[_MrcrMessage]) -> str:
@@ -140,7 +144,7 @@ def _tokenized_mrcr(
             validation_paths=[prefix_join(ctx.artifact_path(raw), glob)],
             cache_path=ctx.output_path,
             tokenizer=tokenizer,
-            format=ChatLmDatasetFormat(chat_template=_MRCR_CHAT_TEMPLATE, pack=True, slice_strategy="right"),
+            format=_mrcr_format(),
             tags=list(tags),
         )
 
