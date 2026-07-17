@@ -161,6 +161,7 @@ def _row(
     return {
         "ts": ts,
         "date": date,
+        "lane_id": lane.id,
         "lane": lane.short_label,
         "label": lane.label,
         "group": lane.group,
@@ -270,3 +271,20 @@ def project_nightlies(
             else:
                 rows.append(_empty_row(lane, date, ts, expected, snapshot, now))
     return rows
+
+
+def nightly_matrix(rows: Sequence[dict]) -> list[dict]:
+    """Pivot per-cell rows into one wide row per day for the state-timeline panel.
+
+    Each output row is `{ts, date, <lane_id>: status_code, ...}` — one key per lane
+    — ordered by day ascending so the panel's time axis reads left to right. A cell
+    with no color code (a day the lane was not scheduled or not yet introduced)
+    carries `None`, which the panel renders as a gap. State-timeline needs one
+    series per lane, which is a numeric field per lane; the long per-cell rows do
+    not split into series, so the endpoint serves this wide view instead.
+    """
+    by_day: dict[int, dict] = {}
+    for row in rows:
+        day = by_day.setdefault(row["ts"], {"ts": row["ts"], "date": row["date"]})
+        day[row["lane_id"]] = row["status_code"]
+    return [by_day[ts] for ts in sorted(by_day)]

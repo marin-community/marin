@@ -19,7 +19,7 @@ from urllib.parse import quote
 import httpx
 from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_REPO
 from errors import UpstreamError
-from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
+from nightly import NightlyLaneSnapshot, NightlyRun, nightly_matrix, project_nightlies
 from nightly_config import NIGHTLY_LANES, NightlyLane
 
 logger = logging.getLogger(__name__)
@@ -212,11 +212,13 @@ class GithubSource:
         return NightlyLaneSnapshot(lane_id=lane.id, runs=runs, error=None)
 
     def nightlies(self, now: datetime | None = None) -> list[dict]:
-        """One flat row per (lane, day) over the trailing 7 UTC days.
+        """The nightly regression matrix: one wide row per day over the trailing 7 UTC days.
 
-        Each configured lane is fetched independently; a lane whose fetch fails
-        renders its cells "unavailable" rather than failing the whole matrix.
+        Each row carries a `status_code` per lane keyed by lane id, which the
+        state-timeline panel renders as one row per lane. Each configured lane is
+        fetched independently; a lane whose fetch fails renders its cells
+        "unavailable" rather than failing the whole matrix.
         """
         effective_now = now or datetime.now(UTC)
         snapshots = [self._nightly_lane_snapshot(lane, effective_now) for lane in NIGHTLY_LANES]
-        return project_nightlies(NIGHTLY_LANES, snapshots, effective_now)
+        return nightly_matrix(project_nightlies(NIGHTLY_LANES, snapshots, effective_now))

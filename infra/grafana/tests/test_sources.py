@@ -276,26 +276,11 @@ def test_nightlies_endpoint_returns_full_matrix():
         )
 
     rows = _app(_FakeIris(TARGET), github_source=_github(handler)).get("/github/nightlies").json()
-    # One row per configured lane per day over the trailing 7 days.
-    assert len(rows) == len(NIGHTLY_LANES) * 7
-    expected_keys = {
-        "ts",
-        "date",
-        "lane",
-        "label",
-        "group",
-        "subgroup",
-        "repository",
-        "workflow",
-        "state",
-        "status_code",
-        "healthy",
-        "due",
-        "duration_state",
-        "duration_seconds",
-        "conclusion",
-        "url",
-    }
-    assert all(set(row) == expected_keys for row in rows)
-    # StrEnum cell/duration states must cross the wire as plain strings, not repr.
-    assert all(isinstance(row["state"], str) and "." not in row["state"] for row in rows)
+    # One wide row per day over the trailing 7 days, keyed by lane id per cell.
+    assert len(rows) == 7
+    lane_ids = {lane.id for lane in NIGHTLY_LANES}
+    assert all(set(row) == {"ts", "date"} | lane_ids for row in rows)
+    # Each cell is a numeric status code or a null gap, never a nested object.
+    assert all(cell is None or isinstance(cell, int) for row in rows for cell in (row[lid] for lid in lane_ids))
+    # Days ascend so the panel's time axis reads left to right.
+    assert [row["ts"] for row in rows] == sorted(row["ts"] for row in rows)

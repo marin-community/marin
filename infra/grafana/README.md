@@ -53,8 +53,9 @@ admin-only — so an authed controller would break `jobs` and the ad-hoc `query`
 GitHub: `ferries`, `builds`, and `nightlies` fan out over the Actions REST and GraphQL
 APIs with a server-side token (the rate-limit shield), cached, panel fields precomputed.
 `nightlies` fetches each configured nightly workflow (across the marin repo and the fork
-repos) and projects the runs onto a 7-day-by-lane matrix — one row per lane and day, with
-the cell's health, overdue, and duration state resolved server-side.
+repos), classifies each (lane, day) cell server-side — health, overdue, and duration state —
+and serves the result as a wide matrix: one row per day, a per-lane status code keyed by lane
+id, which the state-timeline panel renders as one row per lane over the trailing week.
 
 The controller and finelog IPs are resolved from GCE labels and refreshed after a
 connection failure. A dead controller or GitHub returns 5xx (not empty rows) and the

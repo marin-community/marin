@@ -994,6 +994,7 @@
     {
       "id": 18,
       "type": "state-timeline",
+      "timeFrom": "8d",
       "title": "Nightly lanes (7 days)",
       "description": "Each nightly workflow lane over the last 7 UTC days: green healthy, yellow slow, red failed, dark-red missing (overdue, no run), orange source unavailable, blue not yet due. Blank cells are days the lane was not scheduled or not yet introduced.",
       "datasource": {
@@ -1016,17 +1017,74 @@
             {
               "type": "value",
               "options": {
-                "1": { "text": "healthy", "color": "green", "index": 0 },
-                "2": { "text": "slow", "color": "yellow", "index": 1 },
-                "3": { "text": "failed", "color": "red", "index": 2 },
-                "4": { "text": "missing", "color": "dark-red", "index": 3 },
-                "5": { "text": "unavailable", "color": "orange", "index": 4 },
-                "6": { "text": "not yet due", "color": "blue", "index": 5 }
+                "1": {
+                  "text": "healthy",
+                  "color": "green",
+                  "index": 0
+                },
+                "2": {
+                  "text": "slow",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "3": {
+                  "text": "failed",
+                  "color": "red",
+                  "index": 2
+                },
+                "4": {
+                  "text": "missing",
+                  "color": "dark-red",
+                  "index": 3
+                },
+                "5": {
+                  "text": "unavailable",
+                  "color": "orange",
+                  "index": 4
+                },
+                "6": {
+                  "text": "not yet due",
+                  "color": "blue",
+                  "index": 5
+                }
               }
             }
           ],
           "color": {
             "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "transparent"
+              },
+              {
+                "value": 1,
+                "color": "green"
+              },
+              {
+                "value": 2,
+                "color": "yellow"
+              },
+              {
+                "value": 3,
+                "color": "red"
+              },
+              {
+                "value": 4,
+                "color": "dark-red"
+              },
+              {
+                "value": 5,
+                "color": "orange"
+              },
+              {
+                "value": 6,
+                "color": "blue"
+              }
+            ]
           }
         },
         "overrides": []
@@ -1064,13 +1122,63 @@
               "type": "timestamp_epoch"
             },
             {
-              "selector": "lane",
-              "text": "lane",
-              "type": "string"
+              "selector": "tpu-ferry",
+              "text": "TPU ferry",
+              "type": "number"
             },
             {
-              "selector": "status_code",
-              "text": "status",
+              "selector": "cw-gpu-ferry",
+              "text": "CW ferry",
+              "type": "number"
+            },
+            {
+              "selector": "grug-multislice",
+              "text": "Grug",
+              "type": "number"
+            },
+            {
+              "selector": "datakit-t1",
+              "text": "Data T1",
+              "type": "number"
+            },
+            {
+              "selector": "datakit-t2",
+              "text": "Data T2",
+              "type": "number"
+            },
+            {
+              "selector": "datakit-t3",
+              "text": "Data T3 · Mon",
+              "type": "number"
+            },
+            {
+              "selector": "cluster-smoke",
+              "text": "Cluster",
+              "type": "number"
+            },
+            {
+              "selector": "evalchemy",
+              "text": "Evalchemy",
+              "type": "number"
+            },
+            {
+              "selector": "harbor",
+              "text": "Harbor",
+              "type": "number"
+            },
+            {
+              "selector": "marinskyrl",
+              "text": "SkyRL",
+              "type": "number"
+            },
+            {
+              "selector": "vllm-gpu",
+              "text": "vLLM GPU",
+              "type": "number"
+            },
+            {
+              "selector": "tpu-inference",
+              "text": "TPU infer",
               "type": "number"
             }
           ]
