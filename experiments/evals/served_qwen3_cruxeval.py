@@ -4,10 +4,11 @@
 """Run CruxEval input and output prediction against brokered Qwen3 vLLM.
 
 ``CRUXEVAL_RESULTS`` is a lazy artifact containing lm-eval metrics and samples.
-The evaluator runs through an isolated ``uv run`` environment in a non-preemptible
-Iris CPU parent. Inference runs in TPU child jobs connected through Marin's
-inference broker. CruxEval is scored by executing the predicted assertions rather
-than by an LLM judge.
+By default, the evaluator runs through an isolated ``uv run`` environment in a
+non-preemptible Iris CPU parent, with inference in TPU child jobs connected through
+Marin's inference broker. ``--local`` instead runs the broker, proxy, and worker in
+the current process. CruxEval is scored by executing the predicted assertions
+rather than by an LLM judge.
 
 \b
 Examples:
@@ -30,32 +31,36 @@ from experiments.evals.served_lm_eval import (
     served_lm_eval_command,
 )
 
-CRUXEVAL_TASKS = ("cruxeval_input", "cruxeval_output")
-CRUXEVAL_REGION = "us-west4"
+CRUXEVAL_BENCHMARK = ServedLmEvalBenchmark(
+    tasks=("cruxeval_input", "cruxeval_output"),
+    output_path="/tmp/served-qwen3-cruxeval",
+    job_name="served-qwen3-cruxeval",
+    confirm_run_unsafe_code=True,
+)
 
 
 def cruxeval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Artifact]:
     inference = brokered_vllm_config(
-        model="Qwen/Qwen3-0.6B-Base",
-        tokenizer="Qwen/Qwen3-0.6B",
-        workers=1,
-        num_concurrent=16,
+        model=CRUXEVAL_BENCHMARK.model,
+        tokenizer=CRUXEVAL_BENCHMARK.tokenizer,
+        workers=CRUXEVAL_BENCHMARK.workers,
+        num_concurrent=CRUXEVAL_BENCHMARK.num_concurrent,
         timeout_seconds=None,
     )
     inference = replace(
         inference,
         worker_resources=ResourceConfig.with_tpu(
-            "v5litepod-4",
-            ram="96g",
-            regions=[CRUXEVAL_REGION],
+            CRUXEVAL_BENCHMARK.tpu_type,
+            ram=CRUXEVAL_BENCHMARK.worker_ram,
+            regions=[CRUXEVAL_BENCHMARK.region] if CRUXEVAL_BENCHMARK.region else None,
         ),
-        worker_env_vars=VLLM_WORKER_ENV_VARS,
+        worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
     )
     eval_run = LmEvalRun(
-        tasks=CRUXEVAL_TASKS,
-        output_path="/tmp/served-qwen3-cruxeval",
+        tasks=CRUXEVAL_BENCHMARK.tasks,
+        output_path=CRUXEVAL_BENCHMARK.output_path,
         limit=limit,
-        confirm_run_unsafe_code=True,
+        confirm_run_unsafe_code=CRUXEVAL_BENCHMARK.confirm_run_unsafe_code,
         extra_model_args={
             "num_concurrent": inference.workers.max_in_flight_per_worker,
             "timeout": int(inference.proxy.request_timeout_seconds),
@@ -68,9 +73,9 @@ def cruxeval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Art
         version=version,
         parent_resources=ResourceConfig.with_cpu(
             cpu=0.5,
-            ram="6g",
+            ram=CRUXEVAL_BENCHMARK.parent_ram,
             disk="16g",
-            regions=[CRUXEVAL_REGION],
+            regions=[CRUXEVAL_BENCHMARK.region] if CRUXEVAL_BENCHMARK.region else None,
             preemptible=False,
         ),
         parent_env_vars={},
@@ -81,12 +86,7 @@ CRUXEVAL_RESULTS = cruxeval_step(version="2026.07.16")
 
 main = served_lm_eval_command(
     __doc__,
-    ServedLmEvalBenchmark(
-        tasks=CRUXEVAL_TASKS,
-        output_path="/tmp/served-qwen3-cruxeval",
-        job_name="served-qwen3-cruxeval",
-        confirm_run_unsafe_code=True,
-    ),
+    CRUXEVAL_BENCHMARK,
 )
 
 if __name__ == "__main__":

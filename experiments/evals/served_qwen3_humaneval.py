@@ -3,9 +3,10 @@
 
 """Run HumanEval against Qwen3 through brokered vLLM serving.
 
-The evaluator runs through an isolated ``uv run`` environment in a
-non-preemptible Iris CPU parent. Inference runs in TPU child jobs connected
-through Marin's inference broker.
+By default, the evaluator runs through an isolated ``uv run`` environment in a
+non-preemptible Iris CPU parent, with inference in TPU child jobs connected
+through Marin's inference broker. ``--local`` instead runs the broker, proxy,
+and worker in the current process.
 
 \b
 Examples:

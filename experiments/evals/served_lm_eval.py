@@ -7,7 +7,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import click
-import fsspec
 from fray.types import ResourceConfig
 from iris.cli.connect import open_controller_endpoint
 from iris.client import IrisClient
@@ -23,14 +22,15 @@ from marin.inference.vllm import (
     BrokeredVllmSystemConfig,
     InferenceWorkerConfig,
 )
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
-VLLM_WORKER_ENV_VARS: dict[str, str] = {
-    "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
-    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
-    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
-    "VLLM_TPU_SKIP_PRECOMPILE": "1",
-}
+VLLM_WORKER_ENV_VARS = (
+    ("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),
+    ("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1"),
+    ("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1"),
+    ("VLLM_TPU_SKIP_PRECOMPILE", "1"),
+)
 
 
 @dataclass(frozen=True)
@@ -40,17 +40,36 @@ class ServedLmEvalBenchmark:
     job_name: str
     confirm_run_unsafe_code: bool = False
     parent_env_vars: Mapping[str, str] = field(default_factory=dict)
+    model: str = "Qwen/Qwen3-0.6B-Base"
+    tokenizer: str = "Qwen/Qwen3-0.6B"
+    tpu_type: str = "v5litepod-4"
+    worker_ram: str = "96g"
+    parent_ram: str = "6g"
+    region: str | None = "us-west4"
+    workers: int = 1
+    num_concurrent: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
+
+
+@dataclass(frozen=True)
+class BrokeredLmEvalArtifactConfig:
+    model: str
+    tokenizer: str | None
+    max_model_len: int
+    max_num_batched_tokens: int
+    workers: InferenceWorkerConfig
+    worker_env_vars: tuple[tuple[str, str], ...]
+    ignored_request_fields: tuple[str, ...]
+    eval_run: LmEvalRun
 
 
 def _run_brokered_lm_eval_artifact(
     inference: BrokeredVllmSystemConfig,
     eval_run: LmEvalRun,
-    output_path: str,
 ) -> None:
-    output_fs, _ = fsspec.core.url_to_fs(output_path)
+    output_path = eval_run.output_path
     with tempfile.TemporaryDirectory() as local_output:
         run_iris_brokered_lm_eval(inference, replace(eval_run, output_path=local_output))
-        output_fs.put(local_output + "/", output_path, recursive=True)
+        StoragePath(output_path).upload_from(local_output + "/", recursive=True)
 
 
 def brokered_lm_eval_step(
@@ -66,35 +85,25 @@ def brokered_lm_eval_step(
     if inference.worker_resources is None:
         raise ValueError("inference.worker_resources must be set for a brokered lm-eval artifact")
 
-    def build_config(ctx: StepContext) -> dict:
-        return {
-            "model": inference.model,
-            "tokenizer": inference.tokenizer,
-            "max_model_len": inference.server.max_model_len,
-            "max_num_batched_tokens": inference.server.max_num_batched_tokens,
-            "worker_count": inference.workers.count,
-            "max_in_flight_per_worker": inference.workers.max_in_flight_per_worker,
-            "worker_env_vars": dict(inference.worker_env_vars),
-            "ignored_request_fields": list(inference.proxy.ignored_request_fields),
-            "tasks": list(eval_run.tasks),
-            "adapter": eval_run.adapter.value,
-            "apply_chat_template": eval_run.apply_chat_template,
-            "limit": eval_run.limit,
-            "num_fewshot": eval_run.num_fewshot,
-            "batch_size": eval_run.batch_size,
-            "confirm_run_unsafe_code": eval_run.confirm_run_unsafe_code,
-            "uv_packages": list(eval_run.uv_packages),
-            "extra_model_args": dict(eval_run.extra_model_args),
-            "out": ctx.output_path,
-        }
+    def build_config(ctx: StepContext) -> BrokeredLmEvalArtifactConfig:
+        return BrokeredLmEvalArtifactConfig(
+            model=inference.model,
+            tokenizer=inference.tokenizer,
+            max_model_len=inference.server.max_model_len,
+            max_num_batched_tokens=inference.server.max_num_batched_tokens,
+            workers=inference.workers,
+            worker_env_vars=tuple(sorted(inference.worker_env_vars.items())),
+            ignored_request_fields=inference.proxy.ignored_request_fields,
+            eval_run=replace(eval_run, output_path=ctx.output_path),
+        )
 
-    def run_step(cfg: dict) -> None:
+    def run_step(cfg: BrokeredLmEvalArtifactConfig) -> None:
         remote(
             _run_brokered_lm_eval_artifact,
             name=name,
             resources=parent_resources,
             env_vars=dict(parent_env_vars),
-        )(inference, eval_run, cfg["out"])
+        )(inference, cfg.eval_run)
 
     return ArtifactStep(
         name=name,
@@ -167,21 +176,23 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
     @click.option(
         "--num-concurrent",
         type=click.IntRange(min=1),
-        default=DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
+        default=benchmark.num_concurrent,
         help="lm-eval request concurrency and per-worker vLLM request limit.",
     )
     @click.option(
         "--workers",
         type=click.IntRange(min=1),
-        default=1,
+        default=benchmark.workers,
         help="Number of child vLLM worker jobs. Local mode requires one.",
     )
-    @click.option("--model", default="Qwen/Qwen3-0.6B-Base", help="Model served by each vLLM worker.")
-    @click.option("--tokenizer", default="Qwen/Qwen3-0.6B", help="Tokenizer used by vLLM and lm-eval.")
-    @click.option("--tpu-type", default="v5litepod-4", help="TPU type for child vLLM workers.")
-    @click.option("--worker-ram", default="96g", help="Host RAM for each child vLLM worker.")
-    @click.option("--parent-ram", default="6g", help="Host RAM for the CPU parent running lm-eval and the proxy.")
-    @click.option("--region", default="us-west4", help="Region for the parent and worker jobs.")
+    @click.option("--model", default=benchmark.model, help="Model served by each vLLM worker.")
+    @click.option("--tokenizer", default=benchmark.tokenizer, help="Tokenizer used by vLLM and lm-eval.")
+    @click.option("--tpu-type", default=benchmark.tpu_type, help="TPU type for child vLLM workers.")
+    @click.option("--worker-ram", default=benchmark.worker_ram, help="Host RAM for each child vLLM worker.")
+    @click.option(
+        "--parent-ram", default=benchmark.parent_ram, help="Host RAM for the CPU parent running lm-eval and the proxy."
+    )
+    @click.option("--region", default=benchmark.region, help="Region for the parent and worker jobs.")
     @click.option("--job-name", default=benchmark.job_name, help="Iris parent job name.")
     @click.option("--priority", type=click.Choice(PRIORITY_BAND_NAMES), help="Iris priority band for all jobs.")
     @click.option("--local", is_flag=True, help="Run a single local dev TPU worker instead of submitting to Iris.")
@@ -235,7 +246,7 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
                 ram=worker_ram,
                 regions=worker_regions,
             ),
-            worker_env_vars=VLLM_WORKER_ENV_VARS,
+            worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
             priority=iris_priority,
         )
         submit_iris_lm_eval(
