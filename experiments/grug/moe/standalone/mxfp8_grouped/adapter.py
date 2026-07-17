@@ -8,15 +8,29 @@ Wraps ``ScaledGroupedGemmKernel`` (vendored from cutlass v4.5.2
 as a JAX call via ``cutlass.jax.cutlass_call``, following the proven Hopper
 ``_tma_grouped_adapter`` pattern (branch ``fp8-ragged-cute``).
 
-Forward 2Dx3D scenario only: ``x[M, K] @ w[E, K, N] -> out[M, N]`` where rows of
-``x`` are grouped per expert by an ``offs`` cumsum tensor. Operands are MXFP8:
-e4m3 data + e8m0 scale factors, one scale per 32 contiguous K elements, with the
-scale tensors pre-swizzled into the sm100 32x4x4 block-scaled atom layout
-(``to_blocked`` below reproduces the torch harness layout exactly).
+All three MoE ragged_dot products are covered:
+
+- fwd (2Dx3D):   ``x[M, K] @ w[E, K, N] -> out[M, N]`` (``mxfp8_grouped_mm``)
+- dgrad (2Dx3D): ``g[M, N] @ w^T[E, N, K] -> dx[M, K]`` -- the same call with
+  the weight quantized along N in its natural ``(E, K, N)`` buffer
+  (``mxfp8_grouped_dgrad``)
+- wgrad (2Dx2D): ``x^T[K, M] grouped-outer g[M, N] -> dw[E, K, N]``
+  (``mxfp8_grouped_wgrad``); operands stay in natural token-major storage
+  (A m-major / B n-major, both supported by the vendored kernel for fp8)
+
+Rows of the 2D operand are grouped per expert by an ``offs`` cumsum tensor.
+Operands are MXFP8: e4m3 data + e8m0 scale factors, one scale per 32 contiguous
+elements ALONG THE CONTRACTION AXIS of each product, with the scale tensors
+pre-swizzled into the sm100 32x4x4 block-scaled atom layout (``to_blocked``
+below reproduces the torch harness layout exactly). Each product therefore
+needs a fresh quantization of its operands from the high-precision original.
 
 Also hosts the JAX quantization + scale-layout helpers used by the bench:
-``quantize_mxfp8`` (round-up e8m0, matching jax's scaled_matmul_stablehlo),
-``build_sfa`` / ``build_sfb`` (per-group 128-row padded swizzled assembly).
+``quantize_mxfp8`` / ``quantize_mxfp8_tokens`` (round-up e8m0, matching jax's
+scaled_matmul_stablehlo), naive per-group swizzle assembly (``build_sfa`` /
+``build_sfb`` / ``build_sf_wgrad``), vectorized bit-exact equivalents
+(``*_fast``), and the fused dual-orientation producers
+(``dual_quantize_activation`` / ``dual_quantize_weight``).
 """
 
 import os
@@ -26,6 +40,7 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .moe_utils import MoEScaledGroupedGemmTensormapConstructor
 from .torch_scaled_grouped_mm import ScaledGroupedGemmKernel
@@ -111,6 +126,31 @@ def dequantize_mxfp8(q, scales):
     return deq.reshape(q.shape)
 
 
+def quantize_mxfp8_tokens(x):
+    """Quantize ``x[T, ...]`` to MXFP8 along the FIRST (token) axis (T % 32 == 0).
+
+    Token-axis quantization for the wgrad (2Dx2D) operands: the contraction
+    runs over tokens, so scale blocks span 32 consecutive tokens per feature.
+    Returns ``(q, scales)`` with ``q`` float8_e4m3fn of x's shape (natural
+    storage, no transpose) and ``scales`` uint8 e8m0 of shape ``(T // 32, ...)``.
+    """
+    t = x.shape[0]
+    assert t % SF_VEC_SIZE == 0, f"T={t} not divisible by {SF_VEC_SIZE}"
+    xb = x.astype(jnp.float32).reshape(t // SF_VEC_SIZE, SF_VEC_SIZE, *x.shape[1:])
+    amax = jnp.max(jnp.abs(xb), axis=1, keepdims=True)
+    scales = cast_to_e8m0_with_rounding_up(amax / E4M3_MAX)
+    scaled = xb / e8m0_to_f32(scales)
+    q = jnp.clip(scaled, -E4M3_MAX, E4M3_MAX).astype(jnp.float8_e4m3fn)
+    return q.reshape(x.shape), scales.squeeze(1)
+
+
+def dequantize_mxfp8_tokens(q, scales):
+    """Inverse of ``quantize_mxfp8_tokens`` (f32 output)."""
+    t = q.shape[0]
+    qb = q.astype(jnp.float32).reshape(t // SF_VEC_SIZE, SF_VEC_SIZE, *q.shape[1:])
+    return (qb * e8m0_to_f32(scales)[:, None]).reshape(q.shape)
+
+
 # --------------------------------------------------------------------------- #
 # Scale-factor layout (sm100 32x4x4 block-scaled atom, torch harness parity)
 # --------------------------------------------------------------------------- #
@@ -168,6 +208,172 @@ def build_sfb(w_scales):
     return jax.lax.bitcast_convert_type(jnp.stack(parts), jnp.float8_e8m0fnu)
 
 
+def build_sf_wgrad(scales_2d, group_sizes):
+    """Assemble the swizzled SF tensor for a 2Dx2D (wgrad) operand -- naive.
+
+    ``scales_2d``: uint8 (R, T//32) raw token-axis scales laid out with the
+    fixed non-token dim R first (R % 128 == 0; R is M=hidden for the A operand,
+    N=intermediate for B). Groups run along the columns (contraction = tokens).
+    Per-group column slice swizzled independently (cols padded to 4 = 128
+    tokens) and concatenated: float8_e8m0fnu of shape
+    ``(R, sum(round_up(tok_g, 128)) // 32)``.
+    """
+    r = scales_2d.shape[0]
+    assert r % 128 == 0, f"non-token dim {r} must be a multiple of 128"
+    parts = []
+    start = 0
+    for g in group_sizes:
+        cols = int(g) // SF_VEC_SIZE
+        if cols > 0:
+            parts.append(to_blocked(scales_2d[:, start : start + cols]))
+        start += cols
+    flat = jnp.concatenate(parts)
+    total_cols = sum(_round_up(int(g) // SF_VEC_SIZE, 4) for g in group_sizes)
+    return jax.lax.bitcast_convert_type(flat.reshape(r, total_cols), jnp.float8_e8m0fnu)
+
+
+# --------------------------------------------------------------------------- #
+# Vectorized swizzle (bit-exact vs the naive per-group builders above)
+# --------------------------------------------------------------------------- #
+
+
+def _to_blocked_block_grid(padded):
+    """(rows % 128 == 0, cols % 4 == 0) uint8 -> (rb*cb, 512) swizzled atom blocks.
+
+    Each 128x4 tile becomes 512 contiguous output bytes; tile (r, c) lands at
+    block index ``r * cb + c``. ``to_blocked(padded)`` equals
+    ``_to_blocked_block_grid(padded).reshape(-1)`` when no padding is needed.
+    """
+    rows, cols = padded.shape
+    rb, cb = rows // 128, cols // 4
+    blocks = padded.reshape(rb, 128, cb, 4).transpose(0, 2, 1, 3)
+    return blocks.reshape(rb * cb, 4, 32, 4).swapaxes(1, 2).reshape(rb * cb, 512)
+
+
+def sfa_row_gather_indices(group_sizes) -> np.ndarray:
+    """Host-side padded-row -> source-row map for ``build_sfa_fast`` (-1 = zero pad).
+
+    Because every group is padded to a whole number of 128-row blocks, the
+    whole-matrix swizzle of the row-gathered scales equals the concatenation of
+    per-group swizzles, so one gather + one ``_to_blocked_block_grid`` replaces
+    the per-group loop.
+    """
+    idx: list[int] = []
+    start = 0
+    for g in group_sizes:
+        g = int(g)
+        idx.extend(range(start, start + g))
+        idx.extend([-1] * (_round_up(g, 128) - g))
+        start += g
+    return np.asarray(idx, dtype=np.int32)
+
+
+def build_sfa_fast(x_scales, row_idx):
+    """Vectorized ``build_sfa``: one row gather + whole-matrix swizzle.
+
+    ``x_scales``: uint8 (M, K//32); ``row_idx``: int32 device array from
+    ``sfa_row_gather_indices``. Bit-exact vs ``build_sfa``.
+    """
+    m, kb = x_scales.shape
+    kb4 = _round_up(kb, 4)
+    if kb4 != kb:
+        x_scales = jnp.pad(x_scales, ((0, 0), (0, kb4 - kb)))
+    gathered = jnp.where((row_idx >= 0)[:, None], x_scales[jnp.clip(row_idx, 0, m - 1)], 0)
+    flat = _to_blocked_block_grid(gathered).reshape(-1)
+    return jax.lax.bitcast_convert_type(flat.reshape(row_idx.shape[0], kb4), jnp.float8_e8m0fnu)
+
+
+def build_sfb_fast(w_scales):
+    """Vectorized ``build_sfb``: batched whole-tensor swizzle (bit-exact)."""
+    e, n, kb = w_scales.shape
+    assert n % 128 == 0, f"N={n} must be a multiple of 128"
+    kb4 = _round_up(kb, 4)
+    if kb4 != kb:
+        w_scales = jnp.pad(w_scales, ((0, 0), (0, 0), (0, kb4 - kb)))
+    rb, cb = n // 128, kb4 // 4
+    blocks = w_scales.reshape(e, rb, 128, cb, 4).transpose(0, 1, 3, 2, 4)
+    flat = blocks.reshape(e, rb * cb, 4, 32, 4).swapaxes(2, 3).reshape(e, rb * cb * 512)
+    return jax.lax.bitcast_convert_type(flat, jnp.float8_e8m0fnu)
+
+
+def sf_wgrad_col_layout(group_sizes, rows: int) -> tuple[np.ndarray, np.ndarray]:
+    """Host-side (column gather map, atom-block permutation) for ``build_sf_wgrad_fast``.
+
+    ``col_idx`` maps padded scale-column -> source column (-1 = zero pad; each
+    group's columns are padded to a multiple of 4 = 128 tokens). ``block_perm``
+    reorders the whole-matrix 128x4 atom-block grid (row-block-major) into the
+    kernel's per-expert-chunk order [expert][row_block][col_block] -- unlike the
+    row-grouped case the chunk order is NOT a plain reshape because each
+    expert's flat chunk spans all row blocks of only its own columns.
+    """
+    col_idx: list[int] = []
+    group_cbs: list[int] = []
+    start = 0
+    for g in group_sizes:
+        cols = int(g) // SF_VEC_SIZE
+        padded = _round_up(cols, 4)
+        col_idx.extend(range(start, start + cols))
+        col_idx.extend([-1] * (padded - cols))
+        group_cbs.append(padded // 4)
+        start += cols
+    rb = _round_up(rows, 128) // 128
+    cb_total = sum(group_cbs)
+    perm: list[int] = []
+    cb_start = 0
+    for gcb in group_cbs:
+        for r in range(rb):
+            perm.extend(r * cb_total + c for c in range(cb_start, cb_start + gcb))
+        cb_start += gcb
+    return np.asarray(col_idx, dtype=np.int32), np.asarray(perm, dtype=np.int32)
+
+
+def build_sf_wgrad_fast(scales_2d, col_idx, block_perm):
+    """Vectorized ``build_sf_wgrad``: column gather + swizzle + block permute.
+
+    ``scales_2d``: uint8 (R, T//32) with R % 128 == 0; ``col_idx`` /
+    ``block_perm``: int32 device arrays from ``sf_wgrad_col_layout``. Bit-exact
+    vs ``build_sf_wgrad``.
+    """
+    r, tb = scales_2d.shape
+    gathered = jnp.where((col_idx >= 0)[None, :], scales_2d[:, jnp.clip(col_idx, 0, tb - 1)], 0)
+    flat = _to_blocked_block_grid(gathered)[block_perm].reshape(-1)
+    return jax.lax.bitcast_convert_type(flat.reshape(r, col_idx.shape[0]), jnp.float8_e8m0fnu)
+
+
+# --------------------------------------------------------------------------- #
+# Fused dual-orientation producers (one jitted pass per tensor)
+# --------------------------------------------------------------------------- #
+
+
+def dual_quantize_activation(t, row_idx, col_idx, block_perm):
+    """Produce BOTH MXFP8 orientations of an activation/cotangent ``t[T, D]``.
+
+    Returns ``(q_row, sf_row, q_col, sf_col)``: ``q_row`` quantized along the
+    feature axis with fwd/dgrad-A swizzled scales (``build_sfa`` layout);
+    ``q_col`` quantized along the token axis in NATURAL storage (the 2Dx2D
+    wgrad operand -- no data transpose) with 2Dx2D swizzled scales. Index
+    arrays come from ``sfa_row_gather_indices`` / ``sf_wgrad_col_layout``.
+    Designed to be wrapped in a single ``jax.jit``.
+    """
+    q_row, s_row = quantize_mxfp8(t)
+    sf_row = build_sfa_fast(s_row, row_idx)
+    q_col, s_col = quantize_mxfp8_tokens(t)
+    sf_col = build_sf_wgrad_fast(s_col.T, col_idx, block_perm)
+    return q_row, sf_row, q_col, sf_col
+
+
+def dual_quantize_weight(w):
+    """Produce both MXFP8 orientations of a weight ``w[E, K, N]``.
+
+    Returns ``(wq_fwd, sfb_fwd, wq_dgrad, sfb_dgrad)``: the fwd copy quantized
+    along K (buffer (E, N, K), for ``mxfp8_grouped_mm``), the dgrad copy
+    quantized along N (natural buffer (E, K, N), for ``mxfp8_grouped_dgrad``).
+    """
+    wq_fwd, s_fwd = quantize_mxfp8(jnp.swapaxes(w, 1, 2))
+    wq_dgrad, s_dgrad = quantize_mxfp8(w)
+    return wq_fwd, build_sfb_fast(s_fwd), wq_dgrad, build_sfb_fast(s_dgrad)
+
+
 # --------------------------------------------------------------------------- #
 # cutlass_call launcher
 # --------------------------------------------------------------------------- #
@@ -193,6 +399,7 @@ def _as_gmem_tensor(t):
 def _build_launcher(
     *,
     e: int,
+    scenario: str = "2Dx3D",
     mma_tiler_mnk: tuple[int, int, int],
     cluster_shape_mnk: tuple[int, int, int],
     max_active_clusters: int,
@@ -204,8 +411,9 @@ def _build_launcher(
     gmem-space pointers, and any recast (``recast_tensor``/``recast_ptr``)
     would drop the gmem address space -- the tensormap constructor then fails
     with ``gmem_ptr_to_generic requires pointer in gmem address space``
-    (observed on job mxfp8-002-g3). The (E,K,N) logical view of the row-major
-    (E,N,K) weight buffer is expressed via TensorSpec ``mode`` instead.
+    (observed on job mxfp8-002-g3). Logical layout permutations (transposed
+    weight views, token-major wgrad operands) are expressed via TensorSpec
+    ``mode`` instead.
     """
 
     class MxFp8GroupedLauncher:
@@ -237,7 +445,7 @@ def _build_launcher(
             mOut = _as_gmem_tensor(mOut)
             mWs = _as_gmem_tensor(mWs)
             kernel = ScaledGroupedGemmKernel(
-                scenario="2Dx3D",
+                scenario=scenario,
                 sf_vec_size=SF_VEC_SIZE,
                 accumulate_on_output=False,
                 separate_tensormap_init=True,
@@ -344,4 +552,132 @@ def mxfp8_grouped_mm(
         compile_options=(cute.GPUArch(_BLACKWELL_CUTE_ARCH),),
     )
     out = call(x_q, w_q, x_sf, w_sf, offs.astype(jnp.int32))
+    return out[0]
+
+
+def mxfp8_grouped_dgrad(
+    g_q,
+    g_sf,
+    w_q,
+    w_sf,
+    offs,
+    *,
+    out_dtype=jnp.bfloat16,
+    mma_tiler_mnk: tuple[int, int, int] = (128, 256, 128),
+    cluster_shape_mnk: tuple[int, int, int] = (1, 1, 1),
+):
+    """MXFP8 grouped dgrad ``g[M, N] @ w^T[E, N, K] -> dx[M, K]`` on sm100.
+
+    Structurally the SAME 2Dx3D grouped product as the forward: the transposed
+    weight view is what ``mxfp8_grouped_mm`` already expresses via TensorSpec
+    mode, so dgrad is the forward call with the OTHER quantized copy of the
+    weight. The orientation contract (this is the whole point of the wrapper):
+
+    Args:
+        g_q: (M, N) float8_e4m3fn cotangent, quantized along N (its natural
+            last axis -- N is the contraction dim here).
+        g_sf: swizzled scales from ``build_sfa``/``build_sfa_fast`` on g's
+            (M, N//32) scale matrix.
+        w_q: (E, K, N) float8_e4m3fn -- the weight quantized along N in its
+            NATURAL (E, K, N) row-major buffer (fresh quantization from the
+            high-precision original; never transpose-requantize the fwd copy).
+        w_sf: (E, round_up(K,128) * round_up(N//32,4)) float8_e8m0fnu from
+            ``build_sfb``/``build_sfb_fast`` on the (E, K, N//32) scales.
+        offs: (E,) int32 END offsets (cumsum of group sizes; offs[-1] == M).
+    """
+    return mxfp8_grouped_mm(
+        g_q,
+        g_sf,
+        w_q,
+        w_sf,
+        offs,
+        out_dtype=out_dtype,
+        mma_tiler_mnk=mma_tiler_mnk,
+        cluster_shape_mnk=cluster_shape_mnk,
+    )
+
+
+def mxfp8_grouped_wgrad(
+    x_q,
+    x_sf,
+    g_q,
+    g_sf,
+    offs,
+    *,
+    out_dtype=jnp.bfloat16,
+    mma_tiler_mnk: tuple[int, int, int] = (128, 256, 128),
+    cluster_shape_mnk: tuple[int, int, int] = (1, 1, 1),
+):
+    """MXFP8 grouped wgrad ``x^T grouped-outer g -> dw[E, K, N]`` on sm100 (2Dx2D).
+
+    Per expert e with token slice s_e: ``dw[e] = x[s_e].T @ g[s_e]``. The
+    contraction axis is TOKENS, so both operands are quantized along the token
+    axis (``quantize_mxfp8_tokens``) and stay in their NATURAL (T, D) storage:
+    the kernel supports m-major A / n-major B for fp8, expressed via TensorSpec
+    mode -- no materialized fp8 transpose. Zero-token experts get zero output
+    tiles (the kernel epilogue stores zeros when k_tile_cnt == 0).
+
+    Args:
+        x_q: (T, K) float8_e4m3fn, natural row-major, token-axis quantized.
+        x_sf: (K, sum(round_up(T_g,128))//32) float8_e8m0fnu from
+            ``build_sf_wgrad``/``build_sf_wgrad_fast`` on x's transposed
+            (K, T//32) scale matrix. K % 128 == 0 required.
+        g_q: (T, N) float8_e4m3fn, natural row-major, token-axis quantized.
+        g_sf: (N, sum(round_up(T_g,128))//32) float8_e8m0fnu. N % 128 == 0.
+        offs: (E,) int32 END offsets (cumsum of group sizes; offs[-1] == T).
+        out_dtype: output dtype for dw (E, K, N); f32 accumulate.
+    """
+    ensure_blackwell_arch()
+    t, kdim = x_q.shape
+    tg, n = g_q.shape
+    assert t == tg, f"token mismatch: x_q T={t}, g_q T={tg}"
+    assert kdim % 128 == 0, f"K={kdim} must be a multiple of 128"
+    assert n % 128 == 0, f"N={n} must be a multiple of 128"
+    (e,) = offs.shape
+    assert x_sf.shape[0] == kdim and g_sf.shape[0] == n
+    assert x_sf.shape[1] == g_sf.shape[1], "SFA/SFB padded token columns must match"
+    assert x_sf.dtype == jnp.float8_e8m0fnu and g_sf.dtype == jnp.float8_e8m0fnu
+
+    desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size("2Dx2D", e)
+    ws_bytes = desc_bytes + e * 4  # + padded offs (consistent_token_padding=False)
+
+    cluster_size = cluster_shape_mnk[0] * cluster_shape_mnk[1]
+    max_active_clusters = _B200_SMS // cluster_size
+
+    launcher = _build_launcher(
+        e=e,
+        scenario="2Dx2D",
+        mma_tiler_mnk=mma_tiler_mnk,
+        cluster_shape_mnk=cluster_shape_mnk,
+        max_active_clusters=max_active_clusters,
+    )
+
+    ts = cjax.TensorSpec
+    # x_q buffer (T, K): logical mat_a (hidden=K, tokens=T) via mode; A is
+    # m-major (hidden stride-1), so per-expert token slices are always
+    # 16-elem aligned regardless of group sizes.
+    a_spec = ts(mode=(1, 0), divisibility=(1, _FP8_TMA_VEC), static=True)
+    # g_q buffer (T, N): logical mat_b (tokens=T, N) is the identity view;
+    # B is n-major (N stride-1).
+    b_spec = ts(mode=(0, 1), divisibility=(1, _FP8_TMA_VEC), static=True)
+    sfa_spec = ts(mode=(0, 1), static=True)
+    sfb_spec = ts(mode=(0, 1), static=True)
+    offs_spec = ts(mode=(0,), static=True)
+    out_spec = ts(mode=(0, 1, 2), static=True)
+    ws_spec = ts(mode=(0,), static=True)
+
+    out_shapes = (
+        jax.ShapeDtypeStruct((e, kdim, n), out_dtype),
+        jax.ShapeDtypeStruct((ws_bytes,), jnp.uint8),
+    )
+
+    call = cjax.cutlass_call(
+        launcher,
+        output_shape_dtype=out_shapes,
+        input_spec=(a_spec, b_spec, sfa_spec, sfb_spec, offs_spec),
+        output_spec=(out_spec, ws_spec),
+        use_static_tensors=True,
+        compile_options=(cute.GPUArch(_BLACKWELL_CUTE_ARCH),),
+    )
+    out = call(x_q, g_q, x_sf, g_sf, offs.astype(jnp.int32))
     return out[0]
