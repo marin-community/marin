@@ -30,12 +30,15 @@ experiment:
 search:
   grid:
     learning_rate:
-      # Initial x2 grid.
-      values: [5.0e-4, 1.0e-3, 2.0e-3]
+      # Four half-decade (sqrt(10)) values spanning 1.5 decades up to the hard upper bound. The top
+      # value is the prior sweep's best point (final loss ~2.73, a top-edge optimum); the extra low
+      # anchor characterizes the low-LR stability gradient. domain.max == the top grid value, so no
+      # upward extension is intended: the top edge converges against its hard bound.
+      values: [3.1623e-4, 1.0e-3, 3.1623e-3, 1.0e-2]
       scale: log10
-      # Just above log10(2), preserving x2 extensions when evidence implicates an edge.
-      preferred_max_gap: 0.31
-      # Hard bounds; upper extensions require supporting evidence.
+      # Half-decade spacing.
+      preferred_max_gap: 0.5
+      # Hard bounds; the low edge may extend one half-decade toward the floor if evidence supports it.
       domain: {min: 3.1623e-5, max: 1.0e-2}
     weight_decay:
       # Five log-spaced values, x2 increments.
@@ -123,5 +126,6 @@ targets:
 - Data uses hierarchical Feistel block shuffle with `data_seed=0`.
 - Batch size changes optimizer-step count, warmup/decay cadence, and cumulative AdamW decay at fixed
   corpus epochs. Learning rate, weight decay, and batch size are therefore evaluated jointly.
-- The initial grid has 45 configurations per rung and 135 logical trials across three rungs. An
-  exhaustive initial-grid run costs 315 eight-epoch equivalents before any grid expansion.
+- The initial grid has 60 configurations per rung (4 LR x 5 WD x 3 batch) and 180 logical trials
+  across three rungs. An exhaustive initial-grid run costs 420 eight-epoch equivalents before any
+  grid expansion.

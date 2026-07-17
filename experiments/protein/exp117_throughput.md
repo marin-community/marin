@@ -2,7 +2,7 @@
 
 Empirical throughput of the contacts-v1 1.5B recipe (global batch 128, seq 8192) across the
 region/slice targets exercised during the exp117 rung-0 sweep (2026-07-15 → 07-17). Computed from the
-orchestrator's periodic `run_progress` observations (`scratch/exp117-adaptive-sweep.sqlite`), one snapshot
+orchestrator's periodic `run_progress` observations (`scratch/exp117-adaptive-sweep-s01.sqlite`), one snapshot
 per ~30-min heartbeat, aggregated over each target's whole life in the sweep. Simple ratios only — no
 time-weighting or decay.
 
