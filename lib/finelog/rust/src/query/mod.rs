@@ -24,6 +24,7 @@ use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
+use datafusion::execution::context::SQLOptions;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -246,6 +247,20 @@ fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>)
     );
 }
 
+/// Read-only SQL surface for the Query RPC: `SELECT`/`EXPLAIN` only.
+///
+/// The Query RPC runs caller-supplied SQL verbatim and the cidr auth layer
+/// admits all of RFC1918, so DataFusion's full grammar (`CREATE`/`DROP`/
+/// `INSERT`/`COPY … TO`) must not be reachable — otherwise any VPC caller could
+/// mutate or exfiltrate the fleet's only telemetry store. Denying DDL, DML, and
+/// statements leaves queries as the only executable surface.
+fn read_only_sql_options() -> SQLOptions {
+    SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+}
+
 /// Register every namespace in `providers`, run `sql` verbatim, collect, and
 /// deregister. Returns the result schema + batches.
 ///
@@ -269,7 +284,7 @@ pub async fn run_query_over(
     }
     let started = Instant::now();
     let result = async {
-        let df = ctx.sql(sql).await?;
+        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
@@ -438,6 +453,33 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         assert_eq!(col.value(0), 1);
+    }
+
+    #[tokio::test]
+    async fn query_rpc_rejects_ddl_dml_and_copy() {
+        // The Query RPC surface must expose SELECT only: DDL/DML/COPY are how a
+        // VPC caller admitted by the cidr auth layer could mutate or exfiltrate
+        // the telemetry store. A plain SELECT still runs.
+        let ctx = make_ctx();
+        let ok = run_query_over(&ctx, vec![], "SELECT 1 AS n").await.unwrap();
+        assert_eq!(ok.batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+
+        // CREATE/DROP/COPY all plan without a pre-registered table, so a
+        // rejection is the SQLOptions gate ("not supported"), not name lookup.
+        for (sql, kind) in [
+            ("CREATE TABLE evil (x INT)", "DDL"),
+            ("DROP TABLE evil", "DDL"),
+            ("COPY (SELECT 1) TO '/tmp/finelog_evil.parquet'", "DML"),
+        ] {
+            let err = run_query_over(&ctx, vec![], sql)
+                .await
+                .expect_err(&format!("expected {kind} rejection for: {sql}"));
+            let msg = err.to_string();
+            assert!(
+                msg.contains("not supported"),
+                "{sql}: expected {kind} rejection via SQLOptions, got: {msg}"
+            );
+        }
     }
 
     #[tokio::test]
