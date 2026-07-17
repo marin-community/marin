@@ -27,13 +27,16 @@ CTA of 256 threads in an (32, 8) thread grid covers a (256, 64) tile. Rowwise
 over 4 column-adjacent lanes (xor 1, 2); token-axis amax = in-thread reduce
 over the 8 owned rows + shuffle over 4 row-adjacent lanes (xor 8, 16; the
 warp's 4 thread-rows are 4-aligned in the CTA, so both groups sit inside one
-warp). The e8m0 round-up is the exact bit-twiddle of
-``cast_to_e8m0_with_rounding_up``, and the rescale multiplies by the exact
+warp). The e8m0 round-up is an integer-only derivation matching
+``cast_to_e8m0_with_rounding_up(amax / 448)`` exactly for bf16-granular amax
+(see ``_e8m0_round_up``), and the rescale multiplies by the exact
 power-of-two inverse ``2^(127 - e)`` (bit pattern ``(254 - e) << 23``; for
 bf16 inputs e <= 247, and the zero-amax block gives e = 0 -> inverse 2^127,
 so the inverse is always a normal f32 and the multiply is bit-identical to
-the reference's division). Finite inputs only: inf/NaN blocks produce e=255
-and diverge from the XLA reference's inf-scale semantics.
+the reference's division). The f32 -> e4m3 conversion is an inline-PTX
+``cvt.rn.satfinite.e4m3x2.f32`` (see ``_cvt2_e4m3``); satfinite saturation
+subsumes the reference's clip. Finite inputs only: inf/NaN blocks diverge
+from the XLA reference's inf-scale semantics.
 """
 
 import cutlass
