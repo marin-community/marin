@@ -138,7 +138,7 @@ def main():
         # from XLA's quantize kernels. Also time the quantize step itself.
         cfg = MXFP8_CONFIGS[0]
         x3 = x.reshape(1, a.tokens, k)
-        wt3 = jnp.ascontiguousarray(w.T).reshape(1, n, k)  # rhs is (B, N, K), contract dim last
+        wt3 = w.T.reshape(1, n, k)  # rhs is (B, N, K), contract dim last
         quant = jax.jit(lambda t: quantize(t, cfg))
         xq, xs = jax.block_until_ready(quant(x3))
         wq, ws = jax.block_until_ready(quant(wt3))
