@@ -86,6 +86,15 @@ def _moe_mlp_ep_nccl(
         cfg, topk_idx, x, combine_weights.astype(jnp.float32), recv_capacity
     )
 
+    lead = P(batch_spec[0], None, None)  # (outer, ep) leading axis of EP-output tensors
+    lead2 = P(batch_spec[0], None)
+    # TE's dispatch outputs come back unconstrained under an explicit-sharding
+    # mesh — pin them (same move as TE's own multi-process test) so the FFN
+    # shard_map sees the declared specs.
+    recv_tokens = jax.lax.with_sharding_constraint(recv_tokens, jax.sharding.NamedSharding(mesh, lead))
+    recv_w = jax.lax.with_sharding_constraint(recv_w, jax.sharding.NamedSharding(mesh, lead2))
+    token_counts = jax.lax.with_sharding_constraint(token_counts, jax.sharding.NamedSharding(mesh, lead2))
+
     def _local_ffn(recv_tokens_l, token_counts_l, w13_l, w2_l):
         x_dispatch = recv_tokens_l.reshape(recv_tokens_l.shape[-2], recv_tokens_l.shape[-1])
         group_sizes = token_counts_l.reshape(-1).astype(jnp.int32)
@@ -93,13 +102,11 @@ def _moe_mlp_ep_nccl(
         out = expert_mlp_fn(x_dispatch, group_sizes)
         return out.reshape(recv_tokens_l.shape)
 
-    lead = P(batch_spec[0], None, None)  # (outer, ep) leading axis of EP-output tensors
-    counts_spec = P(batch_spec[0], None)
     w_spec = P("expert", None, None)
     ffn = shard_map(
         _local_ffn,
         mesh=mesh,
-        in_specs=(lead, counts_spec, w_spec, w_spec),
+        in_specs=(lead, lead2, w_spec, w_spec),
         out_specs=lead,
         check_vma=False,
     )
@@ -110,6 +117,7 @@ def _moe_mlp_ep_nccl(
     # flows through this hadamard, not the FFI.
     mask = (recv_w != 0).astype(jnp.float32)[..., None]
     weighted = (expert_out.astype(jnp.float32) * recv_w[..., None] * mask).astype(expert_out.dtype)
+    weighted = jax.lax.with_sharding_constraint(weighted, jax.sharding.NamedSharding(mesh, lead))
     out = ep_combine(cfg, handle_mem, token_counts, weighted, tuple(x.shape[:-1]))
     out = jax.lax.with_sharding_constraint(out, jax.sharding.NamedSharding(mesh, batch_spec))
 
