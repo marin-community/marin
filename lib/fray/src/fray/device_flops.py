@@ -106,16 +106,21 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
-    # B200 / GB200 - per-GPU Blackwell peaks
+    # B200 / GB200 - per-GPU GB200 NVL72 peaks (Grace Blackwell, liquid-cooled)
+    # Rack totals from Table 2 of the Blackwell Architecture Technical Brief (V2.1),
+    # divided by 72 GPUs. Stored value is the dense peak (fray's sparse/2 convention).
+    # JAX reports "NVIDIA GB200" on this hardware, so use the GB200 NVL72 column, not
+    # the lower-clocked HGX B200 (1000W) numbers.
     # source: https://resources.nvidia.com/en-us-blackwell-architecture
     "b200": {
-        "fp64": 40e12,
-        "fp32": 40e12,
-        "tf32": 2.2e15 / 2,
-        "fp16": 4.5e15 / 2,
-        "bf16": 4.5e15 / 2,
-        "fp8": 9e15 / 2,
-        "int8": 9e15 / 2,
+        "fp64": 40e12,  # 2880 TFLOPS / 72
+        "fp32": 80e12,  # 5760 TFLOPS / 72
+        "tf32": 2.5e15 / 2,  # 180 PFLOPS / 72 sparse -> 1.25 dense
+        "fp16": 5e15 / 2,  # 360 PFLOPS / 72 sparse -> 2.5 dense
+        "bf16": 5e15 / 2,  # 360 PFLOPS / 72 sparse -> 2.5 dense
+        "fp8": 10e15 / 2,  # 720 PFLOPS / 72 sparse -> 5 dense
+        "int8": 10e15 / 2,  # 720 POPS / 72 sparse -> 5 dense
+        "fp4": 20e15 / 2,  # 1440 PFLOPS / 72 sparse -> 10 dense
     },
     # source: https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf
     "v100": {
