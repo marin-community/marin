@@ -81,6 +81,15 @@ class TrainLmConfig:
     If provided, will initialize from this checkpoint, used for llama style ablation. This resets the data loader.
     Note that this differs from --trainer.initialize_from, which does not reset the data loader.
     """
+    initialize_model_from_checkpoint_path: Optional[str] = None
+    """
+    If provided, initialize *only the model weights* from the ``model`` subtree of this native Levanter
+    checkpoint; the optimizer state is left fresh and the step at 0 — the same "load weights, fresh optimizer"
+    semantics as ``initialize_from_hf``, but from a native checkpoint. Unlike ``initialize_from_checkpoint_path``
+    (a full-state restore) this never reads the checkpoint's optimizer state or step, and the load is strict:
+    every model leaf must be present (a missing leaf is an error, not a silent re-init). Used to init from a
+    materialized HF->Levanter conversion; ``config.model`` must be the architecture the checkpoint was saved with.
+    """
     eval_harness: Optional[LmEvalHarnessConfig] = None
     eval_harness_steps: int = 10000
     labeled_eval: LabeledLmEvalConfig | None = None
@@ -134,6 +143,19 @@ def _load_lm_model_from_configured_source(
 
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
+
+    # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
+    # native weights-only init. (trainer.initialize_from is a fourth, full-state resume; checked below.)
+    _init_sources = [
+        config.initialize_from_hf,
+        config.initialize_from_checkpoint_path is not None,
+        config.initialize_model_from_checkpoint_path is not None,
+    ]
+    if sum(bool(s) for s in _init_sources) > 1:
+        raise ValueError(
+            "Specify at most one of initialize_from_hf, initialize_from_checkpoint_path, "
+            "initialize_model_from_checkpoint_path."
+        )
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
@@ -248,6 +270,15 @@ def main(config: TrainLmConfig):
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
+        if int(state.step) == 0 and config.initialize_model_from_checkpoint_path is not None:
+            # Weights-only init: load just the model subtree (strict — every model leaf must be present),
+            # leaving the freshly-built optimizer state and step 0 in place. Mirrors the initialize_from_hf
+            # path (load weights, cast to param precision), but from a native Levanter checkpoint.
+            checkpoint_path = latest_checkpoint_path(config.initialize_model_from_checkpoint_path)
+            model = load_checkpoint(state.model, checkpoint_path, subpath="model")
+            model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+            state = dataclasses.replace(state, model=model)
+
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
             if config.initialize_from_hf:
@@ -270,6 +301,11 @@ def main(config: TrainLmConfig):
                     trainer=trainer,
                 )
                 state = dataclasses.replace(state, model=model)
+            elif config.initialize_model_from_checkpoint_path is not None:
+                logger.info(
+                    "Initialized model weights from native checkpoint"
+                    f" '{config.initialize_model_from_checkpoint_path}' (fresh optimizer, step 0)."
+                )
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
         elif not isinstance(config.adapter, NoAdaptorConfig):
