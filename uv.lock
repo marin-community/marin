@@ -205,6 +205,7 @@ members = [
     "marin-levanter",
     "marin-rigging",
     "marin-root",
+    "marin-smallquery",
     "marin-zephyr",
 ]
 constraints = [
@@ -5445,6 +5446,7 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-levanter" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-smallquery" },
     { name = "marin-zephyr" },
     { name = "watchdog" },
 ]
@@ -5460,8 +5462,44 @@ requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
+    { name = "marin-smallquery", editable = "lib/smallquery" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
+]
+
+[[package]]
+name = "marin-smallquery"
+version = "0.1.0"
+source = { editable = "lib/smallquery" }
+dependencies = [
+    { name = "click" },
+    { name = "marin-iris" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.0" },
+    { name = "marin-iris", editable = "lib/iris" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]
