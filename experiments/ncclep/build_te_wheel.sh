@@ -32,10 +32,9 @@ uv pip install pip cmake ninja "pybind11[global]" wheel setuptools packaging \
 uv pip install --upgrade \
   nvidia-cuda-nvcc nvidia-cuda-runtime nvidia-cuda-crt \
   nvidia-cuda-nvrtc nvidia-curand nvidia-cublas \
-  nvidia-cuda-profiler-api nvidia-cuda-cupti \
+  nvidia-cuda-profiler-api nvidia-cuda-cupti nvidia-nvml-dev nvidia-nvtx \
   nvidia-cudnn-cu13 "nvidia-nccl-cu13==${NCCL_RUNTIME_VERSION}"
 uv pip install nvidia-cuda-cccl || echo "cccl wheel unavailable; continuing"
-uv pip install nvidia-cuda-nvtx || echo "nvtx wheel unavailable; continuing"
 
 SP=$(python -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
 echo "nvidia wheel root: $SP"
