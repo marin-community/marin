@@ -835,4 +835,56 @@ author: mcwitt
   scratch/mxfp8-005/ (gitignored).
 - Next action: thread goal MET (mxfp8 > per-tensor e2e). Follow-ups ranked
   above; biggest single lever is the slim-vjp/B128 port, then producer
-  folding.
+  folding. [Superseded same-day by the production-viability re-rank below.]
+
+### 2026-07-17 - Direction decision (mcwitt): production-viability filter — slim-vjp/B128 port dropped, follow-ups re-ranked
+
+- Trigger: user asked whether slim-vjp/`all_but_moe` are viable for a
+  production run (>120B total / >15B active params) and directed: do not
+  spend benchmark time on configs that are not production-viable.
+- Evidence (from the #7012 branch logbook,
+  `research/mcwitt/7012-b200-mfu:.agents/logbooks/7012-b200-moe-mfu.md`,
+  entries B200MFU-015/-029/-032 — that thread has advanced past our last
+  sync): at the production reference config (d5120 L48 E64 top4 b1024,
+  64xGB200 rep2 DDP, 16 seq/GPU ≈ the >120B/~14B-active scale asked about),
+  `all_but_moe` wants 439-627 GiB and `none` 1.43-1.62 TiB of step
+  temporaries vs the 138 GiB pool — 3-12x over budget. **`recompute_all` is
+  the only viable remat mode at production scale**, and slim residuals
+  standalone are a measured −0.28pp tax under recompute_all. Also: the
+  MuonH-NS 26% share at our B64 4-GPU grid is a small-bench artifact —
+  optimizer share at the reference config is ~4% (B200MFU-007/-032), so the
+  "amortize NS via B128" motivation evaporates too.
+- Consequence: **MXFP8-005's B64 `recompute_all` ladder was already the
+  production-representative mode**; the mxfp8 win (+1.17pp vs bf16, +0.94pp
+  vs per-tensor) needs no remat-mode caveat. What is NOT yet
+  production-representative is the *shape/scale* (d2560 L26 4-GPU vs d5120
+  L48 multi-node, where #7012 measured the step becoming
+  collective-dominated at >=32-way — ~48% collectives at d2560 EP4 32-GPU,
+  which compresses any GEMM-side win).
+- New ranked follow-ups (production filter applied):
+  1. **MXFP8-006: production-shape ladder** — mxfp8 vs per-tensor vs bf16 at
+     d5120/L48/E64/K4, 16 seq/GPU, recompute_all, multi-node EP on GB200
+     (as close to the B200MFU-032 reference as our node budget allows).
+     Includes fused-kernel tile re-tune at d5120/F2560 shapes,
+     save-qweights memory re-probe under the tighter budget, and the
+     one-shot-off a2a flag. This is now the only benchmark that decides
+     whether the +1.17pp survives where it matters.
+  2. Producer folding (~185 ms) + pre-interleaved w13 storage (~75 ms):
+     production-viable and double-dips under recompute_all (producers run in
+     both the forward and the remat re-run).
+  3. dswiglu epilogue headroom (1244 TF/s leg): mode/scale-independent
+     kernel work.
+  4. QuACK bf16 grouped denominator port: the production driver runs
+     QuACK-class bf16, so the honest comparison arm needs it at (1)'s scale.
+  5. CuTe-producer same-node A/B: only if (2) doesn't subsume the producers.
+  6. Quality gate hand-off to #7271 (compute-optimal wall-time-matched
+     MXFP8 vs BF16): unchanged, runs in parallel — it's the numerics case
+     for mxfp8 and is scale-relevant regardless of the perf ladder.
+- Dropped (production filter):
+  - slim-vjp/`all_but_moe`/B128 port: falsified at production scale by
+    B200MFU-032 (3-12x memory over budget; slim standalone is a perf tax).
+    Was only ever a small-grid comparability item.
+  - a2a-at-B64 XLA pathology chase: 4-GPU bench artifact; production EP
+    collective work (EP16/32 CUBIN bug, EP32 SPMD-remat OOM) lives on
+    #7012/#7279, not this thread.
+- Next action: launch MXFP8-006 (production-shape ladder).
