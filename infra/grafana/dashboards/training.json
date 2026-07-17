@@ -2,12 +2,18 @@
   "uid": "marin-training",
   "title": "Training (telltale)",
   "description": "Levanter training metrics persisted from each process's rigging.telltale registry into the telltale finelog namespace by the telltale forwarder. Series are keyed on the metric name and grouped by run (the wandb run id levanter sets, falling back to the Iris job_id column). Identity like run/job_id/source is flattened into top-level columns; the namespace clusters on name, so per-metric panels prune to a metric's row groups. Any in-cluster training run reports here; there is no data before the forwarder ships.",
-  "tags": ["marin", "generated"],
+  "tags": [
+    "marin",
+    "generated"
+  ],
   "timezone": "utc",
   "editable": false,
   "schemaVersion": 39,
   "refresh": "1m",
-  "time": { "from": "now-3h", "to": "now" },
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -15,7 +21,10 @@
         "label": "Cluster",
         "type": "datasource",
         "query": "yesoreyeram-infinity-datasource",
-        "current": { "text": "finelog-marin", "value": "finelog-marin" }
+        "current": {
+          "text": "finelog-marin",
+          "value": "finelog-marin"
+        }
       }
     ]
   },
@@ -25,10 +34,25 @@
       "type": "timeseries",
       "title": "Training loss by run",
       "description": "levanter_train_loss over time, averaged per time bin for each run.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": { "unit": "none", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
         "overrides": []
       },
       "targets": [
@@ -42,15 +66,36 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_train_loss' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_train_loss' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
-            { "selector": "series", "text": "run", "type": "string" },
-            { "selector": "value", "text": "loss", "type": "number" }
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "loss",
+              "type": "number"
+            }
           ]
         }
       ]
@@ -60,10 +105,25 @@
       "type": "timeseries",
       "title": "Throughput by run",
       "description": "levanter_throughput over time, averaged per time bin for each run.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": { "unit": "none", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
         "overrides": []
       },
       "targets": [
@@ -77,15 +137,36 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_throughput' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_throughput' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
-            { "selector": "series", "text": "run", "type": "string" },
-            { "selector": "value", "text": "throughput", "type": "number" }
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "throughput",
+              "type": "number"
+            }
           ]
         }
       ]
@@ -95,10 +176,25 @@
       "type": "timeseries",
       "title": "Training step by run",
       "description": "levanter_step (the most recent training step logged) per run — a progress line.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "fieldConfig": {
-        "defaults": { "unit": "none", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
         "overrides": []
       },
       "targets": [
@@ -112,15 +208,36 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, MAX(value) AS value FROM \"telltale\" WHERE name = 'levanter_step' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, job_id, 'unknown') AS series, MAX(value) AS value FROM \"telltale\" WHERE name = 'levanter_step' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
-            { "selector": "series", "text": "run", "type": "string" },
-            { "selector": "value", "text": "step", "type": "number" }
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "run",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "step",
+              "type": "number"
+            }
           ]
         }
       ]
@@ -130,9 +247,20 @@
       "type": "table",
       "title": "Telltale sources over the window",
       "description": "Distinct metric names and total samples per source in the telltale namespace — a quick check that levanter/zephyr/iris processes are reporting.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
@@ -144,15 +272,36 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT source, COUNT(DISTINCT name) AS metrics, COUNT(*) AS samples FROM \"telltale\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY source ORDER BY samples DESC" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT source, COUNT(DISTINCT name) AS metrics, COUNT(*) AS samples FROM \"telltale\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY source ORDER BY samples DESC"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "source", "text": "source", "type": "string" },
-            { "selector": "metrics", "text": "metrics", "type": "number" },
-            { "selector": "samples", "text": "samples", "type": "number" }
+            {
+              "selector": "source",
+              "text": "source",
+              "type": "string"
+            },
+            {
+              "selector": "metrics",
+              "text": "metrics",
+              "type": "number"
+            },
+            {
+              "selector": "samples",
+              "text": "samples",
+              "type": "number"
+            }
           ]
         }
       ]

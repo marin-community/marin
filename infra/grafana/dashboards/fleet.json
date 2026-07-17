@@ -2,12 +2,18 @@
   "uid": "marin-fleet",
   "title": "Fleet",
   "description": "Worker fleet and canary health from the infra.canary.metrics namespace that infra/probes writes. Its labels are a JSON string, so panels filter with finelog's contains() UDF and group by the label_<key> columns the bridge flattens.",
-  "tags": ["marin", "generated"],
+  "tags": [
+    "marin",
+    "generated"
+  ],
   "timezone": "utc",
   "editable": false,
   "schemaVersion": 39,
   "refresh": "1m",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "templating": {
     "list": [
       {
@@ -15,7 +21,10 @@
         "label": "Cluster",
         "type": "datasource",
         "query": "yesoreyeram-infinity-datasource",
-        "current": { "text": "finelog-marin", "value": "finelog-marin" }
+        "current": {
+          "text": "finelog-marin",
+          "value": "finelog-marin"
+        }
       }
     ]
   },
@@ -25,10 +34,25 @@
       "type": "timeseries",
       "title": "Healthy workers by region",
       "description": "worker_healthy per region. Rows carrying a region label, grouped by it.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
         "overrides": []
       },
       "targets": [
@@ -42,15 +66,36 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'worker_healthy' AND contains(labels, '\"region\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'worker_healthy' AND contains(labels, '\"region\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
-            { "selector": "label_region", "text": "region", "type": "string" },
-            { "selector": "value", "text": "workers", "type": "number" }
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "label_region",
+              "text": "region",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "workers",
+              "type": "number"
+            }
           ]
         }
       ]
@@ -60,10 +105,25 @@
       "type": "timeseries",
       "title": "Fleet TPU chips",
       "description": "worker_tpu_chips for the scope=fleet rollup row.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
         "overrides": []
       },
       "targets": [
@@ -77,14 +137,31 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT collected_at AS t, value FROM \"infra.canary.metrics\" WHERE metric = 'worker_tpu_chips' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT collected_at AS t, value FROM \"infra.canary.metrics\" WHERE metric = 'worker_tpu_chips' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
-            { "selector": "value", "text": "chips", "type": "number" }
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "value",
+              "text": "chips",
+              "type": "number"
+            }
           ]
         }
       ]
@@ -94,10 +171,26 @@
       "type": "timeseries",
       "title": "Canary probe health",
       "description": "probe_up per check: 1 healthy, 0 failing. Grouped by the probe label.",
-      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "${cluster}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
       "fieldConfig": {
-        "defaults": { "unit": "short", "min": 0, "max": 1, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
         "overrides": []
       },
       "targets": [
@@ -111,15 +204,36 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'probe_up' AND contains(labels, '\"probe\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at" },
-              { "key": "from", "value": "${__from}" },
-              { "key": "to", "value": "${__to}" }
+              {
+                "key": "sql",
+                "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'probe_up' AND contains(labels, '\"probe\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
-            { "selector": "label_probe", "text": "probe", "type": "string" },
-            { "selector": "value", "text": "up", "type": "number" }
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "label_probe",
+              "text": "probe",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "up",
+              "type": "number"
+            }
           ]
         }
       ]
