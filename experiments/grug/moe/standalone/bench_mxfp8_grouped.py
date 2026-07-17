@@ -98,6 +98,22 @@ def timed(fn, args, iters, warmup):
     return statistics.median(times)
 
 
+def ragged_reference(x32, w32_ekn, group_sizes: list[int]):
+    """Per-expert f32 matmul reference for the grouped GEMM.
+
+    Plain dense dots per group instead of ``jax.lax.ragged_dot``: the f32
+    ragged_dot triton autotune tries to profile ~160 GiB fusions at these
+    shapes and OOMs the pool (observed on GB200, jax 0.10.1).
+    """
+    outs = []
+    start = 0
+    for ei, g in enumerate(group_sizes):
+        if g > 0:
+            outs.append(x32[start : start + g] @ w32_ekn[ei])
+        start += g
+    return jnp.concatenate(outs, axis=0)
+
+
 def run_case(label: str, k: int, n: int, group_sizes: list[int], iters: int, warmup: int) -> dict:
     m = sum(group_sizes)
     gs_dev = jnp.array(group_sizes, dtype=jnp.int32)
@@ -116,36 +132,15 @@ def run_case(label: str, k: int, n: int, group_sizes: list[int], iters: int, war
     w_sf = build_sfb(w_scales)
     jax.block_until_ready((x_q, w_q, x_sf, w_sf))
 
-    # ── Kernel arm ──
+    # ── Kernel first run ──
     kernel_fn = jax.jit(lambda xq, wq, xsf, wsf, off: mxfp8_grouped_mm(xq, xsf, wq, wsf, off))
     out = jax.block_until_ready(kernel_fn(x_q, w_q, x_sf, w_sf, offs))
-
-    # ── References ──
-    # GEMM-isolating reference: dequantize the SAME quantized operands.
-    x_deq = dequantize_mxfp8(x_q, x_scales)  # (M, K) f32
-    w_deq = jnp.swapaxes(dequantize_mxfp8(w_q, w_scales), 1, 2)  # (E, K, N) f32
-    ref_q32 = jax.lax.ragged_dot(x_deq, w_deq, gs_dev, preferred_element_type=jnp.float32)
-    ref_q_bf = ref_q32.astype(jnp.bfloat16)
-    err_gemm_bf = rel_frob(out, ref_q_bf)  # gate: < 1e-3 (bf16-rounded ref)
-    err_gemm_f32 = rel_frob(out, ref_q32)
-    # Quantization-inclusive reference: unquantized operands.
-    ref_full = jax.lax.ragged_dot(
-        x.astype(jnp.float32), w.astype(jnp.float32), gs_dev, preferred_element_type=jnp.float32
-    )
-    err_quant = rel_frob(out, ref_full)
-    del x_deq, w_deq, ref_q32, ref_q_bf, ref_full
+    print(f"  kernel out: shape={out.shape} |mean|={float(jnp.mean(jnp.abs(out.astype(jnp.float32)))):.4f}")
 
     flops = 2 * m * k * n
-    res = {
-        "m": m,
-        "k": k,
-        "n": n,
-        "err_gemm_vs_deq_bf16ref": err_gemm_bf,
-        "err_gemm_vs_deq_f32ref": err_gemm_f32,
-        "err_vs_unquantized": err_quant,
-        "arms": {},
-    }
+    res = {"m": m, "k": k, "n": n, "arms": {}}
 
+    # ── Timing arms (before the memory-heavy f32 reference work) ──
     t = timed(kernel_fn, (x_q, w_q, x_sf, w_sf, offs), iters, warmup)
     res["arms"]["mxfp8_kernel"] = {"ms": t * 1e3, "tfs": flops / t / 1e12}
 
@@ -157,6 +152,22 @@ def run_case(label: str, k: int, n: int, group_sizes: list[int], iters: int, war
     dense_fn = jax.jit(lambda xx, ww: jnp.einsum("mk,kn->mn", xx, ww, preferred_element_type=jnp.bfloat16))
     t = timed(dense_fn, (x, w_dense), iters, warmup)
     res["arms"]["bf16_dense"] = {"ms": t * 1e3, "tfs": flops / t / 1e12}
+
+    # ── References ──
+    # GEMM-isolating reference: dequantize the SAME quantized operands.
+    x_deq = dequantize_mxfp8(x_q, x_scales)  # (M, K) f32
+    w_deq = jnp.swapaxes(dequantize_mxfp8(w_q, w_scales), 1, 2)  # (E, K, N) f32
+    ref_q32 = ragged_reference(x_deq, w_deq, group_sizes)
+    err_gemm_bf = rel_frob(out, ref_q32.astype(jnp.bfloat16))  # gate: < 1e-3 (bf16-rounded ref)
+    err_gemm_f32 = rel_frob(out, ref_q32)
+    del x_deq, w_deq, ref_q32
+    # Quantization-inclusive reference: unquantized operands.
+    ref_full = ragged_reference(x.astype(jnp.float32), jnp.asarray(w, jnp.float32), group_sizes)
+    err_quant = rel_frob(out, ref_full)
+    del ref_full
+    res["err_gemm_vs_deq_bf16ref"] = err_gemm_bf
+    res["err_gemm_vs_deq_f32ref"] = err_gemm_f32
+    res["err_vs_unquantized"] = err_quant
 
     base = res["arms"]["bf16_ragged"]["ms"]
     print(f"\n== {label} M={m} K={k} N={n} ==")
