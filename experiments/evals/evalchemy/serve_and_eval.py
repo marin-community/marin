@@ -241,11 +241,29 @@ def _vllm_gpu_fork_install() -> str:
     )
 
 
+# AWS config path (written by the serve child's setup) that forces virtual-hosted S3 addressing.
+_SERVE_AWS_CONFIG_PATH = "/tmp/marin-serve-aws-config"
+
+
+def _s3_virtual_addressing_setup() -> str:
+    """A setup script that forces VIRTUAL-HOSTED S3 addressing for the GPU serve child.
+
+    The fork's distributed model loader (Run:ai's model streamer) pulls the ``s3://`` export via boto3,
+    which defaults to PATH-style addressing; the CoreWeave object store rejects that
+    (``PathStyleRequestNotAllowed``) and ignores Iris's ``FSSPEC_S3`` setting. Mirror
+    ``tests/cluster/vllm/test_snowball_backend_parity.py``: write ``[default] s3.addressing_style =
+    virtual`` and point ``AWS_CONFIG_FILE`` (set in ``env_vars`` below) at it, so boto3 reads it before
+    the streamer pulls."""
+    return f"printf '[default]\\ns3 =\\n    addressing_style = virtual\\n' > {_SERVE_AWS_CONFIG_PATH}"
+
+
 def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
     """Worker environment for the serve child, by slice and backend.
 
     - GPU + vLLM: ``marin-core`` synced, then Marin's forked CUDA vLLM overlaid onto the venv (see
-      :func:`_vllm_gpu_fork_install`) -- ``marin-core[gpu]`` has no CUDA vLLM of its own.
+      :func:`_vllm_gpu_fork_install`), plus a virtual-hosted S3 addressing config (see
+      :func:`_s3_virtual_addressing_setup`) so the streamer can pull a ``s3://`` export from the
+      CoreWeave object store -- ``marin-core[gpu]`` has no CUDA vLLM of its own.
     - GPU + Levanter: the ``gpu`` build (the JAX/Levanter GPU stack) suffices; Levanter serves in-process.
     - TPU + vLLM: the ``tpu``+``vllm`` build. TPU + Levanter: only jax (the ``tpu`` extra).
     """
@@ -253,8 +271,15 @@ def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
         if spec.backend == ServeBackend.LEVANTER:
             return EnvironmentSpec(extras=("gpu",), env_vars=_propagated_env())
         return EnvironmentSpec(
-            setup_scripts=[default_setup_script(packages=["marin-core"]), _vllm_gpu_fork_install()],
-            env_vars=_propagated_env(VLLM_USE_FLASHINFER_SAMPLER="0"),
+            setup_scripts=[
+                default_setup_script(packages=["marin-core"]),
+                _vllm_gpu_fork_install(),
+                _s3_virtual_addressing_setup(),
+            ],
+            env_vars=_propagated_env(
+                VLLM_USE_FLASHINFER_SAMPLER="0",
+                AWS_CONFIG_FILE=_SERVE_AWS_CONFIG_PATH,
+            ),
         )
     if spec.backend == ServeBackend.LEVANTER:
         extras = ("tpu",)
