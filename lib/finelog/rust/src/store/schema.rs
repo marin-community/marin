@@ -331,11 +331,6 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
 
 /// Return `schema` with the implicit nullable STRING `cluster` column appended.
 /// No-op if a `cluster` column is already declared.
-///
-/// Nullable and appended so it evolves an already-registered namespace additively:
-/// [`merge_schemas`] admits a new nullable column, and segments written before the
-/// column existed null-fill it on read. Local writers leave it empty; the
-/// cross-cluster forwarder fills it (see [`IMPLICIT_CLUSTER_COLUMN`]).
 pub fn with_implicit_cluster(schema: Schema) -> Schema {
     if schema
         .columns
