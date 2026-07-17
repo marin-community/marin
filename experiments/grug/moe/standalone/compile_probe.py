@@ -210,7 +210,6 @@ def _report_dump_buffers(top_n: int) -> None:
         for shape, s in byshape.most_common(top_n):
             top_ops = ",".join(f"{o}x{c}" for o, c in ops[shape].most_common(3))
             print(f"  {s / 2**30:9.2f} GiB  n={counts[shape]:5d}  {shape}  [{top_ops}]", flush=True)
-        break
 
 
 if __name__ == "__main__":
