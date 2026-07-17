@@ -94,6 +94,10 @@ export NCCL_HOME=$(dirname "$(dirname "$NCCL_H")")
 NCCL_SO2=$(find "$NCCL_HOME" -name 'libnccl.so.2' | head -1)
 [ -e "$(dirname "$NCCL_SO2")/libnccl.so" ] || ln -s libnccl.so.2 "$(dirname "$NCCL_SO2")/libnccl.so"
 echo "CUDNN_PATH=$CUDNN_PATH NCCL_HOME=$NCCL_HOME"
+# cmake find_library/find_path consult these env vars; wheel dirs aren't in
+# any default search prefix.
+export CMAKE_LIBRARY_PATH="$NCCL_HOME/lib:$CUDNN_PATH/lib:$CUDA/lib64"
+export CMAKE_INCLUDE_PATH="$NCCL_HOME/include:$CUDNN_PATH/include:$CUDA/include"
 
 echo "=== PHASE 3: clone TE @ $TE_SHA with submodules ==="
 if [ ! -d te/.git ]; then
