@@ -139,7 +139,8 @@ def build_sfa(x_scales, group_sizes):
 
     ``x_scales``: uint8 (M, K//32) raw per-token scales; ``group_sizes``: host
     ints summing to M. Each group's block is swizzled independently (rows padded
-    to 128) and concatenated: shape ``(sum(round_up(M_g,128)), round_up(K//32,4))``.
+    to 128) and concatenated: float8_e8m0fnu of shape
+    ``(sum(round_up(M_g,128)), round_up(K//32,4))``.
     """
     kcols = x_scales.shape[1]
     parts = []
@@ -151,18 +152,20 @@ def build_sfa(x_scales, group_sizes):
         start += g
     flat = jnp.concatenate(parts)
     total_rows = sum(_round_up(int(g), 128) for g in group_sizes)
-    return flat.reshape(total_rows, _round_up(kcols, 4))
+    sfa = flat.reshape(total_rows, _round_up(kcols, 4))
+    return jax.lax.bitcast_convert_type(sfa, jnp.float8_e8m0fnu)
 
 
 def build_sfb(w_scales):
     """Assemble the swizzled SFB tensor for the 2Dx3D B operand.
 
     ``w_scales``: uint8 (E, N, K//32) raw per-output-row scales. Per-expert
-    swizzle, stacked: shape ``(E, round_up(N,128) * round_up(K//32,4))``.
+    swizzle, stacked: float8_e8m0fnu of shape
+    ``(E, round_up(N,128) * round_up(K//32,4))``.
     """
     e = w_scales.shape[0]
     parts = [to_blocked(w_scales[i]) for i in range(e)]
-    return jnp.stack(parts)
+    return jax.lax.bitcast_convert_type(jnp.stack(parts), jnp.float8_e8m0fnu)
 
 
 # --------------------------------------------------------------------------- #
@@ -173,20 +176,19 @@ def build_sfb(w_scales):
 def _build_launcher(
     *,
     e: int,
-    n: int,
-    k: int,
-    sfa_rows: int,
-    sfa_cols: int,
-    sfb_cols: int,
     mma_tiler_mnk: tuple[int, int, int],
     cluster_shape_mnk: tuple[int, int, int],
     max_active_clusters: int,
 ):
     """Build the stream-first ``@cute.jit`` launcher consumed by ``cutlass_call``.
 
-    Signature: (stream, x_q, w_q, x_sf, w_sf, offs, out, workspace). The scale
-    buffers arrive as uint8 and are recast to e8m0; the workspace arrives as
-    int32 (JAX-friendly) and is recast to bytes.
+    Signature: (stream, x_q, w_q, x_sf, w_sf, offs, out, workspace). All
+    tensors pass through untouched: cutlass_call builds them as genuine
+    gmem-space pointers, and any recast (``recast_tensor``/``recast_ptr``)
+    would drop the gmem address space -- the tensormap constructor then fails
+    with ``gmem_ptr_to_generic requires pointer in gmem address space``
+    (observed on job mxfp8-002-g3). The (E,K,N) logical view of the row-major
+    (E,N,K) weight buffer is expressed via TensorSpec ``mode`` instead.
     """
 
     class MxFp8GroupedLauncher:
@@ -200,7 +202,7 @@ def _build_launcher(
             mSFB: cute.Tensor,
             mOffs: cute.Tensor,
             mOut: cute.Tensor,
-            mWsI32: cute.Tensor,
+            mWs: cute.Tensor,
         ):
             kernel = ScaledGroupedGemmKernel(
                 scenario="2Dx3D",
@@ -214,33 +216,14 @@ def _build_launcher(
                 use_2cta_instrs=False,
                 fixed_expert_cnt=e,
             )
-            # w_q is (E, N, K) row-major; the kernel's torch-facing __call__
-            # expects mat_b as an (E, K, N) view with K stride-1 (b_layout
-            # "k_major"). Rebuild that view over the same buffer.
-            mat_b = cute.make_tensor(
-                mB.iterator,
-                cute.make_layout((e, k, n), stride=(n * k, 1, k)),
-            )
-            # Scale factors: uint8 buffers reinterpreted as e8m0. The kernel
-            # only consumes .shape/.iterator (it re-layouts via
-            # tile_atom_to_shape_SF), so a plain row-major 2D view suffices.
-            sfa = cute.make_tensor(
-                cute.recast_ptr(mSFA.iterator, dtype=cutlass.Float8E8M0FNU),
-                cute.make_layout((sfa_rows, sfa_cols), stride=(sfa_cols, 1)),
-            )
-            sfb = cute.make_tensor(
-                cute.recast_ptr(mSFB.iterator, dtype=cutlass.Float8E8M0FNU),
-                cute.make_layout((e, sfb_cols), stride=(sfb_cols, 1)),
-            )
-            workspace = cute.recast_tensor(mWsI32, cutlass.Uint8)
             kernel(
                 mA,
-                mat_b,
-                sfa,
-                sfb,
+                mB,
+                mSFA,
+                mSFB,
                 mOut,
                 mOffs,
-                workspace,
+                mWs,
                 max_active_clusters,
                 stream,
             )
@@ -263,11 +246,12 @@ def mxfp8_grouped_mm(
 
     Args:
         x_q: (M, K) float8_e4m3fn, K contiguous. Rows grouped per expert.
-        x_sf: (sum(round_up(M_g,128)), round_up(K//32,4)) uint8, swizzled e8m0
-            scales from ``build_sfa``.
+        x_sf: (sum(round_up(M_g,128)), round_up(K//32,4)) float8_e8m0fnu,
+            swizzled scales from ``build_sfa``.
         w_q: (E, N, K) float8_e4m3fn row-major (K contiguous) -- the transposed
             weight layout; logical operand is w[E, K, N].
-        w_sf: (E, round_up(N,128) * round_up(K//32,4)) uint8 from ``build_sfb``.
+        w_sf: (E, round_up(N,128) * round_up(K//32,4)) float8_e8m0fnu from
+            ``build_sfb``.
         offs: (E,) int32 END offsets (cumsum of group sizes; offs[-1] == M).
         out_dtype: output dtype (bf16 default; f32 accumulate).
     """
@@ -277,27 +261,21 @@ def mxfp8_grouped_mm(
     assert kx == k, f"K mismatch: x_q K={kx}, w_q K={k}"
     assert k % 128 == 0, f"K={k} must be divisible by 128 (sf_vec_size * 4)"
     assert offs.shape == (e,)
-    sfa_rows, sfa_cols = x_sf.shape
+    sfa_cols = x_sf.shape[1]
     sfb_cols = w_sf.shape[1]
     assert sfa_cols == _round_up(_ceil_div(k, SF_VEC_SIZE), 4)
     assert sfb_cols == _round_up(n, 128) * sfa_cols
+    assert x_sf.dtype == jnp.float8_e8m0fnu and w_sf.dtype == jnp.float8_e8m0fnu
 
-    # Workspace: expert-wise TMA descriptors + padded scale offsets (int32 words
-    # for JAX friendliness; recast to bytes in the launcher).
+    # Workspace: expert-wise TMA descriptors + padded scale offsets.
     desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size("2Dx3D", e)
     ws_bytes = desc_bytes + e * 4  # + padded offs (consistent_token_padding=False)
-    ws_words = _ceil_div(ws_bytes, 4)
 
     cluster_size = cluster_shape_mnk[0] * cluster_shape_mnk[1]
     max_active_clusters = _B200_SMS // cluster_size
 
     launcher = _build_launcher(
         e=e,
-        n=n,
-        k=k,
-        sfa_rows=sfa_rows,
-        sfa_cols=sfa_cols,
-        sfb_cols=sfb_cols,
         mma_tiler_mnk=mma_tiler_mnk,
         cluster_shape_mnk=cluster_shape_mnk,
         max_active_clusters=max_active_clusters,
@@ -305,7 +283,11 @@ def mxfp8_grouped_mm(
 
     ts = cjax.TensorSpec
     a_spec = ts(mode=(0, 1), divisibility=(1, _FP8_TMA_VEC), static=True)
-    b_spec = ts(mode=(0, 1, 2), divisibility=(1, 1, _FP8_TMA_VEC), static=True)
+    # w_q buffer is row-major (E, N, K); the kernel's torch-facing __call__
+    # expects mat_b logical (E, K, N) with K stride-1. mode reorders the
+    # logical view without materializing a transpose; divisibility is in
+    # input-dimension order (before mode).
+    b_spec = ts(mode=(0, 2, 1), divisibility=(1, 1, _FP8_TMA_VEC), static=True)
     sfa_spec = ts(mode=(0, 1), static=True)
     sfb_spec = ts(mode=(0, 1), static=True)
     offs_spec = ts(mode=(0,), static=True)
@@ -314,7 +296,7 @@ def mxfp8_grouped_mm(
 
     out_shapes = (
         jax.ShapeDtypeStruct((m, n), out_dtype),
-        jax.ShapeDtypeStruct((ws_words,), jnp.int32),
+        jax.ShapeDtypeStruct((ws_bytes,), jnp.uint8),
     )
 
     call = cjax.cutlass_call(
