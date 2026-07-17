@@ -142,3 +142,14 @@ def test_security_flags_docker_access_mounts_socket():
     assert "/var/run/docker.sock:/var/run/docker.sock" in flags
     # Still hardened like DEFAULT otherwise.
     assert "--cap-drop" in flags
+
+
+def test_security_flags_gvisor_uses_runsc_runtime_and_default_caps():
+    """gVisor selects the runsc runtime and keeps docker's default caps (no cap-drop)."""
+    flags = _security_flags(job_pb2.CONTAINER_PROFILE_GVISOR, is_tpu_run=False)
+    assert flags == ["--runtime", "runsc"]
+    # in-guest root needs the default cap set, so the container is NOT cap-dropped
+    # or privileged — gVisor provides the host isolation instead.
+    assert "--cap-drop" not in flags
+    assert "--privileged" not in flags
+    assert "no-new-privileges" not in flags

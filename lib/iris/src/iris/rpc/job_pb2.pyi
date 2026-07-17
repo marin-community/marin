@@ -89,6 +89,7 @@ class ContainerProfile(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     CONTAINER_PROFILE_DEFAULT: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_DOCKER_ACCESS: _ClassVar[ContainerProfile]
     CONTAINER_PROFILE_PRIVILEGED: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_GVISOR: _ClassVar[ContainerProfile]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -143,6 +144,7 @@ CONTAINER_PROFILE_RESTRICTED: ContainerProfile
 CONTAINER_PROFILE_DEFAULT: ContainerProfile
 CONTAINER_PROFILE_DOCKER_ACCESS: ContainerProfile
 CONTAINER_PROFILE_PRIVILEGED: ContainerProfile
+CONTAINER_PROFILE_GVISOR: ContainerProfile
 
 class Empty(_message.Message):
     __slots__ = ()
