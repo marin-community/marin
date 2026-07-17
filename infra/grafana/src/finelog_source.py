@@ -13,8 +13,8 @@ from typing import Protocol
 
 import pyarrow as pa
 from config import FINELOG_PORT, ClusterTarget
+from discovery import resolve_internal_ip
 from finelog.client.log_client import LogClient
-from google.cloud import compute_v1
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +49,9 @@ class FinelogSource:
 
     def _resolve_address(self, _label: str) -> str:
         """Return http://<internal-ip>:<port> for the VM matching this cluster's filter."""
-        # list() flattens only project/zone; the filter rides on the request.
-        request = compute_v1.ListInstancesRequest(
-            project=self._target.project,
-            zone=self._target.zone,
-            filter=self._target.instance_filter,
-        )
-        instances = compute_v1.InstancesClient().list(request=request)
-        for instance in instances:
-            for interface in instance.network_interfaces:
-                if interface.network_i_p:
-                    logger.info("resolved finelog for %s to %s", self._target.name, interface.network_i_p)
-                    return f"http://{interface.network_i_p}:{FINELOG_PORT}"
-        raise RuntimeError(
-            f"no finelog VM with an internal IP for {self._target.name} "
-            f"({self._target.instance_filter} in {self._target.zone})"
-        )
+        ip = resolve_internal_ip(self._target.project, self._target.zone, self._target.instance_filter)
+        logger.info("resolved finelog for %s to %s", self._target.name, ip)
+        return f"http://{ip}:{FINELOG_PORT}"
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         """Run sql against this cluster's finelog. Raises QueryResultTooLargeError past max_rows."""

@@ -17,7 +17,7 @@ import os
 import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
-from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs
+from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 
 # Cloud Run serves every custom domain from this fixed Google frontend; the mapping resource
 # routes the host to the service, and the DNS CNAME points the host at the frontend.
@@ -51,8 +51,11 @@ def main() -> None:
             # Grafana 13's apiserver and search indexers run between requests and need CPU
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
-            # The bridge lists finelog VM internal IPs through the Compute API.
+            # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
+            # The ferry/build panels call the GitHub API; the token lifts the REST rate limit
+            # and is required for the GraphQL build query. Value stays in Secret Manager.
+            secrets=(SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),),
             iap_members=tuple(viewers),
         ),
         gcp_provider=provider,

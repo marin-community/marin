@@ -1,10 +1,12 @@
 # grafana
 
-Grafana over finelog, as an IAP-gated Cloud Run service. One instance serves both
-clusters: it reaches `finelog-marin` and `finelog-marin-dev` on their internal IPs
-over Direct VPC egress, and provisions a datasource for each. `marin` is the
-federation hub — the CoreWeave clusters forward their rows to it — so its
-datasource sees the whole fleet; `marin-dev` sees only itself.
+The Marin infra dashboard, as an IAP-gated Cloud Run service: Grafana plus a bridge
+that fronts three sources for its Infinity datasource — finelog SQL, the live Iris
+controller, and the GitHub API. One instance serves both clusters, reaching
+`finelog-marin` / `finelog-marin-dev` and each cluster's Iris controller on their
+internal IPs over Direct VPC egress. `marin` is the federation hub (the CoreWeave
+clusters forward their rows to it), so its finelog datasource sees the whole fleet;
+`marin-dev` sees only itself.
 
 Dashboards and datasources are provisioned from the files in this directory.
 Grafana's SQLite is ephemeral on Cloud Run, so UI edits do not persist: change the
@@ -13,52 +15,61 @@ JSON under `dashboards/` and redeploy.
 ## Why Cloud Run and not an Iris job
 
 A service that monitors X should not run on X: Grafana on Iris would serve the
-dashboards you need *during* an Iris incident from the thing that is down. Cloud
-Run is also the path already proven in this repo — `infra/status-page` runs the
-same substrate and queries finelog's internal IP over
-`--vpc-egress=private-ranges-only`.
+dashboards you need *during* an Iris incident from the thing that is down. Cloud Run
+reaches the finelog and controller internal IPs over
+`--vpc-egress=private-ranges-only` without living on the cluster it watches.
 
 ## The bridge
 
-Panels send SQL; the bridge runs it against finelog and returns JSON rows. finelog
-gates the `Query` RPC to SELECT and enforces a server-side deadline, so the bridge
-does not police the query. It exists for three things Grafana and the engine
-cannot do themselves:
-
-1. Arrow to JSON. finelog's `Query` returns Arrow IPC; Grafana's Infinity
-   datasource reads JSON.
-2. Caching. Grafana's query caching is Enterprise-only, so a shared
-   auto-refreshing dashboard would multiply through to the finelog hub. Results
-   are cached with a short TTL and concurrent misses coalesce. Panels reference
-   the window through the `{{from}}` / `{{to}}` macros the bridge substitutes, so
-   a relative range keeps one cache key as its edges drift between refreshes.
-3. Method gating. finelog admits every RPC from the same VPC, so pointing Grafana
-   at finelog's host would expose `WriteRows` and `DropTable` alongside `Query`.
-   The bridge calls only `Query`.
-
-It also flattens the EAV `labels` column into `label_<key>` fields on the way
-back, since DataFusion has no JSON functions and a panel cannot group by a label
-in SQL; the canary panels filter labels with `contains()` for the same reason.
+Grafana's Infinity datasource fetches JSON over loopback from the bridge, which fronts
+three upstreams and returns flat JSON rows. It runs beside Grafana; backend datasources
+fetch server-side, so nothing outside the container reaches it.
 
 ```
-GET /{cluster}/query?sql=&from=&to=
-GET /health
+GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
+GET /iris/{cluster}/jobs | workers | health      live controller RPCs
+GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
+GET /github/ferries | builds                      GitHub REST / GraphQL
+GET /health                                       bridge liveness
 ```
 
-Timestamps in the result render as epoch milliseconds, which is what Grafana
-plots, so a panel selects a raw or `date_bin`-ned time column without casting it.
+finelog: a panel sends SQL and a window; the bridge substitutes the `{{from}}` / `{{to}}`
+macros, runs it against finelog's `Query` RPC (SELECT-gated and deadline-bounded there),
+turns the Arrow result into JSON, and caches per (cluster, SQL, window bucket) so a
+relative range keeps one cache key as its edges drift. It calls only `Query`, avoiding the
+`WriteRows` / `DropTable` a direct Grafana-to-finelog datasource would also expose.
+Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bin`-ned
+time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
+— `json_get(labels,'region')`; the bridge also flattens a `labels` column into
+`label_<key>` fields.
 
-It runs on loopback beside Grafana; Grafana's backend datasources fetch
-server-side, so nothing outside the container reaches it.
+Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
+dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
+terminal) and `query` use the controller's `ExecuteRawQuery`; `workers` aggregates
+`ListWorkers` (worker liveness is in-memory, not SQL); `health` is the controller
+`/health`. These rely on the marin controller's null-auth mode — `ExecuteRawQuery` is
+admin-only — so an authed controller would break `jobs` and the ad-hoc `query`.
+
+GitHub: `ferries` and `builds` fan out over the Actions REST and GraphQL APIs with a
+server-side token (the rate-limit shield), cached, panel fields precomputed.
+
+The controller and finelog IPs are resolved from GCE labels and refreshed after a
+connection failure. A dead controller or GitHub returns 5xx (not empty rows) and the
+failure is not cached, so a panel shows an error rather than blank data; `iris/.../health`
+is the exception — it returns `reachable=false` so the panel can render the outage.
 
 ## Layout
 
 ```
-src/server.py          the /query API (Starlette): macros, Arrow->JSON, label flatten
-src/finelog_source.py  finelog internal-IP discovery + LogClient
-src/config.py          cluster targets and bridge settings
+src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub
+src/finelog_source.py  finelog query over its internal IP (LogClient)
+src/iris_source.py     live controller RPCs: jobs, workers, health, ad-hoc query
+src/github_source.py   ferry runs and CI build rollup, precomputed
+src/discovery.py       GCE label -> internal IP
+src/config.py          cluster targets, ferry config, and bridge settings
 src/cache.py           TTL cache with in-flight coalescing
-provisioning/          datasources + dashboard provider
+src/errors.py          UpstreamError -> 5xx
+provisioning/          datasources (finelog, iris, github) + dashboard provider
 dashboards/            dashboard JSON — reviewed like code
 Dockerfile             grafana:13.1.0-ubuntu + the bridge venv + the Infinity plugin
 entrypoint.sh          runs both; if either dies the container dies
@@ -66,9 +77,10 @@ __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.clo
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-Dashboards: `fleet.json` (canary + worker health, marin only), `iris.json`
-(per-task and per-worker resource usage; `iris.task` has data on both clusters),
-`pipelines.json` (Zephyr throughput and shard memory).
+Dashboards: `infra.json` (the infra overview — builds and ferries, the Iris control
+plane, probes, and 24h history), `fleet.json` (canary + worker health), `iris.json`
+(per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
+memory).
 
 ## Develop
 
@@ -119,6 +131,16 @@ IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen
 project-level and shared across the project's IAP services, so nothing per-service needs
 configuring beyond the `viewers` list. The service is created IAP-gated with no viewers,
 i.e. reachable by nobody until the first grant.
+
+The ferry and build panels read the GitHub API; `GITHUB_TOKEN` comes from the
+`marin-status-page-github-token` Secret Manager secret, mounted by the CloudRunService
+`secrets` field (the value never enters Pulumi). Create it once if it does not exist — a
+classic token with no scopes or a fine-grained PAT scoped to public-repo read is enough:
+
+```bash
+echo -n "<paste-github-token>" | gcloud secrets create marin-status-page-github-token \
+  --project=hai-gcp-models --data-file=-
+```
 
 ## Adding a dashboard
 

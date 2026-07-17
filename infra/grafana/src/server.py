@@ -1,20 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The metric API Grafana queries, backed by finelog.
+"""The data API Grafana queries: finelog SQL plus the live Iris and GitHub sources.
 
-A panel sends SQL and a time window; the bridge substitutes the window macros,
-runs the SQL against finelog's Query RPC, shapes the Arrow result into JSON rows,
-and caches the result per (cluster, SQL, window bucket) for the configured TTL.
+A finelog panel sends SQL and a time window; the bridge substitutes the window
+macros, runs the SQL against finelog's Query RPC, shapes the Arrow result into JSON
+rows, and caches per (cluster, SQL, window bucket). The Iris and GitHub routes are
+fixed — the bridge owns their query and shape and returns flat JSON rows — so the
+dashboard never sends admin RPC SQL, and every route feeds Infinity's backend parser.
 
-Routes, one datasource per cluster addressed by path:
+Routes, grouped by source (cluster is a path segment where it applies):
 
-    GET /{cluster}/query?sql=&from=&to=
-    GET /health
+    GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
+    GET /iris/{cluster}/health                   controller reachability + latency
+    GET /iris/{cluster}/query?sql=               ad-hoc SELECT via ExecuteRawQuery (admin/null-auth)
+    GET /github/ferries                          recent ferry runs per tier, with success rate
+    GET /github/builds                           recent main commits with CI rollup state
+    GET /health                                  bridge liveness
 
-sql carries the {{from}} / {{to}} window macros. The cache key snaps the window
-to a TTL-wide bucket, so a relative range keeps one key as its edges drift.
-Handlers are sync defs; Starlette runs them in a threadpool.
+A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
+cached. Handlers are sync defs; Starlette runs them in a threadpool.
 """
 
 import json
@@ -26,8 +33,11 @@ import pyarrow as pa
 import uvicorn
 from cache import TtlCache
 from config import BRIDGE_PORT, CLUSTERS, BridgeConfig, ClusterTarget
+from errors import UpstreamError
 from finelog.errors import QueryResultTooLargeError
 from finelog_source import FinelogSource, MetricSource
+from github_source import GithubSource
+from iris_source import IrisSource
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -180,25 +190,85 @@ def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricS
     return cache.get_or_compute(key, run)
 
 
-def create_app(config: BridgeConfig, sources: Mapping[str, MetricSource]) -> Starlette:
-    """Build the ASGI app serving the clusters in sources."""
-    cache: TtlCache = TtlCache(config.cache_ttl)
+def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
+    if name not in sources:
+        raise _BadRequest(f"unknown cluster {name!r}; configured: {sorted(sources)}")
+    return sources[name]
+
+
+def create_app(
+    config: BridgeConfig,
+    finelog_sources: Mapping[str, MetricSource],
+    iris_sources: Mapping[str, IrisSource],
+    github_source: GithubSource,
+) -> Starlette:
+    """Build the ASGI app serving finelog, Iris, and GitHub for the configured clusters."""
+    finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
+    github_cache: TtlCache = TtlCache(config.github_cache_ttl)
 
     def query(request: Request) -> JSONResponse:
         try:
-            return JSONResponse(_query(request, config, sources, cache))
+            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
         except QueryResultTooLargeError as err:
             return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
 
+    def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
+        try:
+            source = _iris_for(request.path_params["cluster"], iris_sources)
+            return JSONResponse(iris_cache.get_or_compute((source.target.name, endpoint), lambda: run(source)))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def iris_jobs(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "jobs", lambda s: s.jobs())
+
+    def iris_workers(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "workers", lambda s: s.workers())
+
+    def iris_health(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "health", lambda s: s.health())
+
+    def iris_query(request: Request) -> JSONResponse:
+        # Ad-hoc SELECT: not cached (arbitrary SQL) and not used by any committed panel.
+        try:
+            source = _iris_for(request.path_params["cluster"], iris_sources)
+            sql = _require(request.query_params, "sql")
+            return JSONResponse(source.raw_query(sql))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def github_endpoint(key: str, run) -> JSONResponse:
+        try:
+            return JSONResponse(github_cache.get_or_compute(key, run))
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def github_ferries(_: Request) -> JSONResponse:
+        return github_endpoint("ferries", github_source.ferries)
+
+    def github_builds(_: Request) -> JSONResponse:
+        return github_endpoint("builds", github_source.builds)
+
     def health(_: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "clusters": sorted(sources)})
+        return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
     return Starlette(
         routes=[
             Route("/health", health),
-            Route("/{cluster}/query", query),
+            Route("/github/ferries", github_ferries),
+            Route("/github/builds", github_builds),
+            Route("/finelog/{cluster}/query", query),
+            Route("/iris/{cluster}/jobs", iris_jobs),
+            Route("/iris/{cluster}/workers", iris_workers),
+            Route("/iris/{cluster}/health", iris_health),
+            Route("/iris/{cluster}/query", iris_query),
         ]
     )
 
@@ -206,10 +276,17 @@ def create_app(config: BridgeConfig, sources: Mapping[str, MetricSource]) -> Sta
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config = BridgeConfig.from_environment()
-    sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
-    logger.info("grafana bridge serving %s on :%d", sorted(sources), BRIDGE_PORT)
+    finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
+    iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
+    github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
+    logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
-    uvicorn.run(create_app(config, sources), host="127.0.0.1", port=BRIDGE_PORT, access_log=False)
+    uvicorn.run(
+        create_app(config, finelog_sources, iris_sources, github_source),
+        host="127.0.0.1",
+        port=BRIDGE_PORT,
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

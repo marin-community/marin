@@ -23,7 +23,6 @@ updates:
 
   - package-ecosystem: "npm"
     directories:
-      - "/infra/status-page"
       - "/lib/iris"
       - "/lib/iris/dashboard"
       - "/lib/finelog"
