@@ -43,6 +43,12 @@ popd
 
 export XLA_PYTHON_CLIENT_ALLOCATOR=${XLA_PYTHON_CLIENT_ALLOCATOR:-cuda_async}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+# TE's EP integration disables command-buffer capture around the EP FFI ops;
+# with capture on, XLA can run an EP op's host-side handle lookup before
+# ep_prepare's cache insert (lookup_handle assertion). Unlimited handle cache
+# is TE's own documented JAX workaround for handle_mem relocation.
+export XLA_FLAGS="--xla_gpu_enable_command_buffer= ${XLA_FLAGS:-}"
+export NVTE_EP_HANDLE_CACHE_SIZE=-1
 
 # uv's cached marin-levanter wheel goes stale when new source files are added
 # without a version bump — shadow it with the bundled tree (stale-import
