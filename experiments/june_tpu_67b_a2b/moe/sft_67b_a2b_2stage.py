@@ -66,7 +66,7 @@ from experiments.june_tpu_67b_a2b.moe.sft_launch import (
 )
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.sft_launcher.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
+from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
 
 # --- Model: the EXACT cooldown architecture (arch parity is required for the weights load) -------
 _DIM: int = 2560
