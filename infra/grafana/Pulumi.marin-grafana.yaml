@@ -8,4 +8,5 @@ config:
   #     - alice@example.com
   #     - "*@openathena.ai"
   #     - group:marin-eng@example.com
-  marin-grafana:viewers: []
+  marin-grafana:viewers: [russell.power@gmail.com, '*@openathena.ai']
+encryptionsalt: v1:l4cpXo+O0AQ=:v1:eyZFohyodD1XPLAl:MQudWu5IcpxOK62NyqAUU5cCP8FYBw==
