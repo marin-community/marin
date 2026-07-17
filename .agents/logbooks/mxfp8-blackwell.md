@@ -442,3 +442,46 @@ author: mcwitt
      148 SMs for GB200.
 - Next action: dgrad/wgrad products + fused quantize+swizzle kernel, then
   layer-level fwd+bwd bench (MXFP8-004).
+
+### 2026-07-16 - MXFP8-002b: dgrad + wgrad green; honest layer-quad is 0.58x — producers gate everything
+
+- Hypothesis: MXFP8-H2 (bwd legs) + MXFP8-H5 (producer cost).
+- Commit Hash: 92f7af921 + b6fa1f9de (adapters, fused dual producer, bench).
+- Command: `python experiments/grug/moe/standalone/bench_mxfp8_grouped.py`, job
+  `/mwittmann/mxfp8-002b-g1` (1x GB200; single job, first-attempt green —
+  CPU-only sm_100a compile validated the 2Dx2D launcher locally in 2 s).
+- Result (M=262144, E=64, tile (128,256,128), median of 50; err vs
+  dequantized-same-operands ref, gate <1e-3):
+
+  | product | w13 | w2 | note |
+  |---|---|---|---|
+  | fwd | 0.806 ms / 2130 TF/s | 0.847 / 2027 | |
+  | dgrad | 0.842 / 2041 | 0.814 / 2112 | transposed-weight view via TensorSpec mode, no materialized transpose |
+  | wgrad (2Dx2D) | 0.778 / **2209** | 0.776 / **2214** | fastest product; skew costs ~15% here (~1% elsewhere) |
+
+  All errors 3e-6..1e-5. bf16 dense yardstick 1475-1531 TF/s.
+- Producer costs (jitted XLA, per tensor): fused dual-orientation producer
+  (both quantized copies + swizzled SFs in one jit; bit-exact, asserted
+  on-device) buys ~1.3x over naive but lands at 1.72 ms for act (M,2560) /
+  0.95 ms (M,1280) / ~0.86 ms per weight — effective ~1.6-2.2 TB/s. The
+  QUANTIZE itself is the bottleneck (MXFP8-001b redux), not the swizzle.
+- **Layer-quad honest total** (fwd+dgrad+wgrad, w13+w2, vs 3x bf16 dense =
+  6.95 ms): GEMMs only 4.86 ms -> **1.43x**; + XLA producers (7.06 ms) ->
+  **0.58x**. Break-even producer budget: 2.09 ms. HBM-ideal (~7 TB/s)
+  standalone dual-write quantizer ~1.4 ms -> ~1.11x; fusion-grade (marginal
+  cost = fp8 writes only, quantize fused into ops already touching the
+  tensors) ~0.7 ms -> **~1.25x**. The layer-level win exists ONLY with
+  fusion-grade producers (`exploratory`, but internally consistent with
+  MXFP8-001b's independent quantize measurement).
+- New gotchas: 2Dx2D wgrad runs at full speed in natural layouts (m-major A /
+  n-major B via TensorSpec mode) and per-expert token slices stay TMA-aligned
+  for any group sizes; the 2Dx2D SF chunk order needs an atom-block
+  permutation ([expert][row_block][col_block]), unlike the 2Dx3D plain
+  swizzle; zero-token experts safe only with accumulate_on_output=False
+  (epilogue stores zeros — True would need pre-zeroed FFI outputs we can't
+  provide); time bench arms BEFORE reference churn (BFC OOM warning is
+  non-fatal but pollutes timing).
+- Next action: MXFP8-002c — prototype the fused/dual-write MXFP8 quantizer
+  (CuTe or Mosaic, Hopper CT-kernel analog) targeting <=0.7 ms marginal for
+  the four activation tensors; this is the 0.58x-vs-1.25x decision point.
+  Op wiring (MXFP8-004) proceeds in parallel once the producer verdict is in.
