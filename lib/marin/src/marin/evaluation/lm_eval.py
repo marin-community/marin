@@ -1,13 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from marin.inference.types import RunningModel
+from marin.inference.vllm import BrokeredVllmSystemConfig, start_iris_brokered_vllm, start_local_brokered_vllm
 
 LmEvalModelArgValue = str | int | float | bool
+LM_EVAL_UV_PACKAGES = (
+    "lm-eval[api]@git+https://github.com/EleutherAI/lm-evaluation-harness@f4d4b3de3ee6741a7151a9fe74945ee515262f4c",
+    "transformers<5",
+)
 
 
 class LmEvalAdapter(StrEnum):
@@ -36,38 +42,56 @@ class LmEvalRun:
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: int | str | None = None
+    confirm_run_unsafe_code: bool = False
+    uv_packages: Sequence[str] = LM_EVAL_UV_PACKAGES
     extra_model_args: Mapping[str, LmEvalModelArgValue] = field(default_factory=dict)
 
 
 def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
-    """Run lm-eval against a launcher-neutral served model."""
+    """Run an isolated lm-eval subprocess against a served model."""
     if not run.tasks:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
 
-    # lm_eval is only installed with Marin's eval extra.
-    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415  # optional dep: lm_eval
-    from lm_eval.loggers import EvaluationTracker  # noqa: PLC0415  # optional dep: lm_eval
-
-    evaluation_tracker = EvaluationTracker(output_path=run.output_path)
-    results = simple_evaluate(
-        model=run.adapter.value,
-        tasks=list(run.tasks),
-        num_fewshot=run.num_fewshot,
-        model_args=build_lm_eval_model_args(model, run),
-        apply_chat_template=run.apply_chat_template,
-        batch_size=run.batch_size,
-        confirm_run_unsafe_code=True,
-        limit=run.limit,
-        evaluation_tracker=evaluation_tracker,
-        log_samples=True,
+    command = ["uv", "run", "--isolated", "--no-project"]
+    for package in run.uv_packages:
+        command.extend(["--with", package])
+    command.extend(
+        [
+            "lm_eval",
+            "--model",
+            run.adapter.value,
+            "--model_args",
+            build_lm_eval_model_args(model, run),
+            "--tasks",
+            ",".join(run.tasks),
+            "--output_path",
+            run.output_path,
+            "--log_samples",
+        ]
     )
-    if results is None:
-        raise RuntimeError("lm-eval returned no results.")
+    if run.apply_chat_template:
+        command.append("--apply_chat_template")
+    if run.confirm_run_unsafe_code:
+        command.append("--confirm_run_unsafe_code")
+    if run.limit is not None:
+        command.extend(["--limit", str(run.limit)])
+    if run.num_fewshot is not None:
+        command.extend(["--num_fewshot", str(run.num_fewshot)])
+    if run.batch_size is not None:
+        command.extend(["--batch_size", str(run.batch_size)])
+    subprocess.run(command, check=True)
 
-    samples = results.pop("samples")
-    evaluation_tracker.save_results_aggregated(results=results, samples=samples)
-    for task_name in results["configs"].keys():
-        evaluation_tracker.save_results_samples(task_name=task_name, samples=samples[task_name])
+
+def run_local_brokered_lm_eval(inference: BrokeredVllmSystemConfig, run: LmEvalRun) -> None:
+    """Run lm-eval with a local broker, proxy, and vLLM worker."""
+    with start_local_brokered_vllm(inference) as model:
+        run_lm_eval(model, run)
+
+
+def run_iris_brokered_lm_eval(inference: BrokeredVllmSystemConfig, run: LmEvalRun) -> None:
+    """Run lm-eval with Iris broker and vLLM worker jobs."""
+    with start_iris_brokered_vllm(inference) as model:
+        run_lm_eval(model, run)
 
 
 def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:

@@ -5,7 +5,7 @@ import logging
 import socket
 import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
@@ -54,6 +54,7 @@ class InferenceProxy:
         readiness_timeout_seconds: float,
         max_pending_requests: int,
         response_fetch_batch_size: int,
+        ignored_request_fields: Sequence[str] = (),
         backoff: ExponentialBackoff | None = None,
     ) -> None:
         if max_pending_requests < 1:
@@ -66,6 +67,7 @@ class InferenceProxy:
         self._readiness_timeout_seconds = readiness_timeout_seconds
         self._max_pending_requests = max_pending_requests
         self._response_fetch_batch_size = response_fetch_batch_size
+        self._ignored_request_fields = frozenset(ignored_request_fields)
         if backoff is None:
             backoff = ExponentialBackoff(initial=0.01, maximum=0.25, factor=2.0)
         self._backoff = backoff
@@ -163,12 +165,15 @@ class InferenceProxy:
             pending_count = len(self._pending)
 
         try:
+            forwarded_json = {
+                key: value for key, value in request_json.items() if key not in self._ignored_request_fields
+            }
             self._broker.submit_request(
                 InferenceRequest(
                     request_id=request_id,
                     method=method,
                     path=path,
-                    payload=pack_json_payload(request_json),
+                    payload=pack_json_payload(forwarded_json),
                 ),
             )
             logger.info(
@@ -271,6 +276,7 @@ def serve_inference_proxy(
     max_pending_requests: int,
     response_fetch_batch_size: int,
     server_start_timeout_seconds: float,
+    ignored_request_fields: Sequence[str] = (),
     backoff: ExponentialBackoff | None = None,
 ) -> Iterator[RunningModel]:
     actual_port = _reserve_port(host, port)
@@ -281,6 +287,7 @@ def serve_inference_proxy(
         readiness_timeout_seconds=readiness_timeout_seconds,
         max_pending_requests=max_pending_requests,
         response_fetch_batch_size=response_fetch_batch_size,
+        ignored_request_fields=ignored_request_fields,
         backoff=backoff,
     )
     config = uvicorn.Config(proxy.app, host=host, port=actual_port, log_level="error", log_config=None)
