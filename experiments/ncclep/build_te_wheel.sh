@@ -124,7 +124,20 @@ echo "=== PHASE 4: build wheel (jax framework, sm_100a) ==="
 export NVTE_FRAMEWORK=jax
 export NVTE_CUDA_ARCHS=100a
 cd te
-python -m pip wheel --no-build-isolation --no-deps -w "$WORK/wheelhouse" -v .
+# No -v: verbose nvcc command echoes drown the actual errors in iris log
+# retention. Tee to a file and surface only error context on failure.
+rc=0
+python -m pip wheel --no-build-isolation --no-deps -w "$WORK/wheelhouse" . \
+  > "$WORK/tebuild.log" 2>&1 || rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "=== BUILD FAILED (rc=$rc); error context: ==="
+  grep -nE "FAILED:|fatal error|error:|Error limit|ptxas.* error|Killed" "$WORK/tebuild.log" \
+    | grep -vE "nvcc -forward|/usr/bin/c\+\+ " | head -60
+  echo "=== last 60 lines: ==="
+  tail -60 "$WORK/tebuild.log"
+  exit "$rc"
+fi
+tail -5 "$WORK/tebuild.log"
 cd "$WORK"
 ls -la wheelhouse/
 sha256sum wheelhouse/*.whl
