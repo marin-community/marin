@@ -102,9 +102,11 @@ def _moe_mlp_ep_nccl(
         recv_w = jax.lax.with_sharding_constraint(recv_w, lead2)
         token_counts = jax.lax.with_sharding_constraint(token_counts, lead2)
 
+        # Inside auto_axes the context mesh is the auto-typed view of `mesh`;
+        # shard_map must receive that view, not the outer Explicit object.
         ffn = shard_map(
             _local_ffn,
-            mesh=mesh,
+            mesh=jax.sharding.get_abstract_mesh(),
             in_specs=(lead, lead2, w_spec, w_spec),
             out_specs=lead,
             check_vma=False,
