@@ -51,9 +51,10 @@ author: mcwitt
 
 ### Active
 
-- `MXFP8-H2`: an SM100 block-scaled grouped GEMM (CUTLASS via `cutlass_call`,
-  reusing the fp8-ragged-cute FFI plumbing) beats bf16 ragged dot >=1.3x at
-  canonical expert shapes. Next test: MXFP8-002 feasibility + bench.
+- `MXFP8-H2` (fwd CONFIRMED, MXFP8-002 @ 42f7d9fa2: 2,200 TF/s w13 / 2,050 w2,
+  ~1.4x vs bf16 dense yardstick and ~1.45x vs QuACK bf16 grouped): remaining
+  scope is the dgrad/wgrad products and a fused quantize+swizzle producer;
+  layer-level fwd+bwd verdict lands in MXFP8-004.
 - `MXFP8-H3`: MXFP8 quantization is stateless (per-block scales computed on
   the fly, no amax history), so the ops need none of the
   `OverwriteWithGradient` train-step machinery — strictly simpler than the
