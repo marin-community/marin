@@ -232,9 +232,7 @@ def _vllm_gpu_fork_install() -> str:
     swaps in the fork's python; the fork pin is read from ``tool.uv.sources.vllm`` so it tracks the same
     commit the workspace resolves. The default ``WorkspaceVllm`` launcher then serves the fork off the
     venv PATH. Drop this for ``marin-core[vllm-gpu]`` once #7134 lands the managed baseline."""
-    source = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())["tool"]["uv"]["sources"][
-        "vllm"
-    ]
+    source = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())["tool"]["uv"]["sources"]["vllm"]
     return (
         'VLLM_USE_PRECOMPILED=1 uv pip install --no-config --python "$IRIS_VENV/bin/python" '
         f'--torch-backend=cu130 "vllm @ git+{source["git"]}@{source["rev"]}" "runai-model-streamer[s3]==0.16.0"'
