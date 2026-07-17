@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
-from iris.client.client import _wrap_entrypoint_for_multiprocess, _wrap_entrypoint_for_nsys
+from iris.client.client import collect_hooks
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob
-from iris.cluster.types import Entrypoint, EnvironmentSpec, NsysSpec, ResourceSpec, gpu_device
+from iris.cluster.types import EnvironmentSpec, ProfileSpec, ResourceSpec, gpu_device
 from iris.runtime.nsys import (
     _supervise,
     build_nsys_argv,
@@ -89,19 +89,16 @@ def test_task_index_from_env_requires_a_task_context(monkeypatch: pytest.MonkeyP
         task_index_from_env()
 
 
-def test_wrapper_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The client builds this argv and iris.runtime.nsys parses it. Nothing else binds
+def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The nsys hook builds this argv and iris.runtime.nsys parses it. Nothing else binds
     the two, so a flag renamed on one side has to fail here rather than on a GPU."""
-    wrapped = _wrap_entrypoint_for_nsys(
-        Entrypoint.from_command("python", "train.py"),
-        _gpu_resources(8),
-        NsysSpec(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True),
-    )
-    assert wrapped.command[:3] == ["python", "-m", "iris.runtime.nsys"]
+    hook = ProfileSpec(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True).to_hook()
+    wrapped = hook.wrap(["python", "train.py"])
+    assert wrapped[:3] == ["python", "-m", "iris.runtime.nsys"]
 
     seen: dict[str, object] = {}
     monkeypatch.setattr("iris.runtime.nsys.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
-    nsys_main(wrapped.command[3:])
+    nsys_main(wrapped[3:])
 
     assert seen == {
         "tasks": "0,7",
@@ -112,28 +109,28 @@ def test_wrapper_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.Monk
     }
 
 
-def test_wrap_entrypoint_argv_needs_no_shell_expansion() -> None:
+def test_hook_argv_needs_no_shell_expansion() -> None:
     """The wrapper argv is exec'd, not run through a shell, so a '$VAR' would arrive
     literally. The install path is therefore resolved in-task, never passed as text."""
-    wrapped = _wrap_entrypoint_for_nsys(
-        Entrypoint.from_command("python", "x.py"), _gpu_resources(1), NsysSpec(output_uri=OUT)
-    )
-    assert not any("$" in arg for arg in wrapped.command)
+    wrapped = ProfileSpec(output_uri=OUT).to_hook().wrap(["python", "x.py"])
+    assert not any("$" in arg for arg in wrapped)
 
 
-def test_wrap_entrypoint_requires_gpu() -> None:
+def test_collect_hooks_rejects_nsys_without_gpu() -> None:
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
+    env = EnvironmentSpec(profile=ProfileSpec(output_uri=OUT))
     with pytest.raises(ValueError, match="requires a GPU device"):
-        _wrap_entrypoint_for_nsys(Entrypoint.from_command("python", "x.py"), cpu_only, NsysSpec(output_uri=OUT))
+        collect_hooks(env, cpu_only, processes_per_task=1)
 
 
-def test_nsys_wraps_outside_the_multigpu_supervisor() -> None:
-    """Composed in submit()'s order, nsys ends up outermost, so its child-tracing sweeps
-    every rank the supervisor spawns into one report — the whole point of node-level scope."""
-    entry = Entrypoint.from_command("python", "train.py")
-    wrapped = _wrap_entrypoint_for_multiprocess(entry, _gpu_resources(8), processes_per_task=8)
-    wrapped = _wrap_entrypoint_for_nsys(wrapped, _gpu_resources(8), NsysSpec(output_uri=OUT))
-    assert wrapped.command.index("iris.runtime.nsys") < wrapped.command.index("iris.runtime.multigpu")
+def test_collect_hooks_orders_nsys_outside_the_multigpu_supervisor() -> None:
+    """collect_hooks returns [multigpu, nsys]; folded in order, nsys ends up outermost, so
+    its child-tracing sweeps every rank the supervisor spawns into one report."""
+    env = EnvironmentSpec(profile=ProfileSpec(output_uri=OUT))
+    command = ["python", "train.py"]
+    for hook in collect_hooks(env, _gpu_resources(8), processes_per_task=8):
+        command = hook.wrap(command)
+    assert command.index("iris.runtime.nsys") < command.index("iris.runtime.multigpu")
 
 
 def test_build_nsys_argv_matches_what_the_container_allows() -> None:
@@ -185,27 +182,27 @@ def test_setup_script_and_wrapper_agree_on_the_install_path(tmp_path: Path, monk
     assert glob(os.path.expandvars(script_glob)) == [str(nsys_bin)]
 
 
-def test_environment_spec_appends_nsys_setup_only_when_requested() -> None:
+def test_environment_spec_appends_profile_setup_only_when_requested() -> None:
     without = EnvironmentSpec(extras=["gpu"]).to_proto()
     assert not any("nsight-systems" in s for s in without.setup_scripts)
-    with_nsys = EnvironmentSpec(extras=["gpu"], nsys=NsysSpec(output_uri=OUT)).to_proto()
-    assert any("nsight-systems" in s for s in with_nsys.setup_scripts)
+    with_profile = EnvironmentSpec(extras=["gpu"], profile=ProfileSpec(output_uri=OUT)).to_proto()
+    assert any("nsight-systems" in s for s in with_profile.setup_scripts)
 
 
-def test_inherited_setup_still_installs_nsys() -> None:
-    """A child job that reuses its parent's setup scripts still needs Nsight installed:
+def test_inherited_setup_still_installs_profiler() -> None:
+    """A child job that reuses its parent's setup scripts still needs the profiler installed:
     its entrypoint is already wrapped, and an unwrapped install would fail at launch."""
-    inherited = EnvironmentSpec(setup_scripts=["echo parent setup"], nsys=NsysSpec(output_uri=OUT)).to_proto()
+    inherited = EnvironmentSpec(setup_scripts=["echo parent setup"], profile=ProfileSpec(output_uri=OUT)).to_proto()
     assert any("nsight-systems" in s for s in inherited.setup_scripts)
     assert inherited.setup_scripts[0] == "echo parent setup"
 
 
-def test_no_setup_plus_nsys_is_rejected() -> None:
+def test_no_setup_plus_profile_is_rejected() -> None:
     """`setup_scripts=[]` runs no install, and the wrapper looks nowhere else — so the
     combination can only fail on a GPU. It has to fail at submit instead."""
     with pytest.raises(ValueError, match="setup_scripts=\\[\\]"):
-        EnvironmentSpec(setup_scripts=[], nsys=NsysSpec(output_uri=OUT)).to_proto()
-    # Without nsys, no-setup is still the bring-your-own-image path.
+        EnvironmentSpec(setup_scripts=[], profile=ProfileSpec(output_uri=OUT)).to_proto()
+    # Without a profile, no-setup is still the bring-your-own-image path.
     assert EnvironmentSpec(setup_scripts=[]).to_proto().setup_scripts == []
 
 
@@ -213,8 +210,9 @@ def test_no_setup_plus_nsys_is_rejected() -> None:
 def test_scheme_less_output_uri_is_rejected(uri: str) -> None:
     """Such a URI resolves inside the task workdir, which the pod destroys — the wrapper
     would log a successful upload to storage that no longer exists."""
+    env = EnvironmentSpec(profile=ProfileSpec(output_uri=uri))
     with pytest.raises(ValueError, match="needs a scheme"):
-        _wrap_entrypoint_for_nsys(Entrypoint.from_command("python", "x.py"), _gpu_resources(1), NsysSpec(output_uri=uri))
+        collect_hooks(env, _gpu_resources(1), processes_per_task=1)
 
 
 class _Execed(Exception):

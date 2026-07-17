@@ -12,8 +12,8 @@ import sys
 import textwrap
 
 import pytest
-from iris.client.client import _wrap_entrypoint_for_multiprocess
-from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
+from iris.client.client import build_multigpu_hook
+from iris.cluster.types import ResourceSpec, gpu_device
 from iris.runtime import multigpu
 from iris.runtime.multigpu import run
 from rigging.timing import Duration
@@ -119,11 +119,9 @@ def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_wrap_entrypoint_one_process_per_gpu() -> None:
-    wrapped = _wrap_entrypoint_for_multiprocess(
-        Entrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
-    )
-    assert wrapped.command == [
+def test_multigpu_hook_one_process_per_gpu() -> None:
+    wrapped = build_multigpu_hook(_gpu_resources(8), processes_per_task=8).wrap(["python", "train.py", "--steps", "10"])
+    assert wrapped == [
         "python",
         "-m",
         "iris.runtime.multigpu",
@@ -139,11 +137,9 @@ def test_wrap_entrypoint_one_process_per_gpu() -> None:
     ]
 
 
-def test_wrap_entrypoint_groups_devices_when_fewer_processes() -> None:
-    wrapped = _wrap_entrypoint_for_multiprocess(
-        Entrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
-    )
-    assert wrapped.command[:8] == [
+def test_multigpu_hook_groups_devices_when_fewer_processes() -> None:
+    wrapped = build_multigpu_hook(_gpu_resources(8), processes_per_task=4).wrap(["python", "train.py"])
+    assert wrapped[:8] == [
         "python",
         "-m",
         "iris.runtime.multigpu",
@@ -155,13 +151,12 @@ def test_wrap_entrypoint_groups_devices_when_fewer_processes() -> None:
     ]
 
 
-def test_wrap_entrypoint_requires_gpu() -> None:
+def test_multigpu_hook_requires_gpu() -> None:
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
     with pytest.raises(ValueError, match="requires a GPU device"):
-        _wrap_entrypoint_for_multiprocess(Entrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+        build_multigpu_hook(cpu_only, processes_per_task=2)
 
 
-def test_wrap_entrypoint_requires_divisible_gpu_count() -> None:
-    entry = Entrypoint.from_command("python", "x.py")
+def test_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
-        _wrap_entrypoint_for_multiprocess(entry, _gpu_resources(8), processes_per_task=3)
+        build_multigpu_hook(_gpu_resources(8), processes_per_task=3)

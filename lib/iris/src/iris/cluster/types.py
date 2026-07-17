@@ -28,10 +28,10 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
+from iris.cluster.hooks import NsysHook, TaskHook
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
-    nsys_setup_script,
     wants_gpu_extra,
 )
 from iris.cluster.tpu_topology import get_tpu_topology
@@ -709,22 +709,28 @@ except Exception:
 """
 
 
-@dataclass(frozen=True)
-class NsysSpec:
-    """Opt-in Nsight Systems profiling for a GPU job.
+class ProfileBackend(StrEnum):
+    """Which profiler a ``ProfileSpec`` selects."""
 
-    Setting this on an ``EnvironmentSpec`` installs the Nsight Systems CLI during
-    setup and wraps the run command in ``nsys profile`` on the selected tasks. It is
-    a launch wrapper by necessity — CUDA tracing is injected at ``cuInit`` — so it
-    cannot be turned on for a job that is already running, unlike the py-spy/memray
-    profiler in ``iris.cluster.runtime.profile``.
+    NSYS = "nsys"  # Nsight Systems — GPU/CUDA launch wrapper
+
+
+@dataclass(frozen=True)
+class ProfileSpec:
+    """Opt-in profiling for a job, realized as a launch-wrapping ``TaskHook``.
+
+    Setting this on an ``EnvironmentSpec`` installs the profiler during setup and wraps
+    the run command so the selected tasks run under it. A launch wrapper by necessity —
+    e.g. nsys injects CUDA tracing at ``cuInit`` — so it cannot be turned on for a job
+    that is already running, unlike the attach-based py-spy/memray profiler in
+    ``iris.cluster.runtime.profile``.
 
     The wrapper always sits outside the multi-process GPU supervisor, so one report
-    covers every GPU rank a selected task runs (nsys traces child processes). That is
-    the better artifact for intra-node collectives; the tradeoff is that a task cannot
-    profile a subset of its own GPUs — the minimum granularity is one whole task/node.
-    At ``processes_per_task=1`` there is no supervisor and the wrapper profiles the
-    command directly.
+    covers every rank a selected task runs (the profiler traces child processes). That
+    is the better artifact for intra-node collectives; the tradeoff is that a task
+    cannot profile a subset of its own GPUs — the minimum granularity is a whole
+    task/node. At ``processes_per_task=1`` there is no supervisor and the wrapper
+    profiles the command directly.
 
     Attributes:
         output_uri: Directory URI each profiled task uploads its report to (any
@@ -733,6 +739,7 @@ class NsysSpec:
             so a report that is not uploaded is destroyed with the pod, and only the
             caller knows which storage the job's cluster can actually write — under
             ``--target-cluster`` the submitting cluster's storage is the wrong answer.
+        backend: Which profiler to run (see ``ProfileBackend``).
         tasks: Which tasks write a report, selected by task index: ``first``, ``all``,
             or a comma-separated list (e.g. ``0,7``). Reports are never merged, so
             tracing every task of a large job is rarely what you want.
@@ -746,9 +753,15 @@ class NsysSpec:
     """
 
     output_uri: str
+    backend: ProfileBackend = ProfileBackend.NSYS
     tasks: str = "first"
     trace: str = "cuda,nvtx,cublas"
     capture_range: bool = False
+
+    def to_hook(self) -> TaskHook:
+        """Build the launch-wrapping hook for this backend. Device-agnostic; the caller
+        validates device/output compatibility (see ``iris.client.client.collect_hooks``)."""
+        return NsysHook(output_uri=self.output_uri, tasks=self.tasks, trace=self.trace, capture_range=self.capture_range)
 
 
 @dataclass
@@ -784,7 +797,7 @@ class EnvironmentSpec:
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
-    nsys: NsysSpec | None = None
+    profile: ProfileSpec | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -824,16 +837,16 @@ class EnvironmentSpec:
         else:
             setup_scripts = [s for s in self.setup_scripts if s.strip()]
         # Appended even to a custom setup list, unlike the CUDA toolchain: the run
-        # command is wrapped in `nsys` whenever nsys is requested, so the binary has to
-        # be there. The no-setup case cannot install it and the wrapper looks nowhere
+        # command is wrapped by the profiler whenever one is requested, so its binary has
+        # to be there. The no-setup case cannot install it and the wrapper looks nowhere
         # else, so the combination is rejected rather than left to fail on a GPU.
-        if self.nsys is not None:
+        if self.profile is not None and (install := self.profile.to_hook().setup()) is not None:
             if not setup_scripts:
                 raise ValueError(
-                    "nsys profiling needs the Nsight install, which setup_scripts=[] (bring-your-own "
-                    "image) skips; drop the nsys spec or let iris build the setup"
+                    "profiling needs its install, which setup_scripts=[] (bring-your-own image) skips; "
+                    "drop the profile spec or let iris build the setup"
                 )
-            setup_scripts.append(nsys_setup_script())
+            setup_scripts.append(install)
 
         return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 

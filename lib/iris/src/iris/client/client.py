@@ -46,6 +46,7 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
+from iris.cluster.hooks import MultiGpuHook, TaskHook
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -54,7 +55,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
-    NsysSpec,
+    ProfileBackend,
+    ProfileSpec,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
@@ -454,61 +456,11 @@ class LocalClientConfig:
     max_workers: int = 4
 
 
-# Module path of the in-task GPU process supervisor (see iris/runtime/multigpu.py).
-_MULTIGPU_MODULE = "iris.runtime.multigpu"
-# Module path of the in-task Nsight launch wrapper (see iris/runtime/nsys.py).
-_NSYS_MODULE = "iris.runtime.nsys"
+def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> MultiGpuHook:
+    """Build the multi-process GPU supervisor hook for *processes_per_task* processes.
 
-
-def _wrap_entrypoint_for_nsys(entrypoint: Entrypoint, resources: ResourceSpec, nsys: NsysSpec) -> Entrypoint:
-    """Wrap an entrypoint so selected tasks run under ``nsys profile``.
-
-    Prepends ``python -m iris.runtime.nsys --tasks ... --``. Selection happens in-task,
-    where the task index exists; an unselected task execs the command unchanged. Requires
-    a GPU device — Nsight profiles CUDA work, and the setup script that installs it only
-    runs on the node that will use it.
-    """
-    device = resources.device
-    if device is None or not device.HasField("gpu"):
-        raise ValueError("nsys profiling requires a GPU device")
-    # A scheme-less URI is workdir-relative, and the workdir is an emptyDir: the wrapper
-    # would report a successful upload into storage that dies with the pod. Caught here
-    # rather than after the GPU work is done.
-    if StoragePath(nsys.output_uri).scheme is None:
-        raise ValueError(
-            f"nsys output_uri needs a scheme (e.g. s3://bucket/tmp/ttl=30d/nsys); {nsys.output_uri!r} "
-            f"resolves inside the task workdir, which does not outlive the task"
-        )
-    wrapper = [
-        "python",
-        "-m",
-        _NSYS_MODULE,
-        "--tasks",
-        nsys.tasks,
-        "--trace",
-        nsys.trace,
-        "--output-uri",
-        nsys.output_uri,
-    ]
-    if nsys.capture_range:
-        wrapper.append("--capture-range")
-    wrapper.append("--")
-    return Entrypoint(
-        command=[*wrapper, *entrypoint.command],
-        workdir_files=entrypoint.workdir_files,
-        workdir_file_refs=entrypoint.workdir_file_refs,
-    )
-
-
-def _wrap_entrypoint_for_multiprocess(
-    entrypoint: Entrypoint, resources: ResourceSpec, processes_per_task: int
-) -> Entrypoint:
-    """Wrap an entrypoint so each task runs ``processes_per_task`` GPU processes.
-
-    Prepends ``python -m iris.runtime.multigpu --nproc N --devices-per-proc D --``
-    to the command. The supervisor spawns N children, each pinned to a contiguous
-    group of D of the task's GPUs. Requires a GPU device whose count is divisible
-    by ``processes_per_task``.
+    Requires a GPU device whose count is divisible by ``processes_per_task``; each of the
+    N children is pinned to a contiguous group of ``gpu_count // N`` GPUs.
     """
     device = resources.device
     gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
@@ -516,22 +468,43 @@ def _wrap_entrypoint_for_multiprocess(
         raise ValueError("processes_per_task > 1 requires a GPU device")
     if gpu_count % processes_per_task != 0:
         raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
-    devices_per_proc = gpu_count // processes_per_task
-    wrapper = [
-        "python",
-        "-m",
-        _MULTIGPU_MODULE,
-        "--nproc",
-        str(processes_per_task),
-        "--devices-per-proc",
-        str(devices_per_proc),
-        "--",
-    ]
-    return Entrypoint(
-        command=[*wrapper, *entrypoint.command],
-        workdir_files=entrypoint.workdir_files,
-        workdir_file_refs=entrypoint.workdir_file_refs,
-    )
+    return MultiGpuHook(nproc=processes_per_task, devices_per_proc=gpu_count // processes_per_task)
+
+
+def _validate_profile(profile: ProfileSpec, resources: ResourceSpec) -> None:
+    """Reject a profile that cannot run as requested, before the entrypoint is wrapped.
+
+    nsys profiles CUDA work, so it needs a GPU device, and the setup that installs it only
+    runs on the node that uses it. A scheme-less output URI is workdir-relative, and the
+    workdir is an emptyDir: the wrapper would report a successful upload into storage that
+    dies with the pod — caught here rather than after the GPU work is done.
+    """
+    device = resources.device
+    if profile.backend is ProfileBackend.NSYS and (device is None or not device.HasField("gpu")):
+        raise ValueError("nsys profiling requires a GPU device")
+    if StoragePath(profile.output_uri).scheme is None:
+        raise ValueError(
+            f"profile output_uri needs a scheme (e.g. s3://bucket/tmp/ttl=30d/nsys); {profile.output_uri!r} "
+            f"resolves inside the task workdir, which does not outlive the task"
+        )
+
+
+def collect_hooks(
+    environment: EnvironmentSpec | None, resources: ResourceSpec, processes_per_task: int
+) -> list[TaskHook]:
+    """Build the ordered task hooks for this job, outer-wrapper last.
+
+    Order is the nesting: the multigpu supervisor goes first (inner), the profiler last
+    (outer), so a profiler traces every rank the supervisor spawns — one report per task.
+    """
+    hooks: list[TaskHook] = []
+    if processes_per_task > 1:
+        hooks.append(build_multigpu_hook(resources, processes_per_task))
+    profile = environment.profile if environment is not None else None
+    if profile is not None:
+        _validate_profile(profile, resources)
+        hooks.append(profile.to_hook())
+    return hooks
 
 
 class IrisClient:
@@ -761,14 +734,15 @@ class IrisClient:
 
         if processes_per_task < 1:
             raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
-        if processes_per_task > 1:
-            entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
-        # nsys always wraps outside the multigpu supervisor, so one report covers every
-        # GPU rank the task runs — nsys traces children. Applied last for that reason;
-        # at processes_per_task=1 there is no supervisor and it wraps the command itself.
-        nsys = environment.nsys if environment is not None else None
-        if nsys is not None:
-            entrypoint = _wrap_entrypoint_for_nsys(entrypoint, resources, nsys)
+        # Hooks wrap the command in order, later = outer: the multigpu supervisor first,
+        # then the profiler outside it, so a profiler traces every rank the supervisor
+        # spawns. collect_hooks owns that order; here it is a plain fold.
+        for hook in collect_hooks(environment, resources, processes_per_task):
+            entrypoint = Entrypoint(
+                command=hook.wrap(entrypoint.command),
+                workdir_files=entrypoint.workdir_files,
+                workdir_file_refs=entrypoint.workdir_file_refs,
+            )
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -806,10 +780,10 @@ class IrisClient:
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
                     sync_packages=environment.sync_packages,
                     # Carried whether or not the child owns its setup: the child's
-                    # entrypoint is already wrapped in `python -m iris.runtime.nsys`, and
-                    # dropping this here would leave it wrapped with no Nsight installed
-                    # (to_proto appends the install to the inherited scripts too).
-                    nsys=environment.nsys,
+                    # entrypoint is already wrapped by the profiler, and dropping this here
+                    # would leave it wrapped with the profiler uninstalled (to_proto appends
+                    # the install to the inherited scripts too).
+                    profile=environment.profile,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
