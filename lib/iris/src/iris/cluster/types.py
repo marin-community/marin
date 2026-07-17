@@ -709,61 +709,44 @@ except Exception:
 """
 
 
-class NsysScope(StrEnum):
-    """Where the Nsight wrapper sits relative to the multi-process GPU supervisor.
-
-    nsys traces child processes, so the choice decides how a node's ranks are divided
-    into reports — not whether they are captured at all.
-
-    ``PROCESS`` wraps each child: one report per selected rank, and any subset of a
-    node's ranks can be traced (``first`` profiles one GPU of eight). ``NODE`` wraps
-    the supervisor: every rank on the node lands in one report, on one timeline with a
-    single clock — the better artifact for intra-node collectives, at the cost of
-    tracing every local rank whether or not you wanted them all.
-
-    With ``processes_per_task=1`` there is no supervisor and the two coincide; the
-    scope then only names the report.
-    """
-
-    PROCESS = "process"
-    NODE = "node"
-
-
 @dataclass(frozen=True)
 class NsysSpec:
     """Opt-in Nsight Systems profiling for a GPU job.
 
     Setting this on an ``EnvironmentSpec`` installs the Nsight Systems CLI during
-    setup and wraps the run command in ``nsys profile`` on the selected ranks. It is
+    setup and wraps the run command in ``nsys profile`` on the selected tasks. It is
     a launch wrapper by necessity — CUDA tracing is injected at ``cuInit`` — so it
     cannot be turned on for a job that is already running, unlike the py-spy/memray
     profiler in ``iris.cluster.runtime.profile``.
 
+    The wrapper always sits outside the multi-process GPU supervisor, so one report
+    covers every GPU rank a selected task runs (nsys traces child processes). That is
+    the better artifact for intra-node collectives; the tradeoff is that a task cannot
+    profile a subset of its own GPUs — the minimum granularity is one whole task/node.
+    At ``processes_per_task=1`` there is no supervisor and the wrapper profiles the
+    command directly.
+
     Attributes:
-        output_uri: Directory URI each profiled rank uploads its report to (any
+        output_uri: Directory URI each profiled task uploads its report to (any
             fsspec target the *task* can reach, e.g. ``s3://bucket/tmp/ttl=30d/nsys``).
             Required, and deliberately not defaulted: the task workdir is an emptyDir,
             so a report that is not uploaded is destroyed with the pod, and only the
             caller knows which storage the job's cluster can actually write — under
             ``--target-cluster`` the submitting cluster's storage is the wrong answer.
-        scope: Whether to wrap each process or the whole node (see ``NsysScope``).
-        ranks: Which units write a report — global process ranks under
-            ``NsysScope.PROCESS``, task indices under ``NsysScope.NODE``. Accepts
-            ``first``, ``all``, a comma-separated list, or ``per-node`` (process scope
-            only, meaning each node's local rank 0). Reports are never merged, so
-            tracing every rank of a large job is rarely what you want.
+        tasks: Which tasks write a report, selected by task index: ``first``, ``all``,
+            or a comma-separated list (e.g. ``0,7``). Reports are never merged, so
+            tracing every task of a large job is rarely what you want.
         trace: The nsys ``--trace`` value. CPU sampling and GPU metrics are never
             enabled: the task container lacks the privileges for either.
         capture_range: Collect only between ``cuProfilerStart``/``cuProfilerStop``
             instead of for the whole run. Keeps compilation out of the report, and
-            is how multi-rank captures are aligned — ranks must bracket the same
+            is how multi-task captures are aligned — tasks must bracket the same
             step, since aligning on wall-clock leaves the windows disjoint. The
             application must call the API, or nothing is collected.
     """
 
     output_uri: str
-    scope: NsysScope = NsysScope.PROCESS
-    ranks: str = "first"
+    tasks: str = "first"
     trace: str = "cuda,nvtx,cublas"
     capture_range: bool = False
 

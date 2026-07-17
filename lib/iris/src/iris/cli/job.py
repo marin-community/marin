@@ -53,7 +53,6 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     JobName,
-    NsysScope,
     NsysSpec,
     ResourceSpec,
     gpu_device,
@@ -1009,7 +1008,7 @@ Examples:
     is_flag=True,
     default=False,
     help=(
-        "Profile the run with Nsight Systems, uploading one .nsys-rep per profiled rank to "
+        "Profile the run with Nsight Systems, uploading one .nsys-rep per profiled task to "
         "--nsys-output. Requires --gpu. CPU sampling and GPU metrics are unavailable in an "
         "unprivileged task container, so this is a CUDA/NVTX/NCCL timeline."
     ),
@@ -1025,24 +1024,13 @@ Examples:
     ),
 )
 @click.option(
-    "--nsys-scope",
-    type=click.Choice([s.value for s in NsysScope], case_sensitive=False),
-    default=NsysScope.PROCESS.value,
+    "--nsys-tasks",
+    default=NsysSpec.tasks,
     show_default=True,
     help=(
-        "'process': one report per rank, and any subset of a node's ranks can be traced. "
-        "'node': wrap the whole node so every rank on it lands in one report on one timeline "
-        "— better for intra-node collectives, but it traces every local rank."
-    ),
-)
-@click.option(
-    "--nsys-ranks",
-    default=NsysSpec.ranks,
-    show_default=True,
-    help=(
-        "Which units to profile: 'first', 'all', a comma-separated list (e.g. 0,7), or "
-        "'per-node' (process scope only). Units are ranks under --nsys-scope=process and "
-        "nodes under =node. Reports are never merged, so prefer a subset."
+        "Which tasks to profile, by task index: 'first', 'all', or a comma-separated list "
+        "(e.g. 0,7). One report per selected task covers every GPU it runs — the minimum "
+        "granularity is a whole task/node. Reports are never merged, so prefer a subset."
     ),
 )
 @click.option(
@@ -1096,8 +1084,7 @@ def run(
     container_profile: str | None,
     nsys: bool,
     nsys_output: str | None,
-    nsys_scope: str,
-    nsys_ranks: str,
+    nsys_tasks: str,
     nsys_trace: str,
     nsys_capture_range: bool,
     terminate_on_exit: bool,
@@ -1120,8 +1107,7 @@ def run(
     nsys_spec = (
         NsysSpec(
             output_uri=nsys_output,
-            scope=NsysScope(nsys_scope),
-            ranks=nsys_ranks,
+            tasks=nsys_tasks,
             trace=nsys_trace,
             capture_range=nsys_capture_range,
         )

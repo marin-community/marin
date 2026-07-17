@@ -54,7 +54,6 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
-    NsysScope,
     NsysSpec,
     ResourceSpec,
     TaskAttempt,
@@ -462,10 +461,10 @@ _NSYS_MODULE = "iris.runtime.nsys"
 
 
 def _wrap_entrypoint_for_nsys(entrypoint: Entrypoint, resources: ResourceSpec, nsys: NsysSpec) -> Entrypoint:
-    """Wrap an entrypoint so selected units run under ``nsys profile``.
+    """Wrap an entrypoint so selected tasks run under ``nsys profile``.
 
-    Prepends ``python -m iris.runtime.nsys --ranks ... --``. Selection happens in-task,
-    where the rank env exists; an unselected unit execs the command unchanged. Requires
+    Prepends ``python -m iris.runtime.nsys --tasks ... --``. Selection happens in-task,
+    where the task index exists; an unselected task execs the command unchanged. Requires
     a GPU device — Nsight profiles CUDA work, and the setup script that installs it only
     runs on the node that will use it.
     """
@@ -484,10 +483,8 @@ def _wrap_entrypoint_for_nsys(entrypoint: Entrypoint, resources: ResourceSpec, n
         "python",
         "-m",
         _NSYS_MODULE,
-        "--scope",
-        nsys.scope.value,
-        "--ranks",
-        nsys.ranks,
+        "--tasks",
+        nsys.tasks,
         "--trace",
         nsys.trace,
         "--output-uri",
@@ -764,17 +761,13 @@ class IrisClient:
 
         if processes_per_task < 1:
             raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
-        # Nsight's scope is literally which side of the multigpu supervisor it wraps.
-        # PROCESS goes on first so the supervisor ends up outside it and every child
-        # runs its own nsys, which is what makes a subset of a node's ranks traceable
-        # and gives each its own report. NODE goes on last so it wraps the supervisor:
-        # nsys traces children, so every rank on the node lands in one report.
-        nsys = environment.nsys if environment is not None else None
-        if nsys is not None and nsys.scope is NsysScope.PROCESS:
-            entrypoint = _wrap_entrypoint_for_nsys(entrypoint, resources, nsys)
         if processes_per_task > 1:
             entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
-        if nsys is not None and nsys.scope is NsysScope.NODE:
+        # nsys always wraps outside the multigpu supervisor, so one report covers every
+        # GPU rank the task runs — nsys traces children. Applied last for that reason;
+        # at processes_per_task=1 there is no supervisor and it wraps the command itself.
+        nsys = environment.nsys if environment is not None else None
+        if nsys is not None:
             entrypoint = _wrap_entrypoint_for_nsys(entrypoint, resources, nsys)
 
         # Get parent job ID from context
