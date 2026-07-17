@@ -25,9 +25,9 @@ model on local disk. The prepared checkpoint is the base checkpoint with those r
 the tokenizer renamed, nothing else — so the untouched weights are provably identical to the base.
 
 :func:`prepare_checkpoint_step` expresses this as an ``ArtifactStep`` that emits a prepared HF
-checkpoint + tokenizer directory. The SFT spec depends on it, so ``sft_step`` builds the prepared
-inputs from a clean prefix rather than assuming a staged directory exists. Pass ``override_path``
-to pin an already-staged prepared checkpoint instead of regenerating. The reserved-slot map is a
+checkpoint + tokenizer directory. A config can depend on it (via ``PreparedModel``) to build its
+inputs from a clean prefix, or point ``model_ref`` at a staged copy of its output; ``override_path``
+adopts an already-staged prepared checkpoint instead of regenerating. The reserved-slot map is a
 parameter, so the step is not tied to one model; ``configs/delphi_1e22.py`` is the first example.
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ from huggingface_hub import HfFileSystem, list_repo_files, snapshot_download
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from rigging.filesystem import prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 from safetensors.numpy import load, save
 from scipy.stats import truncnorm
 from transformers import AutoTokenizer
@@ -126,9 +126,9 @@ def _reinit_shard_bytes(data: bytes, ids: Sequence[int], seed: int) -> bytes:
     return save(tensors, metadata=metadata)
 
 
-def _stream_copy(src_fs: AbstractFileSystem, src: str, out_fs: AbstractFileSystem, dst: str) -> None:
-    """Copy a file between filesystems in chunks, without staging it whole on local disk."""
-    with src_fs.open(src, "rb") as fin, out_fs.open(dst, "wb") as fout:
+def _stream_copy(src_fs: AbstractFileSystem, src: str, dst: str) -> None:
+    """Stream a Hub file to the output prefix in chunks, without staging it whole on local disk."""
+    with src_fs.open(src, "rb") as fin, StoragePath(dst).open("wb") as fout:
         shutil.copyfileobj(fin, fout, _COPY_CHUNK)
 
 
@@ -147,9 +147,8 @@ def _prepare_tokenizer(
         tokenizer = AutoTokenizer.from_pretrained(raw_dir)
         inject_special_tokens(tokenizer, dict(renames)).save_pretrained(prepared_dir)
         written = [name for name in os.listdir(prepared_dir) if not name.startswith(".")]
-        out_fs, _ = url_to_fs(output_path)
         for name in written:
-            out_fs.put_file(os.path.join(prepared_dir, name), prefix_join(output_path, name))
+            StoragePath(prefix_join(output_path, name)).upload_from(os.path.join(prepared_dir, name))
         return set(written)
 
 
@@ -171,7 +170,6 @@ def run_prepare_checkpoint(config: PrepareCheckpointConfig) -> None:
     revision = config.source_revision or None
     repo_at = f"{config.source_model}@{revision}" if revision else config.source_model
     hf_fs = HfFileSystem()
-    out_fs, _ = url_to_fs(config.output_path)
 
     target_shards = _embedding_shards(hf_fs, repo_at)
 
@@ -184,10 +182,9 @@ def run_prepare_checkpoint(config: PrepareCheckpointConfig) -> None:
             continue
         src, dst = f"{repo_at}/{name}", prefix_join(config.output_path, name)
         if name in target_shards:
-            with out_fs.open(dst, "wb") as fout:
-                fout.write(_reinit_shard_bytes(hf_fs.cat_file(src), ids, config.seed))
+            StoragePath(dst).write_bytes(_reinit_shard_bytes(hf_fs.cat_file(src), ids, config.seed))
         else:
-            _stream_copy(hf_fs, src, out_fs, dst)
+            _stream_copy(hf_fs, src, dst)
 
 
 def _prepare_job(config: PrepareCheckpointConfig) -> None:
