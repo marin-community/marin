@@ -72,64 +72,65 @@ def _build_model(fp8: bool):
     )
 
 
+_VALUE_RE = re.compile(r"\(size=(\d+),offset=(\d+)\):\s*([A-Za-z0-9]+)\[")
+
+
 def _report_buffer_assignment(arm: str, new_files: list[str]) -> None:
-    ba_files = [f for f in new_files if "buffer" in os.path.basename(f)]
+    # The authoritative arena table is `...-buffer-assignment.txt`; skip the
+    # sibling `-buffer-assignment-values.txt` (different, uninformative format).
+    ba_files = [
+        f
+        for f in new_files
+        if os.path.basename(f).endswith("buffer-assignment.txt")
+        and not os.path.basename(f).endswith("values.txt")
+    ]
     if not ba_files:
-        print(f"MEMPROBE {arm} no buffer-assignment dump found; new dump files: {sorted(new_files)[:20]}", flush=True)
+        print(f"MEMPROBE {arm} no buffer-assignment.txt; dump files: {sorted(os.path.basename(f) for f in new_files)}", flush=True)
         return
     for path in ba_files:
-        allocations: list[tuple[int, str, list[tuple[int, str]]]] = []
-        cur_size, cur_head, cur_values = 0, "", []
+        # Find the biggest allocation (the preallocated temp arena) and, within
+        # it, every value line. Each arena offset is one physical slot reused
+        # over time; attribute the slot to the dtype of the largest value that
+        # ever lands there, then sum slot bytes per dtype.
+        allocations: list[tuple[int, str, list[str]]] = []
+        cur_size, cur_head, cur_lines = 0, "", []
         with open(path) as f:
             for line in f:
                 m = re.match(r"allocation \d+: .*size (\d+)", line)
                 if m:
                     if cur_head:
-                        allocations.append((cur_size, cur_head, cur_values))
-                    cur_size, cur_head, cur_values = int(m.group(1)), line.strip()[:160], []
-                elif cur_head and "size" in line and ("value:" in line or "offset=" in line):
-                    vm = re.search(r"size=?[ ]?(\d+)", line)
-                    if vm:
-                        cur_values.append((int(vm.group(1)), line.strip()[:200]))
+                        allocations.append((cur_size, cur_head, cur_lines))
+                    cur_size, cur_head, cur_lines = int(m.group(1)), line.strip()[:160], []
+                elif cur_head and "offset=" in line:
+                    cur_lines.append(line)
         if cur_head:
-            allocations.append((cur_size, cur_head, cur_values))
+            allocations.append((cur_size, cur_head, cur_lines))
         allocations.sort(key=lambda a: -a[0])
         print(f"MEMPROBE {arm} buffer file {os.path.basename(path)}: {len(allocations)} allocations", flush=True)
-        for size, head, _ in allocations[:8]:
+        for size, head, _ in allocations[:6]:
             print(f"MEMPROBE {arm} alloc {size / 2**30:8.2f}GiB  {head}", flush=True)
         if not allocations:
             continue
-        _, _, values = allocations[0]
-        # Values in the temp arena alias heavily (slots are reused over time);
-        # dedupe by (offset, size) so each arena slot counts once, then group
-        # slots by dtype[shape] signature to attribute the arena's composition.
-        sig_re = re.compile(r"\):\s*(\S+?\[[^\]]*\])")
-        off_re = re.compile(r"offset=(\d+)")
-        slots: dict[tuple[int, int], str] = {}
-        for size, text in values:
-            om = off_re.search(text)
-            sm = sig_re.search(text)
-            key = (int(om.group(1)) if om else -1, size)
-            slots.setdefault(key, sm.group(1) if sm else "?")
-        groups: dict[str, tuple[int, int]] = {}
-        for (off, size), sig in slots.items():
-            c, t = groups.get(sig, (0, 0))
-            groups[sig] = (c + 1, t + size)
-        covered = sum(size for _, size in slots)
-        print(
-            f"MEMPROBE {arm} arena slots={len(slots)} covered={covered / 2**30:.2f}GiB "
-            f"(>= arena size means overlap; groups below)",
-            flush=True,
-        )
-        for sig, (c, t) in sorted(groups.items(), key=lambda kv: -kv[1][1])[:30]:
-            print(f"MEMPROBE {arm} grp {t / 2**30:8.2f}GiB  n={c:5d}  {sig}", flush=True)
+        _, _, lines = allocations[0]
+        slot_size: dict[int, int] = {}
+        slot_dtype: dict[int, str] = {}
+        for line in lines:
+            vm = _VALUE_RE.search(line)
+            if not vm:
+                continue
+            size, offset, dtype = int(vm.group(1)), int(vm.group(2)), vm.group(3)
+            if size > slot_size.get(offset, -1):
+                slot_size[offset] = size
+                slot_dtype[offset] = dtype
         dtypes: dict[str, tuple[int, int]] = {}
-        for sig, (c, t) in groups.items():
-            d = sig.split("[")[0]
-            a, b = dtypes.get(d, (0, 0))
-            dtypes[d] = (a + c, b + t)
+        for offset, size in slot_size.items():
+            d = slot_dtype[offset]
+            c, t = dtypes.get(d, (0, 0))
+            dtypes[d] = (c + 1, t + size)
+        covered = sum(slot_size.values())
+        print(f"MEMPROBE {arm} arena slots={len(slot_size)} covered={covered / 2**30:.2f}GiB", flush=True)
         for d, (c, t) in sorted(dtypes.items(), key=lambda kv: -kv[1][1]):
-            print(f"MEMPROBE {arm} dtype {t / 2**30:8.2f}GiB  n={c:5d}  {d}", flush=True)
+            print(f"MEMPROBE {arm} dtype {t / 2**30:8.3f}GiB  n={c:5d}  {d}", flush=True)
 
 
 def _probe_entry(cfg: ProbeConfig) -> None:
