@@ -108,7 +108,6 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
     },
     # B200 / GB200 - per-GPU Blackwell peaks
     # source: https://resources.nvidia.com/en-us-blackwell-architecture
-    # nvidia publishes spec sheet with a 2x sparsity factor
     "b200": {
         "fp64": 40e12,
         "fp32": 40e12,
