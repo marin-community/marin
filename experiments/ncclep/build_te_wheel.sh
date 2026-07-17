@@ -25,7 +25,8 @@ mkdir -p "$WORK"
 cd "$WORK"
 
 echo "=== PHASE 1: python-level build tools + cu13 toolchain wheels ==="
-uv pip install pip cmake ninja pybind11 wheel setuptools packaging
+uv pip install pip cmake ninja "pybind11[global]" wheel setuptools packaging \
+  "nvidia-cudnn-frontend>=1.25.0" flax
 # CUDA 13 wheels dropped the -cu13 suffix (the suffixed names are deprecated
 # 0.0.1 stubs) — except cudnn and nccl, which keep it.
 uv pip install --upgrade \
