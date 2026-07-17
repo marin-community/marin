@@ -70,6 +70,25 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
 - `H-microbench`: at matched shapes, NCCL_EP dispatch+combine ≪ XLA raa NCCL
   fallback per call (it should pipeline staging chunks and skip host syncs).
 
+### Design constraints discovered (source-read, 2026-07-17)
+- **Single outer axis:** TE's EP sharding supports exactly one dp/fsdp mesh axis
+  outside `ep` (`_ep_outer_axis`; `get_mesh_axis_size` asserts the axis is a
+  plain mesh axis — no tuples). The reference layout replica2 × (data4 × ep8)
+  has TWO outer axes → won't bootstrap. First 64-GPU target is therefore a
+  single-copy `data8 × expert8` mesh (still ≥32-way sharded per copy = the
+  memory-realism the issue guidance actually demands); replica-DP-outside is an
+  upstream integration gap worth reporting to NVIDIA.
+- EP groups are contiguous global ranks (`dp_color = rank // ep_size`); the
+  bench mesh order (replica_dcn, data, expert, model) keeps expert
+  fastest-varying → compatible.
+- `num_experts × … % 4 == 0` TMA alignment (e64 fine); dispatch rows are
+  per-(token,k) assignments with a scalar weight each; combine is **unweighted**
+  (caller multiplies expert_out by recv weights first); token_counts
+  ([ranks, num_local_experts], alignment-padded) feeds grouped GEMMs as
+  group_sizes directly — TE's own moe.py (WIP branch) does exactly
+  dispatch → shard_map(grouped FFN) → combine, which is the shape our
+  `nccl_ep` bench backend will take (QuACK GEMMs via the `expert_mlp_fn` seam).
+
 ### Blocked / later
 - `H-fp8wire`: fp8 dispatch wire (quantization WIP branch) halves dispatch
   bytes; ties into MXFP8 work (#7282). After bf16 wire works.
