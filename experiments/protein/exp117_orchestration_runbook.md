@@ -79,8 +79,15 @@ job = one point.
    the W&B run (group `exp117-contacts-v1-tune`, id per run_id above) for `run_progress` + final-step
    objective. Write observations to the DB. Classify terminals: succeeded (objective present) /
    OOM (`RESOURCE_EXHAUSTED`/`CompileTimeHbmOom` → **corrective halt**: stop + surface, don't retry)
-   / terminal crash (SIGSEGV, killed, network/HF-404 → **retry immediately on-target**, not gated) /
+   / terminal failure (killed, network/HF-404 → **retry immediately on-target**, not gated) /
    preemption (iris auto-resumes; 12h+ gaps are NORMAL under TRC batch).
+   - **SIGSEGV ≈ preemption on multi-host slices (learned s01, reframed 2026-07-17):** nearly every
+     slice in our grid is multi-host, and there a SIGSEGV (exit 139) is *most likely* a preempted
+     gang cosibling — one host in the gang gets preempted and a sibling reports the segfault. Treat
+     it as a preemption, NOT a code crash to investigate: **retry immediately on-target** (resume
+     checkpoint) and do not let it drive relocation/escalation or read as a systemic defect, however
+     many occur. Investigate further ONLY with a specific reason — a single-host slice, a segfault
+     that repeats at step 0 before any training, or a real Python traceback in the log.
    - **LIVENESS (learned s01, still true):** the W&B **`state` field is UNRELIABLE** — it flips to
      `crashed` on any heartbeat lapse (preemption/resume/network) while training continues. Ground
      truth = (a) `_step` **advancing** across passes, and (b) a recent `Progress on:train
@@ -118,7 +125,9 @@ job = one point.
    corrective conditions.)
 
 ## Recovery ladder (tool-computed; honor `rank-targets` `recovery`, don't auto-fire)
-Any observed progress resets the regional no-progress clock. Terminal crashes are exempt (retry now).
+Any observed progress resets the regional no-progress clock. Terminal failures are exempt (retry
+now) — including a SIGSEGV, which on our multi-host slices is almost always a preempted gang
+cosibling, not a code fault.
 - **`startup_relocation_timeout` 3h** — never appeared in W&B → same-region **relocation** (new slice).
 - **`same_target_restart_timeout` 6h** — W&B-registered, iris still `running`, no progress → **restart
   in place on the SAME target** (stop + resubmit; resumes checkpoint; keeps logical trial, regional

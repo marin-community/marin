@@ -129,3 +129,5 @@ targets:
 - The initial grid has 60 configurations per rung (4 LR x 5 WD x 3 batch) and 180 logical trials
   across three rungs. An exhaustive initial-grid run costs 420 eight-epoch equivalents before any
   grid expansion.
+- A SIGSEGV on a multi-host slice (nearly all slices here) is treated as a preempted gang cosibling
+  — retry in place, not a code fault to investigate — absent a specific reason.
