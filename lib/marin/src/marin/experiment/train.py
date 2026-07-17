@@ -87,11 +87,9 @@ def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:
 
 def _train_job(pod_config: TrainLmOnPodConfig) -> None:
     """Dispatch the assembled config as its own Fray training job."""
-    # GPU runs resolve the training env at submit time so XLA_FLAGS (the NCCL
-    # collective watchdog) reaches the pod environment before the worker starts;
-    # XLA reads XLA_FLAGS at backend init, so the in-worker fallback only lands in
-    # time if nothing touches a device first. TPU/CPU keep resolving in-worker,
-    # where the WANDB_API_KEY the TPU path checks lives (the GPU path skips it).
+    # GPU: resolve the env now so XLA_FLAGS is in the pod environment before the
+    # worker imports JAX. TPU/CPU resolve in-worker, where the WANDB_API_KEY the
+    # TPU path requires is present (the GPU path skips that check).
     env_vars = (
         resolve_training_env(pod_config.env_vars, pod_config.resources)
         if isinstance(pod_config.resources.device, GpuConfig)

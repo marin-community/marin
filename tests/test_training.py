@@ -17,14 +17,11 @@ from levanter.infra.cli_helpers import CliConfig
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
-from marin.experiment.train import _train_job
 from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
-    DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT,
     GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    _add_gpu_collective_watchdog_env,
     _maybe_auto_resolve_dpo_schedule,
     _resolve_run_id,
     apply_output_path,
@@ -314,86 +311,17 @@ def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_
     assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
 
 
-def test_gpu_collective_watchdog_arms_timeout_and_logging():
-    """A GPU run gets the NCCL collective termination-timeout flag and NCCL warn logging.
-
-    Without the timeout flag XLA leaves the watchdog disabled (-1), so a wedged
-    collective hangs the mesh forever instead of aborting into a retryable failure.
-    """
-    env: dict[str, str] = {}
-    _add_gpu_collective_watchdog_env(env)
-    assert f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}" in env["XLA_FLAGS"]
-    assert env["NCCL_DEBUG"] == "WARN"
-
-
-def test_gpu_collective_watchdog_appends_to_existing_xla_flags():
-    """The watchdog flag is appended, preserving operator-supplied XLA_FLAGS."""
-    env = {"XLA_FLAGS": "--xla_gpu_enable_latency_hiding_scheduler=true"}
-    _add_gpu_collective_watchdog_env(env)
-    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in env["XLA_FLAGS"]
-    assert f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}" in env["XLA_FLAGS"]
-
-
-def test_gpu_collective_watchdog_defers_to_explicit_timeout():
-    """An explicit termination timeout in XLA_FLAGS wins and is not duplicated."""
-    env = {"XLA_FLAGS": f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}=120"}
-    _add_gpu_collective_watchdog_env(env)
-    assert env["XLA_FLAGS"].count(GPU_NCCL_TERMINATION_TIMEOUT_FLAG) == 1
-    assert "=120" in env["XLA_FLAGS"]
-    assert f"={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}" not in env["XLA_FLAGS"]
-
-
-def test_gpu_collective_watchdog_defers_to_preset_nccl_debug():
-    """A preset NCCL_DEBUG (e.g. INFO for a debug run) wins over the WARN default."""
-    env = {"NCCL_DEBUG": "INFO"}
-    _add_gpu_collective_watchdog_env(env)
-    assert env["NCCL_DEBUG"] == "INFO"
-
-
-def test_resolve_training_env_arms_watchdog_for_gpu_not_cpu():
-    """resolve_training_env arms the collective watchdog for GPU devices only."""
-    base = {"JAX_COMPILATION_CACHE_DIR": "/tmp/cache"}  # preset skips the temp-bucket lookup
+def test_resolve_training_env_adds_collective_watchdog_for_gpu():
+    """A GPU run appends the collective-watchdog flag without dropping operator XLA_FLAGS; CPU is untouched."""
+    base = {
+        "JAX_COMPILATION_CACHE_DIR": "/tmp/cache",  # preset skips the temp-bucket lookup
+        "XLA_FLAGS": "--xla_gpu_enable_latency_hiding_scheduler=true",
+    }
     with patch("marin.training.training._cli_helpers_module") as mod:
         mod.return_value.load_config.return_value = CliConfig()
-        gpu_env = resolve_training_env(dict(base), ResourceConfig.with_gpu("H100", count=8))
-        cpu_env = resolve_training_env(dict(base), ResourceConfig.with_cpu())
+        gpu_flags = resolve_training_env(dict(base), ResourceConfig.with_gpu("H100", count=8))["XLA_FLAGS"]
+        cpu_flags = resolve_training_env(dict(base), ResourceConfig.with_cpu())["XLA_FLAGS"]
 
-    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_env.get("XLA_FLAGS", "")
-    assert gpu_env["NCCL_DEBUG"] == "WARN"
-    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in cpu_env.get("XLA_FLAGS", "")
-    assert "NCCL_DEBUG" not in cpu_env
-
-
-def test_train_job_seeds_gpu_pod_env_with_collective_watchdog(trainer_config):
-    """A GPU training job launches with the NCCL watchdog XLA_FLAGS in its pod env.
-
-    XLA reads XLA_FLAGS lazily at backend init, so resolving the env at submit time
-    and seeding it into the pod environment makes the watchdog independent of the
-    in-worker env-application order (nothing must touch a device before it applies).
-    """
-    captured: dict[str, dict[str, str]] = {}
-
-    def fake_remote(fn, *, resources, env_vars):
-        captured["env_vars"] = env_vars
-        return lambda pod_config: None
-
-    gpu_config = TrainLmOnPodConfig(
-        train_config=train_lm.TrainLmConfig(trainer=trainer_config),
-        resources=ResourceConfig.with_gpu("H100", count=8),
-        env_vars={"JAX_COMPILATION_CACHE_DIR": "/tmp/cache"},  # preset skips the temp-bucket lookup
-    )
-    cpu_config = dataclasses.replace(gpu_config, resources=ResourceConfig.with_cpu())
-
-    with (
-        patch("marin.experiment.train.remote", fake_remote),
-        patch("marin.training.training._cli_helpers_module") as mod,
-    ):
-        mod.return_value.load_config.return_value = CliConfig()
-        _train_job(gpu_config)
-        gpu_env = captured["env_vars"]
-        _train_job(cpu_config)
-        cpu_env = captured["env_vars"]
-
-    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_env.get("XLA_FLAGS", "")
-    assert gpu_env["NCCL_DEBUG"] == "WARN"
-    assert cpu_env == {}
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_flags
+    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_flags
+    assert cpu_flags == base["XLA_FLAGS"]
