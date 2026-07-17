@@ -135,13 +135,13 @@ def publish_gauge(key: str, value: float, documentation: str, prefix: str = "") 
 
 
 def set_global_labels(**labels: str) -> None:
-    """Merge process-wide labels stamped onto every persisted telltale metric.
+    """Merge process-wide labels describing who produced these metrics.
 
     The metrics themselves carry no run/process identity — a levanter gauge is
-    just ``levanter_train_loss``. A forwarder that persists the registry (see
-    ``iris.runtime.telltale``) reads these to tag every row with who produced it,
-    so a producer names itself once at startup (``set_global_labels(run=run_id,
-    source="levanter")``) rather than threading identity through each metric.
+    just ``levanter_train_loss``. A producer names itself once at startup
+    (``set_global_labels(run=run_id, source="levanter")``) rather than threading
+    identity through each metric, and a reader of the registry can stamp every
+    sample with these labels.
 
     Merges into the existing set; a later call overrides an existing key. Values
     are coerced to ``str``. Purely additive to the exposition path — the
