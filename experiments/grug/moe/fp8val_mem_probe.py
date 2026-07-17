@@ -97,12 +97,39 @@ def _report_buffer_assignment(arm: str, new_files: list[str]) -> None:
         print(f"MEMPROBE {arm} buffer file {os.path.basename(path)}: {len(allocations)} allocations", flush=True)
         for size, head, _ in allocations[:8]:
             print(f"MEMPROBE {arm} alloc {size / 2**30:8.2f}GiB  {head}", flush=True)
-        if allocations:
-            _, _, values = allocations[0]
-            values.sort(key=lambda v: -v[0])
-            print(f"MEMPROBE {arm} top {TOP_VALUES} values in largest allocation:", flush=True)
-            for size, text in values[:TOP_VALUES]:
-                print(f"MEMPROBE {arm} val {size / 2**30:7.2f}GiB  {text}", flush=True)
+        if not allocations:
+            continue
+        _, _, values = allocations[0]
+        # Values in the temp arena alias heavily (slots are reused over time);
+        # dedupe by (offset, size) so each arena slot counts once, then group
+        # slots by dtype[shape] signature to attribute the arena's composition.
+        sig_re = re.compile(r"\):\s*(\S+?\[[^\]]*\])")
+        off_re = re.compile(r"offset=(\d+)")
+        slots: dict[tuple[int, int], str] = {}
+        for size, text in values:
+            om = off_re.search(text)
+            sm = sig_re.search(text)
+            key = (int(om.group(1)) if om else -1, size)
+            slots.setdefault(key, sm.group(1) if sm else "?")
+        groups: dict[str, tuple[int, int]] = {}
+        for (off, size), sig in slots.items():
+            c, t = groups.get(sig, (0, 0))
+            groups[sig] = (c + 1, t + size)
+        covered = sum(size for _, size in slots)
+        print(
+            f"MEMPROBE {arm} arena slots={len(slots)} covered={covered / 2**30:.2f}GiB "
+            f"(>= arena size means overlap; groups below)",
+            flush=True,
+        )
+        for sig, (c, t) in sorted(groups.items(), key=lambda kv: -kv[1][1])[:30]:
+            print(f"MEMPROBE {arm} grp {t / 2**30:8.2f}GiB  n={c:5d}  {sig}", flush=True)
+        dtypes: dict[str, tuple[int, int]] = {}
+        for sig, (c, t) in groups.items():
+            d = sig.split("[")[0]
+            a, b = dtypes.get(d, (0, 0))
+            dtypes[d] = (a + c, b + t)
+        for d, (c, t) in sorted(dtypes.items(), key=lambda kv: -kv[1][1]):
+            print(f"MEMPROBE {arm} dtype {t / 2**30:8.2f}GiB  n={c:5d}  {d}", flush=True)
 
 
 def _probe_entry(cfg: ProbeConfig) -> None:
