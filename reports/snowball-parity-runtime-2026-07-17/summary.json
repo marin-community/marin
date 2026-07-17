@@ -1,0 +1,114 @@
+{
+  "accuracy": {
+    "levanter-gpu": {
+      "count": 64,
+      "max_error_case": "structured-structeval-09",
+      "max_probability_error": 0.06827317837764091,
+      "p50_probability_error": 0.012349263391533458,
+      "p95_probability_error": 0.04377023466247692,
+      "winner_changes": 5
+    },
+    "vllm-gpu": {
+      "count": 64,
+      "max_error_case": "structured-structeval-09",
+      "max_probability_error": 0.06072821596936906,
+      "p50_probability_error": 0.01115610904587376,
+      "p95_probability_error": 0.04550102279103464,
+      "winner_changes": 5
+    }
+  },
+  "event_counts": {
+    "levanter-gpu": {
+      "gpu_sample": 1672,
+      "levanter_batch": 8,
+      "parity": 64,
+      "phase_complete": 5,
+      "remote_complete": 1,
+      "remote_start": 1
+    },
+    "vllm-gpu": {
+      "gpu_sample": 648,
+      "phase_complete": 4,
+      "remote_complete": 1,
+      "remote_start": 1,
+      "vllm_request": 72,
+      "vllm_sentinel_wave": 1,
+      "vllm_wave": 8
+    }
+  },
+  "gpu": {
+    "levanter-gpu": {
+      "complete_cycles": 209,
+      "peak_gpu_utilization_percent": 100.0,
+      "peak_hbm_mib": 65049.0,
+      "peak_power_watts": 292.61,
+      "peak_temperature_c": 36.0,
+      "raw_samples": 1672,
+      "telemetry_emission_span_max_seconds": 3.389630000000011,
+      "telemetry_emission_span_p50_seconds": 0.00025600000000736145
+    },
+    "vllm-gpu": {
+      "complete_cycles": 81,
+      "peak_gpu_utilization_percent": 100.0,
+      "peak_hbm_mib": 75425.0,
+      "peak_power_watts": 293.24,
+      "peak_temperature_c": 33.0,
+      "raw_samples": 648,
+      "telemetry_emission_span_max_seconds": 0.00041299999999466763,
+      "telemetry_emission_span_p50_seconds": 0.00023399999999185184
+    }
+  },
+  "levanter_scoring_seconds": 133.15879367478192,
+  "levanter_total_padded_tokens": 479232,
+  "prompt_count": 64,
+  "pytest_test_seconds": {
+    "levanter-gpu": 535.045,
+    "vllm-gpu": 273.298
+  },
+  "pytest_total_seconds": 808.649,
+  "remote_seconds": {
+    "levanter-gpu": 485.9919866840355,
+    "vllm-gpu": 175.7509451135993
+  },
+  "runtime_breakdown_seconds": {
+    "levanter-gpu": {
+      "Client / scheduler": 35.934999999999945,
+      "Fixture + model config": 2.846769536845386,
+      "Imports": 15.54734870698303,
+      "Iris environment / finalization": 13.118013315964504,
+      "Model load / server startup": 334.3868694091216,
+      "Prompt scoring": 133.15879367478192,
+      "Shutdown + remainder": 0.05220535630360246
+    },
+    "vllm-gpu": {
+      "Client / scheduler": 17.918000000000006,
+      "Fixture + model config": 1.121609658934176,
+      "Imports": 13.697579121217132,
+      "Iris environment / finalization": 79.6290548864007,
+      "Model load / server startup": 135.03868895489722,
+      "Prompt scoring": 15.854046485386789,
+      "Shutdown + remainder": 10.039020893163979
+    }
+  },
+  "sentinel": {
+    "count": 8,
+    "max_error_rank": 4,
+    "max_probability_error": 0.07343012661526516,
+    "mean_probability_error": 0.041264516161301924,
+    "min_probability_error": 0.017062118462661813,
+    "request_seconds_max": 2.7961496100760996,
+    "request_seconds_min": 0.15111640794202685
+  },
+  "task_seconds": {
+    "levanter-gpu": 499.11,
+    "vllm-gpu": 255.38
+  },
+  "total_real_prompt_tokens": 329514,
+  "vllm_representative_request_seconds": {
+    "max": 4.427429463714361,
+    "min": 0.08694494189694524,
+    "p50": 0.4732270468957722,
+    "p95": 4.288382261246443
+  },
+  "vllm_scoring_seconds_including_sentinel": 15.854046485386789
+}

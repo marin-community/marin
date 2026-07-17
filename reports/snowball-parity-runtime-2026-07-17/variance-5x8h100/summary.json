@@ -1,0 +1,145 @@
+{
+  "commit": "4b32fcfb0747dbb83ef4c0e8a13ffa7d4863218d",
+  "valid_numerical_runs": 5,
+  "passing_runs": 2,
+  "failing_runs": 3,
+  "excluded_infrastructure_failure_job": "f6b61bf9",
+  "tolerance": 0.075,
+  "records_per_run": 72,
+  "representative_records_per_run": 64,
+  "sentinel_records_per_run": 8,
+  "top_tokens_per_record": 25,
+  "runs": [
+    {
+      "run": 1,
+      "job_id": "7ff3af48",
+      "passed_0_075_gate": true,
+      "representative_max_probability_error": 0.0670223315392619,
+      "representative_worst_case": "knowledge-longbench-02",
+      "representative_worst_rank": 1,
+      "sentinel_max_probability_error": 0.0741303815094298,
+      "sentinel_worst_rank": 4,
+      "sentinel_min_probability_error": 0.014111131096591845,
+      "sentinel_median_probability_error": 0.03365599697284212
+    },
+    {
+      "run": 2,
+      "job_id": "9af1f63f",
+      "passed_0_075_gate": false,
+      "representative_max_probability_error": 0.053179897078425076,
+      "representative_worst_case": "long-longbench-04",
+      "representative_worst_rank": 5,
+      "sentinel_max_probability_error": 0.07604531056313579,
+      "sentinel_worst_rank": 7,
+      "sentinel_min_probability_error": 0.018087375149153956,
+      "sentinel_median_probability_error": 0.035532768929763536
+    },
+    {
+      "run": 3,
+      "job_id": "c8ab3bb9",
+      "passed_0_075_gate": true,
+      "representative_max_probability_error": 0.05606684533816664,
+      "representative_worst_case": "knowledge-longbench-02",
+      "representative_worst_rank": 1,
+      "sentinel_max_probability_error": 0.055487692149351786,
+      "sentinel_worst_rank": 6,
+      "sentinel_min_probability_error": 0.009418263815410666,
+      "sentinel_median_probability_error": 0.04394756433235532
+    },
+    {
+      "run": 4,
+      "job_id": "0373bc39",
+      "passed_0_075_gate": false,
+      "representative_max_probability_error": 0.0670223315392619,
+      "representative_worst_case": "knowledge-longbench-02",
+      "representative_worst_rank": 1,
+      "sentinel_max_probability_error": 0.09304992317242533,
+      "sentinel_worst_rank": 3,
+      "sentinel_min_probability_error": 0.025318701747810035,
+      "sentinel_median_probability_error": 0.04965584025144759
+    },
+    {
+      "run": 5,
+      "job_id": "b3e2493b",
+      "passed_0_075_gate": false,
+      "representative_max_probability_error": 0.055501926096163556,
+      "representative_worst_case": "structured-structeval-09",
+      "representative_worst_rank": 4,
+      "sentinel_max_probability_error": 0.0824646483368438,
+      "sentinel_worst_rank": 3,
+      "sentinel_min_probability_error": 0.034299878482469515,
+      "sentinel_median_probability_error": 0.06381063817947497
+    }
+  ],
+  "sentinel_max_across_runs": 0.09304992317242533,
+  "sentinel_min_of_run_maxima": 0.055487692149351786,
+  "representative_max_across_runs": 0.0670223315392619,
+  "token_variance_by_request_kind": {
+    "representative": {
+      "exact_token_tuples": 1600,
+      "median_probability_range": 0.0003413330439799773,
+      "p95_probability_range": 0.010713125124384302,
+      "max_probability_range": 0.09693778584873358,
+      "median_logprob_range": 0.07815194129943848,
+      "p95_logprob_range": 0.3247338533401488,
+      "max_logprob_range": 1.6890125274658203,
+      "largest_probability_range_tuple": {
+        "case_id": "structured-structeval-09",
+        "backend_rank": 4,
+        "golden_rank": 0,
+        "token_id": 2612,
+        "golden_probability": 0.5607663336402587,
+        "actual_probability_min": 0.5219154901813251,
+        "actual_probability_max": 0.6188532760300587,
+        "actual_probability_range": 0.09693778584873358,
+        "actual_logprob_min": -0.6502496004104614,
+        "actual_logprob_max": -0.47988706827163696,
+        "actual_logprob_range": 0.17036253213882446
+      }
+    },
+    "sentinel": {
+      "exact_token_tuples": 200,
+      "median_probability_range": 0.00025510186989018027,
+      "p95_probability_range": 0.043362701790465114,
+      "max_probability_range": 0.08908458104844102,
+      "median_logprob_range": 0.1763383150100708,
+      "p95_logprob_range": 0.43763389587402335,
+      "max_logprob_range": 0.7156682014465332,
+      "largest_probability_range_tuple": {
+        "case_id": "knowledge-longbench-02",
+        "backend_rank": 4,
+        "golden_rank": 0,
+        "token_id": 423,
+        "golden_probability": 0.5578482253534148,
+        "actual_probability_min": 0.47553292628677185,
+        "actual_probability_max": 0.5646175073352129,
+        "actual_probability_range": 0.08908458104844102,
+        "actual_logprob_min": -0.7433191537857056,
+        "actual_logprob_max": -0.5716067552566528,
+        "actual_logprob_range": 0.17171239852905273
+      }
+    }
+  },
+  "largest_exact_token_probability_range": {
+    "request_kind": "representative",
+    "case_id": "structured-structeval-09",
+    "backend_rank": 4,
+    "golden_rank": 0,
+    "token_id": 2612,
+    "golden_probability": 0.5607663336402587,
+    "actual_probability_min": 0.5219154901813251,
+    "actual_probability_max": 0.6188532760300587,
+    "actual_probability_range": 0.09693778584873358,
+    "actual_logprob_min": -0.6502496004104614,
+    "actual_logprob_max": -0.47988706827163696,
+    "actual_logprob_range": 0.17036253213882446
+  },
+  "largest_request_metric_range": {
+    "request_kind": "sentinel",
+    "case_id": "knowledge-longbench-02",
+    "rank": 3,
+    "max_error_min": 0.025150732398845688,
+    "max_error_max": 0.09304992317242533,
+    "max_error_range": 0.06789919077357964
+  }
+}
