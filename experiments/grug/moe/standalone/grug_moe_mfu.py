@@ -2164,6 +2164,17 @@ def _parse():
             "overflow assignments are dropped. Default 1.0 = zero padding headroom, drops on any imbalance."
         ),
     )
+    p.add_argument(
+        "--ep-chunk-tokens",
+        type=int,
+        default=0,
+        help=(
+            "nccl_ep only: split each rank's tokens into chunks of this size and loop "
+            "dispatch->FFN->combine per chunk (lax.scan). EP recv buffers are sized per "
+            "chunk instead of per batch, decoupling no-drop capacity from batch size "
+            "(NCCLEP-006 wall). 0 = single dispatch over the whole batch."
+        ),
+    )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument(
         "--remat-mode",
@@ -2264,17 +2275,23 @@ def main():
             tokens_per_rank = a.batch_size * a.seq_len // jax.process_count()
             # NCCL_EP has no drop path: dispatch overflow beyond recv capacity
             # is an OOB write (poisons the CUDA context). Size for the no-drop
-            # worst case; sub-worst-case capacities need TE-side drop support.
-            recv_capacity = a.expert_parallelism * tokens_per_rank * a.num_experts_per_token
+            # worst case — per chunk when chunking (--ep-chunk-tokens), which
+            # is what decouples EP buffer memory from batch size.
+            dispatch_tokens = a.ep_chunk_tokens or tokens_per_rank
+            if tokens_per_rank % dispatch_tokens != 0:
+                raise ValueError(
+                    f"--ep-chunk-tokens {a.ep_chunk_tokens} must divide per-rank tokens {tokens_per_rank}"
+                )
+            recv_capacity = a.expert_parallelism * dispatch_tokens * a.num_experts_per_token
             _te_ep_bootstrap(
                 world_size=jax.process_count(),
                 rank=jax.process_index(),
                 num_experts=a.num_experts,
-                max_tokens_per_rank=tokens_per_rank,
+                max_tokens_per_rank=dispatch_tokens,
                 recv_capacity_per_rank=recv_capacity,
                 hidden_dim=a.hidden_dim,
             )
-            configure_nccl_ep(a.num_experts_per_token, recv_capacity)
+            configure_nccl_ep(a.num_experts_per_token, recv_capacity, chunk_tokens_per_rank=a.ep_chunk_tokens)
 
         @jax.jit
         def init(rng):

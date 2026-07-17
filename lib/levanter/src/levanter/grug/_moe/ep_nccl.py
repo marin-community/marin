@@ -41,22 +41,30 @@ _DISPATCH_ALIGNMENT = 16
 
 _LAYER_CFG = None
 _RECV_CAPACITY = None
+_CHUNK_TOKENS = 0
 
 
-def configure_nccl_ep(top_k: int, recv_capacity_per_rank: int) -> None:
+def configure_nccl_ep(top_k: int, recv_capacity_per_rank: int, chunk_tokens_per_rank: int = 0) -> None:
     """Record the per-layer EP config after ``ep_bootstrap``.
 
     One shared ``EpLayerConfig`` serves every layer (TE's per-step cache keys on
     handle_mem, not on the config object). Module-level because the TE EP
     backend is itself a process-global singleton.
+
+    ``chunk_tokens_per_rank`` > 0 splits each rank's token stream into
+    fixed-size chunks and loops dispatch → FFN → combine per chunk
+    (``lax.scan``). ``recv_capacity_per_rank`` and the bootstrap's
+    ``max_tokens_per_rank`` must then be sized for ONE chunk, decoupling EP
+    buffer memory from the global batch (the no-drop capacity wall, NCCLEP-006).
     """
-    global _LAYER_CFG, _RECV_CAPACITY
+    global _LAYER_CFG, _RECV_CAPACITY, _CHUNK_TOKENS
     if EpLayerConfig is None:
         raise ModuleNotFoundError(
             "moe_implementation='nccl_ep' requires a transformer-engine build with NCCL_EP"
         ) from _TE_IMPORT_ERROR
     _LAYER_CFG = EpLayerConfig(top_k=top_k, dispatch_output_per_expert_alignment=_DISPATCH_ALIGNMENT)
     _RECV_CAPACITY = int(recv_capacity_per_rank)
+    _CHUNK_TOKENS = int(chunk_tokens_per_rank)
 
 
 def _moe_mlp_ep_nccl(
@@ -104,7 +112,13 @@ def _moe_mlp_ep_nccl(
         out = expert_mlp_fn(x_dispatch, group_sizes)
         return out.reshape(recv_tokens_l.shape)
 
-    def _body(x_b, topk_idx_b, combine_w_b, w13_b, w2_b):
+    lead_axes = batch_spec[0]
+    shard_axis_names = (lead_axes,) if isinstance(lead_axes, str) else tuple(lead_axes)
+    shards = 1
+    for name in shard_axis_names:
+        shards *= mesh.shape[name]
+
+    def _one_chunk(x_b, topk_idx_b, combine_w_b, w13_b, w2_b):
         recv_tokens, recv_w, handle_mem, token_counts = ep_dispatch(
             cfg, topk_idx_b, x_b, combine_w_b, recv_capacity
         )
@@ -134,6 +148,39 @@ def _moe_mlp_ep_nccl(
         weighted = jax.lax.with_sharding_constraint(weighted, lead)
         out = ep_combine(cfg, handle_mem, token_counts, weighted, tuple(x_b.shape[:-1]))
         return out.astype(x_b.dtype)
+
+    def _body(x_b, topk_idx_b, combine_w_b, w13_b, w2_b):
+        tokens_per_rank = x_b.shape[0] // shards
+        if _CHUNK_TOKENS == 0 or _CHUNK_TOKENS >= tokens_per_rank:
+            return _one_chunk(x_b, topk_idx_b, combine_w_b, w13_b, w2_b)
+        if tokens_per_rank % _CHUNK_TOKENS != 0:
+            raise ValueError(
+                f"chunk_tokens_per_rank={_CHUNK_TOKENS} must divide per-rank tokens {tokens_per_rank}"
+            )
+        num_chunks = tokens_per_rank // _CHUNK_TOKENS
+
+        # Rank-local chunking: [T, ...] -> [K, shards, C, ...] where the
+        # `shards` dim stays pinned to the batch mesh axes, so the reshape and
+        # moveaxis shuffle only rank-local rows (no cross-rank resharding).
+        def to_chunks(t):
+            t = t.reshape(shards, num_chunks, _CHUNK_TOKENS, *t.shape[1:])
+            t = jax.lax.with_sharding_constraint(t, P(lead_axes, *(None,) * (t.ndim - 1)))
+            t = jnp.moveaxis(t, 1, 0)
+            return jax.lax.with_sharding_constraint(t, P(None, lead_axes, *(None,) * (t.ndim - 2)))
+
+        chunk_spec = P(lead_axes, None, None)
+
+        def scan_fn(carry, chunk):
+            x_c, idx_c, w_c = (t.reshape(shards * _CHUNK_TOKENS, t.shape[-1]) for t in chunk)
+            x_c = jax.lax.with_sharding_constraint(x_c, P(lead_axes, None))
+            out_c = _one_chunk(x_c, idx_c, w_c, w13_b, w2_b)
+            out_c = out_c.reshape(shards, _CHUNK_TOKENS, out_c.shape[-1])
+            return carry, jax.lax.with_sharding_constraint(out_c, chunk_spec)
+
+        _, outs = jax.lax.scan(scan_fn, 0, (to_chunks(x_b), to_chunks(topk_idx_b), to_chunks(combine_w_b)))
+        outs = jnp.moveaxis(outs, 0, 1)  # [shards, K, C, H]
+        outs = jax.lax.with_sharding_constraint(outs, P(lead_axes, None, None, None))
+        return outs.reshape(x_b.shape[0], x_b.shape[-1])
 
     # The bench mesh types every axis Explicit, where sharding constraints are
     # asserts and TE's partitioning rules (written for auto-sharding) type the
