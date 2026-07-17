@@ -553,6 +553,21 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: b
         f"w2-shape {bf16['w2_dense_ms']:.3f} ms ({bf16['w2_dense_tfs']:.0f} TF/s); 6-GEMM quad {bf16['quad_ms']:.3f} ms",
         flush=True,
     )
+    # A real bf16 layer also pays the SwiGLU fwd + dSwiGLU bwd elementwise
+    # passes that the fused pipeline subsumes -- measure them for the honest
+    # full-layer comparison (the 6-GEMM quad alone is generous to bf16).
+    cb = jax.random.normal(jax.random.PRNGKey(4), (m, N2), jnp.bfloat16)
+    dhb = jax.random.normal(jax.random.PRNGKey(5), (m, F), jnp.bfloat16)
+    sw_fwd = jax.jit(lambda c: swiglu_interleaved(c).astype(jnp.bfloat16))
+    sw_bwd = jax.jit(lambda dh, c: dswiglu_interleaved(dh.astype(jnp.float32), c.astype(jnp.float32)).astype(jnp.bfloat16))
+    bf16["swiglu_fwd_ms"] = timed(sw_fwd, (cb,), iters, warmup) * 1e3
+    bf16["dswiglu_bwd_ms"] = timed(sw_bwd, (dhb, cb), iters, warmup) * 1e3
+    bf16["layer_ms"] = bf16["quad_ms"] + bf16["swiglu_fwd_ms"] + bf16["dswiglu_bwd_ms"]
+    print(
+        f"  bf16 elementwise: swiglu fwd {bf16['swiglu_fwd_ms']:.3f} ms + dswiglu bwd {bf16['dswiglu_bwd_ms']:.3f} ms"
+        f" -> full bf16 layer {bf16['layer_ms']:.3f} ms",
+        flush=True,
+    )
 
     # ---- producers (after the safe measurements; the CuTe probe can only fail in a child) ----
     prod = {}
@@ -582,13 +597,15 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: b
     quad["speedup_gemm_only"] = bf16["quad_ms"] / quad["gemm_ms"]
     quad["speedup_total"] = bf16["quad_ms"] / quad["total_ms"]
     quad["speedup_with_weight_producers"] = bf16["quad_ms"] / (quad["total_ms"] + prod["weights_ms"])
+    quad["speedup_vs_bf16_layer"] = bf16["layer_ms"] / quad["total_ms"]
     print("\n== fused layer quad ==", flush=True)
     print(f"  6 fused legs           {quad['gemm_ms']:8.3f} ms")
     print(f"  + producers (x,g2 dual){quad['producer_ms']:8.3f} ms  -> total {quad['total_ms']:.3f} ms")
     print(f"  bf16 6-GEMM yardstick  {quad['bf16_quad_ms']:8.3f} ms")
     print(
         f"  speedup: gemm-only {quad['speedup_gemm_only']:.3f}x | total {quad['speedup_total']:.3f}x | "
-        f"incl. per-step weight producers {quad['speedup_with_weight_producers']:.3f}x",
+        f"incl. per-step weight producers {quad['speedup_with_weight_producers']:.3f}x | "
+        f"vs full bf16 layer {quad['speedup_vs_bf16_layer']:.3f}x",
         flush=True,
     )
     results["quad"] = quad
