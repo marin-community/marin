@@ -625,10 +625,12 @@ async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
 // Integration test: a non-log table forwards generically.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_log_table_is_registered_on_the_hub_and_forwarded() {
+async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_the_origin_cluster() {
     // Forwarding is table-generic: a table the hub has never seen is created there with
     // RegisterTable, then its rows arrive through the same WriteRows path as logs. The
-    // table has no origin column, so nothing is stamped -- it forwards verbatim.
+    // producer declares only `id`, but registration adds the implicit origin `cluster`
+    // column, so the forwarder stamps every row -- the hub can attribute the table by
+    // cluster with no producer change.
     let fx = Fixture::new("generic").await;
 
     let schema = Schema::new(
@@ -638,6 +640,8 @@ async fn a_non_log_table_is_registered_on_the_hub_and_forwarded() {
     fx.source
         .register_table("events", schema, StoragePolicy::default())
         .unwrap();
+    // The producer writes only its declared column; the server null-fills the implicit
+    // `cluster`, which marks the row as local and therefore eligible to forward.
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
             "id",
@@ -664,4 +668,27 @@ async fn a_non_log_table_is_registered_on_the_hub_and_forwarded() {
         .find(|(name, _, _, _)| name == "events")
         .expect("the hub created the events namespace from RegisterTable");
     assert_eq!(events.2.row_count, 2, "both rows landed on the hub");
+
+    // Every forwarded row carries the source cluster in its implicit `cluster` column.
+    assert_eq!(
+        hub_column_values(fx.target_store(), "SELECT cluster FROM events").await,
+        vec![SOURCE_CLUSTER.to_string(), SOURCE_CLUSTER.to_string()],
+    );
+}
+
+/// Run `sql` against `store` in-process and return the single STRING result column's
+/// values. Reads the hub directly (no wire round trip), which is enough to assert on the
+/// forwarded `cluster` stamp.
+async fn hub_column_values(store: &Arc<Store>, sql: &str) -> Vec<String> {
+    let _guard = store.query_visibility().read().await;
+    let providers = store.query_providers().unwrap();
+    let result = run_query_over(&make_ctx(), providers, sql).await.unwrap();
+    let mut out = Vec::new();
+    for batch in &result.batches {
+        let col = batch.column(0).as_string::<i32>();
+        for v in col.iter() {
+            out.push(v.expect("cluster is stamped, never NULL").to_string());
+        }
+    }
+    out
 }

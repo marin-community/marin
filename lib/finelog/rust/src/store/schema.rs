@@ -27,6 +27,13 @@ pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
 /// transmitted on the wire and never declared by callers.
 pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
 
+/// Origin-cluster column added implicitly to every registered table that does
+/// not declare one. It names the cluster a row was written on: empty/NULL for a
+/// store's own writers, stamped with the origin by the cross-cluster forwarder.
+/// Making it universal lets a hub attribute every forwarded table by cluster,
+/// not just the ones whose producers happened to declare the column.
+pub const IMPLICIT_CLUSTER_COLUMN: &str = "cluster";
+
 /// Max bytes per WriteRows request body.
 pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 
@@ -319,6 +326,25 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
         false,
     ));
     columns.extend(schema.columns);
+    Schema::new(columns, schema.key_column)
+}
+
+/// Return `schema` with the implicit nullable STRING `cluster` column appended.
+/// No-op if `cluster` is already declared (e.g. the `log` namespace).
+///
+/// Appending rather than prepending keeps it consistent with additive schema
+/// evolution: `merge_schemas` also adds new columns at the end, so a re-register
+/// of an already-registered table merges the implicit column in the same slot.
+pub fn with_implicit_cluster(schema: Schema) -> Schema {
+    if schema.column(IMPLICIT_CLUSTER_COLUMN).is_some() {
+        return schema;
+    }
+    let mut columns = schema.columns;
+    columns.push(Column::new(
+        IMPLICIT_CLUSTER_COLUMN,
+        ColumnType::COLUMN_TYPE_STRING,
+        true,
+    ));
     Schema::new(columns, schema.key_column)
 }
 
@@ -702,6 +728,18 @@ mod tests {
         assert_eq!(stored.columns[0].r#type, ColumnType::COLUMN_TYPE_INT64);
         assert!(!stored.columns[0].nullable);
         let again = with_implicit_seq(stored.clone());
+        assert_eq!(again, stored);
+    }
+
+    #[test]
+    fn with_implicit_cluster_appends_nullable_string_and_is_idempotent() {
+        let stored = with_implicit_cluster(worker_schema());
+        let last = stored.columns.last().unwrap();
+        assert_eq!(last.name, "cluster");
+        assert_eq!(last.r#type, ColumnType::COLUMN_TYPE_STRING);
+        assert!(last.nullable);
+        // Idempotent: a schema that already declares `cluster` is unchanged.
+        let again = with_implicit_cluster(stored.clone());
         assert_eq!(again, stored);
     }
 

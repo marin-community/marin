@@ -64,7 +64,9 @@ use crate::query::{make_ctx, run_query_over, QueryResult, RegisteredProvider};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
-use crate::store::schema::{schema_to_proto_owned, Schema, IMPLICIT_SEQ_COLUMN};
+use crate::store::schema::{
+    schema_to_proto_owned, Schema, IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN,
+};
 use crate::store::store::LOG_NAMESPACE_NAME;
 use crate::store::Store;
 
@@ -102,10 +104,11 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// without flooding the logs it forwards.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
 
-/// The column, when a table has one, that names a row's origin cluster. The forwarder
-/// stamps it with its own cluster on the way out and forwards only rows that do not
-/// already carry a foreign origin, so a hub's own relayed rows never loop back.
-const ORIGIN_COLUMN: &str = "cluster";
+/// The column that names a row's origin cluster. The forwarder stamps it with its own
+/// cluster on the way out and forwards only rows that do not already carry a foreign
+/// origin, so a hub's own relayed rows never loop back. Registered tables carry it
+/// implicitly ([`IMPLICIT_CLUSTER_COLUMN`]); segments predating it null-fill on read.
+const ORIGIN_COLUMN: &str = IMPLICIT_CLUSTER_COLUMN;
 
 /// Where this store forwards, and as whom. Parsed from the `FINELOG_FORWARDING` JSON;
 /// the Ed25519 private key arrives separately (`FINELOG_SIGNING_KEY`) so it never rides
