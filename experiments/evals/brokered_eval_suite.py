@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from marin.evaluation.lm_eval import LmEvalRun
-from marin.execution.lazy import Artifact, ArtifactStep
+from marin.evaluation.lm_eval import LmEvalResults, LmEvalRun
+from marin.execution.lazy import ArtifactStep
 from marin.inference.vllm import BrokeredVllmSystemConfig
 
 from experiments.evals.served_lm_eval import brokered_lm_eval_step
@@ -20,7 +20,7 @@ def brokered_eval_suite(
     model_name: str,
     version: str,
     limit: int | None = None,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[LmEvalResults]:
     return brokered_lm_eval_step(
         inference,
         LmEvalRun(

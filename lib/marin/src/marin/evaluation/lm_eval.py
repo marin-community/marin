@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from marin.execution.artifact import Artifact
 from marin.inference.types import RunningModel
 
 LmEvalModelArgValue = str | int | float | bool
@@ -13,6 +14,12 @@ LM_EVAL_UV_PACKAGES = (
     "lm-eval[api]@git+https://github.com/EleutherAI/lm-evaluation-harness@f4d4b3de3ee6741a7151a9fe74945ee515262f4c",
     "transformers<5",
 )
+
+
+class LmEvalResults(Artifact):
+    """A lazy reference to lm-eval metrics and samples."""
+
+    results_path: str
 
 
 class LmEvalAdapter(StrEnum):
