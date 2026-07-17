@@ -36,6 +36,7 @@ from cutlass.cutlass_dsl import (
 from cutlass._mlir import ir
 from cutlass._mlir.dialects import nvvm, llvm
 from cutlass._mlir.dialects.nvvm import AtomicOpKind
+from .utils import atomicrmw_compat
 from cutlass._mlir.dialects import cute as _cute_ir
 import cutlass.pipeline as pipeline
 from cutlass.pipeline import (
@@ -59,8 +60,8 @@ def atomic_add_i32(
     ip=None,
 ) -> Int32:
     """Perform an atomic add on an int32 value in global memory."""
-    old_value = nvvm.atomicrmw(
-        T.i32(),  # res: required positional on nvidia-cutlass-dsl 4.5.x (4.6 infers it)
+    old_value = atomicrmw_compat(
+        T.i32(),  # res (ignored by wheels whose atomicrmw infers it)
         op=AtomicOpKind.ADD,
         ptr=ptr,
         a=value.ir_value(loc=loc, ip=ip),

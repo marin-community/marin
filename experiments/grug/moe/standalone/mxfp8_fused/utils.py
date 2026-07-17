@@ -60,6 +60,22 @@ from cutlass.pipeline import (
     make_pipeline_state,
 )
 
+# nvvm.atomicrmw signature differs ACROSS WHEEL BUILDS of nvidia-cutlass-dsl at
+# the same version: the 4.5.x x86_64 wheel requires the result type as the
+# first positional argument, while the aarch64 cu13 wheel (and 4.6+) infers it.
+# Detect once and dispatch.
+import inspect as _inspect
+
+_ATOMICRMW_TAKES_RES = "res" in _inspect.signature(nvvm.atomicrmw).parameters
+
+
+def atomicrmw_compat(res, *, op, ptr, a, loc=None, ip=None):
+    """Wheel-portable nvvm.atomicrmw (see note above)."""
+    if _ATOMICRMW_TAKES_RES:
+        return nvvm.atomicrmw(res, op=op, ptr=ptr, a=a, loc=loc, ip=ip)
+    return nvvm.atomicrmw(op=op, ptr=ptr, a=a, loc=loc, ip=ip)
+
+
 ##############################################################################
 # Helper functions
 ##############################################################################
@@ -74,8 +90,8 @@ def atomic_add_i32(
     ip=None,
 ) -> Int32:
     """Perform an atomic add on an int32 value in global memory."""
-    old_value = nvvm.atomicrmw(
-        T.i32(),  # res: required positional on nvidia-cutlass-dsl 4.5.x (4.6 infers it)
+    old_value = atomicrmw_compat(
+        T.i32(),  # res (ignored by wheels whose atomicrmw infers it)
         op=AtomicOpKind.ADD,
         ptr=ptr,
         a=value.ir_value(loc=loc, ip=ip),
@@ -219,8 +235,8 @@ def atomic_max_float32(
     """
     value_int = llvm.bitcast(T.i32(), value.ir_value(loc=loc, ip=ip), loc=loc, ip=ip)
 
-    old_value_int = nvvm.atomicrmw(
-        T.i32(),  # res: required positional on nvidia-cutlass-dsl 4.5.x (4.6 infers it)
+    old_value_int = atomicrmw_compat(
+        T.i32(),  # res (ignored by wheels whose atomicrmw infers it)
         op=cutlass._mlir.dialects.nvvm.AtomicOpKind.MAX,
         ptr=ptr,
         a=value_int,
@@ -244,8 +260,8 @@ def atomic_add_float32(
     :param value: The float32 value to add
     :return: The old value at the memory location
     """
-    old_value = nvvm.atomicrmw(
-        T.f32(),  # res: required positional on nvidia-cutlass-dsl 4.5.x (4.6 infers it)
+    old_value = atomicrmw_compat(
+        T.f32(),  # res (ignored by wheels whose atomicrmw infers it)
         op=cutlass._mlir.dialects.nvvm.AtomicOpKind.FADD,
         ptr=ptr,
         a=value.ir_value(loc=loc, ip=ip),

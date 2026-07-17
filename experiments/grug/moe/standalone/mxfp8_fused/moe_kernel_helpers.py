@@ -54,6 +54,7 @@ from cutlass._mlir.dialects.nvvm import AtomicOpKind
 from cutlass.cute.typing import Float32, Int32, BFloat16, AddressSpace
 from cutlass._mlir.dialects import math, nvvm, llvm, vector, arith
 from .moe_persistent_scheduler import MoESchedulerParams
+from .utils import atomicrmw_compat
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -282,8 +283,8 @@ def atomic_max_float32(
 ) -> Float32:
     value_int = llvm.bitcast(T.i32(), value.ir_value(loc=loc, ip=ip), loc=loc, ip=ip)
 
-    old_value_int = nvvm.atomicrmw(
-        T.i32(),  # res: required positional on nvidia-cutlass-dsl 4.5.x (4.6 infers it)
+    old_value_int = atomicrmw_compat(
+        T.i32(),  # res (ignored by wheels whose atomicrmw infers it)
         op=cutlass._mlir.dialects.nvvm.AtomicOpKind.MAX,
         ptr=ptr,
         a=value_int,
@@ -302,8 +303,8 @@ def atomic_add_float32(
     ip=None,
 ) -> Float32:
     """Atomic FP32 addition in global memory (used for dprob gradient accumulation)."""
-    old_value = nvvm.atomicrmw(
-        T.f32(),  # res: required positional on nvidia-cutlass-dsl 4.5.x (4.6 infers it)
+    old_value = atomicrmw_compat(
+        T.f32(),  # res (ignored by wheels whose atomicrmw infers it)
         op=AtomicOpKind.FADD,
         ptr=ptr,
         a=value.ir_value(loc=loc, ip=ip),
