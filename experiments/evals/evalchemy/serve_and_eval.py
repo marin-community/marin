@@ -37,14 +37,17 @@ import json
 import logging
 import os
 import time
+import tomllib
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from iris.client import iris_ctx
 from iris.cluster.constraints import region_constraint
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
@@ -105,6 +108,16 @@ class ServeSpec:
     serve_cpu: float = 8.0
     serve_memory: str = "64g"
     serve_disk: str = "100g"
+    vllm_extra_args: tuple[str, ...] = ()
+    """Raw flags forwarded verbatim to ``vllm serve`` on the vLLM serve path (``VllmBackend.extra_args``).
+    Needed for models the portable defaults cannot serve: e.g. a 256-expert Grug MoE export shards its
+    experts with data + expert parallelism (``--data-parallel-size N --enable-expert-parallel
+    --model-loader-extra-config '{"distributed":true}'``, with ``tensor_parallel_size=1``), which the
+    per-head TP heuristic cannot infer. Empty for the common single-model case."""
+    chat_template_content: str | None = None
+    """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
+    eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.
+    Passed straight to :class:`~marin.inference.quick_serve.QuickServeConfig`."""
 
 
 @dataclass(frozen=True)
@@ -162,6 +175,8 @@ class _ServeParams:
     tensor_parallel_size: int | None
     timeout_hours: float
     startup_timeout_seconds: int
+    vllm_extra_args: tuple[str, ...]
+    chat_template_content: str | None
 
 
 def _serve_for_eval(params: _ServeParams) -> None:
@@ -182,7 +197,10 @@ def _serve_for_eval(params: _ServeParams) -> None:
 
     configure_logging()
     if params.backend == ServeBackend.VLLM:
-        backend = VllmBackend(startup_timeout_seconds=params.startup_timeout_seconds)
+        backend = VllmBackend(
+            startup_timeout_seconds=params.startup_timeout_seconds,
+            extra_args=params.vllm_extra_args,
+        )
     elif params.backend == ServeBackend.LEVANTER:
         backend = LevanterBackend()
     else:
@@ -198,18 +216,47 @@ def _serve_for_eval(params: _ServeParams) -> None:
         dtype=params.dtype,
         max_model_len=params.max_model_len,
         tensor_parallel_size=params.tensor_parallel_size,
+        chat_template_content=params.chat_template_content,
         timeout_hours=params.timeout_hours,
     )
     serve_in_job(config)
 
 
+def _vllm_gpu_fork_install() -> str:
+    """A setup script that installs Marin's forked CUDA vLLM onto the GPU serve child's venv.
+
+    ``marin-core[gpu]`` carries only the JAX/Levanter GPU stack (jax[cuda13] + torch), not a CUDA vLLM,
+    and no managed ``marin-core[vllm-gpu]`` extra exists yet (marin #7134/#7135). The 67B ``grug_moe``
+    export needs Marin's vLLM FORK, so we overlay it exactly as ``tests/cluster/vllm/
+    test_snowball_backend_parity.py`` does: ``VLLM_USE_PRECOMPILED=1`` reuses vLLM's precompiled base and
+    swaps in the fork's python; the fork pin is read from ``tool.uv.sources.vllm`` so it tracks the same
+    commit the workspace resolves. The default ``WorkspaceVllm`` launcher then serves the fork off the
+    venv PATH. Drop this for ``marin-core[vllm-gpu]`` once #7134 lands the managed baseline."""
+    source = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())["tool"]["uv"]["sources"][
+        "vllm"
+    ]
+    return (
+        'VLLM_USE_PRECOMPILED=1 uv pip install --no-config --python "$IRIS_VENV/bin/python" '
+        f'--torch-backend=cu130 "vllm @ git+{source["git"]}@{source["rev"]}" "runai-model-streamer[s3]==0.16.0"'
+    )
+
+
 def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
-    """Worker extras for the serve child, by slice and backend: a GPU slice needs the ``gpu`` build (the
-    JAX/Levanter GPU stack); a vLLM-TPU serve needs the ``tpu``+``vllm`` build; a Levanter-TPU serve
-    needs only jax (the ``tpu`` extra)."""
+    """Worker environment for the serve child, by slice and backend.
+
+    - GPU + vLLM: ``marin-core`` synced, then Marin's forked CUDA vLLM overlaid onto the venv (see
+      :func:`_vllm_gpu_fork_install`) -- ``marin-core[gpu]`` has no CUDA vLLM of its own.
+    - GPU + Levanter: the ``gpu`` build (the JAX/Levanter GPU stack) suffices; Levanter serves in-process.
+    - TPU + vLLM: the ``tpu``+``vllm`` build. TPU + Levanter: only jax (the ``tpu`` extra).
+    """
     if spec.gpu_count is not None:
-        extras = ("gpu",)
-    elif spec.backend == ServeBackend.LEVANTER:
+        if spec.backend == ServeBackend.LEVANTER:
+            return EnvironmentSpec(extras=("gpu",), env_vars=_propagated_env())
+        return EnvironmentSpec(
+            setup_scripts=[default_setup_script(packages=["marin-core"]), _vllm_gpu_fork_install()],
+            env_vars=_propagated_env(VLLM_USE_FLASHINFER_SAMPLER="0"),
+        )
+    if spec.backend == ServeBackend.LEVANTER:
         extras = ("tpu",)
     else:
         extras = ("tpu", "vllm")
@@ -251,6 +298,8 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
         tensor_parallel_size=spec.tensor_parallel_size,
         timeout_hours=SERVE_TIMEOUT_HOURS,
         startup_timeout_seconds=int(ENDPOINT_READY_TIMEOUT_SECONDS),
+        vllm_extra_args=spec.vllm_extra_args,
+        chat_template_content=spec.chat_template_content,
     )
     constraints = [region_constraint([spec.region])] if spec.region else None
 
