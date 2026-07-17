@@ -42,6 +42,9 @@ export NCCL_EP_JIT_LOG=1
 popd
 
 export XLA_PYTHON_CLIENT_ALLOCATOR=${XLA_PYTHON_CLIENT_ALLOCATOR:-cuda_async}
+# No-drop EP recv buffers are large (ep x tokens x topk rows); default 0.75
+# fraction leaves 48 GiB idle on a 186 GiB part.
+export XLA_PYTHON_CLIENT_MEM_FRACTION=${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.90}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # TE's EP integration disables command-buffer capture around the EP FFI ops;
 # with capture on, XLA can run an EP op's host-side handle lookup before
