@@ -1,7 +1,7 @@
 {
   "uid": "marin-training",
   "title": "Training (telltale)",
-  "description": "Levanter training metrics persisted from each process's rigging.telltale registry into the telltale finelog namespace by the iris telltale forwarder. Series are keyed on the metric name and grouped by run (the wandb run id levanter sets, falling back to the Iris task_id from the labels map). The namespace clusters on name, so per-metric panels prune to a metric's row groups. Any in-cluster training run reports here; there is no data before the forwarder ships.",
+  "description": "Levanter training metrics persisted from each process's rigging.telltale registry into the telltale finelog namespace by the telltale forwarder. Series are keyed on the metric name and grouped by run (the wandb run id levanter sets, falling back to the Iris task_id column). Identity like run/task_id/source is flattened into top-level columns; the namespace clusters on name, so per-metric panels prune to a metric's row groups. Any in-cluster training run reports here; there is no data before the forwarder ships.",
   "tags": ["marin", "generated"],
   "timezone": "utc",
   "editable": false,
@@ -42,7 +42,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, json_get(labels, 'task_id'), 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_train_loss' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, task_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_train_loss' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -77,7 +77,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, json_get(labels, 'task_id'), 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_throughput' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, task_id, 'unknown') AS series, AVG(value) AS value FROM \"telltale\" WHERE name = 'levanter_throughput' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -112,7 +112,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, json_get(labels, 'task_id'), 'unknown') AS series, MAX(value) AS value FROM \"telltale\" WHERE name = 'levanter_step' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(run, task_id, 'unknown') AS series, MAX(value) AS value FROM \"telltale\" WHERE name = 'levanter_step' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]

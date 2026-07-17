@@ -15,8 +15,9 @@ import socket
 import pytest
 import uvicorn
 from connectrpc.errors import ConnectError
-from iris.actor import ActorClient, ActorServer
+from iris.actor.client import ActorClient
 from iris.actor.resolver import ProxyResolver
+from iris.actor.server import ActorServer
 from iris.cluster.controller.endpoint_proxy import ALLOWED_METHODS, PROXY_ROUTE, EndpointProxy
 from iris.cluster.dashboard_common import on_shutdown
 from iris.managed_thread import ThreadContainer
