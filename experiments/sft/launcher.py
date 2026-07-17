@@ -26,7 +26,7 @@ Init sources (the :class:`ModelSource` implementations):
   to that step's output directory. The step becomes a dependency.
 - :class:`LevanterCheckpointModel` — SFT from a native Levanter checkpoint, weights-only with a fresh
   optimizer (``initialize_model_from_checkpoint_path``, the same semantics as ``initialize_from_hf``).
-  ``init_from`` is an :class:`~experiments.sft.hf_to_levanter.HfToLevanterCheckpoint` (a materialized
+  ``init_from`` is an :class:`~marin.experiment.checkpoints.HfToLevanterCheckpoint` (a materialized
   HF->Levanter conversion, which also carries the arch + padded tokenizer), or a static dir / prior
   ``sft_step`` step for stage chaining (for which the arch and tokenizer are supplied explicitly).
 
@@ -85,6 +85,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
+from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
@@ -95,7 +96,6 @@ from experiments.datasets.instruction import (
     multi_turn_adapter,
     transform_dataset_step,
 )
-from experiments.sft.hf_to_levanter import HfToLevanterCheckpoint
 
 # Runtime-arg key for the accelerator the job is dispatched onto (excluded from the fingerprint).
 _TRAIN_RESOURCES = "train_resources"
@@ -357,7 +357,7 @@ class LevanterCheckpointModel:
 
     ``init_from`` is one of:
 
-    - an :class:`~experiments.sft.hf_to_levanter.HfToLevanterCheckpoint` — a materialized HF->Levanter
+    - an :class:`~marin.experiment.checkpoints.HfToLevanterCheckpoint` — a materialized HF->Levanter
       conversion: the architecture and padded tokenizer come from it, so nothing else is required;
     - an :class:`ArtifactStep` or a static dir holding a native checkpoint (e.g. a prior ``sft_step``
       output, for stage chaining): supply ``model`` (the checkpoint's architecture) and ``tokenizer_path``.
@@ -414,10 +414,12 @@ class LevanterCheckpointModel:
         return (step,) if step is not None else ()
 
     def _init_path(self, ctx: StepContext) -> str:
-        if isinstance(self.init_from, HfToLevanterCheckpoint):
-            return prefix_join(ctx.artifact_path(self.init_from.step), self.init_from.model_checkpoint_path)
-        if isinstance(self.init_from, ArtifactStep):
-            return ctx.artifact_path(self.init_from)
+        step = self._init_step()
+        if step is not None:
+            # Both an HF->Levanter conversion (subpath="model") and a prior sft_step (a TrainerState
+            # whose model field serializes to `model/`) store the weights as a `model` subtree at the
+            # step's output root; native init reads it with load_checkpoint(..., subpath="model").
+            return ctx.artifact_path(step)
         return self.init_from
 
     def build_train_config(

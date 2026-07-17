@@ -19,15 +19,15 @@ from fray.types import ResourceConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, materialized_config
-from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint
-
-from experiments.sft.hf_to_levanter import (
+from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
     hf_to_levanter,
     resolve_lm_config,
 )
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint
+
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, sft_step
 
 _PREFIX = "gs://test-prefix"
@@ -79,8 +79,9 @@ def test_conversion_handle_is_a_dependency_and_wires_native_weights_only_init():
     train_config = materialized_config(step, _PREFIX).train_config
 
     conv_out = conv.step.path(_PREFIX)
-    # Native weights-only init points at the model checkpoint subdir; the HF/full-state fields are off.
-    assert train_config.initialize_model_from_checkpoint_path == f"{conv_out}/converted"
+    # Native weights-only init points at the checkpoint root (the model is a `model/` subtree there,
+    # loaded with subpath="model"); the HF/full-state fields are off.
+    assert train_config.initialize_model_from_checkpoint_path == conv_out
     assert train_config.initialize_from_hf is False
     assert train_config.initialize_from_checkpoint_path is None
     assert train_config.use_hf_model_config is False
@@ -148,7 +149,7 @@ def test_hf_to_levanter_resolves_real_arch_and_is_identity_stable():
     conv = hf_to_levanter("Qwen/Qwen3-0.6B", model_type="qwen3", hf_revision="main", version="2026.07.17")
     # 0.6B differs from the Qwen3Config class default, so a real resolution must have happened.
     assert conv.model != LmConfig.get_choice_class("qwen3")()
-    assert conv.model == resolve_lm_config("qwen3", "Qwen/Qwen3-0.6B", "main", "Qwen/Qwen3-0.6B", "main")
+    assert conv.model == resolve_lm_config("qwen3", "Qwen/Qwen3-0.6B", "main")
 
     config = materialized_config(conv.step, _PREFIX)
     assert isinstance(config, HfToLevanterConfig)

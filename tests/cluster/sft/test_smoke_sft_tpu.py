@@ -27,8 +27,8 @@ from iris.client import IrisClient
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
+from marin.experiment.checkpoints import hf_to_levanter
 
-from experiments.sft.hf_to_levanter import hf_to_levanter
 from experiments.sft.launcher import (
     DatasetSpec,
     HFModel,
