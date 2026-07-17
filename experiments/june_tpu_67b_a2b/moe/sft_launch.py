@@ -31,7 +31,6 @@ the training sequence length cannot drift apart.
 """
 
 import dataclasses
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -48,6 +47,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import temporary_checkpoint_base_path
+from rigging.filesystem import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
@@ -88,8 +88,8 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
     """Map SFT launch knobs onto a Levanter trainer and dispatch the run.
 
     Resolves the latest checkpoint under ``init_from_path`` and hands it to the weights-only
-    init path (``sft_weights_only_init=True``); the optimizer/step reset happens inside
-    ``_run_grug_local``.
+    init path (``sft_weights_only_init=True``): only the base weights load, the optimizer state
+    and step counter start fresh, so SFT runs a new LR schedule from step 0.
     """
     if config.model.num_experts <= 1:
         # marin #6252: the single-expert training path is buggy; SFT of an MoE must keep >1.
@@ -132,7 +132,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         allow_nondivisible_batch_size=False,
         checkpointer=config.checkpointer
         or CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
+            base_path=prefix_join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=config.save_interval_minutes),
@@ -215,7 +215,7 @@ class GrugModel:
     ) -> GrugMoeSFTConfig:
         if isinstance(self.init_from, ArtifactStep):
             # A chained Grug stage: init from the prior stage's saved checkpoints.
-            init_from_path = os.path.join(ctx.artifact_path(self.init_from), "checkpoints")
+            init_from_path = prefix_join(ctx.artifact_path(self.init_from), "checkpoints")
         else:
             init_from_path = self.init_from
         run_id = spec.name.split("/")[-1]

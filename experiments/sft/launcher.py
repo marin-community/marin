@@ -380,33 +380,53 @@ def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
     )
 
 
-def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
-    """One cache-backed chat component per dataset, weighted by ``spec.datasets``.
+def _chat_mixture_data_config(
+    spec: SFTSpec,
+    cache_dirs: Sequence[str],
+    *,
+    build_component: Callable[[str, ChatLmDatasetFormat], DatasetComponent],
+    auto_build_caches: bool,
+) -> LmDataConfig:
+    """The weighted chat mixture ``LmDataConfig`` shared by the auto-build and pre-built cache paths.
 
-    ``dep_paths`` are the resolved ``transform_dataset_step`` outputs, aligned with
-    ``spec.datasets``; Levanter builds the chat caches from them at train time. The tokenizer comes
-    from ``spec.model`` (the model's tokenizer), so data and model stay consistent.
+    One component per dataset (``build_component`` turns a cache dir + the chat format into the
+    ``DatasetComponent`` — the two paths differ only in that source shape and in
+    ``auto_build_caches``). The tokenizer comes from ``spec.model`` so data and model stay consistent.
     """
     fmt = _chat_format(spec)
     components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
-    for dataset, cache_dir in zip(spec.datasets, dep_paths, strict=True):
-        components[dataset.slug] = DatasetComponent(
-            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, "**/*.jsonl.gz")]),
-            cache_dir=cache_dir,
-            format=fmt,
-            split="train",
-        )
+    for dataset, cache_dir in zip(spec.datasets, cache_dirs, strict=True):
+        components[dataset.slug] = build_component(cache_dir, fmt)
         weights[dataset.slug] = dataset.weight
     return LmDataConfig(
         tokenizer=spec.model.tokenizer_path,
         chat_template=spec.chat_template,  # data-level default; the component format overrides it
         enforce_eos=True,
-        auto_build_caches=True,
+        auto_build_caches=auto_build_caches,
         components=components,
         train_weights=weights,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
     )
+
+
+def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
+    """Chat caches built on the training pod from the ``transform_dataset_step`` outputs.
+
+    ``dep_paths`` are the resolved transform outputs, aligned with ``spec.datasets``; each component
+    reads the transformed ``jsonl.gz`` and Levanter builds (``auto_build_caches``) the chat cache at
+    train time.
+    """
+
+    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
+        return DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, "**/*.jsonl.gz")]),
+            cache_dir=cache_dir,
+            format=fmt,
+            split="train",
+        )
+
+    return _chat_mixture_data_config(spec, dep_paths, build_component=build_component, auto_build_caches=True)
 
 
 def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> TrainerConfig:
@@ -497,26 +517,16 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str]) -> LmD
     ``auto_build_caches=False`` and no raw urls: the caches already exist, so Levanter reads them
     directly instead of rebuilding on the training pod.
     """
-    fmt = _chat_format(spec)
-    components: dict[str, DatasetComponent] = {}
-    weights: dict[str, float] = {}
-    for dataset, cache_dir in zip(spec.datasets, cache_paths, strict=True):
-        components[dataset.slug] = DatasetComponent(
+
+    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
+        return DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
             cache_dir=cache_dir,
             format=fmt,
             split="train",
         )
-        weights[dataset.slug] = dataset.weight
-    return LmDataConfig(
-        tokenizer=spec.model.tokenizer_path,
-        chat_template=spec.chat_template,
-        enforce_eos=True,
-        auto_build_caches=False,
-        components=components,
-        train_weights=weights,
-        mixture_block_size=_MIXTURE_BLOCK_SIZE,
-    )
+
+    return _chat_mixture_data_config(spec, cache_paths, build_component=build_component, auto_build_caches=False)
 
 
 def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactStep[TokenizedCache]) -> int:

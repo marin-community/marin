@@ -384,8 +384,7 @@ def init_weights_only_from_checkpoint(
     This is the SFT/RL init (marin #650): the base checkpoint supplies ``params`` and the
     ``pending_qb_betas`` router-bias state; the optimizer state and ``step`` stay at their
     fresh values in ``state`` so training starts a new LR schedule from step 0 instead of
-    resuming the base run's optimizer/step. Weights are read via subpath loads so the base
-    checkpoint's (potentially different) optimizer tree is never deserialized.
+    resuming the base run's optimizer/step.
 
     ``load_ema`` mirrors the loaded weights into ``ema_params`` when the run tracks an EMA.
     """
