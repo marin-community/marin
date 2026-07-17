@@ -9,7 +9,7 @@ telltale->finelog forwarder persists them. These exercise the parsing/filtering,
 poller lifecycle, and the collision-avoidance that filtering buys.
 """
 
-import time
+import threading
 
 import pytest
 from marin.inference.vllm_metrics import (
@@ -22,6 +22,7 @@ from marin.inference.vllm_metrics import (
 )
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 from prometheus_client.parser import text_string_to_metric_families
+from rigging import telltale
 
 # A representative vLLM /metrics body: a gauge, two counters, a histogram — all vllm:-prefixed —
 # plus the stdlib process/python collectors vLLM's registry also exposes and the parent already has.
@@ -100,27 +101,21 @@ def test_poll_once_keeps_last_snapshot_when_scrape_fails():
     assert "vllm:num_requests_running" in {f.name for f in proxy.collect()}
 
 
-def test_forwarder_thread_polls_then_stops():
+def test_forwarder_thread_scrapes_then_stops():
     proxy = _VllmMetricsProxy()
-    scrapes = []
+    scraped = threading.Event()
 
     def _fetch(url: str) -> str:
-        scrapes.append(url)
+        scraped.set()
         return _VLLM_METRICS_BODY
 
     # A long interval keeps the loop to its one immediate scrape; stop() joins the thread.
     forwarder = VllmMetricsForwarder("http://server/metrics", proxy, fetch=_fetch, interval=1000.0)
     forwarder.start()
 
-    deadline = time.monotonic() + 5
-    while not scrapes:
-        if time.monotonic() > deadline:
-            raise AssertionError("poller never scraped")
-        time.sleep(0.01)
-
+    assert scraped.wait(timeout=5), "poller never scraped"
     forwarder.stop(timeout=5)
     assert not forwarder._thread.is_alive()
-    assert proxy.collect()  # the immediate scrape populated the proxy
 
 
 def test_filtered_mirror_does_not_collide_with_a_parent_process_collector():
@@ -147,8 +142,6 @@ def test_filtered_mirror_does_not_collide_with_a_parent_process_collector():
 @pytest.fixture
 def reset_global_telltale():
     """Restore telltale's process-global labels and clear the shared proxy after the case."""
-    from rigging import telltale
-
     saved = telltale.get_global_labels()
     yield
     telltale._global_labels.clear()
@@ -157,24 +150,25 @@ def reset_global_telltale():
 
 
 def test_start_vllm_metrics_forwarding_wires_source_and_proxy(monkeypatch, reset_global_telltale):
-    from rigging import telltale
+    populated = threading.Event()
+    original_set_latest = _PROXY.set_latest
+
+    def _spy_set_latest(families):
+        original_set_latest(families)
+        populated.set()
 
     class _FakeResponse:
         status_code = 200
         text = _VLLM_METRICS_BODY
 
     monkeypatch.setattr("marin.inference.vllm_metrics.requests.get", lambda *a, **k: _FakeResponse())
+    monkeypatch.setattr(_PROXY, "set_latest", _spy_set_latest)
 
     forwarder = start_vllm_metrics_forwarding("http://server/metrics", interval=1000.0)
     try:
-        deadline = time.monotonic() + 5
-        while not _PROXY.collect():
-            if time.monotonic() > deadline:
-                raise AssertionError("proxy never populated")
-            time.sleep(0.01)
-
-        # The process's forwarded rows are stamped as vLLM's, and the mirrored families are present.
+        # source is stamped synchronously; the mirrored families arrive on the poller's first scrape.
         assert telltale.get_global_labels()["source"] == VLLM_METRICS_SOURCE
+        assert populated.wait(timeout=5), "proxy never populated"
         assert "vllm:num_requests_running" in {f.name for f in _PROXY.collect()}
     finally:
         forwarder.stop(timeout=5)
