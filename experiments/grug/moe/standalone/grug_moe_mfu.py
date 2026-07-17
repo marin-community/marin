@@ -178,6 +178,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    fa4_cute_segment_bounds,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -222,10 +223,6 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
-
-
-def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -446,7 +443,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
-        disable_rope: bool = False,
+        disable_rope: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -485,17 +482,32 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
+
         # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
         # (second half is rope-free on every layer). ``disable_rope`` skips
         # the RoPE step entirely on this layer — used to opt long layers out
-        # of rotary embedding when ``cfg.disable_long_rope`` is set.
-        if not disable_rope:
+        # of rotary embedding when ``cfg.disable_long_rope`` is set. It may be a
+        # traced scalar bool (per-layer choice inside the layer scan): then RoPE
+        # is always computed and selected with ``jnp.where`` so the scan body has
+        # no ``lax.cond`` (which would pin the FA4 metadata to device 0).
+        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
             half = head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+                qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            return (
+                jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
+                jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
+            )
+
+        if isinstance(disable_rope, bool):
+            if not disable_rope:
+                q, k = _rope(q, k)
+        else:
+            q_roped, k_roped = _rope(q, k)
+            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+            q = jnp.where(keep, q_roped, q)
+            k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
@@ -817,25 +829,20 @@ class Block(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
-        short_mask: AttentionMask | jax.Array,
-        long_mask: AttentionMask | jax.Array,
-        use_long_mask: Bool[Array, ""] | bool,
+        mask: AttentionMask | jax.Array,
         use_pko: bool = False,
-        disable_long_rope: bool = False,
+        disable_rope: bool | jax.Array = False,
         sub_remat: Literal["none", "all_but_moe"] = "none",
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        # lax.cond so the body has a uniform shape across scan iterations: long layers use
-        # the full causal mask (and may PKO / drop RoPE); short layers use the sliding-window
-        # mask, never PKO, and always RoPE.
-        def _attn_block(attn_mods, h, use_long, s_mask, l_mask):
+        # The per-layer short/long mask choice is made by the caller: either statically
+        # (unrolled blocks) or via precomputed FA4 bounds selected with jnp.where inside
+        # the layer scan. No lax.cond here — a conditional output feeding the FA4
+        # pure_callback is pinned to {maximal device=0} and forces an involuntary full
+        # rematerialization that wedges the collectives at scale.
+        def _attn_block(attn_mods, h, m, rope_off):
             rms_attn, attn_gated_norm, attn = attn_mods
             attn_in = attn_gated_norm(rms_attn(h))
-            return jax.lax.cond(
-                jnp.asarray(use_long, dtype=jnp.bool_),
-                lambda _: attn(attn_in, l_mask, use_pko=use_pko, disable_rope=disable_long_rope),
-                lambda _: attn(attn_in, s_mask, use_pko=False, disable_rope=False),
-                operand=None,
-            )
+            return attn(attn_in, m, use_pko=use_pko, disable_rope=rope_off)
 
         # Modules and traced values enter the checkpointed sub-functions as explicit
         # arguments (not via closure) so eqx.filter_checkpoint sees them as
@@ -847,19 +854,19 @@ class Block(eqx.Module):
             # residuals would otherwise be saved as fp32 by autodiff — leaving only
             # the MoE (router, dispatch, expert GEMMs, combine) and shared expert
             # live so backward never re-runs the expert forward.
-            def _pre_moe(mods, h, use_long, s_mask, l_mask):
+            def _pre_moe(mods, h, m, rope_off):
                 a_mods, rms_mlp, mlp_gated_norm = mods
-                h2 = h + _attn_block(a_mods, h, use_long, s_mask, l_mask)
+                h2 = h + _attn_block(a_mods, h, m, rope_off)
                 return h2, mlp_gated_norm(rms_mlp(h2))
 
             pre_mods = (attn_mods, self.rms_mlp, self.mlp_gated_norm)
-            x, mlp_in = eqx.filter_checkpoint(_pre_moe)(pre_mods, x, use_long_mask, short_mask, long_mask)
+            x, mlp_in = eqx.filter_checkpoint(_pre_moe)(pre_mods, x, mask, disable_rope)
             mlp_out, router_stats = self.mlp(mlp_in)
             if self.shared is not None:
                 mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
             return x + mlp_out, router_stats
 
-        attn_out = _attn_block(attn_mods, x, use_long_mask, short_mask, long_mask)
+        attn_out = _attn_block(attn_mods, x, mask, disable_rope)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
@@ -957,8 +964,34 @@ class Transformer(eqx.Module):
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        if segment_ids is not None:
+            # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer
+            # blocks. Otherwise they reach the FA4 metadata computation as {maximal device=0}
+            # and the compiler falls back to an involuntary full-remat scatter that serializes
+            # through device 0 (collective rendezvous timeout at 8+ racks).
+            segment_ids = _batch_reshard(segment_ids)
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+
+        use_fa4_bounds = cfg.attention_implementation == "gpu_fa4_cute"
+        if use_fa4_bounds:
+            # Precompute the FA4 per-token (lower_bounds, valid) metadata for both the
+            # full-causal (long) and sliding-window (short) layers OUTSIDE the layer scan,
+            # so the FA4 pure_callback never reads a conditional output (which would be
+            # pinned to {maximal device=0} and force an involuntary full rematerialization
+            # that wedges the collectives at scale). ``valid`` is window-independent.
+            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+            long_lower_bounds, valid = fa4_cute_segment_bounds(
+                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            )
+            short_lower_bounds, _ = fa4_cute_segment_bounds(
+                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+            )
+            long_lower_bounds = _batch_reshard(long_lower_bounds)
+            short_lower_bounds = _batch_reshard(short_lower_bounds)
+            valid = _batch_reshard(valid)
+            short_mask = short_mask.with_fa4_bounds(short_lower_bounds, valid)
+            long_mask = long_mask.with_fa4_bounds(long_lower_bounds, valid)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -981,9 +1014,9 @@ class Transformer(eqx.Module):
                 is_last = i == num_blocks - 1
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
-                hidden, router_stats = _apply_block(
-                    block, hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
-                )
+                layer_mask = long_mask if is_long else short_mask
+                disable_rope = cfg.disable_long_rope if is_long else False
+                hidden, router_stats = _apply_block(block, hidden, layer_mask, use_pko, disable_rope)
                 moe_router_stats.append(router_stats)
             router_metrics = {
                 "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
@@ -995,8 +1028,16 @@ class Transformer(eqx.Module):
             }
         else:
             assert self.stacked_blocks is not None
+            if not use_fa4_bounds:
+                raise NotImplementedError(
+                    "use_array_stacked_blocks=True encodes the per-layer short/long mask choice "
+                    "in precomputed FA4 bounds (gpu_fa4_cute only); other attention "
+                    "implementations must use unrolled blocks (use_array_stacked_blocks=False)."
+                )
             # Homogeneous scan: one compiled Block body over the stacked layers; the per-layer
-            # short/long mask choice rides in as a Bool[num_layers] scan input.
+            # short/long choice rides in as a Bool[num_layers] scan input, selecting between the
+            # precomputed FA4 bounds with jnp.where (no lax.cond — see the fa4 bounds comment
+            # above). ``disable_rope`` rides in as a traced per-layer scalar.
             mask_schedule = _long_layer_schedule(cfg.num_layers)
 
             def _scan_layers(
@@ -1004,9 +1045,11 @@ class Transformer(eqx.Module):
                 scan_inputs: tuple[Block, Bool[Array, ""]],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
-                return _apply_block(
-                    layer, carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
-                )
+                use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                disable_rope = use_long if cfg.disable_long_rope else False
+                return _apply_block(layer, carry_hidden, layer_mask, False, disable_rope)
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
@@ -2152,6 +2195,15 @@ def _parse():
     )
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument(
+        "--unrolled-blocks",
+        action="store_true",
+        help=(
+            "per-layer unrolled blocks (use_array_stacked_blocks=False) instead of the "
+            "homogeneous layer scan; required for non-fa4 attention implementations and "
+            "useful as a parity check against the scan path's FA4-bounds mask selection"
+        ),
+    )
+    p.add_argument(
         "--remat-mode",
         default="recompute_all",
         choices=["recompute_all", "save_moe", "all_but_moe", "none"],
@@ -2216,7 +2268,7 @@ def main():
         attention_implementation=a.attention_implementation,
         moe_implementation=a.moe_implementation,
         capacity_factor=a.capacity_factor,
-        use_array_stacked_blocks=True,
+        use_array_stacked_blocks=not a.unrolled_blocks,
         disable_pko=True,
         remat_mode=a.remat_mode,
     )
