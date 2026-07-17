@@ -2254,7 +2254,9 @@ def main():
             )
         if int(mesh.shape.get("replica_dcn", 1)) != 1:
             raise ValueError("nccl_ep supports one dp/fsdp axis outside expert; use --replica-axis-size 1")
-        ep_guard = _te_global_shard_guard(_TeMeshResource(fsdp_resource="data", ep_resource="expert"))
+        # compact_grug_mesh drops size-1 axes; TE asserts named resources exist.
+        fsdp_axis = "data" if int(mesh.shape.get("data", 1)) > 1 else None
+        ep_guard = _te_global_shard_guard(_TeMeshResource(fsdp_resource=fsdp_axis, ep_resource="expert"))
     metrics = []
     tps = a.batch_size * a.seq_len
     with set_mesh(mesh), ep_guard:
