@@ -1,0 +1,13 @@
+config:
+  # People admitted through IAP (roles/iap.httpsResourceAccessor). Each entry is a bare
+  # email, a domain wildcard (quote it — YAML reads a leading `*` as an alias), or an
+  # already-qualified IAM member. Editing this and re-running `pulumi up` updates only the
+  # grants, never the service:
+  #
+  #   marin-infra-dashboard:viewers:
+  #     - alice@example.com
+  #     - "*@openathena.ai"
+  #     - group:marin-eng@example.com
+  marin-infra-dashboard:viewers: [russell.power@gmail.com, '*@openathena.ai']
+# `pulumi stack init marin-infra-dashboard` adds `encryptionsalt` here (derived from the
+# shared pulumi-iac-passphrase; safe to commit). See README.md § Deploy.

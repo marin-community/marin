@@ -72,7 +72,8 @@ web/
       ProbesPanel.tsx synthetic-canary health checks + provisioning rollup
     style.css       Tailwind entry
 Dockerfile          multi-stage build → node:20-slim runtime
-deploy.sh           Cloud Run + IAP deploy
+__main__.py         Pulumi entry point — the Cloud Run service (iac.gcp.cloud_run)
+Pulumi.yaml         Pulumi project, run on the shared repo venv
 ```
 
 ## Local dev
@@ -261,23 +262,61 @@ cap the report's own panels use).
 
 ## Deploy
 
-```bash
-# one-time setup instructions (service account, secret, IAP bindings)
-./deploy.sh --setup
+Pulumi owns the deploy: the runtime service account and its `compute.viewer` grant, the
+accessor binding on the GitHub-token secret, the Artifact Registry repo and image, the Cloud
+Run service, and the IAP wiring. The service and its image build come from the reusable
+`iac.gcp.cloud_run.CloudRunService` component (`infra/iac`); this directory is its own Pulumi
+project, runs on the shared repo venv, and shares `infra/iac`'s state backend. Merges to `main`
+that touch this directory roll the service through CI (`.github/workflows/ops-infra-dashboard.yaml`).
 
-# actual deploy
-./deploy.sh
+The token value stays out of Pulumi — it lives in Secret Manager as
+`marin-status-page-github-token`; Pulumi only mounts it as `GITHUB_TOKEN` and grants the
+runtime account read access.
+
+```bash
+uv sync --all-packages                                    # once: iac + Pulumi providers on the venv
+gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
+
+# once, only if the secret does not exist — a classic token with NO scopes, or a fine-grained
+# PAT scoped to public-repo read, is enough (the repo is public; the token only lifts the API
+# rate limit from 60/hr to 5000/hr):
+echo -n "<paste-github-token>" | gcloud secrets create marin-status-page-github-token \
+  --project=hai-gcp-models --data-file=-
+
+cd infra/status-page
+pulumi login gs://marin-iac-state
+export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
+  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
+pulumi stack select marin-infra-dashboard                 # first time: pulumi stack init marin-infra-dashboard
+
+# Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member. Editing this
+# and re-running updates only the grant, never the service.
+pulumi config set --path 'viewers[0]' you@example.com
+
+pulumi preview                                            # plan; then, once it looks right:
+pulumi up
 ```
 
-`deploy.sh` uses `gcloud beta run deploy --source=.`, which builds the
-Dockerfile via Cloud Build, deploys to Cloud Run with native IAP
-(`--iap`), Direct VPC egress (`private-ranges-only`), and pins
-`min/max-instances=1` so the in-process TTL cache stays warm.
+`pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact Registry,
+and rolls the service to that digest. `min` and `max` instances are both 1 so the in-process
+TTL cache and the background latency sampler stay warm on the single instance. IAP is the only
+gate; the OAuth consent screen is project-level and shared, so nothing per-service needs
+configuring beyond the `viewers` list.
 
-Each Cloud Run deployment is a single active environment. The prod
-service should use `CLUSTER_NAME=marin`/`CONTROL_PLANE_ENV=prod`; a dev
-service should use `CLUSTER_NAME=marin-dev`/`CONTROL_PLANE_ENV=dev`
-plus the dev controller discovery settings.
+This stack is prod (`CLUSTER_NAME=marin`); a dev dashboard would be a second stack with
+`CLUSTER_NAME=marin-dev` and the dev controller-discovery settings.
+
+The service and its `marin-status-page` account already exist (they predate Pulumi), so import
+them into the stack once before the first `up`, then confirm `pulumi preview` updates rather
+than replaces them:
+
+```bash
+parent='urn:pulumi:marin-infra-dashboard::marin-infra-dashboard::marin:gcp:CloudRunService::status-page'
+pulumi import gcp:serviceaccount/account:Account sa \
+  projects/hai-gcp-models/serviceAccounts/marin-status-page@hai-gcp-models.iam.gserviceaccount.com --parent "$parent"
+pulumi import gcp:cloudrunv2/service:Service service \
+  projects/hai-gcp-models/locations/us-central1/services/marin-infra-dashboard --parent "$parent"
+```
 
 ## Caching
 

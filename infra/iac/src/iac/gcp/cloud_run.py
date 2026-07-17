@@ -29,6 +29,21 @@ IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gser
 
 
 @dataclass(frozen=True)
+class SecretEnv:
+    """A Secret Manager secret exposed to the container as an environment variable.
+
+    ``name`` is the variable the container reads; ``secret`` is the Secret Manager secret id
+    in the service's project; ``version`` is the version to mount ("latest" or a number). The
+    component grants the runtime service account roles/secretmanager.secretAccessor on the
+    secret — it references the secret, and never creates it or holds its value.
+    """
+
+    name: str
+    secret: str
+    version: str = "latest"
+
+
+@dataclass(frozen=True)
 class CloudRunServiceArgs:
     project: str
     region: str
@@ -61,9 +76,18 @@ class CloudRunServiceArgs:
     network: str = "default"
     subnet: str = "default"
 
+    # Runtime service-account id. Defaults to service_name. Override to keep an existing
+    # account: GCP cannot rename a service account in place, so a service whose account was
+    # created under a different name pins that name here rather than orphaning it.
+    service_account_id: str | None = None
+
     # Project roles granted to the runtime service account (e.g. roles/compute.viewer for
     # a service that lists VM internal IPs).
     service_account_roles: tuple[str, ...] = ()
+    # Secret Manager secrets mounted as container env vars. Each grants the runtime service
+    # account roles/secretmanager.secretAccessor on its secret; the component references the
+    # secret and never creates it or holds its value.
+    secrets: tuple[SecretEnv, ...] = ()
     # People admitted through IAP. Each entry is a bare email ("alice@x.com"), a domain
     # wildcard ("*@openathena.ai"), or an already-qualified IAM member ("group:eng@x.com").
     # Each grant is its own resource, so re-running with a changed list updates only the
@@ -125,7 +149,7 @@ class CloudRunService(pulumi.ComponentResource):
 
         service_account = gcp.serviceaccount.Account(
             "sa",
-            account_id=args.service_name,
+            account_id=args.service_account_id or args.service_name,
             project=args.project,
             display_name=f"{args.service_name} (Cloud Run)",
             opts=child,
@@ -136,6 +160,15 @@ class CloudRunService(pulumi.ComponentResource):
                 f"sa-{_role_slug(role)}",
                 project=args.project,
                 role=role,
+                member=member,
+                opts=child,
+            )
+        for secret_env in args.secrets:
+            gcp.secretmanager.SecretIamMember(
+                f"secret-{_member_slug(secret_env.secret)}",
+                project=args.project,
+                secret_id=secret_env.secret,
+                role="roles/secretmanager.secretAccessor",
                 member=member,
                 opts=child,
             )
@@ -197,6 +230,18 @@ class CloudRunService(pulumi.ComponentResource):
                         envs=[
                             gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(name=key, value=value)
                             for key, value in args.env.items()
+                        ]
+                        + [
+                            gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
+                                name=secret_env.name,
+                                value_source=gcp.cloudrunv2.ServiceTemplateContainerEnvValueSourceArgs(
+                                    secret_key_ref=gcp.cloudrunv2.ServiceTemplateContainerEnvValueSourceSecretKeyRefArgs(
+                                        secret=secret_env.secret,
+                                        version=secret_env.version,
+                                    )
+                                ),
+                            )
+                            for secret_env in args.secrets
                         ],
                         resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
                             limits={"cpu": args.cpu, "memory": args.memory},

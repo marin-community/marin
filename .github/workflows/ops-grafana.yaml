@@ -1,17 +1,16 @@
-name: "Ops - Infra Dashboard"
+name: "Ops - Grafana"
 on:
   push:
     branches:
       - main
     paths:
-      - 'infra/status-page/**'
-      - '.github/workflows/ops-infra-dashboard.yaml'
+      - 'infra/grafana/**'
+      - '.github/workflows/ops-grafana.yaml'
   pull_request:
     paths:
-      - 'infra/status-page/**'
-      - '.github/workflows/ops-infra-dashboard.yaml'
+      - 'infra/grafana/**'
+      - '.github/workflows/ops-grafana.yaml'
   workflow_dispatch:
-
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -21,42 +20,29 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: infra/status-page
+        working-directory: infra/grafana
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: infra/status-page/package-lock.json
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
+      - name: Bridge unit tests
+        run: uv run pytest
 
   deploy:
-    needs: build
+    needs: test
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: marin-infra-dashboard-deploy
+      group: marin-grafana-deploy
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -65,7 +51,7 @@ jobs:
       - name: Roll the Cloud Run service
         uses: ./.github/actions/pulumi-deploy
         with:
-          stack: marin-infra-dashboard
-          work-dir: infra/status-page
+          stack: marin-grafana
+          work-dir: infra/grafana
           gcp-credentials: ${{ secrets.MARIN_CD_CLOUD_RUN_SA_KEY }}
           gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}
