@@ -811,6 +811,9 @@ class ScaledGroupedGemmKernel:
         )
 
         # =================================================================
+        # Vendored (marin), temporary debug: trace-time pointer diagnostics.
+        print(f"[mxfp8-dbg] host-side workspace.iterator: {workspace.iterator}")
+
         # Step 7: Launch desc_init_kernel (if separate_tensormap_init)
         # =================================================================
 
@@ -1266,6 +1269,9 @@ class ScaledGroupedGemmKernel:
         Backbone: torch_grouped_mm.py (7-warp MoE scheduler structure)
         GEMM internals: dense_blockscaled_gemm_persistent.py
         """
+        # Vendored (marin), temporary debug: trace-time pointer diagnostics.
+        print(f"[mxfp8-dbg] kernel-body workspace_ptr: {workspace_ptr}")
+
         # =================================================================
         # Reconstruct objects that can't be passed as kernel params
         # =================================================================

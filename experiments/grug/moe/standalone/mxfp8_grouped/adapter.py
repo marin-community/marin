@@ -204,6 +204,9 @@ def _build_launcher(
             mOut: cute.Tensor,
             mWs: cute.Tensor,
         ):
+            # Temporary debug: trace-time pointer diagnostics.
+            print(f"[mxfp8-dbg] launcher mWs.iterator: {mWs.iterator}")
+            print(f"[mxfp8-dbg] launcher mA.iterator: {mA.iterator}")
             kernel = ScaledGroupedGemmKernel(
                 scenario="2Dx3D",
                 sf_vec_size=SF_VEC_SIZE,
