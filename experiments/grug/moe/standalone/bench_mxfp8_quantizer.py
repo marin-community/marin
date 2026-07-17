@@ -36,6 +36,7 @@ import jax.numpy as jnp
 import numpy as np
 from mxfp8_grouped.adapter import (
     dual_quantize_activation,
+    e8m0_to_f32,
     sf_wgrad_col_layout,
     sfa_row_gather_indices,
 )
@@ -141,6 +142,17 @@ def check_case(x, group_sizes: list[int], what: str) -> int:
 
 def run_correctness(tokens: int):
     print("== correctness (bit-exact vs adapter.dual_quantize_activation) ==", flush=True)
+    # GPU exp2 exactness probe: the original e8m0_to_f32 used jnp.exp2, whose
+    # GPU lowering can be 1 ulp off an exact power of two (suspected cause of
+    # the g10 tie-rounding mismatches). Report which exponent bytes differ.
+    got = jnp.exp2(jnp.arange(256, dtype=jnp.float32) - 127.0)
+    exact = e8m0_to_f32(jnp.arange(256, dtype=jnp.uint8))
+    bad_bits = np.asarray(jax.lax.bitcast_convert_type(got, jnp.uint32))
+    exact_bits = np.asarray(jax.lax.bitcast_convert_type(exact, jnp.uint32))
+    bad = np.nonzero(bad_bits != exact_bits)[0]
+    print(f"  gpu exp2 vs exact e8m0 decode: {len(bad)} bytes differ: {bad[:16]}", flush=True)
+    for b in bad[:4]:
+        print(f"    byte {b}: exp2 0x{bad_bits[b]:08x} exact 0x{exact_bits[b]:08x}", flush=True)
     key = jax.random.PRNGKey(0)
     m_small = 8192
     failures = 0

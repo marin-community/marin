@@ -45,7 +45,6 @@ from cutlass._mlir.dialects import llvm
 
 from .adapter import (
     _BLACKWELL_CUTE_ARCH,
-    E4M3_MAX,
     SF_VEC_SIZE,
     _as_gmem_tensor,
     build_sf_wgrad_fast,
@@ -110,16 +109,29 @@ def _store_ssa_as_e4m3(q_ssa, frag):
 
 
 def _e8m0_round_up(amax):
-    """Exact ``cast_to_e8m0_with_rounding_up(amax / 448)`` bit-twiddle (Int32)."""
-    t = amax / cutlass.Float32(E4M3_MAX)
-    # Clear the sign bit: amax can be -0.0 for all-(+/-)0 blocks (the where
-    # based abs keeps -0.0), and an arithmetic >> would smear its sign into
-    # the exponent byte. abs(-0.0) == +0.0 must yield scale byte 0.
-    u = t.bitcast(cutlass.Int32) & 0x7FFFFFFF
-    exp = (u >> 23) & 0xFF
-    mant = u & 0x7FFFFF
-    is_ru = (mant > 0) & (exp != 0xFE) & ((exp != 0) | (mant > 0x400000))
-    return exp + is_ru.to(cutlass.Int32)
+    """Integer-exact e8m0 round-up cast (Int32 byte value).
+
+    Matches ``cast_to_e8m0_with_rounding_up(amax / 448)`` bit-for-bit for
+    every amax with bf16 mantissa granularity -- exhaustively validated
+    against the f32-division reference on all 32640 finite ``|bf16|`` values
+    (block amaxes of bf16 inputs are always such values). Integer-only: the
+    division cost 16 FDIV sequences per thread in the first cut. The sign
+    mask canonicalizes the -0.0 amax of an all-(+/-)0 block to byte 0.
+    Finite inputs only (inf amax is out of contract).
+    """
+    u = amax.bitcast(cutlass.Int32) & 0x7FFFFFFF
+    exp_a = u >> 23
+    m23 = u & 0x7FFFFF
+    # t = amax/448 = (1.m / 1.75) * 2^(exp_a - 127 - 8): the ratio is in
+    # (0.571, 1.143], so t's biased exponent is exp_a - 9 (+1 when 1.m >=
+    # 1.75), and the round-up adds 1 except when the ratio is exactly 1.
+    base = exp_a - 9 + (m23 >= 0x600000).to(cutlass.Int32)
+    e_norm = base + 1 - (m23 == 0x600000).to(cutlass.Int32)
+    # base < 1: t is subnormal; it rounds to scale byte 0 or 1 with the cut
+    # between amax bits 0x04600000 and 0x04610000 (bf16-granular amax).
+    is_sub = (base < 1).to(cutlass.Int32)
+    e_sub = (u > 0x04600000).to(cutlass.Int32)
+    return is_sub * e_sub + (1 - is_sub) * e_norm
 
 
 def _dual_quantize_launcher():
@@ -169,20 +181,26 @@ def _dual_quantize_launcher():
             frag_x = cute.make_fragment_like(gX)
             cute.autovec_copy(gX, frag_x)
             xf = frag_x.load().to(cutlass.Float32)
-            # abs via select: cute.absf lowers to a libdevice __nv_fabsf call
-            # that the pod-side FFI NVVM compile cannot link (job 002c-g1).
-            # -0.0 may leak through (handled in _e8m0_round_up).
-            ax = cute.where(xf < cutlass.Float32(0.0), -xf, xf)
 
             # ---- 32-block amaxes for both orientations ---------------------
-            # In-thread partials: per-row max over the 8 owned columns, and
-            # per-column max over the 8 owned rows.
-            rp = ax.reduce(cute.ReductionOp.MAX, 0.0, (None, 1))  # (8 rows,)
-            cp = ax.reduce(cute.ReductionOp.MAX, 0.0, (1, None))  # (8 cols,)
-            r_amax = cute.make_fragment(_THR_TILE, cutlass.Float32)
-            r_amax.store(rp)
-            c_amax = cute.make_fragment(_THR_TILE, cutlass.Float32)
-            c_amax.store(cp)
+            # amax = max(max(x), -min(x)) instead of an elementwise abs: the
+            # select-based abs cost 3 PTX ops/element (cute.absf is a
+            # libdevice call the pod NVVM cannot link, job 002c-g1); paired
+            # max/min reduces amortize to ~2 ops/element. 0.0 init is safe
+            # (amax >= 0), and a -0.0 amax from an all-(+/-)0 block is
+            # canonicalized in _e8m0_round_up.
+            rmax = xf.reduce(cute.ReductionOp.MAX, 0.0, (None, 1))  # (8 rows,)
+            rmin = xf.reduce(cute.ReductionOp.MIN, 0.0, (None, 1))
+            cmax = xf.reduce(cute.ReductionOp.MAX, 0.0, (1, None))  # (8 cols,)
+            cmin = xf.reduce(cute.ReductionOp.MIN, 0.0, (1, None))
+            r_hi = cute.make_fragment(_THR_TILE, cutlass.Float32)
+            r_hi.store(rmax)
+            r_lo = cute.make_fragment(_THR_TILE, cutlass.Float32)
+            r_lo.store(rmin)
+            c_hi = cute.make_fragment(_THR_TILE, cutlass.Float32)
+            c_hi.store(cmax)
+            c_lo = cute.make_fragment(_THR_TILE, cutlass.Float32)
+            c_lo.store(cmin)
 
             # ---- shuffle-combine + e8m0 round-up + exact inverses ----------
             # Rowwise 32-col block spans the 4 column-adjacent lanes (lane =
@@ -194,28 +212,24 @@ def _dual_quantize_launcher():
             inv_r = cute.make_fragment(_THR_TILE, cutlass.Float32)
             inv_c = cute.make_fragment(_THR_TILE, cutlass.Float32)
             for i in cutlass.range_constexpr(_THR_TILE):
-                e_r = _e8m0_round_up(_group_max(r_amax[i], (1, 2)))
+                e_r = _e8m0_round_up(_group_max(cute.arch.fmax(r_hi[i], -r_lo[i]), (1, 2)))
                 sr_b[i] = e_r.to(cutlass.Uint8)
                 inv_r[i] = ((254 - e_r) << 23).bitcast(cutlass.Float32)
-                e_c = _e8m0_round_up(_group_max(c_amax[i], (8, 16)))
+                e_c = _e8m0_round_up(_group_max(cute.arch.fmax(c_hi[i], -c_lo[i]), (8, 16)))
                 sc_b[i] = e_c.to(cutlass.Uint8)
                 inv_c[i] = ((254 - e_c) << 23).bitcast(cutlass.Float32)
 
-            # ---- rescale + clip + fp8 casts, all from registers ------------
-            maxv = cutlass.Float32(E4M3_MAX)
-            minv = cutlass.Float32(-E4M3_MAX)
-
+            # ---- rescale + fp8 casts, all from registers -------------------
+            # No explicit clip: cvt.rn.satfinite saturates to +-448, which is
+            # bit-identical to the reference's clip-then-convert for finite
+            # values (and q <= 448 mathematically by the round-up scale).
             qr = xf * inv_r.load().reshape((_THR_TILE, 1)).broadcast_to((_THR_TILE, _THR_TILE))
-            qr = cute.where(qr > maxv, maxv, qr)
-            qr = cute.where(qr < minv, minv, qr)
             gQr = cute.local_tile(mQr, (_THR_TILE, _THR_TILE), (row_blk, col_blk))
             frag_qr = cute.make_fragment_like(gQr)
             _store_ssa_as_e4m3(qr, frag_qr)
             cute.autovec_copy(frag_qr, gQr)
 
             qc = xf * inv_c.load().reshape((1, _THR_TILE)).broadcast_to((_THR_TILE, _THR_TILE))
-            qc = cute.where(qc > maxv, maxv, qc)
-            qc = cute.where(qc < minv, minv, qc)
             gQc = cute.local_tile(mQc, (_THR_TILE, _THR_TILE), (row_blk, col_blk))
             frag_qc = cute.make_fragment_like(gQc)
             _store_ssa_as_e4m3(qc, frag_qc)

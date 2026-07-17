@@ -98,7 +98,18 @@ def cast_to_e8m0_with_rounding_up(x):
 
 
 def e8m0_to_f32(scale_u8):
-    return jnp.exp2(scale_u8.astype(jnp.float32) - 127.0)
+    """Exact e8m0 decode: bit-construct ``2^(e - 127)`` (byte 0 -> subnormal 2^-127).
+
+    NOT ``jnp.exp2``: on GPU that lowers to the approximate ``ex2`` path, which
+    can be 1 ulp off the exact power of two at extreme exponents. An inexact
+    scale silently perturbs tie-rounding in ``quantize_mxfp8`` (observed on
+    GB200: adversarial denormal/huge blocks rounded ties away instead of RTNE,
+    job mxfp8-002c-g10), while the grouped GEMM hardware applies the EXACT
+    e8m0 scale -- the bit-exact decode is the semantically correct reference.
+    """
+    e = scale_u8.astype(jnp.uint32)
+    bits = jnp.where(e == 0, jnp.uint32(0x00400000), e << 23)
+    return jax.lax.bitcast_convert_type(bits, jnp.float32)
 
 
 def quantize_mxfp8(x):
