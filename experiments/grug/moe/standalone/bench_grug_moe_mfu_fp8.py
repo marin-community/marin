@@ -16,6 +16,7 @@ there is no use_array_stacked_blocks knob on this branch.
 import argparse
 import json
 import time
+import traceback
 from pathlib import Path
 
 import jax
@@ -77,6 +78,17 @@ def _parse():
         help="grouped-GEMM recipe: per_tensor (Hopper Fp8RaggedDotOp) or mxfp8 (Blackwell fused kernels)",
     )
     p.add_argument("--mxfp8-producer", default="auto", choices=["auto", "cute", "xla"])
+    p.add_argument(
+        "--mxfp8-save-qweights",
+        action="store_true",
+        help="with --fp8-recipe mxfp8: save fwd-orientation weight quantize across the remat recompute",
+    )
+    p.add_argument(
+        "--profile-steps",
+        type=int,
+        default=0,
+        help="after the timed steps, trace this many extra steps with jax.profiler and print a phase breakdown",
+    )
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--warmup-steps", type=int, default=8)
     p.add_argument("--batch-size", type=int, default=128)
@@ -111,6 +123,7 @@ def main():
             grouped=not a.no_fp8_grouped,
             recipe=a.fp8_recipe,
             mxfp8_producer=a.mxfp8_producer,
+            mxfp8_save_qweights=a.mxfp8_save_qweights,
         )
     model = GrugModelConfig(
         vocab_size=128256,
@@ -169,6 +182,19 @@ def main():
             }
             metrics.append(m)
             print(json.dumps(m, sort_keys=True), flush=True)
+        if a.profile_steps > 0:
+            prof_dir = out / "profiler"
+            with jax.profiler.trace(str(prof_dir)):
+                for step in range(a.steps, a.steps + a.profile_steps):
+                    batch = _make_batch(a.batch_size, a.seq_len, model.vocab_size, step, mesh)
+                    state, sm, _w = train_step(state, batch, compute_watch=False)
+                    jax.block_until_ready(sm["train/loss"])
+            try:
+                from trace_phases import analyze  # noqa: PLC0415 (sibling module, GPU-job only)
+
+                analyze(prof_dir, steps=a.profile_steps, num_gpus=a.num_gpus)
+            except Exception:  # trace parsing must not lose the MFU result
+                traceback.print_exc()
     steady = [m for m in metrics if m["step"] >= a.warmup_steps]
 
     def med(xs):

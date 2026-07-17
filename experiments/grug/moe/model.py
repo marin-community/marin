@@ -51,7 +51,7 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
-from experiments.grug.moe.mxfp8 import MxFp8MoeMlpOp
+from experiments.grug.moe.mxfp8 import MXFP8_QWEIGHT_CHECKPOINT_NAME, MxFp8MoeMlpOp
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
@@ -146,6 +146,11 @@ class GrugFp8Config:
     grouped: bool = True
     recipe: Literal["per_tensor", "mxfp8"] = "per_tensor"
     mxfp8_producer: Literal["auto", "cute", "xla"] = "auto"
+    # Save the fwd-orientation MXFP8 weight copies across the remat recompute
+    # (weights change once per step; full remat otherwise re-quantizes them in
+    # bwd). Bit-identical numerics; costs fp8 copies of the local expert
+    # weights held across the backward pass.
+    mxfp8_save_qweights: bool = False
     amax_history_length: int = 1024
 
     def __post_init__(self) -> None:
@@ -938,10 +943,10 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
-        if cfg.remat_mode == "save_moe":
-            remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
-        else:
-            remat_policy = None
+        save_names: tuple[str, ...] = MOE_REMAT_SAVE_NAMES if cfg.remat_mode == "save_moe" else ()
+        if cfg.fp8 is not None and cfg.fp8.recipe == "mxfp8" and cfg.fp8.mxfp8_save_qweights:
+            save_names = (*save_names, MXFP8_QWEIGHT_CHECKPOINT_NAME)
+        remat_policy = jax.checkpoint_policies.save_only_these_names(*save_names) if save_names else None
 
         num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []

@@ -59,6 +59,7 @@ from typing import Literal, NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+from haliax.jax_utils import tree_checkpoint_name
 
 _STANDALONE_DIR = Path(__file__).resolve().parent / "standalone"
 if str(_STANDALONE_DIR) not in sys.path:
@@ -76,6 +77,14 @@ from mxfp8_grouped.quantize import (  # noqa: E402
 GROUP_PAD = 256
 # gate/up column interleave block width of the fused SwiGLU epilogue.
 _GATE_UP_BLK = 32
+
+# Checkpoint name on the fwd-orientation quantized weight copies (+ swizzled
+# SFs). Weights change once per train step, but under full remat the forward
+# pipeline runs twice (primal + recompute), re-quantizing them. A remat policy
+# that saves this name (GrugFp8Config.mxfp8_save_qweights) computes the fwd
+# weight quantize + w13 interleave once per step; numerics are bit-identical
+# either way. Costs ~fp8 copies of the local expert weights across the bwd.
+MXFP8_QWEIGHT_CHECKPOINT_NAME = "grug_moe_mxfp8_qweights"
 
 # Tiler winners from the MXFP8-004a g6/g8 ablations (jobs mxfp8-004a-g6..g11).
 _SWIGLU_TILER = ((256, 256), (2, 1))
@@ -326,6 +335,9 @@ def _forward_pipeline(op: "MxFp8MoeMlpOp", x, w13, w2, group_sizes) -> dict:
     sfb13f = build_sfb_fast(s13f)
     w2f_q, s2f = quantize_mxfp8(jnp.swapaxes(w2, 1, 2))  # (E, D, F) along F: fwd-w2 B operand
     sfb2f = build_sfb_fast(s2f)
+    # Tag unconditionally; whether the copies are saved across the remat
+    # recompute is the remat policy's decision (MXFP8_QWEIGHT_CHECKPOINT_NAME).
+    w13i_q, sfb13f, w2f_q, sfb2f = tree_checkpoint_name((w13i_q, sfb13f, w2f_q, sfb2f), MXFP8_QWEIGHT_CHECKPOINT_NAME)
 
     c13, h, h_col, sfh_row, sfh_col = fused.mxfp8_fused_swiglu(
         x_q, x_sf, w13i_q, sfb13f, layout.offs, mma_tiler_mn=_SWIGLU_TILER[0], cluster_shape_mn=_SWIGLU_TILER[1]
