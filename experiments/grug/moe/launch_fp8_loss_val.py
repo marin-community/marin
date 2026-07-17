@@ -28,6 +28,10 @@ Env knobs:
     FP8VAL_GPU_REPLICAS  8xH100 nodes per arm (default 4)
     FP8VAL_EXPERT_AXIS   expert-parallel axis size (default 8)
     FP8VAL_TRACKER       wandb (default; needs WANDB_API_KEY) | json_logger
+    FP8VAL_CHECKPOINTS   s3 (default: periodic saves under output_path) |
+                         local (node-local disposable, no periodic saves —
+                         avoids the async-save-vs-collectives hazard for
+                         throwaway validation runs)
     RUN_ID               unique run identifier (also the W&B run name)
 """
 
@@ -35,6 +39,7 @@ import datetime
 import os
 
 from fray.cluster import ResourceConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -121,6 +126,19 @@ def build_val_checkpoint(*, version: str | None = None) -> ArtifactStep[Levanter
     batch_size = env_int("FP8VAL_BATCH", 128)
     steps = env_int("FP8VAL_STEPS", 11000)
 
+    checkpoint_mode = os.environ.get("FP8VAL_CHECKPOINTS", "s3").lower()
+    if checkpoint_mode == "local":
+        checkpointer = CheckpointerConfig(
+            base_path=f"/tmp/fp8val-ckpt/{run_id}",
+            append_run_id_to_base_path=False,
+            save_interval=None,
+            keep=None,
+        )
+    elif checkpoint_mode == "s3":
+        checkpointer = None
+    else:
+        raise ValueError(f"FP8VAL_CHECKPOINTS={checkpoint_mode!r} must be 's3' or 'local'")
+
     model = build_val_model()
     data_axis = (replicas * GPUS_PER_NODE) // expert_axis
     batch_shards = data_axis * expert_axis
@@ -151,6 +169,7 @@ def build_val_checkpoint(*, version: str | None = None) -> ArtifactStep[Levanter
                 log_every=1,
             ),
             eval=None,
+            checkpointer=checkpointer,
         )
 
     step_name = f"{OUTPUT_SUBDIR}/fp8val-{arm}-{run_id}"
