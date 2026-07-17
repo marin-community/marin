@@ -673,3 +673,17 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   instant finish. Same pattern as the zephyr lost-report gotcha; kick is the cheap unwedge.
 - Deliverables: `grug/sample_size_sensitivity.{md,json}`, `report/figs3/f15_sample_size.png`
   (+ manifest3), builder `report/build_f15.py`. No commits/posts (per directive).
+
+## 2026-07-17 cross-reference: issue #2846 (two-domain two-phase study) vs our landscapes
+
+- rav pointed at #2846's graphs (Calvin's minimal 2-domain 2-phase sweep + model zoo). Measured
+  U-curve: programming bpb vs phase-1 starcoder weight has its MINIMUM at 3.7 epochs, steep harm
+  past ~6-8 — empirically vindicates the 4-epoch cap and matches f18's saturating branch where
+  supports overlap. The harm regime is real and kernel-invisible (mean reversion) → caps carry
+  the load, as designed.
+- Model zoo: linear/loglinear/BiMix/Cobb-Douglas predict corner nonsense; only saturating/
+  entropy forms find the optimum; universal optimistic bias at proposals (= H3's winner's curse,
+  zoo-wide). Mirrors our DSP-vs-kernel outcome from the parametric side.
+- Sharpening adopted: r_δ (monotone) cannot express negative utility past ~6 epochs (their
+  measured regime); free-sign hinge required for any high-epoch modeling. f18 rev to adopt
+  their epochs-top-axis convention; cite #2846 in the report's epoching section.
