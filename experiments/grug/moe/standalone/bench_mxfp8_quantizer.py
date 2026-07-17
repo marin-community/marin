@@ -67,11 +67,22 @@ def as_u8(x):
     return jax.lax.bitcast_convert_type(x, jnp.uint8)
 
 
-def assert_bit_equal(a, b, what: str):
+def check_bit_equal(a, b, what: str, x=None) -> int:
+    """Byte-compare; on mismatch print sample diagnostics and return the count."""
     ua, ub = as_u8(a), as_u8(b)
     assert ua.shape == ub.shape, f"{what}: shape {ua.shape} vs {ub.shape}"
     n_diff = int(jnp.sum(ua != ub))
-    assert n_diff == 0, f"{what}: {n_diff}/{ua.size} bytes differ"
+    if n_diff:
+        print(f"  MISMATCH {what}: {n_diff}/{ua.size} bytes differ", flush=True)
+        idx = np.argwhere(np.asarray(ua != ub))[:8]
+        for loc in idx:
+            loc_t = tuple(int(v) for v in loc)
+            extra = ""
+            if x is not None and len(loc_t) == 2 and x.shape == ua.shape:
+                xv = x[loc_t]
+                extra = f" x={float(xv):.6g} (0x{int(np.asarray(xv).view(np.uint16)):04x})"
+            print(f"    at {loc_t}: got 0x{int(ua[loc_t]):02x} ref 0x{int(ub[loc_t]):02x}{extra}", flush=True)
+    return n_diff
 
 
 def uniform_groups(m: int) -> list[int]:
@@ -114,30 +125,34 @@ def adversarial_input(m: int, k: int, seed: int = 3) -> jnp.ndarray:
     return jnp.asarray(x, dtype=jnp.bfloat16)
 
 
-def check_case(x, group_sizes: list[int], what: str):
+def check_case(x, group_sizes: list[int], what: str) -> int:
     m, dim = x.shape
     row_idx = jnp.asarray(sfa_row_gather_indices(group_sizes))
     col_idx_np, perm_np = sf_wgrad_col_layout(group_sizes, dim)
     col_idx, perm = jnp.asarray(col_idx_np), jnp.asarray(perm_np)
     ref = jax.jit(lambda t: dual_quantize_activation(t, row_idx, col_idx, perm))(x)
     got = jax.jit(lambda t: dual_quantize_activation_cute(t, row_idx, col_idx, perm))(x)
+    total = 0
     for name, a, b in zip(("q_row", "sf_row", "q_col", "sf_col"), got, ref, strict=True):
-        assert_bit_equal(a, b, f"{what} {name}")
-    print(f"  BIT-EXACT: {what} ({m}x{dim})", flush=True)
+        total += check_bit_equal(a, b, f"{what} {name}", x=x if name.startswith("q") else None)
+    print(f"  {'BIT-EXACT' if total == 0 else 'FAILED'}: {what} ({m}x{dim})", flush=True)
+    return total
 
 
 def run_correctness(tokens: int):
     print("== correctness (bit-exact vs adapter.dual_quantize_activation) ==", flush=True)
     key = jax.random.PRNGKey(0)
     m_small = 8192
+    failures = 0
     for dim in DIMS:
         x = jax.random.normal(key, (m_small, dim), dtype=jnp.bfloat16)
-        check_case(x, uniform_groups(m_small), f"small normal d{dim}")
-        check_case(adversarial_input(m_small, dim), uniform_groups(m_small), f"small adversarial d{dim}")
+        failures += check_case(x, uniform_groups(m_small), f"small normal d{dim}")
+        failures += check_case(adversarial_input(m_small, dim), uniform_groups(m_small), f"small adversarial d{dim}")
     for dim in DIMS:
         x = jax.random.normal(jax.random.fold_in(key, dim), (tokens, dim), dtype=jnp.bfloat16)
-        check_case(x, uniform_groups(tokens), f"full normal uniform d{dim}")
-        check_case(x, skewed_groups(tokens), f"full normal skewed d{dim}")
+        failures += check_case(x, uniform_groups(tokens), f"full normal uniform d{dim}")
+        failures += check_case(x, skewed_groups(tokens), f"full normal skewed d{dim}")
+    return failures
 
 
 def run_bench(tokens: int, iters: int, warmup: int) -> dict:
@@ -216,11 +231,13 @@ def main():
         flush=True,
     )
 
+    failures = 0
     if not a.skip_correctness:
-        run_correctness(a.tokens)
+        failures = run_correctness(a.tokens)
     bench = run_bench(a.tokens, a.iters, a.warmup)
     quad = quad_summary(bench)
     print("\nRESULTS_JSON " + json.dumps({"bench": bench, "quad": quad}), flush=True)
+    assert failures == 0, f"correctness: {failures} mismatched bytes across cases"
 
 
 if __name__ == "__main__":
