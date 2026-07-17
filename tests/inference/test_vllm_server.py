@@ -13,6 +13,7 @@ severity, and tears down cleanly.
 import os
 import subprocess
 import sys
+import time
 
 from marin.inference.vllm_server import VllmServerHandle, _LogPump, _native_logs_tail
 
@@ -80,8 +81,10 @@ def test_native_logs_tail_sees_final_lines_after_join(tmp_path):
     pump.close()
 
 
-def test_handle_stop_is_idempotent_and_closes_logs(tmp_path):
-    proc = _spawn("import time; time.sleep(30)", start_new_session=True)
+def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
+    # The child logs a line, then blocks; stop() must terminate it, drain that line to the
+    # on-disk log, and be safe to call again.
+    proc = _spawn("import sys, time; print('SERVE_READY'); sys.stdout.flush(); time.sleep(30)", start_new_session=True)
     pump = _LogPump(proc, str(tmp_path / "stdout.log"), str(tmp_path / "stderr.log"))
     pump.start()
     try:
@@ -97,8 +100,17 @@ def test_handle_stop_is_idempotent_and_closes_logs(tmp_path):
         log_pump=pump,
     )
 
+    # Wait until the child has started Python and its line is pumped to disk, so teardown below
+    # is deterministic rather than racing the child's startup.
+    deadline = time.monotonic() + 10
+    while "SERVE_READY" not in _native_logs_tail(str(tmp_path)):
+        if time.monotonic() > deadline:
+            raise AssertionError("child never logged SERVE_READY")
+        time.sleep(0.05)
+
     handle.stop(timeout_seconds=5)
     assert proc.poll() is not None  # terminated
-    assert pump._stdout_file.closed and pump._stderr_file.closed
+    # Teardown flushed and closed the on-disk logs, so the tail still reads the child's output.
+    assert "SERVE_READY" in _native_logs_tail(str(tmp_path))
 
     handle.stop(timeout_seconds=5)  # second call must not raise
