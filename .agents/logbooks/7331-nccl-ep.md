@@ -201,3 +201,27 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   imports on the goal platform, single-stack with the bench baselines.
 - Next: NCCLEP-003 single-node 4-proc TE EP test-suite smoke (in flight),
   then the EP4/EP8 transport microbenches.
+
+### 2026-07-17 — NCCLEP-003 (in flight): single-node TE EP test-suite smoke — two runtime discoveries
+- Smoke 1 (`/mwittmann/ncclep-smoke`): `OSError: libcublas.so.12` at
+  `import transformer_engine`. Root cause: the gpu venv also carries **cu12**
+  wheels (torch+cu128 deps) under `nvidia/<pkg>/`; the build's include/lib merge
+  swept them in and the unversioned-symlink pass (sorted, `.so.12` < `.so.13`)
+  linked TE against cu12 sonames while TE's pip-mode preloader loads cu13.
+  Fixed by merging only `nvidia/cu13` + `cudnn` + `nccl` trees (build 12);
+  smoke now asserts no `.so.12` in TE core's DT_NEEDED (verified clean).
+- Smoke 2 (`/mwittmann/ncclep-smoke2`): all ranks SIGABRT with
+  `<command-line>: fatal error: cuda_runtime.h: No such file or directory`.
+  **NCCL_EP JIT-compiles its device kernels at bootstrap** (hybridep JIT via an
+  external nvcc): runtime needs nvcc + CUDA headers + the generated JIT header
+  tree (`build/include/nccl_ep/`), none of which the wheel packages — the
+  compile-time default paths point into the (gone) build tree. Source-read of
+  `contrib/nccl_ep/device/jit/`: env knobs `NCCL_EP_JIT_NVCC`/`NVCC`/
+  `$CUDA_HOME/bin/nvcc`; `NCCL_EP_JIT_SOURCE_DIR`, `NCCL_EP_JIT_BUILD_INCLUDE_DIR`,
+  `NCCL_EP_JIT_CUDA_INCLUDE_DIR` (falls back to `$CUDA_HOME/include`),
+  `NCCL_EP_JIT_LOG=1` for visibility. Fix: `cuda_wheels_env.sh` (shared
+  build/runtime toolchain synthesis) + build job stashes
+  `nccl-ep-jit-headers.tgz`; launchers download and export the JIT env.
+  Implication for all future NCCL_EP jobs: **every rank's pod needs the JIT
+  toolchain env**, and first-bootstrap latency includes an nvcc compile
+  (cached under the JIT cache dir afterward).
