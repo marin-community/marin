@@ -54,10 +54,10 @@ author: mcwitt
 - `MXFP8-H2` (GEMM-level CONFIRMED for all three products, MXFP8-002/002b:
   fwd 2130/2027, dgrad 2041/2112, wgrad 2209/2214 TF/s w13/w2 — ~1.4-1.5x vs
   bf16; errors 3e-6..1e-5): the LAYER-level verdict now hangs entirely on H5.
-- `MXFP8-H3`: MXFP8 quantization is stateless (per-block scales computed on
-  the fly, no amax history), so the ops need none of the
-  `OverwriteWithGradient` train-step machinery — strictly simpler than the
-  per-tensor path. Next test: falls out of MXFP8-003 wiring.
+- `MXFP8-H3` (CONFIRMED, MXFP8-004c @ af2110ac5): the op is fully stateless —
+  threaded as a static shard_map closure, no OverwriteWithGradient, no pmax
+  cotangent, no optimizer/EMA special-casing. e2e smoke green, loss tracks
+  bf16 to ~2e-3/step.
 - `MXFP8-H4`: the FP8 wire (per-token scaling, permutation legs only) carries
   over to B200/GB200 unchanged. Next test: enable during MXFP8-003 smoke.
 - `MXFP8-H5` (RESOLVED: fusion is the only route, and it's importable): the
