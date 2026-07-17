@@ -41,6 +41,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from iris.client import iris_ctx
 from iris.cluster.constraints import region_constraint
@@ -78,15 +79,22 @@ def _propagated_env(**extra: str) -> dict[str, str]:
     return env
 
 
+class ServeBackend(StrEnum):
+    """Which marin-serve backend serves the model under eval. Both expose the same OpenAI API, so the
+    eval client is identical either way."""
+
+    VLLM = "vllm"
+    LEVANTER = "levanter"
+
+
 @dataclass(frozen=True)
 class ServeSpec:
     """Which backend serves the model under eval, and on what slice.
 
-    ``backend`` is ``"vllm"`` or ``"levanter"``; both expose the same OpenAI API, so the eval client
-    is identical either way. Exactly one of ``tpu_type`` / (``gpu_type``, ``gpu_count``) is set.
+    Exactly one of ``tpu_type`` / (``gpu_type``, ``gpu_count``) is set.
     """
 
-    backend: str = "vllm"
+    backend: ServeBackend = ServeBackend.VLLM
     tpu_type: str | None = "v6e-8"
     gpu_type: str | None = None
     gpu_count: int | None = None
@@ -145,7 +153,7 @@ class _ServeParams:
 
     model: str
     endpoint_name: str
-    backend: str
+    backend: ServeBackend
     tpu_type: str | None
     gpu_type: str | None
     gpu_count: int | None
@@ -173,12 +181,12 @@ def _serve_for_eval(params: _ServeParams) -> None:
     from rigging.log_setup import configure_logging  # noqa: PLC0415  # lazy: only needed in the serve child
 
     configure_logging()
-    if params.backend == "vllm":
+    if params.backend == ServeBackend.VLLM:
         backend = VllmBackend(startup_timeout_seconds=params.startup_timeout_seconds)
-    elif params.backend == "levanter":
+    elif params.backend == ServeBackend.LEVANTER:
         backend = LevanterBackend()
     else:
-        raise ValueError(f"unknown serve backend {params.backend!r}; use 'vllm' or 'levanter'")
+        raise ValueError(f"unknown serve backend {params.backend!r}")
 
     config = QuickServeConfig(
         model=params.model,
@@ -195,9 +203,16 @@ def _serve_for_eval(params: _ServeParams) -> None:
     serve_in_job(config)
 
 
-def _serve_environment(backend: str) -> EnvironmentSpec:
-    """Worker extras for the serve child: vLLM-TPU needs the tpu+vllm build, Levanter only jax."""
-    extras = ("tpu",) if backend == "levanter" else ("tpu", "vllm")
+def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
+    """Worker extras for the serve child, by slice and backend: a GPU slice needs the ``gpu`` build (the
+    JAX/Levanter GPU stack); a vLLM-TPU serve needs the ``tpu``+``vllm`` build; a Levanter-TPU serve
+    needs only jax (the ``tpu`` extra)."""
+    if spec.gpu_count is not None:
+        extras = ("gpu",)
+    elif spec.backend == ServeBackend.LEVANTER:
+        extras = ("tpu",)
+    else:
+        extras = ("tpu", "vllm")
     return EnvironmentSpec(extras=extras, env_vars=_propagated_env())
 
 
@@ -245,7 +260,7 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
         resources=ResourceSpec(
             cpu=spec.serve_cpu, memory=spec.serve_memory, disk=spec.serve_disk, device=_serve_device(spec)
         ),
-        environment=_serve_environment(spec.backend),
+        environment=_serve_environment(spec),
         ports=["http"],
         constraints=constraints,
         max_retries_failure=0,
@@ -290,7 +305,15 @@ _EVAL_CLIENT_SCRIPT = "experiments/evals/evalchemy/run_evalchemy_client.py"
 
 
 def _task_dir(task: EvalTaskConfig) -> str:
-    return f"{task.task_alias or task.name}_{task.num_fewshot}shot"
+    """The per-task upload subdirectory, unique per task-config.
+
+    The alias, when the author set one, is the full identity (they encode shots there when they run one
+    task at several shot counts, e.g. ``hellaswag_0shot`` vs ``hellaswag_10shot``); otherwise it is the
+    task name plus its shot count. Distinct dirs keep shot variants of one task from overwriting each
+    other, since lm-eval keys its own results by the bare task name -- see
+    :class:`~marin.evaluation.eval_result.EvalchemyResult`.
+    """
+    return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
 
 
 def _client_config_json(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) -> str:
@@ -327,6 +350,14 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> None:
     """
     if not config.tasks:
         raise ValueError("serve_and_eval requires at least one task")
+    # The served backend loads the model from any fsspec path (gs://...), but the eval client loads its
+    # tokenizer through HF, which cannot read an object-store path. Fail fast rather than let the eval
+    # child die deep in lm-eval; the caller sets tokenizer to the base model's HF id for a gs:// model.
+    if config.tokenizer is None and "://" in config.model:
+        raise ValueError(
+            f"model {config.model!r} is an object-store path the eval image cannot load a tokenizer "
+            "from; set EvalchemyEvalConfig.tokenizer (EvalGroup.tokenizer) to the base model's HF id."
+        )
     with serve_model(config.model, config.tokenizer or config.model, config.serve) as endpoint:
         _submit_eval_child(config, endpoint)
 
