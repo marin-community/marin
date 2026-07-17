@@ -225,6 +225,30 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
 
 
+def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+    """Replica-local embedding lookup.
+
+    The naive ``token_embed.at[token_ids].get(out_sharding=...)`` emits an all-to-all to lay the
+    gathered rows onto the batch-sharded token axis; because that axis spans ``replica_dcn`` it runs
+    cross-rack and its NCCL first-call rendezvous wedges at 8+ racks. Instead, run the gather under a
+    ``shard_map`` over the batch axes so each shard looks up its own tokens in its (fully replicated)
+    copy of the table -- a purely local op, no collective. Relies on ``Pembed_vocab`` replicating the
+    table across all devices; output hidden is replicated, matching the downstream FFN/attention.
+    """
+
+    def _local(te: jax.Array, ids: jax.Array) -> jax.Array:
+        return te[ids]
+
+    # Pin the (tiny int32) indices to the batch sharding so they match the shard_map in_spec.
+    token_ids = reshard(token_ids, P(_BATCH_AXES, None))
+    return shard_map(
+        _local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(None, None), P(_BATCH_AXES, None)),
+        out_specs=P(_BATCH_AXES, None, None),
+    )(token_embed, token_ids)
+
+
 class GrugMoeHfConfig(HfConfig):
     model_type = GRUG_MOE_MODEL_TYPE
 
@@ -957,9 +981,8 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        hidden = _embedding_gather(self.token_embed, token_ids)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
