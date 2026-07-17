@@ -1,20 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reference: Harbor's hello-world task on Iris sandboxes.
+"""Reference: Harbor's prepackaged hello-world task on Iris sandboxes.
 
 Demonstrates ``marin.harbor.sandbox.iris_sandbox``, the Daytona-style context
 manager for Harbor environments on Iris compute: each sandbox is an Iris job
 running the task's prebuilt ``docker_image``, bin-packed onto spare host CPU
 of cluster workers, and torn down when the context exits.
 
-The task is Harbor's canonical hello-world (write ``hello.txt``, verify its
-contents), inlined below so the reference is self-contained. Each episode
-walks the full Harbor trial shape by hand:
+The task in ``harbor_hello_world/`` is Harbor's own ``examples/tasks/hello-world``,
+vendored verbatim except for the ``[environment]`` build spec: upstream builds a
+Dockerfile that is just ``FROM ubuntu:24.04`` + ``WORKDIR /app``, which the Iris
+backend (prebuilt images only) expresses as ``docker_image`` + ``workdir``.
+Each episode walks the full Harbor trial shape by hand:
 
-  1. start a sandbox from the task directory (``[environment]`` in task.toml)
+  1. start a sandbox from the task directory
   2. agent: upload ``solution/`` and run ``solve.sh``
-  3. verifier: upload ``tests/`` and run ``test.sh``
+  3. verifier: upload ``tests/`` and run ``test.sh`` (installs uv + pytest
+     inside the sandbox, so episodes take a minute or two)
   4. download ``reward.txt``
 
 Episodes fan out with plain ``asyncio.gather`` — one context per sandbox, no
@@ -25,7 +28,6 @@ Iris cluster.
 import asyncio
 import json
 import logging
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,60 +43,9 @@ logger = logging.getLogger(__name__)
 
 CLUSTER = "marin"
 EPISODES = 3
-# Where the verifier writes its score inside the sandbox; test.sh and the
-# downloader below must agree on it.
+TASK_DIR = Path(__file__).parent / "harbor_hello_world"
+# Where the task's test.sh writes its score inside the sandbox.
 REWARD_PATH = "/logs/verifier/reward.txt"
-
-_TASK_TOML = """\
-schema_version = "1.1"
-
-[task]
-name = "marin/hello-world"
-description = "Harbor's hello-world on a prebuilt image."
-authors = []
-keywords = []
-
-[environment]
-docker_image = "python:3.13-slim"
-cpus = 1
-memory_mb = 1024
-storage_mb = 2048
-allow_internet = true
-
-[verifier]
-timeout_sec = 120.0
-
-[agent]
-timeout_sec = 120.0
-"""
-
-_INSTRUCTION = 'Create a file hello.txt in /app containing exactly "Hello, world!".\n'
-
-_SOLVE_SH = """\
-#!/bin/bash
-mkdir -p /app
-echo "Hello, world!" > /app/hello.txt
-"""
-
-_TEST_SH = f"""\
-#!/bin/bash
-mkdir -p {os.path.dirname(REWARD_PATH)}
-if grep -q "Hello, world!" /app/hello.txt; then
-  echo 1 > {REWARD_PATH}
-else
-  echo 0 > {REWARD_PATH}
-fi
-"""
-
-
-def _write_hello_world_task(task_dir: Path) -> None:
-    """Materialize Harbor's hello-world task layout (task.toml, solution/, tests/)."""
-    (task_dir / "solution").mkdir(parents=True)
-    (task_dir / "tests").mkdir(parents=True)
-    (task_dir / "task.toml").write_text(_TASK_TOML)
-    (task_dir / "instruction.md").write_text(_INSTRUCTION)
-    (task_dir / "solution" / "solve.sh").write_text(_SOLVE_SH)
-    (task_dir / "tests" / "test.sh").write_text(_TEST_SH)
 
 
 @dataclass(frozen=True)
@@ -104,14 +55,23 @@ class HelloWorldConfig:
     output_path: str
 
 
-async def _run_episode(task_dir: Path, cluster: str, index: int) -> float:
+async def _run_episode(cluster: str, index: int) -> float:
     """One Harbor trial by hand: agent solves, verifier scores, reward comes back."""
-    async with iris_sandbox(task_dir=task_dir, cluster=cluster, name=f"hello-world-{index}") as sandbox:
-        await sandbox.upload_dir(task_dir / "solution", "/solution")
+    async with iris_sandbox(
+        task_dir=TASK_DIR,
+        cluster=cluster,
+        name=f"hello-world-{index}",
+        # The task's verifier installs packages with apt, which needs setuid;
+        # Iris's default profile drops all capabilities, so opt up. Admin-gated.
+        container_profile="privileged",
+    ) as sandbox:
+        await sandbox.upload_dir(TASK_DIR / "solution", "/solution")
         agent = await sandbox.exec("bash /solution/solve.sh")
         assert agent.return_code == 0, agent
 
-        await sandbox.upload_dir(task_dir / "tests", "/tests")
+        # A real Harbor trial creates the verifier log dir; do the same by hand.
+        await sandbox.ensure_dirs([str(Path(REWARD_PATH).parent)])
+        await sandbox.upload_dir(TASK_DIR / "tests", "/tests")
         verifier = await sandbox.exec("bash /tests/test.sh")
         assert verifier.return_code == 0, verifier
 
@@ -125,11 +85,8 @@ async def _run_episode(task_dir: Path, cluster: str, index: int) -> float:
 
 def run_hello_world(config: HelloWorldConfig) -> None:
     async def run() -> list[float]:
-        with tempfile.TemporaryDirectory(prefix="hello-world-task-") as tmp:
-            task_dir = Path(tmp)
-            _write_hello_world_task(task_dir)
-            episodes = (_run_episode(task_dir, config.cluster, i) for i in range(config.episodes))
-            return list(await asyncio.gather(*episodes))
+        episodes = (_run_episode(config.cluster, i) for i in range(config.episodes))
+        return list(await asyncio.gather(*episodes))
 
     rewards = asyncio.run(run())
     results = {"rewards": rewards, "mean_reward": sum(rewards) / len(rewards)}

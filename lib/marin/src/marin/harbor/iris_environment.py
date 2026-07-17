@@ -48,6 +48,12 @@ DEFAULT_CPUS = 1
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_STORAGE_MB = 10240
 
+_CONTAINER_PROFILES = {
+    "restricted": job_pb2.CONTAINER_PROFILE_RESTRICTED,
+    "default": job_pb2.CONTAINER_PROFILE_DEFAULT,
+    "privileged": job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+}
+
 
 def _owned_by_root(info: tarfile.TarInfo) -> tarfile.TarInfo:
     info.uid = info.gid = 0
@@ -64,6 +70,7 @@ class IrisEnvironment(BaseEnvironment):
         cluster: str | None = None,
         controller_url: str | None = None,
         scheduling_timeout_sec: int | str = DEFAULT_SCHEDULING_TIMEOUT,
+        container_profile: str = "default",
         **kwargs,
     ):
         """
@@ -73,6 +80,10 @@ class IrisEnvironment(BaseEnvironment):
             controller_url: Direct controller URL, bypassing cluster config.
             scheduling_timeout_sec: How long to wait for the sandbox task to
                 be scheduled and reach RUNNING.
+            container_profile: Iris container security profile for the sandbox
+                ("restricted", "default", or "privileged"). The default profile
+                drops all capabilities, so tasks whose commands need setuid
+                (e.g. apt-get) currently require "privileged" (admin-gated).
         """
         super().__init__(*args, **kwargs)
         if (cluster is None) == (controller_url is None):
@@ -80,6 +91,7 @@ class IrisEnvironment(BaseEnvironment):
         self._cluster = cluster
         self._controller_url = controller_url
         self._scheduling_timeout = int(scheduling_timeout_sec)
+        self._container_profile = _CONTAINER_PROFILES[container_profile]
         self._iris: IrisClient | None = None
         self._rpc: ControllerServiceClientSync | None = None
         self._job: Job | None = None
@@ -114,7 +126,12 @@ class IrisEnvironment(BaseEnvironment):
         await asyncio.to_thread(self._start_sync)
         # Non-mounting environments use the trial's mount targets as mkdir
         # hints (e.g. /logs/agent, /logs/verifier); see BaseEnvironment.mounts.
-        await self.ensure_dirs(self._mount_targets(writable_only=True))
+        dirs = self._mount_targets(writable_only=True)
+        # Docker creates [environment].workdir via WORKDIR/-w; prebuilt images
+        # may not carry it, so create it like the docker backend would.
+        if self.task_env_config.workdir:
+            dirs = [*dirs, self.task_env_config.workdir]
+        await self.ensure_dirs(dirs)
         await self._upload_environment_dir_after_start()
 
     def _start_sync(self) -> None:
@@ -146,6 +163,7 @@ class IrisEnvironment(BaseEnvironment):
                 disk=(self.task_env_config.storage_mb or DEFAULT_STORAGE_MB) * 1024 * 1024,
             ),
             task_image=self.task_env_config.docker_image,
+            container_profile=self._container_profile,
             scheduling_timeout=Duration.from_seconds(self._scheduling_timeout),
             # A restarted sandbox is a fresh container with all trial state lost,
             # so never retry: fail the trial and let harbor-level resume handle it.
@@ -198,7 +216,8 @@ class IrisEnvironment(BaseEnvironment):
         timeout_sec: int | None = None,
         user: str | int | None = None,
     ) -> ExecResult:
-        script = self._build_script(command, cwd=cwd, env=env, user=user)
+        effective_cwd = cwd or self.task_env_config.workdir
+        script = self._build_script(command, cwd=effective_cwd, env=env, user=user)
         return await asyncio.to_thread(self._exec_sync, script, timeout_sec)
 
     def _build_script(

@@ -70,6 +70,7 @@ async def iris_sandbox(
     cpus: int | None = None,
     memory_mb: int | None = None,
     storage_mb: int | None = None,
+    container_profile: str = "default",
 ) -> AsyncIterator[IrisEnvironment]:
     """Run a Harbor sandbox as an Iris job for the duration of the context.
 
@@ -89,6 +90,7 @@ async def iris_sandbox(
         cpus: Override the environment's CPU reservation.
         memory_mb: Override the environment's memory reservation.
         storage_mb: Override the environment's disk reservation.
+        container_profile: Iris container security profile; see IrisEnvironment.
 
     Yields:
         The started IrisEnvironment.
@@ -113,6 +115,7 @@ async def iris_sandbox(
             override_storage_mb=storage_mb,
             cluster=cluster,
             controller_url=controller_url,
+            container_profile=container_profile,
         )
         await env.start(force_build=False)
         try:
