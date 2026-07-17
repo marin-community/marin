@@ -17,6 +17,7 @@ from levanter.infra.cli_helpers import CliConfig
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
+from marin.experiment.train import _train_job
 from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
     DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT,
@@ -361,3 +362,38 @@ def test_resolve_training_env_arms_watchdog_for_gpu_not_cpu():
     assert gpu_env["NCCL_DEBUG"] == "WARN"
     assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in cpu_env.get("XLA_FLAGS", "")
     assert "NCCL_DEBUG" not in cpu_env
+
+
+def test_train_job_seeds_gpu_pod_env_with_collective_watchdog(trainer_config):
+    """A GPU training job launches with the NCCL watchdog XLA_FLAGS in its pod env.
+
+    XLA reads XLA_FLAGS lazily at backend init, so resolving the env at submit time
+    and seeding it into the pod environment makes the watchdog independent of the
+    in-worker env-application order (nothing must touch a device before it applies).
+    """
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_remote(fn, *, resources, env_vars):
+        captured["env_vars"] = env_vars
+        return lambda pod_config: None
+
+    gpu_config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(trainer=trainer_config),
+        resources=ResourceConfig.with_gpu("H100", count=8),
+        env_vars={"JAX_COMPILATION_CACHE_DIR": "/tmp/cache"},  # preset skips the temp-bucket lookup
+    )
+    cpu_config = dataclasses.replace(gpu_config, resources=ResourceConfig.with_cpu())
+
+    with (
+        patch("marin.experiment.train.remote", fake_remote),
+        patch("marin.training.training._cli_helpers_module") as mod,
+    ):
+        mod.return_value.load_config.return_value = CliConfig()
+        _train_job(gpu_config)
+        gpu_env = captured["env_vars"]
+        _train_job(cpu_config)
+        cpu_env = captured["env_vars"]
+
+    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_env.get("XLA_FLAGS", "")
+    assert gpu_env["NCCL_DEBUG"] == "WARN"
+    assert cpu_env == {}
