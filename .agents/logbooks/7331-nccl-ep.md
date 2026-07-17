@@ -130,3 +130,30 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   `nvidia-nccl-cu13` to 2.30.7 in the job env; keep the WIP branch only for the
   later fp8-wire phase.
 - Next: build + import probe on cw-us-east-08a (NCCLEP-002).
+
+### 2026-07-17 — NCCLEP-002 (in flight): TE wheel build on an arm64 GB200 iris pod — pip-wheel toolchain
+- Motivation: the schmidt-cluster NGC/apptainer recipe (B200MFU-010/-011) is x86 +
+  slurm; the goal platform is arm64 GB200 iris pods whose task image
+  (`python:3.12-slim`) has no CUDA toolkit. Decide native-venv build vs container.
+- Pod probe (`/mwittmann/ncclep-podprobe`): aarch64 Grace, 144 cores, 14 TB local
+  disk, gcc 14.2 + make + git present, cmake/ninja absent (pip-installable),
+  no `/usr/local/cuda`, driver 595.71.05, GB200 compute cap 10.0. → **native
+  build with a synthetic CUDA_HOME assembled from pip cu13 wheels**
+  (`experiments/ncclep/build_te_wheel.sh`); no container. Bonus: the wheel then
+  links against the *same* venv stack (stock jax 0.10.1) the bench baselines use.
+- Build-iteration findings (each a failed job on the way to green):
+  1. CUDA 13 pip packages dropped the `-cu13` suffix — the suffixed names
+     (`nvidia-cuda-nvrtc-cu13` etc.) are deprecated 0.0.1 stubs whose sdist
+     build *fails on purpose*. Exceptions: `nvidia-cudnn-cu13`/`nvidia-nccl-cu13`
+     keep the suffix. `nvidia-curand` is on its own 10.x versioning.
+  2. TE build-time python deps (with `--no-build-isolation`):
+     `nvidia-cudnn-frontend>=1.25`, `pybind11[global]`, cmake, ninja, flax;
+     `NVTE_FRAMEWORK=jax` skips the torch requirement.
+  3. `build_nccl_ep_submodule` makes `contrib/nccl_ep` in the NCCL submodule.
+     `lib` target builds `libnccl_ep.a` (fine) **and** `libnccl_ep.so`, whose
+     nvcc-driven link needs `-lnccl` (the nccl wheel ships only `libnccl.so.2` —
+     add an unversioned symlink) and `-lcudadevrt -lcudart_static` (ship in the
+     `nvidia-cuda-runtime` wheel under `nvidia/cu13/lib/*.a`; nvcc's implicit
+     `-L` points at the wheel's own tree, so export `LIBRARY_PATH`).
+  4. The wheel layout nests under `site-packages/nvidia/cu13/{bin,include,lib}`.
+- Status: attempt 6 in flight (past all previous failure points expected).
