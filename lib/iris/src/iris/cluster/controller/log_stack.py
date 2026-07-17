@@ -30,7 +30,9 @@ from iris.cluster.worker.stats import (
     TASK_EVENT_NAMESPACE,
     TASK_EVENT_STORAGE_POLICY,
     TASK_STATS_NAMESPACE,
+    WORKER_STATS_NAMESPACE,
     IrisTaskStat,
+    IrisWorkerStat,
     TaskEventRow,
 )
 
@@ -52,6 +54,10 @@ class LogStack:
     task_event_table: Table
     profile_table: Table
     provisioning_table: Table
+    # iris.worker table for the k8s backend's per-node heartbeats. On worker-daemon
+    # clusters the daemons register and write this themselves; the controller holds
+    # the handle so the k8s backend (which has no daemon) can write node rows.
+    worker_stats_table: Table
     server: Any = None
 
     def close(self) -> None:
@@ -97,5 +103,6 @@ def build_log_stack(
         task_event_table=client.get_table(TASK_EVENT_NAMESPACE, TaskEventRow, storage_policy=TASK_EVENT_STORAGE_POLICY),
         profile_table=client.get_table(PROFILE_NAMESPACE, IrisProfile),
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
+        worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
         server=server,
     )

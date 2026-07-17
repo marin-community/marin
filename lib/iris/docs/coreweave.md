@@ -146,7 +146,8 @@ Key architectural properties:
   controller calls the same three uniform phase methods regardless. The dashboard
   reflects this via the backend descriptor served by
   `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
-  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
+  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler),
+  and per-node host and GPU readings surface in the **Cluster** panel instead.
   See `docs/architecture.md` "The TaskBackend contract".
 - **Shared NodePool model**: One NodePool per scale group (not per slice). CoreWeave
   autoscaling is enabled (`autoscaling: true`). NodePool names follow
@@ -718,9 +719,16 @@ model per node instead of sharding across nodes.
 
 ### KubernetesProvider Operations
 
-On CoreWeave, there are no persistent worker daemons. The controller dispatches
-tasks directly as Kubernetes Pods, `list-workers` returns empty, and the
-`workers` SQL table is empty. Use:
+On CoreWeave, there are no persistent worker daemons: the controller dispatches
+tasks directly as Kubernetes Pods, so the `list-workers` RPC returns empty and
+the controller's `workers` state table stays empty. Node-level telemetry is
+surfaced differently. Each cluster sync the controller scrapes the
+`cw-exporters` DaemonSets — `node-exporter` (host CPU/memory/disk/network over
+the node's hostPort `:9100`) and `dcgm-exporter` (GPU HBM/utilization/
+temperature/power over the pod's `:9400`) — and writes one `iris.worker` finelog
+row per node, keyed by node name. The same readings appear in
+`get-kubernetes-cluster-status` and the dashboard **Cluster** panel's node
+table. Use:
 
 ```bash
 kci get pods -n iris -l iris.managed=true
@@ -764,7 +772,9 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 ### Gotchas
 
 - **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
-- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly.
+- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly; no
+  worker daemons register. Per-node readings live in the `iris.worker` finelog table
+  and the **Cluster** panel, not this RPC.
 - **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
 - **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
 - **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
