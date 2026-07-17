@@ -48,7 +48,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "stage", "type": "string" },
             { "selector": "value", "text": "items_per_s", "type": "number" }
           ]
@@ -83,7 +83,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "stage", "type": "string" },
             { "selector": "value", "text": "bytes_per_s", "type": "number" }
           ]
@@ -118,7 +118,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "stage", "type": "string" },
             { "selector": "value", "text": "mem_bytes", "type": "number" }
           ]

@@ -48,7 +48,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "label_region", "text": "region", "type": "string" },
             { "selector": "value", "text": "workers", "type": "number" }
           ]
@@ -83,7 +83,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "value", "text": "chips", "type": "number" }
           ]
         }
@@ -117,7 +117,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "label_probe", "text": "probe", "type": "string" },
             { "selector": "value", "text": "up", "type": "number" }
           ]

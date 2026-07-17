@@ -48,7 +48,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "task", "type": "string" },
             { "selector": "value", "text": "memory_mb", "type": "number" }
           ]
@@ -83,7 +83,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "task", "type": "string" },
             { "selector": "value", "text": "memory_peak_mb", "type": "number" }
           ]
@@ -118,7 +118,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "task", "type": "string" },
             { "selector": "value", "text": "cpu_millicores", "type": "number" }
           ]
@@ -153,7 +153,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "task", "type": "string" },
             { "selector": "value", "text": "disk_mb", "type": "number" }
           ]
@@ -188,7 +188,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "worker", "type": "string" },
             { "selector": "value", "text": "cpu_pct", "type": "number" }
           ]
@@ -223,7 +223,7 @@
             ]
           },
           "columns": [
-            { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
+            { "selector": "t", "text": "time", "type": "timestamp_epoch" },
             { "selector": "series", "text": "worker", "type": "string" },
             { "selector": "value", "text": "mem_bytes", "type": "number" }
           ]
