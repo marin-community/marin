@@ -5,16 +5,9 @@
 
 import math
 
-from fray.types import get_tpu_topology, tpu_family
+from fray.types import get_tpu_topology, tpu_hbm_capacity_bytes
 
 BYTES_PER_GIB = 1024**3
-
-_TPU_HBM_BYTES_PER_CHIP: dict[str, int] = {
-    "v4": 32 * BYTES_PER_GIB,
-    "v5e": 16 * BYTES_PER_GIB,
-    "v5p": 95 * BYTES_PER_GIB,
-    "v6e": 32 * BYTES_PER_GIB,
-}
 
 
 def adam_optimizer_bytes(
@@ -163,18 +156,6 @@ def tpu_batch_config(
         f"but target HBM capacity is {_format_gib(capacity_bytes)}. Use a larger TPU slice, "
         "reduce model/sequence size, or use more model/context parallelism and pass the resulting data_axis_size."
     )
-
-
-def tpu_hbm_capacity_bytes(tpu: str) -> int:
-    """Return the aggregate HBM capacity of a TPU slice in bytes."""
-    topology = get_tpu_topology(tpu)
-    family = tpu_family(tpu)
-    hbm_bytes_per_chip = _TPU_HBM_BYTES_PER_CHIP.get(family)
-    if hbm_bytes_per_chip is None:
-        raise ValueError(
-            f"No HBM memory spec for TPU family {family!r}. Known families: {sorted(_TPU_HBM_BYTES_PER_CHIP)}"
-        )
-    return topology.chip_count * hbm_bytes_per_chip
 
 
 def _batch_bytes_for_microbatch(batch_bytes: int, *, full_batch_size: int, microbatch_size: int) -> int:
