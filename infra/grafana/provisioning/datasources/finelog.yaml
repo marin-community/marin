@@ -1,0 +1,37 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One Infinity datasource per cluster, each pointed at the bridge's per-cluster
+# path on loopback. The bridge, not Grafana, decides what SQL finelog runs — see
+# src/server.py — so these carry no credentials and no query text. Each panel sets
+# its own `parser: backend` and time macros; see dashboards/fleet.json.
+#
+# Port 8081 is config.BRIDGE_PORT, a constant rather than a setting precisely so
+# these URLs cannot drift out of sync with the process they address.
+#
+# `marin` is the federation hub (the CoreWeave clusters forward their rows to it),
+# so it sees the whole fleet; `marin-dev` forwards nowhere and sees only itself.
+apiVersion: 1
+
+datasources:
+  - name: finelog-marin
+    uid: finelog-marin
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/marin
+
+  - name: finelog-marin-dev
+    uid: finelog-marin-dev
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      global_queries: []
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/marin-dev
