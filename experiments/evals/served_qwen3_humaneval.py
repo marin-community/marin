@@ -5,7 +5,7 @@
 
 \b
 Examples:
-  uv run iris --cluster=marin job run --job-name qwen3-humaneval --region us-west4 \
+  uv run iris --cluster=marin job run --job-name qwen3-humaneval \
     --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \
     -- python -m experiments.evals.served_qwen3_humaneval
 """
