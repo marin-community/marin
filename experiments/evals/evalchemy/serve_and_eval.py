@@ -37,13 +37,11 @@ import json
 import logging
 import os
 import time
-import tomllib
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 
 from iris.client import iris_ctx
 from iris.cluster.constraints import region_constraint
@@ -193,11 +191,19 @@ def _serve_for_eval(params: _ServeParams) -> None:
         LevanterBackend,
         VllmBackend,
     )
+    from marin.inference.vllm_server import (  # noqa: PLC0415  # lazy: keep vLLM out of the CPU parent
+        IsolatedCudaVllm,
+        VllmType,
+    )
     from rigging.log_setup import configure_logging  # noqa: PLC0415  # lazy: only needed in the serve child
 
     configure_logging()
     if params.backend == ServeBackend.VLLM:
+        # GPU serves the Marin vLLM fork (grug_moe et al.) from an isolated uvx env; TPU serves the
+        # workspace TPU-vLLM stack already on PATH (WorkspaceVllm, the default launcher).
+        launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK) if params.gpu_count is not None else None
         backend = VllmBackend(
+            launcher=launcher,
             startup_timeout_seconds=params.startup_timeout_seconds,
             extra_args=params.vllm_extra_args,
         )
@@ -222,46 +228,12 @@ def _serve_for_eval(params: _ServeParams) -> None:
     serve_in_job(config)
 
 
-def _vllm_gpu_fork_install() -> str:
-    """A setup script that installs Marin's forked CUDA vLLM onto the GPU serve child's venv.
-
-    ``marin-core[gpu]`` carries only the JAX/Levanter GPU stack (jax[cuda13] + torch), not a CUDA vLLM,
-    and no managed ``marin-core[vllm-gpu]`` extra exists yet (marin #7134/#7135). The 67B ``grug_moe``
-    export needs Marin's vLLM FORK, so we overlay it exactly as ``tests/cluster/vllm/
-    test_snowball_backend_parity.py`` does: ``VLLM_USE_PRECOMPILED=1`` reuses vLLM's precompiled base and
-    swaps in the fork's python; the fork pin is read from ``tool.uv.sources.vllm`` so it tracks the same
-    commit the workspace resolves. The default ``WorkspaceVllm`` launcher then serves the fork off the
-    venv PATH. Drop this for ``marin-core[vllm-gpu]`` once #7134 lands the managed baseline."""
-    source = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())["tool"]["uv"]["sources"]["vllm"]
-    return (
-        'VLLM_USE_PRECOMPILED=1 uv pip install --no-config --python "$IRIS_VENV/bin/python" '
-        f'--torch-backend=cu130 "vllm @ git+{source["git"]}@{source["rev"]}" "runai-model-streamer[s3]==0.16.0"'
-    )
-
-
-# AWS config path (written by the serve child's setup) that forces virtual-hosted S3 addressing.
-_SERVE_AWS_CONFIG_PATH = "/tmp/marin-serve-aws-config"
-
-
-def _s3_virtual_addressing_setup() -> str:
-    """A setup script that forces VIRTUAL-HOSTED S3 addressing for the GPU serve child.
-
-    The fork's distributed model loader (Run:ai's model streamer) pulls the ``s3://`` export via boto3,
-    which defaults to PATH-style addressing; the CoreWeave object store rejects that
-    (``PathStyleRequestNotAllowed``) and ignores Iris's ``FSSPEC_S3`` setting. Mirror
-    ``tests/cluster/vllm/test_snowball_backend_parity.py``: write ``[default] s3.addressing_style =
-    virtual`` and point ``AWS_CONFIG_FILE`` (set in ``env_vars`` below) at it, so boto3 reads it before
-    the streamer pulls."""
-    return f"printf '[default]\\ns3 =\\n    addressing_style = virtual\\n' > {_SERVE_AWS_CONFIG_PATH}"
-
-
 def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
     """Worker environment for the serve child, by slice and backend.
 
-    - GPU + vLLM: ``marin-core`` synced, then Marin's forked CUDA vLLM overlaid onto the venv (see
-      :func:`_vllm_gpu_fork_install`), plus a virtual-hosted S3 addressing config (see
-      :func:`_s3_virtual_addressing_setup`) so the streamer can pull a ``s3://`` export from the
-      CoreWeave object store -- ``marin-core[gpu]`` has no CUDA vLLM of its own.
+    - GPU + vLLM: base ``marin-core`` only. The fork, its precompiled/cu130 build, the Run:ai
+      streamer, and the virtual-hosted S3 addressing are all owned by ``IsolatedCudaVllm(MARIN_FORK)``
+      (uvx), so the worker venv just needs enough to run ``serve_in_job``.
     - GPU + Levanter: the ``gpu`` build (the JAX/Levanter GPU stack) suffices; Levanter serves in-process.
     - TPU + vLLM: the ``tpu``+``vllm`` build. TPU + Levanter: only jax (the ``tpu`` extra).
     """
@@ -269,15 +241,8 @@ def _serve_environment(spec: ServeSpec) -> EnvironmentSpec:
         if spec.backend == ServeBackend.LEVANTER:
             return EnvironmentSpec(extras=("gpu",), env_vars=_propagated_env())
         return EnvironmentSpec(
-            setup_scripts=[
-                default_setup_script(packages=["marin-core"]),
-                _vllm_gpu_fork_install(),
-                _s3_virtual_addressing_setup(),
-            ],
-            env_vars=_propagated_env(
-                VLLM_USE_FLASHINFER_SAMPLER="0",
-                AWS_CONFIG_FILE=_SERVE_AWS_CONFIG_PATH,
-            ),
+            setup_scripts=[default_setup_script(packages=["marin-core"])],
+            env_vars=_propagated_env(),
         )
     if spec.backend == ServeBackend.LEVANTER:
         extras = ("tpu",)

@@ -164,4 +164,12 @@ class TelltaleTracker(Tracker):
 @dataclasses.dataclass
 class TelltaleConfig(TrackerConfig):
     def init(self, run_id: Optional[str]) -> Tracker:
+        # The metrics carry no identity; tag every persisted row (see the iris
+        # telltale->finelog forwarder) with the run so dashboards can pick out one
+        # training run. `run_id` is None for an unnamed run — then only `source`
+        # is set.
+        labels = {"source": "levanter"}
+        if run_id is not None:
+            labels["run"] = run_id
+        telltale.set_global_labels(**labels)
         return TelltaleTracker()

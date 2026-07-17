@@ -6,8 +6,10 @@ import numpy as np
 import pytest
 from prometheus_client import REGISTRY, generate_latest
 
+from rigging import telltale
+
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.telltale import TelltaleTracker
+from levanter.tracker.telltale import TelltaleConfig, TelltaleTracker
 
 
 def _series(text: str, name: str) -> dict[str, float]:
@@ -64,6 +66,22 @@ def test_summary_stats_becomes_moments_and_a_prometheus_histogram(exposition):
     assert len(buckets) == 5
     assert samples['levanter_grad_bucket{le="+Inf"}'] == 1000.0
     assert samples["levanter_grad_count"] == 1000.0
+
+
+def test_config_publishes_run_and_source_as_global_labels():
+    """The forwarder tags persisted rows with these, so init must set them."""
+    saved = telltale.get_global_labels()
+    telltale._global_labels.clear()
+    try:
+        TelltaleConfig().init("run-42")
+        assert telltale.get_global_labels() == {"source": "levanter", "run": "run-42"}
+
+        telltale._global_labels.clear()
+        TelltaleConfig().init(None)
+        assert telltale.get_global_labels() == {"source": "levanter"}
+    finally:
+        telltale._global_labels.clear()
+        telltale._global_labels.update(saved)
 
 
 def test_two_trackers_do_not_duplicate_the_histogram_family(exposition):

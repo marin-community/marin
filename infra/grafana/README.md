@@ -80,7 +80,8 @@ Pulumi.yaml            Pulumi project, run on the shared repo venv
 Dashboards: `infra.json` (the infra overview — builds and ferries, the Iris control
 plane, probes, and 24h history), `fleet.json` (canary + worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
-memory).
+memory), `training.json` (levanter training metrics from the `telltale` namespace,
+grouped by run).
 
 ## Develop
 

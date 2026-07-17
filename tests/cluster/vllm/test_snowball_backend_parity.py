@@ -10,7 +10,8 @@ Parametrized over the two marin-serve backends that can serve the 67B ``grug_moe
 - ``levanter-gpu`` -- ``LevanterBackend.load_model`` + a single forward (Snowball has no paged decode
   yet, so its full ``serve()`` generation path is separate work);
 - ``vllm-gpu`` -- ``VllmBackend.serve()`` + the OpenAI ``/completions`` logprobs API. The 67B needs
-  Marin's vLLM fork, installed onto the job venv so the default ``WorkspaceVllm`` launcher serves it.
+  Marin's vLLM fork, served via ``IsolatedCudaVllm(MARIN_FORK)`` (uvx) rather than installed onto the
+  job venv.
 
 Both load through ``marin.inference.serving_backend`` and are scored the same way -- for every golden
 prompt the backend's next-token distribution is compared to the grug reference's frozen top-25: the
@@ -28,11 +29,7 @@ default; the ``marin-cluster-smoke`` workflow runs it. Launch it on demand with:
 """
 
 import logging
-import os
-import tempfile
-import tomllib
 import uuid
-from pathlib import Path
 
 import pytest
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
@@ -64,15 +61,6 @@ PAD_TOKEN_ID = 0
 LEVANTER_CACHE = "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/snowball-67b-a2b-step-42150-parity-v1"
 
 pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
-
-
-# TODO(#7135): drop this overlay for marin-core[vllm-gpu] once #7134 provides the managed baseline.
-def _vllm_setup_script() -> str:
-    source = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())["tool"]["uv"]["sources"]["vllm"]
-    return (
-        'VLLM_USE_PRECOMPILED=1 uv pip install --no-config --python "$IRIS_VENV/bin/python" '
-        f'--torch-backend=cu130 "vllm @ git+{source["git"]}@{source["rev"]}" "runai-model-streamer[s3]==0.16.0"'
-    )
 
 
 def _log_parities(backend: str, parities: list[NextTokenParity]) -> None:
@@ -148,68 +136,65 @@ def score_vllm_against_goldens(goldens: list[InferenceGolden], attention_backend
     """Remote entrypoint: serve the 67B via ``VllmBackend`` and score every golden's next token."""
     import requests  # noqa: PLC0415
     from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend  # noqa: PLC0415
+    from marin.inference.vllm_server import IsolatedCudaVllm, VllmType  # noqa: PLC0415
 
-    # Run:ai ignores Iris's FSSPEC_S3 setting and CoreWeave rejects path-style S3 requests.
-    with tempfile.TemporaryDirectory(prefix="snowball-parity-vllm-") as temp_dir:
-        aws_config = Path(temp_dir) / "aws-config"
-        aws_config.write_text("[default]\ns3 =\n    addressing_style = virtual\n")
-        os.environ["AWS_CONFIG_FILE"] = str(aws_config)
-
-        spec = ModelSpec(
-            model=JUNE_67B_A2B.vllm_model_name,
-            model_path=JUNE_67B_A2B.export_uri,
-            num_chips=GPU_COUNT,
-            tensor_parallel_size=1,  # the 67B shards its experts with data + expert parallelism, not TP.
-            dtype="bfloat16",
-            max_model_len=128,
-            chat_template_content=None,
-        )
-        # Default WorkspaceVllm launcher serves the fork installed on the job venv (see _vllm_setup_script).
-        backend = VllmBackend(
-            extra_args=(
-                "--data-parallel-size",
-                str(GPU_COUNT),
-                "--enable-expert-parallel",
-                "--model-loader-extra-config",
-                '{"distributed":true}',
-                "--max-num-seqs",
-                "1",
-                "--max-logprobs",
-                str(RETURNED_LOGPROBS),
-                "--attention-backend",
-                attention_backend,
-            ),
-        )
-        parities: list[NextTokenParity] = []
-        with backend.serve(spec) as served:
-            completions_url = f"{served.base_url}{OPENAI_API_SUFFIX}/completions"
-            for golden in goldens:
-                for rank in range(GPU_COUNT):
-                    response = requests.post(
-                        completions_url,
-                        # Pin every request: vLLM's DP load balancer would otherwise choose the rank.
-                        headers={"X-data-parallel-rank": str(rank)},
-                        json={
-                            "model": served.model_id,
-                            "prompt": golden.prompt,
-                            "add_special_tokens": False,
-                            "temperature": 0.0,
-                            "max_tokens": 1,
-                            "logprobs": RETURNED_LOGPROBS,
-                            "return_tokens_as_token_ids": True,
-                            "return_token_ids": True,
-                        },
-                        timeout=300,
-                    )
-                    response.raise_for_status()
-                    choice = response.json()["choices"][0]
-                    assert choice["prompt_token_ids"] == golden.prompt_token_ids
-                    greedy_token_id = int(choice["token_ids"][0])
-                    actual_logprobs = {
-                        int(token.removeprefix("token_id:")): logprob
-                        for token, logprob in choice["logprobs"]["top_logprobs"][0].items()
-                    }
-                    parities.append(parity_from_logprob_map(golden, greedy_token_id, actual_logprobs))
+    spec = ModelSpec(
+        model=JUNE_67B_A2B.vllm_model_name,
+        model_path=JUNE_67B_A2B.export_uri,
+        num_chips=GPU_COUNT,
+        tensor_parallel_size=1,  # the 67B shards its experts with data + expert parallelism, not TP.
+        dtype="bfloat16",
+        max_model_len=128,
+        chat_template_content=None,
+    )
+    # IsolatedCudaVllm(MARIN_FORK) provisions the fork via uvx and owns the precompiled/cu130 build,
+    # the Run:ai streamer, and the virtual-hosted S3 addressing the CoreWeave object store requires.
+    backend = VllmBackend(
+        launcher=IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        extra_args=(
+            "--data-parallel-size",
+            str(GPU_COUNT),
+            "--enable-expert-parallel",
+            "--model-loader-extra-config",
+            '{"distributed":true}',
+            "--max-num-seqs",
+            "1",
+            "--max-logprobs",
+            str(RETURNED_LOGPROBS),
+            "--attention-backend",
+            attention_backend,
+        ),
+    )
+    parities: list[NextTokenParity] = []
+    with backend.serve(spec) as served:
+        completions_url = f"{served.base_url}{OPENAI_API_SUFFIX}/completions"
+        for golden in goldens:
+            for rank in range(GPU_COUNT):
+                response = requests.post(
+                    completions_url,
+                    # Pin every request: vLLM's DP load balancer would otherwise choose the rank.
+                    headers={"X-data-parallel-rank": str(rank)},
+                    json={
+                        "model": served.model_id,
+                        "prompt": golden.prompt,
+                        "add_special_tokens": False,
+                        "temperature": 0.0,
+                        "max_tokens": 1,
+                        "logprobs": RETURNED_LOGPROBS,
+                        "return_tokens_as_token_ids": True,
+                        "return_token_ids": True,
+                    },
+                    timeout=300,
+                )
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                assert choice["prompt_token_ids"] == golden.prompt_token_ids
+                greedy_token_id = int(choice["token_ids"][0])
+                actual_logprobs = {
+                    int(token.removeprefix("token_id:")): logprob
+                    for token, logprob in choice["logprobs"]["top_logprobs"][0].items()
+                }
+                parities.append(parity_from_logprob_map(golden, greedy_token_id, actual_logprobs))
 
     _log_parities("vllm-gpu", parities)
     for parity in parities:
@@ -239,10 +224,7 @@ def _vllm_job(goldens: list[InferenceGolden], attention_backend: str) -> JobRequ
         name=f"snowball-parity-vllm-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(score_vllm_against_goldens, args=[goldens, attention_backend]),
         resources=ResourceConfig.with_gpu("H100", count=GPU_COUNT, cpu=64, ram="512g", disk="64g"),
-        environment=create_environment(
-            setup_scripts=[default_setup_script(packages=["marin-core"]), _vllm_setup_script()],
-            env_vars={"VLLM_USE_FLASHINFER_SAMPLER": "0"},
-        ),
+        environment=create_environment(setup_scripts=[default_setup_script(packages=["marin-core"])]),
         priority=job_pb2.PRIORITY_BAND_PRODUCTION,
     )
 
