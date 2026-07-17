@@ -106,6 +106,18 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp8": 3.958e15 / 2,
         "int8": 3.958e15 / 2,
     },
+    # B200 / GB200 - per-GPU Blackwell peaks
+    # source: https://resources.nvidia.com/en-us-blackwell-architecture
+    # nvidia publishes spec sheet with a 2x sparsity factor
+    "b200": {
+        "fp64": 40e12,
+        "fp32": 40e12,
+        "tf32": 2.2e15 / 2,
+        "fp16": 4.5e15 / 2,
+        "bf16": 4.5e15 / 2,
+        "fp8": 9e15 / 2,
+        "int8": 9e15 / 2,
+    },
     # source: https://images.nvidia.com/content/technologies/volta/pdf/volta-v100-datasheet-update-us-1165301-r5.pdf
     "v100": {
         "fp64": 7e12,
@@ -288,6 +300,9 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "l40s"
     if "l4" in kind:
         return "l4"
+    # Blackwell: JAX reports "NVIDIA B200" / "NVIDIA GB200"; both contain "b200"
+    if "b200" in kind:
+        return "b200"
     if "gb10" in kind:
         return "gb10"
 
