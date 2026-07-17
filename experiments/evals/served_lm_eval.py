@@ -113,6 +113,8 @@ def brokered_lm_eval_step(
         )
 
     def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
+        if config.lm_eval_uv_packages != LM_EVAL_UV_PACKAGES:
+            raise ValueError("artifact lm-eval packages must match the pinned runtime packages")
         execution_inference = replace(
             inference,
             model=config.model,
