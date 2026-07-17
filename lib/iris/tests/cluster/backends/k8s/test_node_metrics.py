@@ -23,6 +23,8 @@ from iris.cluster.backends.k8s.node_metrics import (
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.worker.stats import IrisWorkerStat, WorkerStatus
 
+from .conftest import FakeStatsTable
+
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
 # TYPE node_memory_MemTotal_bytes gauge
@@ -227,14 +229,7 @@ def test_collector_writes_worker_rows_and_reports_snapshot():
         },
     )
 
-    class FakeTable:
-        def __init__(self):
-            self.rows: list[IrisWorkerStat] = []
-
-        def write(self, rows):
-            self.rows.extend(rows)
-
-    table = FakeTable()
+    table = FakeStatsTable()
     snapshots: list[dict] = []
     collector = NodeStatsCollector(
         k8s,
@@ -250,26 +245,20 @@ def test_collector_writes_worker_rows_and_reports_snapshot():
     finally:
         collector.close()
 
-    assert len(table.rows) == 1
-    assert table.rows[0].worker_id == "g83d142"
-    assert table.rows[0].gpu_count == 2
+    rows = [r for batch in table.writes for r in batch]
+    assert len(rows) == 1
+    assert rows[0].worker_id == "g83d142"
+    assert rows[0].gpu_count == 2
     assert snapshots and snapshots[0]["g83d142"].gpu_count == 2
 
 
 def test_collector_no_targets_writes_nothing():
     k8s = InMemoryK8sService(namespace="iris")
 
-    class FakeTable:
-        def __init__(self):
-            self.rows = []
-
-        def write(self, rows):
-            self.rows.extend(rows)
-
-    table = FakeTable()
+    table = FakeStatsTable()
     collector = NodeStatsCollector(k8s, table, poll_interval=3600)
     try:
         collector.collect_once()  # set_nodes never called
     finally:
         collector.close()
-    assert table.rows == []
+    assert table.writes == []

@@ -151,10 +151,6 @@ function memPercent(node: NodeStatus): number {
   return usagePercent(num(node.memUsedBytes), num(node.memTotalBytes))
 }
 
-function hbmPercent(node: NodeStatus): number {
-  return usagePercent(num(node.hbmUsedBytes), num(node.hbmTotalBytes))
-}
-
 // -- Computed --
 
 const nodes = computed(() => props.status.nodes ?? [])

@@ -31,6 +31,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
@@ -137,8 +138,16 @@ def _parse_labels(body: str) -> dict[str, str]:
     return labels
 
 
-def parse_prometheus(text: str) -> Iterator[tuple[str, dict[str, str], float]]:
-    """Yield ``(metric_name, labels, value)`` for each sample line in exporter text.
+class Sample(NamedTuple):
+    """One parsed exporter sample line: ``metric_name``, its labels, and value."""
+
+    name: str
+    labels: dict[str, str]
+    value: float
+
+
+def parse_prometheus(text: str) -> Iterator[Sample]:
+    """Yield a :class:`Sample` for each sample line in exporter text.
 
     Comment/HELP/TYPE lines are skipped, as are samples whose value is not a
     finite float (``NaN`` / ``+Inf`` gauges some exporters emit for absent data).
@@ -170,7 +179,7 @@ def parse_prometheus(text: str) -> Iterator[tuple[str, dict[str, str], float]]:
         # Skip NaN / ±Inf gauges some exporters emit for absent data.
         if not math.isfinite(value):
             continue
-        yield name, labels, value
+        yield Sample(name, labels, value)
 
 
 def _is_physical_iface(device: str) -> bool:
@@ -309,8 +318,7 @@ class NodeTarget:
 
     ``internal_ip`` is where the node-exporter is reached; the rest is static
     node metadata (allocatable capacity, accelerator type, region) replicated
-    into every heartbeat row so the ``iris.worker`` table stays self-contained,
-    exactly as a worker daemon replicates its ``WorkerMetadata``.
+    into every heartbeat row so the ``iris.worker`` table stays self-contained.
     """
 
     name: str
