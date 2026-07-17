@@ -46,7 +46,8 @@ def _endpoint_name() -> str:
     assert job_info is not None, "no Iris job context"
 
     task = job_info.task_id
-    suffix = str(task).removeprefix(f"/{Namespace.from_job_id(task)}/")
+    # Namespace.from_job_id already carries its leading slash ("/alice/train").
+    suffix = str(task).removeprefix(f"{Namespace.from_job_id(task)}/")
     name = f"{ENDPOINT_PREFIX}/{suffix}"
 
     process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
