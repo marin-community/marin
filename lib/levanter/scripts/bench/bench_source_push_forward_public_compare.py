@@ -38,7 +38,14 @@ from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
 
-PUBLIC_EP_BACKENDS = ("ring", "ragged_all_to_all", "pallas_mgpu_source_push", "pallas_mgpu_source_push_blackwell")
+PUBLIC_EP_BACKENDS = (
+    "ring",
+    "ring_cute",
+    "ragged_all_to_all",
+    "ragged_all_to_all_cute",
+    "pallas_mgpu_source_push",
+    "pallas_mgpu_source_push_blackwell",
+)
 KERNEL_NAME = "source_push_forward_public_compare"
 TIMING_KERNEL_NAME = "source_push_forward_public_timing"
 BYTES_PER_BF16 = 2
