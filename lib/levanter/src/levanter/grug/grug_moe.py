@@ -33,6 +33,7 @@ from levanter.grug._moe.common import (
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
+    MoeExpertMlpOp,
     MoeImplementation,
     MoeRaggedDotOps,
     PspecAxis,
@@ -75,6 +76,9 @@ class MoEExpertMlp(eqx.Module):
     # partition_for_grad_overwrite / apply_updates like Linear's dot_general ops.
     ragged_dot_ops: MoeRaggedDotOps | None = None
     fp8_wire: bool = eqx.field(static=True, default=False)
+    # Optional stateless whole-expert-MLP op (e.g. MXFP8 fused kernels). Static:
+    # it carries no arrays, so it threads through shard_map as a closure constant.
+    expert_mlp_op: MoeExpertMlpOp | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(
@@ -90,6 +94,7 @@ class MoEExpertMlp(eqx.Module):
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
         ragged_dot_ops: MoeRaggedDotOps | None = None,
         fp8_wire: bool = False,
+        expert_mlp_op: MoeExpertMlpOp | None = None,
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
@@ -108,6 +113,7 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=capacity_factor,
             ragged_dot_ops=ragged_dot_ops,
             fp8_wire=fp8_wire,
+            expert_mlp_op=expert_mlp_op,
         )
 
     @named_call
@@ -134,6 +140,7 @@ class MoEExpertMlp(eqx.Module):
             report_capacity_overflow=report_capacity_overflow,
             ragged_dot_ops=self.ragged_dot_ops,
             fp8_wire=self.fp8_wire,
+            expert_mlp_op=self.expert_mlp_op,
         )
 
 
@@ -152,6 +159,7 @@ def moe_mlp(
     report_capacity_overflow: bool = False,
     ragged_dot_ops: MoeRaggedDotOps | None = None,
     fp8_wire: bool = False,
+    expert_mlp_op: MoeExpertMlpOp | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -170,6 +178,11 @@ def moe_mlp(
     ``fp8_wire=True`` switches the EP dispatch/combine collectives to carry FP8
     over the wire (E4M3 activations forward, E5M2 gradients backward; see
     ``levanter.grug._moe.fp8_wire``). Ring and ragged_all_to_all backends only.
+
+    ``expert_mlp_op`` supplies a stateless op owning the WHOLE expert MLP body
+    (both GEMMs and the activation between them, see [MoeExpertMlpOp][]) for
+    kernels that fuse across the activation (e.g. Blackwell MXFP8). Mutually
+    exclusive with ``ragged_dot_ops``; ring / ragged_all_to_all backends only.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -216,6 +229,18 @@ def moe_mlp(
             "fp8_wire is only wired into the EP ring / ragged_all_to_all backends; "
             f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
         )
+    if expert_mlp_op is not None:
+        if ragged_dot_ops is not None:
+            raise ValueError("expert_mlp_op and ragged_dot_ops are mutually exclusive: both own the expert GEMMs")
+        if not has_ep or resolved_implementation not in _QUANTIZED_EP_MOE_IMPLEMENTATIONS:
+            raise NotImplementedError(
+                "expert_mlp_op is only wired into the EP ring / ragged_all_to_all backends; "
+                f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+            )
+        if activation != ActivationFunctionEnum.silu:
+            # The op bakes its own activation into the fused kernel; a caller
+            # requesting a different one would be silently ignored.
+            raise ValueError(f"expert_mlp_op owns the MLP activation (SwiGLU/silu); got activation={activation!r}")
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -266,7 +291,11 @@ def moe_mlp(
                 lambda a: _reshard_for_shard_map(a, mesh, P()) if eqx.is_array(a) else a, ragged_dot_ops
             )
 
-        backend_kwargs = {"fp8_wire": fp8_wire} if resolved_implementation in _QUANTIZED_EP_MOE_IMPLEMENTATIONS else {}
+        backend_kwargs = (
+            {"fp8_wire": fp8_wire, "expert_mlp_op": expert_mlp_op}
+            if resolved_implementation in _QUANTIZED_EP_MOE_IMPLEMENTATIONS
+            else {}
+        )
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
@@ -336,6 +365,7 @@ __all__ = [
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
+    "MoeExpertMlpOp",
     "MoeImplementation",
     "MoeRaggedDotOps",
     "PspecAxis",

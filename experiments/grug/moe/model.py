@@ -51,6 +51,8 @@ from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
+from experiments.grug.moe.mxfp8 import MxFp8MoeMlpOp
+
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
@@ -110,24 +112,53 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 class GrugFp8Config:
     """FP8 for the quantizable GEMMs of the model.
 
-    Enabling this runs both expert GEMMs as FP8 grouped matmuls with delayed
-    per-tensor scaling ([haliax.quantization.Fp8RaggedDotOp][], Hopper-only) and,
-    unless ``wire`` is disabled, carries the EP dispatch/combine collectives as
-    FP8 over the wire with per-token scaling. Requires 128-divisible hidden and
-    intermediate dims (checked at config time) and expert parallelism
-    (expert axis size > 1) with the ring or ragged_all_to_all MoE backend; other
-    configurations raise on the first forward pass.
+    Enabling this runs both expert GEMMs as FP8 grouped matmuls (unless
+    ``grouped`` is disabled) and, unless ``wire`` is disabled, carries the EP
+    dispatch/combine collectives as FP8 over the wire with per-token scaling.
+    Requires 128-divisible hidden and intermediate dims (checked at config
+    time) and expert parallelism (expert axis size > 1) with the ring or
+    ragged_all_to_all MoE backend; other configurations raise on the first
+    forward pass.
+
+    ``recipe`` picks the grouped-GEMM quantization recipe:
+
+    - ``"per_tensor"``: delayed per-tensor scaling
+      ([haliax.quantization.Fp8RaggedDotOp][], Hopper/sm90-only Mosaic wgmma
+      kernels).
+    - ``"mxfp8"``: Blackwell (sm100-only) MXFP8 block scaling on the fused
+      cudnn-frontend grouped kernels — stateless, whole expert MLP as one op
+      (see ``experiments.grug.moe.mxfp8.MxFp8MoeMlpOp``). Requires
+      ``wire=False`` (the MXFP8 phase keeps EP collectives bf16 per
+      MXFP8-000b) and ``grouped=True``. ``mxfp8_producer`` selects the
+      dual-orientation activation quantizer (``"auto"`` probes the CuTe
+      kernel per node and falls back to XLA).
 
     Unless ``dense`` is disabled, the dense GEMMs — attention q/k/v/o and the
-    shared-expert MLP — also run as FP8 cuBLASLt matmuls with the same delayed
-    per-tensor scaling recipe ([haliax.quantization.Fp8DotGeneralOp][]). The
+    shared-expert MLP — also run as FP8 cuBLASLt matmuls with delayed
+    per-tensor scaling ([haliax.quantization.Fp8DotGeneralOp][]) under EITHER
+    recipe (per MXFP8-001b, per-tensor beats native mxfp8 dense on sm100). The
     router, attention gate, GatedNorm, embedding, and lm-head projections stay
     in full precision.
     """
 
     wire: bool = True
     dense: bool = True
+    grouped: bool = True
+    recipe: Literal["per_tensor", "mxfp8"] = "per_tensor"
+    mxfp8_producer: Literal["auto", "cute", "xla"] = "auto"
     amax_history_length: int = 1024
+
+    def __post_init__(self) -> None:
+        if self.recipe not in ("per_tensor", "mxfp8"):
+            raise ValueError(f"recipe must be 'per_tensor' or 'mxfp8', got {self.recipe!r}")
+        if self.recipe == "mxfp8":
+            if self.wire:
+                raise ValueError(
+                    "recipe='mxfp8' requires wire=False: the MXFP8 phase keeps EP collectives bf16 "
+                    "(MXFP8-000b decision; re-test FP8 wire separately)"
+                )
+            if not self.grouped:
+                raise ValueError("recipe='mxfp8' requires grouped=True (the recipe only changes the grouped GEMMs)")
 
 
 @dataclass(frozen=True)
@@ -698,11 +729,15 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         ragged_dot_ops = None
-        if cfg.fp8 is not None:
-            ragged_dot_ops = MoeRaggedDotOps(
-                w13=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
-                w2=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
-            )
+        expert_mlp_op = None
+        if cfg.fp8 is not None and cfg.fp8.grouped:
+            if cfg.fp8.recipe == "mxfp8":
+                expert_mlp_op = MxFp8MoeMlpOp(producer=cfg.fp8.mxfp8_producer)
+            else:
+                ragged_dot_ops = MoeRaggedDotOps(
+                    w13=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
+                    w2=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
+                )
 
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
@@ -719,6 +754,7 @@ class MoEMLP(eqx.Module):
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
                 ragged_dot_ops=ragged_dot_ops,
                 fp8_wire=cfg.fp8.wire if cfg.fp8 is not None else False,
+                expert_mlp_op=expert_mlp_op,
             ),
             cfg=cfg,
         )

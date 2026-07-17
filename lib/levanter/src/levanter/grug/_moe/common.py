@@ -5,7 +5,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, cast, get_args
+from typing import Literal, Protocol, TypeAlias, cast, get_args
 
 import equinox as eqx
 import jax
@@ -56,6 +56,35 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+
+
+class MoeExpertMlpOp(Protocol):
+    """Whole-expert-MLP op for EP backends whose kernels fuse across the two GEMMs.
+
+    Where [MoeRaggedDotOps][] swaps in a kernel per grouped matmul (leaving the
+    activation between them to the backend), an expert-MLP op owns the entire
+    ``w13 -> activation -> w2`` body — including its own quantization recipe,
+    padding/layout requirements, and custom VJP. It is called per expert shard
+    with the expert-grouped dispatch buffer and the genuine non-uniform
+    ``group_sizes`` (summing to the buffer's row count).
+
+    Implementations must be STATELESS pytree-free values (hashable, defining
+    ``__eq__``): they are threaded through ``shard_map`` as static closure
+    constants, not as operands. Stateful recipes (delayed scaling) belong in
+    [MoeRaggedDotOps][] instead.
+
+    Args:
+        x: ``(C, D)`` dispatch buffer, rows grouped by local expert.
+        w13: ``(E_local, D, 2*I)`` gate/up weights, concatenated along the last
+            axis (gate first).
+        w2: ``(E_local, I, D)`` down-projection weights.
+        group_sizes: ``(E_local,)`` int32 rows per expert; ``sum == C``.
+
+    Returns:
+        ``(C, D)`` expert MLP output in ``x.dtype``.
+    """
+
+    def __call__(self, x, w13, w2, group_sizes) -> jnp.ndarray: ...
 
 
 class MoeRaggedDotOps(eqx.Module):

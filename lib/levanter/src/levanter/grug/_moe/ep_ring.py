@@ -15,6 +15,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    MoeExpertMlpOp,
     MoeRaggedDotOps,
 )
 from levanter.grug._moe.ep_common import _prefix_cap_counts, _resolve_ragged_dot_fns
@@ -34,6 +35,7 @@ def _moe_mlp_ep_ring_local(
     num_experts: int,
     capacity_factor: float,
     fp8_wire: bool = False,
+    expert_mlp_op: MoeExpertMlpOp | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
@@ -104,16 +106,23 @@ def _moe_mlp_ep_ring_local(
     # boundaries aligned by attributing padding to the final expert segment.
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
-    rd_w13, rd_w2 = _resolve_ragged_dot_fns(ops)
-
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(rd_w13(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = tree_checkpoint_name(
-            rd_w2(activation_fn(gate) * up, moe_w2_local, group_sizes),
-            _CHECKPOINT_DISPATCH_OUTPUT,
-        )
+        if expert_mlp_op is not None:
+            # The op owns the whole w13 -> activation -> w2 body (fused kernels
+            # save their own residuals), so only the combined output is tagged.
+            out_dispatch = tree_checkpoint_name(
+                expert_mlp_op(x_dispatch, moe_w13_local, moe_w2_local, group_sizes),
+                _CHECKPOINT_DISPATCH_OUTPUT,
+            )
+        else:
+            rd_w13, rd_w2 = _resolve_ragged_dot_fns(ops)
+            w13_out = tree_checkpoint_name(rd_w13(x_dispatch, moe_w13_local, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+            moe_dim = moe_w2_local.shape[1]
+            gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+            out_dispatch = tree_checkpoint_name(
+                rd_w2(activation_fn(gate) * up, moe_w2_local, group_sizes),
+                _CHECKPOINT_DISPATCH_OUTPUT,
+            )
 
     with jax.named_scope("scatter"):
         out_global = jnp.zeros_like(x_global).at[token_local].add(out_dispatch * weight_dispatch[:, None], mode="drop")

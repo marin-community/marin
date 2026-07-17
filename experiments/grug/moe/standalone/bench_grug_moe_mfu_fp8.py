@@ -69,6 +69,14 @@ def _parse():
     p.add_argument("--fp8", action="store_true", help="FP8 grouped + dense GEMMs + wire collectives")
     p.add_argument("--no-fp8-wire", action="store_true", help="with --fp8: keep EP collectives bf16")
     p.add_argument("--no-fp8-dense", action="store_true", help="with --fp8: keep dense GEMMs bf16")
+    p.add_argument("--no-fp8-grouped", action="store_true", help="with --fp8: keep expert GEMMs bf16 (dense-only arm)")
+    p.add_argument(
+        "--fp8-recipe",
+        default="per_tensor",
+        choices=["per_tensor", "mxfp8"],
+        help="grouped-GEMM recipe: per_tensor (Hopper Fp8RaggedDotOp) or mxfp8 (Blackwell fused kernels)",
+    )
+    p.add_argument("--mxfp8-producer", default="auto", choices=["auto", "cute", "xla"])
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--warmup-steps", type=int, default=8)
     p.add_argument("--batch-size", type=int, default=128)
@@ -97,7 +105,13 @@ def main():
     inter = a.hidden_dim // 2
     fp8 = None
     if a.fp8:
-        fp8 = GrugFp8Config(wire=not a.no_fp8_wire, dense=not a.no_fp8_dense)
+        fp8 = GrugFp8Config(
+            wire=not a.no_fp8_wire,
+            dense=not a.no_fp8_dense,
+            grouped=not a.no_fp8_grouped,
+            recipe=a.fp8_recipe,
+            mxfp8_producer=a.mxfp8_producer,
+        )
     model = GrugModelConfig(
         vocab_size=128256,
         hidden_dim=a.hidden_dim,
@@ -166,7 +180,11 @@ def main():
             **flops_summary,
             "hidden_dim": model.hidden_dim,
             "moe_implementation": model.moe_implementation,
-            "fp8": None if fp8 is None else {"wire": fp8.wire, "dense": fp8.dense},
+            "fp8": (
+                None
+                if fp8 is None
+                else {"wire": fp8.wire, "dense": fp8.dense, "grouped": fp8.grouped, "recipe": fp8.recipe}
+            ),
             "capacity_factor_note": "branch-hardcoded 1.25 (standalone default was 1.0)",
             "num_gpus": a.num_gpus,
         },

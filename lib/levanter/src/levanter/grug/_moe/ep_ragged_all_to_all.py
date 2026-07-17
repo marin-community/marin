@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from levanter.grug._moe.common import MoeRaggedDotOps
+from levanter.grug._moe.common import MoeExpertMlpOp, MoeRaggedDotOps
 from levanter.grug._moe.fp8_wire import fp8_ragged_a2a
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
@@ -39,6 +39,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     fp8_wire: bool = False,
+    expert_mlp_op: MoeExpertMlpOp | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -97,13 +98,15 @@ def _moe_mlp_ep_ragged_a2a_local(
             shard_index=shard_id,
         )
 
-    rd_w13, rd_w2 = _resolve_ragged_dot_fns(ops)
-
     with jax.named_scope("moe_up_down"):
-        w13_out = rd_w13(x_dispatch, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = rd_w2(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        if expert_mlp_op is not None:
+            out_dispatch = expert_mlp_op(x_dispatch, moe_w13_local, moe_w2_local, local_group_sizes)
+        else:
+            rd_w13, rd_w2 = _resolve_ragged_dot_fns(ops)
+            w13_out = rd_w13(x_dispatch, moe_w13_local, local_group_sizes)
+            moe_dim = moe_w2_local.shape[1]
+            gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+            out_dispatch = rd_w2(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
 
     with jax.named_scope("combine"):
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
