@@ -1787,9 +1787,7 @@ class ResourceCollector:
         self._thread.join(timeout=5)
 
 
-# Periodic thread-dump cadence, matching the GCE/TPU worker's profile loop
-# (Worker._profile_interval, 10 minutes). The k8s runtime has no per-node worker
-# daemon to run that loop, so PeriodicProfiler reproduces it controller-side.
+# Periodic thread-dump cadence, 10 minutes to match the GCE/TPU worker cadence.
 DEFAULT_PROFILE_POLL_INTERVAL = 600.0
 # Cap on concurrent kubectl exec streams a single capture cycle opens, so a large
 # gang is dumped near-simultaneously without exhausting the controller's k8s
@@ -1810,23 +1808,14 @@ class _ProfileTarget:
 
 
 class PeriodicProfiler:
-    """Background thread that dumps each running task pod's threads every
-    ``poll_interval`` and appends a ``trigger="periodic"`` ``iris.profile`` row.
+    """Dumps each running task pod's threads every ``poll_interval`` and appends
+    one ``trigger="periodic"`` ``iris.profile`` row per pod.
 
-    The GCE/TPU runtime profiles each running attempt from its per-node worker
-    daemon (``Worker._run_profile_loop``). The k8s runtime has no worker daemon,
-    so without this the only profiles a k8s job ever gets are the on-demand
-    captures an operator triggers by hand — a silently wedged collective (every
-    rank blocked, no error, no process exit) then leaves no stack-trace history
-    to diagnose after the fact. This reproduces the worker loop controller-side:
-    unattended thread dumps land in the profile timeline so a hang is caught.
-
-    Thread dumps (not CPU samples) are captured because they are instantaneous
-    and pinpoint where each rank is blocked; a CPU profile of a hung process
-    samples nothing. Captures run on a bounded thread pool so a whole gang is
-    dumped near-simultaneously. The reconcile loop declares the authoritative
-    running-pod set via ``set_pods()`` once per cycle, and all kubectl exec I/O
-    stays off the reconcile thread.
+    The reconcile loop declares the running-pod set via ``set_pods()``; captures
+    then run on a background thread, off the reconcile path, on a bounded pool so
+    a whole gang is dumped near-simultaneously. Thread dumps rather than CPU
+    samples: a hung process samples no CPU, but a thread dump shows where each
+    rank is blocked.
     """
 
     def __init__(
@@ -2080,11 +2069,9 @@ class K8sTaskProvider:
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
     # metrics list per tick covers every managed pod (see ResourceCollector).
     resource_poll_interval: float = 15.0
-    # Periodic thread-dump cadence. The k8s runtime has no per-node worker daemon
-    # to run the GCE worker's profile loop, so PeriodicProfiler reproduces it here:
-    # every profile_poll_interval it dumps each running pod's threads to
-    # iris.profile (trigger=periodic) so a silently hung collective is caught in
-    # the profile timeline. Matches the worker loop's 10-minute cadence.
+    # Cadence at which PeriodicProfiler dumps each running pod's threads to
+    # iris.profile (trigger=periodic), so a silently hung collective is caught in
+    # the profile timeline even though nothing polls a k8s pod otherwise.
     profile_poll_interval: float = DEFAULT_PROFILE_POLL_INTERVAL
     # Cluster-wide kubectl scans (pod list, stray-pod GC, pod poll, node refresh)
     # are coarse-grained: the controller ticks reconcile at poll_interval (1s),
