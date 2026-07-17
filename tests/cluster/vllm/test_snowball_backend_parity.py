@@ -5,8 +5,8 @@
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
-The 64 content-addressed prompts span 28 to 29,364 tokens and are evaluated in
-the same production-shaped length buckets as the June checkpoint golden test.
+The 64 content-addressed prompts span short through 32K-context workloads and
+are evaluated in the same production-shaped buckets as the checkpoint test.
 Levanter projects only each prompt's last hidden state. vLLM receives the exact
 token IDs through its OpenAI completions endpoint, with one concurrent request
 pinned to each data-parallel rank.
@@ -44,7 +44,6 @@ from tests.cluster.vllm.representative_eval import (
     RepresentativeCase,
     RepresentativeGolden,
     pad_prompt_batch,
-    prompt_batches,
     read_prompt_fixture,
     read_representative_goldens,
 )
@@ -82,7 +81,6 @@ def _log_parities(backend: str, parities: list[NextTokenParity]) -> None:
         backend,
         "\n".join(
             f"  case={parity.case_id} rank={parity.backend_rank} greedy={parity.greedy_token_id} "
-            f"golden={parity.golden_greedy_token_ids} margin={parity.golden_top1_probability_margin:.6f} "
             f"greedy_gap={parity.golden_probability_gap_to_greedy:.6f} "
             f"max_prob_err={parity.max_probability_error:.6f} l1={parity.top_probability_l1_error:.6f}"
             for parity in sorted(parities, key=lambda item: (item.case_id, item.backend_rank))
@@ -103,7 +101,6 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
     from marin.inference.serving_backend import LevanterBackend, ModelSpec  # noqa: PLC0415
 
     prompt_fixture = read_prompt_fixture(goldens)
-    batches = prompt_batches(prompt_fixture.cases)
     num_chips = jax.device_count()
     assert num_chips == GPU_COUNT, f"expected {GPU_COUNT} H100s, found {num_chips} devices"
     num_heads, num_kv_heads = read_attention_heads(JUNE_67B_A2B.export_uri)
@@ -146,12 +143,12 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
 
         parities: list[NextTokenParity] = []
         Batch = Axis("batch", BATCH_SIZE)
-        for batch_index, batch in enumerate(batches):
+        for batch_index, batch in enumerate(prompt_fixture.batches):
             assert len(batch.cases) == BATCH_SIZE
             logger.info(
                 "Levanter batch %d/%d: max_tokens=%d cases=%s",
                 batch_index + 1,
-                len(batches),
+                len(prompt_fixture.batches),
                 batch.max_tokens,
                 [case.id for case in batch.cases],
             )
@@ -186,7 +183,6 @@ def score_vllm_against_goldens(
     from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend  # noqa: PLC0415
 
     prompt_fixture = read_prompt_fixture(goldens)
-    batches = prompt_batches(prompt_fixture.cases)
 
     # Run:ai ignores Iris's FSSPEC_S3 setting and CoreWeave rejects path-style S3 requests.
     with tempfile.TemporaryDirectory(prefix="snowball-parity-vllm-") as temp_dir:
@@ -247,24 +243,18 @@ def score_vllm_against_goldens(
                         timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
                     )
                     response.raise_for_status()
-                    choices = response.json()["choices"]
-                    assert len(choices) == 1
-                    choice = choices[0]
+                    (choice,) = response.json()["choices"]
                     assert choice["prompt_token_ids"] == list(case.prompt_token_ids)
-                    assert len(choice["token_ids"]) == 1
-                    returned_top_logprobs = choice["logprobs"]["top_logprobs"]
-                    assert len(returned_top_logprobs) == 1
-                    actual_logprobs = {}
-                    for token, logprob in returned_top_logprobs[0].items():
-                        assert token.startswith("token_id:")
-                        token_id = int(token.removeprefix("token_id:"))
-                        assert token_id >= 0
-                        assert token_id not in actual_logprobs
-                        actual_logprobs[token_id] = float(logprob)
+                    (greedy_token_id,) = choice["token_ids"]
+                    (returned_top_logprobs,) = choice["logprobs"]["top_logprobs"]
+                    actual_logprobs = {
+                        int(token.removeprefix("token_id:")): float(logprob)
+                        for token, logprob in returned_top_logprobs.items()
+                    }
                     return parity_from_logprob_map(
                         case.id,
                         case.top_logprobs,
-                        int(choice["token_ids"][0]),
+                        int(greedy_token_id),
                         actual_logprobs,
                         backend_rank=rank,
                     )
@@ -285,20 +275,18 @@ def score_vllm_against_goldens(
                 return [future.result() for future in as_completed(futures)]
 
             with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
-                for wave, batch in enumerate(batches):
+                for wave, batch in enumerate(prompt_fixture.batches):
                     logger.info(
                         "vLLM wave %d/%d: max_tokens=%d cases=%s",
                         wave + 1,
-                        len(batches),
+                        len(prompt_fixture.batches),
                         batch.max_tokens,
                         [case.id for case in batch.cases],
                     )
                     parities.extend(request_wave(executor, batch.cases, f"wave-{wave}"))
 
-                sentinel = min(
-                    (case for case in prompt_fixture.cases if len(case.prompt_token_ids) > 2048),
-                    key=lambda case: (len(case.prompt_token_ids), case.id),
-                )
+                sentinel = next(case for case in prompt_fixture.cases if case.id == "knowledge-longbench-02")
+                assert len(sentinel.prompt_token_ids) > 2048
                 logger.info("vLLM rank sentinel: case=%s tokens=%d", sentinel.id, len(sentinel.prompt_token_ids))
                 parities.extend(request_wave(executor, (sentinel,) * GPU_COUNT, "rank-sentinel"))
 

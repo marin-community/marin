@@ -41,7 +41,6 @@ from tests.cluster.vllm.representative_eval import (
     RepresentativePromptFixture,
     TokenScore,
     pad_prompt_batch,
-    prompt_batches,
     read_prompt_fixture,
     read_representative_goldens,
 )
@@ -110,7 +109,7 @@ def compute_checkpoint_inference(
         params, pending_qb_betas = load_checkpoint(inference_model_config, mesh)
 
         computed_cases = {}
-        for batch in prompt_batches(prompt_fixture.cases):
+        for batch in prompt_fixture.batches:
             token_ids, last_token_indices = pad_prompt_batch(batch, tokenizer.eos_token_id)
             top_logprobs, top_token_ids = top_k_next_token_logprobs(
                 params,
