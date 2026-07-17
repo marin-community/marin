@@ -198,6 +198,12 @@ class GrugModel:
     wandb_tags: Sequence[str] = ()
     wandb_group: str | None = None
 
+    def tokenizer_cache_key(self) -> str:
+        return self.tokenizer_path
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        return self.tokenizer_path
+
     @property
     def run(self) -> Callable[..., None]:
         return run_grug_moe_sft_trial

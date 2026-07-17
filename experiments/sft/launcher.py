@@ -14,13 +14,16 @@
 The chat template, dataset mixture, sequence length, and packing are fields of :class:`SFTSpec`;
 the model — architecture, tokenizer, where the initial weights come from, and which training
 backend runs it — is a separate :class:`ModelSource`, so an experiment composes *model* and *data*
-as independent inputs. ``configs/delphi_1e22.py`` is one worked example (a :class:`HfModel` source
+as independent inputs. ``configs/delphi_1e22.py`` is one worked example (an :class:`HFModel` source
 plus a magpie/warmup mixture).
 
 Init sources (the :class:`ModelSource` implementations):
 
-- :class:`HfModel` — SFT of an HF checkpoint (``initialize_from_hf`` + ``use_hf_model_config``);
-  Levanter re-derives the arch from the checkpoint.
+- :class:`HFModel` — SFT of an HF checkpoint used verbatim (``initialize_from_hf`` +
+  ``use_hf_model_config``); Levanter re-derives the arch from the checkpoint.
+- :class:`PreparedModel` — like :class:`HFModel`, but the base checkpoint + tokenizer are produced
+  by an upstream preparation :class:`ArtifactStep` (e.g. the Delphi reserved-slot rename), resolved
+  to that step's output directory. The step becomes a dependency.
 - :class:`LevanterCheckpointModel` — SFT from a native Levanter checkpoint
   (``initialize_from_checkpoint_path``); the init path may be a static string or a dependency step
   (an HF->Levanter conversion, or a prior ``sft_step`` output for stage chaining). Its model config
@@ -77,6 +80,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -96,6 +100,9 @@ _TRAIN_RESOURCES = "train_resources"
 # Compute in bf16, keep master params and optimizer state in f32 — the standard marin policy.
 _MARIN_PRECISION = "p=f32,c=bfloat16"
 _MIXTURE_BLOCK_SIZE = 2048
+# Bump to rebuild every chat cache; the (tokenizer, template, pack) hash in the name already forks a
+# new cache when any of those change, so this is only for reprocessing the same recipe.
+_CHAT_CACHE_VERSION = "2026.07.17"
 
 
 @dataclass(frozen=True)
@@ -114,42 +121,6 @@ class DatasetSpec:
     weight: float
 
 
-@dataclass(frozen=True)
-class SFTSpec:
-    """A full chat-SFT run: the *data* and the training hyperparameters.
-
-    The *model* (arch, tokenizer, init source, backend) is a separate :class:`ModelSource` so the
-    two compose independently. The chat template is a parameter, so Delphi is just one instance.
-    """
-
-    name: str  # artifact name, e.g. "checkpoints/delphi-1e22-magpie-warmup-levanter-sft"
-    version: str  # calver "2026.07.15"; a "-dev" suffix opts out of the cache (always rebuild)
-    model: ModelSource  # arch + tokenizer + where the initial weights come from + training backend
-    chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
-    datasets: Sequence[DatasetSpec]  # the instruction mixture
-    optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
-    seq_len: int = 4096
-    pack: bool = True  # chat packs by default; a step count must count packed examples
-    batch_size: int = 16
-    # Training length is exactly one of these. ``num_train_epochs`` (single dataset only) resolves the
-    # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
-    # batch))``, the packed-sequence count -- so it is not hand-calibrated; it routes the run through a
-    # ``chat_tokenize`` dep (see :func:`sft_step`). ``num_train_steps`` is the explicit count (required
-    # for a mixture, where epoch semantics are undefined) and keeps the ``auto_build_caches`` path.
-    num_train_steps: int | None = None
-    num_train_epochs: int | None = None
-    wandb_project: str = "marin-sft-launcher"
-
-    def __post_init__(self) -> None:
-        if (self.num_train_steps is None) == (self.num_train_epochs is None):
-            raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
-        if self.num_train_epochs is not None and len(self.datasets) != 1:
-            raise ValueError(
-                f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
-                "use num_train_steps for a mixture."
-            )
-
-
 @runtime_checkable
 class ModelSource(Protocol):
     """A model to fine-tune: its tokenizer, its training backend, and how it is initialised.
@@ -157,9 +128,20 @@ class ModelSource(Protocol):
     An implementation owns the backend-specific training config and the backend dispatch callable
     (``run``). ``sft_step`` builds the shared chat-data config and hands it to
     :meth:`build_train_config`; the returned object is what ``run`` is called with.
+
+    The tokenizer is exposed two ways because it may not be known until the graph runs (a
+    :class:`PreparedModel`'s tokenizer is an upstream step's output directory):
+    :meth:`tokenizer_cache_key` is a construction-time-stable id used only to fork chat caches, and
+    :meth:`resolve_tokenizer` is the build-time path handed to Levanter / the tokenizer.
     """
 
-    tokenizer_path: str
+    def tokenizer_cache_key(self) -> str:
+        """A stable, construction-time id for the tokenizer, used only to fork chat caches."""
+        ...
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        """The build-time tokenizer path (a hub id/dir, or a prepared step's output directory)."""
+        ...
 
     @property
     def run(self) -> Callable[..., None]:
@@ -167,7 +149,7 @@ class ModelSource(Protocol):
         ...
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
-        """Extra dependency steps this source contributes (e.g. an init checkpoint produced upstream)."""
+        """Extra dependency steps this source contributes (e.g. a preparation or init step)."""
         ...
 
     def build_train_config(
@@ -262,18 +244,25 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
 
 
 @dataclass(frozen=True)
-class HfModel:
-    """Init from an HF checkpoint: ``initialize_from_hf`` + ``use_hf_model_config`` (Levanter backend).
+class HFModel:
+    """Init from an HF checkpoint used verbatim: ``initialize_from_hf`` + ``use_hf_model_config``.
 
-    ``model_type`` is the Levanter model-registry key; ``use_hf_model_config`` re-derives the arch
-    from the checkpoint, so it only has to match the architecture (Delphi and the Qwen3 smoke are
-    both ``qwen3``).
+    ``model_ref`` is an HF hub id or a staged directory; ``tokenizer_path`` defaults to it (the
+    common case). ``model_type`` is the Levanter model-registry key; ``use_hf_model_config``
+    re-derives the arch from the checkpoint, so it only has to match the architecture (Delphi and
+    the Qwen3 smoke are both ``qwen3``).
     """
 
-    model_ref: str  # HF id or prepared-checkpoint dir
-    tokenizer_path: str  # tokenizer dir (Delphi: the prepared single-id think/tool tokenizer)
+    model_ref: str  # HF id or staged prepared-checkpoint dir
+    tokenizer_path: str | None = None  # defaults to model_ref
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = (128001, 128009)  # Delphi: <|end_of_text|> + <|eot_id|>
+
+    def tokenizer_cache_key(self) -> str:
+        return self.tokenizer_path or self.model_ref
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        return self.tokenizer_path or self.model_ref
 
     @property
     def run(self) -> Callable[..., None]:
@@ -305,19 +294,76 @@ class HfModel:
 
 
 @dataclass(frozen=True)
+class PreparedModel:
+    """Init from a base checkpoint produced by a preparation :class:`ArtifactStep` (Levanter backend).
+
+    ``step`` builds the base (e.g. the Delphi reserved-slot rename + embedding reinit); ``sft_step``
+    adds it as a dependency and resolves both ``initialize_from_hf`` and the tokenizer to its output
+    directory. Otherwise identical to :class:`HFModel` (verbatim ``initialize_from_hf`` +
+    ``use_hf_model_config``).
+    """
+
+    step: ArtifactStep[Artifact]
+    model_type: str = "qwen3"
+    eos_token_ids: Sequence[int] = (128001, 128009)
+
+    def tokenizer_cache_key(self) -> str:
+        # The step's name is stable at graph-construction time; the output path is not yet known.
+        return self.step.name
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        return ctx.artifact_path(self.step)
+
+    @property
+    def run(self) -> Callable[..., None]:
+        return _levanter_train_job
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def build_train_config(
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
+    ) -> TrainLmOnPodConfig:
+        prepared_path = ctx.artifact_path(self.step)
+        return _levanter_pod_config(
+            ctx,
+            spec,
+            data_config,
+            resources,
+            num_train_steps,
+            model_type=self.model_type,
+            initialize_from_hf=prepared_path,
+            initialize_from_checkpoint_path=None,
+            use_hf_model_config=True,
+            eos_token_ids=self.eos_token_ids,
+        )
+
+
+@dataclass(frozen=True)
 class LevanterCheckpointModel:
     """Init from a native Levanter checkpoint: ``initialize_from_checkpoint_path`` (Levanter backend).
 
     ``init_from`` is either a static checkpoint dir or a dependency step whose output is the
-    checkpoint — an HF->Levanter conversion (:func:`hf_to_levanter`) or a prior ``sft_step`` output
-    for stage chaining. Unlike :class:`HfModel` the arch is not re-derived, so ``model_type`` must
-    name the class whose default fields match the checkpoint.
+    checkpoint — an HF->Levanter conversion or a prior ``sft_step`` output for stage chaining.
+    Unlike :class:`HFModel` the arch is not re-derived, so ``model_type`` must name the class whose
+    default fields match the checkpoint.
     """
 
     init_from: str | ArtifactStep
     tokenizer_path: str
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = (128001, 128009)
+
+    def tokenizer_cache_key(self) -> str:
+        return self.tokenizer_path
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        return self.tokenizer_path
 
     @property
     def run(self) -> Callable[..., None]:
@@ -347,6 +393,42 @@ class LevanterCheckpointModel:
             use_hf_model_config=False,
             eos_token_ids=self.eos_token_ids,
         )
+
+
+@dataclass(frozen=True)
+class SFTSpec:
+    """A full chat-SFT run: the *data* and the training hyperparameters.
+
+    The *model* (arch, tokenizer, init source, backend) is a separate :class:`ModelSource` so the
+    two compose independently. The chat template is a parameter, so Delphi is just one instance.
+    """
+
+    name: str  # artifact name, e.g. "checkpoints/delphi-1e22-magpie-warmup-levanter-sft"
+    version: str  # calver "2026.07.15"; a "-dev" suffix opts out of the cache (always rebuild)
+    model: ModelSource  # arch + tokenizer + where the initial weights come from + training backend
+    chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
+    datasets: Sequence[DatasetSpec]  # the instruction mixture
+    optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
+    seq_len: int = 4096
+    pack: bool = True  # chat packs by default; a step count must count packed examples
+    batch_size: int = 16
+    # Training length is exactly one of these. ``num_train_epochs`` (single dataset only) resolves the
+    # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
+    # batch))``, the packed-sequence count -- so it is not hand-calibrated; it routes the run through a
+    # ``chat_tokenize`` dep (see :func:`sft_step`). ``num_train_steps`` is the explicit count (required
+    # for a mixture, where epoch semantics are undefined) and keeps the ``auto_build_caches`` path.
+    num_train_steps: int | None = None
+    num_train_epochs: int | None = None
+    wandb_project: str = "marin-sft-launcher"
+
+    def __post_init__(self) -> None:
+        if (self.num_train_steps is None) == (self.num_train_epochs is None):
+            raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
+        if self.num_train_epochs is not None and len(self.datasets) != 1:
+            raise ValueError(
+                f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
+                "use num_train_steps for a mixture."
+            )
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").
@@ -383,6 +465,7 @@ def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
 def _chat_mixture_data_config(
     spec: SFTSpec,
     cache_dirs: Sequence[str],
+    tokenizer: str,
     *,
     build_component: Callable[[str, ChatLmDatasetFormat], DatasetComponent],
     auto_build_caches: bool,
@@ -391,7 +474,8 @@ def _chat_mixture_data_config(
 
     One component per dataset (``build_component`` turns a cache dir + the chat format into the
     ``DatasetComponent`` — the two paths differ only in that source shape and in
-    ``auto_build_caches``). The tokenizer comes from ``spec.model`` so data and model stay consistent.
+    ``auto_build_caches``). ``tokenizer`` is the resolved model tokenizer, so data and model stay
+    consistent.
     """
     fmt = _chat_format(spec)
     components: dict[str, DatasetComponent] = {}
@@ -400,7 +484,7 @@ def _chat_mixture_data_config(
         components[dataset.slug] = build_component(cache_dir, fmt)
         weights[dataset.slug] = dataset.weight
     return LmDataConfig(
-        tokenizer=spec.model.tokenizer_path,
+        tokenizer=tokenizer,
         chat_template=spec.chat_template,  # data-level default; the component format overrides it
         enforce_eos=True,
         auto_build_caches=auto_build_caches,
@@ -410,7 +494,7 @@ def _chat_mixture_data_config(
     )
 
 
-def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
+def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
     """Chat caches built on the training pod from the ``transform_dataset_step`` outputs.
 
     ``dep_paths`` are the resolved transform outputs, aligned with ``spec.datasets``; each component
@@ -426,7 +510,27 @@ def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataCon
             split="train",
         )
 
-    return _chat_mixture_data_config(spec, dep_paths, build_component=build_component, auto_build_caches=True)
+    return _chat_mixture_data_config(spec, dep_paths, tokenizer, build_component=build_component, auto_build_caches=True)
+
+
+def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
+    """A chat ``LmDataConfig`` over pre-built chat caches (the ``chat_tokenize`` outputs).
+
+    ``auto_build_caches=False`` and no raw urls: the caches already exist, so Levanter reads them
+    directly instead of rebuilding on the training pod.
+    """
+
+    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
+        return DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
+            cache_dir=cache_dir,
+            format=fmt,
+            split="train",
+        )
+
+    return _chat_mixture_data_config(
+        spec, cache_paths, tokenizer, build_component=build_component, auto_build_caches=False
+    )
 
 
 def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> TrainerConfig:
@@ -472,11 +576,6 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
     )
 
 
-# Bump to rebuild every chat cache; the (tokenizer, template, pack) hash in the name already forks a
-# new cache when any of those change, so this is only for reprocessing the same recipe.
-_CHAT_CACHE_VERSION = "2026.07.17"
-
-
 def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactStep) -> ArtifactStep[TokenizedCache]:
     """A chat-format ``TokenizedCache`` step: tokenize the canonical messages with the chat template +
     completions-only mask + packing, off the training pod.
@@ -487,8 +586,7 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
     identity forks on ``(tokenizer, chat_template, pack)`` via the name suffix, so two recipes never
     collide on the ``StepRunner``'s name@version key.
     """
-    tokenizer = spec.model.tokenizer_path
-    key = hashlib.md5(f"{tokenizer}|{spec.chat_template}|{spec.pack}".encode()).hexdigest()[:6]
+    key = hashlib.md5(f"{spec.model.tokenizer_cache_key()}|{spec.chat_template}|{spec.pack}".encode()).hexdigest()[:6]
     name = f"tokenized/{dataset.slug}-chat-{key}"
 
     def build_config(ctx: StepContext) -> TokenizeConfig:
@@ -496,7 +594,7 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
             train_paths=[prefix_join(ctx.artifact_path(transform_dep), "**/*.jsonl.gz")],
             validation_paths=[],
             cache_path=ctx.output_path,
-            tokenizer=tokenizer,
+            tokenizer=spec.model.resolve_tokenizer(ctx),
             format=_chat_format(spec),
             tags=[dataset.slug],
         )
@@ -509,24 +607,6 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
         build_config=build_config,
         deps=(transform_dep,),
     )
-
-
-def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str]) -> LmDataConfig:
-    """A chat ``LmDataConfig`` over pre-built chat caches (the ``chat_tokenize`` outputs).
-
-    ``auto_build_caches=False`` and no raw urls: the caches already exist, so Levanter reads them
-    directly instead of rebuilding on the training pod.
-    """
-
-    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
-        return DatasetComponent(
-            source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
-            cache_dir=cache_dir,
-            format=fmt,
-            split="train",
-        )
-
-    return _chat_mixture_data_config(spec, cache_paths, build_component=build_component, auto_build_caches=False)
 
 
 def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactStep[TokenizedCache]) -> int:
@@ -566,7 +646,8 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
 
         def build_config(ctx: StepContext) -> object:
             run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
-            data_config = _prebuilt_chat_data_config(spec, [ctx.artifact_path(c) for c in chat_caches])
+            tokenizer = model.resolve_tokenizer(ctx)
+            data_config = _prebuilt_chat_data_config(spec, [ctx.artifact_path(c) for c in chat_caches], tokenizer)
             num_train_steps = _resolve_epoch_steps(ctx, spec, chat_caches[0])
             return model.build_train_config(ctx, spec, data_config, run_resources, num_train_steps)
 
@@ -576,7 +657,8 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
 
         def build_config(ctx: StepContext) -> object:
             run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
-            data_config = build_chat_data_config(spec, [ctx.artifact_path(dep) for dep in transform_deps])
+            tokenizer = model.resolve_tokenizer(ctx)
+            data_config = build_chat_data_config(spec, [ctx.artifact_path(dep) for dep in transform_deps], tokenizer)
             return model.build_train_config(ctx, spec, data_config, run_resources, spec.num_train_steps)
 
     return ArtifactStep(

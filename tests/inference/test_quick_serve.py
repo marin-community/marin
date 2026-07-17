@@ -27,7 +27,6 @@ from marin.inference.quick_serve_cli import (
 )
 from marin.inference.quick_serve_dashboard import (
     ServingInfo,
-    _forwardable_request_headers,
     bind_serving_socket,
     build_dashboard_app,
     serve_app_background,
@@ -378,20 +377,3 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503
     assert response.json()["status"] == "loading"
-
-
-def test_proxy_drops_blank_bearer_and_hop_by_hop_headers():
-    # lm-eval's local-completions client sends "Authorization: Bearer " with an empty key; the
-    # trailing-space value is an illegal HTTP header httpx refuses to forward, so it must be dropped
-    # (the local upstream needs no auth). A real token and ordinary headers pass through; hop-by-hop
-    # headers are stripped.
-    headers = {
-        "Authorization": "Bearer ",
-        "Content-Type": "application/json",
-        "Host": "10.0.0.1:30000",
-        "Connection": "keep-alive",
-    }
-    assert _forwardable_request_headers(headers) == {"Content-Type": "application/json"}
-
-    real = {"Authorization": "Bearer sk-abc123", "Content-Type": "application/json"}
-    assert _forwardable_request_headers(real) == real

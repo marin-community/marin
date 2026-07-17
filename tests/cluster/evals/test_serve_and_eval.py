@@ -24,7 +24,7 @@ from iris.cluster.types import Entrypoint, ResourceSpec, is_job_finished
 from marin.evaluation.eval_result import EvalchemyResult
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-from experiments.evals.evalchemy.serve_and_eval import EvalchemyEvalConfig, ServeSpec, serve_and_eval
+from experiments.evals.evalchemy.serve_and_eval import EvalchemyEvalConfig, ServeBackend, ServeSpec, serve_and_eval
 
 pytestmark = pytest.mark.cluster
 
@@ -44,7 +44,7 @@ def test_serve_and_eval_smoke(iris_client: IrisClient, smoke_region: str) -> Non
         model="Qwen/Qwen3-0.6B",
         tasks=SMOKE_TASKS,
         out_path=out_path,
-        serve=ServeSpec(backend="vllm", tpu_type="v6e-4", region=smoke_region),
+        serve=ServeSpec(backend=ServeBackend.VLLM, tpu_type="v6e-4", region=smoke_region),
         max_eval_instances=3,
     )
 
@@ -62,7 +62,8 @@ def test_serve_and_eval_smoke(iris_client: IrisClient, smoke_region: str) -> Non
         if not is_job_finished(job.state):
             job.terminate()
 
+    # Metrics are keyed by each task's upload dir (name_Nshot when un-aliased), not the bare task name.
     metrics = EvalchemyResult.raw_load(out_path).task_metrics()
-    assert set(metrics) >= {"arc_easy", "gsm8k"}, metrics
-    assert metrics["arc_easy"], "arc_easy produced no numeric metrics"
-    assert metrics["gsm8k"], "gsm8k produced no numeric metrics"
+    assert set(metrics) >= {"arc_easy_0shot", "gsm8k_5shot"}, metrics
+    assert metrics["arc_easy_0shot"], "arc_easy produced no numeric metrics"
+    assert metrics["gsm8k_5shot"], "gsm8k produced no numeric metrics"

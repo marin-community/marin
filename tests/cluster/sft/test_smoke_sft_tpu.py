@@ -28,7 +28,7 @@ from levanter.optim.config import AdamConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 
-from experiments.sft.launcher import DatasetSpec, HfModel, SFTSpec, resources_from_accelerator, sft_step
+from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, resources_from_accelerator, sft_step
 
 pytestmark = pytest.mark.cluster
 
@@ -55,8 +55,8 @@ _SMOKE_DATA = DatasetSpec(
 SMOKE_SPEC = SFTSpec(
     name="checkpoints/smoke-sft-tpu-qwen3-0p6b",
     version="2026.07.15-dev",  # -dev = always rebuild (no cache reuse)
-    # tiny public Qwen3 -> initialize_from_hf; Qwen3 eos = <|endoftext|> + <|im_end|>.
-    model=HfModel(model_ref="Qwen/Qwen3-0.6B", tokenizer_path="Qwen/Qwen3-0.6B", eos_token_ids=(151643, 151645)),
+    # tiny public Qwen3, used verbatim -> initialize_from_hf; Qwen3 eos = <|endoftext|> + <|im_end|>.
+    model=HFModel("Qwen/Qwen3-0.6B", eos_token_ids=(151643, 151645)),
     chat_template=QWEN3_SMOKE_CHAT_TEMPLATE,
     datasets=[_SMOKE_DATA],
     optimizer=AdamConfig(

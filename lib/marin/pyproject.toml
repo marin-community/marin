@@ -189,8 +189,9 @@ harbor = [
 ]
 
 dedup = [
-    # Native (maturin) nightly wheel; floor mirrors the root pyproject.toml pin.
-    "marin-dupekit >= 0.1.2.dev202606060824",
+    # Pure-Python workspace member; it pulls the native marin-dupekit-native
+    # kernels transitively (see lib/dupekit/pyproject.toml).
+    "marin-dupekit",
 ]
 
 datakit = [
