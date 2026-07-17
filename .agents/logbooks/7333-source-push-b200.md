@@ -38,3 +38,38 @@ A/B); shared academic B200/B300 Slurm cluster for single-node kernel work.
 ## Entries
 
 (append-only below)
+
+### 2026-07-17 — SPB-001 (part 1): branch assembly and census plan
+
+Assembled the working state for the GB200 census + gate on
+`research/mcwitt/7333-source-push-b200`:
+
+- Merged `origin/mcwitt/moe-standalone-ep` (65469cf38): the #7279 standalone
+  MFU harness (`experiments/grug/moe/standalone/grug_moe_mfu.py`) plus the
+  `ring_cute` / `ragged_all_to_all_cute` / `sonic_cute` backends.
+- Merged `origin/codex/blackwell-source-push-stack` (e21dd73c5): the #6933
+  staged source-push stack, including `source_push_inbox_blackwell.py`
+  (B200/B300 tuning) and the `pallas_mgpu_source_push_blackwell` public
+  implementation. Conflicts only in `_moe/common.py`
+  (`_EP_MOE_IMPLEMENTATIONS` union) and trivially in `grug_moe.py`.
+- Did NOT merge `research/mcwitt/6841-source-push-followup`: its semantic-path
+  files diverged from the blackwell stack by thousands of lines
+  (`source_push_forward.py` 1.9k-line diff, `source_push_mlp.py` 3.2k) and its
+  Pallas kernels are `mgpu.wgmma` sm_90a-only. Portable SPF wins (SPF-004 XLA
+  gather-sum combine, SPF-001 dy bf16) can be cherry-picked later if the gate
+  passes.
+- Extended `bench_source_push_forward_public_compare.py` `PUBLIC_EP_BACKENDS`
+  with `ring_cute` / `ragged_all_to_all_cute` (e70df4f09) — the bench routes
+  through public `moe_mlp`, so the merged dispatcher provides them.
+
+Gate instrument: `lib/levanter/scripts/bench/bench_source_push_forward_public_compare.py`
+(single-process, `jax.devices()[:ep_size]`, per-implementation timing +
+correctness vs reference). Production gate shape from #7279 (64-GPU config,
+per-32-GPU copy at EP4): `--ep-size 4 --tokens-per-rank 65536 --hidden-dim
+5120 --intermediate-dim 2560 --experts-per-rank 16 --topk 4
+--capacity-factor 1.0`. Paper check of `source_push_public` validation: EP4 ∈
+2..8, I2560 % 128 = 0, GB200 in the blackwell device allowlist — passes.
+
+Census instrument for per-stage anatomy: `bench_blackwell_source_push_forward_smoke.py`
+(stages: input_prepare, destination_x_transport, w13, w2, return_transport,
+combine).
