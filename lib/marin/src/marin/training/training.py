@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast
 
 from draccus.utils import DataclassInstance
-from fray.types import CpuConfig, ResourceConfig, TpuConfig
+from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig
@@ -381,6 +381,45 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
 
 
+# GPU collective watchdog. A transient NVLink/IB stall on a single rank leaves
+# every rank blocked inside one NCCL collective that never completes. XLA's
+# host-side rendezvous watchdog only covers a collective's *launch* (all local
+# streams arriving before the kernel is issued), not the in-kernel network wait,
+# so a cross-node stall wedges the whole mesh with no error and Iris never sees a
+# process failure to retry. `xla_gpu_nccl_termination_timeout_seconds` arms an XLA
+# monitor thread that polls each in-flight collective's completion event and, once
+# one is stuck past the timeout, aborts the communicators and raises TimeoutError
+# -- turning a silent hang into a crash that Iris retries (`max_retries_failure`).
+# XLA leaves it at -1 (disabled) by default, which is why these runs wedged
+# silently.
+GPU_NCCL_TERMINATION_TIMEOUT_FLAG = "xla_gpu_nccl_termination_timeout_seconds"
+# The timeout counts only time spent *inside* a collective, so it never fires
+# during compilation or host-side data loading (neither runs a collective) -- it
+# just has to clear the longest legitimate single collective: cross-rank compile
+# and data skew on a cold start, and checkpoint/eval barriers. 10 minutes sits
+# comfortably above those and still recovers a real wedge promptly. Override per
+# run by putting your own --xla_gpu_nccl_termination_timeout_seconds in XLA_FLAGS.
+DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT = 600
+
+
+def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:
+    """Arm the NCCL collective-hang watchdog and enable NCCL warn logging for a GPU run.
+
+    Mutates ``env`` in place. Both settings defer to anything already provided: an
+    explicit ``xla_gpu_nccl_termination_timeout_seconds`` in ``XLA_FLAGS`` wins, as
+    does a preset ``NCCL_DEBUG``.
+    """
+    xla_flags = env.get("XLA_FLAGS", "")
+    if GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in xla_flags:
+        flag = f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}"
+        env["XLA_FLAGS"] = f"{xla_flags} {flag}".strip()
+
+    # Without this NCCL stays silent even as the watchdog aborts a wedged collective
+    # (the issue's original symptom); WARN surfaces the abort and any transport
+    # error without INFO's per-collective firehose across hundreds of ranks.
+    env.setdefault("NCCL_DEBUG", "WARN")
+
+
 def resolve_training_env(
     base_env: dict[str, str] | None,
     resources: ResourceConfig,
@@ -403,6 +442,9 @@ def resolve_training_env(
         _check_for_wandb_key(env)
 
     env = add_run_env_variables(env)
+
+    if isinstance(resources.device, GpuConfig):
+        _add_gpu_collective_watchdog_env(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
         env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(
