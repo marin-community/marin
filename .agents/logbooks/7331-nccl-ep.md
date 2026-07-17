@@ -232,3 +232,43 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   TE core DT_NEEDED verified all-cu13. **NCCL_EP runs on this stack.**
   H-microbench arms now in flight: EP4 single-node + EP8 across 2 nodes
   (first cross-node NCCL_EP over MNNVL).
+
+### 2026-07-17 — NCCLEP-004: transport microbench — cross-node EP8 works; fwd-only jit anomalously slow
+- Setup: `experiments/ncclep/ep_transport_microbench.py` via
+  `run_microbench_gang.sh` (iris multigpu supervisor, 1 proc/GPU). Reference
+  per-rank load: 65,536 tokens/rank × H 5120 × top-4, e64, cf 1.25 (recv
+  capacity 327,680 rows/rank), bf16 wire, uniform round-robin routing,
+  30 iters/8 warmup, jitted dispatch → weighted-hadamard → combine round trip.
+  Jobs `/mwittmann/ncclep-mb-ep4d` (dp1×ep4, one node) and `ncclep-mb-ep8d`
+  (dp1×ep8, TWO nodes — first cross-node NCCL_EP, default MNNVL transport).
+- Results (median):
+  | arm | fwd | fwd+bwd (`value_and_grad`) |
+  |---|---|---|
+  | EP4, 1 node | 28.03 ms | 16.28 ms |
+  | EP8, 2 nodes | 54.46 ms | 24.47 ms |
+- Interpretation: **EP≥8 spanning nodes runs correctly with gradients** — the
+  goal's biggest physics risk is retired. Training-relevant cost is the
+  fwd+bwd number (24.5 ms/layer-equivalent at EP8) — ~1.2 s over 48 layers at
+  the reference load, plausibly competitive with the incumbent a2a_cute legs
+  (direct comparison lands with the e2e MFU runs, not here).
+- Anomaly (open): the fwd-ONLY jit is consistently ~2× slower than
+  fwd+bwd — even after switching to `value_and_grad` (plain `jax.grad` DCE'd
+  the primal combine FFI entirely, an earlier 2–5× artifact). Tight p10–p90
+  both arms, reproducible at both scales. Suspect scheduling/serialization
+  around the FFI ops in the small fwd-only executable; profile only if e2e
+  shows dispatch-bound steps.
+- Gotcha (repeated twice): FFI handlers must be registered by importing TE
+  **before the JAX CUDA client exists** — importing after
+  `jax.distributed.initialize` → `NOT_FOUND: No FFI handler registered for
+  te_ep_prepare_ffi`. TE imports now live at bench module top.
+
+### 2026-07-17 — NCCLEP-005 (in flight): e2e bench integration — `nccl_ep` backend
+- Branch `mcwitt/moe-standalone-ep-ncclep` (off the sample branch):
+  `levanter/grug/_moe/ep_nccl.py` (TE dispatch → shard_map(QuACK
+  `expert_mlp_fn`) → weighted hadamard → TE combine, mirroring TE's own MoE
+  block), `nccl_ep` registered in the implementation enum + a global-view
+  branch in `grug_moe.py`, and bench wiring: process-per-GPU assertion,
+  `--replica-axis-size 1` requirement (TE single-outer-axis), TE
+  `global_shard_guard(MeshResource(fsdp="data", ep="expert"))`, per-process
+  `ep_bootstrap` sized from `--capacity-factor`, supervised jax_init under the
+  multigpu supervisor. Single-node EP4 smoke (d2560 L4 b16) in flight.
