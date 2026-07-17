@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -37,6 +36,7 @@ VLLM_WORKER_ENV_VARS = (
     ("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1"),
     ("VLLM_TPU_SKIP_PRECOMPILE", "1"),
 )
+MARIN_IRIS_CONFIG_PATH = "lib/iris/config/marin.yaml"
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ def _run_brokered_lm_eval_artifact(
 ) -> None:
     output_path = eval_run.output_path
     with tempfile.TemporaryDirectory() as local_output:
-        run_iris_brokered_lm_eval(inference, replace(eval_run, output_path=local_output))
+        run_iris_brokered_lm_eval(inference, replace(eval_run, output_path=local_output), {})
         StoragePath(output_path).upload_from(local_output + "/", recursive=True)
 
 
@@ -140,7 +140,7 @@ def run_iris_lm_eval_job(
 
     def run_parent() -> None:
         configure_logging()
-        run_iris_brokered_lm_eval(inference, run)
+        run_iris_brokered_lm_eval(inference, run, {})
 
     constraints = [preemptible_constraint(False)]
     if region is not None:
@@ -280,15 +280,14 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
             priority=iris_priority,
         )
         if launcher_mode is LmEvalLauncher.LOCAL:
-            os.environ.update(configured_benchmark.parent_env_vars)
-            run_local_brokered_lm_eval(inference, run)
+            run_local_brokered_lm_eval(inference, run, configured_benchmark.parent_env_vars)
             return
 
         run_iris_lm_eval_job(
             inference,
             run,
             job_name=job_name,
-            iris_config_path="lib/iris/config/marin.yaml",
+            iris_config_path=MARIN_IRIS_CONFIG_PATH,
             parent_cpu=benchmark.parent_cpu,
             parent_ram=parent_ram,
             parent_disk=benchmark.parent_disk,

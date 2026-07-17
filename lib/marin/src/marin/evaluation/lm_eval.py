@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -46,7 +47,7 @@ class LmEvalRun:
     extra_model_args: Mapping[str, LmEvalModelArgValue] = field(default_factory=dict)
 
 
-def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
+def run_lm_eval(model: RunningModel, run: LmEvalRun, env_vars: Mapping[str, str]) -> None:
     """Evaluate tasks against a served model and persist metrics and samples."""
     if not run.tasks:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
@@ -78,17 +79,27 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
         command.extend(["--num_fewshot", str(run.num_fewshot)])
     if run.batch_size is not None:
         command.extend(["--batch_size", str(run.batch_size)])
-    subprocess.run(command, check=True)
+    environment = dict(os.environ)
+    environment.update(env_vars)
+    subprocess.run(command, check=True, env=environment)
 
 
-def run_local_brokered_lm_eval(inference: BrokeredVllmSystemConfig, run: LmEvalRun) -> None:
+def run_local_brokered_lm_eval(
+    inference: BrokeredVllmSystemConfig,
+    run: LmEvalRun,
+    env_vars: Mapping[str, str],
+) -> None:
     with start_local_brokered_vllm(inference) as model:
-        run_lm_eval(model, run)
+        run_lm_eval(model, run, env_vars)
 
 
-def run_iris_brokered_lm_eval(inference: BrokeredVllmSystemConfig, run: LmEvalRun) -> None:
+def run_iris_brokered_lm_eval(
+    inference: BrokeredVllmSystemConfig,
+    run: LmEvalRun,
+    env_vars: Mapping[str, str],
+) -> None:
     with start_iris_brokered_vllm(inference) as model:
-        run_lm_eval(model, run)
+        run_lm_eval(model, run, env_vars)
 
 
 def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:
