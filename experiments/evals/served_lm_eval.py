@@ -2,17 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from fray.types import ResourceConfig
-from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalRun, run_iris_brokered_lm_eval
+from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalRun, run_lm_eval
 from marin.execution.lazy import Artifact, ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.inference.vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
     InferenceWorkerConfig,
+    start_iris_brokered_vllm,
 )
 from rigging.filesystem import StoragePath
 
@@ -22,23 +23,6 @@ VLLM_WORKER_ENV_VARS = (
     ("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1"),
     ("VLLM_TPU_SKIP_PRECOMPILE", "1"),
 )
-
-
-@dataclass(frozen=True)
-class ServedLmEvalBenchmark:
-    tasks: Sequence[str]
-    confirm_run_unsafe_code: bool = False
-    parent_env_vars: tuple[tuple[str, str], ...] = ()
-    model: str = "Qwen/Qwen3-0.6B-Base"
-    tokenizer: str = "Qwen/Qwen3-0.6B"
-    tpu_type: str = "v5litepod-4"
-    worker_ram: str = "96g"
-    parent_cpu: float = 0.5
-    parent_ram: str = "6g"
-    parent_disk: str = "16g"
-    region: str | None = "us-west4"
-    workers: int = 1
-    num_concurrent: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
 
 
 @dataclass(frozen=True)
@@ -55,7 +39,8 @@ def _run_brokered_lm_eval_artifact(
     output_path: str,
 ) -> None:
     with tempfile.TemporaryDirectory() as local_output:
-        run_iris_brokered_lm_eval(inference, eval_run, local_output)
+        with start_iris_brokered_vllm(inference) as model:
+            run_lm_eval(model, eval_run, local_output)
         StoragePath(output_path).upload_from(local_output + "/", recursive=True)
 
 
@@ -71,10 +56,20 @@ def brokered_lm_eval_step(
     """Build a lazy artifact containing lm-eval metrics and samples."""
     if inference.worker_resources is None:
         raise ValueError("inference.worker_resources must be set for a brokered lm-eval artifact")
+    worker_resources = inference.worker_resources
+    inference = replace(inference, worker_resources=None)
+    eval_run = replace(
+        eval_run,
+        extra_model_args={
+            "num_concurrent": inference.workers.max_in_flight_per_worker,
+            "timeout": int(inference.proxy.request_timeout_seconds),
+            **eval_run.extra_model_args,
+        },
+    )
 
     def build_config(context: StepContext) -> BrokeredLmEvalArtifactConfig:
         return BrokeredLmEvalArtifactConfig(
-            inference=inference,
+            inference=replace(inference, worker_resources=context.runtime_arg("worker_resources")),
             lm_eval_uv_packages=LM_EVAL_UV_PACKAGES,
             eval_run=eval_run,
             output_path=context.output_path,
@@ -99,67 +94,8 @@ def brokered_lm_eval_step(
         deps=(),
         runtime_args={
             "parent_resources": parent_resources,
+            "worker_resources": worker_resources,
         },
-    )
-
-
-def brokered_lm_eval_configs(
-    benchmark: ServedLmEvalBenchmark,
-    *,
-    limit: int | None,
-) -> tuple[BrokeredVllmSystemConfig, LmEvalRun]:
-    inference = brokered_vllm_config(
-        model=benchmark.model,
-        tokenizer=benchmark.tokenizer,
-        workers=benchmark.workers,
-        num_concurrent=benchmark.num_concurrent,
-    )
-    inference = replace(
-        inference,
-        worker_resources=ResourceConfig.with_tpu(
-            benchmark.tpu_type,
-            ram=benchmark.worker_ram,
-            regions=[benchmark.region] if benchmark.region is not None else None,
-        ),
-        worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
-    )
-    eval_run = LmEvalRun(
-        tasks=benchmark.tasks,
-        limit=limit,
-        confirm_run_unsafe_code=benchmark.confirm_run_unsafe_code,
-        extra_model_args={
-            "num_concurrent": inference.workers.max_in_flight_per_worker,
-            "timeout": int(inference.proxy.request_timeout_seconds),
-        },
-    )
-    return inference, eval_run
-
-
-def served_lm_eval_step(
-    benchmark: ServedLmEvalBenchmark,
-    *,
-    name: str,
-    version: str,
-    limit: int | None = None,
-) -> ArtifactStep[Artifact]:
-    """Build a brokered lm-eval artifact runnable by a Marin StepRunner."""
-    inference, eval_run = brokered_lm_eval_configs(
-        benchmark,
-        limit=limit,
-    )
-    return brokered_lm_eval_step(
-        inference,
-        eval_run,
-        name=name,
-        version=version,
-        parent_resources=ResourceConfig.with_cpu(
-            cpu=benchmark.parent_cpu,
-            ram=benchmark.parent_ram,
-            disk=benchmark.parent_disk,
-            regions=[benchmark.region] if benchmark.region else None,
-            preemptible=False,
-        ),
-        parent_env_vars=benchmark.parent_env_vars,
     )
 
 
@@ -167,8 +103,9 @@ def brokered_vllm_config(
     *,
     model: str,
     tokenizer: str,
-    workers: int,
-    num_concurrent: int,
+    worker_resources: ResourceConfig,
+    workers: int = 1,
+    num_concurrent: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
 ) -> BrokeredVllmSystemConfig:
     config = BrokeredVllmSystemConfig(
         model=model,
@@ -178,6 +115,8 @@ def brokered_vllm_config(
     timeout = config.server.timeout_seconds
     return replace(
         config,
+        worker_resources=worker_resources,
+        worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
         proxy=replace(
             config.proxy,
             request_timeout_seconds=timeout,

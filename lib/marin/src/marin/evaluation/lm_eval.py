@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from marin.inference.types import RunningModel
-from marin.inference.vllm import BrokeredVllmSystemConfig, start_iris_brokered_vllm
 
 LmEvalModelArgValue = str | int | float | bool
 LM_EVAL_UV_PACKAGES = (
@@ -78,15 +77,6 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun, output_path: str) -> None:
     if run.batch_size is not None:
         command.extend(["--batch_size", str(run.batch_size)])
     subprocess.run(command, check=True)
-
-
-def run_iris_brokered_lm_eval(
-    inference: BrokeredVllmSystemConfig,
-    run: LmEvalRun,
-    output_path: str,
-) -> None:
-    with start_iris_brokered_vllm(inference) as model:
-        run_lm_eval(model, run, output_path)
 
 
 def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:

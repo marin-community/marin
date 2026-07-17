@@ -14,26 +14,44 @@ Examples:
     -- python -m experiments.evals.served_qwen3_cruxeval
 """
 
+from dataclasses import replace
+
+from fray.types import ResourceConfig
+from marin.evaluation.lm_eval import LmEvalRun
 from marin.execution.lazy import Artifact, ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.evals.served_lm_eval import (
-    ServedLmEvalBenchmark,
-    served_lm_eval_step,
+    brokered_lm_eval_step,
+    brokered_vllm_config,
 )
 
-CRUXEVAL_BENCHMARK = ServedLmEvalBenchmark(
+QWEN3_INFERENCE = brokered_vllm_config(
+    model="Qwen/Qwen3-0.6B-Base",
+    tokenizer="Qwen/Qwen3-0.6B",
+    worker_resources=ResourceConfig.with_tpu("v5litepod-4", ram="96g", regions=["us-west4"]),
+)
+EVAL_PARENT_RESOURCES = ResourceConfig.with_cpu(
+    cpu=0.5,
+    ram="6g",
+    disk="16g",
+    regions=["us-west4"],
+    preemptible=False,
+)
+CRUXEVAL_RUN = LmEvalRun(
     tasks=("cruxeval_input", "cruxeval_output"),
     confirm_run_unsafe_code=True,
 )
 
 
 def cruxeval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Artifact]:
-    return served_lm_eval_step(
-        CRUXEVAL_BENCHMARK,
+    return brokered_lm_eval_step(
+        QWEN3_INFERENCE,
+        replace(CRUXEVAL_RUN, limit=limit),
         name="evals/qwen3-0.6b/cruxeval",
         version=version,
-        limit=limit,
+        parent_resources=EVAL_PARENT_RESOURCES,
+        parent_env_vars={},
     )
 
 
