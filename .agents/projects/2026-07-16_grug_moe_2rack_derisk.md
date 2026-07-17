@@ -438,3 +438,71 @@ Two blockers to 20% mfu_b200:
 
 capfac lever is minor (~+1pp): cap1.25 padding=25%; r2cap tests d4096 cap
 1.0/1.1/1.15 floor.
+
+## Comprehensive width-blocker characterization (2026-07-17)
+
+Exhaustive testing of the width lever (the only lever that moved MFU) established
+the 2-rack ceiling and isolated the blockers.
+
+**2-rack ceiling: d4096 = 12.4% mfu_b200 (28% h100-equiv), QuACK; 11.26% ragged/Triton.**
+Depth is flat for MFU (d4096: 24L=12.39%, 48L=12.37%).
+
+**d5120 is blocked by a SHARED SM100 cutlass kernel, NOT QuACK:**
+- Fails (CUDA_ERROR_LAUNCH_FAILED) on BOTH --expert-glu quack AND --expert-glu ragged
+  (Triton). Since ragged doesn't touch QuACK, the fault is not the expert GEMM.
+- The shared component is the FA4 attention (gpu_fa4_cute); d5120 = 40 heads vs
+  d4096 = 32 (works). Pattern in num_heads: {16,20,32} work, {24,40} fail.
+- QuACK tile/cluster/swizzle sweep (SCALE_QUACK_* env, added to sonic_cute) does
+  NOT fix it — irrelevant, since the GEMM isn't the blocker.
+- reference attention is itself broken in this nccl_ep/stacked/GB200 setup
+  (CUDA_ERROR at d4096), so it can't be swapped in as a robust baseline.
+
+**d6144 is memory-blocked at 2 racks** (OOM ~90 GiB/24L). Fits at 4 racks
+(FSDP data=4), but 4-rack FSDP taxes MFU: d4096 12.4%@2rack -> 11.06%@4rack (the
+per-layer expert-weight all-gather over IB).
+
+**4-rack FSDP validated the architecture** (d5120/48L cleared its 120 GiB 2-rack
+OOM) but then hit the same attention/QuACK kernel wall.
+
+**Conclusion:** 20% mfu_b200 is not reachable on this MoE in this environment.
+Width beyond d4096 is blocked at every wider width by SM100 cutlass kernel
+dim-faults (FA4 attention at 40 heads) and memory. Reaching 20% needs the
+cutlass SM100 attention kernel (and QuACK) made dim-robust — deep kernel work
+without a viable single-node debug loop here (probe hits cuDNN; real runs opaque).
+
+## FP8 + kernel-blocker resolution (2026-07-17)
+
+**Corrected the d5120 misdiagnosis via CUDA_LAUNCH_BLOCKING + full-log dump:**
+d5120 faults in `nccl_ep.cc:1703` — the TE HybridEP dispatch/combine kernel, NOT
+the FA4 attention or QuACK (it dies identically on quack and ragged, which share
+the TE ep path). Higher capacity_factor does NOT fix it (cap2 faults with memory
+to spare, cap3 OOMs) — it's a D=5120 kernel bug, not token overflow.
+
+**FP8 works and lifts MFU (the one real new win):** cast QuACK grouped-GEMM
+operands to e4m3 (SCALE_QUACK_FP8=1), output bf16 (fp8-in/bf16-out, since 8-bit
+floats have no implicit promotion with bf16 at the residual add). d4096/24L:
+12.44% bf16 -> 13.40% mfu_b200 FP8-MoE (+0.96pp, ~8% faster step). QuACK's SM100
+GemmGatedSm100/GemmDefaultSm100 DO run e4m3.
+
+**FP8 attention blocked:** gpu_fa4_cute (_fa4_cute_backend.py:785) has a hard
+guard `supports only bf16/fp16` and NO fp8 code path anywhere — the flash4 cute
+kernel isn't fp8-compiled. Attention is ~30% of the step and can't go FP8 without
+building an fp8 flash4 kernel variant.
+
+**remat=none OOMs** at d4096/24L/2-rack (137.75 GiB saved activations) — the
+save_moe recompute (~25% of step) is load-bearing for memory, not removable.
+
+**Bug found: the `$4` env-prefix trick was broken** — bash treats a
+variable-expanded `VAR=val` first word as a command, not an assignment
+(`env $VAR ...` is the fix). This silently no-op'd r2qk (QuACK tile/cluster/
+swizzle sweep) and the first FP8 runs — those "results" were bash errors, not
+model runs.
+
+**Accessible ceiling: ~13.4% mfu_b200** (2-rack, 512E, save_moe, FP8 MoE), a
+4.65x climb from 2.88%. 20% requires kernel-level CuTeDSL work on one of two
+isolated kernels: an FP8 flash4 attention, or the TE HybridEP D=5120 fix. Neither
+is doable in this multi-controller batch env (single-node probe dies on cuDNN;
+kernel faults only visible via the full-log-dump workaround).
+
+New env switches (committed): SCALE_QUACK_FP8, SCALE_ATTN_FP8, SCALE_NO_MUON,
+SCALE_QUACK_TILE/CLUSTER/SWIZZLE; e4m3 dtype mapping + bf16-output in quack_moe_cute.

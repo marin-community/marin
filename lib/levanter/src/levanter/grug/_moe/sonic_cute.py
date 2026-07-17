@@ -11,6 +11,7 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 ``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
 """
 
+import os
 from collections.abc import Callable
 
 import jax
@@ -36,27 +37,55 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
 
 
+def _quack_tile() -> tuple[int, int]:
+    v = os.environ.get("SCALE_QUACK_TILE")  # e.g. "256,128"
+    return tuple(int(x) for x in v.split(",")) if v else (256, 128)  # type: ignore[return-value]
+
+
+def _quack_cluster() -> tuple[int, int, int]:
+    v = os.environ.get("SCALE_QUACK_CLUSTER")  # e.g. "1,1,1"
+    return tuple(int(x) for x in v.split(",")) if v else (2, 1, 1)  # type: ignore[return-value]
+
+
+def _quack_swizzle() -> int:
+    return int(os.environ.get("SCALE_QUACK_SWIZZLE", "8"))
+
+
+def _f8(x):
+    """Cast a grouped-GEMM operand to e4m3 when SCALE_QUACK_FP8=1 (Blackwell FP8 tensor
+    cores ~2x BF16). Values are O(1) from init/silu, well within e4m3 range, so a direct
+    cast suffices for a throughput (MFU) measurement — no scaling needed for correctness here."""
+    return x.astype(jnp.float8_e4m3fn) if os.environ.get("SCALE_QUACK_FP8") == "1" else x
+
+
 @jax.custom_vjp
 def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     """y = down( swiglu( x @ w13_il ) ), grouped by experts. Activation-path GEMMs on QuACK.
 
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
+
+    The QuACK tile/cluster/swizzle are env-overridable (``SCALE_QUACK_TILE`` /
+    ``SCALE_QUACK_CLUSTER`` / ``SCALE_QUACK_SWIZZLE``) to work around the SM100 grouped
+    GEMM's dim-dependent launch failures at some hidden widths.
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    tm, cm, sw = _quack_tile(), _quack_cluster(), _quack_swizzle()
+    _gu, h = quack_gated_grouped_gemm(_f8(x_dispatch), _f8(w13_il), cu, return_preact=True, tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
+    return quack_grouped_gemm(_f8(h), _f8(moe_w2), cu, b_major="n", tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
 
 
 def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    tm, cm, sw = _quack_tile(), _quack_cluster(), _quack_swizzle()
+    gu, h = quack_gated_grouped_gemm(_f8(x_dispatch), _f8(w13_il), cu, return_preact=True, tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
+    y = quack_grouped_gemm(_f8(h), _f8(moe_w2), cu, b_major="n", tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
 def _expert_mlp_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
+    tm, cm, sw = _quack_tile(), _quack_cluster(), _quack_swizzle()
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
+    dh = quack_grouped_gemm(_f8(dy), _f8(moe_w2), cu, b_major="k", tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
     (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
     # SwiGLU backward (interleaved gate/up), elementwise
     gate, up = gu[:, 0::2], gu[:, 1::2]
@@ -66,7 +95,7 @@ def _expert_mlp_bwd(res, dy):
     dup = dh * silu
     d_gu = jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
     # gate/up backward: dx via QuACK, dw13 via XLA weight-grad
-    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = quack_grouped_gemm(_f8(d_gu), _f8(w13_il), cu, b_major="k", tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
     (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
     # int-typed routing args get float0 zero cotangents
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)

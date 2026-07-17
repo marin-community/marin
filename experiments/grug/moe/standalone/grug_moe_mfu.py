@@ -523,7 +523,14 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        # SCALE_ATTN_FP8=1: run the FA4 flash kernel in e4m3 (Blackwell FP8 tensor cores ~2x).
+        # Output follows q.dtype in the FA4 backend, so cast back to bf16 for the residual stream.
+        if os.environ.get("SCALE_ATTN_FP8") == "1":
+            _qd = q.dtype
+            q8, k8, v8 = (t.astype(jnp.float8_e4m3fn) for t in (q, k, v))
+            attn_out = attention(q8, k8, v8, mask, implementation=self.cfg.attention_implementation).astype(_qd)
+        else:
+            attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
         # ``num_q_heads``; force the canonical TP layout so it matches ``aligned_v``.
@@ -1713,7 +1720,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # norm test since model.py names them *_gated_norm (contains "norm"); model_mid
             # names them gated_*.
             if "gated" in path_lower:
-                return "muonh"
+                # SCALE_NO_MUON=1 disables MuonH (Newton-Schulz) — route these params to AdamH.
+                return "adamh" if os.environ.get("SCALE_NO_MUON") == "1" else "muonh"
             # RMSNorm/LayerNorm gains are per-dimension scales (stack to 2D under scan), not
             # orthogonalizable matrices -> plain Adam. Handles model.py's rms_attn/rms_mlp
             # and model_mid's norm_* naming.
@@ -1721,7 +1729,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             # Matrices -> MuonH: attention, MoE experts (4D when stacked under scan), shared.
             if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
-                return "muonh"
+                # SCALE_NO_MUON=1 disables MuonH (Newton-Schulz) — route these params to AdamH.
+                return "adamh" if os.environ.get("SCALE_NO_MUON") == "1" else "muonh"
             return "adam"
 
         return jax.tree.map(mask_fn, params, paths)

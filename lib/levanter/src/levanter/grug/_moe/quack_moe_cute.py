@@ -31,6 +31,13 @@ _JAX_TO_CUTE = {
     jnp.dtype(jnp.float16): cutlass.Float16,
     jnp.dtype(jnp.float32): cutlass.Float32,
 }
+# FP8 (e4m3) input support for the SM100 grouped GEMMs — Blackwell FP8 tensor cores run
+# ~2x BF16. The cutlass-dsl attribute name varies across versions; probe a few.
+for _n in ("Float8E4M3FN", "Float8E4M3", "Float8_e4m3fn", "Float8e4m3fn"):
+    _t = getattr(cutlass, _n, None)
+    if _t is not None:
+        _JAX_TO_CUTE[jnp.dtype(jnp.float8_e4m3fn)] = _t
+        break
 
 
 def _cute_dtype(dt):
@@ -112,11 +119,14 @@ def quack_gated_grouped_gemm(
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
+    # FP8 inputs accumulate in fp32; emit bf16 so the output re-enters bf16 model math
+    # (8-bit floats have no implicit promotion path with bf16 at the residual add).
+    _out_dt = jnp.bfloat16 if x_sort.dtype == jnp.float8_e4m3fn else x_sort.dtype
     call = cjax.cutlass_call(
         launcher,
         output_shape_dtype=(
-            jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
-            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
+            jax.ShapeDtypeStruct((M, N2), _out_dt),
+            jax.ShapeDtypeStruct((M, N), _out_dt),
         ),
         input_spec=(a_spec, b_spec, cu_spec),
         output_spec=(d_spec, p_spec),
@@ -163,9 +173,10 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
     b_spec = ts(mode=_bmode, divisibility=(1, 1, 8), static=False)
     cu_spec = ts(static=False)
     d_spec = ts(divisibility=(1, 8), static=False)
+    _out_dt = jnp.bfloat16 if a.dtype == jnp.float8_e4m3fn else a.dtype  # fp8 in -> bf16 out
     call = cjax.cutlass_call(
         launcher,
-        output_shape_dtype=jax.ShapeDtypeStruct((M, N), a.dtype),
+        output_shape_dtype=jax.ShapeDtypeStruct((M, N), _out_dt),
         input_spec=(a_spec, b_spec, cu_spec),
         output_spec=(d_spec,),
         use_static_tensors=False,
