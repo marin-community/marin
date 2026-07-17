@@ -70,8 +70,10 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.runtime.env import (
+    STANDARD_MOUNTS,
     VENV_PATH,
     build_common_iris_env,
+    cache_host_dirname,
     normalize_workdir_relative_path,
     render_setup_steps,
 )
@@ -85,6 +87,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
+from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
 from iris.cluster.worker.stats import IrisTaskStat, TaskEventRow, build_task_stat, stats_timestamp
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
@@ -351,46 +354,37 @@ def _pod_name(task_id: JobName, attempt_id: int) -> str:
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
 
 
-_STANDARD_MOUNTS = [
-    # (volume_name, container_path, kind)
-    ("workdir", "/app", "workdir"),
-    ("tmpfs", "/tmp", "tmpfs"),
-    ("uv-cache", "/uv/cache", "cache"),
-    ("cargo-registry", "/root/.cargo/registry", "cache"),
-    ("cargo-target", "/root/.cargo/target", "cache"),
-]
-
-
 def _build_volumes_and_mounts(
     cache_dir: str,
     has_accelerator: bool,
 ) -> tuple[list[dict], list[dict]]:
     """Build standard pod volumes and container volume mounts.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath so they persist
-    across pod restarts on the same node. /dev/shm is memory-backed with a
+    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
+    they persist across pods on the same node. /dev/shm is memory-backed with a
     generous limit for GPU/TPU multi-process communication.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
-    to avoid running out of space installing torch+CUDA.
+    to avoid running out of space installing torch+CUDA. emptyDir is unaffected:
+    it lives under the kubelet root, which is on the node NVMe.
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
-    for name, path, kind in _STANDARD_MOUNTS:
-        if kind in ("workdir", "tmpfs"):
-            volumes.append({"name": name, "emptyDir": {}})
-        else:
+    for spec in STANDARD_MOUNTS:
+        if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
-                    "name": name,
+                    "name": spec.name,
                     "hostPath": {
-                        "path": f"{cache_dir}/{path.strip('/').replace('/', '-')}",
+                        "path": f"{cache_dir}/{cache_host_dirname(spec.container_path)}",
                         "type": "DirectoryOrCreate",
                     },
                 }
             )
-        mounts.append({"name": name, "mountPath": path})
+        else:
+            volumes.append({"name": spec.name, "emptyDir": {}})
+        mounts.append({"name": spec.name, "mountPath": spec.container_path})
 
     shm_spec: dict = {"medium": "Memory"}
     if has_accelerator:

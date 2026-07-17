@@ -202,8 +202,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
 ENV PATH="/root/.cargo/bin:$PATH"
 
-ENV UV_CACHE_DIR=/uv/cache
-ENV CARGO_TARGET_DIR=/root/.cargo/target
+# Cache locations (UV_CACHE_DIR, CARGO_TARGET_DIR, HF_HUB_CACHE) are injected per
+# task by iris.cluster.runtime.env, which owns the matching mounts, so that they
+# cover every task image rather than just this one.
+
 # Only disable bytecode during build to keep image layers clean.
 # At runtime, bytecode compilation is re-enabled so .pyc files accumulate
 # in the persistent uv cache, speeding up repeated imports across pods.

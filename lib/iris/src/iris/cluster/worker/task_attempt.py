@@ -28,7 +28,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
-from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.runtime.env import STANDARD_MOUNTS, build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -37,8 +37,6 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    MountKind,
-    MountSpec,
     RuntimeLogReader,
 )
 from iris.cluster.types import AttemptUid, JobName, is_task_finished
@@ -742,14 +740,6 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        mounts = [
-            MountSpec("/app", kind=MountKind.WORKDIR),
-            MountSpec("/tmp", kind=MountKind.TMPFS),
-            MountSpec("/uv/cache", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/target", kind=MountKind.CACHE),
-        ]
-
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -757,7 +747,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=mounts,
+            mounts=list(STANDARD_MOUNTS),
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,

@@ -538,16 +538,16 @@ def test_zero_timeout_no_deadline():
 
 
 def test_build_pod_manifest_includes_standard_volumes():
-    """Pod manifest includes the 5 standard volumes, dshm, and the log-shipper
-    varlogpods hostPath; the task container mounts the 6 task volumes (not
-    varlogpods, which is the sidecar's)."""
+    """Pod manifest includes every STANDARD_MOUNTS volume, dshm, and the
+    log-shipper varlogpods hostPath; the task container mounts the task volumes
+    but not varlogpods, which is the sidecar's."""
     req = make_run_req("/test-job/0", attempt_id=1)
     manifest = _build_pod_manifest(req, pod_config())
 
     spec = manifest["spec"]
     container = spec["containers"][0]
 
-    task_volume_names = {"workdir", "tmpfs", "uv-cache", "cargo-registry", "cargo-target", "dshm"}
+    task_volume_names = {"workdir", "tmpfs", "uv-cache", "hf-cache", "cargo", "dshm"}
     volume_names = {v["name"] for v in spec["volumes"]}
     mount_names = {m["name"] for m in container["volumeMounts"]}
     assert volume_names == task_volume_names | {"varlogpods"}
@@ -560,6 +560,39 @@ def test_build_pod_manifest_includes_standard_volumes():
     assert "/dev/shm" in mount_paths
 
     assert container["workingDir"] == "/app"
+
+
+def test_cache_env_points_at_mounted_cache_volumes():
+    """Every cache env var names a path the pod actually mounts.
+
+    The pod spec carries these rather than the task image, so that a task
+    bringing its own image writes to the shared cache volumes too.
+    """
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+    container = manifest["spec"]["containers"][0]
+
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    cache_mounts = [
+        m["mountPath"]
+        for m in container["volumeMounts"]
+        if any(v["name"] == m["name"] and "hostPath" in v for v in manifest["spec"]["volumes"])
+    ]
+
+    assert env["UV_CACHE_DIR"] == "/uv/cache"
+    assert env["HF_HUB_CACHE"] == "/hf/cache"
+    assert env["CARGO_HOME"] == "/cargo"
+
+    # Each var must resolve inside a node-persistent cache mount. A var pointing
+    # anywhere else lands on the container layer and re-downloads every task.
+    for var in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "HF_HUB_CACHE", "CARGO_HOME", "CARGO_TARGET_DIR"):
+        value = env[var]
+        assert any(
+            value == mount or value.startswith(f"{mount}/") for mount in cache_mounts
+        ), f"{var}={value} is not under a cache mount ({cache_mounts}); it would land on the container layer"
+
+    # HF_HOME carries the submitter's HF_TOKEN, so it must NOT be redirected onto
+    # a node-shared cache directory that every other task on the node can read.
+    assert "HF_HOME" not in env
 
 
 def test_build_pod_manifest_shm_size_limit_with_gpu():
@@ -608,13 +641,21 @@ def test_tpu_adds_sys_resource_capability():
 
 
 def test_build_volumes_and_mounts_cache_uses_host_path():
-    """Cache volumes use hostPath with DirectoryOrCreate under the given cache_dir."""
+    """Cache volumes use hostPath with DirectoryOrCreate under the given cache_dir.
+
+    hostPath (not emptyDir) is what makes a cache outlive its pod: emptyDir is
+    deleted with the pod, so every run would re-download into it.
+    """
     volumes, _mounts = _build_volumes_and_mounts("/my-cache", has_accelerator=False)
-    cache_volumes = [v for v in volumes if "hostPath" in v]
-    assert len(cache_volumes) == 3
-    for v in cache_volumes:
+    cache_volumes = {v["name"]: v for v in volumes if "hostPath" in v}
+    assert set(cache_volumes) == {"uv-cache", "hf-cache", "cargo"}
+    for v in cache_volumes.values():
         assert v["hostPath"]["path"].startswith("/my-cache/")
         assert v["hostPath"]["type"] == "DirectoryOrCreate"
+
+    # Host layout mirrors the Docker runtime's (container path, slashes to
+    # dashes), so one node dir can back both runtimes.
+    assert cache_volumes["hf-cache"]["hostPath"]["path"] == "/my-cache/hf-cache"
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +786,7 @@ def test_iris_env_vars_injected():
     assert env_by_name["IRIS_WORKDIR"]["value"] == "/app"
     assert env_by_name["IRIS_PYTHON"]["value"] == "python"
     assert env_by_name["UV_PYTHON_INSTALL_DIR"]["value"] == "/uv/cache/python"
-    assert env_by_name["CARGO_TARGET_DIR"]["value"] == "/root/.cargo/target"
+    assert env_by_name["CARGO_TARGET_DIR"]["value"] == "/cargo/target"
 
 
 def test_advertise_host_uses_downward_api():

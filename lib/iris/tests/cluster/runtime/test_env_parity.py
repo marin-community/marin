@@ -280,7 +280,8 @@ def test_standard_paths_always_present():
     assert env["IRIS_PYTHON"] == "python"
     assert env["IRIS_BIND_HOST"] == "0.0.0.0"
     assert env["UV_PYTHON_INSTALL_DIR"] == "/uv/cache/python"
-    assert env["CARGO_TARGET_DIR"] == "/root/.cargo/target"
+    assert env["CARGO_TARGET_DIR"] == "/cargo/target"
+    assert env["CARGO_HOME"] == "/cargo"
 
 
 # ---------------------------------------------------------------------------
