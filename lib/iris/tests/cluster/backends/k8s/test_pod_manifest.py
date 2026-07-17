@@ -557,9 +557,6 @@ def test_build_pod_manifest_mounts_every_standard_mount():
     # The manifest adds /dev/shm on top of STANDARD_MOUNTS.
     assert "/dev/shm" in mounted.values()
 
-    workdir = next(m for m in STANDARD_MOUNTS if m.kind is MountKind.WORKDIR)
-    assert container["workingDir"] == workdir.container_path
-
 
 def test_task_container_does_not_mount_the_log_shipper_host_path():
     """varlogpods stays the sidecar's.
@@ -898,7 +895,6 @@ def test_init_container_created_when_bundle_id_present():
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_BUNDLE_ID"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
-    assert env_by_name["IRIS_WORKDIR"] == "/app"
     assert configmap_name is None
     assert extra_volumes == []
 

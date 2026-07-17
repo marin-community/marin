@@ -72,6 +72,7 @@ from iris.cluster.platforms.k8s.types import (
 from iris.cluster.runtime.env import (
     STANDARD_MOUNTS,
     VENV_PATH,
+    WORKDIR_MOUNT,
     build_common_iris_env,
     cache_host_dirname,
     normalize_workdir_relative_path,
@@ -469,8 +470,10 @@ def _build_init_container_spec(
     script_path = Path(__file__).parent / "bundle_fetch.py"
     bundle_script = script_path.read_text()
 
-    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": "/app"}]
-    init_mounts: list[dict] = [{"name": "workdir", "mountPath": "/app"}]
+    # The init container stages the bundle into the same volume the task reads it
+    # from, so both sides take the path and volume name from the one mount spec.
+    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": WORKDIR_MOUNT.container_path}]
+    init_mounts: list[dict] = [{"name": WORKDIR_MOUNT.name, "mountPath": WORKDIR_MOUNT.container_path}]
     extra_volumes: list[dict] = []
     configmap_name: str | None = None
 
@@ -775,7 +778,7 @@ def _build_pod_manifest(
         "image": task_image,
         "imagePullPolicy": "IfNotPresent",
         "env": env_list,
-        "workingDir": "/app",
+        "workingDir": WORKDIR_MOUNT.container_path,
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
         # Without this, a non-zero exit leaves containerStatuses[].state.terminated

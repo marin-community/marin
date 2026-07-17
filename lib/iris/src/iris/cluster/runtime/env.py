@@ -47,8 +47,10 @@ CARGO_HOME_PATH = "/cargo"
 # names these exact paths, so both must be defined together. A cache whose env
 # var and mount disagree still runs -- it just writes to the container's own
 # writable layer and re-downloads on every task, with nothing to see in a log.
+WORKDIR_MOUNT = MountSpec("workdir", WORKDIR_PATH, kind=MountKind.WORKDIR)
+
 STANDARD_MOUNTS: tuple[MountSpec, ...] = (
-    MountSpec("workdir", WORKDIR_PATH, kind=MountKind.WORKDIR),
+    WORKDIR_MOUNT,
     MountSpec("tmpfs", "/tmp", kind=MountKind.TMPFS),
     MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
