@@ -31,6 +31,9 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
+    # marin-smallquery is the Ballista-on-Iris distributed SQL PoC (Iris launcher +
+    # image build), a workspace member so launcher fixes land without a republish.
+    "marin-smallquery",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is the pure-Python text-dedup surface, a workspace member
@@ -134,6 +137,7 @@ members = [
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
+    "lib/smallquery",
     "lib/zephyr",
     "infra/iac",
 ]
@@ -165,6 +169,7 @@ marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
+marin-smallquery = { workspace = true }
 marin-zephyr = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
@@ -278,6 +283,7 @@ project-includes = [
     "lib/iris/scripts/**/*.py",
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
+    "lib/smallquery/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
@@ -295,6 +301,7 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "lib/smallquery/src",
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
