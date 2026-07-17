@@ -346,3 +346,19 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   Loss check: nccl_ep 8.75977 vs a2a_cute 8.76165 at step 19 — parity.
 - The b1024 reference-config arm remains blocked by the no-drop capacity wall
   (172 GiB temp arena) — the headline scale-derisk finding of this issue.
+- Quiet rerun (`ncclep-64g-ep8-b512-q`, JIT logging off): steady 7.1–7.4 % —
+  **logging was NOT the bottleneck**. Root cause found instead: the QuACK seam's
+  tail-group extension ran the grouped GEMMs over the ENTIRE no-drop capacity
+  buffer (4× the real tokens at EP8/cf-equivalent). Fix
+  (`extend_tail_group=False` for nccl_ep — safe because real rows are
+  `where`-selected before combine): `ncclep-64g-ep8-b512-t2` = **16.7–17.1 %
+  MFU, 8.9 s/step, 233–240 k tok/s, final loss 8.759794** — within ~1 pp of
+  the a2a_cute control (18.1 %) on a first-pass untuned integration.
+- Loss cross-check: 8.75977 / 8.75979 / 8.75979 (nccl_ep ×3 runs) vs 8.76165
+  (a2a_cute b512) vs 8.74628 (a2a_cute b1024) — parity.
+- Remaining known overheads (unranked estimates): command buffers globally off
+  (both arms paid this; scoping to EP ops would help everything), redundant
+  tail-zeroing pass over the capacity buffer, `max_num_sms` at auto, bf16 wire.
+- Decision: goal met; promote results to #7331; next-step queue posted there
+  (cmd-buffer scoping, tail-zero removal, MoE-layer chunking for b1024+,
+  max_num_sms sweep, fp8 wire from the TE quantization WIP branch → #7282).
