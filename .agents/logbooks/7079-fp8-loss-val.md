@@ -182,7 +182,26 @@ and `fp8val-fp8-full3b` (same RUN_ID `fp8val-fp8-full3` → resumes from the
 inside the ≤0.01 bar, no growth trend. Plot artifact:
 https://claude.ai/code/artifact/99ec4cac-2537-494c-b9e2-1b285311fa32
 
-### FP8VAL-003 — full A/B launched (2026-07-17 13:32 UTC; superseded by full2 15:41, full3 19:38 UTC)
+### FP8VAL-003c — full3 down: checkpoint saves are a coequal wedge trigger; full4 is the stable config (2026-07-17 21:57 UTC)
+
+full3 lasted <25 min: **bf16-full3 wedged at its first 10-min async checkpoint
+save** (no heavy log reads this time — clique-acquire signature at 20:00, ~20
+min in, same as smoke9's save-coincident stall), and **fp8-full3b OOM'd on
+checkpoint *resume*** (40.64 GiB in `jit_train_step` post-restore — the
+restore path leaves enough extra live to push the step arena over; fresh
+starts at the same config fit) then hung dead-but-"running" like full1.
+
+Tabulating all attempts: the only runs that lived for hours were the two with
+**no periodic checkpoints and only light log polling** (bf16-full2 3.5 h,
+fp8-full2 2 h — each ultimately killed by a heavy log read, not by itself).
+Conclusion: two independent wedge triggers — **async checkpoint saves** and
+**heavy log serves** — both injecting host-side contention during collective
+dispatch. Revised FP8VAL-003b: log reads are one trigger, not the whole story.
+
+**full4 (21:57 UTC, final config):** both arms fresh, `FP8VAL_CHECKPOINTS=local`
+(no periodic saves, no resume — accepted risk since the no-save config is the
+only one with a multi-hour clean record), light monitoring only, nothing else
+touches the jobs until terminal. ETA fp8 ~04:15, bf16 ~05:00 UTC.
 
 `/mwittmann/fp8val-bf16-full1` and `/mwittmann/fp8val-fp8-full1`, 24000 steps
 × B16 × seq 4096 = **1.57B tokens/arm** (≥ the 1.44B that resolved 0.01-level
