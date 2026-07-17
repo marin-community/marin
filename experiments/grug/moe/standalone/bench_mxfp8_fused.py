@@ -37,6 +37,7 @@ import argparse
 import json
 import os
 import statistics
+import subprocess
 import sys
 import time
 
@@ -453,7 +454,55 @@ def check_phase(m: int, tilers, results: dict):
 # --------------------------------------------------------------------------- #
 
 
-def time_phase(m: int, tilers, iters: int, warmup: int, results: dict):
+def cute_producer_available() -> bool:
+    """Compile-probe the 002c CuTe producer in a SUBPROCESS.
+
+    cutlass_call compile failures happen on an FFI thread and are fatal to the
+    process (they cannot be caught with try/except): on GB200 nodes with the
+    bad libNVVM (the MXFP8-002c heterogeneity gotcha) the quantizer kernel
+    dies with NVVM_ERROR_COMPILATION. Probe in a child process instead.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "import jax, jax.numpy as jnp\n"
+        "from mxfp8_grouped.quantize_cute import dual_quantize_mxfp8_cute\n"
+        "x = jnp.ones((256, 128), jnp.bfloat16)\n"
+        "jax.block_until_ready(dual_quantize_mxfp8_cute(x))\n"
+        "print('CUTE_PROBE_OK')\n"
+    ) % here
+    try:
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        print("  cute producer probe timed out; using XLA producer", flush=True)
+        return False
+    ok = proc.returncode == 0 and "CUTE_PROBE_OK" in proc.stdout
+    if not ok:
+        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+        print(f"  cute producer unavailable on this node: {' | '.join(tail)}", flush=True)
+    return ok
+
+
+# Per-leg tiler variants for --ablate (mma_m, mma_n, cluster_m, cluster_n).
+ABLATE_VARIANTS = {
+    "swiglu": ["128,256,1,1"],
+    "gemm_w2": ["256,256,2,1"],
+    "dswiglu": ["128,256,1,1"],
+    "gemm_w13": ["256,256,2,1"],
+    "wgrad_w13": ["256,256,2,1", "128,128,1,1"],
+    "wgrad_w2": ["256,256,2,1", "128,128,1,1"],
+}
+_LEG_KIND = {
+    "swiglu": "swiglu",
+    "gemm_w2": "gemm",
+    "dswiglu": "dswiglu",
+    "gemm_w13": "gemm",
+    "wgrad_w13": "wgrad",
+    "wgrad_w2": "wgrad",
+}
+
+
+def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: bool = False):
     print(f"\n== timing phase (M={m}) ==", flush=True)
     inp = make_inputs(m)
     legs, args, outs = run_legs(inp, tilers)
@@ -481,28 +530,6 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict):
         print(f"  {name:10s} {t * 1e3:8.3f} ms  {flops[name] / t / 1e12:7.1f} TF/s", flush=True)
     gemm_total = sum(v["ms"] for v in times.values())
 
-    # ---- producers ----
-    prod = {}
-    prod["x_dual_xla_ms"] = timed(inp["acts_fn"], (inp["x"],), iters, warmup) * 1e3
-    cute_fn = jax.jit(lambda t: dual_quantize_activation_cute(t, inp["row_idx"], inp["col_idx"], inp["perms"]["d"]))
-    cute_ok = True
-    try:
-        jax.block_until_ready(cute_fn(inp["x"]))
-    except Exception as exc:  # noqa: BLE001 - report and fall back to the XLA producer
-        cute_ok = False
-        print(f"  cute producer unavailable: {type(exc).__name__}: {exc}", flush=True)
-    if cute_ok:
-        prod["x_dual_cute_ms"] = timed(cute_fn, (inp["x"],), iters, warmup) * 1e3
-    prod["weights_ms"] = timed(jax.jit(inp["weights_fn"]), (inp["w13i"], inp["w2"]), iters, warmup) * 1e3
-    per_mb_key = "x_dual_cute_ms" if cute_ok else "x_dual_xla_ms"
-    prod["per_microbatch_ms"] = 2 * prod[per_mb_key]  # x and g2, identical shape (M, D)
-    print(
-        f"  producers: x dual XLA {prod['x_dual_xla_ms']:.3f} ms"
-        + (f", CuTe {prod['x_dual_cute_ms']:.3f} ms" if cute_ok else "")
-        + f"; weights (amortized) {prod['weights_ms']:.3f} ms",
-        flush=True,
-    )
-
     # ---- bf16 dense yardsticks at the REAL shapes ----
     xb = inp["x"]
     wb_big = inp["w13i"][0].T  # (D, N2)
@@ -524,6 +551,25 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict):
         flush=True,
     )
 
+    # ---- producers (after the safe measurements; the CuTe probe can only fail in a child) ----
+    prod = {}
+    prod["x_dual_xla_ms"] = timed(inp["acts_fn"], (inp["x"],), iters, warmup) * 1e3
+    prod["weights_ms"] = timed(jax.jit(inp["weights_fn"]), (inp["w13i"], inp["w2"]), iters, warmup) * 1e3
+    print(
+        f"  producers: x dual XLA {prod['x_dual_xla_ms']:.3f} ms; weights (amortized) {prod['weights_ms']:.3f} ms",
+        flush=True,
+    )
+    results["times"] = times
+    results["producers"] = prod
+    results["bf16"] = bf16
+    cute_ok = cute_producer_available()
+    if cute_ok:
+        cute_fn = jax.jit(lambda t: dual_quantize_activation_cute(t, inp["row_idx"], inp["col_idx"], inp["perms"]["d"]))
+        prod["x_dual_cute_ms"] = timed(cute_fn, (inp["x"],), iters, warmup) * 1e3
+        print(f"  producers: x dual CuTe {prod['x_dual_cute_ms']:.3f} ms", flush=True)
+    per_mb_key = "x_dual_cute_ms" if cute_ok else "x_dual_xla_ms"
+    prod["per_microbatch_ms"] = 2 * prod[per_mb_key]  # x and g2, identical shape (M, D)
+
     quad = {
         "gemm_ms": gemm_total,
         "producer_ms": prod["per_microbatch_ms"],
@@ -542,10 +588,38 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict):
         f"incl. per-step weight producers {quad['speedup_with_weight_producers']:.3f}x",
         flush=True,
     )
-    results["times"] = times
-    results["producers"] = prod
-    results["bf16"] = bf16
     results["quad"] = quad
+
+    if ablate:
+        print("\n== tiler ablation ==", flush=True)
+        plan_kw = {
+            "swiglu": lambda t: dict(mma_tiler_mn=t[0], cluster_shape_mn=t[1]),
+            "gemm": lambda t: dict(mma_tiler_mn=t[0], cluster_shape_mn=t[1]),
+            "dswiglu": lambda t: dict(mma_tiler_mn=t[0], cluster_shape_mn=t[1]),
+            "wgrad": lambda t: dict(mma_tiler_mn=t[0], cluster_shape_mn=t[1]),
+        }
+        builders = {
+            "swiglu": lambda kw: jax.jit(lambda a, asf, b, bsf, o: mxfp8_fused_swiglu(a, asf, b, bsf, o, **kw)),
+            "gemm": lambda kw: jax.jit(lambda a, asf, b, bsf, o: mxfp8_fused_gemm(a, asf, b, bsf, o, **kw)),
+            "dswiglu": lambda kw: jax.jit(lambda a, asf, b, bsf, c, o: mxfp8_fused_dswiglu(a, asf, b, bsf, c, o, **kw)),
+            "wgrad": lambda kw: jax.jit(lambda a, asf, b, bsf, o: mxfp8_fused_wgrad(a, asf, b, bsf, o, **kw)),
+        }
+        # dswiglu also gets a vectorized_f32 variant at the default tiler.
+        extra = {"dswiglu": [("vecf32", dict(mma_tiler_mn=tilers["dswiglu"][0], cluster_shape_mn=tilers["dswiglu"][1], vectorized_f32=True))]}
+        ab_res = {}
+        for leg, variants in ABLATE_VARIANTS.items():
+            kind = _LEG_KIND[leg]
+            trials = [(v, plan_kw[kind](parse_tiler(v))) for v in variants]
+            trials += extra.get(kind, [])
+            for tag, kw in trials:
+                try:
+                    fn = builders[kind](kw)
+                    t = timed(fn, args[leg], max(iters // 2, 10), warmup)
+                    ab_res[f"{leg}@{tag}"] = {"ms": t * 1e3, "tfs": flops[leg] / t / 1e12}
+                    print(f"  {leg:10s} @ {tag:12s} {t * 1e3:8.3f} ms  {flops[leg] / t / 1e12:7.1f} TF/s", flush=True)
+                except Exception as exc:  # noqa: BLE001 - unsupported tiler combos raise at trace time
+                    print(f"  {leg:10s} @ {tag:12s} FAILED: {type(exc).__name__}: {exc}", flush=True)
+        results["ablate"] = ab_res
 
 
 def parse_tiler(s: str):
@@ -560,6 +634,7 @@ def main():
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
     p.add_argument("--phases", default="check,time")
+    p.add_argument("--ablate", action="store_true", help="also time per-leg tiler variants")
     p.add_argument("--swiglu-tiler", default="256,256,2,1", help="mma_m,mma_n,cluster_m,cluster_n")
     p.add_argument("--dswiglu-tiler", default="256,256,2,1")
     p.add_argument("--gemm-tiler", default="128,256,1,1")
@@ -588,7 +663,7 @@ def main():
     if "check" in phases:
         check_phase(a.check_tokens, tilers, results)
     if "time" in phases:
-        time_phase(a.tokens, tilers, a.iters, a.warmup, results)
+        time_phase(a.tokens, tilers, a.iters, a.warmup, results, ablate=a.ablate)
 
     with open(a.out, "w") as f:
         json.dump(results, f, indent=2)
