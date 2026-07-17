@@ -209,8 +209,15 @@ class _LogPump:
                 except Exception:
                     logger.warning("Failed to forward a vLLM log line to the parent process", exc_info=True)
         finally:
-            # Reached at EOF (the child's pipe closed), so release the read end promptly rather
-            # than waiting for GC — repeated serves would otherwise accumulate pipe fds.
+            # Reached at EOF (the child's pipe closed). Flush a trailing fragment that had no
+            # newline — a crash mid-write — so the startup-failure tail, which reads the file
+            # right after join() and before close(), still sees it (the file is line-buffered, so
+            # a newline-less final write would otherwise sit unflushed). Then release the read end
+            # promptly rather than waiting for GC — repeated serves would otherwise leak pipe fds.
+            try:
+                log_file.flush()
+            except Exception:
+                logger.debug("Failed to flush a vLLM native log file", exc_info=True)
             stream.close()
 
     def join(self, timeout: float | None = None) -> None:

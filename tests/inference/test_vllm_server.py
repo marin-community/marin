@@ -81,6 +81,20 @@ def test_native_logs_tail_sees_final_lines_after_join(tmp_path):
     pump.close()
 
 
+def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
+    # A child that crashes mid-line leaves a final fragment with no trailing newline. The pump
+    # flushes on EOF so the startup-failure tail — read right after join(), before close() — sees
+    # it; without that flush the line-buffered file would hold the newline-less fragment.
+    proc = _spawn("import sys; sys.stderr.write('FATAL partial line no newline'); sys.stderr.flush()")
+    pump = _LogPump(proc, str(tmp_path / "stdout.log"), str(tmp_path / "stderr.log"))
+    pump.start()
+    proc.wait(timeout=10)
+    pump.join(timeout=5)
+
+    assert "FATAL partial line no newline" in _native_logs_tail(str(tmp_path))
+    pump.close()
+
+
 def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path):
     # The child logs a line, then blocks; stop() must terminate it, drain that line to the
     # on-disk log, and be safe to call again.
