@@ -65,13 +65,7 @@ class LmEvalLauncher(StrEnum):
 
 @dataclass(frozen=True)
 class BrokeredLmEvalArtifactConfig:
-    model: str
-    tokenizer: str | None
-    max_model_len: int
-    max_num_batched_tokens: int
-    workers: InferenceWorkerConfig
-    worker_env_vars: tuple[tuple[str, str], ...]
-    ignored_request_fields: tuple[str, ...]
+    inference: BrokeredVllmSystemConfig
     lm_eval_uv_packages: tuple[str, ...]
     eval_run: LmEvalRun
 
@@ -101,13 +95,7 @@ def brokered_lm_eval_step(
 
     def build_config(context: StepContext) -> BrokeredLmEvalArtifactConfig:
         return BrokeredLmEvalArtifactConfig(
-            model=inference.model,
-            tokenizer=inference.tokenizer,
-            max_model_len=inference.server.max_model_len,
-            max_num_batched_tokens=inference.server.max_num_batched_tokens,
-            workers=inference.workers,
-            worker_env_vars=tuple(sorted(inference.worker_env_vars.items())),
-            ignored_request_fields=inference.proxy.ignored_request_fields,
+            inference=inference,
             lm_eval_uv_packages=LM_EVAL_UV_PACKAGES,
             eval_run=replace(eval_run, output_path=context.output_path),
         )
@@ -115,25 +103,12 @@ def brokered_lm_eval_step(
     def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
         if config.lm_eval_uv_packages != LM_EVAL_UV_PACKAGES:
             raise ValueError("artifact lm-eval packages must match the pinned runtime packages")
-        execution_inference = replace(
-            inference,
-            model=config.model,
-            tokenizer=config.tokenizer,
-            server=replace(
-                inference.server,
-                max_model_len=config.max_model_len,
-                max_num_batched_tokens=config.max_num_batched_tokens,
-            ),
-            workers=config.workers,
-            worker_env_vars=dict(config.worker_env_vars),
-            proxy=replace(inference.proxy, ignored_request_fields=config.ignored_request_fields),
-        )
         remote(
             _run_brokered_lm_eval_artifact,
             name=name,
             resources=parent_resources,
             env_vars=dict(parent_env_vars),
-        )(execution_inference, config.eval_run)
+        )(config.inference, config.eval_run)
 
     return ArtifactStep(
         name=name,
@@ -144,7 +119,6 @@ def brokered_lm_eval_step(
         deps=(),
         runtime_args={
             "parent_resources": parent_resources,
-            "worker_resources": inference.worker_resources,
         },
     )
 
