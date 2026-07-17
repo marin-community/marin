@@ -129,6 +129,18 @@ def test_json_labels_flatten_into_columns():
     ]
 
 
+def test_native_map_labels_flatten_into_columns():
+    # A native Map<Utf8,Utf8> column (telltale metrics) arrives as list[(k, v)].
+    table = pa.table(
+        {"value": [3.0], "labels": [[("region", "us-east5"), ("scope", "pool")]]},
+        schema=pa.schema([("value", pa.float64()), ("labels", pa.map_(pa.string(), pa.string()))]),
+    )
+    source = FakeSource(table)
+    assert _get(_client(source), "SELECT value, labels FROM t").json() == [
+        {"value": 3.0, "label_region": "us-east5", "label_scope": "pool"}
+    ]
+
+
 def test_unparseable_labels_cell_keeps_the_row():
     # One malformed cell is schema drift; the panel still gets its row.
     source = FakeSource(finelog_result(value=[1.0], labels=["{not json"]))

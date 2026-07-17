@@ -18,6 +18,7 @@ from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
 from iris.managed_thread import get_thread_container
 from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
+from iris.runtime.telltale_forward import start_forwarding
 
 logger = logging.getLogger(__name__)
 
@@ -86,4 +87,6 @@ def start() -> str | None:
     atexit.register(ctx.registry.unregister, endpoint_id)
     _started = True
     logger.info("telltale serving at %s, registered as %s", address, name)
+    # Persist the served metrics to finelog too, so the series outlive the job.
+    start_forwarding()
     return address

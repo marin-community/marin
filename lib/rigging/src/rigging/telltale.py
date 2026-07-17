@@ -46,6 +46,7 @@ _metrics: dict[str, MetricWrapperBase] = {}
 _collectors: set[Collector] = set()
 _status: str = ""
 _start_time = time.time()
+_global_labels: dict[str, str] = {}
 
 
 def _get_or_create(
@@ -131,6 +132,29 @@ def publish_gauge(key: str, value: float, documentation: str, prefix: str = "") 
         gauge(name, documentation).set(value)
     except ValueError:
         logger.warning("could not publish %r as gauge %r", key, name, exc_info=True)
+
+
+def set_global_labels(**labels: str) -> None:
+    """Merge process-wide labels stamped onto every persisted telltale metric.
+
+    The metrics themselves carry no run/process identity — a levanter gauge is
+    just ``levanter_train_loss``. A forwarder that persists the registry (see
+    ``iris.runtime.telltale``) reads these to tag every row with who produced it,
+    so a producer names itself once at startup (``set_global_labels(run=run_id,
+    source="levanter")``) rather than threading identity through each metric.
+
+    Merges into the existing set; a later call overrides an existing key. Values
+    are coerced to ``str``. Purely additive to the exposition path — the
+    Prometheus ``/metrics`` output is unaffected.
+    """
+    with _lock:
+        _global_labels.update((k, str(v)) for k, v in labels.items())
+
+
+def get_global_labels() -> dict[str, str]:
+    """A copy of the process-wide labels set via ``set_global_labels``."""
+    with _lock:
+        return dict(_global_labels)
 
 
 def set_status(text: str) -> None:

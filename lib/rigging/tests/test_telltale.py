@@ -27,6 +27,16 @@ def client() -> TestClient:
     return TestClient(Starlette(routes=telltale.routes()))
 
 
+@pytest.fixture
+def clean_global_labels():
+    """Restore the process-global label set so cases don't leak into each other."""
+    saved = telltale.get_global_labels()
+    telltale._global_labels.clear()
+    yield
+    telltale._global_labels.clear()
+    telltale._global_labels.update(saved)
+
+
 def test_counter_is_get_or_create(name):
     telltale.counter(name, "d", ["route"]).labels("/a").inc(2)
     telltale.counter(name, "d", ["route"]).labels("/a").inc()
@@ -148,6 +158,23 @@ def test_routes_are_reachable_under_a_fail_closed_auth_middleware():
     assert client.get("/metrics").status_code == 200
     assert client.get("/health").status_code == 200
     assert client.get("/").status_code == 200
+
+
+def test_global_labels_merge_and_a_later_key_overrides(clean_global_labels):
+    telltale.set_global_labels(run="r1", source="levanter")
+    telltale.set_global_labels(run="r2")
+
+    assert telltale.get_global_labels() == {"run": "r2", "source": "levanter"}
+
+
+def test_global_labels_coerce_to_str_and_snapshot_is_a_copy(clean_global_labels):
+    telltale.set_global_labels(process_index=3)
+
+    snapshot = telltale.get_global_labels()
+    assert snapshot == {"process_index": "3"}
+
+    snapshot["process_index"] = "mutated"
+    assert telltale.get_global_labels() == {"process_index": "3"}
 
 
 def test_status_survives_a_scrape_and_is_replaced_not_appended(client):

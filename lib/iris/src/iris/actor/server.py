@@ -349,6 +349,13 @@ class ActorServer:
             timeout=Duration.from_seconds(5.0),
         )
 
+        # Persist this actor's telltale metrics to finelog; idempotent and a no-op
+        # outside an in-cluster Iris job. Local import breaks a cycle: the forwarder
+        # pulls in iris.client, whose package __init__ imports iris.actor.
+        from iris.runtime.telltale_forward import start_forwarding  # noqa: PLC0415
+
+        start_forwarding()
+
         return self._actual_port
 
     def wait(self) -> None:

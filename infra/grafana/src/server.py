@@ -78,19 +78,40 @@ def _json_safe(value: object) -> object:
     return value
 
 
-def _flatten_labels(row: dict[str, object]) -> dict[str, object]:
-    """Expand a JSON labels cell into label_<key> fields, dropping the raw cell.
+def _labels_as_dict(raw: object) -> dict | None:
+    """Coerce a labels cell to a ``{key: value}`` dict, or None if it isn't one.
 
-    A cell that does not parse to a JSON object stays in place and is logged.
+    Handles both label encodings finelog serves: a JSON-string column (the probes
+    EAV convention) and a native ``Map<Utf8,Utf8>`` column, which arrives from
+    ``Table.to_pylist()`` as a ``list[(key, value)]`` (or a dict).
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        try:
+            return dict(raw)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _flatten_labels(row: dict[str, object]) -> dict[str, object]:
+    """Expand a labels cell into label_<key> fields, dropping the raw cell.
+
+    A cell that is neither a JSON object nor a native map stays in place and is
+    logged.
     """
     raw = row.get(LABELS_COLUMN)
     if raw is None:
         return row
-    try:
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            raise ValueError("labels is not a JSON object")
-    except (ValueError, TypeError):
+    parsed = _labels_as_dict(raw)
+    if parsed is None:
         logger.warning("row has unparseable labels: %.200r", raw)
         return row
     flattened = {key: value for key, value in row.items() if key != LABELS_COLUMN}

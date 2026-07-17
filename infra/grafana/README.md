@@ -68,7 +68,8 @@ Pulumi.yaml            Pulumi project, run on the shared repo venv
 
 Dashboards: `fleet.json` (canary + worker health, marin only), `iris.json`
 (per-task and per-worker resource usage; `iris.task` has data on both clusters),
-`pipelines.json` (Zephyr throughput and shard memory).
+`pipelines.json` (Zephyr throughput and shard memory), `training.json` (levanter
+training metrics from the `telltale` namespace, grouped by run).
 
 ## Develop
 
