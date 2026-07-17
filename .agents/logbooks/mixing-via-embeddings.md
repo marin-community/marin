@@ -499,7 +499,32 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   no legacy layout, capacity raise post-load). Eval + readout plan, monitoring commands,
   abort/resume: `scratch/mixture_features/grug/seedpanel_monitor.md`.
 
-## 2026-07-17 seed panel LAUNCHED on GB200 (cw-us-east-08a) — 10 runs training
+## 2026-07-17 seed panel MOVED to H100/cw-rno2a (rav directive) — 10 runs training
+
+- B200 panel stopped at ~1-2.9% (steps ~600-1400; 10 jobs killed 01:50Z; GB200s
+  freed). B200 checkpoints = rolling saves under the ttl=14d checkpoints-temp
+  prefix — left in place, self-expiring; the H100 panel uses a FRESH prefix
+  (`rav_mve_seedpanel_h100_NN`) + fresh W&B names/group (`rav_mve_seedpanel_h100`)
+  so no cross-hardware resume is possible. **Panel is now H100-numerics.**
+- Port: `experiments/grug/moe/launch_mve_seedpanel_h100.py` (same swarm
+  constants by import; dry-run parity PASSED). H100x8 = one gd-8xh100ib-i128
+  node/run (80GB HBM ⇒ 8-way sharding of the ~521GiB step footprint; global
+  batch 512×4096 unchanged, data-axis=8). `gpu_fa4_cute` KEPT — FA4/CuTe has a
+  dedicated SM90 path (arch_family 9 + SM90 backward schedule; CW H100 canary
+  default). `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`. Direct submission via
+  `iris --cluster=cw-rno2a` self-tunnel (no federation/allowlist).
+- **H100 smoke PASSED** (200 steps): W&B steady-state **2,602,738 tok/s
+  (0.806 s/step)**; loss 4.92 @200 ≈ B200 smoke's 4.93 (cross-hardware sanity);
+  checkpoint saved to the fresh prefix. Early steps ~3.2 s/it (cross-DC loader
+  warmup RNO2A←us-east-02a; LOTA caches locally).
+- Panel `/rav/rav-mve-seedpanel-h100-{00..09}` submitted 02:15-02:17Z; all 10
+  running immediately (10/64 nodes); **stepping verified twice** (02:28: 10/10;
+  02:39: steps 257-353, losses 9.4-10.5 in warmup, effective ~1.7 s/it and
+  improving). **ETA ~11-23 h/run** (≤32h worst-case if loader-bound) →
+  completion expected 2026-07-17 late / 2026-07-18. Details + abort/readout:
+  seedpanel_monitor.md.
+
+## 2026-07-17 seed panel LAUNCHED on GB200 (cw-us-east-08a) — 10 runs training (SUPERSEDED)
 
 - Admission unblocked (PR #7275 + 08a controller redeploy ~22:54Z). Smoke ladder
   (5 informative failures, each with a precise fix; full record in
