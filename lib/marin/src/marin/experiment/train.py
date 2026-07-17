@@ -86,17 +86,12 @@ def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:
 
 
 def _train_job(pod_config: TrainLmOnPodConfig) -> None:
-    """Dispatch the assembled config as its own Fray training job.
-
-    A GPU run resolves its training env here, at submit time, and seeds it into the
-    job's pod environment. XLA reads ``XLA_FLAGS`` (notably the NCCL collective
-    watchdog) lazily at backend init, so the in-worker ``_apply_env_to_process``
-    already sets it in time -- but only as long as nothing touches a device before
-    that runs. Seeding the pod env removes that ordering dependency: the flag is
-    present before the worker process starts. TPU/CPU runs keep resolving in-worker,
-    where the ``WANDB_API_KEY`` secret the TPU path requires is present (the GPU
-    path skips that check, so resolving early is safe).
-    """
+    """Dispatch the assembled config as its own Fray training job."""
+    # GPU runs resolve the training env at submit time so XLA_FLAGS (the NCCL
+    # collective watchdog) reaches the pod environment before the worker starts;
+    # XLA reads XLA_FLAGS at backend init, so the in-worker fallback only lands in
+    # time if nothing touches a device first. TPU/CPU keep resolving in-worker,
+    # where the WANDB_API_KEY the TPU path checks lives (the GPU path skips it).
     env_vars = (
         resolve_training_env(pod_config.env_vars, pod_config.resources)
         if isinstance(pod_config.resources.device, GpuConfig)
