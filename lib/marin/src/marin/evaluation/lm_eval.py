@@ -43,7 +43,6 @@ class LmEvalRun:
     num_fewshot: int | None = None
     batch_size: int | str | None = None
     confirm_run_unsafe_code: bool = False
-    uv_packages: Sequence[str] = LM_EVAL_UV_PACKAGES
     extra_model_args: Mapping[str, LmEvalModelArgValue] = field(default_factory=dict)
 
 
@@ -53,7 +52,7 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
 
     command = ["uv", "run", "--isolated", "--no-project"]
-    for package in run.uv_packages:
+    for package in LM_EVAL_UV_PACKAGES:
         command.extend(["--with", package])
     command.extend(
         [

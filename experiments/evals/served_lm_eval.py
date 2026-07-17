@@ -15,7 +15,12 @@ from iris.cluster.constraints import preemptible_constraint, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
-from marin.evaluation.lm_eval import LmEvalRun, run_iris_brokered_lm_eval, run_local_brokered_lm_eval
+from marin.evaluation.lm_eval import (
+    LM_EVAL_UV_PACKAGES,
+    LmEvalRun,
+    run_iris_brokered_lm_eval,
+    run_local_brokered_lm_eval,
+)
 from marin.execution.lazy import Artifact, ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.inference.vllm import (
@@ -67,6 +72,7 @@ class BrokeredLmEvalArtifactConfig:
     workers: InferenceWorkerConfig
     worker_env_vars: tuple[tuple[str, str], ...]
     ignored_request_fields: tuple[str, ...]
+    lm_eval_uv_packages: tuple[str, ...]
     eval_run: LmEvalRun
 
 
@@ -102,6 +108,7 @@ def brokered_lm_eval_step(
             workers=inference.workers,
             worker_env_vars=tuple(sorted(inference.worker_env_vars.items())),
             ignored_request_fields=inference.proxy.ignored_request_fields,
+            lm_eval_uv_packages=LM_EVAL_UV_PACKAGES,
             eval_run=replace(eval_run, output_path=ctx.output_path),
         )
 
