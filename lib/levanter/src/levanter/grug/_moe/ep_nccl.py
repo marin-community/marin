@@ -95,7 +95,12 @@ def _moe_mlp_ep_nccl(
         total = jnp.sum(group_sizes)
         row_ids = jnp.arange(x_dispatch.shape[0], dtype=jnp.int32)
         x_dispatch = jnp.where((row_ids < total)[:, None], x_dispatch, 0)
-        expert_mlp_fn = _quack_expert_mlp_fn(w13_l, w2_l, implementation="nccl_ep")
+        # extend_tail_group=False: the no-drop capacity tail is up to
+        # (ep-1)/ep of the buffer; running GEMMs over it multiplies FFN work.
+        # Unwritten output rows are where-selected away before ep_combine.
+        expert_mlp_fn = _quack_expert_mlp_fn(
+            w13_l, w2_l, implementation="nccl_ep", extend_tail_group=False
+        )
         out = expert_mlp_fn(x_dispatch, group_sizes)
         return out.reshape(recv_tokens_l.shape)
 

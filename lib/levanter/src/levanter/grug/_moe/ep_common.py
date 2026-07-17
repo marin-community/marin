@@ -22,7 +22,11 @@ except ModuleNotFoundError as _e:  # quack-kernels (and its torch dep) are optio
 
 
 def _quack_expert_mlp_fn(
-    moe_w13_local: jax.Array, moe_w2_local: jax.Array, *, implementation: str
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    implementation: str,
+    extend_tail_group: bool = True,
 ) -> Callable[[jax.Array, jax.Array], jax.Array]:
     """Expert-MLP callable running sonic_cute's QuACK grouped GEMMs on ``(x_dispatch, group_sizes)``.
 
@@ -39,10 +43,13 @@ def _quack_expert_mlp_fn(
     def expert_mlp_fn(x_dispatch: jax.Array, group_sizes: jax.Array) -> jax.Array:
         moe_dim = moe_w2_local.shape[1]
         w13_il = interleave_gate_up(moe_w13_local, moe_dim)
-        # The QuACK varlen kernel only writes rows below cu[-1]; attribute any
-        # capacity-padding tail (zero rows) to the final expert segment so every
-        # output row is defined.
-        group_sizes = group_sizes.at[-1].add(x_dispatch.shape[0] - jnp.sum(group_sizes, dtype=jnp.int32))
+        # The QuACK varlen kernel only writes rows below cu[-1]. When the
+        # caller reads every output row, attribute the capacity-padding tail to
+        # the final expert segment so all rows are defined. Callers that
+        # where-select real rows (nccl_ep: tail can be a large no-drop margin)
+        # skip this and save the tail's GEMM work.
+        if extend_tail_group:
+            group_sizes = group_sizes.at[-1].add(x_dispatch.shape[0] - jnp.sum(group_sizes, dtype=jnp.int32))
         cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
         # EP dispatch produces x_dispatch via collectives, so there is no cheap
         # (x, token_dispatch) re-gather like the local path — pass identity hints.
