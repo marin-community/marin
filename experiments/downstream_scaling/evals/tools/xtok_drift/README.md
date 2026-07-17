@@ -44,11 +44,13 @@ fraction; `--step-output` + `--prompts` bypass slug resolution.
 ## Browse
 
 ```bash
-srun --gres=gpu:1 --pty .venv-xtok/bin/python \
-    -m experiments.downstream_scaling.evals.tools.xtok_drift.app --port 7860
-# from your laptop, then open http://localhost:7860:
-ssh -J <login-host> <node> -L 7860:localhost:7860
+GRADIO_SHARE=True srun --gres=gpu:1 --pty .venv-xtok/bin/python \
+  -m experiments.downstream_scaling.evals.tools.xtok_drift.app
 ```
 
-Only the probe tab uses the GPU; an rsynced cache dir browses on a laptop
-with the same commands minus the allocation.
+Gradio prints the public URL after startup. The app has no authentication;
+anyone with the URL can browse the cache and submit live probes.
+
+For cache-only browsing, run
+`.venv-xtok/bin/python -m experiments.downstream_scaling.evals.tools.xtok_drift.app`
+without a GPU allocation. Opening the probe still requires the model.
