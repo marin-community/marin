@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
@@ -43,6 +46,7 @@ Key components:
 - rewrite_tensor_shape: Debug-friendly tensor shape rewrite utility
 """
 
+# ruff: noqa  -- vendored NVIDIA example code (cutlass v4.5.2), kept close to upstream
 from abc import ABC, abstractmethod
 from typing import Optional, Literal, Tuple, Union
 
@@ -68,9 +72,7 @@ TensormapDescBytes = 128
 
 @dsl_user_op
 @cute.jit
-def spin_wait(
-    ptr: Pointer, condition, fail_sleep_cycles: int = 100, *, loc=None, ip=None
-) -> None:
+def spin_wait(ptr: Pointer, condition, fail_sleep_cycles: int = 100, *, loc=None, ip=None) -> None:
     """
     Generic spin-wait.
     Example usage:
@@ -96,15 +98,10 @@ def gmem_ptr_to_generic(
     ip: Optional[ir.InsertionPoint] = None,
 ) -> Pointer:
     if gmem_ptr.memspace != AddressSpace.gmem:
-        raise ValueError(
-            f"gmem_ptr_to_generic requires pointer in gmem address space, "
-            f"got {gmem_ptr.memspace}"
-        )
+        raise ValueError(f"gmem_ptr_to_generic requires pointer in gmem address space, " f"got {gmem_ptr.memspace}")
     # Get LLVM pointer and cast to generic address space
     llvm_ptr = gmem_ptr.to_llvm_ptr(loc=loc, ip=ip)
-    generic_llvm_ptr = llvm.addrspacecast(
-        llvm.PointerType.get(AddressSpace.generic), llvm_ptr, loc=loc, ip=ip
-    )
+    generic_llvm_ptr = llvm.addrspacecast(llvm.PointerType.get(AddressSpace.generic), llvm_ptr, loc=loc, ip=ip)
     # Create a new cute.Pointer with generic address space, preserving alignment
     return cute.make_ptr(
         gmem_ptr.dtype,
@@ -125,14 +122,11 @@ def generic_ptr_to_gmem(
 ) -> Pointer:
     if generic_ptr.memspace != AddressSpace.generic:
         raise ValueError(
-            f"generic_ptr_to_gmem requires pointer in generic address space, "
-            f"got {generic_ptr.memspace}"
+            f"generic_ptr_to_gmem requires pointer in generic address space, " f"got {generic_ptr.memspace}"
         )
     # Get LLVM pointer and cast to gmem address space
     llvm_ptr = generic_ptr.to_llvm_ptr(loc=loc, ip=ip)
-    gmem_llvm_ptr = llvm.addrspacecast(
-        llvm.PointerType.get(AddressSpace.gmem), llvm_ptr, loc=loc, ip=ip
-    )
+    gmem_llvm_ptr = llvm.addrspacecast(llvm.PointerType.get(AddressSpace.gmem), llvm_ptr, loc=loc, ip=ip)
     # Create a new cute.Pointer with gmem address space, preserving alignment
     return cute.make_ptr(
         generic_ptr.dtype,
@@ -160,8 +154,7 @@ def prefetch_tma_descriptor(tma_desc_ptr: Pointer, *, loc=None, ip=None) -> None
     """
     if tma_desc_ptr.memspace not in (AddressSpace.gmem, AddressSpace.generic):
         raise ValueError(
-            f"prefetch_tma_descriptor requires pointer in gmem or generic address space, "
-            f"got {tma_desc_ptr.memspace}"
+            f"prefetch_tma_descriptor requires pointer in gmem or generic address space, " f"got {tma_desc_ptr.memspace}"
         )
     # Convert gmem pointer to generic if needed
     if tma_desc_ptr.memspace == AddressSpace.gmem:
@@ -300,16 +293,11 @@ class TensormapWorkspace:
         """
         if cutlass.const_expr(tensor_name not in self._name_to_slot):
             raise ValueError(
-                f"Invalid tensor_name '{tensor_name}', "
-                f"expected one of {list(self._name_to_slot.keys())}"
+                f"Invalid tensor_name '{tensor_name}', " f"expected one of {list(self._name_to_slot.keys())}"
             )
         slot = self._name_to_slot[tensor_name]
-        byte_offset = (
-            executor_idx * self._slots_per_executor + slot
-        ) * TensormapDescBytes
-        return ptr_offset_bytes(self.workspace_ptr, byte_offset).align(
-            TensormapDescBytes
-        )
+        byte_offset = (executor_idx * self._slots_per_executor + slot) * TensormapDescBytes
+        return ptr_offset_bytes(self.workspace_ptr, byte_offset).align(TensormapDescBytes)
 
     @staticmethod
     def size_bytes(num_slots: int, num_executors: int) -> int:
@@ -761,9 +749,7 @@ class MoEScaledGroupedGemmTensormapConstructor(OnlineTensormapDescCreator):
                     # padded_end    = smem[lane + 1] (this expert's cumulative)
                     padded_offset = smem_offs_padded[lane_in_group]
                     padded_size_i = smem_offs_padded[lane_in_group + 1] - padded_offset
-                    self._construct_sf_descs_2dx2d_direct(
-                        expert_idx, padded_offset, padded_size_i
-                    )
+                    self._construct_sf_descs_2dx2d_direct(expert_idx, padded_offset, padded_size_i)
 
             # All threads release (fixed arrive count)
             handle.release()
@@ -856,30 +842,14 @@ class MoEScaledGroupedGemmTensormapConstructor(OnlineTensormapDescCreator):
         """
         c1 = cutlass.Int32(1)
 
-        a_chunks_to_move = (
-            padded_offset
-            // self.sf_vec_size
-            * cute.size(self.sfa_tensor, mode=[0])
-            // 128
-        )
-        a_elems_to_move = (
-            cute.size(self.sfa_tensor, mode=[0]) * padded_offset // self.sf_vec_size
-        )
-        b_chunks_to_move = (
-            padded_offset
-            // self.sf_vec_size
-            * cute.size(self.sfb_tensor, mode=[0])
-            // 128
-        )
-        b_elems_to_move = (
-            cute.size(self.sfb_tensor, mode=[0]) * padded_offset // self.sf_vec_size
-        )
+        a_chunks_to_move = padded_offset // self.sf_vec_size * cute.size(self.sfa_tensor, mode=[0]) // 128
+        a_elems_to_move = cute.size(self.sfa_tensor, mode=[0]) * padded_offset // self.sf_vec_size
+        b_chunks_to_move = padded_offset // self.sf_vec_size * cute.size(self.sfb_tensor, mode=[0]) // 128
+        b_elems_to_move = cute.size(self.sfb_tensor, mode=[0]) * padded_offset // self.sf_vec_size
 
         per_expert_sfa_shape = (self.sfa_tensor.shape[0], padded_size_i, c1)  # type: ignore[index]
         sfa_layout_i = tile_atom_to_shape_SF(per_expert_sfa_shape, self.sf_vec_size)
-        sfa_i = cute.make_tensor(
-            self.sfa_tensor.iterator + a_elems_to_move, sfa_layout_i
-        )
+        sfa_i = cute.make_tensor(self.sfa_tensor.iterator + a_elems_to_move, sfa_layout_i)
 
         tma_atom_sfa, _ = cute.nvgpu.make_tiled_tma_atom_A(
             self.sfa_tma_op,
@@ -894,9 +864,7 @@ class MoEScaledGroupedGemmTensormapConstructor(OnlineTensormapDescCreator):
 
         per_expert_sfb_shape = (self.sfb_tensor.shape[0], padded_size_i, c1)  # type: ignore[index]
         sfb_layout_i = tile_atom_to_shape_SF(per_expert_sfb_shape, self.sf_vec_size)
-        sfb_i = cute.make_tensor(
-            self.sfb_tensor.iterator + b_elems_to_move, sfb_layout_i
-        )
+        sfb_i = cute.make_tensor(self.sfb_tensor.iterator + b_elems_to_move, sfb_layout_i)
 
         tma_atom_sfb, _ = cute.nvgpu.make_tiled_tma_atom_B(
             self.sfb_tma_op,

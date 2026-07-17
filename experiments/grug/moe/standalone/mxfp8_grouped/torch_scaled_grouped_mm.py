@@ -45,6 +45,7 @@ Kernel interface uses GEMM MNKL domain (same as torch_grouped_mm.py):
 The scheduler handles fake dimensions by computing token_offset from offs.
 """
 
+# ruff: noqa  -- vendored NVIDIA example code (cutlass v4.5.2), kept close to upstream
 from typing import Literal
 
 import cuda.bindings.driver as cuda

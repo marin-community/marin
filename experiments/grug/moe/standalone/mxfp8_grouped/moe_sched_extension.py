@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
@@ -62,6 +65,7 @@ Architecture:
     Kernel (caller): the only place that knows all three exist
 """
 
+# ruff: noqa  -- vendored NVIDIA example code (cutlass v4.5.2), kept close to upstream
 from abc import ABC, abstractmethod
 from typing import Literal, Tuple, Union
 
@@ -73,6 +77,7 @@ from cutlass.cutlass_dsl import Int32
 from dataclasses import dataclass
 
 from cutlass.utils.blockscaled_layout import tile_atom_to_shape_SF
+
 # Vendored (marin): absolute `blackwell.kernel.moe.*` imports rewritten to
 # package-relative.
 from .moe_utils import (
@@ -219,9 +224,7 @@ class GroupedMmSchedExtension(MoESchedExtension):
                     gmem_tensor_in_moe_view,
                     (tokens_i, shape[1], c1),  # type: ignore[index]
                 )
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("c", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("c", expert_idx))
                 return (real, desc)
 
         elif cutlass.const_expr(self.scenario == "2Dx2D"):
@@ -231,9 +234,7 @@ class GroupedMmSchedExtension(MoESchedExtension):
                     gmem_tensor_in_moe_view,
                     (shape[0], tokens_i, c1),  # type: ignore[index]
                 )
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("a", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("a", expert_idx))
                 return (real, desc)
             elif cutlass.const_expr(tensor_name == "b"):
                 # B: (n, fake_k, 1) -> expert-wise desc, no offset
@@ -241,16 +242,14 @@ class GroupedMmSchedExtension(MoESchedExtension):
                     gmem_tensor_in_moe_view,
                     (shape[0], tokens_i, c1),  # type: ignore[index]
                 )
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("b", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("b", expert_idx))
                 return (real, desc)
             elif cutlass.const_expr(tensor_name == "c"):
                 # C: (m, n, fake_l) -> offset fake_l, global desc
                 real = cute.domain_offset((0, 0, expert_idx), gmem_tensor_in_moe_view)
                 real = rewrite_tensor_shape(real, (shape[0], shape[1], c1))  # type: ignore[index]
                 return (real, None)
-        
+
         raise ValueError("Invalid scenario or GEMM tensor name.")
 
     @cute.jit
@@ -262,7 +261,6 @@ class GroupedMmSchedExtension(MoESchedExtension):
             prefetch_tma_descriptor(self.tensormap_ctor.get_desc_ptr("b", expert_idx))
         else:
             raise ValueError("Invalid scenario.")
-        
 
 
 # =============================================================================
@@ -326,9 +324,7 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
 
         expert_idx = work_tile_info.expert_idx
         token_offset, tokens_i = compute_expert_token_range(offs_token, expert_idx)
-        padded_offset, padded_size_i = compute_expert_token_range(
-            offs_padded, expert_idx
-        )
+        padded_offset, padded_size_i = compute_expert_token_range(offs_padded, expert_idx)
 
         shape = gmem_tensor_in_moe_view.shape
         stride = gmem_tensor_in_moe_view.stride
@@ -354,21 +350,15 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
                     gmem_tensor_in_moe_view,
                     (tokens_i, shape[1], c1),  # type: ignore[index]
                 )
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("c", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("c", expert_idx))
                 return (real, desc)
 
             elif cutlass.const_expr(tensor_name == "sfa"):
                 # SFA: (fake_m_pad, k_pad, 1) -> offset fake_m_pad, atom-tile, global desc
-                real = cute.domain_offset(
-                    (padded_offset, 0, 0), gmem_tensor_in_moe_view
-                )
+                real = cute.domain_offset((padded_offset, 0, 0), gmem_tensor_in_moe_view)
                 per_expert_shape = (padded_size_i, shape[1], c1)  # type: ignore[index]
                 sf_layout = tile_atom_to_shape_SF(per_expert_shape, sf_vec_size)
-                real = cute.make_tensor(
-                    real.iterator, cute.make_layout(sf_layout.shape, stride=stride)
-                )
+                real = cute.make_tensor(real.iterator, cute.make_layout(sf_layout.shape, stride=stride))
                 return (real, None)
 
             elif cutlass.const_expr(tensor_name == "sfb"):
@@ -376,9 +366,7 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
                 real = cute.domain_offset((0, 0, expert_idx), gmem_tensor_in_moe_view)
                 per_expert_shape = (shape[0], shape[1], c1)  # type: ignore[index]
                 sf_layout = tile_atom_to_shape_SF(per_expert_shape, sf_vec_size)
-                real = cute.make_tensor(
-                    real.iterator, cute.make_layout(sf_layout.shape, stride=stride)
-                )
+                real = cute.make_tensor(real.iterator, cute.make_layout(sf_layout.shape, stride=stride))
                 return (real, None)
 
         elif cutlass.const_expr(self.scenario == "2Dx2D"):
@@ -388,9 +376,7 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
                     gmem_tensor_in_moe_view,
                     (shape[0], tokens_i, c1),  # type: ignore[index]
                 )
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("a", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("a", expert_idx))
                 return (real, desc)
 
             elif cutlass.const_expr(tensor_name == "b"):
@@ -399,9 +385,7 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
                     gmem_tensor_in_moe_view,
                     (shape[0], tokens_i, c1),  # type: ignore[index]
                 )
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("b", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("b", expert_idx))
                 return (real, desc)
 
             elif cutlass.const_expr(tensor_name == "c"):
@@ -415,9 +399,7 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
                 per_expert_shape = (shape[0], padded_size_i, c1)  # type: ignore[index]
                 sf_layout = tile_atom_to_shape_SF(per_expert_shape, sf_vec_size)
                 real = rewrite_tensor_shape(gmem_tensor_in_moe_view, sf_layout.shape)
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("sfa", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("sfa", expert_idx))
                 return (real, desc)
 
             elif cutlass.const_expr(tensor_name == "sfb"):
@@ -425,9 +407,7 @@ class ScaledGroupedMmSchedExtension(MoESchedExtension):
                 per_expert_shape = (shape[0], padded_size_i, c1)  # type: ignore[index]
                 sf_layout = tile_atom_to_shape_SF(per_expert_shape, sf_vec_size)
                 real = rewrite_tensor_shape(gmem_tensor_in_moe_view, sf_layout.shape)
-                desc = tensormap_ptr_for_copy(
-                    self.tensormap_ctor.get_desc_ptr("sfb", expert_idx)
-                )
+                desc = tensormap_ptr_for_copy(self.tensormap_ctor.get_desc_ptr("sfb", expert_idx))
                 return (real, desc)
 
         raise ValueError("Invalid scenario or tensor name.")
