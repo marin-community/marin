@@ -12,8 +12,8 @@ candidates — this is the same-tokenizer baseline for the
 cross-tokenizer HumanEval sweep, run through the xtok module so all weights
 share one engine load and token paths are recorded.
 
-Generation settings follow lm-eval's ``humaneval.yaml`` (10-shot, stop at
-code-block boundaries, 1024 generated tokens), per the HumanEval task plan.
+Generation settings follow lm-eval's ``humaneval.yaml``: zero-shot, stop at
+code-block boundaries, and 1024 generated tokens.
 
 ``--mode preseed`` downloads the advisor and the (non-skipped) Delphi ladder
 from Hugging Face into each preseed region — per-region downloads, so the
@@ -81,7 +81,7 @@ ADVISOR_MAX_TOKENS = MAX_TOKENS
 SEED = 42
 STOP_TOKENS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint")
 
-NUM_FEWSHOT = 5
+NUM_FEWSHOT = 0
 FEWSHOT_SEED = 1234
 
 TEMPERATURE = 0.4

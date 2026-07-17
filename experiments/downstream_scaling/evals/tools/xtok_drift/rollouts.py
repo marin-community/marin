@@ -50,6 +50,10 @@ class Step:
 class Rollout:
     problem_id: str
     completion_index: int
+    # Rank within this (problem, weight)'s block of samples — the same rank
+    # --samples selects by, and aligned across weights (the sweep repeats the
+    # same request slots per weight).
+    sample_rank: int
     advisor_weight: float
     prompt: str
     # Non-EOS steps only; a trailing selector-chosen EOS step (empty bytes) is
@@ -102,6 +106,23 @@ def verify_token_paths(rollout: Rollout, vocab_b: xtok_selection.Vocab) -> None:
                 f"{rollout.problem_id} completion {rollout.completion_index} step {step_index}: "
                 f"recorded tokens_b {list(step.tokens_b)} != segment(chunk bytes) {expected}"
             )
+
+
+def is_misaligned(rollout: Rollout, tokenizer: Any) -> bool:
+    """True if any decodable boundary's canonical tokenization differs from
+    the recorded forced ids — tokenizer-only, no model, first hit decides."""
+    forced: list[int] = []
+    data = bytearray()
+    for step in rollout.steps:
+        forced.extend(step.tokens_b)
+        data.extend(step.chunk)
+        try:
+            text = bytes(data).decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if tokenizer.encode(text, add_special_tokens=False) != forced:
+            return True
+    return False
 
 
 def _parse_steps(record: dict[str, Any], *, context: str) -> tuple[tuple[Step, ...], bool]:
@@ -194,7 +215,7 @@ def load_rollouts(
     selection_ids = sorted(wanted_ids) if wanted_ids is not None else sorted({key[0] for key in groups})
     if not selection_ids:
         raise ValueError(f"no token paths at weights {sorted(wanted_weights)} in {completions_output}")
-    selected: list[dict[str, Any]] = []
+    selected: list[tuple[int, dict[str, Any]]] = []
     for problem_id in selection_ids:
         for weight in sorted(wanted_weights):
             group = groups.get((problem_id, weight))
@@ -206,18 +227,18 @@ def load_rollouts(
                     raise ValueError(
                         f"sample rank {rank} out of range: {len(group)} samples for {problem_id!r} at weight {weight}"
                     )
-                selected.append(group[rank])
+                selected.append((rank, group[rank]))
     if limit is not None:
         selected = selected[:limit]
 
-    selected_ids = {record["id"] for record in selected}
+    selected_ids = {record["id"] for _, record in selected}
     completion_lists: dict[str, list[dict[str, Any]]] = {}
     for completion_row in read_completion_rows(completions_file(completions_output)):
         if completion_row["id"] in selected_ids:
             completion_lists[completion_row["id"]] = completion_row["completions"]
 
     rollouts: list[Rollout] = []
-    for record in selected:
+    for sample_rank, record in selected:
         problem_id, weight = record["id"], record["advisor_weight"]
         context = f"{problem_id} completion {record['completion_index']}"
         if problem_id not in prompts:
@@ -239,6 +260,7 @@ def load_rollouts(
             Rollout(
                 problem_id=problem_id,
                 completion_index=record["completion_index"],
+                sample_rank=sample_rank,
                 advisor_weight=weight,
                 prompt=prompts[problem_id],
                 steps=steps,

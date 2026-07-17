@@ -244,6 +244,17 @@ def prefix_mass(chunk: bytes, probs: dict[Key, float], *, credit: float) -> floa
     return mass
 
 
+def avg_bytes_union_scores(a: dict[Key, Candidate], b: dict[Key, Candidate], advisor_weight: float) -> dict[Key, float]:
+    """Score the byte-keyed union with each side's minimum as its missing-key floor."""
+    a_floor = min(candidate.logit for candidate in a.values())
+    b_floor = min(candidate.logit for candidate in b.values())
+    w_a, w_b = 1.0 - advisor_weight, advisor_weight
+    return {
+        key: w_a * (a[key].logit if key in a else a_floor) + w_b * (b[key].logit if key in b else b_floor)
+        for key in set(a) | set(b)
+    }
+
+
 def select_avg_bytes_union(
     a_topk: list[dict[str, Any]],
     b_topk: list[dict[str, Any]],
@@ -259,14 +270,8 @@ def select_avg_bytes_union(
     missing keys, temperature sample (argmax at T=0)."""
     a = candidates(vocab_a, a_topk)
     b = candidates(vocab_b, b_topk)
-    a_floor = min(candidate.logit for candidate in a.values())
-    b_floor = min(candidate.logit for candidate in b.values())
-    w_a, w_b = 1.0 - advisor_weight, advisor_weight
-    union = list(set(a) | set(b))
-    scores = [
-        w_a * (a[key].logit if key in a else a_floor) + w_b * (b[key].logit if key in b else b_floor) for key in union
-    ]
-    key = _temperature_sample(union, scores, temperature, rng)
+    scores = avg_bytes_union_scores(a, b, advisor_weight)
+    key = _temperature_sample(list(scores), list(scores.values()), temperature, rng)
     return force(vocab_a, key, a), force(vocab_b, key, b)
 
 

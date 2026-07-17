@@ -302,7 +302,7 @@ def main() -> None:
     parser.add_argument("--server-name", default="127.0.0.1")
     args = parser.parse_args()
     demo = build_app(resolve_cache_dir(args.cache_dir), args.model, args.revision, args.device)
-    demo.launch(server_name=args.server_name, server_port=args.port)
+    demo.launch(server_name=args.server_name, server_port=args.port, show_error=True)
 
 
 if __name__ == "__main__":

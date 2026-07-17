@@ -35,7 +35,7 @@ HF_ALLOW_CODE_EVAL = "HF_ALLOW_CODE_EVAL"
 
 @dataclass(frozen=True)
 class HumanEvalTaskConfig:
-    num_fewshot: int = 10
+    num_fewshot: int = 0
     fewshot_seed: int = 1234
     n_problems: int | None = None
     grade_workers: int = 32

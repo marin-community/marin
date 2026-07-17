@@ -90,6 +90,8 @@ VLLM_TPU_ENV_VARS: dict[str, str] = {
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
     "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
     "VLLM_TPU_SKIP_PRECOMPILE": "1",
+    # Bound concurrent RunAI CPU staging when several TPU engine pairs boot on one VM.
+    "RUNAI_STREAMER_MEMORY_LIMIT": "4294967296",
 }
 
 DEFAULT_HEARTBEAT_TIMEOUT = 2 * 60

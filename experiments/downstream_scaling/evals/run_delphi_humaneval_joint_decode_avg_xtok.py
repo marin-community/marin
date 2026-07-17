@@ -8,8 +8,8 @@ Advisor (B) = Qwen3-4B-Base (Qwen tokenizer). Selection rule =
 anchored_prefix_mass; one step per checkpoint sweeps the full advisor-weight
 grid through a single engine load per worker child.
 
-Generation settings follow lm-eval's ``humaneval.yaml`` (10-shot, stop at
-code-block boundaries, 1024 generated tokens), per the HumanEval task plan.
+Generation settings follow lm-eval's ``humaneval.yaml``: zero-shot, stop at
+code-block boundaries, and 1024 generated tokens.
 
 ``--mode preseed`` downloads the advisor and the (non-skipped) Delphi ladder
 from Hugging Face into each preseed region — per-region downloads, so the
@@ -77,7 +77,7 @@ ADVISOR_MAX_TOKENS = 2 * MAX_TOKENS
 SEED = 42
 STOP_TOKENS = ("\nclass", "\ndef", "\n#", "\nif", "\nprint")
 
-NUM_FEWSHOT = 10
+NUM_FEWSHOT = 0
 FEWSHOT_SEED = 1234
 
 TEMPERATURE = 0.4

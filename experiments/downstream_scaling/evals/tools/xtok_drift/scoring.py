@@ -21,6 +21,7 @@ run on a single >=16 GB CUDA GPU:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import math
 import os
@@ -36,6 +37,7 @@ from experiments.downstream_scaling.evals.tools.xtok_drift.rollouts import (
     DEFAULT_EXECUTOR_PREFIX,
     Rollout,
     decoded_boundaries,
+    is_misaligned,
     load_rollouts,
     resolve_step_paths,
     verify_token_paths,
@@ -268,21 +270,23 @@ def score_chunked_prefix(
     return compare_logits(rows[0], rows[1]), forced_gen == canonical_gen
 
 
-def cache_key(rollout: Rollout) -> str:
-    return f"{rollout.problem_id.replace('/', '-')}__w{rollout.advisor_weight:g}__i{rollout.completion_index}"
+def cache_key(decoder: str, rollout: Rollout) -> str:
+    problem = rollout.problem_id.replace("/", "-")
+    return f"{decoder}__{problem}__w{rollout.advisor_weight:g}__r{rollout.sample_rank}"
 
 
 def save_scored(
     cache_dir: str,
     scored: ScoredRollout,
     *,
+    decoder: str,
     model_name: str,
     revision: str,
     vocab_b: xtok_selection.Vocab,
     tokenizer: Any,
 ) -> str:
     os.makedirs(cache_dir, exist_ok=True)
-    key = cache_key(scored.rollout)
+    key = cache_key(decoder, scored.rollout)
     bounds = scored.boundaries
     arrays = {
         "step_index": np.array([b.step_index for b in bounds], dtype=np.int32),
@@ -306,7 +310,9 @@ def save_scored(
     shown_ids = np.unique(np.concatenate([arrays["topk_forced_ids"], arrays["topk_canonical_ids"]], axis=None))
     labels = {str(int(token_id)): token_label(int(token_id), vocab_b, tokenizer) for token_id in shown_ids}
     meta = {
+        "decoder": decoder,
         "problem_id": scored.rollout.problem_id,
+        "sample_rank": scored.rollout.sample_rank,
         "advisor_weight": scored.rollout.advisor_weight,
         "completion_index": scored.rollout.completion_index,
         "prompt": scored.rollout.prompt,
@@ -323,7 +329,7 @@ def save_scored(
     return key
 
 
-def print_summary(scored_rollouts: list[ScoredRollout]) -> None:
+def print_summary(decoder: str, scored_rollouts: list[ScoredRollout]) -> None:
     pooled: list[float] = []
     print()
     print(
@@ -340,7 +346,7 @@ def print_summary(scored_rollouts: list[ScoredRollout]) -> None:
             stats = f"{'-':>8} {'-':>8} {'-':>8}"
         coincmax = f"{max(coinciding):9.4f}" if coinciding else f"{'-':>9}"
         print(
-            f"{cache_key(scored.rollout):<52} {len(scored.boundaries):>5} {len(coinciding):>6} "
+            f"{cache_key(decoder, scored.rollout):<52} {len(scored.boundaries):>5} {len(coinciding):>6} "
             f"{len(scored.skipped_offsets):>5} {stats} {coincmax}"
         )
     if pooled:
@@ -366,6 +372,11 @@ def parse_args() -> argparse.Namespace:
         "--samples", nargs="+", type=int, default=[0], help="sample ranks within each (problem, weight) group"
     )
     parser.add_argument("--num-rollouts", type=int, default=None, help="keep only the first N selected rollouts")
+    parser.add_argument(
+        "--only-misaligned",
+        action="store_true",
+        help="screen with the tokenizer (no GPU) and score only rollouts whose segmentations diverge",
+    )
     parser.add_argument("--cache-dir", default=None, help=f"cache dir; default ${CACHE_DIR_ENV_VAR}")
     parser.add_argument("--model", default=ADVISOR_MODEL, help="HF repo id or local model path")
     parser.add_argument("--revision", default=ADVISOR_REVISION)
@@ -394,22 +405,41 @@ def main() -> None:
         advisor_weights=args.weights,
         sample_ranks=args.samples,
         problem_ids=args.problems,
-        limit=args.num_rollouts,
+        limit=None if args.only_misaligned else args.num_rollouts,
         cache_dir=args.cache_dir,
     )
     print(f"loaded {len(rollouts)} rollouts from {completions_output}")
+    # Decoder identity for result keys: the slug, else the completions step's
+    # hash basename — distinct per decoder either way.
+    decoder = args.slug if args.slug is not None else os.path.basename(completions_output.rstrip("/"))
     tokenizer, model = load_advisor(args.model, args.revision, args.device)
     vocab_b = xtok_selection.load_vocab(tokenizer)
+    if args.only_misaligned:
+        kept = [rollout for rollout in rollouts if is_misaligned(rollout, tokenizer)]
+        print(f"misaligned: {len(kept)}/{len(rollouts)} rollouts ({100 * len(kept) / len(rollouts):.1f}%)")
+        rollouts = kept[: args.num_rollouts]
+        if not rollouts:
+            return
+    # Results are the last run's output, not an accumulating cache: each run
+    # replaces the previous one's files (inputs/ is untouched).
+    for stale in glob.glob(os.path.join(args.cache_dir, "*.npz")) + glob.glob(os.path.join(args.cache_dir, "*.json")):
+        os.remove(stale)
     scored_rollouts: list[ScoredRollout] = []
     for rollout in rollouts:
         verify_token_paths(rollout, vocab_b)
         scored = score_rollout(model, tokenizer, vocab_b, rollout, batch_size=args.batch_size)
         key = save_scored(
-            args.cache_dir, scored, model_name=args.model, revision=args.revision, vocab_b=vocab_b, tokenizer=tokenizer
+            args.cache_dir,
+            scored,
+            decoder=decoder,
+            model_name=args.model,
+            revision=args.revision,
+            vocab_b=vocab_b,
+            tokenizer=tokenizer,
         )
         print(f"scored {key}: {len(scored.boundaries)} boundaries, {len(scored.skipped_offsets)} skipped")
         scored_rollouts.append(scored)
-    print_summary(scored_rollouts)
+    print_summary(decoder, scored_rollouts)
 
 
 if __name__ == "__main__":

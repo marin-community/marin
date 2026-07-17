@@ -35,8 +35,11 @@ sbatch --gres=gpu:1 --time=0:30:00 --wrap "\
 
 The job log ends with the KL summary — the drift measurement. Inputs are
 cached under `$XTOK_DRIFT_CACHE/inputs/`, so reruns against the same slug pay
-no egress. `--problems` / `--samples` select specific problems or sample
-ranks; `--step-output` + `--prompts` bypass slug resolution.
+no egress. Each scoring run replaces the previous run's results; the app
+always shows the latest run. `--problems` / `--samples` select specific
+problems or sample ranks; `--only-misaligned` screens without the GPU and
+scores only rollouts whose segmentations diverge, printing the misaligned
+fraction; `--step-output` + `--prompts` bypass slug resolution.
 
 ## Browse
 
