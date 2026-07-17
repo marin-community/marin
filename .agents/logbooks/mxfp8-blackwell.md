@@ -562,3 +562,68 @@ author: mcwitt
   `dot_scaled`, public fused mxfp8 quantizers (fal.ai?); (b) continue the
   engineering paths from 002c: epilogue fusion (SwiGLU+dual-quantize) and/or
   TMA-pipelined quantizer with in-kernel swizzle.
+
+### 2026-07-16 - MXFP8-000c: third-party kernel survey (brief #2) — NVIDIA ships our epilogue fusion, MIT-licensed
+
+- Effort: medium (2 tracks: tokamax source deep-dive; web survey TE/QuACK/CUTLASS/triton/DeepGEMM/fal.ai + adversarial ceiling).
+- Date: 2026-07-16. Full agent reports promoted here in condensed form.
+
+#### Headline findings
+
+1. **cudnn-frontend >=1.21 ships open-source (MIT) CuTeDSL fused MoE grouped
+   kernels** (`python/cudnn/grouped_gemm/`) — including
+   `grouped_gemm_swiglu_quant` (blockscaled grouped GEMM -> SwiGLU ->
+   dual-orientation MXFP8 quantize, emitting d + d_col + swizzled
+   sfd_row/sfd_col + per-expert amax), `grouped_gemm_dswiglu_quant` (bwd),
+   `grouped_gemm_quant` (plain quantizing epilogue), and
+   `grouped_gemm_wgrad`. Same file lineage as our vendored kernel (they
+   include newer revisions of moe_persistent_scheduler/moe_utils/
+   moe_sched_extension). This IS the 002c epilogue fusion, already written:
+   the "interleaved" dense variant solves the w13 column-interleave problem
+   the probe identified. NVIDIA blog: 1.3x fwd / 2.1x bwd kernel-level on
+   GB200. Constraints: SM100+, sf_vec 16/32, m_aligned=256, experts <=1024.
+2. **Standalone quantizers cannot reach the 0.7 ms target — adversarial math
+   closes that path.** Even a perfect 6.2 TB/s dual-orientation quantizer
+   (Cursor's, closed-source) only takes our 4-tensor producer 2.07 -> ~1.6 ms.
+   Everyone credible (Cursor, NVIDIA, CUTLASS ex.92, QuACK) gets
+   producer-free via epilogue fusion. (Our SIMT kernel's ~4.8 TB/s sits at
+   the known cp.async plateau; fal recipe = one bulk-TMA per CTA tile +
+   packed 4-byte scale stores; torchao's 5.9 TB/s single-orientation kernels
+   are BSD-3 and vendorable if a standalone is ever needed.)
+3. **MXFP8-on-Hopper is DEAD** (answers the tokamax question): tokamax has no
+   MXFP8 anywhere (0.0.6/0.0.12/HEAD; sm90 path is weight-only
+   dequant-to-bf16 before wgmma — no fp8 TC use on Hopper at all; sm100 quant
+   kernels are W4A8 inference, float subchannel-128 scales, no sm100 wgrad).
+   TE hard-gates MXFP8 to cc>=10.0. No public sm90 1x32-e8m0 kernel exists,
+   and the arithmetic says why: fp8 wgmma is K=32/instruction, so per-block
+   rescale costs ~0.92x the MMA time in CUDA-core FMAs -> ceiling ~1030 TF/s
+   ~= bf16 peak. DeepSeek's 1x128 (0.23x overhead) is the sm90 frontier.
+4. **Our GEMM is at ~80-84% of the honest ceiling, not 50%.** Measured cuBLAS
+   mxfp8 dense tops at ~2.5-2.7 PF/s (not the 4.5 spec); Cursor's grouped
+   kernel ~2650 TF/s at wide-N shapes. Verdict: ~10-20% GEMM headroom, best
+   captured by the fused epilogues + scheduler tuning, not mainloop heroics.
+5. Other options graded: TE common lib (Apache-2.0, torch-free
+   libtransformer_engine.so) exposes nvte_swiglu-with-MXFP8-output,
+   nvte_group_quantize (dual-orientation one-pass), swizzle, and
+   nvte_grouped_gemm (cuBLAS 13.3+ for MXFP8 grouped; kMaxGroups=64 = our E);
+   te.jax grouped_dense MXFP8 landed in v2.15 — cheapest honest baseline.
+   QuACK (Apache-2.0, JAX bindings): blockscaled epilogue with SF-direction
+   knob on bf16-input GEMMs (varlen_m MoE fwd + varlen_k wgrad) — cleanest
+   for making UPSTREAM dense GEMMs emit mxfp8. Triton dense-only 2378 TF/s,
+   no grouped MX (low EV). DeepGEMM sm100 impl can express gran_k=32 but
+   default recipe is 1x128 (medium-low EV). jax 0.10.1 Pallas already
+   exposes tcgen05_mma with scale refs (pure-JAX fallback).
+6. Prerequisite for most of the above: bump `nvidia-cutlass-dsl` pin past
+   `<4.6` (lib/levanter/pyproject.toml:89); the v4.6 drop also updated our
+   vendored torch_scaled_grouped_mm.py (diff it) and 4.6.1 improves JAX FFI
+   registration. Re-run 002c bit-exactness after the bump.
+
+#### Plan (supersedes the 002c three-way)
+
+- MXFP8-004a (primary): vendor cudnn-frontend fused grouped kernels behind
+  our cutlass_call adapter; wire fwd w13 (SwiGLU+quant), w2 (quant epilogue),
+  dSwiGLU+quant, wgrad. Gate: layer-quad >=1.2x vs bf16. Fallback: same
+  fusion in C++ CUTLASS ex.92 via a small FFI .so.
+- MXFP8-004b (parallel, cheap): bench TE 2.15+ te.jax grouped_dense MXFP8 at
+  our shapes on a pod — the NVIDIA-tuned narrow-N datapoint; time-boxed
+  (arm64 install risk).
