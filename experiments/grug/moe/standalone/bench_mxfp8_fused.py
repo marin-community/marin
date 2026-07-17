@@ -295,9 +295,9 @@ def run_legs(inp, tilers):
     g_q, g_sf, g_col, g_sfc = inp["g_ops"]
     m = inp["m"]
 
-    swiglu_kw = dict(mma_tiler_mn=tilers["swiglu"][0], cluster_shape_mn=tilers["swiglu"][1])
+    swiglu_kw = dict(mma_tiler_mn=tilers["swiglu"][0], cluster_shape_mn=tilers["swiglu"][1], vector_f32=tilers.get("swiglu_vecf32", False))
     gemm_kw = dict(mma_tiler_mn=tilers["gemm"][0], cluster_shape_mn=tilers["gemm"][1])
-    dsw_kw = dict(mma_tiler_mn=tilers["dswiglu"][0], cluster_shape_mn=tilers["dswiglu"][1])
+    dsw_kw = dict(mma_tiler_mn=tilers["dswiglu"][0], cluster_shape_mn=tilers["dswiglu"][1], vectorized_f32=tilers.get("dswiglu_vecf32", True))
     wg_kw = dict(mma_tiler_mn=tilers["wgrad"][0], cluster_shape_mn=tilers["wgrad"][1])
 
     legs = {}
@@ -484,13 +484,14 @@ def cute_producer_available() -> bool:
 
 
 # Per-leg tiler variants for --ablate (mma_m, mma_n, cluster_m, cluster_n).
+# g6 verdicts: (256,256,2,1) wins every leg it applies to; dswiglu vecf32 wins.
 ABLATE_VARIANTS = {
     "swiglu": ["128,256,1,1"],
-    "gemm_w2": ["256,256,2,1"],
+    "gemm_w2": ["128,256,1,1"],
     "dswiglu": ["128,256,1,1"],
-    "gemm_w13": ["256,256,2,1"],
-    "wgrad_w13": ["256,256,2,1", "128,128,1,1"],
-    "wgrad_w2": ["256,256,2,1", "128,128,1,1"],
+    "gemm_w13": ["128,256,1,1"],
+    "wgrad_w13": ["128,256,1,1"],
+    "wgrad_w2": ["128,256,1,1"],
 }
 _LEG_KIND = {
     "swiglu": "swiglu",
@@ -605,7 +606,17 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: b
             "wgrad": lambda kw: jax.jit(lambda a, asf, b, bsf, o: mxfp8_fused_wgrad(a, asf, b, bsf, o, **kw)),
         }
         # dswiglu also gets a vectorized_f32 variant at the default tiler.
-        extra = {"dswiglu": [("vecf32", dict(mma_tiler_mn=tilers["dswiglu"][0], cluster_shape_mn=tilers["dswiglu"][1], vectorized_f32=True))]}
+        extra = {
+            "swiglu": [
+                ("vecf32", dict(mma_tiler_mn=tilers["swiglu"][0], cluster_shape_mn=tilers["swiglu"][1], vector_f32=True))
+            ],
+            "dswiglu": [
+                (
+                    "novecf32",
+                    dict(mma_tiler_mn=tilers["dswiglu"][0], cluster_shape_mn=tilers["dswiglu"][1], vectorized_f32=False),
+                )
+            ],
+        }
         ab_res = {}
         for leg, variants in ABLATE_VARIANTS.items():
             kind = _LEG_KIND[leg]
@@ -637,8 +648,8 @@ def main():
     p.add_argument("--ablate", action="store_true", help="also time per-leg tiler variants")
     p.add_argument("--swiglu-tiler", default="256,256,2,1", help="mma_m,mma_n,cluster_m,cluster_n")
     p.add_argument("--dswiglu-tiler", default="256,256,2,1")
-    p.add_argument("--gemm-tiler", default="128,256,1,1")
-    p.add_argument("--wgrad-tiler", default="128,256,1,1")
+    p.add_argument("--gemm-tiler", default="256,256,2,1")
+    p.add_argument("--wgrad-tiler", default="256,256,2,1")
     p.add_argument("--out", default="bench_mxfp8_fused.json")
     a = p.parse_args()
     phases = set(a.phases.split(","))
