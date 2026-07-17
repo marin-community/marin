@@ -774,3 +774,64 @@ author: mcwitt
   the #7012 4-GPU numbers: EP1 17.01% / ring EP4 16.32% / a2a 15.82%
   B200-conv) with per-phase timing; weight-quantize amortization across
   microbatches; exercise CuTe producer on a good node; one a2a arm.
+
+### 2026-07-17 - MXFP8-005: e2e MFU — mxfp8 beats bf16 (+1.17pp) and per-tensor (+0.94pp); best 15.65%
+
+- Hypothesis: H8 e2e leg + H5 fusion thesis at step level.
+- Commit Hash: bd98e7d0d (save-qweights knob, --profile-steps,
+  trace_phases.py). Jobs `/mwittmann/mxfp8-005-g1..g13` (results from
+  g7-g13; g1-g6 were shell-quoting/B128-OOM casualties).
+- Config: GB200x4, EP4, d2560/L26/E64/K4/seq4096, MuonH, recompute_all,
+  20 steps, steady-median, B200-conv MFU. **B64** — B128 does NOT fit this
+  branch (182.8 GiB/dev vs 133.6 budget; #7012 ran B128 only via
+  slim-vjp/all_but_moe, not yet on this stack), so #7012's 17.01/16.32/15.82%
+  references are NOT directly comparable (2x batch + QuACK-cute bf16 there).
+- Result (same-node 4-leg = g7; ladder internally comparable):
+
+  | arm | s/step | MFU | loss@19 |
+  |---|---|---|---|
+  | bf16 ring | 3.4635 | 14.34% | 10.5299 |
+  | per-tensor dense-only | 3.4094 | 14.57% | 10.5374 |
+  | **mxfp8 ring (XLA producer)** | **3.2020** | **15.51%** | 10.5385 |
+  | mxfp8 + save-qweights (g8) | 3.1725 | **15.65%** | 10.5386 |
+  | mxfp8 forced CuTe producer (g9) | 3.3941 | 14.63% | 10.5385 |
+  | mxfp8 a2a B64 | OOM (XLA ragged_a2a 165-168 GiB alloc, even mf 0.92) | | |
+  | mxfp8 a2a B32 (+one-shot-off flag) | 2.2403 | 11.08% | vs ring B32 12.43% |
+
+  mxfp8 loss tracks bf16 to 8.5e-3 over 20 steps (~4e-4/step); identical
+  across 5 nodes and XLA-vs-CuTe producers to <=7e-5. Ring MFU replicated
+  across 3 nodes (15.51/15.57/15.58) — label `replicated` for the ring arm.
+- Per-phase attribution (xplane trace, ms/GPU/step, mxfp8 arm): MuonH NS
+  optimizer ~833 (26%, dominant at B64), fa4 attention ~542, EP collectives
+  ~287, **fused MXFP8 expert kernels 200.8** (vs bf16's ~1,100-1,150 ms
+  MoE-MLP block — the whole block went 1.1 s -> 0.49 s), XLA producers ~185,
+  dispatch/pad ~205, fp8 dense ~143, transposes incl. w13 interleave ~75.
+  Producers+repack (~290) cost 1.4x the fused GEMMs — fusion thesis holds e2e.
+- Weight-quantize amortization: train.py has NO grad-accumulation loop (1
+  microbatch/step), so the duplication was remat recompute; fixed via
+  `checkpoint_name` on the 4 fwd qweight outputs +
+  `GrugFp8Config.mxfp8_save_qweights` remat-policy extension: -13.9 ms/step
+  (+0.07pp), loss delta 5.8e-5 (gate passed).
+- CuTe producer ran e2e for the first time (g9, numerics match to 5e-5) but
+  on a different node measured slower than XLA-producer arms — slow-node vs
+  genuinely-slower unresolved; needs same-node A/B.
+- Ranked gaps to bf16+1.5-2pp (measured +1.31pp with save-qweights):
+  1. MuonH NS optimizer 26% share -> amortize via B128 (needs #7012 slim-vjp
+     port) or bf16/sharded NS.
+  2. Producer folding (~185 ms) + pre-interleaved w13 storage (~75 ms):
+     ~0.5-0.8pp.
+  3. B128 memory wall = slim-vjp port (also halves optimizer share).
+  4. bf16 denominator is soft (triton+XLA loop, not QuACK-cute) — port QuACK
+     bf16 grouped for the honest comparison.
+  5. dswiglu epilogue (1244 TF/s), ~10-15 ms/step.
+  6. a2a B64 memory pathology is upstream XLA (single 165-168 GiB alloc in
+     ragged_all_to_all lowering); a2a op-threading itself validated (loss
+     matches ring to 3e-5). Always set the one-shot-kernel-off flag.
+- New gotchas: this Bash tool doesn't word-split unquoted vars (iris args must
+  be literal or in `bash -c`); B64 is the 4-GPU ceiling for recompute_all
+  L26; GPU trace events carry only XlaModule metadata — classify by kernel
+  symbol (MuonH NS identifiable by count E_local*L*2*5); logs snapshotted in
+  scratch/mxfp8-005/ (gitignored).
+- Next action: thread goal MET (mxfp8 > per-tensor e2e). Follow-ups ranked
+  above; biggest single lever is the slim-vjp/B128 port, then producer
+  folding.
