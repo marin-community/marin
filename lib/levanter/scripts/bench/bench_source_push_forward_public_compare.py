@@ -10,6 +10,7 @@ import json
 import os
 import time
 import traceback
+from functools import partial
 from collections.abc import Sequence
 from dataclasses import asdict
 from typing import Any
@@ -31,6 +32,7 @@ from levanter.grug._moe.source_push_forward import (
 from levanter.grug._moe.source_push_inbox import AXIS, ROUTING_MODES, PushInboxConfig, _make_mesh
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 from levanter.grug._moe.source_push_public import (
+    is_source_push_public_implementation,
     moe_mlp_ep_source_push_mgpu_from_plan,
     prepare_moe_mlp_ep_source_push_mgpu_plan,
 )
@@ -120,6 +122,13 @@ def parse_source_push_forward_public_compare_args(argv: Sequence[str] | None = N
         help="Time public implementations without diffing output.",
     )
     parser.add_argument("--public-call-mode", choices=("direct", "preplanned"), default="direct")
+    parser.add_argument(
+        "--jit-public",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Time non-source-push public implementations under jax.jit (how production calls them). "
+        "Source-push implementations always run un-jitted: host planning is part of their public cost.",
+    )
     parser.add_argument("--warmup", type=int, default=default("warmup", 1))
     parser.add_argument("--steps", type=int, default=default("steps", 1))
     parser.add_argument("--repeat-runs", type=int, default=default("repeat_runs", 3))
@@ -167,6 +176,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             repeat_runs=args.repeat_runs,
             separate_compile=args.separate_compile,
             public_call_mode=args.public_call_mode,
+            jit_public=args.jit_public,
         )
     else:
         rows = run_source_push_forward_public_compare(
@@ -289,6 +299,7 @@ def run_source_push_forward_public_timing(
     repeat_runs: int,
     separate_compile: bool,
     public_call_mode: str,
+    jit_public: bool = False,
 ) -> list[dict[str, Any]]:
     """Time public EP MoE implementations on one generated source-push input."""
 
@@ -331,30 +342,43 @@ def run_source_push_forward_public_timing(
             public_plan = None
             if public_call_mode == "preplanned":
                 public_plan = _prepare_public_moe_plan(config, public_inputs, public_mesh, public_implementation)
+            use_jit = jit_public and not is_source_push_public_implementation(public_implementation)
+            if use_jit:
+                jitted_call = jax.jit(
+                    partial(
+                        _public_moe_call_body,
+                        implementation=public_implementation,
+                        mesh=public_mesh,
+                        capacity_factor=config.capacity_factor,
+                    )
+                )
+
+                def call_public(_jitted=jitted_call):
+                    with jax.set_mesh(public_mesh):
+                        return _jitted(*public_inputs)
+
+            else:
+
+                def call_public(_impl=public_implementation, _plan=public_plan):
+                    return _call_public_moe_with_mode(
+                        config,
+                        public_inputs,
+                        public_mesh,
+                        _impl,
+                        public_call_mode=public_call_mode,
+                        public_plan=_plan,
+                    )
+
             compile_time = None
             dropped_routes = None
             if separate_compile:
                 compile_start = time.perf_counter()
-                out, dropped = _call_public_moe_with_mode(
-                    config,
-                    public_inputs,
-                    public_mesh,
-                    public_implementation,
-                    public_call_mode=public_call_mode,
-                    public_plan=public_plan,
-                )
+                out, dropped = call_public()
                 jax.block_until_ready((out, dropped))
                 compile_time = time.perf_counter() - compile_start
                 dropped_routes = int(jax.device_get(dropped))
             for _ in range(warmup):
-                out, dropped = _call_public_moe_with_mode(
-                    config,
-                    public_inputs,
-                    public_mesh,
-                    public_implementation,
-                    public_call_mode=public_call_mode,
-                    public_plan=public_plan,
-                )
+                out, dropped = call_public()
                 jax.block_until_ready((out, dropped))
                 dropped_routes = int(jax.device_get(dropped))
 
@@ -362,14 +386,7 @@ def run_source_push_forward_public_timing(
             for _ in range(repeat_runs):
                 start = time.perf_counter()
                 for _ in range(steps):
-                    out, dropped = _call_public_moe_with_mode(
-                        config,
-                        public_inputs,
-                        public_mesh,
-                        public_implementation,
-                        public_call_mode=public_call_mode,
-                        public_plan=public_plan,
-                    )
+                    out, dropped = call_public()
                     jax.block_until_ready((out, dropped))
                 elapsed = (time.perf_counter() - start) / steps
                 steady_state_times.append(elapsed)
@@ -395,6 +412,7 @@ def run_source_push_forward_public_timing(
                     "repeat_runs": repeat_runs,
                     "separate_compile": separate_compile,
                     "public_call_mode": public_call_mode,
+                    "jit_public": use_jit,
                     "dropped_routes": dropped_routes,
                     "useful_forward_flops_per_rank": useful_forward_flops_per_rank,
                     "useful_forward_tflops_per_rank": useful_forward_flops_per_rank / steady_state_time / 1e12,
@@ -483,6 +501,30 @@ def _make_public_moe_inputs(config: PushInboxConfig, raw_inputs, mesh):
     w_gate_up = jax.device_put(w_gate_up, NamedSharding(mesh, P(AXIS, None, None)))
     w_down = jax.device_put(w_down, NamedSharding(mesh, P(AXIS, None, None)))
     return x, selected_experts, combine_weights, w_gate_up, w_down
+
+
+def _public_moe_call_body(
+    x,
+    selected_experts,
+    combine_weights,
+    w_gate_up,
+    w_down,
+    *,
+    implementation: str,
+    mesh,
+    capacity_factor: float,
+):
+    return moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_gate_up,
+        w_down,
+        implementation=implementation,
+        mesh=mesh,
+        capacity_factor=capacity_factor,
+        report_capacity_overflow=True,
+    )
 
 
 def _call_public_moe(config: PushInboxConfig, public_inputs, mesh, implementation: str):
