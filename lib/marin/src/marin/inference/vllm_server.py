@@ -223,7 +223,9 @@ class _LogPump:
             try:
                 log_file.close()
             except Exception:
-                pass
+                # Best-effort teardown: a close() failure (e.g. a flush error) is not actionable
+                # here and must not mask the caller's own shutdown path.
+                logger.debug("Failed to close a vLLM native log file", exc_info=True)
 
 
 @dataclass(frozen=True)

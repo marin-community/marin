@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for native vLLM server log routing (issue #7323).
+"""Tests for native vLLM server log routing.
 
 The native server runs as a subprocess. Iris ships a job's logs to finelog by capturing the
 task process's own fd 1/2, so the server's stdout/stderr must reach those fds to be observable.
