@@ -72,9 +72,9 @@ def cruxeval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Art
         name="evals/qwen3-0.6b/cruxeval",
         version=version,
         parent_resources=ResourceConfig.with_cpu(
-            cpu=0.5,
+            cpu=CRUXEVAL_BENCHMARK.parent_cpu,
             ram=CRUXEVAL_BENCHMARK.parent_ram,
-            disk="16g",
+            disk=CRUXEVAL_BENCHMARK.parent_disk,
             regions=[CRUXEVAL_BENCHMARK.region] if CRUXEVAL_BENCHMARK.region else None,
             preemptible=False,
         ),

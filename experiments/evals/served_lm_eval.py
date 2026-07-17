@@ -44,7 +44,9 @@ class ServedLmEvalBenchmark:
     tokenizer: str = "Qwen/Qwen3-0.6B"
     tpu_type: str = "v5litepod-4"
     worker_ram: str = "96g"
+    parent_cpu: float = 0.5
     parent_ram: str = "6g"
+    parent_disk: str = "16g"
     region: str | None = "us-west4"
     workers: int = 1
     num_concurrent: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
@@ -125,7 +127,9 @@ def submit_iris_lm_eval(
     *,
     job_name: str,
     iris_config_path: str,
+    parent_cpu: float,
     parent_ram: str,
+    parent_disk: str,
     parent_env_vars: Mapping[str, str],
     region: str | None,
     priority: int,
@@ -148,7 +152,7 @@ def submit_iris_lm_eval(
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_parent),
                 name=job_name,
-                resources=ResourceSpec(cpu=0.5, memory=parent_ram, disk="16g"),
+                resources=ResourceSpec(cpu=parent_cpu, memory=parent_ram, disk=parent_disk),
                 environment=EnvironmentSpec(env_vars=dict(parent_env_vars)),
                 constraints=constraints,
                 priority_band=priority,
@@ -254,7 +258,9 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
             run,
             job_name=job_name,
             iris_config_path="lib/iris/config/marin.yaml",
+            parent_cpu=benchmark.parent_cpu,
             parent_ram=parent_ram,
+            parent_disk=benchmark.parent_disk,
             parent_env_vars=benchmark.parent_env_vars,
             region=region,
             priority=iris_priority,

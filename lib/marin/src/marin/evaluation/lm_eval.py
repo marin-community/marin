@@ -48,7 +48,7 @@ class LmEvalRun:
 
 
 def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
-    """Run an isolated lm-eval subprocess against a served model."""
+    """Evaluate tasks against a served model and persist metrics and samples."""
     if not run.tasks:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
 
@@ -83,13 +83,11 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
 
 
 def run_local_brokered_lm_eval(inference: BrokeredVllmSystemConfig, run: LmEvalRun) -> None:
-    """Run lm-eval with a local broker, proxy, and vLLM worker."""
     with start_local_brokered_vllm(inference) as model:
         run_lm_eval(model, run)
 
 
 def run_iris_brokered_lm_eval(inference: BrokeredVllmSystemConfig, run: LmEvalRun) -> None:
-    """Run lm-eval with Iris broker and vLLM worker jobs."""
     with start_iris_brokered_vllm(inference) as model:
         run_lm_eval(model, run)
 
