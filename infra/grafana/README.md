@@ -63,6 +63,8 @@ provisioning/          datasources + dashboard provider
 dashboards/            dashboard JSON — reviewed like code
 Dockerfile             grafana:13.1.0-ubuntu + the bridge venv + the Infinity plugin
 entrypoint.sh          runs both; if either dies the container dies
+__main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.cloud_run)
+Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
 Dashboards: `fleet.json` (canary + worker health, marin only), `iris.json`
@@ -84,20 +86,40 @@ dashboards, and a bridge that 500s on query.
 
 ## Deploy
 
+Pulumi owns the deploy: the runtime service account and its `compute.viewer` grant, the
+Artifact Registry repo and image, the Cloud Run service, and the IAP wiring. The service
+and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` component
+(`infra/iac`); this directory is its own Pulumi project. It runs on the shared repo venv
+and shares `infra/iac`'s state backend.
+
 ```bash
-./deploy.sh setup    # one-time: service account + roles/compute.viewer
-./deploy.sh          # build + deploy to Cloud Run, IAP-gated
+uv sync --all-packages                                    # once: iac + Pulumi providers on the venv
+gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
+
+cd infra/grafana
+pulumi login gs://marin-iac-state
+export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
+  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
+pulumi stack select marin-grafana                         # first time: pulumi stack init marin-grafana
+
+# Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member. Editing this
+# and re-running updates only the grant, never the service.
+pulumi config set --path 'viewers[0]' you@example.com
+
+pulumi preview                                            # plan; then, once it looks right:
+pulumi up
 ```
 
-`min-instances` and `max-instances` are both 1: Grafana's SQLite is per-instance
-and ephemeral, so more than one instance means divergent alert state and dashboard
-versions, while zero means no alert rules evaluate and first paint is a cold
-start.
+`pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
+Registry, and rolls the service to that digest. `min` and `max` instances are both 1:
+Grafana's SQLite is per-instance and ephemeral, so more than one instance means divergent
+alert state and dashboard versions, while zero means no alert rules evaluate and first
+paint is a cold start.
 
-Access is granted per user or group with `roles/iap.httpsResourceAccessor`, plus a
-one-time `roles/run.invoker` for the IAP service agent (see `deploy.sh setup`). IAP
-is the only gate — Grafana runs anonymous Viewer, since IAP admits everyone Google
-admits and is not role-scoped.
+IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
+project-level and shared across the project's IAP services, so nothing per-service needs
+configuring beyond the `viewers` list. The service is created IAP-gated with no viewers,
+i.e. reachable by nobody until the first grant.
 
 ## Adding a dashboard
 

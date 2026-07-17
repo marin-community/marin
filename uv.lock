@@ -4909,6 +4909,7 @@ dependencies = [
     { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "pulumi" },
+    { name = "pulumi-docker-build" },
     { name = "pulumi-gcp" },
     { name = "pulumi-kubernetes" },
 ]
@@ -4918,6 +4919,7 @@ requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pulumi", specifier = ">=3.140,<4" },
+    { name = "pulumi-docker-build", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", specifier = ">=9,<10" },
     { name = "pulumi-kubernetes", specifier = ">=4.18,<5" },
 ]
@@ -8024,6 +8026,20 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/5f/94b4af305a4aa34842bb65282269bc9804125d0d22442d099fec07dd78b3/pulumi-3.224.0-py3-none-any.whl", hash = "sha256:2045987052c39740dcdb13d8845868106aebdc91792aa25ef82b06797ebf0a8e", size = 390575, upload-time = "2026-02-26T16:28:59.795Z" },
+]
+
+[[package]]
+name = "pulumi-docker-build"
+version = "0.0.15"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/31/9b9e9fe7c4fea6f0f5fcfa37110888b9c772cfb15ef1740ba6338a936378/pulumi_docker_build-0.0.15.tar.gz", hash = "sha256:a6301d9c1bfc749a3bce37280ef60c3f9a3dc767f89b62e99edf24ec46de0a6e", size = 38723, upload-time = "2025-10-17T11:03:54.948Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/2a/cbbd2bf07f2082e6187d52c463166a522f1960aaf7d34bf59a57e7a51327/pulumi_docker_build-0.0.15-py3-none-any.whl", hash = "sha256:6121e09e6ccdbc8c60695631e7f3d7da22a6188a9ccba16ec3b37dc449d6c45e", size = 43384, upload-time = "2025-10-17T11:03:52.891Z" },
 ]
 
 [[package]]

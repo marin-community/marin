@@ -1,0 +1,11 @@
+config:
+  # People admitted through IAP (roles/iap.httpsResourceAccessor). Each entry is a bare
+  # email, a domain wildcard (quote it — YAML reads a leading `*` as an alias), or an
+  # already-qualified IAM member. Editing this and re-running `pulumi up` updates only the
+  # grants, never the service:
+  #
+  #   marin-grafana:viewers:
+  #     - alice@example.com
+  #     - "*@openathena.ai"
+  #     - group:marin-eng@example.com
+  marin-grafana:viewers: []
