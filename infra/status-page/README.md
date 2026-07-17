@@ -96,7 +96,7 @@ Before committing, run the same checks CI enforces:
 ```bash
 npm run lint       # ESLint 9 flat config (server + web)
 npm run typecheck  # tsc against tsconfig.server.json + tsconfig.web.json
-npm test           # server behavior + Playwright/axe/visual tests
+npm test           # deterministic server behavior tests
 npm run build      # vite bundle + tsc server compile
 ```
 
