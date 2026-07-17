@@ -18,11 +18,11 @@ that protocol, and this step makes both reproducible instead of a manual out-of-
      :func:`levanter.utils.token_init.reinitialize_some_tokens`, so SFT starts from a sensible
      point rather than the reserved slot's noise.
 
-The edit only touches the ``embed_tokens`` and ``lm_head`` rows, so the step rewrites just the
-safetensors shard(s) that hold them and copies every other shard byte-for-byte — the prepared
-checkpoint is the base checkpoint with those rows reseeded and the tokenizer renamed, nothing else.
-That keeps it cheap (one shard in memory, not the whole model) and makes the untouched weights
-provably identical to the base.
+The edit only touches the ``embed_tokens`` and ``lm_head`` rows, so the step streams the base
+checkpoint from the Hub straight to the output prefix: it rewrites only the safetensors shard that
+holds those tensors (in memory) and copies every other file byte-for-byte without staging the whole
+model on local disk. The prepared checkpoint is the base checkpoint with those rows reseeded and
+the tokenizer renamed, nothing else — so the untouched weights are provably identical to the base.
 
 :func:`prepare_checkpoint_step` expresses this as an ``ArtifactStep`` that emits a prepared HF
 checkpoint + tokenizer directory. The SFT spec depends on it, so ``sft_step`` builds the prepared
@@ -34,20 +34,20 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 from fray.types import ResourceConfig
-from huggingface_hub import snapshot_download
+from fsspec import AbstractFileSystem
+from huggingface_hub import HfFileSystem, list_repo_files, snapshot_download
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from rigging.filesystem import prefix_join, url_to_fs
-from safetensors import safe_open
-from safetensors.numpy import load_file, save_file
+from safetensors.numpy import load, save
 from scipy.stats import truncnorm
 from transformers import AutoTokenizer
 
@@ -62,10 +62,20 @@ _PREPARE_RESOURCES = "prepare_resources"
 _EMBEDDING_TENSORS = ("model.embed_tokens.weight", "lm_head.weight")
 _SAFETENSORS_INDEX = "model.safetensors.index.json"
 _SINGLE_SAFETENSORS = "model.safetensors"
+# Files that the renamed tokenizer replaces; skipped when copying the base checkpoint through.
+_TOKENIZER_PATTERNS = (
+    "tokenizer*",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "*.model",
+    "vocab.json",
+    "merges.txt",
+)
+_COPY_CHUNK = 32 * 1024 * 1024
 
-# Only one shard is loaded at a time (Delphi's embed + lm_head share shard 1 of 8, ~5 GB); the rest
-# are streamed to the output untouched. No accelerator — a few-row edit does not need one.
-DEFAULT_PREPARE_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="32g", disk="150g")
+# Only the one embedding shard is held in memory (Delphi's embed + lm_head share shard 1 of 8,
+# ~5 GB); everything else streams Hub -> output. No accelerator — a few-row edit does not need one.
+DEFAULT_PREPARE_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="32g", disk="20g")
 
 
 @dataclass(frozen=True)
@@ -100,71 +110,84 @@ def _reinit_rows(matrix: np.ndarray, ids: Sequence[int], rng: np.random.Generato
     return out
 
 
-def _reinit_embedding_shards(local_dir: str, ids: Sequence[int], seed: int) -> None:
-    """Reinitialize rows ``ids`` of the embedding + LM-head tensors, rewriting only their shard(s).
+def _reinit_shard_bytes(data: bytes, ids: Sequence[int], seed: int) -> bytes:
+    """Reinitialize rows ``ids`` of the embedding/LM-head tensors in one safetensors shard's bytes.
 
-    Every other shard is left on disk untouched (and later uploaded byte-for-byte). Raises if none
-    of :data:`_EMBEDDING_TENSORS` are present, since then the checkpoint layout is unexpected.
+    Every other tensor in the shard is round-tripped unchanged. Each embedding tensor draws from an
+    independent, name-keyed PRNG stream so the result does not depend on tensor iteration order.
     """
-    index_path = os.path.join(local_dir, _SAFETENSORS_INDEX)
-    if os.path.exists(index_path):
-        with open(index_path) as f:
-            weight_map = json.load(f)["weight_map"]
-    else:
-        weight_map = {name: _SINGLE_SAFETENSORS for name in _EMBEDDING_TENSORS}
-
-    targets = [name for name in _EMBEDDING_TENSORS if name in weight_map]
-    if not targets:
-        raise ValueError(f"none of {_EMBEDDING_TENSORS} found in {local_dir}; unexpected checkpoint layout")
-
-    shard_to_tensors: dict[str, list[str]] = {}
-    for name in targets:
-        shard_to_tensors.setdefault(weight_map[name], []).append(name)
-
-    rng = np.random.default_rng(seed)
-    for shard in sorted(shard_to_tensors):
-        path = os.path.join(local_dir, shard)
-        with safe_open(path, framework="numpy") as handle:
-            metadata = handle.metadata()
-        tensors = load_file(path)
-        for name in shard_to_tensors[shard]:
+    header_len = int.from_bytes(data[:8], "little")
+    metadata = json.loads(data[8 : 8 + header_len]).get("__metadata__")
+    tensors = load(data)
+    for name in _EMBEDDING_TENSORS:
+        if name in tensors:
+            rng = np.random.default_rng([seed, _EMBEDDING_TENSORS.index(name)])
             tensors[name] = _reinit_rows(tensors[name], ids, rng)
-        save_file(tensors, path, metadata=metadata)
+    return save(tensors, metadata=metadata)
 
 
-def _upload_dir(local_dir: str, output_path: str) -> None:
-    """Upload the prepared checkpoint files to ``output_path`` (skips the HF download cache)."""
-    fs, _ = url_to_fs(output_path)
-    for dirpath, _dirs, files in os.walk(local_dir):
-        if ".cache" in Path(dirpath).relative_to(local_dir).parts:
-            continue  # huggingface_hub's local-dir metadata, not part of the checkpoint
-        for name in files:
-            src = os.path.join(dirpath, name)
-            fs.put_file(src, prefix_join(output_path, os.path.relpath(src, local_dir)))
+def _stream_copy(src_fs: AbstractFileSystem, src: str, out_fs: AbstractFileSystem, dst: str) -> None:
+    """Copy a file between filesystems in chunks, without staging it whole on local disk."""
+    with src_fs.open(src, "rb") as fin, out_fs.open(dst, "wb") as fout:
+        shutil.copyfileobj(fin, fout, _COPY_CHUNK)
+
+
+def _prepare_tokenizer(
+    source_model: str, revision: str | None, renames: Mapping[int, str], output_path: str
+) -> set[str]:
+    """Download just the tokenizer files, rename the reserved slots, upload; return the files written.
+
+    ``save_pretrained`` regenerates only the files it owns (e.g. ``tokenizer.json`` /
+    ``tokenizer_config.json``); the returned set is what the base-checkpoint copy must then skip so
+    it does not overwrite the renamed files. Any other tokenizer file the base ships (e.g.
+    ``special_tokens_map.json``, which carries bos/eos, unaffected by the rename) is copied through.
+    """
+    with tempfile.TemporaryDirectory() as raw_dir, tempfile.TemporaryDirectory() as prepared_dir:
+        snapshot_download(source_model, revision=revision, local_dir=raw_dir, allow_patterns=list(_TOKENIZER_PATTERNS))
+        tokenizer = AutoTokenizer.from_pretrained(raw_dir)
+        inject_special_tokens(tokenizer, dict(renames)).save_pretrained(prepared_dir)
+        written = [name for name in os.listdir(prepared_dir) if not name.startswith(".")]
+        out_fs, _ = url_to_fs(output_path)
+        for name in written:
+            out_fs.put_file(os.path.join(prepared_dir, name), prefix_join(output_path, name))
+        return set(written)
+
+
+def _embedding_shards(hf_fs: AbstractFileSystem, repo_at: str) -> set[str]:
+    """The shard filename(s) holding the embedding/LM-head tensors, from the safetensors index."""
+    index = f"{repo_at}/{_SAFETENSORS_INDEX}"
+    weight_map = json.loads(hf_fs.cat_file(index))["weight_map"] if hf_fs.exists(index) else {}
+    shards = {weight_map.get(name, _SINGLE_SAFETENSORS) for name in _EMBEDDING_TENSORS}
+    return shards
 
 
 def run_prepare_checkpoint(config: PrepareCheckpointConfig) -> None:
     """Rename the reserved slots, reinit their embedding + LM-head rows, and publish the result.
 
-    Runs on a worker: it downloads the base checkpoint, so it needs ``HF_TOKEN`` in the environment
-    for gated repos (propagated the same way as the training job).
+    Runs on a worker: it reads the base checkpoint from the Hub, so it needs ``HF_TOKEN`` in the
+    environment for gated repos (propagated the same way as the training job).
     """
     ids = sorted(config.token_renames)
-    with tempfile.TemporaryDirectory() as local_dir:
-        snapshot_download(
-            repo_id=config.source_model,
-            revision=config.source_revision or None,
-            local_dir=local_dir,
-        )
-        # (1) Rename the reserved slots so the canonical strings are single ids, overwriting the
-        # tokenizer files in place. The renamed count is unchanged, so the tokenizer length still
-        # matches the checkpoint's embedding rows.
-        tokenizer = AutoTokenizer.from_pretrained(local_dir)
-        inject_special_tokens(tokenizer, dict(config.token_renames)).save_pretrained(local_dir)
-        # (2) Reseed the repurposed rows in place, touching only the shard(s) that hold them.
-        _reinit_embedding_shards(local_dir, ids, config.seed)
-        # (3) Publish; every unmodified shard is uploaded byte-for-byte.
-        _upload_dir(local_dir, config.output_path)
+    revision = config.source_revision or None
+    repo_at = f"{config.source_model}@{revision}" if revision else config.source_model
+    hf_fs = HfFileSystem()
+    out_fs, _ = url_to_fs(config.output_path)
+
+    target_shards = _embedding_shards(hf_fs, repo_at)
+
+    # (1) Rename the reserved slots so the canonical strings are single ids.
+    renamed = _prepare_tokenizer(config.source_model, revision, config.token_renames, config.output_path)
+
+    # (2) Stream every other file to the output; rewrite only the embedding shard, in memory.
+    for name in list_repo_files(config.source_model, revision=revision):
+        if name in renamed:  # already uploaded as the renamed tokenizer
+            continue
+        src, dst = f"{repo_at}/{name}", prefix_join(config.output_path, name)
+        if name in target_shards:
+            with out_fs.open(dst, "wb") as fout:
+                fout.write(_reinit_shard_bytes(hf_fs.cat_file(src), ids, config.seed))
+        else:
+            _stream_copy(hf_fs, src, out_fs, dst)
 
 
 def _prepare_job(config: PrepareCheckpointConfig) -> None:
