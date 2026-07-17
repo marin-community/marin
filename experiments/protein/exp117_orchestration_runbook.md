@@ -23,7 +23,7 @@ liveness signal, submission mechanics, the DB schema, and the operator's executi
   low edge may extend one half-decade down); WD `[0.1,0.2,0.4,0.8,1.6]` (log10, ×2, domain
   `[0.025, 6.4]`); **batch_size `[64,128,256]`** (log2, domain `[32,1024]`). Points stored by axis
   VALUE. Per rung: 4·5·3 = **60 configs**; across 3 rungs = **180 logical trials**.
-- **Budget:** `max_inflight_chips=1024`, `observation_interval=15m`, `full_exploitation_level=32`
+- **Budget:** `max_inflight_chips=2048`, `observation_interval=15m`, `full_exploitation_level=32`
   (rung index 2). `wall_time=8 weeks`.
 - **Steps depend on batch** (not a constant): `steps/epoch = round(TRAIN_TOKENS / (batch·8192))`,
   `TRAIN_TOKENS=4_676_753_425`. So 8ep → **71,360 / 35,680 / 17,840** steps at batch 64/128/256, and
@@ -48,7 +48,7 @@ filter targets to feasible, THEN call `rank-targets` with only those. Chip count
 v5litepod-N=N, v5p-N=N/2**. Since every slice size and every batch value is a power of two,
 divisibility reduces to **chips ≤ batch_size**, and the largest feasible slice for a trial has
 `chips = batch_size` (so a bs=64 trial caps at 64 chips, bs=256 at 256 — this bounds how many run
-in parallel under the 1024 cap).
+in parallel under the 2048 cap).
 
 | batch | max chips | feasible allowed slices |
 |---|---|---|
@@ -111,7 +111,7 @@ job = one point.
 4. **Place.** Feasibility-filter (above), then `sweep_tools.py rank-targets` per selected trial with
    the `recovery` block + only feasible targets; choose within the returned `selection_pool`
    (diversity while exploration>0; highest-throughput feasible target at rung 2). Keep
-   submitted+running+retrying chips ≤ 1024.
+   submitted+running+retrying chips ≤ 2048.
    - **Exploration placement (rung 0 / early):** deliberately SAMPLE distinct `(region, family,
      size)` targets to build per-target throughput evidence — don't pile onto one slice type. Larger
      slices give faster wall-clock (operator: bias larger at cold start) but preempt more, schedule

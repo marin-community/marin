@@ -70,7 +70,7 @@ execution:
   # Hard elapsed sweep limit, including queueing and retries.
   wall_time: 8 weeks
   # Maximum requested TPU chips across submitted, running, or retrying dispatches.
-  max_inflight_chips: 1024
+  max_inflight_chips: 2048
   # Dispatcher cadence for polling Iris, logs, and W&B. Throughput is recomputed on each observation.
   observation_interval: 15m
   # Resource level at which placement uses only the best currently observed target. Earlier rungs
