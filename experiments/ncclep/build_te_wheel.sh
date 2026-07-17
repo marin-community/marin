@@ -26,11 +26,14 @@ cd "$WORK"
 
 echo "=== PHASE 1: python-level build tools + cu13 toolchain wheels ==="
 uv pip install pip cmake ninja pybind11 wheel setuptools packaging
+# CUDA 13 wheels dropped the -cu13 suffix (the suffixed names are deprecated
+# 0.0.1 stubs) — except cudnn and nccl, which keep it.
 uv pip install \
-  nvidia-cuda-nvcc-cu13 nvidia-cuda-runtime-cu13 nvidia-cuda-cccl-cu13 \
-  nvidia-cuda-nvrtc-cu13 nvidia-curand-cu13 nvidia-cublas-cu13 \
+  "nvidia-cuda-nvcc>=13" "nvidia-cuda-runtime>=13" "nvidia-cuda-crt>=13" \
+  "nvidia-cuda-nvrtc>=13" "nvidia-curand>=13" "nvidia-cublas>=13" \
   nvidia-cudnn-cu13 "nvidia-nccl-cu13==${NCCL_RUNTIME_VERSION}"
-uv pip install nvidia-cuda-nvtx-cu13 || echo "nvtx wheel unavailable; continuing"
+uv pip install "nvidia-cuda-cccl>=13" || echo "cccl wheel unavailable; continuing"
+uv pip install "nvidia-cuda-nvtx>=13" || echo "nvtx wheel unavailable; continuing"
 
 SP=$(python -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
 echo "nvidia wheel root: $SP"
