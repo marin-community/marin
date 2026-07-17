@@ -60,11 +60,15 @@ author: mcwitt
   per-tensor path. Next test: falls out of MXFP8-003 wiring.
 - `MXFP8-H4`: the FP8 wire (per-token scaling, permutation legs only) carries
   over to B200/GB200 unchanged. Next test: enable during MXFP8-003 smoke.
-- `MXFP8-H5` (PARTIALLY confirmed, MXFP8-002c): the CuTe dual-write quantizer
-  cuts producers 2.5x (2.074 ms vs 5.19; break-even 2.09) — layer-quad now
-  ~1.00x with weights amortized. Standalone-optimal is structurally short of
-  fusion-grade (~0.7 ms => ~1.25x needs epilogue fusion, est. 1-2 wk). Next
-  test: decision point — epilogue fusion vs `MXFP8-H7` vs wire-as-is.
+- `MXFP8-H5` (RESOLVED: fusion is the only route, and it's importable): the
+  standalone-quantizer branch is closed by adversarial math (even a perfect
+  6.2 TB/s kernel leaves ~1.6 ms > 0.7 target; MXFP8-000c). The fusion-grade
+  producer exists upstream as MIT-licensed cudnn-frontend fused grouped
+  kernels. Superseded by `MXFP8-H8`.
+- `MXFP8-H8` (NEW, primary): vendoring the cudnn-frontend fused kernels
+  (SwiGLU+dual-quant fwd, dSwiGLU+quant bwd, quant epilogue, wgrad) behind
+  our cutlass_call adapter achieves layer-quad >=1.2x vs bf16. Next test:
+  MXFP8-004a. Cheap parallel datapoint: MXFP8-004b TE grouped_dense bench.
 - `MXFP8-H7` (NEW, from the 001b+002c pattern): a per-tensor-scaled fp8
   grouped kernel on sm100 (vendor the non-scaled DSL grouped GEMM, delayed
   scaling like the dense path) beats mxfp8 at LAYER level — per-tensor
@@ -79,6 +83,12 @@ author: mcwitt
 (none)
 
 ### Falsified / Dead End
+
+- MXFP8-on-Hopper (user question re tokamax): DEAD. tokamax has no MXFP8 on
+  any arch (sm90 = weight-only dequant-to-bf16 wgmma; sm100 = W4A8 inference,
+  float subchannel scales); TE gates MXFP8 to cc>=10; no public sm90
+  1x32-e8m0 kernel; arithmetic ceiling ~bf16 peak (rescale FMA stream ~0.92x
+  MMA time at K=32/wgmma). Evidence: MXFP8-000c (2026-07-16).
 
 - `MXFP8-H1` (as stated): naive `jax.nn.scaled_dot_general` does NOT beat
   bf16 dense on sm100 — 0.64-1.00x, while per-tensor `Fp8DotGeneralOp` gets
