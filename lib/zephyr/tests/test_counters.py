@@ -6,6 +6,7 @@
 import logging
 import threading
 
+from prometheus_client import REGISTRY, generate_latest
 from zephyr import counters
 from zephyr.counters import ScopedCounters
 from zephyr.execution import ZephyrCoordinator, ZephyrExecutionResult
@@ -373,3 +374,22 @@ def test_set_counter_resets_average_count():
         assert counters.pipeline.get_counters()["avg"] == 50
     finally:
         _worker_ctx_var.reset(token)
+
+
+def test_publish_telltale_exports_aggregated_counters_as_gauges():
+    """The coordinator publishes, since it is the only process that both aggregates and serves.
+
+    Shards run under ``SubprocessRunner`` by default, and nobody scrapes a
+    short-lived child's registry.
+    """
+    coord = _make_coordinator(
+        [
+            CounterSnapshot(counters={"records/in": CounterEntry(10)}, generation=1),
+            CounterSnapshot(counters={"records/in": CounterEntry(5)}, generation=2),
+        ]
+    )
+
+    coord._publish_telltale()
+
+    exposition = generate_latest(REGISTRY).decode()
+    assert "records_in 15.0" in exposition

@@ -13,6 +13,8 @@ dependencies = [
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "google-auth>=2.0.0",
+    # Metric objects and the text exposition format behind rigging.telltale.
+    "prometheus-client>=0.24",
     # EdDSA (Ed25519) service-token signing/verification in rigging.token_authority.
     # The [crypto] extra pulls in `cryptography`, which the EdDSA algorithm needs.
     "PyJWT[crypto]>=2.12.0",
@@ -32,6 +34,8 @@ secrets = ["google-cloud-secret-manager>=2.16.0"]
 
 [dependency-groups]
 test = [
+    # starlette.testclient needs an HTTP client; rigging has no runtime httpx dep.
+    "httpx>=0.28.1",
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-timeout",
