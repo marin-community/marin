@@ -74,7 +74,10 @@ def _group_max(v, offsets: tuple[int, ...]):
 def _e8m0_round_up(amax):
     """Exact ``cast_to_e8m0_with_rounding_up(amax / 448)`` bit-twiddle (Int32)."""
     t = amax / cutlass.Float32(E4M3_MAX)
-    u = t.bitcast(cutlass.Int32)
+    # Clear the sign bit: amax can be -0.0 for all-(+/-)0 blocks (the where
+    # based abs keeps -0.0), and an arithmetic >> would smear its sign into
+    # the exponent byte. abs(-0.0) == +0.0 must yield scale byte 0.
+    u = t.bitcast(cutlass.Int32) & 0x7FFFFFFF
     exp = (u >> 23) & 0xFF
     mant = u & 0x7FFFFF
     is_ru = (mant > 0) & (exp != 0xFE) & ((exp != 0) | (mant > 0x400000))
@@ -128,7 +131,10 @@ def _dual_quantize_launcher():
             frag_x = cute.make_fragment_like(gX)
             cute.autovec_copy(gX, frag_x)
             xf = frag_x.load().to(cutlass.Float32)
-            ax = cute.absf(xf)
+            # abs via select: cute.absf lowers to a libdevice __nv_fabsf call
+            # that the pod-side FFI NVVM compile cannot link (job 002c-g1).
+            # -0.0 may leak through (handled in _e8m0_round_up).
+            ax = cute.where(xf < cutlass.Float32(0.0), -xf, xf)
 
             # ---- 32-block amaxes for both orientations ---------------------
             # In-thread partials: per-row max over the 8 owned columns, and
