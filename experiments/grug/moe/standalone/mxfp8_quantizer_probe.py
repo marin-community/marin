@@ -19,6 +19,8 @@ Prints PASS/FAIL per variant; run on 1x GB200.
 """
 
 import os
+import socket
+import subprocess
 import sys
 import traceback
 
@@ -170,9 +172,6 @@ def print_env():
     """Node/toolchain diagnostics: the same probe PASSes and FAILs across jobs
     (g3 all-pass vs g4 v1-fail), so suspicion is node- or toolchain-resolution
     dependence of the libNVVM the DSL invokes."""
-    import socket
-    import subprocess
-
     print(f"hostname: {socket.gethostname()}", flush=True)
     for cmd in (
         ["nvidia-smi", "--query-gpu=driver_version,name", "--format=csv,noheader"],
@@ -185,7 +184,7 @@ def print_env():
         except Exception as e:
             print(f"(diag {cmd[0]} failed: {e})", flush=True)
     try:
-        from cuda import pathfinder
+        from cuda import pathfinder  # noqa: PLC0415 - GPU-only optional dep
 
         for lib in ("nvvm",):
             print(f"libnvvm: {pathfinder.load_nvidia_dynamic_lib(lib).abs_path}", flush=True)
