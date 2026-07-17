@@ -21,7 +21,6 @@ Usage:
 
 import asyncio
 import base64
-import contextlib
 import re
 import shlex
 import tarfile
@@ -85,7 +84,6 @@ class IrisEnvironment(BaseEnvironment):
         self._cluster = cluster
         self._controller_url = controller_url
         self._scheduling_timeout = int(scheduling_timeout_sec)
-        self._stack = contextlib.ExitStack()
         self._iris: IrisClient | None = None
         self._rpc: ControllerServiceClientSync | None = None
         self._job: Job | None = None
@@ -124,16 +122,19 @@ class IrisEnvironment(BaseEnvironment):
         await self._upload_environment_dir_after_start()
 
     def _start_sync(self) -> None:
-        endpoint = self._stack.enter_context(
-            open_controller_endpoint(cluster_name=self._cluster, controller_url=self._controller_url)
-        )
-        self._iris = self._stack.enter_context(
-            IrisClient.remote(endpoint.url, workspace=None, credentials=endpoint.credentials)
-        )
+        # Resolve the controller URL and credentials, then close the endpoint
+        # context immediately: it pushes a thread-local click.Context, which
+        # must be popped by the same thread that pushed it, and start/stop run
+        # in different asyncio.to_thread workers. The URL outlives the context
+        # for IAP-fronted and direct-URL clusters (no local tunnel).
+        with open_controller_endpoint(cluster_name=self._cluster, controller_url=self._controller_url) as endpoint:
+            url = endpoint.url
+            credentials = endpoint.credentials
+        self._iris = IrisClient.remote(url, workspace=None, credentials=credentials)
         self._rpc = ControllerServiceClientSync(
-            address=endpoint.url,
+            address=url,
             timeout_ms=EXEC_RPC_PADDING * 1000,
-            interceptors=endpoint.credentials.interceptors() if endpoint.credentials is not None else [],
+            interceptors=credentials.interceptors() if credentials is not None else [],
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
         )
@@ -189,7 +190,9 @@ class IrisEnvironment(BaseEnvironment):
             self._job = None
         self._task_id = None
         self._rpc = None
-        self._stack.close()
+        if self._iris is not None:
+            self._iris.shutdown()
+            self._iris = None
 
     async def exec(
         self,
