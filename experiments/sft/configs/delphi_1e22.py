@@ -16,11 +16,12 @@ model-agnostic.
     ``nyu-dice-lab/wildchat50m-rewild-sft-385700`` at the same weights and LR, so the instruction
     dataset is the only varying factor.
 
-The prepared inputs are built from a clean prefix by ``_DELPHI_PREPARED``: a
-:func:`prepare_checkpoint_step` renames the raw checkpoint's reserved slots so
-``<|start_think|>``=128002 … are single ids and reinitializes their embedding rows. ``SPEC``
-depends on it, so no manual staging is required. To reuse an already-staged prepared checkpoint
-instead of regenerating, set ``DELPHI_PREPARED_OVERRIDE`` to its directory.
+``model_ref``/``tokenizer_path`` point at a *prepared* Delphi checkpoint + tokenizer (reserved
+slots renamed so ``<|start_think|>``=128002 … are single ids, embeddings reinitialized), staged per
+prefix before launch. :func:`delphi_prepared_checkpoint_step` regenerates that prepared checkpoint
+reproducibly from the raw ``laion/delphi-*`` base — run it to (re)stage the artifact this config
+points at. A future config can instead depend on such a step directly (``PreparedModel``) to build
+its inputs from a clean prefix.
 
 Remaining prerequisites:
   * ``revision`` pins are placeholders (``"main"``); resolve the 7-char commit per dataset so the
@@ -35,28 +36,36 @@ Launch on a TPU slice or CoreWeave H100s::
     python -m experiments.sft.configs.delphi_1e22 --accelerator 8xH100
 """
 
+from marin.execution.lazy import ArtifactStep
+
 from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES, DELPHI_V0_CHAT_TEMPLATE
-from experiments.sft.launcher import DatasetSpec, PreparedModel, SFTSpec, run_sft_cli
+from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, run_sft_cli
 from experiments.sft.prepare_checkpoint import prepare_checkpoint_step
 
-# Raw laion/delphi-1e22 checkpoint (Qwen3ForCausalLM, untied embeddings; reserved slots still named
-# ``<|reserved_special_token_N|>``). The preparation step below renames them and reinits the rows.
+# Prepared (reserved-slot-renamed + embedding-reinit'd) checkpoint + tokenizer. Stage per prefix
+# (gs:// for TPU, s3:// for CoreWeave) before launch; build it with delphi_prepared_checkpoint_step.
+DELPHI_1E22_PREPARED_CKPT = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
+DELPHI_PREPARED_TOKENIZER = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
+
+# Raw base for the preparation step: reserved slots still named ``<|reserved_special_token_N|>``.
 DELPHI_1E22_BASE_MODEL = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
 DELPHI_1E22_BASE_REVISION = "56cc5aaf65cd59d6632962cee636a0423abfbf66"
 
-# Set to a staged prepared-checkpoint directory (gs:// for TPU, s3:// for CoreWeave) to reuse it
-# instead of regenerating — e.g. to pin the exact artifact validated at LLaMA-Factory parity.
-DELPHI_PREPARED_OVERRIDE: str | None = None
 
-_DELPHI_PREPARED = prepare_checkpoint_step(
-    name="checkpoints/delphi-1e22-prepared",
-    version="2026.07.16",
-    source_model=DELPHI_1E22_BASE_MODEL,
-    source_revision=DELPHI_1E22_BASE_REVISION,
-    token_renames=DELPHI_RESERVED_TOKEN_RENAMES,
-    override_path=DELPHI_PREPARED_OVERRIDE,
-)
-_DELPHI_MODEL = PreparedModel(_DELPHI_PREPARED)
+def delphi_prepared_checkpoint_step() -> ArtifactStep:
+    """The ``ArtifactStep`` that reproducibly builds the prepared Delphi checkpoint from the raw base.
+
+    Renames the reserved slots and reinitializes their embedding rows. ``SPEC`` points ``model_ref``
+    at a staged copy of this step's output; run it to (re)generate that artifact.
+    """
+    return prepare_checkpoint_step(
+        name="checkpoints/delphi-1e22-prepared",
+        version="2026.07.16",
+        source_model=DELPHI_1E22_BASE_MODEL,
+        source_revision=DELPHI_1E22_BASE_REVISION,
+        token_renames=DELPHI_RESERVED_TOKEN_RENAMES,
+    )
+
 
 _MAGPIE = DatasetSpec(
     slug="magpie",  # math-strong
@@ -92,8 +101,8 @@ _WILDCHAT_386K = DatasetSpec(
 # The math-strong DoD config (the parity reproduction).
 SPEC = SFTSpec(
     name="checkpoints/delphi-1e22-magpie-warmup-levanter-sft",
-    version="2026.07.16",
-    model=_DELPHI_MODEL,
+    version="2026.07.15",
+    model=HFModel(DELPHI_1E22_PREPARED_CKPT, tokenizer_path=DELPHI_PREPARED_TOKENIZER),
     chat_template=DELPHI_V0_CHAT_TEMPLATE,  # the Delphi jinja passed in as a parameter
     datasets=[_MAGPIE, _WARMUP],
     seq_len=4096,
@@ -105,8 +114,8 @@ SPEC = SFTSpec(
 # The math-weak sibling (swap magpie -> wildchat50m; recompute num_train_steps for its token count).
 SPEC_WC50M = SFTSpec(
     name="checkpoints/delphi-1e22-wc50m-warmup-levanter-sft",
-    version="2026.07.16",
-    model=_DELPHI_MODEL,
+    version="2026.07.15",
+    model=HFModel(DELPHI_1E22_PREPARED_CKPT, tokenizer_path=DELPHI_PREPARED_TOKENIZER),
     chat_template=DELPHI_V0_CHAT_TEMPLATE,
     datasets=[_WILDCHAT_386K, _WARMUP],
     seq_len=4096,
