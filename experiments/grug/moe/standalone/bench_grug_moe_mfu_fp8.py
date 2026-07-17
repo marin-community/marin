@@ -23,6 +23,7 @@ import jax
 import jmp
 import numpy as np
 from haliax.partitioning import set_mesh
+from iris.runtime.jax_init import initialize_jax
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -109,8 +110,13 @@ def _parse():
 def main():
     jax.config.update("jax_threefry_partitionable", True)
     a = _parse()
+    # Multi-node gangs: coordinator discovery via the Iris endpoint registry
+    # (no-op for single-task jobs). --num-gpus is the GLOBAL device count.
+    initialize_jax()
     if jax.device_count() != a.num_gpus:
         raise ValueError(f"--num-gpus={a.num_gpus} but jax sees {jax.device_count()} devices")
+    is_proc0 = jax.process_index() == 0
+    print(f"process {jax.process_index()}/{jax.process_count()}, local devices {jax.local_device_count()}")
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     nh = a.hidden_dim // a.head_dim
@@ -181,7 +187,8 @@ def main():
                 "loss": float(loss),
             }
             metrics.append(m)
-            print(json.dumps(m, sort_keys=True), flush=True)
+            if is_proc0:
+                print(json.dumps(m, sort_keys=True), flush=True)
         if a.profile_steps > 0:
             prof_dir = out / "profiler"
             with jax.profiler.trace(str(prof_dir)):
@@ -189,12 +196,13 @@ def main():
                     batch = _make_batch(a.batch_size, a.seq_len, model.vocab_size, step, mesh)
                     state, sm, _w = train_step(state, batch, compute_watch=False)
                     jax.block_until_ready(sm["train/loss"])
-            try:
-                from trace_phases import analyze  # noqa: PLC0415 (sibling module, GPU-job only)
+            if is_proc0:
+                try:
+                    from trace_phases import analyze  # noqa: PLC0415 (sibling module, GPU-job only)
 
-                analyze(prof_dir, steps=a.profile_steps, num_gpus=a.num_gpus)
-            except Exception:  # trace parsing must not lose the MFU result
-                traceback.print_exc()
+                    analyze(prof_dir, steps=a.profile_steps, num_gpus=jax.local_device_count())
+                except Exception:  # trace parsing must not lose the MFU result
+                    traceback.print_exc()
     steady = [m for m in metrics if m["step"] >= a.warmup_steps]
 
     def med(xs):
@@ -223,7 +231,8 @@ def main():
         "steady_median_duration": med([m["duration"] for m in steady]),
     }
     (out / "metrics_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True))
-    print("SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
+    if is_proc0:
+        print("SUMMARY " + json.dumps(summary, sort_keys=True), flush=True)
     multihost_utils.sync_global_devices("bench_grug_moe_mfu_fp8_done")
 
 
