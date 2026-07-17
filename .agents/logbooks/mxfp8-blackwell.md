@@ -51,20 +51,21 @@ author: mcwitt
 
 ### Active
 
-- `MXFP8-H2` (fwd CONFIRMED, MXFP8-002 @ 42f7d9fa2: 2,200 TF/s w13 / 2,050 w2,
-  ~1.4x vs bf16 dense yardstick and ~1.45x vs QuACK bf16 grouped): remaining
-  scope is the dgrad/wgrad products and a fused quantize+swizzle producer;
-  layer-level fwd+bwd verdict lands in MXFP8-004.
+- `MXFP8-H2` (GEMM-level CONFIRMED for all three products, MXFP8-002/002b:
+  fwd 2130/2027, dgrad 2041/2112, wgrad 2209/2214 TF/s w13/w2 — ~1.4-1.5x vs
+  bf16; errors 3e-6..1e-5): the LAYER-level verdict now hangs entirely on H5.
 - `MXFP8-H3`: MXFP8 quantization is stateless (per-block scales computed on
   the fly, no amax history), so the ops need none of the
   `OverwriteWithGradient` train-step machinery — strictly simpler than the
   per-tensor path. Next test: falls out of MXFP8-003 wiring.
 - `MXFP8-H4`: the FP8 wire (per-token scaling, permutation legs only) carries
   over to B200/GB200 unchanged. Next test: enable during MXFP8-003 smoke.
-- `MXFP8-H5`: quantize + scale-layout overhead (MXFP8 needs both a row-major
-  and a transposed quantized copy for bwd, and cuBLASLt wants a tiled scale
-  layout) can be fused or amortized like the Hopper cast-transpose kernels.
-  Risk item. Next test: profile within MXFP8-004.
+- `MXFP8-H5` (SHARPENED by MXFP8-002b — now the gating hypothesis): a
+  fusion-grade dual-write quantize+swizzle producer (<=0.7 ms marginal for
+  the four activation tensors) turns the honest layer-quad from 0.58x into
+  ~1.25x; XLA producers max out at ~1.6-2.2 TB/s (7.06 ms total, breakeven
+  is 2.09 ms); an HBM-ideal standalone kernel only reaches ~1.11x. Next
+  test: MXFP8-002c quantizer prototype (CuTe or Mosaic, Hopper CT analog).
 
 ### Blocked
 
