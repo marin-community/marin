@@ -33,6 +33,7 @@ from mxfp8_grouped.adapter import (
     _round_up,
     build_sfa,
     build_sfb,
+    dequantize_mxfp8,
     ensure_blackwell_arch,
     mxfp8_grouped_mm,
     quantize_mxfp8,
@@ -105,4 +106,21 @@ sfa = build_sfa(xs, group_sizes)
 sfb = build_sfb(wsc)
 fn = jax.jit(lambda a, b, c, d, o: mxfp8_grouped_mm(a, c, b, d, o))
 out = jax.block_until_ready(fn(xq, wq, sfa, sfb, offs))
-print("PART B OK:", out.shape, float(jnp.mean(jnp.abs(out.astype(jnp.float32)))))
+print("PART B ran:", out.shape, float(jnp.mean(jnp.abs(out.astype(jnp.float32)))))
+
+# Correctness at small shape: dequantize the same quantized operands.
+x_deq = dequantize_mxfp8(xq, xs)
+w_deq = jnp.swapaxes(dequantize_mxfp8(wq, wsc), 1, 2)  # (E, K, N)
+refs = []
+start = 0
+for ei, g in enumerate(group_sizes):
+    refs.append(x_deq[start : start + g] @ w_deq[ei])
+    start += g
+ref = jnp.concatenate(refs, axis=0)
+err = float(jnp.linalg.norm(out.astype(jnp.float32) - ref) / jnp.linalg.norm(ref))
+err_bf = float(
+    jnp.linalg.norm(out.astype(jnp.float32) - ref.astype(jnp.bfloat16).astype(jnp.float32)) / jnp.linalg.norm(ref)
+)
+print(f"PART B rel-fro err vs deq ref: f32 {err:.3e}, bf16-rounded {err_bf:.3e}")
+assert err_bf < 1e-3, err_bf
+print("PART B OK")
