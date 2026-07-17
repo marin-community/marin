@@ -1,7 +1,7 @@
 {
   "uid": "marin-iris",
   "title": "Iris resources",
-  "description": "Per-task and per-worker resource usage from the iris.task and iris.worker finelog namespaces. iris.task is written on every backend, so this dashboard has data on marin-dev; iris.worker heartbeats are GCE/TPU-only.",
+  "description": "Per-task and per-worker resource usage from the iris.task and iris.worker finelog namespaces. A busy cluster runs hundreds of tasks, so each panel shows only the 20 heaviest series over the window (a full per-task scan overruns the bridge row cap). iris.task is written on every backend, so this dashboard has data on marin-dev; iris.worker heartbeats are GCE/TPU-only.",
   "tags": ["marin", "generated"],
   "timezone": "utc",
   "editable": false,
@@ -23,8 +23,8 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "Task memory by task",
-      "description": "Mean resident memory per task, from iris.task.memory_mb.",
+      "title": "Top tasks by memory",
+      "description": "The 20 tasks with the highest mean resident memory over the window, from iris.task.memory_mb.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "fieldConfig": {
@@ -42,7 +42,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(memory_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "WITH top AS (SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY AVG(memory_mb) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(memory_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -58,8 +58,8 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Task peak memory by task",
-      "description": "Peak resident memory per task, from iris.task.memory_peak_mb (populated on GCE/TPU; k8s until the producer stamps it).",
+      "title": "Top tasks by peak memory",
+      "description": "The 20 tasks with the highest peak resident memory over the window, from iris.task.memory_peak_mb (populated on GCE/TPU; k8s until the producer stamps it).",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "fieldConfig": {
@@ -77,7 +77,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, MAX(memory_peak_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "WITH top AS (SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY MAX(memory_peak_mb) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, MAX(memory_peak_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -93,8 +93,8 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Task CPU by task",
-      "description": "Mean CPU in millicores per task, from iris.task.cpu_millicores.",
+      "title": "Top tasks by CPU",
+      "description": "The 20 tasks with the highest mean CPU in millicores over the window, from iris.task.cpu_millicores.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "fieldConfig": {
@@ -112,7 +112,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(cpu_millicores) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "WITH top AS (SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY AVG(cpu_millicores) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(cpu_millicores) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -128,8 +128,8 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Task disk by task",
-      "description": "Peak disk usage per task, from iris.task.disk_mb (populated on GCE/TPU; k8s until the producer stamps it).",
+      "title": "Top tasks by disk",
+      "description": "The 20 tasks with the highest peak disk usage over the window, from iris.task.disk_mb (populated on GCE/TPU; k8s until the producer stamps it).",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "fieldConfig": {
@@ -147,7 +147,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, MAX(disk_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "WITH top AS (SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY MAX(disk_mb) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, MAX(disk_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -163,8 +163,8 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Worker host CPU by worker",
-      "description": "Host CPU percent per worker heartbeat, from iris.worker.cpu_pct. GCE/TPU only.",
+      "title": "Top workers by host CPU",
+      "description": "The 20 workers with the highest mean host CPU percent over the window, from iris.worker.cpu_pct. GCE/TPU only.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "fieldConfig": {
@@ -182,7 +182,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(cpu_pct) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "WITH top AS (SELECT worker_id FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY worker_id ORDER BY AVG(cpu_pct) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(cpu_pct) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} AND worker_id IN (SELECT worker_id FROM top) GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
@@ -198,8 +198,8 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Worker memory used by worker",
-      "description": "Host memory in use per worker heartbeat, from iris.worker.mem_bytes. GCE/TPU only.",
+      "title": "Top workers by memory",
+      "description": "The 20 workers with the highest mean host memory in use over the window, from iris.worker.mem_bytes. GCE/TPU only.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "fieldConfig": {
@@ -217,7 +217,7 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(mem_bytes) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
+              { "key": "sql", "value": "WITH top AS (SELECT worker_id FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY worker_id ORDER BY AVG(mem_bytes) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(mem_bytes) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} AND worker_id IN (SELECT worker_id FROM top) GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
