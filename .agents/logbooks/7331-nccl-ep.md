@@ -56,11 +56,11 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
 ## Hypothesis queue
 
 ### Active
-- `H-build`: TE + NCCL_EP is buildable from the WIP branch on this stack
-  (arm64 Grace + sm_100a + cu13 container). Open sub-questions: is the
-  NCCL_EP backend's NCCL dependency (libnccl_ep) public/vendored, or does the
-  build need an NVIDIA-internal artifact? Does the JAX surface build need extra
-  flags? **First derisk item — resolve by source read before spending GPU time.**
+- `H-build`: TE + NCCL_EP is buildable on this stack (arm64 Grace + sm_100a +
+  cu13). **Source-level derisk complete (NCCLEP-001): everything is public** —
+  build from TE main, upgrade runtime NCCL to ≥ 2.30.4 (PyPI has aarch64
+  wheels). Residual risk is only the actual compile on arm64 + the TE↔jax-0.10.1
+  FFI compatibility, both empirical (→ build task).
 - `H-ep8-prod`: TE NCCL_EP dispatch/combine runs at the reference config with
   EP≥8 across 64 GPUs and is competitive with (or beats) a2a_cute EP8 19.12 %.
   Sub-risks: 65k tokens/rank staging memory; process-per-GPU × 26–48-layer scan
@@ -79,3 +79,54 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   reference config + baselines frozen to B200MFU-032 values.
 
 ## Entries
+
+### 2026-07-17 — NCCLEP-001: dependency-chain source read — NCCL_EP is fully public; build plan set
+- Motivation: H-te's blocker was "requires building TE from the WIP PR branch",
+  with an open worry that the NCCL_EP backend depends on a closed `libnccl_ep`
+  fork. Resolve buildability entirely by source read before spending GPU time.
+- Method: shallow clone of the WIP branch
+  (`jberchtold-nvidia/TransformerEngine@jberchtold/teddy-te-ep-integration-2026-07-08-support-quantization`,
+  local at `$CLAUDE_JOB_DIR/tmp/te-wip`); `gh` reads of TE PRs #3034/#3036;
+  `git ls-tree`/`gh api` to resolve the NCCL submodule pin; PyPI index query for
+  `nvidia-nccl-cu13`.
+- Findings:
+  1. **Both TE EP PRs are merged into TE main** — #3034 (common C API +
+     NCCL EP backend) 2026-06-13, #3036 (JAX FFI primitives + VJPs,
+     `transformer_engine/jax/ep.py`) 2026-06-27. The WIP branch is only needed
+     for the **fp8 dispatch wire** (H-fp8wire); phase 1 builds **TE main**
+     (tip `68493d2d55ac`, 2026-07-17). This also explains the negative
+     2026-07-15 probe: TE 2.15.0+42b840051 predates/omits the merge.
+  2. **No closed dependency.** `libnccl_ep.a` is built by `setup.py`
+     (`build_nccl_ep_submodule`) from the in-tree `3rdparty/nccl` submodule
+     pinned to **public** NVIDIA/nccl `b87848fbc` (2026-07-07, verified
+     reachable upstream; EP lives on the `v2.30u1` line) and statically linked
+     into `libtransformer_engine.so`. `NVTE_WITH_NCCL_EP=ON` is the default;
+     needs `git submodule update --init --recursive` + `NVTE_CUDA_ARCHS`
+     containing ≥ 90 (use `100a`).
+  3. **Runtime gate: system libnccl.so ≥ 2.30.4** (checked in
+     `EPBackend::initialize`, lazy-bound so older NCCL only fails at EP init;
+     note the comment: `LD_BIND_NOW` environments lose this property). Our
+     lockfile pins `nvidia-nccl-cu13==2.28.9` → **must upgrade the job env**;
+     PyPI has 2.30.7 with aarch64 wheels.
+  4. API contract confirmed at the merged surface (`te.jax.ep`): `ep_bootstrap(
+     world_size, rank, num_experts, max_tokens_per_rank, recv_capacity_per_rank,
+     hidden_dim, max_token_dtype=bf16, max_num_sms=0)` — requires
+     `jax.local_device_count()==1` (process-per-GPU), world ≥ 2, TE
+     `global_shard_guard(MeshResource(..., ep_resource=...))`, num_experts
+     divisible by ep_size, bf16-only wire; `ep_dispatch`/`ep_combine` are
+     custom_vjp FFI primitives, CUDA-graph capturable; `ep_prepare` runs inside
+     dispatch fwd (routing all-gather). SM ≥ 90 runtime gate. Per-row limit:
+     `hidden_dim × sizeof(dtype)` < 4 GiB (fine: 5120×2B).
+  5. Capacity math at the reference config: `max_tokens_per_rank` = 65,536
+     (16 seq/GPU × 4096). Zero-drop `recv_capacity_per_rank` =
+     ep_size × max_tokens × topk = 2.1 M tokens ≈ **21.4 GiB** of bf16 staging
+     at EP8 — must size to expected load × margin instead (uniform-routing
+     expectation is 262 k tokens ≈ 2.7 GiB; cf-style margin TBD). This is the
+     EP≥8-at-scale derisk question the goal is about.
+  6. TE ships `tests/jax/test_multi_process_ep.py` (13 tests, multi-process)
+     + an e2e MoE example — natural smoke + microbench scaffolding.
+- Decision: build TE **main** (not the WIP branch) with bundled-submodule
+  NCCL_EP inside the NGC container stack on a GB200 node; upgrade
+  `nvidia-nccl-cu13` to 2.30.7 in the job env; keep the WIP branch only for the
+  later fp8-wire phase.
+- Next: build + import probe on cw-us-east-08a (NCCLEP-002).
