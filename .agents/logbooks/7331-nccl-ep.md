@@ -175,4 +175,29 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
      `nvidia-cuda-runtime` wheel under `nvidia/cu13/lib/*.a`; nvcc's implicit
      `-L` points at the wheel's own tree, so export `LIBRARY_PATH`).
   4. The wheel layout nests under `site-packages/nvidia/cu13/{bin,include,lib}`.
-- Status: attempt 6 in flight (past all previous failure points expected).
+- More build-iteration findings (attempts 6–10):
+  5. cmake `find_library(NCCL_LIB ...)` doesn't search wheel dirs — export
+     `CMAKE_LIBRARY_PATH`/`CMAKE_INCLUDE_PATH`.
+  6. Missing headers, one wheel each: `cuda_profiler_api.h` →
+     `nvidia-cuda-profiler-api`; `nvml.h` → `nvidia-nvml-dev`; `nvtx3/` →
+     `nvidia-nvtx` (all unsuffixed 13.x names).
+  7. **Per-file include merges are dangerous**: two wheels both shipping
+     `include/nvtx3/` interleaved into a franken-tree (`NVTX_NULLPTR`
+     undefined) — symlink version-coherent trees whole-directory instead.
+  8. Verbose builds drown their own errors in iris log retention — tee the
+     build log to a file and print only error context (same lesson as
+     B200MFU-034's stderr capture).
+  9. Attempt 10 failed in hadamard-transform TUs with the error lines lost to
+     retention; attempt 11 (identical script + log capture) went green — the
+     failure did not reproduce. Watch for flakiness in future rebuilds.
+- **GREEN (attempt 11, job `/mwittmann/ncclep-te-build11`)**: wheel
+  `transformer_engine-2.18.0.dev0+68493d2-cp312-cp312-linux_aarch64.whl`
+  (71 MB) stashed at
+  `s3://marin-us-east-02a/marin/scratch/mwittmann/ncclep/wheels/`.
+  Import probe on 4×GB200 under **stock jax 0.10.1**: `te.jax.ep` exposes
+  `ep_bootstrap`/`ep_dispatch`/`ep_combine`/`ep_prepare`/`EpLayerConfig`;
+  pybind ext has `set_ep_bootstrap_params`/`release_ep_resources`/
+  `ep_handle_mem_size`. H-build **confirmed** — TE main + NCCL_EP builds and
+  imports on the goal platform, single-stack with the bench baselines.
+- Next: NCCLEP-003 single-node 4-proc TE EP test-suite smoke (in flight),
+  then the EP4/EP8 transport microbenches.
