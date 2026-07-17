@@ -50,9 +50,10 @@ import { wandbSnapshot, type WandbSnapshot } from "./sources/wandb.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
 const BUILD_HISTORY = 100;
+const NIGHTLY_CACHE_TTL_MS = 60_000;
 
-const nightlyLaneCache = new TTLCache<NightlyLaneSnapshot>(60_000);
-const nightlyAttemptCache = new TTLCache<AttemptFetchResult>(60_000);
+const nightlyLaneCache = new TTLCache<NightlyLaneSnapshot>(NIGHTLY_CACHE_TTL_MS);
+const nightlyAttemptCache = new TTLCache<AttemptFetchResult>(NIGHTLY_CACHE_TTL_MS);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);

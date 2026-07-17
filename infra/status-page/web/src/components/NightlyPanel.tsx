@@ -370,6 +370,18 @@ function consecutiveHeaders(
   return headers;
 }
 
+function laneBoundary(
+  lanes: NightlyLane[],
+  index: number,
+): "group" | "subgroup" | undefined {
+  const lane = lanes[index];
+  const previous = lanes[index - 1];
+  if (!previous) return undefined;
+  if (previous.group !== lane.group) return "group";
+  if (previous.subgroup !== lane.subgroup) return "subgroup";
+  return undefined;
+}
+
 function Matrix({ data }: { data: NightlyResponse }) {
   const groups = consecutiveHeaders(
     data.lanes,
@@ -426,16 +438,14 @@ function Matrix({ data }: { data: NightlyResponse }) {
           </tr>
           <tr>
             {data.lanes.map((lane, index) => {
-              const previous = data.lanes[index - 1];
-              const groupStart = previous && previous.group !== lane.group;
-              const subgroupStart = previous && previous.subgroup !== lane.subgroup;
+              const boundary = laneBoundary(data.lanes, index);
               return (
                 <th
                   key={lane.id}
                   id={`lane-${lane.id}`}
                   scope="col"
                   title={`${lane.label} · ${lane.scheduleLabel}`}
-                  className={`nightly-lane-heading ${groupStart ? "nightly-group-start" : ""} ${subgroupStart && !groupStart ? "nightly-subgroup-start" : ""}`}
+                  className={`nightly-lane-heading ${boundary ? `nightly-${boundary}-start` : ""}`}
                 >
                   {lane.shortLabel}
                 </th>
@@ -453,16 +463,13 @@ function Matrix({ data }: { data: NightlyResponse }) {
                 </th>
                 {row.cells.map((cell, index) => {
                   const lane = data.lanes[index];
-                  const previous = data.lanes[index - 1];
-                  const groupStart = previous && previous.group !== lane.group;
-                  const subgroupStart = previous && previous.subgroup !== lane.subgroup;
                   return (
                     <NightlyDataCell
                       key={lane.id}
                       cell={cell}
                       lane={lane}
                       dateHeaderId={dateHeaderId}
-                      boundary={groupStart ? "group" : subgroupStart ? "subgroup" : undefined}
+                      boundary={laneBoundary(data.lanes, index)}
                     />
                   );
                 })}

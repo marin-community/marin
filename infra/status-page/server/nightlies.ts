@@ -7,6 +7,8 @@ import {
   type NightlyResponse,
 } from "./sources/nightlyProjection.js";
 
+const GITHUB_FETCH_CONCURRENCY = 4;
+
 export interface NightlyAttemptResult {
   attempt?: NightlyAttempt;
   error?: string;
@@ -46,7 +48,9 @@ export async function nightliesResponse(
   loadLane: NightlyLaneLoader,
   loadAttempt: NightlyAttemptLoader,
 ): Promise<NightlyResponse> {
-  const snapshots = await mapWithConcurrency(lanes, 4, (lane) => loadLane(lane, now));
+  const snapshots = await mapWithConcurrency(lanes, GITHUB_FETCH_CONCURRENCY, (lane) =>
+    loadLane(lane, now),
+  );
   const reruns = selectedReruns(projectNightlies(lanes, snapshots, now));
   const enriched = snapshots.map((snapshot) => ({
     ...snapshot,
@@ -69,10 +73,14 @@ export async function nightliesResponse(
     });
   });
 
-  const attemptResults = await mapWithConcurrency(attemptTasks, 4, async (task) => ({
-    ...task,
-    result: await loadAttempt(task.lane, task.runId, task.attemptNumber),
-  }));
+  const attemptResults = await mapWithConcurrency(
+    attemptTasks,
+    GITHUB_FETCH_CONCURRENCY,
+    async (task) => ({
+      ...task,
+      result: await loadAttempt(task.lane, task.runId, task.attemptNumber),
+    }),
+  );
   for (const { lane, runId, result } of attemptResults) {
     const snapshot = enrichedByLane.get(lane.id);
     if (!snapshot) continue;

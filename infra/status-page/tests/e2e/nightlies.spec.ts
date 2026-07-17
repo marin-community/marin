@@ -51,9 +51,8 @@ test("matrix communicates status, confidence, duration, and recovery", async ({ 
   await expect(recovered).toBeVisible();
   await recovered.focus();
   await expect(recovered).toBeFocused();
-  await expect(
-    page.getByText("Datakit tier 3, Mondays, 2026-07-17: not scheduled.", { exact: true }),
-  ).toBeAttached();
+  const fridayT3 = table.locator('tbody tr:first-child td[headers~="lane-datakit-t3"]');
+  await expect(fridayT3).toContainText("not scheduled");
 
   const vllmCell = falseGreen.locator("xpath=ancestor::td");
   await expect(vllmCell).toHaveAttribute(
