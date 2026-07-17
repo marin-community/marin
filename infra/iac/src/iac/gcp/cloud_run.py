@@ -3,10 +3,10 @@
 
 """An IAP-gated internal Cloud Run service, built from a local Dockerfile.
 
-The generic shape behind Marin's single-instance internal web services (Grafana today,
-ducky next): build the image from a Dockerfile, push it digest-pinned to a per-service
-Artifact Registry repo, and run it on Cloud Run v2 with Direct VPC egress so it reaches
-cluster-internal IPs, gated by Identity-Aware Proxy.
+The generic shape behind Marin's single-instance internal web services: build the image
+from a Dockerfile, push it digest-pinned to a per-service Artifact Registry repo, and run
+it on Cloud Run v2 with Direct VPC egress so it reaches cluster-internal IPs, gated by
+Identity-Aware Proxy.
 
 The component owns everything a deploy needs: the runtime service account and its
 project roles, the Artifact Registry repo and image, the service, and the IAP wiring
