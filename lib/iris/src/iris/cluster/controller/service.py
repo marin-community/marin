@@ -1218,6 +1218,27 @@ class ControllerServiceImpl:
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
         authorize_resource_owner(job_id.user)
 
+    def _authorize_federated_debug_target(self, root_job: JobName) -> None:
+        """Scope a federation peer's on-demand debug RPC to a job it federated here.
+
+        ``authorize_method`` admits ProfileTask/ExecInContainer/GetProcessStatus for a
+        ``FEDERATION_PEER_ROLE`` identity; this confirms ``root_job`` is one the peer
+        actually handed off (matching its received handle), so a peer cannot profile,
+        exec into, or inspect this cluster's own tasks. Non-peer callers pass through
+        untouched — their access stays governed by ``authorize_method``'s role
+        allowlist, so the read-only dashboard keeps reading any task's process status.
+        """
+        if not self._auth.provider:
+            return
+        identity = get_verified_identity()
+        if identity is None or identity.role != FEDERATION_PEER_ROLE:
+            return
+        with self._db.read_snapshot() as snap:
+            handoff = reads.received_handoff(snap, root_job)
+            if handoff is not None and handoff.requester_id == identity.user_id:
+                return
+        raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
+
     def _wait_until_job_drained(self, job_id: JobName, wait: Duration) -> bool:
         """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
         attempts. Returns ``True`` if drained, ``False`` if the wait elapsed.
@@ -2647,6 +2668,7 @@ class ControllerServiceImpl:
             target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        self._authorize_federated_debug_target(target.task_id.root_job)
         task = _read_task_with_attempts(self._db, target.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
@@ -2826,6 +2848,7 @@ class ControllerServiceImpl:
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}") from exc
 
+        self._authorize_federated_debug_target(task_id.root_job)
         task = _read_task_with_attempts(self._db, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {target} not found")
@@ -2909,6 +2932,7 @@ class ControllerServiceImpl:
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
 
+        self._authorize_federated_debug_target(task_id.root_job)
         task = _read_task_with_attempts(self._db, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
