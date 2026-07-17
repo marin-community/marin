@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
@@ -42,36 +45,36 @@ Kernel interface uses GEMM MNKL domain (same as torch_grouped_mm.py):
 The scheduler handles fake dimensions by computing token_offset from offs.
 """
 
-from typing import Optional, Tuple, Literal, Type, Union
+from typing import Literal
 
 import cuda.bindings.driver as cuda
-
 import cutlass
 import cutlass.cute as cute
-from cutlass.cute.typing import Pointer
-from cutlass.cute.nvgpu import cpasync, tcgen05
-import cutlass.utils as utils
 import cutlass.pipeline as pipeline
+import cutlass.utils as utils
+import cutlass.utils.blackwell_helpers as sm100_utils
+import cutlass.utils.blockscaled_layout as blockscaled_utils
+from cutlass.cute.nvgpu import cpasync, tcgen05
+from cutlass.cute.typing import Pointer
 from cutlass.pipeline import pipeline_init_arrive, pipeline_init_wait
+from cutlass.utils.gemm.sm100 import (
+    epilogue_smem_copy_and_partition,
+    epilogue_tmem_copy_and_partition,
+    transform_partitioned_tensor_layout,
+)
+
+from .moe_persistent_scheduler import (
+    MoEStaticPersistentTileScheduler,
+    MoEStaticSchedulerParams,
+    MoEWorkTileInfo,
+)
+from .moe_sched_extension import ScaledGroupedMmSchedExtension
 
 # Vendored (marin): absolute `blackwell.kernel.moe.*` imports rewritten to
 # package-relative; torch benchmark harness (everything below the kernel
 # classes in upstream) stripped -- torch is not a dependency here.
 from .moe_utils import (
     MoEScaledGroupedGemmTensormapConstructor,
-)
-from .moe_persistent_scheduler import (
-    MoEStaticSchedulerParams,
-    MoEStaticPersistentTileScheduler,
-    MoEWorkTileInfo,
-)
-from .moe_sched_extension import ScaledGroupedMmSchedExtension
-import cutlass.utils.blackwell_helpers as sm100_utils
-import cutlass.utils.blockscaled_layout as blockscaled_utils
-from cutlass.utils.gemm.sm100 import (
-    transform_partitioned_tensor_layout,
-    epilogue_tmem_copy_and_partition,
-    epilogue_smem_copy_and_partition,
 )
 
 # =============================================================================
@@ -108,11 +111,11 @@ class ScaledGroupedGemmKernel:
         accumulate_on_output: bool,
         separate_tensormap_init: bool,
         consistent_token_padding: bool,
-        acc_dtype: Type[cutlass.Numeric] = cutlass.Float32,
-        mma_tiler_mnk: Tuple[int, int, int] = (128, 128, 64),
-        cluster_shape_mnk: Tuple[int, int, int] = (1, 1, 1),
+        acc_dtype: type[cutlass.Numeric] = cutlass.Float32,
+        mma_tiler_mnk: tuple[int, int, int] = (128, 128, 64),
+        cluster_shape_mnk: tuple[int, int, int] = (1, 1, 1),
         use_2cta_instrs: bool = False,
-        fixed_expert_cnt: Optional[int] = None,
+        fixed_expert_cnt: int | None = None,
     ):
         # ── User-provided codegen-time configuration ──
         self.scenario = scenario
@@ -128,9 +131,7 @@ class ScaledGroupedGemmKernel:
         self.arch = "sm_100"
 
         if accumulate_on_output and scenario == "2Dx3D":
-            raise ValueError(
-                "accumulate_on_output only makes sense for 2Dx2D (weight grad)."
-            )
+            raise ValueError("accumulate_on_output only makes sense for 2Dx2D (weight grad).")
 
         self._validate_mma_tiler_and_cluster_shape()
 
@@ -138,9 +139,7 @@ class ScaledGroupedGemmKernel:
         self.mma_tiler = (mma_tiler_mnk[0], mma_tiler_mnk[1], 1)
 
         # ── CTA group for tcgen05 MMA ──
-        self.cta_group = (
-            tcgen05.CtaGroup.TWO if use_2cta_instrs else tcgen05.CtaGroup.ONE
-        )
+        self.cta_group = tcgen05.CtaGroup.TWO if use_2cta_instrs else tcgen05.CtaGroup.ONE
 
         # ── Warp specialization (7 warps) ──
         self.occupancy = 1
@@ -174,9 +173,7 @@ class ScaledGroupedGemmKernel:
 
         Layout: [TMA descriptors (managed by tensormap ctor)] [padded scale offsets]
         """
-        desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size(
-            self.scenario, expert_cnt
-        )
+        desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size(self.scenario, expert_cnt)
         padded_offs_bytes = expert_cnt * 4 if not self.consistent_token_padding else 0
         return desc_bytes + padded_offs_bytes
 
@@ -204,21 +201,15 @@ class ScaledGroupedGemmKernel:
 
         sf_k_granularity = self.sf_vec_size * 4
         if k % sf_k_granularity != 0:
-            raise ValueError(
-                f"mma_tiler K ({k}) must be a multiple of "
-                f"sf_vec_size * 4 = {sf_k_granularity}"
-            )
+            raise ValueError(f"mma_tiler K ({k}) must be a multiple of " f"sf_vec_size * 4 = {sf_k_granularity}")
 
         if cm % (2 if self.use_2cta_instrs else 1) != 0:
-            raise ValueError(
-                f"cluster_shape M ({cm}) must be even when use_2cta_instrs=True"
-            )
+            raise ValueError(f"cluster_shape M ({cm}) must be even when use_2cta_instrs=True")
 
         is_pow2 = lambda x: x > 0 and (x & (x - 1)) == 0
         if cm * cn > 16 or not is_pow2(cm) or not is_pow2(cn) or cm > 4 or cn > 4:
             raise ValueError(
-                f"Invalid cluster_shape ({cm}, {cn}): each dim must be "
-                f"a power of 2 and <= 4, product must be <= 16"
+                f"Invalid cluster_shape ({cm}, {cn}): each dim must be " f"a power of 2 and <= 4, product must be <= 16"
             )
 
         if self.sf_vec_size not in {16, 32}:
@@ -288,8 +279,7 @@ class ScaledGroupedGemmKernel:
         # Use user-specified K dimension from mma_tiler_mnk
         mma_inst_shape_k = cute.size(tiled_mma.shape_mnk, mode=[2])
         assert self.mma_tiler_mnk[2] % mma_inst_shape_k == 0, (
-            f"mma_tiler K ({self.mma_tiler_mnk[2]}) must be a multiple of "
-            f"MMA instruction K ({mma_inst_shape_k})"
+            f"mma_tiler K ({self.mma_tiler_mnk[2]}) must be a multiple of " f"MMA instruction K ({mma_inst_shape_k})"
         )
         mma_inst_tile_k = self.mma_tiler_mnk[2] // mma_inst_shape_k
         self.mma_tiler = (
@@ -394,47 +384,31 @@ class ScaledGroupedGemmKernel:
         # The acc pipeline uses 1 barrier stage with phase-based toggling.
         # N<256: TMEM fits 2 independent acc buffers, normal 2-stage pipeline.
         self.overlapping_accum = self.cta_tile_shape_mnk[1] == 256
-        self.num_acc_pipeline_stages = (
-            1 if self.overlapping_accum else self.num_acc_stage
-        )
+        self.num_acc_pipeline_stages = 1 if self.overlapping_accum else self.num_acc_stage
 
         # ── TMEM column counts ──
         sf_atom_mn = 32
-        self.num_sfa_tmem_cols = (
-            self.cta_tile_shape_mnk[0] // sf_atom_mn
-        ) * mma_inst_tile_k
-        self.num_sfb_tmem_cols = (
-            self.cta_tile_shape_mnk_sfb[1] // sf_atom_mn
-        ) * mma_inst_tile_k
+        self.num_sfa_tmem_cols = (self.cta_tile_shape_mnk[0] // sf_atom_mn) * mma_inst_tile_k
+        self.num_sfb_tmem_cols = (self.cta_tile_shape_mnk_sfb[1] // sf_atom_mn) * mma_inst_tile_k
         self.num_sf_tmem_cols = self.num_sfa_tmem_cols + self.num_sfb_tmem_cols
-        self.num_accumulator_tmem_cols = self.cta_tile_shape_mnk[
-            1
-        ] * self.num_acc_stage - (
+        self.num_accumulator_tmem_cols = self.cta_tile_shape_mnk[1] * self.num_acc_stage - (
             self.num_sf_tmem_cols if self.overlapping_accum else 0
         )
 
         # Only when overlapping_accum, release accumulator buffer early in epilogue
-        self.iter_acc_early_release_in_epilogue = (
-            self.num_sf_tmem_cols // self.epi_tile_n
-        )
+        self.iter_acc_early_release_in_epilogue = self.num_sf_tmem_cols // self.epi_tile_n
 
         # ── TMA load bytes (A + B + SFA + SFB per stage) ──
         atom_thr_size = cute.size(tiled_mma.thr_id.shape)
         a_smem_layout = cute.slice_(self.a_smem_layout_staged, (None, None, None, 0))
         b_smem_layout = cute.slice_(self.b_smem_layout_staged, (None, None, None, 0))
-        sfa_smem_layout = cute.slice_(
-            self.sfa_smem_layout_staged, (None, None, None, 0)
-        )
-        sfb_smem_layout = cute.slice_(
-            self.sfb_smem_layout_staged, (None, None, None, 0)
-        )
+        sfa_smem_layout = cute.slice_(self.sfa_smem_layout_staged, (None, None, None, 0))
+        sfb_smem_layout = cute.slice_(self.sfb_smem_layout_staged, (None, None, None, 0))
         a_copy_size = cute.size_in_bytes(self.a_dtype, a_smem_layout)
         b_copy_size = cute.size_in_bytes(self.b_dtype, b_smem_layout)
         sfa_copy_size = cute.size_in_bytes(self.sf_dtype, sfa_smem_layout)
         sfb_copy_size = cute.size_in_bytes(self.sf_dtype, sfb_smem_layout)
-        self.num_tma_load_bytes = (
-            a_copy_size + b_copy_size + sfa_copy_size + sfb_copy_size
-        ) * atom_thr_size
+        self.num_tma_load_bytes = (a_copy_size + b_copy_size + sfa_copy_size + sfb_copy_size) * atom_thr_size
 
     # -----------------------------------------------------------------
     # _compute_stages (static)
@@ -443,17 +417,17 @@ class ScaledGroupedGemmKernel:
     @staticmethod
     def _compute_stages(
         tiled_mma: cute.TiledMma,
-        mma_tiler_mnk: Tuple[int, int, int],
-        a_dtype: Type[cutlass.Numeric],
-        b_dtype: Type[cutlass.Numeric],
+        mma_tiler_mnk: tuple[int, int, int],
+        a_dtype: type[cutlass.Numeric],
+        b_dtype: type[cutlass.Numeric],
         epi_tile: cute.Tile,
-        c_dtype: Type[cutlass.Numeric],
+        c_dtype: type[cutlass.Numeric],
         c_layout: utils.LayoutEnum,
-        sf_dtype: Type[cutlass.Numeric],
+        sf_dtype: type[cutlass.Numeric],
         sf_vec_size: int,
         smem_capacity: int,
         occupancy: int,
-    ) -> Tuple[int, int, int]:
+    ) -> tuple[int, int, int]:
         """Compute stage counts for ACC, A/B/SFA/SFB, and C."""
         num_acc_stage = 2
         num_c_stage = 2
@@ -505,15 +479,11 @@ class ScaledGroupedGemmKernel:
 
         fixed_overhead = mbar_helpers_bytes + c_bytes + sched_bytes
 
-        num_ab_stage = (
-            smem_capacity // occupancy - fixed_overhead
-        ) // ab_bytes_per_stage
+        num_ab_stage = (smem_capacity // occupancy - fixed_overhead) // ab_bytes_per_stage
 
-        num_c_stage += (
-            smem_capacity
-            - occupancy * ab_bytes_per_stage * num_ab_stage
-            - occupancy * fixed_overhead
-        ) // (occupancy * c_bytes_per_stage)
+        num_c_stage += (smem_capacity - occupancy * ab_bytes_per_stage * num_ab_stage - occupancy * fixed_overhead) // (
+            occupancy * c_bytes_per_stage
+        )
 
         return num_acc_stage, num_ab_stage, num_c_stage
 
@@ -525,7 +495,7 @@ class ScaledGroupedGemmKernel:
         self,
         sSF: cute.Tensor,
         tSF: cute.Tensor,
-    ) -> Tuple[cute.TiledCopy, cute.Tensor, cute.Tensor]:
+    ) -> tuple[cute.TiledCopy, cute.Tensor, cute.Tensor]:
         """
         Make tiledCopy for smem → tmem load of a scale factor tensor,
         then partition smem (source) and tmem (destination).
@@ -541,9 +511,7 @@ class ScaledGroupedGemmKernel:
         thr_copy_s2t = tiled_copy_s2t.get_slice(0)
 
         tCsSF_compact_s2t_ = thr_copy_s2t.partition_S(tCsSF_compact)
-        tCsSF_compact_s2t = tcgen05.get_s2t_smem_desc_tensor(
-            tiled_copy_s2t, tCsSF_compact_s2t_
-        )
+        tCsSF_compact_s2t = tcgen05.get_s2t_smem_desc_tensor(tiled_copy_s2t, tCsSF_compact_s2t_)
         tCtSF_compact_s2t = thr_copy_s2t.partition_D(tCtSF_compact)
 
         return tiled_copy_s2t, tCsSF_compact_s2t, tCtSF_compact_s2t
@@ -564,9 +532,9 @@ class ScaledGroupedGemmKernel:
         workspace: cute.Tensor,  # Expert-wise TMA desc + padded offs
         max_active_clusters: cutlass.Constexpr,
         stream: cuda.CUstream,
-        global_scale_a: Optional[cute.Tensor] = None,  # NVFP4: per-expert f32 scalar
-        global_scale_b: Optional[cute.Tensor] = None,  # NVFP4: per-expert f32 scalar
-        bias: Optional[cute.Tensor] = None,
+        global_scale_a: cute.Tensor | None = None,  # NVFP4: per-expert f32 scalar
+        global_scale_b: cute.Tensor | None = None,  # NVFP4: per-expert f32 scalar
+        bias: cute.Tensor | None = None,
     ) -> None:
         """Launch the scaled grouped GEMM kernel."""
         if cutlass.const_expr(bias is not None):
@@ -615,19 +583,13 @@ class ScaledGroupedGemmKernel:
             hidden_padded = scale_a.shape[1] * self.sf_vec_size
             sfa_gemm = cute.make_tensor(
                 scale_a.iterator,
-                blockscaled_utils.tile_atom_to_shape_SF(
-                    (tokens_sum_padded, hidden_padded, c1), self.sf_vec_size
-                ),
+                blockscaled_utils.tile_atom_to_shape_SF((tokens_sum_padded, hidden_padded, c1), self.sf_vec_size),
             )
             intermediate_padded_mul_hidden_padded = scale_b.shape[1]
-            intermediate_padded = (
-                intermediate_padded_mul_hidden_padded * self.sf_vec_size
-            ) // hidden_padded
+            intermediate_padded = (intermediate_padded_mul_hidden_padded * self.sf_vec_size) // hidden_padded
             sfb_gemm = cute.make_tensor(
                 scale_b.iterator,
-                blockscaled_utils.tile_atom_to_shape_SF(
-                    (intermediate_padded, hidden_padded, experts), self.sf_vec_size
-                ),
+                blockscaled_utils.tile_atom_to_shape_SF((intermediate_padded, hidden_padded, experts), self.sf_vec_size),
             )
 
         else:  # 2Dx2D
@@ -667,26 +629,22 @@ class ScaledGroupedGemmKernel:
             tokens_sum_padded = scale_a.shape[1] * self.sf_vec_size
             sfa_gemm = cute.make_tensor(
                 scale_a.iterator,
-                blockscaled_utils.tile_atom_to_shape_SF(
-                    (hidden_padded, tokens_sum_padded, c1), self.sf_vec_size
-                ),
+                blockscaled_utils.tile_atom_to_shape_SF((hidden_padded, tokens_sum_padded, c1), self.sf_vec_size),
             )
             intermediate_padded = scale_b.shape[0]
             sfb_gemm = cute.make_tensor(
                 scale_b.iterator,
-                blockscaled_utils.tile_atom_to_shape_SF(
-                    (intermediate_padded, tokens_sum_padded, c1), self.sf_vec_size
-                ),
+                blockscaled_utils.tile_atom_to_shape_SF((intermediate_padded, tokens_sum_padded, c1), self.sf_vec_size),
             )
 
         # =================================================================
         # Step 2: Infer dtypes and major modes
         # =================================================================
 
-        self.a_dtype: Type[cutlass.Numeric] = a_gemm.element_type
-        self.b_dtype: Type[cutlass.Numeric] = b_gemm.element_type
-        self.c_dtype: Type[cutlass.Numeric] = c_gemm.element_type
-        self.sf_dtype: Type[cutlass.Numeric] = sfa_gemm.element_type
+        self.a_dtype: type[cutlass.Numeric] = a_gemm.element_type
+        self.b_dtype: type[cutlass.Numeric] = b_gemm.element_type
+        self.c_dtype: type[cutlass.Numeric] = c_gemm.element_type
+        self.sf_dtype: type[cutlass.Numeric] = sfa_gemm.element_type
         self.a_major_mode = utils.LayoutEnum.from_tensor(a_gemm).mma_major_mode()
         self.b_major_mode = utils.LayoutEnum.from_tensor(b_gemm).mma_major_mode()
         self.c_layout = utils.LayoutEnum.from_tensor(c_gemm)
@@ -704,9 +662,7 @@ class ScaledGroupedGemmKernel:
         # =================================================================
 
         # ── TMA load A ──
-        a_op = sm100_utils.cluster_shape_to_tma_atom_A(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
+        a_op = sm100_utils.cluster_shape_to_tma_atom_A(self.cluster_shape_mn, tiled_mma.thr_id)
         a_smem_layout = cute.slice_(self.a_smem_layout_staged, (None, None, None, 0))
         tma_atom_a, tma_tensor_a = cute.nvgpu.make_tiled_tma_atom_A(
             a_op,
@@ -718,9 +674,7 @@ class ScaledGroupedGemmKernel:
         )
 
         # ── TMA load B ──
-        b_op = sm100_utils.cluster_shape_to_tma_atom_B(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
+        b_op = sm100_utils.cluster_shape_to_tma_atom_B(self.cluster_shape_mn, tiled_mma.thr_id)
         b_smem_layout = cute.slice_(self.b_smem_layout_staged, (None, None, None, 0))
         tma_atom_b, tma_tensor_b = cute.nvgpu.make_tiled_tma_atom_B(
             b_op,
@@ -733,12 +687,8 @@ class ScaledGroupedGemmKernel:
 
         # ── TMA load SFA ──
         # sfa_gemm is already atom-tiled from tile_atom_to_shape_SF
-        sfa_op = sm100_utils.cluster_shape_to_tma_atom_A(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        sfa_smem_layout = cute.slice_(
-            self.sfa_smem_layout_staged, (None, None, None, 0)
-        )
+        sfa_op = sm100_utils.cluster_shape_to_tma_atom_A(self.cluster_shape_mn, tiled_mma.thr_id)
+        sfa_smem_layout = cute.slice_(self.sfa_smem_layout_staged, (None, None, None, 0))
         tma_atom_sfa, tma_tensor_sfa = cute.nvgpu.make_tiled_tma_atom_A(
             sfa_op,
             sfa_gemm,
@@ -751,12 +701,8 @@ class ScaledGroupedGemmKernel:
 
         # ── TMA load SFB ──
         # sfb_gemm is already atom-tiled from tile_atom_to_shape_SF
-        sfb_op = sm100_utils.cluster_shape_to_tma_atom_SFB(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        sfb_smem_layout = cute.slice_(
-            self.sfb_smem_layout_staged, (None, None, None, 0)
-        )
+        sfb_op = sm100_utils.cluster_shape_to_tma_atom_SFB(self.cluster_shape_mn, tiled_mma.thr_id)
+        sfb_smem_layout = cute.slice_(self.sfb_smem_layout_staged, (None, None, None, 0))
         tma_atom_sfb, tma_tensor_sfb = cute.nvgpu.make_tiled_tma_atom_B(
             sfb_op,
             sfb_gemm,
@@ -774,9 +720,7 @@ class ScaledGroupedGemmKernel:
             c_tma_op = cpasync.CopyBulkTensorTileS2GOp()
 
         epi_smem_layout = cute.select(self.c_smem_layout_staged, mode=[0, 1])
-        tma_atom_c, tma_tensor_c = cpasync.make_tiled_tma_atom(
-            c_tma_op, c_gemm, epi_smem_layout, self.epi_tile
-        )
+        tma_atom_c, tma_tensor_c = cpasync.make_tiled_tma_atom(c_tma_op, c_gemm, epi_smem_layout, self.epi_tile)
 
         # =================================================================
         # Step 5: offs_padded tensor (written by desc_init_kernel)
@@ -787,9 +731,7 @@ class ScaledGroupedGemmKernel:
         if cutlass.const_expr(self.consistent_token_padding):
             offs_padded = None
         else:
-            desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size(
-                self.scenario, expert_cnt
-            )
+            desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size(self.scenario, expert_cnt)
             offs_padded = cute.make_tensor(
                 cute.recast_ptr(workspace.iterator + desc_bytes, dtype=offs.dtype),
                 cute.make_layout((expert_cnt,)),
@@ -806,14 +748,9 @@ class ScaledGroupedGemmKernel:
             cluster_shape_mn=self.cluster_shape_mn,
         )
 
-        grid = MoEStaticSchedulerParams.get_grid_shape(
-            sched_params, max_active_clusters
-        )
+        grid = MoEStaticSchedulerParams.get_grid_shape(sched_params, max_active_clusters)
 
         # =================================================================
-        # Vendored (marin), temporary debug: trace-time pointer diagnostics.
-        print(f"[mxfp8-dbg] host-side workspace.iterator: {workspace.iterator}")
-
         # Step 7: Launch desc_init_kernel (if separate_tensormap_init)
         # =================================================================
 
@@ -915,7 +852,7 @@ class ScaledGroupedGemmKernel:
         sfb_gemm: cute.Tensor,
         # ── Scheduling / workspace ──
         offs: cute.Tensor,
-        expert_cnt: Union[cutlass.Int32, int],
+        expert_cnt: cutlass.Int32 | int,
         workspace_ptr: Pointer,
         # ── Cluster layouts ──
         cluster_layout_vmnk: cute.Layout,
@@ -925,7 +862,7 @@ class ScaledGroupedGemmKernel:
         b_smem_layout_staged: cute.ComposedLayout,
         sfa_smem_layout_staged: cute.Layout,
         sfb_smem_layout_staged: cute.Layout,
-        c_smem_layout_staged: Union[cute.Layout, cute.ComposedLayout],
+        c_smem_layout_staged: cute.Layout | cute.ComposedLayout,
         epi_tile: cute.Tile,
     ):
         """
@@ -966,18 +903,10 @@ class ScaledGroupedGemmKernel:
         sfb_smem_layout = cute.slice_(sfb_smem_layout_staged, (None, None, None, 0))
         epi_smem_layout = cute.select(c_smem_layout_staged, mode=[0, 1])
 
-        a_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        b_tma_op = sm100_utils.cluster_shape_to_tma_atom_B(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        sfa_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        sfb_tma_op = sm100_utils.cluster_shape_to_tma_atom_SFB(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
+        a_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(self.cluster_shape_mn, tiled_mma.thr_id)
+        b_tma_op = sm100_utils.cluster_shape_to_tma_atom_B(self.cluster_shape_mn, tiled_mma.thr_id)
+        sfa_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(self.cluster_shape_mn, tiled_mma.thr_id)
+        sfb_tma_op = sm100_utils.cluster_shape_to_tma_atom_SFB(self.cluster_shape_mn, tiled_mma.thr_id)
         if cutlass.const_expr(self.accumulate_on_output):
             c_tma_op = cpasync.CopyReduceBulkTensorTileS2GOp()
         else:
@@ -989,9 +918,7 @@ class ScaledGroupedGemmKernel:
         # =================================================================
 
         if cutlass.const_expr(not self.consistent_token_padding):
-            desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size(
-                self.scenario, expert_cnt
-            )
+            desc_bytes = MoEScaledGroupedGemmTensormapConstructor.get_workspace_size(self.scenario, expert_cnt)
             gmem_offs_padded = cute.make_tensor(
                 cute.recast_ptr(workspace_ptr + desc_bytes, dtype=offs.dtype),
                 cute.make_layout((expert_cnt,)),
@@ -1008,9 +935,7 @@ class ScaledGroupedGemmKernel:
             # offs_padded SMEM buffer: [carry, chunk[0..127]]
             offs_padded_buf: cute.struct.MemRange[cutlass.Int32, chunk_size + 1]
             # Cross-warp prefix sum scratch (one per warp in Group A)
-            warp_sums: cute.struct.MemRange[
-                cutlass.Int32, self._desc_init_warps_per_group
-            ]
+            warp_sums: cute.struct.MemRange[cutlass.Int32, self._desc_init_warps_per_group]
             # Pipeline mbarrier storage (PipelineAsync with 1 stage needs 2 mbarriers)
             pipeline_mbar: cute.struct.MemRange[cutlass.Int64, 2]
 
@@ -1091,9 +1016,7 @@ class ScaledGroupedGemmKernel:
             sfa_tensor=sfa_gemm,
             sfb_tensor=sfb_gemm,
             offs=offs,
-            offs_padded=offs
-            if cutlass.const_expr(self.consistent_token_padding)
-            else gmem_offs_padded,
+            offs_padded=offs if cutlass.const_expr(self.consistent_token_padding) else gmem_offs_padded,
             workspace_ptr=workspace_ptr,
             expert_cnt=expert_cnt,
         )
@@ -1150,16 +1073,12 @@ class ScaledGroupedGemmKernel:
                         if expert_idx > cutlass.Int32(0):
                             prev_off = offs[expert_idx - 1]
                         size_i = offs[expert_idx] - prev_off
-                        padded_size = (
-                            (size_i + pad_granularity - 1) // pad_granularity
-                        ) * pad_granularity
+                        padded_size = ((size_i + pad_granularity - 1) // pad_granularity) * pad_granularity
 
                     # Stage 1: warp-level inclusive prefix sum (shfl_up)
                     val = padded_size
                     for d in [1, 2, 4, 8, 16]:
-                        n = cute.arch.shuffle_sync_up(
-                            val, d, mask=full_mask, mask_and_clamp=0
-                        )
+                        n = cute.arch.shuffle_sync_up(val, d, mask=full_mask, mask_and_clamp=0)
                         if lane_in_warp >= d:
                             val = val + n
 
@@ -1255,13 +1174,13 @@ class ScaledGroupedGemmKernel:
         b_smem_layout_staged: cute.ComposedLayout,
         sfa_smem_layout_staged: cute.Layout,
         sfb_smem_layout_staged: cute.Layout,
-        c_smem_layout_staged: Union[cute.Layout, cute.ComposedLayout],
+        c_smem_layout_staged: cute.Layout | cute.ComposedLayout,
         epi_tile: cute.Tile,
         # ── Optional: padded offsets ──
-        offs_padded: Optional[cute.Tensor],
+        offs_padded: cute.Tensor | None,
         # ── Optional: NVFP4 per-expert global scales ──
-        global_scale_a: Optional[cute.Tensor],
-        global_scale_b: Optional[cute.Tensor],
+        global_scale_a: cute.Tensor | None,
+        global_scale_b: cute.Tensor | None,
     ):
         """
         GPU device kernel for MoE Scaled Grouped GEMM with block scaling.
@@ -1269,9 +1188,6 @@ class ScaledGroupedGemmKernel:
         Backbone: torch_grouped_mm.py (7-warp MoE scheduler structure)
         GEMM internals: dense_blockscaled_gemm_persistent.py
         """
-        # Vendored (marin), temporary debug: trace-time pointer diagnostics.
-        print(f"[mxfp8-dbg] kernel-body workspace_ptr: {workspace_ptr}")
-
         # =================================================================
         # Reconstruct objects that can't be passed as kernel params
         # =================================================================
@@ -1282,18 +1198,10 @@ class ScaledGroupedGemmKernel:
         sfb_smem_layout = cute.slice_(sfb_smem_layout_staged, (None, None, None, 0))
         epi_smem_layout = cute.select(c_smem_layout_staged, mode=[0, 1])
 
-        a_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        b_tma_op = sm100_utils.cluster_shape_to_tma_atom_B(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        sfa_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
-        sfb_tma_op = sm100_utils.cluster_shape_to_tma_atom_SFB(
-            self.cluster_shape_mn, tiled_mma.thr_id
-        )
+        a_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(self.cluster_shape_mn, tiled_mma.thr_id)
+        b_tma_op = sm100_utils.cluster_shape_to_tma_atom_B(self.cluster_shape_mn, tiled_mma.thr_id)
+        sfa_tma_op = sm100_utils.cluster_shape_to_tma_atom_A(self.cluster_shape_mn, tiled_mma.thr_id)
+        sfb_tma_op = sm100_utils.cluster_shape_to_tma_atom_SFB(self.cluster_shape_mn, tiled_mma.thr_id)
         if cutlass.const_expr(self.accumulate_on_output):
             c_tma_op = cpasync.CopyReduceBulkTensorTileS2GOp()
         else:
@@ -1338,9 +1246,7 @@ class ScaledGroupedGemmKernel:
             offs_padded=offs_padded if offs_padded is not None else offs,
             workspace_ptr=workspace_ptr,
         )
-        ext = ScaledGroupedMmSchedExtension(
-            scenario=self.scenario, tensormap_ctor=tensormap_ctor
-        )
+        ext = ScaledGroupedMmSchedExtension(scenario=self.scenario, tensormap_ctor=tensormap_ctor)
 
         # =================================================================
         # Kernel setup
@@ -1353,15 +1259,9 @@ class ScaledGroupedGemmKernel:
         bidx, bidy, bidz = cute.arch.block_idx()
         mma_tile_coord_v = bidx % cute.size(tiled_mma.thr_id.shape)
         is_leader_cta = mma_tile_coord_v == 0
-        cta_rank_in_cluster = cute.arch.make_warp_uniform(
-            cute.arch.block_idx_in_cluster()
-        )
-        block_in_cluster_coord_vmnk = cluster_layout_vmnk.get_flat_coord(
-            cta_rank_in_cluster
-        )
-        block_in_cluster_coord_sfb_vmnk = cluster_layout_sfb_vmnk.get_flat_coord(
-            cta_rank_in_cluster
-        )
+        cta_rank_in_cluster = cute.arch.make_warp_uniform(cute.arch.block_idx_in_cluster())
+        block_in_cluster_coord_vmnk = cluster_layout_vmnk.get_flat_coord(cta_rank_in_cluster)
+        block_in_cluster_coord_sfb_vmnk = cluster_layout_sfb_vmnk.get_flat_coord(cta_rank_in_cluster)
         tidx, _, _ = cute.arch.thread_idx()
 
         # =================================================================
@@ -1371,13 +1271,9 @@ class ScaledGroupedGemmKernel:
         @cute.struct
         class SharedStorage:
             ab_full_mbar_ptr: cute.struct.MemRange[cutlass.Int64, self.num_ab_stage * 2]
-            acc_full_mbar_ptr: cute.struct.MemRange[
-                cutlass.Int64, self.num_acc_pipeline_stages * 2
-            ]
+            acc_full_mbar_ptr: cute.struct.MemRange[cutlass.Int64, self.num_acc_pipeline_stages * 2]
             sched_buf: cute.struct.MemRange[cutlass.Int32, self.num_sched_stages * 4]
-            sched_mbar_ptr: cute.struct.MemRange[
-                cutlass.Int64, self.num_sched_stages * 2
-            ]
+            sched_mbar_ptr: cute.struct.MemRange[cutlass.Int64, self.num_sched_stages * 2]
             tmem_dealloc_mbar_ptr: cutlass.Int64
             tmem_holding_buf: cutlass.Int32
 
@@ -1391,9 +1287,7 @@ class ScaledGroupedGemmKernel:
         # AB pipeline (TMA load → MMA) — same as grouped_mm
         ab_pipeline_producer_group = pipeline.CooperativeGroup(pipeline.Agent.Thread)
         num_tma_producer = self.num_mcast_ctas_a + self.num_mcast_ctas_b - 1
-        ab_pipeline_consumer_group = pipeline.CooperativeGroup(
-            pipeline.Agent.Thread, num_tma_producer
-        )
+        ab_pipeline_consumer_group = pipeline.CooperativeGroup(pipeline.Agent.Thread, num_tma_producer)
         ab_producer, ab_consumer = pipeline.PipelineTmaUmma.create(
             barrier_storage=storage.ab_full_mbar_ptr.data_ptr(),
             num_stages=self.num_ab_stage,
@@ -1406,12 +1300,8 @@ class ScaledGroupedGemmKernel:
 
         # ACC pipeline (MMA → epilogue)
         acc_pipeline_producer_group = pipeline.CooperativeGroup(pipeline.Agent.Thread)
-        num_acc_consumer_threads = (
-            len(self.epilogue_warp_id) * 32 * (2 if use_2cta_instrs else 1)
-        )
-        acc_pipeline_consumer_group = pipeline.CooperativeGroup(
-            pipeline.Agent.Thread, num_acc_consumer_threads
-        )
+        num_acc_consumer_threads = len(self.epilogue_warp_id) * 32 * (2 if use_2cta_instrs else 1)
+        acc_pipeline_consumer_group = pipeline.CooperativeGroup(pipeline.Agent.Thread, num_acc_consumer_threads)
         acc_pipeline = pipeline.PipelineUmmaAsync.create(
             barrier_storage=storage.acc_full_mbar_ptr.data_ptr(),
             num_stages=self.num_acc_pipeline_stages,
@@ -1423,12 +1313,8 @@ class ScaledGroupedGemmKernel:
 
         # Scheduler pipeline (sched warp → tma/mma/epi warps)
         sched_producer_group = pipeline.CooperativeGroup(pipeline.Agent.Thread, 32)
-        num_sched_consumer_threads = 32 * len(
-            (self.tma_warp_id, self.mma_warp_id, *self.epilogue_warp_id)
-        )
-        sched_consumer_group = pipeline.CooperativeGroup(
-            pipeline.Agent.Thread, num_sched_consumer_threads
-        )
+        num_sched_consumer_threads = 32 * len((self.tma_warp_id, self.mma_warp_id, *self.epilogue_warp_id))
+        sched_consumer_group = pipeline.CooperativeGroup(pipeline.Agent.Thread, num_sched_consumer_threads)
         sched_pipeline = pipeline.PipelineAsync.create(
             num_stages=self.num_sched_stages,
             producer_group=sched_producer_group,
@@ -1483,9 +1369,7 @@ class ScaledGroupedGemmKernel:
         acc_shape = tiled_mma.partition_shape_C(self.mma_tiler[:2])
 
         # (MMA, MMA_M, MMA_N, STAGE=2)
-        tCtAcc_fake = tiled_mma.make_fragment_C(
-            cute.append(acc_shape, self.num_acc_stage)
-        )
+        tCtAcc_fake = tiled_mma.make_fragment_C(cute.append(acc_shape, self.num_acc_stage))
         if cutlass.const_expr(self.overlapping_accum):
             # Overlapping: two acc buffers share TMEM with SF columns,
             # so the stage stride is smaller than a full N-width.
@@ -1510,12 +1394,8 @@ class ScaledGroupedGemmKernel:
         # =================================================================
 
         sched_buf_ptr = storage.sched_buf.data_ptr()
-        sched_copy_atom = cute.make_copy_atom(
-            cute.nvgpu.CopyUniversalOp(), cutlass.Int32, num_bits_per_copy=128
-        )
-        sched_buf_tensor = cute.make_tensor(
-            sched_buf_ptr, cute.make_layout((4, self.num_sched_stages), stride=(1, 4))
-        )
+        sched_copy_atom = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), cutlass.Int32, num_bits_per_copy=128)
+        sched_buf_tensor = cute.make_tensor(sched_buf_ptr, cute.make_layout((4, self.num_sched_stages), stride=(1, 4)))
 
         if warp_idx == self.sched_warp_id:
             scheduler = MoEStaticPersistentTileScheduler.create(
@@ -1582,9 +1462,7 @@ class ScaledGroupedGemmKernel:
             b_full_mcast_mask = None
             sfa_full_mcast_mask = None
             sfb_full_mcast_mask = None
-            if cutlass.const_expr(
-                self.is_a_mcast or self.is_b_mcast or use_2cta_instrs
-            ):
+            if cutlass.const_expr(self.is_a_mcast or self.is_b_mcast or use_2cta_instrs):
                 a_full_mcast_mask = cpasync.create_tma_multicast_mask(
                     cluster_layout_vmnk, block_in_cluster_coord_vmnk, mcast_mode=2
                 )
@@ -1679,9 +1557,7 @@ class ScaledGroupedGemmKernel:
                 tCgSFB = thr_mma_sfb.partition_B(gSFB_nkl)
 
                 # TMA partition A
-                a_cta_layout = cute.make_layout(
-                    cute.slice_(cluster_layout_vmnk, (0, 0, None, 0)).shape
-                )
+                a_cta_layout = cute.make_layout(cute.slice_(cluster_layout_vmnk, (0, 0, None, 0)).shape)
                 tAsA, tAgA = cpasync.tma_partition(
                     tma_atom_a,
                     block_in_cluster_coord_vmnk[2],
@@ -1690,9 +1566,7 @@ class ScaledGroupedGemmKernel:
                     cute.group_modes(tCgA, 0, 3),
                 )
                 # TMA partition B
-                b_cta_layout = cute.make_layout(
-                    cute.slice_(cluster_layout_vmnk, (0, None, 0, 0)).shape
-                )
+                b_cta_layout = cute.make_layout(cute.slice_(cluster_layout_vmnk, (0, None, 0, 0)).shape)
                 tBsB, tBgB = cpasync.tma_partition(
                     tma_atom_b,
                     block_in_cluster_coord_vmnk[1],
@@ -1712,9 +1586,7 @@ class ScaledGroupedGemmKernel:
                 tAsSFA = cute.filter_zeros(tAsSFA)
                 tAgSFA = cute.filter_zeros(tAgSFA)
                 # TMA partition SFB
-                sfb_cta_layout = cute.make_layout(
-                    cute.slice_(cluster_layout_sfb_vmnk, (0, None, 0, 0)).shape
-                )
+                sfb_cta_layout = cute.make_layout(cute.slice_(cluster_layout_sfb_vmnk, (0, None, 0, 0)).shape)
                 tBsSFB, tBgSFB = cpasync.tma_partition(
                     tma_atom_sfb,
                     block_in_cluster_coord_sfb_vmnk[1],
@@ -1726,9 +1598,7 @@ class ScaledGroupedGemmKernel:
                 tBgSFB = cute.filter_zeros(tBgSFB)
 
                 # Slice to current tile coords (L=0, expert already selected)
-                mma_tile_m = work_tile_info.tile_m_idx // cute.size(
-                    tiled_mma.thr_id.shape
-                )
+                mma_tile_m = work_tile_info.tile_m_idx // cute.size(tiled_mma.thr_id.shape)
                 tAgA_slice = tAgA[(None, mma_tile_m, None, 0)]
                 tBgB_slice = tBgB[(None, work_tile_info.tile_n_idx, None, 0)]
                 tAgSFA_slice = tAgSFA[(None, mma_tile_m, None, 0)]
@@ -1888,10 +1758,7 @@ class ScaledGroupedGemmKernel:
                     if cutlass.const_expr(self.cta_tile_shape_mnk[1] == 64):
                         offset = cutlass.Int32((work_tile_info.tile_n_idx % 2) * 2)
                         shifted_ptr = cute.recast_ptr(
-                            acc_tmem_ptr
-                            + self.num_accumulator_tmem_cols
-                            + self.num_sfa_tmem_cols
-                            + offset,
+                            acc_tmem_ptr + self.num_accumulator_tmem_cols + self.num_sfa_tmem_cols + offset,
                             dtype=self.sf_dtype,
                         )
                         tCtSFB_mma = cute.make_tensor(shifted_ptr, tCtSFB_layout)
@@ -1993,9 +1860,7 @@ class ScaledGroupedGemmKernel:
                 pipeline.Agent.Thread,
                 32 * len(self.epilogue_warp_id),
             )
-            c_pipeline = pipeline.PipelineTmaStore.create(
-                num_stages=self.num_c_stage, producer_group=c_producer_group
-            )
+            c_pipeline = pipeline.PipelineTmaStore.create(num_stages=self.num_c_stage, producer_group=c_producer_group)
 
             epilog_sync_barrier = pipeline.NamedBarrier(
                 barrier_id=self.epilog_sync_bar_id,
@@ -2047,20 +1912,16 @@ class ScaledGroupedGemmKernel:
                 )
 
                 # Partition for TMEM → RMEM copy
-                tiled_copy_t2r, tTR_tAcc_base_epi, tTR_rAcc = (
-                    epilogue_tmem_copy_and_partition(
-                        self,
-                        tidx,
-                        tCtAcc_transformed,
-                        tCgC_transformed,
-                        epi_tile,
-                        use_2cta_instrs,
-                    )
+                tiled_copy_t2r, tTR_tAcc_base_epi, tTR_rAcc = epilogue_tmem_copy_and_partition(
+                    self,
+                    tidx,
+                    tCtAcc_transformed,
+                    tCgC_transformed,
+                    epi_tile,
+                    use_2cta_instrs,
                 )
                 tTR_rC = cute.make_rmem_tensor(tTR_rAcc.shape, self.c_dtype)
-                tiled_copy_r2s, tRS_rC, tRS_sC = epilogue_smem_copy_and_partition(
-                    self, tiled_copy_t2r, tTR_rC, tidx, sC
-                )
+                tiled_copy_r2s, tRS_rC, tRS_sC = epilogue_smem_copy_and_partition(self, tiled_copy_t2r, tTR_rC, tidx, sC)
 
                 # TMA partition for C store
                 tCgC_epi = cute.flat_divide(tCgC_transformed, epi_tile)
@@ -2081,9 +1942,7 @@ class ScaledGroupedGemmKernel:
                     acc_stage_index = acc_consumer_state.index
 
                 # Set TMEM buffer for current tile
-                tTR_tAcc = tTR_tAcc_base_epi[
-                    (None, None, None, None, None, acc_stage_index)
-                ]
+                tTR_tAcc = tTR_tAcc_base_epi[(None, None, None, None, None, acc_stage_index)]
 
                 # Wait for accumulator buffer full
                 if k_tile_cnt > 0:
@@ -2113,11 +1972,7 @@ class ScaledGroupedGemmKernel:
                     real_subtile_idx = subtile_idx
                     if cutlass.const_expr(self.overlapping_accum):
                         if reverse_subtile:
-                            real_subtile_idx = (
-                                self.cta_tile_shape_mnk[1] // self.epi_tile_n
-                                - 1
-                                - subtile_idx
-                            )
+                            real_subtile_idx = self.cta_tile_shape_mnk[1] // self.epi_tile_n - 1 - subtile_idx
 
                     # TMEM → RMEM
                     tTR_tAcc_mn = tTR_tAcc[(None, None, None, real_subtile_idx)]
@@ -2149,9 +2004,7 @@ class ScaledGroupedGemmKernel:
 
                     # RMEM → SMEM
                     c_buffer = (num_prev_subtiles + subtile_idx) % self.num_c_stage
-                    cute.copy(
-                        tiled_copy_r2s, tRS_rC, tRS_sC[(None, None, None, c_buffer)]
-                    )
+                    cute.copy(tiled_copy_r2s, tRS_rC, tRS_sC[(None, None, None, c_buffer)])
                     cute.arch.fence_proxy("async.shared", space="cta")
                     epilog_sync_barrier.arrive_and_wait()
 
@@ -2194,4 +2047,3 @@ class ScaledGroupedGemmKernel:
             tmem.relinquish_alloc_permit()
             epilog_sync_barrier.arrive_and_wait()
             tmem.free(acc_tmem_ptr)
-

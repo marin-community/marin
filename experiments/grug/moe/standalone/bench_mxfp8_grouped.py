@@ -114,7 +114,9 @@ def ragged_reference(x32, w32_ekn, group_sizes: list[int]):
     return jnp.concatenate(outs, axis=0)
 
 
-def run_case(label: str, k: int, n: int, group_sizes: list[int], iters: int, warmup: int) -> dict:
+def run_case(
+    label: str, k: int, n: int, group_sizes: list[int], iters: int, warmup: int, mma_tiler: tuple[int, int, int]
+) -> dict:
     m = sum(group_sizes)
     gs_dev = jnp.array(group_sizes, dtype=jnp.int32)
     offs = jnp.cumsum(gs_dev).astype(jnp.int32)
@@ -133,7 +135,7 @@ def run_case(label: str, k: int, n: int, group_sizes: list[int], iters: int, war
     jax.block_until_ready((x_q, w_q, x_sf, w_sf))
 
     # ── Kernel first run ──
-    kernel_fn = jax.jit(lambda xq, wq, xsf, wsf, off: mxfp8_grouped_mm(xq, xsf, wq, wsf, off))
+    kernel_fn = jax.jit(lambda xq, wq, xsf, wsf, off: mxfp8_grouped_mm(xq, xsf, wq, wsf, off, mma_tiler_mnk=mma_tiler))
     out = jax.block_until_ready(kernel_fn(x_q, w_q, x_sf, w_sf, offs))
     print(f"  kernel out: shape={out.shape} |mean|={float(jnp.mean(jnp.abs(out.astype(jnp.float32)))):.4f}")
 
@@ -187,8 +189,11 @@ def main():
     p.add_argument("--tokens", type=int, default=262144)
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
+    p.add_argument("--mma-tiler", default="128,128,128", help="mma tiler MNK, e.g. 128,256,128")
     p.add_argument("--out", default="bench_mxfp8_grouped.json")
     a = p.parse_args()
+    mma_tiler = tuple(int(v) for v in a.mma_tiler.split(","))
+    assert len(mma_tiler) == 3
 
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind} (cc {dev.compute_capability}), jax {jax.__version__}")
@@ -200,12 +205,13 @@ def main():
         "cutlass": cutlass.__version__,
         "tokens": a.tokens,
         "experts": E,
+        "mma_tiler": list(mma_tiler),
         "cases": {},
     }
     for label, k, n in SHAPES:
         for dist, groups in (("uniform", uniform_groups(a.tokens)), ("skewed", skewed_groups(a.tokens))):
             case = f"{label}_{dist}"
-            results["cases"][case] = run_case(case, k, n, groups, a.iters, a.warmup)
+            results["cases"][case] = run_case(case, k, n, groups, a.iters, a.warmup, mma_tiler)
 
     with open(a.out, "w") as f:
         json.dump(results, f, indent=2)
