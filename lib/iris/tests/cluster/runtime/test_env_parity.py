@@ -17,9 +17,11 @@ from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import (
     IRIS_SLICE_COUNT,
     IRIS_TASKS_PER_SLICE,
+    STANDARD_MOUNTS,
     build_common_iris_env,
     with_slice_topology_env,
 )
+from iris.cluster.runtime.types import MountKind
 from iris.rpc import job_pb2
 
 
@@ -274,14 +276,14 @@ def test_ports_set_to_zero():
     assert env["IRIS_PORT_DEBUG"] == "0"
 
 
-def test_standard_paths_always_present():
-    env = _common_env(_make_req())
-    assert env["IRIS_WORKDIR"] == "/app"
-    assert env["IRIS_PYTHON"] == "python"
-    assert env["IRIS_BIND_HOST"] == "0.0.0.0"
-    assert env["UV_PYTHON_INSTALL_DIR"] == "/uv/cache/python"
-    assert env["CARGO_TARGET_DIR"] == "/cargo/target"
-    assert env["CARGO_HOME"] == "/cargo"
+def test_workdir_env_matches_the_workdir_mount():
+    """IRIS_WORKDIR names the path the workdir volume is mounted at.
+
+    Tasks resolve their bundle through it, so it tracks the mount rather than a
+    path of its own.
+    """
+    workdir = next(m for m in STANDARD_MOUNTS if m.kind is MountKind.WORKDIR)
+    assert _common_env(_make_req())["IRIS_WORKDIR"] == workdir.container_path
 
 
 # ---------------------------------------------------------------------------

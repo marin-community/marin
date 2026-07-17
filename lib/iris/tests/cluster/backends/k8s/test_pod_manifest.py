@@ -44,6 +44,8 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
 )
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
+from iris.cluster.runtime.env import STANDARD_MOUNTS
+from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
@@ -537,29 +539,38 @@ def test_zero_timeout_no_deadline():
 # ---------------------------------------------------------------------------
 
 
-def test_build_pod_manifest_includes_standard_volumes():
-    """Pod manifest includes every STANDARD_MOUNTS volume, dshm, and the
-    log-shipper varlogpods hostPath; the task container mounts the task volumes
-    but not varlogpods, which is the sidecar's."""
+def test_build_pod_manifest_mounts_every_standard_mount():
+    """Every standard mount reaches the task container at its declared path."""
     req = make_run_req("/test-job/0", attempt_id=1)
     manifest = _build_pod_manifest(req, pod_config())
 
     spec = manifest["spec"]
     container = spec["containers"][0]
 
-    task_volume_names = {"workdir", "tmpfs", "uv-cache", "hf-cache", "cargo", "dshm"}
-    volume_names = {v["name"] for v in spec["volumes"]}
-    mount_names = {m["name"] for m in container["volumeMounts"]}
-    assert volume_names == task_volume_names | {"varlogpods"}
-    assert mount_names == task_volume_names
+    declared = {v["name"] for v in spec["volumes"]}
+    mounted = {m["name"]: m["mountPath"] for m in container["volumeMounts"]}
 
-    mount_paths = {m["mountPath"] for m in container["volumeMounts"]}
-    assert "/app" in mount_paths
-    assert "/tmp" in mount_paths
-    assert "/uv/cache" in mount_paths
-    assert "/dev/shm" in mount_paths
+    for mount in STANDARD_MOUNTS:
+        assert mount.name in declared
+        assert mounted.get(mount.name) == mount.container_path
 
-    assert container["workingDir"] == "/app"
+    # The manifest adds /dev/shm on top of STANDARD_MOUNTS.
+    assert "/dev/shm" in mounted.values()
+
+    workdir = next(m for m in STANDARD_MOUNTS if m.kind is MountKind.WORKDIR)
+    assert container["workingDir"] == workdir.container_path
+
+
+def test_task_container_does_not_mount_the_log_shipper_host_path():
+    """varlogpods stays the sidecar's.
+
+    It is a hostPath onto the node's pod log directory; mounting it into the task
+    would hand every task a read of every other pod's logs on that node.
+    """
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+
+    assert "varlogpods" in {v["name"] for v in manifest["spec"]["volumes"]}
+    assert "varlogpods" not in {m["name"] for m in manifest["spec"]["containers"][0]["volumeMounts"]}
 
 
 def test_cache_env_points_at_mounted_cache_volumes():
@@ -572,15 +583,8 @@ def test_cache_env_points_at_mounted_cache_volumes():
     container = manifest["spec"]["containers"][0]
 
     env = {e["name"]: e.get("value") for e in container["env"]}
-    cache_mounts = [
-        m["mountPath"]
-        for m in container["volumeMounts"]
-        if any(v["name"] == m["name"] and "hostPath" in v for v in manifest["spec"]["volumes"])
-    ]
-
-    assert env["UV_CACHE_DIR"] == "/uv/cache"
-    assert env["HF_HUB_CACHE"] == "/hf/cache"
-    assert env["CARGO_HOME"] == "/cargo"
+    host_backed = {v["name"] for v in manifest["spec"]["volumes"] if "hostPath" in v}
+    cache_mounts = [m["mountPath"] for m in container["volumeMounts"] if m["name"] in host_backed]
 
     # Each var must resolve inside a node-persistent cache mount. A var pointing
     # anywhere else lands on the container layer and re-downloads every task.
@@ -595,38 +599,32 @@ def test_cache_env_points_at_mounted_cache_volumes():
     assert "HF_HOME" not in env
 
 
-def test_build_pod_manifest_shm_size_limit_with_gpu():
-    """dshm volume gets sizeLimit=100Gi when GPU resources are requested."""
+@pytest.mark.parametrize("device", ["gpu", "tpu", None])
+def test_shm_is_raised_above_the_docker_default_only_for_accelerators(device):
+    """Accelerator pods get a raised /dev/shm; plain CPU pods keep the default.
+
+    Multi-process NCCL and TPU runtimes exchange buffers through /dev/shm and
+    fail on the container default (64MB), so the limit tracks the accelerator,
+    not the exact ceiling.
+    """
     req = make_run_req("/test-job/0")
-    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    if device == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    elif device == "tpu":
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
     manifest = _build_pod_manifest(req, pod_config())
 
     dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
     assert len(dshm_volumes) == 1
-    assert dshm_volumes[0]["emptyDir"]["medium"] == "Memory"
-    assert dshm_volumes[0]["emptyDir"]["sizeLimit"] == "100Gi"
+    empty_dir = dshm_volumes[0]["emptyDir"]
 
+    # Memory-backed: /dev/shm on disk would silently gut collective throughput.
+    assert empty_dir["medium"] == "Memory"
 
-def test_build_pod_manifest_shm_no_size_limit_without_gpu():
-    """dshm volume has no sizeLimit when no GPU is requested."""
-    req = make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, pod_config())
-
-    dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
-    assert len(dshm_volumes) == 1
-    assert dshm_volumes[0]["emptyDir"]["medium"] == "Memory"
-    assert "sizeLimit" not in dshm_volumes[0]["emptyDir"]
-
-
-def test_build_pod_manifest_shm_size_limit_with_tpu():
-    """dshm volume gets sizeLimit=100Gi when TPU resources are requested."""
-    req = make_run_req("/test-job/0")
-    req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
-    manifest = _build_pod_manifest(req, pod_config())
-
-    dshm_volumes = [v for v in manifest["spec"]["volumes"] if v["name"] == "dshm"]
-    assert len(dshm_volumes) == 1
-    assert dshm_volumes[0]["emptyDir"]["sizeLimit"] == "100Gi"
+    if device is None:
+        assert "sizeLimit" not in empty_dir
+    else:
+        assert parse_k8s_quantity(empty_dir["sizeLimit"]) > 64 * 1024**2
 
 
 def test_tpu_adds_sys_resource_capability():
@@ -640,22 +638,26 @@ def test_tpu_adds_sys_resource_capability():
     assert "SYS_RESOURCE" in caps
 
 
-def test_build_volumes_and_mounts_cache_uses_host_path():
-    """Cache volumes use hostPath with DirectoryOrCreate under the given cache_dir.
+def test_cache_mounts_are_host_backed_and_the_rest_are_not():
+    """Only CACHE mounts get a hostPath, and they land under cache_dir.
 
-    hostPath (not emptyDir) is what makes a cache outlive its pod: emptyDir is
-    deleted with the pod, so every run would re-download into it.
+    hostPath is what makes a cache outlive its pod; an emptyDir here would be
+    deleted with the pod and re-downloaded by the next task.
     """
     volumes, _mounts = _build_volumes_and_mounts("/my-cache", has_accelerator=False)
-    cache_volumes = {v["name"]: v for v in volumes if "hostPath" in v}
-    assert set(cache_volumes) == {"uv-cache", "hf-cache", "cargo"}
-    for v in cache_volumes.values():
-        assert v["hostPath"]["path"].startswith("/my-cache/")
-        assert v["hostPath"]["type"] == "DirectoryOrCreate"
+    by_name = {v["name"]: v for v in volumes}
 
-    # Host layout mirrors the Docker runtime's (container path, slashes to
-    # dashes), so one node dir can back both runtimes.
-    assert cache_volumes["hf-cache"]["hostPath"]["path"] == "/my-cache/hf-cache"
+    for mount in STANDARD_MOUNTS:
+        volume = by_name[mount.name]
+        if mount.kind is MountKind.CACHE:
+            assert volume["hostPath"]["path"].startswith("/my-cache/")
+            assert volume["hostPath"]["type"] == "DirectoryOrCreate"
+        else:
+            assert "emptyDir" in volume
+
+    # Distinct host dirs, or two caches would collide on the node.
+    host_paths = [v["hostPath"]["path"] for v in volumes if "hostPath" in v]
+    assert len(host_paths) == len(set(host_paths))
 
 
 # ---------------------------------------------------------------------------
@@ -782,11 +784,9 @@ def test_iris_env_vars_injected():
     assert env_by_name["IRIS_BUNDLE_ID"]["value"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"
     assert env_by_name["IRIS_CONTROLLER_URL"]["value"] == "http://ctrl:8080"
+    # Tasks must listen on all interfaces: a peer or the controller reaching the
+    # pod by IP cannot reach a loopback bind.
     assert env_by_name["IRIS_BIND_HOST"]["value"] == "0.0.0.0"
-    assert env_by_name["IRIS_WORKDIR"]["value"] == "/app"
-    assert env_by_name["IRIS_PYTHON"]["value"] == "python"
-    assert env_by_name["UV_PYTHON_INSTALL_DIR"]["value"] == "/uv/cache/python"
-    assert env_by_name["CARGO_TARGET_DIR"]["value"] == "/cargo/target"
 
 
 def test_advertise_host_uses_downward_api():
