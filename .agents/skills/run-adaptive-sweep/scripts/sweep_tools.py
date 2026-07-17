@@ -364,21 +364,24 @@ def _age_weighted_rate(
     return weighted_work, weighted_elapsed
 
 
-def _stagnation(
+def _recovery(
     request: Mapping[str, Any],
     groups: Mapping[str, Sequence[Mapping[str, Any]]],
     now: float,
     ranked_targets: Sequence[Mapping[str, Any]],
     available_chips: int,
 ) -> list[dict[str, Any]]:
-    thresholds = request["stagnation"]
-    initial_wandb_timeout = float(thresholds["initial_wandb_timeout"])
-    progress_stall_timeout = float(thresholds["progress_stall_timeout"])
+    thresholds = request["recovery"]
+    startup_relocation_timeout = float(thresholds["startup_relocation_timeout"])
+    same_target_restart_timeout = float(thresholds["same_target_restart_timeout"])
+    same_region_relocation_timeout = float(thresholds["same_region_relocation_timeout"])
     cross_region_restart_timeout = float(thresholds["cross_region_restart_timeout"])
-    if initial_wandb_timeout <= 0 or progress_stall_timeout <= 0:
-        raise ValueError("initial_wandb_timeout and progress_stall_timeout must be positive")
-    if cross_region_restart_timeout <= progress_stall_timeout:
-        raise ValueError("cross_region_restart_timeout must exceed progress_stall_timeout")
+    if startup_relocation_timeout <= 0 or same_target_restart_timeout <= 0 or same_region_relocation_timeout <= 0:
+        raise ValueError("recovery timeouts must be positive")
+    if same_target_restart_timeout >= same_region_relocation_timeout:
+        raise ValueError("same_target_restart_timeout must be less than same_region_relocation_timeout")
+    if cross_region_restart_timeout <= same_region_relocation_timeout:
+        raise ValueError("cross_region_restart_timeout must exceed same_region_relocation_timeout")
 
     by_regional_run: dict[str, list[Mapping[str, Any]]] = {}
     for observations in groups.values():
@@ -417,16 +420,28 @@ def _stagnation(
         eligible_targets = []
         blocked_reason = None
         registered = [observation for observation in observations if observation["wandb_run_id"] is not None]
-        current_dispatch_started = dispatch_starts[str(latest["dispatch_id"])]
+        current_dispatch_id = str(latest["dispatch_id"])
+        current_dispatch_started = dispatch_starts[current_dispatch_id]
+        current_dispatch_observations = [
+            observation for observation in observations if str(observation["dispatch_id"]) == current_dispatch_id
+        ]
+        current_submission_started = max(
+            float(observation["submitted_at"]) for observation in current_dispatch_observations
+        )
+        current_submission_running = [
+            observation
+            for observation in current_dispatch_observations
+            if float(observation["submitted_at"]) == current_submission_started and observation["state"] == "running"
+        ]
         if not registered:
             condition = "awaiting_wandb"
             condition_since = min(dispatch_starts.values())
-            same_region_moves_since_condition = len(dispatch_starts) - 1
+            same_region_relocations_since_condition = len(dispatch_starts) - 1
             current_dispatch_inactive_for = max(now - current_dispatch_started, 0.0)
             if (
                 now - condition_since >= cross_region_restart_timeout
-                and same_region_moves_since_condition > 0
-                and current_dispatch_inactive_for >= initial_wandb_timeout
+                and same_region_relocations_since_condition > 0
+                and current_dispatch_inactive_for >= startup_relocation_timeout
             ):
                 if cross_region_targets:
                     action = "cross_region_restart"
@@ -434,9 +449,9 @@ def _stagnation(
                 else:
                     action = "observe"
                     blocked_reason = "no chip-feasible cross-region target"
-            elif current_dispatch_inactive_for >= initial_wandb_timeout:
+            elif current_dispatch_inactive_for >= startup_relocation_timeout:
                 if same_region_targets:
-                    action = "initial_same_region_move"
+                    action = "startup_relocation"
                     eligible_targets = same_region_targets
                 else:
                     action = "observe"
@@ -452,13 +467,13 @@ def _stagnation(
                 if progress is not None and (best_progress is None or progress > best_progress):
                     best_progress = progress
                     condition_since = float(observation["observed_at"])
-            same_region_moves_since_condition = sum(start > condition_since for start in dispatch_starts.values())
+            same_region_relocations_since_condition = sum(start > condition_since for start in dispatch_starts.values())
             inactive_for = max(now - condition_since, 0.0)
             current_dispatch_inactive_for = max(now - max(condition_since, current_dispatch_started), 0.0)
             if (
                 inactive_for >= cross_region_restart_timeout
-                and same_region_moves_since_condition > 0
-                and current_dispatch_inactive_for >= progress_stall_timeout
+                and same_region_relocations_since_condition > 0
+                and current_dispatch_inactive_for >= same_region_relocation_timeout
             ):
                 if cross_region_targets:
                     action = "cross_region_restart"
@@ -466,13 +481,21 @@ def _stagnation(
                 else:
                     action = "observe"
                     blocked_reason = "no chip-feasible cross-region target"
-            elif current_dispatch_inactive_for >= progress_stall_timeout:
+            elif current_dispatch_inactive_for >= same_region_relocation_timeout:
                 if same_region_targets:
-                    action = "stalled_same_region_move"
+                    action = "same_region_relocation"
                     eligible_targets = same_region_targets
                 else:
                     action = "observe"
                     blocked_reason = "no chip-feasible alternate target in region"
+            elif current_submission_running and latest["state"] == "running":
+                current_submission_running_since = float(current_submission_running[0]["observed_at"])
+                current_submission_inactive_for = max(now - max(condition_since, current_submission_running_since), 0.0)
+                if current_submission_inactive_for >= same_target_restart_timeout:
+                    action = "same_target_restart"
+                    eligible_targets = [str(current_target["target"])]
+                else:
+                    action = "observe"
             else:
                 action = "observe"
         results.append(
@@ -483,7 +506,7 @@ def _stagnation(
                 "current_target": latest["target"],
                 "condition": condition,
                 "inactive_for": max(now - condition_since, 0.0),
-                "same_region_moves_since_condition": same_region_moves_since_condition,
+                "same_region_relocations_since_condition": same_region_relocations_since_condition,
                 "eligible_action": action,
                 "eligible_targets": eligible_targets,
                 "blocked_reason": blocked_reason,
@@ -577,7 +600,7 @@ def rank_targets(request: Mapping[str, Any]) -> dict[str, Any]:
         "exploration_depth": exploration_depth,
         "selection_pool": [target["target"] for target in feasible[:exploration_depth]],
         "targets": ranked,
-        "stagnation": _stagnation(request, groups, now, ranked, available_chips),
+        "recovery": _recovery(request, groups, now, ranked, available_chips),
     }
 
 

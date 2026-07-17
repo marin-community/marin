@@ -25,7 +25,7 @@ Input:
 
 - `now`, `resource_levels`, corresponding positive `resource_ratios`, positive `wall_time_limit`, and `max_inflight_chips`.
 - `current_rung` and `full_exploitation_rung` as zero-based resource indices.
-- Positive `initial_wandb_timeout`, `progress_stall_timeout`, and `cross_region_restart_timeout`, with the cross-region timeout longer than the progress-stall timeout.
+- `recovery`: positive `startup_relocation_timeout`, `same_target_restart_timeout`, `same_region_relocation_timeout`, and `cross_region_restart_timeout`, with `same_target_restart_timeout < same_region_relocation_timeout < cross_region_restart_timeout`.
 - `targets`: unique target ID, region, TPU slice, and explicit chips.
 - `observations`: Dispatcher history flattened to `trial_id`, `regional_run_id`, `dispatch_id`, `rung`, `target`, `state`, `submitted_at`, `observed_at`, `wandb_run_id`, and `run_progress`. Progress may be `null` before it is observable; intervals with an unknown endpoint do not contribute throughput evidence.
 
@@ -46,4 +46,4 @@ Exploration decays linearly to zero at `full_exploitation_rung`. Among `F` chip-
 1 + floor(exploration_fraction * (F - 1))
 ```
 
-The output reports the ordered selection pool, chip accounting, target evidence, and recovery actions currently permitted. It distinguishes an execution absent from W&B from a registered run whose progress stalled. Cross-region restart requires a same-region recovery dispatch after the condition began, the total cross-region timeout, and a full applicable timeout on the current replacement dispatch. Recovery records include chip-feasible replacement targets after releasing the current dispatch; impossible same-region moves remain blocked. The Orchestrator retains placement and relocation authority.
+The output's `recovery` records report the currently permitted actions. They distinguish an execution absent from W&B from a registered run whose progress stalled. `same_target_restart` requires the current Iris submission to remain running without progress for `same_target_restart_timeout`; it does not reset the regional no-progress clock. Cross-region restart requires a same-region recovery dispatch after the condition began, the total cross-region timeout, and a full applicable timeout on the current replacement dispatch. Each record includes the eligible target, including the current target for a restart. Impossible same-region relocations remain blocked. The Orchestrator retains restart and relocation authority.

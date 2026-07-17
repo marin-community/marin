@@ -53,9 +53,10 @@ MAX_INFLIGHT_CHIPS = 64
 OBSERVATION_INTERVAL = 0.25
 WALL_TIME_LIMIT = 3 * 7 * 24
 DEFAULT_FULL_EXPLOITATION_LEVEL = 64
-STAGNATION = {
-    "initial_wandb_timeout": 1.0,
-    "progress_stall_timeout": 4.0,
+RECOVERY = {
+    "startup_relocation_timeout": 1.0,
+    "same_target_restart_timeout": 2.0,
+    "same_region_relocation_timeout": 4.0,
     "cross_region_restart_timeout": 48.0,
 }
 TRC_TARGET_PROFILES = {
@@ -265,7 +266,7 @@ def target_input(state: dict[str, Any], rung: int) -> dict[str, Any]:
         "max_inflight_chips": MAX_INFLIGHT_CHIPS,
         "current_rung": rung,
         "full_exploitation_rung": state["full_exploitation_rung"],
-        "stagnation": STAGNATION,
+        "recovery": RECOVERY,
         "targets": TARGETS,
         "observations": state["observations"],
     }
@@ -363,7 +364,7 @@ def command_init(args: argparse.Namespace) -> None:
             "wall_time_limit": state["time_horizon"],
             "target_time_horizon": state["time_horizon"],
             "full_exploitation_level": args.full_exploitation_level,
-            "stagnation": STAGNATION,
+            "recovery": RECOVERY,
             "max_inflight_chips": MAX_INFLIGHT_CHIPS,
         }
     )

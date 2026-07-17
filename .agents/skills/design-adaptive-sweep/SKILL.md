@@ -96,12 +96,14 @@ execution:
   # Resource level at which placement uses only the best currently observed target.
   # Earlier rungs admit progressively more lower-ranked or untried targets.
   full_exploitation_level: 16
-  stagnation:
-    # Initial execution may move within its region when no W&B run appears by this time.
-    initial_wandb_timeout: 1h
-    # A W&B-registered run may move within its region after this long without progress.
-    progress_stall_timeout: 4h
-    # A stalled run may restart elsewhere only after a same-region move also fails to progress.
+  recovery:
+    # Relocate startup within its region when no W&B run appears by this time.
+    startup_relocation_timeout: 1h
+    # A W&B-registered run still running in Iris may restart on the same target after this stall.
+    same_target_restart_timeout: 2h
+    # Relocate a W&B-registered run to another target in its region after this stall.
+    same_region_relocation_timeout: 4h
+    # Restart elsewhere only after a same-region relocation also fails to progress.
     cross_region_restart_timeout: 48h
 ```
 
@@ -128,7 +130,7 @@ targets:
 
 - Trial duration is approximately proportional to epochs, giving ratios `1:4:16`.
 - Training is deterministic enough that duplicate configurations are unnecessary.
-- The registration and progress timeouts are suitable for this training script's startup behavior.
+- The recovery timeouts are suitable for this training script's startup and progress behavior.
 
 ## Review What Matters
 
@@ -139,7 +141,7 @@ Review the following consequences with the operator, not just the field values:
 - **Resource ladder:** Every level must converge, but evidence transfers across levels and may reduce expensive upper-rung sampling. More rungs add information and mandatory work.
 - **Execution envelope:** `wall_time` is the hard elapsed limit. `max_inflight_chips` is the requested-capacity ceiling that the Orchestrator tries to fill until all rungs converge; propose `64` when unspecified. Target preferences determine which regions and slices may consume that budget. Checkpoints remain in their original region, so a cross-region placement starts that trial again.
 - **Placement exploration:** `full_exploitation_level` is the one operator-facing exploration control for region and slice selection. Earlier rungs admit progressively more lower-ranked or untried targets; at and beyond this level only the best currently observed feasible target is admitted. Use the highest rung when unspecified.
-- **Recovery:** Observation cadence and stagnation timeouts should reflect normal startup and progress cadence. When context supplies no better values, propose `15m` polling, `1h` for initial W&B registration, `4h` for a registered-run stall, and `48h` for cross-region restart after a failed same-region recovery. Present them for approval and request alternatives when the training system makes these values questionable.
+- **Recovery:** Set timeouts from normal registration and progress cadence. A same-target restart preserves identity and checkpoint state but releases TPU capacity and may requeue; leave enough time before `same_region_relocation_timeout` for that attempt to queue and demonstrate progress. Require `same_target_restart_timeout < same_region_relocation_timeout < cross_region_restart_timeout`; `startup_relocation_timeout` governs the separate no-registration case. Terminal failures retry immediately. When context supplies no better values, propose `15m` polling and timeouts of `1h`, `2h`, `4h`, and `48h`, respectively. Present them for approval and request alternatives when startup, progress cadence, or queueing makes them questionable.
 
 `resource_ratios` deserve explicit review because they have two effects. They normalize target throughput across rungs:
 

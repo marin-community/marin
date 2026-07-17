@@ -9,7 +9,7 @@ Minimize wall time until every resource rung converges. Use one Orchestrator, lo
 
 ## Keep Boundaries Exact
 
-- The Orchestrator owns SQLite, grid changes, objective forecasts, candidate and target choices, chip allocation, relocations, stopping, and approvals. Store trial configurations by axis value, not mutable grid position.
+- The Orchestrator owns SQLite, grid changes, objective forecasts, candidate and target choices, chip allocation, policy-gated same-target restarts, relocations, stopping, and approvals. Store trial configurations by axis value, not mutable grid position.
 - The Dispatcher executes, monitors, and recovers exact Iris work orders and returns normalized execution facts.
 - Iris owns scheduling and individual preemption handling.
 - Tools calculate strict convergence, candidate predictions, throughput, and placement ranges; they never choose an action.
@@ -18,7 +18,9 @@ One `(configuration, resource rung)` is one logical trial. Never duplicate a log
 
 Before launch, verify the training script and single-job command. Require explicit TPU and region inputs. Confirm TPU-dependent batch sizing, region-scoped W&B and checkpoint identity, same-region TPU resume, monotonic `run_progress`, exact objective matching, target chip counts, SQLite path, preferences, and directives. Ask before modifying an incompatible script.
 
-Never move checkpoint data across regions. A same-region TPU move keeps the regional run identity and starts a new dispatch. A region change abandons that regional run and starts the logical trial from initial state under a new regional identity.
+Never move checkpoint data across regions. A same-region relocation keeps the regional run identity and starts a new dispatch. A region change abandons that regional run and starts the logical trial from initial state under a new regional identity.
+
+A same-target restart keeps the logical trial, regional run, dispatch ID, checkpoint, and chip-budget charge. It creates a new Iris submission attempt, releases the current TPU capacity, and may requeue.
 
 ## Use Three Tools
 
@@ -34,7 +36,7 @@ After material orchestration changes, use [references/trc-simulator-eval.md](ref
 | --- | --- |
 | `check-convergence` | Apply only the strict one-step neighbor test at every rung. |
 | `predict-objectives` | Fit one gradient-boosted regressor to every completed trial and rank proposed candidates within each rung. |
-| `rank-targets` | Normalize observed progress across rungs, rank targets, expose exploration depth, and report stagnation eligibility. |
+| `rank-targets` | Normalize observed progress across rungs, rank targets, expose exploration depth, and report recovery eligibility. |
 
 Map `experiment.objective`, `search.grid`, `search.resource_ladder`, and relevant `execution` fields into the flat tool requests described in the reference. Convert RFC 3339 timestamps and policy durations into one numeric time unit, and convert `execution.full_exploitation_level` from a resource value to its rung index. Map Dispatcher facts into the observation records.
 
@@ -58,20 +60,21 @@ The Dispatcher observes `run_progress` at `observation_interval`. Re-run `rank-t
 
 Target exploration decreases linearly from all feasible targets at the first resource rung to one target at `full_exploitation_level`. At and beyond that rung, use only the highest-throughput feasible target. If its jobs stop progressing, its measured throughput decays and another target can become first.
 
-Honor the tool's stagnation eligibility without treating it as an automatic command:
+Honor the tool's recovery eligibility without treating it as an automatic command:
 
-- `initial_wandb_timeout` permits a same-region TPU move when the current execution has never appeared in W&B.
-- `progress_stall_timeout` permits a same-region TPU move when a W&B-registered regional run has stopped increasing `run_progress`.
-- `cross_region_restart_timeout` permits abandoning that regional run only after a same-region TPU move has occurred and the replacement dispatch has itself exceeded the applicable startup or progress-stall timeout.
-- Any observed progress resets the no-progress clock.
+- `startup_relocation_timeout` permits a same-region relocation when the current execution has never appeared in W&B.
+- `same_target_restart_timeout` permits restarting a W&B-registered run on the same target when Iris still reports it running without progress.
+- `same_region_relocation_timeout` permits moving a W&B-registered regional run to another target in the same region after no progress.
+- `cross_region_restart_timeout` permits abandoning that regional run only after a same-region relocation has occurred and the replacement dispatch has itself exceeded the applicable startup or same-region relocation timeout.
+- Any observed progress resets the regional no-progress clock. A same-target restart resets only its submission's running-stall window, so it cannot defer relocation indefinitely.
 
 An abandoned regional run remains resumable on a compatible TPU in its original region at any later time. Resume its regional identity and checkpoint; never copy either to another region.
 
-Automatic Dispatcher retries remain on the assigned target and do not authorize relocation. Only the Orchestrator changes targets.
+Terminal failures retry immediately on the assigned target and do not wait for `same_target_restart_timeout`. The Orchestrator orders policy-gated same-target restarts and relocations.
 
 ## Finish
 
-Report strict or manually reviewed convergence per rung, final dominant points, objectives, grid changes, prediction history, normalized target throughput, relocations, elapsed wall time, and consumed limits.
+Report strict or manually reviewed convergence per rung, final dominant points, objectives, grid changes, prediction history, normalized target throughput, same-target restarts, relocations, elapsed wall time, and consumed limits.
 
 ## Flow
 
@@ -95,7 +98,7 @@ while wall time remains:
     refresh objective forecasts from all completed trials
     choose candidates across rungs using predicted objective and relative cost
     rank feasible region and slice targets from current throughput evidence
-    issue launch, stop, or relocation work orders until the chip budget is full
+    issue launch, stop/resubmit, or relocation work orders until the chip budget is full
         or no useful policy-compliant trial fits
 
     wait for the next Dispatcher event or observation deadline

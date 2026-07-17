@@ -105,11 +105,11 @@ def test_wandb_registration_distinguishes_queueing_from_execution(tmp_path):
     launch(running, rung=0, point=[0, 0], target="us-east5/v5p-32")
     run_simulator("advance", running, "--steps", 1)
 
-    queued_recovery = output(run_simulator("targets", queued, 0))["stagnation"][0]
-    running_recovery = output(run_simulator("targets", running, 0))["stagnation"][0]
+    queued_recovery = output(run_simulator("targets", queued, 0))["recovery"][0]
+    running_recovery = output(run_simulator("targets", running, 0))["recovery"][0]
 
     assert queued_recovery["condition"] == "awaiting_wandb"
-    assert queued_recovery["eligible_action"] == "initial_same_region_move"
+    assert queued_recovery["eligible_action"] == "startup_relocation"
     assert running_recovery["condition"] == "wandb_registered"
     assert running_recovery["eligible_action"] == "observe"
 

@@ -39,7 +39,7 @@ The current adaptive-sweep fixture uses:
 - `us-east5/v5p-32` at 16 chips, `us-east5/v5p-64` at 32, `us-east5/v5p-128` at 64, `us-central1/v5p-32` at 16, and `europe-west4/v6e-32` at 32. Early conditions deliberately make nominal size a poor placement proxy.
 - Progress equal to hidden normalized work divided by the rung's resource ratio. A regional run appears in W&B only after it first receives compute.
 - Retryable Iris attempts that can fail after W&B progress. The simulated Dispatcher resubmits the same dispatch and target with a new Iris job ID, preserves regional progress, and eventually succeeds; only explicit Orchestrator relocation creates a new dispatch.
-- Same-region TPU moves preserving regional identity, progress, and W&B registration. A new region starts at zero; returning later to an old region restores that region's prior state.
+- Same-region relocations preserving regional identity, progress, and W&B registration. A new region starts at zero; returning later to an old region restores that region's prior state.
 - Strict uniqueness of `(grid point, resource rung)`, one objective per logical trial, explicit chip accounting, and rejected invalid actions.
 
 Throughput and outage times are normalized to the target horizon:

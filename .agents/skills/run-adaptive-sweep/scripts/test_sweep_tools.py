@@ -241,9 +241,10 @@ def target_request(observations, *, now=10, current_rung=0, max_chips=64, wall_t
         "max_inflight_chips": max_chips,
         "current_rung": current_rung,
         "full_exploitation_rung": 2,
-        "stagnation": {
-            "initial_wandb_timeout": 1,
-            "progress_stall_timeout": 4,
+        "recovery": {
+            "startup_relocation_timeout": 1,
+            "same_target_restart_timeout": 2,
+            "same_region_relocation_timeout": 4,
             "cross_region_restart_timeout": 8,
         },
         "targets": [
@@ -364,7 +365,7 @@ def test_unknown_progress_is_accepted_before_wandb_registration():
     result = rank_targets(target_request(observations, now=2))
 
     assert result["current_inflight_chips"] == 4
-    assert result["stagnation"][0]["condition"] == "awaiting_wandb"
+    assert result["recovery"][0]["condition"] == "awaiting_wandb"
 
 
 def test_unknown_progress_is_accepted_after_wandb_registration():
@@ -375,8 +376,8 @@ def test_unknown_progress_is_accepted_after_wandb_registration():
 
     result = rank_targets(target_request(observations, now=4))
 
-    assert result["stagnation"][0]["condition"] == "wandb_registered"
-    assert result["stagnation"][0]["eligible_action"] == "stalled_same_region_move"
+    assert result["recovery"][0]["condition"] == "wandb_registered"
+    assert result["recovery"][0]["eligible_action"] == "same_region_relocation"
 
 
 def test_chip_budget_filters_selection_pool():
@@ -399,7 +400,15 @@ def test_chip_budget_filters_selection_pool():
                 observation("d1", "small", 0, 0, 0, regional_run_id="run"),
                 observation("d1", "small", 0, 2, 0, regional_run_id="run"),
             ],
-            "initial_same_region_move",
+            "startup_relocation",
+        ),
+        (
+            3,
+            [
+                observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
+                observation("d1", "small", 0, 3, 0, regional_run_id="run", wandb_run_id="wb"),
+            ],
+            "same_target_restart",
         ),
         (
             5,
@@ -407,7 +416,7 @@ def test_chip_budget_filters_selection_pool():
                 observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
                 observation("d1", "small", 0, 5, 0, regional_run_id="run", wandb_run_id="wb"),
             ],
-            "stalled_same_region_move",
+            "same_region_relocation",
         ),
         (
             9,
@@ -439,10 +448,79 @@ def test_chip_budget_filters_selection_pool():
         ),
     ],
 )
-def test_stagnation_stages(now, observations, expected_action):
+def test_recovery_stages(now, observations, expected_action):
     result = rank_targets(target_request(observations, now=now))
 
-    assert result["stagnation"][0]["eligible_action"] == expected_action
+    assert result["recovery"][0]["eligible_action"] == expected_action
+
+
+def test_same_target_restart_keeps_current_target():
+    observations = [
+        observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
+        observation("d1", "small", 0, 3, 0, regional_run_id="run", wandb_run_id="wb"),
+    ]
+
+    result = rank_targets(target_request(observations, now=3))
+
+    assert result["recovery"][0]["eligible_targets"] == ["small"]
+
+
+def test_same_target_restart_timeout_must_precede_same_region_relocation():
+    request = target_request([])
+    request["recovery"]["same_target_restart_timeout"] = request["recovery"]["same_region_relocation_timeout"]
+
+    with pytest.raises(
+        ValueError,
+        match="same_target_restart_timeout must be less than same_region_relocation_timeout",
+    ):
+        rank_targets(request)
+
+
+@pytest.mark.parametrize(
+    ("now", "expected_action"),
+    [(3, "observe"), (4, "same_region_relocation")],
+)
+def test_same_target_restart_resets_only_submission_stall_window(now, expected_action):
+    observations = [
+        observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
+        observation("d1", "small", 0, 2, 0, state="stopped", regional_run_id="run", wandb_run_id="wb"),
+        observation(
+            "d1",
+            "small",
+            0,
+            2,
+            0,
+            state="submitted",
+            submitted_at=2,
+            regional_run_id="run",
+            wandb_run_id="wb",
+        ),
+        observation(
+            "d1",
+            "small",
+            0,
+            now,
+            0,
+            submitted_at=2,
+            regional_run_id="run",
+            wandb_run_id="wb",
+        ),
+    ]
+
+    result = rank_targets(target_request(observations, now=now))
+
+    assert result["recovery"][0]["eligible_action"] == expected_action
+
+
+def test_retrying_submission_is_not_eligible_for_running_stall_restart():
+    observations = [
+        observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
+        observation("d1", "small", 0, 3, 0, state="retrying", regional_run_id="run", wandb_run_id="wb"),
+    ]
+
+    result = rank_targets(target_request(observations, now=3))
+
+    assert result["recovery"][0]["eligible_action"] == "observe"
 
 
 def test_cross_region_restart_waits_for_replacement_dispatch_to_stall():
@@ -473,10 +551,10 @@ def test_cross_region_restart_waits_for_replacement_dispatch_to_stall():
 
     result = rank_targets(target_request(observations, now=9))
 
-    assert result["stagnation"][0]["eligible_action"] == "observe"
+    assert result["recovery"][0]["eligible_action"] == "same_target_restart"
 
 
-def test_missing_wandb_can_restart_cross_region_after_failed_same_region_move():
+def test_missing_wandb_can_restart_cross_region_after_failed_same_region_relocation():
     observations = [
         observation("d1", "small", 0, 0, None, state="stopped", regional_run_id="run"),
         observation("d2", "large", 0, 1, None, submitted_at=1, regional_run_id="run"),
@@ -485,39 +563,39 @@ def test_missing_wandb_can_restart_cross_region_after_failed_same_region_move():
 
     result = rank_targets(target_request(observations, now=9))
 
-    stagnation = result["stagnation"][0]
-    assert stagnation["condition"] == "awaiting_wandb"
-    assert stagnation["eligible_action"] == "cross_region_restart"
-    assert stagnation["eligible_targets"] == ["central"]
+    recovery = result["recovery"][0]
+    assert recovery["condition"] == "awaiting_wandb"
+    assert recovery["eligible_action"] == "cross_region_restart"
+    assert recovery["eligible_targets"] == ["central"]
 
 
-def test_same_region_move_is_not_advised_without_an_alternative_slice():
+def test_same_region_relocation_is_not_advised_without_an_alternative_slice():
     observations = [
         observation("d1", "central", 0, 0, 0, regional_run_id="run"),
         observation("d1", "central", 0, 2, 0, regional_run_id="run"),
     ]
     result = rank_targets(target_request(observations, now=2))
 
-    stagnation = result["stagnation"][0]
-    assert stagnation["eligible_action"] == "observe"
-    assert stagnation["eligible_targets"] == []
-    assert stagnation["blocked_reason"] == "no chip-feasible alternate target in region"
+    recovery = result["recovery"][0]
+    assert recovery["eligible_action"] == "observe"
+    assert recovery["eligible_targets"] == []
+    assert recovery["blocked_reason"] == "no chip-feasible alternate target in region"
 
 
 def test_observed_progress_resets_stall_timeout():
     observations = [
         observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
         observation("d1", "small", 0, 3, 0.5, regional_run_id="run", wandb_run_id="wb"),
-        observation("d1", "small", 0, 6, 0.5, regional_run_id="run", wandb_run_id="wb"),
+        observation("d1", "small", 0, 4, 0.5, regional_run_id="run", wandb_run_id="wb"),
     ]
-    result = rank_targets(target_request(observations, now=6))
+    result = rank_targets(target_request(observations, now=4))
 
-    stagnation = result["stagnation"][0]
-    assert stagnation["eligible_action"] == "observe"
-    assert stagnation["inactive_for"] == 3
+    recovery = result["recovery"][0]
+    assert recovery["eligible_action"] == "observe"
+    assert recovery["inactive_for"] == 1
 
 
-def test_stalled_same_region_recovery_can_repeat_before_cross_region_timeout():
+def test_same_region_recovery_can_repeat_before_cross_region_timeout():
     observations = [
         observation("d1", "small", 0, 0, 0, regional_run_id="run", wandb_run_id="wb"),
         observation("d1", "small", 0, 4, 0, state="stopped", regional_run_id="run", wandb_run_id="wb"),
@@ -525,13 +603,13 @@ def test_stalled_same_region_recovery_can_repeat_before_cross_region_timeout():
         observation("d2", "large", 0, 9, 0, submitted_at=4, regional_run_id="run", wandb_run_id="wb"),
     ]
     request = target_request(observations, now=9)
-    request["stagnation"]["cross_region_restart_timeout"] = 12
+    request["recovery"]["cross_region_restart_timeout"] = 12
     result = rank_targets(request)
 
-    assert result["stagnation"][0]["eligible_action"] == "stalled_same_region_move"
+    assert result["recovery"][0]["eligible_action"] == "same_region_relocation"
 
 
-def test_initial_recovery_can_repeat_without_wandb_registration():
+def test_startup_recovery_can_repeat_without_wandb_registration():
     observations = [
         observation("d1", "small", 0, 0, 0, state="stopped", regional_run_id="run"),
         observation("d2", "large", 0, 1, 0, submitted_at=1, regional_run_id="run"),
@@ -539,9 +617,9 @@ def test_initial_recovery_can_repeat_without_wandb_registration():
     ]
     result = rank_targets(target_request(observations, now=2))
 
-    stagnation = result["stagnation"][0]
-    assert stagnation["condition"] == "awaiting_wandb"
-    assert stagnation["eligible_action"] == "initial_same_region_move"
+    recovery = result["recovery"][0]
+    assert recovery["condition"] == "awaiting_wandb"
+    assert recovery["eligible_action"] == "startup_relocation"
 
 
 def test_relocation_targets_use_chips_released_by_current_dispatch():
@@ -553,7 +631,7 @@ def test_relocation_targets_use_chips_released_by_current_dispatch():
 
     assert result["available_chips"] == 0
     assert result["selection_pool"] == []
-    assert result["stagnation"][0]["eligible_targets"] == ["small"]
+    assert result["recovery"][0]["eligible_targets"] == ["small"]
 
 
 def test_json_cli_round_trip(tmp_path):
