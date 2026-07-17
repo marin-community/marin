@@ -588,7 +588,7 @@ def main():
     if "check" in phases:
         check_phase(a.check_tokens, tilers, results)
     if "time" in phases:
-        time_phase(a.tokens, tilers, results)
+        time_phase(a.tokens, tilers, a.iters, a.warmup, results)
 
     with open(a.out, "w") as f:
         json.dump(results, f, indent=2)
