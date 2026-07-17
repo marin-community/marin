@@ -8,15 +8,12 @@ Driven by .github/workflows/dupekit-release-wheels.yaml. Mirrors
 lib/finelog/build_package.py: same nightly/stable/manual mode split and the
 same zig-cross-compiled manylinux + native macOS wheel matrix.
 
-dupekit ships as TWO dists, released in lockstep at one resolved version:
-  - marin-dupekit-native: the native package. lib/dupekit/rust/pyproject.toml is
-    a maturin project whose `[tool.maturin] manifest-path` points at the cdylib
-    crate (the Rust dedup kernels, importable as the top-level module
-    `dupekit_native`). Platform wheels are built per-target by the CI matrix.
-  - marin-dupekit: pure Python (hatchling) — the proxy/type surface. One
-    py3-none-any wheel, built on the linux matrix leg only so artifacts never
-    collide across legs. It depends on marin-dupekit-native at the same resolved
-    floor, so installing marin-dupekit always pulls the kernels.
+Builds both dists of the pair in lockstep at one resolved version (see
+lib/dupekit/pyproject.toml for how the pure and native packages relate):
+  - marin-dupekit-native: platform wheels from the maturin project in rust/,
+    one per target across the CI matrix.
+  - marin-dupekit: one pure py3-none-any wheel, built on the linux leg only so
+    artifacts never collide across legs.
 
 Modes:
     nightly  -- `<bumped_patch>-dev.<YYYYMMDDhhmm>` (UTC), where

@@ -124,12 +124,9 @@ Configure **all eight before the first publish run**. The publish job uploads
 the whole `dist/` directory in one batch; a single missing binding fails the
 upload partway and can poison a version (see [Troubleshooting](#troubleshooting)).
 
-`marin-dupekit` already has its own binding for `dupekit-release-wheels.yaml`;
-leave it untouched. Its native companion `marin-dupekit-native` is a newer
-project, so it needs a **pending publisher** (from
-`https://pypi.org/manage/account/publishing/`, which creates the project on the
-first matching upload) with the same `dupekit-release-wheels.yaml` workflow and
-`pypi-publish` environment.
+`marin-dupekit` and its native companion `marin-dupekit-native` each already
+have a binding for the `dupekit-release-wheels.yaml` workflow and `pypi-publish`
+environment; leave them untouched.
 
 ### 4. The `pypi-publish` GitHub Actions environment
 

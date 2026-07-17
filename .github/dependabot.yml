@@ -11,8 +11,6 @@ version: 2
 updates:
   - package-ecosystem: "uv"
     directories:
-      # marin-dupekit is now a workspace member resolved against the root lock,
-      # so "/" covers it; there is no longer a standalone lib/dupekit/uv.lock.
       - "/"
     schedule:
       interval: "weekly"
