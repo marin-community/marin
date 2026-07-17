@@ -38,7 +38,6 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
-from rigging import telltale
 from rigging.filesystem import StoragePath
 
 from zephyr import counters
@@ -61,7 +60,6 @@ from zephyr.stats import (
     ZEPHYR_WORKER_MEM_PEAK_KEY,
     StatsWriter,
     ZephyrWorkerStatStatus,
-    per_second,
 )
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
 
@@ -204,23 +202,6 @@ def _set_counter_aggregations() -> None:
     sc.set_aggregation(ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX)
 
 
-def _publish_to_telltale(values: dict[str, int | float], task: ShardTask, start_time: float) -> None:
-    """Publish the shard's counters and a one-line status on the telltale page."""
-    # Called from the sampler because the counters live behind a ContextVar scoped
-    # to the worker task, which the serving thread cannot see -- a scrape-time
-    # collector would silently find nothing. Gauges, because a zephyr counter may
-    # aggregate as MAX or AVERAGE.
-    for name, value in values.items():
-        telltale.gauge(telltale.metric_name(name), f"zephyr counter {name}").set(value)
-
-    elapsed = time.time() - start_time
-    items = values.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0)
-    telltale.set_status(
-        f"stage {task.stage_name} shard {task.shard_idx}: "
-        f"{items:,.0f} items in {elapsed:.0f}s ({per_second(items, elapsed):.1f}/s)"
-    )
-
-
 def _periodic_sampler(
     stop_event: threading.Event,
     ctx: _InProcessWorkerContext,
@@ -241,15 +222,13 @@ def _periodic_sampler(
     while not stop_event.wait(timeout=interval):
         try:
             _sample_process_stats(cpu_s_at_start, proc)
-            values = ctx.get_counters()
-            _publish_to_telltale(values, task, start_time)
             stats_writer.emit_worker_stat(
                 task.stage_name,
                 task.shard_idx,
                 execution_id,
                 ZephyrWorkerStatStatus.RUNNING,
                 start_time,
-                values,
+                ctx.get_counters(),
             )
         except Exception:
             logger.warning("Failed to sample/emit process stats", exc_info=True)

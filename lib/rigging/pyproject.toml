@@ -34,6 +34,8 @@ secrets = ["google-cloud-secret-manager>=2.16.0"]
 
 [dependency-groups]
 test = [
+    # starlette.testclient needs an HTTP client; rigging has no runtime httpx dep.
+    "httpx>=0.28.1",
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-timeout",

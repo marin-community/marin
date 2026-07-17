@@ -41,6 +41,19 @@ def test_reregistering_with_a_different_type_raises(name):
         telltale.gauge(name, "d")
 
 
+def test_publish_gauge_sets_a_gauge_named_after_an_arbitrary_key(name):
+    telltale.publish_gauge(f"{name}/records in", 12, "d")
+
+    assert telltale.gauge(f"{name}_records_in", "d")._value.get() == 12
+
+
+def test_publish_gauge_drops_a_key_whose_name_is_taken_by_another_type(name):
+    """A key it cannot publish must not raise: exposition never breaks its caller."""
+    telltale.counter(name, "d")
+
+    telltale.publish_gauge(name, 1, "d")
+
+
 def test_reregistering_with_different_labels_raises(name):
     telltale.counter(name, "d", ["route"])
 

@@ -271,10 +271,7 @@ def initialize_jax(
     # distributed-init path below (TPU, single-task, or the endpoint dance).
     configure_jax_compilation_cache()
 
-    # Bringing up the JAX mesh is the one point every training process passes
-    # through, whichever branch below it takes, so it is where a process that
-    # otherwise never listens on anything acquires its telltale page. Actor
-    # processes get theirs from ActorServer instead and never reach here.
+    # Start the telltale server to report stats for training jobs.
     telltale.start()
 
     # Idempotent: skip if jax.distributed has already been initialized. This

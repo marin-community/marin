@@ -29,6 +29,7 @@ from typing import TypeVar
 
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Gauge, Histogram, generate_latest
 from prometheus_client.metrics import MetricWrapperBase
+from prometheus_client.registry import Collector
 from prometheus_client.samples import Sample
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -42,6 +43,7 @@ _M = TypeVar("_M", bound=MetricWrapperBase)
 
 _lock = threading.Lock()
 _metrics: dict[str, MetricWrapperBase] = {}
+_collectors: set[Collector] = set()
 _status: str = ""
 _start_time = time.time()
 
@@ -94,6 +96,19 @@ def histogram(name: str, documentation: str, labelnames: Sequence[str] = ()) -> 
     return _get_or_create(Histogram, name, documentation, labelnames)
 
 
+def register_collector(collector: Collector) -> None:
+    """Register a custom collector, once per process.
+
+    For metrics a caller computes elsewhere and hands over whole — precomputed
+    histogram buckets, say — which `counter`/`gauge`/`histogram` cannot express.
+    """
+    with _lock:
+        if collector in _collectors:
+            return
+        REGISTRY.register(collector)
+        _collectors.add(collector)
+
+
 def metric_name(name: str, prefix: str = "") -> str:
     """Convert an arbitrary counter/metric key into a legal Prometheus name.
 
@@ -102,6 +117,20 @@ def metric_name(name: str, prefix: str = "") -> str:
     """
     sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
     return f"{prefix}_{sanitized}" if prefix else sanitized
+
+
+def publish_gauge(key: str, value: float, documentation: str, prefix: str = "") -> None:
+    """Set a gauge named after an arbitrary metric key.
+
+    For mirroring counters a caller already keeps, whose names it does not
+    control. A key that sanitizes onto a name another metric type already holds
+    is logged and dropped: exposition must never break the job it reports on.
+    """
+    name = metric_name(key, prefix=prefix)
+    try:
+        gauge(name, documentation).set(value)
+    except ValueError:
+        logger.warning("could not publish %r as gauge %r", key, name, exc_info=True)
 
 
 def set_status(text: str) -> None:

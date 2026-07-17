@@ -1,16 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Serve ``rigging.telltale`` from a process that runs no server of its own.
-
-For a process that boots the JAX network and then blocks in XLA without ever
-listening on anything. Processes that already serve — anything hosting an
-``ActorServer`` — get the same pages on the port they already have, and should
-not call this.
-
-The page is rank-local: each process serves only its own registry, and on a
-multi-process host each registers its own endpoint under its process index.
-"""
+"""Stand up an HTTP server for the ``rigging.telltale`` pages and register it."""
 
 import atexit
 import logging
@@ -36,12 +27,7 @@ _started = False
 
 
 def _endpoint_name() -> str:
-    """Name identifying this exact process under the job's namespace.
-
-    Every task in a job hierarchy shares one namespace, and endpoint resolution
-    picks arbitrarily among live endpoints with the same name — so the task path
-    and process index have to be in the name, or a lookup lands on a random peer.
-    """
+    """Name identifying this exact process under the job's namespace."""
     job_info = get_job_info()
     assert job_info is not None, "no Iris job context"
 
