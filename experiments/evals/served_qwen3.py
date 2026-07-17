@@ -1,8 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Evaluate broker-served Qwen3 with the brokered lm-eval suite.
+
+\b
+Examples:
+  uv run iris --cluster=marin job run --job-name qwen3-evals \
+    --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \
+    -- python -m experiments.evals.served_qwen3
+"""
+
 from fray.types import ANY_REGION, ResourceConfig
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
 from marin.inference.vllm import BrokeredVllmSystemConfig, VllmProxyConfig, VllmServerConfig
+
+from experiments.evals.brokered_eval_suite import brokered_eval_suite
 
 _VLLM_TIMEOUT = 1800
 _VLLM_WORKER_ENV_VARS = {
@@ -24,3 +37,12 @@ QWEN3_INFERENCE = BrokeredVllmSystemConfig(
         ignored_request_fields=("seed",),
     ),
 )
+
+QWEN3_EVAL_RESULTS = brokered_eval_suite(
+    QWEN3_INFERENCE,
+    model_name="qwen3-0.6b",
+    version="2026.07.17",
+)
+
+if __name__ == "__main__":
+    StepRunner().run([lower(QWEN3_EVAL_RESULTS)])
