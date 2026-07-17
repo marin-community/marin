@@ -5,14 +5,14 @@
 
 By default, the evaluator runs through an isolated ``uv run`` environment in a
 non-preemptible Iris CPU parent, with inference in TPU child jobs connected
-through Marin's inference broker. ``--local`` instead runs the broker, proxy,
-and worker in the current process.
+through Marin's inference broker. ``--launcher local`` instead runs the broker,
+proxy, and worker in the current process.
 
 \b
 Examples:
   uv run python experiments/evals/served_qwen3_humaneval.py
   uv run python experiments/evals/served_qwen3_humaneval.py --priority production
-  uv run python experiments/evals/served_qwen3_humaneval.py --local
+  uv run python experiments/evals/served_qwen3_humaneval.py --launcher local
 """
 
 from experiments.evals.served_lm_eval import ServedLmEvalBenchmark, served_lm_eval_command

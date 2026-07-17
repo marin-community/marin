@@ -4,6 +4,7 @@
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 
 import click
@@ -50,6 +51,11 @@ class ServedLmEvalBenchmark:
     region: str | None = "us-west4"
     workers: int = 1
     num_concurrent: int = DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER
+
+
+class LmEvalLauncher(StrEnum):
+    IRIS = "iris"
+    LOCAL = "local"
 
 
 @dataclass(frozen=True)
@@ -161,6 +167,43 @@ def submit_iris_lm_eval(
             job.wait(timeout=float("inf"))
 
 
+def brokered_lm_eval_configs(
+    benchmark: ServedLmEvalBenchmark,
+    *,
+    limit: int | None,
+    timeout_seconds: int | None,
+    priority: int,
+) -> tuple[BrokeredVllmSystemConfig, LmEvalRun]:
+    inference = brokered_vllm_config(
+        model=benchmark.model,
+        tokenizer=benchmark.tokenizer,
+        workers=benchmark.workers,
+        num_concurrent=benchmark.num_concurrent,
+        timeout_seconds=timeout_seconds,
+    )
+    inference = replace(
+        inference,
+        worker_resources=ResourceConfig.with_tpu(
+            benchmark.tpu_type,
+            ram=benchmark.worker_ram,
+            regions=[benchmark.region] if benchmark.region is not None else None,
+        ),
+        worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
+        priority=priority,
+    )
+    eval_run = LmEvalRun(
+        tasks=benchmark.tasks,
+        output_path=benchmark.output_path,
+        limit=limit,
+        confirm_run_unsafe_code=benchmark.confirm_run_unsafe_code,
+        extra_model_args={
+            "num_concurrent": inference.workers.max_in_flight_per_worker,
+            "timeout": int(inference.proxy.request_timeout_seconds),
+        },
+    )
+    return inference, eval_run
+
+
 def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> click.Command:
     """Build a CLI for a fixed lm-eval task set served by brokered vLLM."""
 
@@ -199,7 +242,12 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
     @click.option("--region", default=benchmark.region, help="Region for the parent and worker jobs.")
     @click.option("--job-name", default=benchmark.job_name, help="Iris parent job name.")
     @click.option("--priority", type=click.Choice(PRIORITY_BAND_NAMES), help="Iris priority band for all jobs.")
-    @click.option("--local", is_flag=True, help="Run a single local dev TPU worker instead of submitting to Iris.")
+    @click.option(
+        "--launcher",
+        type=click.Choice([launcher.value for launcher in LmEvalLauncher]),
+        default=LmEvalLauncher.IRIS.value,
+        help="Run through Iris or use a single local dev TPU worker.",
+    )
     def command(
         limit: int,
         output_path: str,
@@ -214,45 +262,36 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
         region: str | None,
         job_name: str,
         priority: str | None,
-        local: bool,
+        launcher: str,
     ) -> None:
         configure_logging()
-        if local and workers > 1:
-            raise click.UsageError("--local only supports --workers 1; use --num-concurrent for request fanout")
+        launcher_mode = LmEvalLauncher(launcher)
+        if launcher_mode is LmEvalLauncher.LOCAL and workers > 1:
+            raise click.UsageError("The local launcher only supports --workers 1; use --num-concurrent for fanout")
 
-        inference = brokered_vllm_config(
+        iris_priority = priority_band_value(priority) if priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
+        configured_benchmark = replace(
+            benchmark,
             model=model,
             tokenizer=tokenizer,
             workers=workers,
             num_concurrent=num_concurrent,
-            timeout_seconds=timeout_seconds,
-        )
-        run = LmEvalRun(
-            tasks=benchmark.tasks,
             output_path=output_path,
-            limit=limit if limit > 0 else None,
-            confirm_run_unsafe_code=benchmark.confirm_run_unsafe_code,
-            extra_model_args={
-                "num_concurrent": inference.workers.max_in_flight_per_worker,
-                "timeout": int(inference.proxy.request_timeout_seconds),
-            },
+            tpu_type=tpu_type,
+            worker_ram=worker_ram,
+            parent_ram=parent_ram,
+            region=region,
         )
-        if local:
+        inference, run = brokered_lm_eval_configs(
+            configured_benchmark,
+            limit=limit if limit > 0 else None,
+            timeout_seconds=timeout_seconds,
+            priority=iris_priority,
+        )
+        if launcher_mode is LmEvalLauncher.LOCAL:
             run_local_brokered_lm_eval(inference, run)
             return
 
-        iris_priority = priority_band_value(priority) if priority else job_pb2.PRIORITY_BAND_UNSPECIFIED
-        worker_regions = [region] if region is not None else None
-        inference = replace(
-            inference,
-            worker_resources=ResourceConfig.with_tpu(
-                tpu_type,
-                ram=worker_ram,
-                regions=worker_regions,
-            ),
-            worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
-            priority=iris_priority,
-        )
         submit_iris_lm_eval(
             inference,
             run,
