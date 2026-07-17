@@ -210,3 +210,70 @@ schedule per `GrugMoeMuonHConfig` defaults, cooldown to 0), seed 0, identical
 data order. Expected: bf16 ~6.7h + compile, fp8 ~6h. Per-step `train/loss` in
 job logs via `fp8val.metrics` json_logger; trajectories to be harvested and
 attached to the issue at completion.
+
+### FP8VAL-004 — TRUE root cause of every wedge: BFC fragmentation OOM of the step scratch buffer → silent clique deadlock (2026-07-17 22:45 UTC)
+
+Full-history harvest of all terminal jobs (safe post-mortem reads) plus source
+dives into iris and levanter kill both prior theories and replace them with
+one mechanism, present in **all five** wedges:
+
+```
+W bfc_allocator.cc:514 Allocator (GPU_k_bfc) ran out of memory trying to
+  allocate 22.66GiB   (bf16 arms; 40.68GiB on fp8 arms)
+[~10 s later]
+E rendezvous.cc:116 ... Acquire clique: devices=8:[0..7] ... may be stuck
+```
+
+| wedge | last step | OOM → stall (UTC) | failing GPUs | chunk |
+|---|---|---|---|---|
+| bf16-smoke9 | 9 | 12:49:29 | 1 | 22.58 GiB |
+| fp8-full2 | 6119 | 17:43:48 | 1 | 40.68 GiB |
+| bf16-full2 | 11199 | 19:09:41 | 3 | 22.66 GiB |
+| fp8-full3 | 2269 | 19:09:21 | 5 | 40.68 GiB |
+| bf16-full3 | 9 | 20:00:48 | 2 | 22.64 GiB |
+
+The allocator dumps show the pool only ~40% occupied at failure — this is
+**fragmentation, not exhaustion**: the train step needs one contiguous
+22.6 GiB (bf16) / 40.7 GiB (fp8) temp chunk per launch, and after enough pool
+churn no hole that large survives. The device threads whose allocation fails
+never join the 8-way clique rendezvous; the other ranks wait forever — an
+XLA failure mode where alloc failure during collective launch deadlocks
+silently instead of raising. That is the entire "wedge".
+
+**Log-read theory (003b): refuted.** `iris job logs` never touches the task
+process: reads are served by the standalone finelog Rust server scanning
+parquet on disk (`lib/finelog/rust/src/server/log_service.rs`), fed by a
+logship sidecar tailing the pod's CRI stdout file
+(`src/iris/cluster/backends/k8s/logship.py`). The in-task uvicorn thread is
+the Prometheus telltale (`src/iris/runtime/telltale.py`), which serves no
+logs. Timeline agrees: bf16-full2 *survived* the heavy 400k/600k-line
+harvests at 18:08–18:09 and died at 19:09 with no heavy read within 10 min;
+the 900k harvest previously blamed ran at 19:19, *after* both 19:09 stalls.
+
+**Checkpoint-save theory (003c): demoted to perturbation.** On one node the
+levanter save path has no barrier or collective (all multihost sync is
+`process_count>1`-gated); it is main-thread D2H staging + a background S3
+commit thread. Its alloc/free churn plausibly re-carves the BFC pool — both
+checkpoint-adjacent wedges landed 3 s / 11 s after the *commit* callback —
+but checkpoint-less arms died identically after hours of slow fragmentation,
+so saves only modulate timing.
+
+The 19:09 cross-job simultaneity (two nodes, 20 s apart) remains the one
+loose end — consistent with a shared external hiccup (monitor cycle, S3/net
+blip) perturbing loader/dispatch allocation patterns on both nodes at once,
+under a mechanism that only needs a nudge when this fragile.
+
+**Quantified fp8 memory regression:** largest step temp is **40.68 GiB (fp8)
+vs 22.66 GiB (bf16)** at the identical B16 config — fp8 needs 57% of the
+~72 GiB pool contiguous, which is why fp8 arms always died first (1–2 h vs
+3.5 h). This is the concrete target for the planned bisect.
+
+**Mitigation:** the allocator's own hint — `TF_GPU_ALLOCATOR=cuda_malloc_async`
+(VMM-backed, no contiguity requirement, immune to BFC fragmentation; already
+forwarded by dispatch; previously exonerated of causing stalls). full4 runs
+without it and 0/6 full arms have ever finished, so a wedge remains likely;
+resubmit-on-wedge commands now carry the flag (a preemptive restart was
+declined by policy — investigation was scoped to run alongside full4).
+Secondary: leave contiguous headroom (larger mem fraction where NCCL init
+tolerates it), and upstream an XLA report: alloc failure inside collective
+launch should abort the rendezvous, not hang.
