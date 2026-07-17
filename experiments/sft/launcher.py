@@ -24,11 +24,13 @@ Init sources (the :class:`ModelSource` implementations):
 - :class:`PreparedModel` — like :class:`HFModel`, but the base checkpoint + tokenizer are produced
   by an upstream preparation :class:`ArtifactStep` (e.g. the Delphi reserved-slot rename), resolved
   to that step's output directory. The step becomes a dependency.
-- :class:`LevanterCheckpointModel` — SFT from a native Levanter checkpoint, weights-only with a fresh
-  optimizer (``initialize_model_from_checkpoint_path``, the same semantics as ``initialize_from_hf``).
-  ``init_from`` is an :class:`~marin.experiment.checkpoints.HfToLevanterCheckpoint` (a materialized
-  HF->Levanter conversion, which also carries the arch + padded tokenizer), or a static dir / prior
-  ``sft_step`` step for stage chaining (for which the arch and tokenizer are supplied explicitly).
+- :class:`ConvertedCheckpointModel` — SFT from a materialized HF->Levanter conversion
+  (:func:`~marin.experiment.checkpoints.hf_to_levanter`), weights-only with a fresh optimizer
+  (``initialize_model_from_checkpoint_path``, the same semantics as ``initialize_from_hf``). The
+  conversion carries the arch and emits the padded tokenizer, so nothing else is required.
+- :class:`LevanterCheckpointModel` — SFT from an existing native Levanter checkpoint (a static dir or a
+  prior ``sft_step`` step, for stage chaining), weights-only with a fresh optimizer. The checkpoint
+  carries no arch/tokenizer, so ``model`` and ``tokenizer_path`` are supplied explicitly.
 
 A vendored model family that is not a Levanter-registry ``LmHeadModel`` (its own train loop and
 train state) supplies its own :class:`ModelSource` implementing the same protocol — see
@@ -351,75 +353,120 @@ class PreparedModel:
         )
 
 
+def _native_init_pod_config(
+    ctx: StepContext,
+    spec: SFTSpec,
+    data_config: LmDataConfig,
+    resources: ResourceConfig,
+    num_train_steps: int,
+    *,
+    checkpoint_path: str,
+    model_config: LmConfig,
+    eos_token_ids: Sequence[int],
+) -> TrainLmOnPodConfig:
+    """Pod config for weights-only init from a native Levanter checkpoint (fresh optimizer, step 0).
+
+    Loads only the ``model`` subtree via ``initialize_model_from_checkpoint_path``, strictly (every
+    model leaf must be present) — the same init as :class:`HFModel`'s ``initialize_from_hf`` but from a
+    native checkpoint. The arch is not re-derived, so ``model_config`` must match the checkpoint's.
+    """
+    return _levanter_pod_config(
+        ctx,
+        spec,
+        data_config,
+        resources,
+        num_train_steps,
+        model_config=model_config,
+        initialize_from_hf=False,
+        initialize_model_from_checkpoint_path=checkpoint_path,
+        use_hf_model_config=False,
+        eos_token_ids=eos_token_ids,
+    )
+
+
 @dataclass(frozen=True)
-class LevanterCheckpointModel:
-    """Init a run's weights from a native Levanter checkpoint (fresh optimizer, step 0).
+class ConvertedCheckpointModel:
+    """Init a run's weights from a materialized HF->Levanter conversion (fresh optimizer, step 0).
 
-    ``init_from`` is one of:
-
-    - an :class:`~marin.experiment.checkpoints.HfToLevanterCheckpoint` — a materialized HF->Levanter
-      conversion: the architecture and padded tokenizer come from it, so nothing else is required;
-    - an :class:`ArtifactStep` or a static dir holding a native checkpoint (e.g. a prior ``sft_step``
-      output, for stage chaining): supply ``model`` (the checkpoint's architecture) and ``tokenizer_path``.
-
-    Weights load via ``initialize_model_from_checkpoint_path``: only the ``model`` subtree, strictly
-    (every model leaf must be present), leaving a fresh optimizer and step 0 — the same init as
-    :class:`HFModel`'s ``initialize_from_hf`` but from a native checkpoint. The arch is not re-derived,
-    so ``model`` must match the checkpoint's architecture.
+    The conversion (:func:`~marin.experiment.checkpoints.hf_to_levanter`) carries the architecture and
+    emits a tokenizer padded to the model vocab at its output root, so this source needs nothing else.
+    The conversion step becomes a dependency.
     """
 
-    init_from: str | ArtifactStep | HfToLevanterCheckpoint
-    tokenizer_path: str | None = None
-    model: LmConfig | None = None
+    conversion: HfToLevanterCheckpoint
     eos_token_ids: Sequence[int] = (128001, 128009)
 
-    def _init_step(self) -> ArtifactStep | None:
-        """The dependency step producing the checkpoint, or ``None`` for a static path."""
-        if isinstance(self.init_from, HfToLevanterCheckpoint):
-            return self.init_from.step
-        return self.init_from if isinstance(self.init_from, ArtifactStep) else None
-
-    def _model_config(self) -> LmConfig:
-        if self.model is not None:
-            return self.model
-        if isinstance(self.init_from, HfToLevanterCheckpoint):
-            return self.init_from.model
-        raise ValueError(
-            "LevanterCheckpointModel needs `model` (the checkpoint's architecture) when init_from is a "
-            "raw path or step; only an HfToLevanterCheckpoint carries it."
-        )
-
     def tokenizer_cache_key(self) -> str:
-        if self.tokenizer_path is not None:
-            return self.tokenizer_path
-        if isinstance(self.init_from, HfToLevanterCheckpoint):
-            # The conversion emits the tokenizer; its step name is a stable construction-time id.
-            return self.init_from.step.name
-        raise ValueError("LevanterCheckpointModel needs `tokenizer_path` unless init_from is an HfToLevanterCheckpoint.")
+        # The conversion emits the tokenizer; its step name is a stable construction-time id.
+        return self.conversion.step.name
 
     def resolve_tokenizer(self, ctx: StepContext) -> str:
-        if self.tokenizer_path is not None:
-            return self.tokenizer_path
-        if isinstance(self.init_from, HfToLevanterCheckpoint):
-            # An HF->Levanter conversion emits a tokenizer padded to the model vocab at its output root.
-            return ctx.artifact_path(self.init_from.step)
-        raise ValueError("LevanterCheckpointModel needs `tokenizer_path` unless init_from is an HfToLevanterCheckpoint.")
+        # The conversion emits a tokenizer padded to the model vocab at its output root.
+        return ctx.artifact_path(self.conversion.step)
 
     @property
     def run(self) -> Callable[..., None]:
         return _levanter_train_job
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
-        step = self._init_step()
-        return (step,) if step is not None else ()
+        return (self.conversion.step,)
+
+    def build_train_config(
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
+    ) -> TrainLmOnPodConfig:
+        # The conversion saves the model as a `model` subtree at its output root; native init reads it
+        # with load_checkpoint(..., subpath="model").
+        return _native_init_pod_config(
+            ctx,
+            spec,
+            data_config,
+            resources,
+            num_train_steps,
+            checkpoint_path=ctx.artifact_path(self.conversion.step),
+            model_config=self.conversion.model,
+            eos_token_ids=self.eos_token_ids,
+        )
+
+
+@dataclass(frozen=True)
+class LevanterCheckpointModel:
+    """Init a run's weights from an existing native Levanter checkpoint (fresh optimizer, step 0).
+
+    ``init_from`` is a static checkpoint directory, or an :class:`ArtifactStep` producing one (e.g. a
+    prior ``sft_step`` output, for stage chaining — which becomes a dependency). The checkpoint carries
+    no architecture or tokenizer, so both ``model`` (the checkpoint's architecture) and ``tokenizer_path``
+    are required. For a materialized HF->Levanter conversion, which supplies both, use
+    :class:`ConvertedCheckpointModel` instead.
+    """
+
+    init_from: str | ArtifactStep
+    model: LmConfig
+    tokenizer_path: str
+    eos_token_ids: Sequence[int] = (128001, 128009)
+
+    def tokenizer_cache_key(self) -> str:
+        return self.tokenizer_path
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        return self.tokenizer_path
+
+    @property
+    def run(self) -> Callable[..., None]:
+        return _levanter_train_job
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
 
     def _init_path(self, ctx: StepContext) -> str:
-        step = self._init_step()
-        if step is not None:
-            # Both an HF->Levanter conversion (subpath="model") and a prior sft_step (a TrainerState
-            # whose model field serializes to `model/`) store the weights as a `model` subtree at the
-            # step's output root; native init reads it with load_checkpoint(..., subpath="model").
-            return ctx.artifact_path(step)
+        # A prior sft_step (a TrainerState whose model field serializes to `model/`) and a static native
+        # checkpoint both expose the weights as a `model` subtree; native init reads them with subpath="model".
+        if isinstance(self.init_from, ArtifactStep):
+            return ctx.artifact_path(self.init_from)
         return self.init_from
 
     def build_train_config(
@@ -430,16 +477,14 @@ class LevanterCheckpointModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> TrainLmOnPodConfig:
-        return _levanter_pod_config(
+        return _native_init_pod_config(
             ctx,
             spec,
             data_config,
             resources,
             num_train_steps,
-            model_config=self._model_config(),
-            initialize_from_hf=False,
-            initialize_model_from_checkpoint_path=self._init_path(ctx),
-            use_hf_model_config=False,
+            checkpoint_path=self._init_path(ctx),
+            model_config=self.model,
             eos_token_ids=self.eos_token_ids,
         )
 

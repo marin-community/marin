@@ -30,9 +30,9 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import hf_to_levanter
 
 from experiments.sft.launcher import (
+    ConvertedCheckpointModel,
     DatasetSpec,
     HFModel,
-    LevanterCheckpointModel,
     SFTSpec,
     resources_from_accelerator,
     sft_step,
@@ -107,7 +107,7 @@ def test_smoke_sft_tpu_hf_to_levanter(iris_client: IrisClient, smoke_region: str
     spec = dataclasses.replace(
         SMOKE_SPEC,
         name="checkpoints/smoke-sft-tpu-qwen3-0p6b-hf2lev",
-        model=LevanterCheckpointModel(init_from=conversion, eos_token_ids=(151643, 151645)),
+        model=ConvertedCheckpointModel(conversion=conversion, eos_token_ids=(151643, 151645)),
     )
     resources = dataclasses.replace(resources_from_accelerator(SMOKE_ACCELERATOR), regions=(smoke_region,))
     StepRunner().run([lower(sft_step(spec, resources))])

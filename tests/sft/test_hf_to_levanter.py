@@ -28,7 +28,13 @@ from marin.experiment.checkpoints import (
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
-from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, sft_step
+from experiments.sft.launcher import (
+    ConvertedCheckpointModel,
+    DatasetSpec,
+    LevanterCheckpointModel,
+    SFTSpec,
+    sft_step,
+)
 
 _PREFIX = "gs://test-prefix"
 _DATASET = DatasetSpec(
@@ -73,7 +79,7 @@ def _spec(model) -> SFTSpec:
 def test_conversion_handle_is_a_dependency_and_wires_native_weights_only_init():
     """A conversion handle makes the step a dep; init is weights-only, arch + tokenizer come from it."""
     conv = _fake_conversion()
-    step = sft_step(_spec(LevanterCheckpointModel(init_from=conv)), ResourceConfig.with_cpu())
+    step = sft_step(_spec(ConvertedCheckpointModel(conversion=conv)), ResourceConfig.with_cpu())
 
     assert conv.step in step.deps
     train_config = materialized_config(step, _PREFIX).train_config
@@ -100,18 +106,13 @@ def test_raw_path_requires_explicit_arch_and_tokenizer():
     assert train_config.model == arch
 
 
-def test_raw_path_without_arch_is_rejected():
-    """Without the architecture there is no way to build the matching pytree — fail, don't guess."""
-    model = LevanterCheckpointModel(init_from="gs://staged/ckpt", tokenizer_path="gs://tok")
-    with pytest.raises(ValueError, match="architecture"):
-        materialized_config(sft_step(_spec(model), ResourceConfig.with_cpu()), _PREFIX)
-
-
 def test_epoch_chat_tokenize_declares_the_conversion_dependency():
     """The epoch path tokenizes off-pod, resolving the tokenizer through the conversion step, so the
     chat-tokenize step must declare it as a dep (else StepContext rejects the undeclared reference)."""
     conv = _fake_conversion()
-    spec = dataclasses.replace(_spec(LevanterCheckpointModel(init_from=conv)), num_train_steps=None, num_train_epochs=1)
+    spec = dataclasses.replace(
+        _spec(ConvertedCheckpointModel(conversion=conv)), num_train_steps=None, num_train_epochs=1
+    )
     step = sft_step(spec, ResourceConfig.with_cpu())
 
     chat_caches = [dep for dep in step.deps if dep.artifact_type is TokenizedCache]
