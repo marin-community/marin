@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """MXFP8-002: Blackwell CuTe DSL MXFP8 scaled grouped GEMM vs bf16 baselines.
 
 Benchmarks the vendored cutlass v4.5.2 MoE scaled-grouped-GEMM kernel (tcgen05
@@ -35,10 +38,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import cutlass
 import jax
 import jax.numpy as jnp
 import numpy as np
-
 from mxfp8_grouped.adapter import (
     build_sfa,
     build_sfb,
@@ -146,9 +149,7 @@ def run_case(label: str, k: int, n: int, group_sizes: list[int], iters: int, war
     t = timed(kernel_fn, (x_q, w_q, x_sf, w_sf, offs), iters, warmup)
     res["arms"]["mxfp8_kernel"] = {"ms": t * 1e3, "tfs": flops / t / 1e12}
 
-    ragged_fn = jax.jit(
-        lambda xx, ww, gg: jax.lax.ragged_dot(xx, ww, gg, preferred_element_type=jnp.bfloat16)
-    )
+    ragged_fn = jax.jit(lambda xx, ww, gg: jax.lax.ragged_dot(xx, ww, gg, preferred_element_type=jnp.bfloat16))
     t = timed(ragged_fn, (x, w, gs_dev), iters, warmup)
     res["arms"]["bf16_ragged"] = {"ms": t * 1e3, "tfs": flops / t / 1e12}
 
@@ -180,8 +181,6 @@ def main():
 
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind} (cc {dev.compute_capability}), jax {jax.__version__}")
-    import cutlass
-
     print(f"cutlass: {cutlass.__version__}")
 
     results = {

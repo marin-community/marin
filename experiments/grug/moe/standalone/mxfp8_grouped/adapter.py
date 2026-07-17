@@ -1,5 +1,4 @@
-# Copyright The Levanter Authors
-#
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """JAX adapter for the vendored NVIDIA Blackwell MXFP8 scaled grouped GEMM.
@@ -22,15 +21,14 @@ Also hosts the JAX quantization + scale-layout helpers used by the bench:
 
 import os
 
-import jax
-import jax.numpy as jnp
-
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
+import jax
+import jax.numpy as jnp
 
-from .torch_scaled_grouped_mm import ScaledGroupedGemmKernel
 from .moe_utils import MoEScaledGroupedGemmTensormapConstructor
+from .torch_scaled_grouped_mm import ScaledGroupedGemmKernel
 
 # CuTe DSL trace arch for Blackwell (GB200/B200). GPU detection on the FFI
 # compile thread can fail; the env var is the only reliable control (compile
