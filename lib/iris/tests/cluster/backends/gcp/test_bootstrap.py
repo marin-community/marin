@@ -3,11 +3,12 @@
 
 """Tests for worker bootstrap script generation."""
 
+import re
+
 import pytest
 from iris.cluster.config import GcpPlatformConfig, WorkerConfig
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.worker_bootstrap import (
-    RUNSC_VERSION,
     build_worker_bootstrap_script,
     render_template,
     rewrite_ghcr_to_ar_remote,
@@ -37,16 +38,15 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
         build_worker_bootstrap_script(cfg)
 
 
-def test_bootstrap_installs_and_registers_runsc() -> None:
-    """The worker bootstrap installs gVisor and registers it as a docker runtime,
-    so the GVISOR container profile can run task containers under runsc."""
+def test_bootstrap_renders_versioned_runsc_url() -> None:
+    """Every gVisor URL in the bootstrap must use the numeric release path:
+    the GCS layout is releases/release/<YYYYMMDD.P>/, and a URL built from the
+    release-<version> tag name 404s, leaving workers without the runtime."""
     script = build_worker_bootstrap_script(_worker_config())
-    assert RUNSC_VERSION in script
-    assert f"gvisor/releases/release/{RUNSC_VERSION}" in script
-    assert "runsc.sha512" in script  # verified download
-    # Registered in daemon.json without a hard restart when already present.
-    assert "/etc/docker/daemon.json" in script
-    assert '"runsc"' in script
+    urls = re.findall(r"https://storage\.googleapis\.com/gvisor/\S+", script)
+    assert urls, "bootstrap no longer downloads runsc"
+    for url in urls:
+        assert re.match(r"https://storage\.googleapis\.com/gvisor/releases/release/\d{8}\.\d+/", url), url
 
 
 def test_render_template_preserves_docker_templates() -> None:

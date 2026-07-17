@@ -31,8 +31,9 @@ GHCR_MIRROR_REPO = "ghcr-mirror"
 
 # gVisor release the worker installs so the GVISOR container profile can run task
 # containers under `docker --runtime=runsc`. Pin explicitly; bump by checking
-# https://github.com/google/gvisor/releases.
-RUNSC_VERSION = "release-20260714.0"
+# https://github.com/google/gvisor/releases (tag "release-YYYYMMDD.P" publishes
+# to the bare "YYYYMMDD.P" path under releases/release/).
+RUNSC_VERSION = "20260714.0"
 
 
 def zone_to_multi_region(zone: str) -> str | None:
