@@ -63,7 +63,7 @@ execution:
   # Hard elapsed sweep limit, including queueing and retries.
   wall_time: 8 weeks
   # Maximum requested TPU chips across submitted, running, or retrying dispatches.
-  max_inflight_chips: 256
+  max_inflight_chips: 1024
   # Dispatcher cadence for polling Iris, logs, and W&B. Throughput is recomputed on each observation.
   observation_interval: 15m
   # Resource level at which placement uses only the best currently observed target. Earlier rungs
@@ -74,7 +74,18 @@ execution:
     # these are deliberately loose — a preemption gap must not read as a failure worth relocating.
     # Initial execution may move within its region when no W&B run appears by this time.
     initial_wandb_timeout: 3h
-    # A W&B-registered run may move within its region after this long without progress.
+    # A W&B-registered run whose progress has stalled may be killed and restarted IN PLACE (same
+    # slice + same region, resuming from checkpoint) after this long without progress. This is the
+    # cheapest recourse for a stalled/hung worker or a transient failure (network, Hugging Face
+    # 404s, a wedged process) and is tried before the same-region slice move at progress_stall_timeout.
+    # Kept well above 1h on purpose: a restart releases the current slice, and iris can take a long
+    # while to find another (a re-queue of hours is common), so restart only once a stall is very
+    # likely a true hang rather than a transient blip or a slow-but-recovering run.
+    # NOTE: a terminal job failure (iris reports FAILED/crashed, e.g. SIGSEGV) is retried immediately
+    # and is not gated by this timeout — the timeout only governs the ambiguous "iris says running
+    # but no progress" case, where waiting distinguishes a self-recovering preemption from a true hang.
+    stall_restart_timeout: 6h
+    # A W&B-registered run may move within its region (different slice) after this long without progress.
     progress_stall_timeout: 24h
     # A stalled run may restart elsewhere only after a same-region move also fails to progress.
     cross_region_restart_timeout: 96h
