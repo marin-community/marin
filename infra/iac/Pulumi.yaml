@@ -1,0 +1,10 @@
+name: marin-iac
+# Plain python runtime: uses whatever `python3` is on PATH, so run under the repo's uv
+# venv (which already has marin-iris + marin-rigging). See README.md. This avoids Pulumi
+# building an isolated venv that would re-pull the heavy marin-iris closure.
+runtime: python
+description: Infrastructure-as-code for Marin cluster prerequisites (see .agents/projects/iac).
+# State backend and secrets provider are supplied by the operator/CI environment
+# (a manual one-time bootstrap, see README.md), not committed here:
+#   pulumi login gs://marin-iac-state
+#   (the secrets provider is configured per-stack in Pulumi.<stack>.yaml during stack init)

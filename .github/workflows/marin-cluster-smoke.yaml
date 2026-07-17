@@ -1,0 +1,133 @@
+name: "Marin - Cluster Smoke"
+
+# Smokes that submit a real job to a *standing* Marin cluster (marker: `cluster`,
+# under tests/cluster/). Distinct from the Iris smokes (iris-smoke-*.yaml), which
+# bring up their own ephemeral cluster. Nightly + on-demand; never on PRs, so a
+# job is only ever submitted deliberately.
+on:
+  workflow_dispatch:
+    inputs:
+      run_gpu:
+        description: "Also run the CoreWeave 8xH100 vLLM e2es (expensive; needs CW secrets)"
+        type: boolean
+        default: false
+  schedule:
+    # Nightly at 07:30 UTC, after the canary ferry (06:00) so they don't contend.
+    - cron: "30 7 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # These submit real cluster jobs; never cancel a run mid-flight and orphan them.
+  group: marin-cluster-smoke
+  cancel-in-progress: false
+
+jobs:
+  marin-tpu-smokes:
+    name: marin-tpu-smokes
+    # Standing marin cluster (GCP, IAP-fronted). Reachable from CI via the
+    # IRIS_CI_GCP_SA_KEY service account, whose ADC mints the IAP edge token.
+    runs-on: ubuntu-latest
+    # Exceeds the summed per-test --timeout (2 x 2400s) plus install overhead so a normal run is not
+    # SIGKILLed by GitHub mid-test. A genuinely hung StepRunner test still can't self-terminate its
+    # submitted job (no finalizer), but those are preemptible v6e-4 slices, so any orphan is
+    # self-limiting.
+    timeout-minutes: 100
+    # No MARIN_PREFIX here: the smokes pin a single region (smoke_region in tests/cluster/conftest.py)
+    # that binds both the TPU slice and the storage root, so the job reads and writes region-locally
+    # without a hand-maintained prefix env var.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups --group dev
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Run marin TPU cluster smokes
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          # -o addopts= clears the default marker filter and the 600s session cap (too tight
+          # for these long smokes); -m cluster then selects them and --import-mode=importlib is
+          # re-added so the tests.cluster.* imports resolve.
+          uv run pytest tests/cluster/evals tests/cluster/sft \
+            -m cluster -o "addopts=" --import-mode=importlib \
+            -v -s --log-cli-level=INFO --tb=short --timeout=2400
+
+  marin-gpu-smokes:
+    name: marin-gpu-smokes
+    # Standing CoreWeave cluster (cw-us-east-02a, kube-fronted). 8xH100 jobs are
+    # expensive, so this is opt-in on manual dispatch only — never nightly.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_gpu }}
+    runs-on: ubuntu-latest
+    # Above the vLLM/Snowball e2es' summed per-test timeout markers (~220 min worst case) plus install
+    # overhead, so the runner is not killed mid-test; the run_test_job fixture terminates the H100 job
+    # on interruption within that window.
+    timeout-minutes: 240
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups --group dev
+
+      - name: Write CoreWeave kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          printf '%s\n' "${{ secrets.CW_KUBECONFIG }}" > ~/.kube/coreweave-iris
+          chmod 600 ~/.kube/coreweave-iris
+
+      - name: Run CoreWeave GPU cluster smokes
+        # No S3 creds here: the vLLM parity e2es stream the 67B weights from CoreWeave AI Object
+        # Storage inside the job, which reads them from the cluster's task-env secret. Runner env is
+        # not forwarded to the job (only create_environment's HF_TOKEN/WANDB_API_KEY are).
+        # No --timeout: each test carries its own pytest.mark.timeout, so the per-test markers govern
+        # (the TPU job overrides only because its evalchemy/sft tests carry no marker).
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          uv run pytest tests/cluster/vllm \
+            -m cluster -o "addopts=" --import-mode=importlib \
+            -v -s --log-cli-level=INFO --tb=short

@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from tests.test_utils import skip_if_no_tpu
 from tests.vllm import grugmoe_real_checkpoint_backend as backend
 
 TPU_LOCK_PATH = "/tmp/marin-tpu-e2e.lock"
@@ -230,7 +231,7 @@ def test_grugmoe_real_checkpoint_e2e_static_preconditions() -> None:
     assert backend.TOKENIZER_PATH.startswith(backend.EUROPE_WEST4_GCS_PREFIX)
 
 
-@pytest.mark.tpu_ci
+@skip_if_no_tpu
 @pytest.mark.slow
 @pytest.mark.data_integration
 def test_grugmoe_real_checkpoint_vllm_output(
@@ -244,7 +245,7 @@ def test_grugmoe_real_checkpoint_vllm_output(
     assert vllm_result["passed"] is True
 
 
-@pytest.mark.tpu_ci
+@skip_if_no_tpu
 @pytest.mark.slow
 @pytest.mark.data_integration
 def test_grugmoe_real_checkpoint_levanter_output(

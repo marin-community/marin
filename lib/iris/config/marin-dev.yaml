@@ -60,6 +60,8 @@ peers:
     controller_address: https://iris-cw-rno2a.oa.dev
   cw-us-east-02a:
     controller_address: https://iris-cw-us-east-02a.oa.dev
+  cw-us-east-08a:
+    controller_address: https://iris-cw-us-east-08a.oa.dev
 
 worker_provider: {}
 

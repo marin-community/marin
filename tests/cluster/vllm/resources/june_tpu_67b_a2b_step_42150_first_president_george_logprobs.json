@@ -1,0 +1,144 @@
+{
+  "moe_implementation": "sonic",
+  "mp": "params=float32,compute=bfloat16,output=bfloat16",
+  "prompt": "The first President of the United States was George",
+  "prompt_token_ids": [
+    791,
+    1176,
+    4900,
+    315,
+    279,
+    3723,
+    4273,
+    574,
+    10058
+  ],
+  "tokenizer": "marin-community/marin-tokenizer",
+  "top_logprobs": [
+    {
+      "logprob": -0.0054283360950648785,
+      "text": " Washington",
+      "token_id": 6652
+    },
+    {
+      "logprob": -6.413631439208984,
+      "text": "\n",
+      "token_id": 198
+    },
+    {
+      "logprob": -6.976131439208984,
+      "text": " W",
+      "token_id": 468
+    },
+    {
+      "logprob": -7.601131439208984,
+      "text": " Washing",
+      "token_id": 82238
+    },
+    {
+      "logprob": -8.382381439208984,
+      "text": "Washington",
+      "token_id": 39231
+    },
+    {
+      "logprob": -8.538631439208984,
+      "text": ".",
+      "token_id": 13
+    },
+    {
+      "logprob": -8.538631439208984,
+      "text": " H",
+      "token_id": 473
+    },
+    {
+      "logprob": -8.601131439208984,
+      "text": " Wash",
+      "token_id": 6113
+    },
+    {
+      "logprob": -9.413631439208984,
+      "text": "\n\n",
+      "token_id": 271
+    },
+    {
+      "logprob": -9.476131439208984,
+      "text": " washington",
+      "token_id": 94771
+    },
+    {
+      "logprob": -9.538631439208984,
+      "text": " Bush",
+      "token_id": 14409
+    },
+    {
+      "logprob": -9.663631439208984,
+      "text": ".\n\n",
+      "token_id": 382
+    },
+    {
+      "logprob": -9.851131439208984,
+      "text": ".\n",
+      "token_id": 627
+    },
+    {
+      "logprob": -10.038631439208984,
+      "text": "...",
+      "token_id": 1131
+    },
+    {
+      "logprob": -10.226131439208984,
+      "text": "\u00a0",
+      "token_id": 4194
+    },
+    {
+      "logprob": -10.226131439208984,
+      "text": "...\n",
+      "token_id": 9522
+    },
+    {
+      "logprob": -10.288631439208984,
+      "text": ",",
+      "token_id": 11
+    },
+    {
+      "logprob": -10.288631439208984,
+      "text": " (",
+      "token_id": 320
+    },
+    {
+      "logprob": -10.351131439208984,
+      "text": " ",
+      "token_id": 220
+    },
+    {
+      "logprob": -10.413631439208984,
+      "text": "...\n\n",
+      "token_id": 2195
+    },
+    {
+      "logprob": -10.663631439208984,
+      "text": " Herbert",
+      "token_id": 58463
+    },
+    {
+      "logprob": -10.851131439208984,
+      "text": " We",
+      "token_id": 1226
+    },
+    {
+      "logprob": -10.851131439208984,
+      "text": " \u2026",
+      "token_id": 4696
+    },
+    {
+      "logprob": -10.913631439208984,
+      "text": " ...",
+      "token_id": 2564
+    },
+    {
+      "logprob": -10.976131439208984,
+      "text": " \"",
+      "token_id": 330
+    }
+  ]
+}

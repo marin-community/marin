@@ -20,8 +20,6 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,8 +42,7 @@ use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
 use crate::store::segment::{
-    discover_segments, read_segment_footer, recover_next_seq, segment_uncompressed_bytes,
-    write_segment_to_dir,
+    discover_segments, read_segment_footer, recover_next_seq, write_segment_to_dir,
 };
 use crate::store::trigram::{sidecar_path, write_sidecar};
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
@@ -647,50 +644,15 @@ impl Namespace {
                 .map(|s| segment_to_row(&self.name, s))
                 .collect::<Vec<_>>()
         };
-        // The planner's only I/O is the per-segment footer read behind this
-        // closure. Memoize it so the chosen job's uncompressed size can be
-        // logged without re-parsing the same footers.
-        let uncompressed: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
-        let planned = plan(&self.compaction_config, &rows, |row| {
-            *uncompressed
-                .borrow_mut()
-                .entry(row.path.clone())
-                .or_insert_with(|| self.segment_uncompressed(&row.path))
-        });
-        let Some(job) = planned else {
+        let Some(job) = plan(&self.compaction_config, &rows) else {
             return Ok(false);
         };
-        let memo = uncompressed.borrow();
-        let job_uncompressed = job
-            .inputs
-            .iter()
-            .filter_map(|s| memo.get(&s.path).copied())
-            .fold(0i64, i64::saturating_add);
-        drop(memo);
-        self.run_one_job(&dir, &job, job_uncompressed)?;
+        self.run_one_job(&dir, &job)?;
         Ok(true)
     }
 
-    /// Decoded size of the segment at `path`, for the compaction memory budget.
-    ///
-    /// An unreadable footer reports `i64::MAX` so the planner isolates the
-    /// segment into a single-input job — promoted by rename — rather than
-    /// pulling an unmeasurable input into a merge.
-    fn segment_uncompressed(&self, path: &str) -> i64 {
-        match segment_uncompressed_bytes(std::path::Path::new(path)) {
-            Some(bytes) => bytes,
-            None => {
-                tracing::warn!(
-                    namespace = %self.name,
-                    path = %path,
-                    "unreadable segment footer; treating as over the merge memory budget"
-                );
-                i64::MAX
-            }
-        }
-    }
-
-    /// Synthesize and apply a single L0->L1 merge of ALL L0 segments.
+    /// Synthesize and apply a single L0->L1 merge of every L0 segment that fits
+    /// `max_merge_arrow_bytes` (all of them, at test data sizes).
     ///
     /// Tests use this to land L1 state without configuring tiny `level_targets`.
     /// Production never calls it. No-op when there are no L0 segments (or in
@@ -714,47 +676,27 @@ impl Namespace {
             return Ok(());
         }
         let output_min_seq = l0.iter().map(|r| r.min_seq).min().expect("non-empty");
-        let output_max_seq = l0.iter().map(|r| r.max_seq).max().expect("non-empty");
-        let uncompressed = l0
-            .iter()
-            .map(|r| self.segment_uncompressed(&r.path))
-            .fold(0i64, i64::saturating_add);
         let job = CompactionJob {
             inputs: l0,
             output_level: 1,
             output_min_seq,
-            output_max_seq,
         };
-        self.run_one_job(&dir, &job, uncompressed)
+        self.run_one_job(&dir, &job)
     }
 
     /// Execute `job` (read+merge+write or rename) then commit the resulting swap.
     ///
-    /// `input_uncompressed_bytes` is the decoded size the planner budgeted the
-    /// job against; it is logged so the compressed-to-decoded ratio driving
-    /// merge memory is visible in production.
-    fn run_one_job(
-        &self,
-        dir: &std::path::Path,
-        job: &CompactionJob,
-        input_uncompressed_bytes: i64,
-    ) -> Result<(), StatsError> {
+    /// The executor may consume only a prefix of `job.inputs` — as much as
+    /// `max_merge_arrow_bytes` admits — so the committed span comes from the
+    /// swap, not the job, and both counts are logged.
+    fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
         let indexed = self.indexed_columns();
         let started = Instant::now();
-        // A single-input job is a rename; a multi-input job reads every input
-        // into RAM. The distinction is the whole memory story, so name it.
-        let kind = if job.inputs.len() == 1 {
-            "bump"
-        } else {
-            "merge"
-        };
         tracing::info!(
             namespace = %self.name,
-            kind,
-            inputs = job.inputs.len(),
+            planned_inputs = job.inputs.len(),
             output_level = job.output_level,
             input_bytes = job.inputs.iter().map(|s| s.byte_size).sum::<i64>(),
-            input_uncompressed_bytes,
             input_rows = job.inputs.iter().map(|s| s.row_count).sum::<i64>(),
             "compaction job starting"
         );
@@ -764,11 +706,23 @@ impl Namespace {
             &self.arrow_schema,
             self.key_column.as_deref(),
             &indexed,
+            self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
         let output_path = swap.added.path.clone();
         let output_bytes = swap.added.size_bytes;
         let output_rows = swap.added.row_count;
+        // A bump is a rename; a merge decodes its inputs into RAM. The
+        // distinction is the whole memory story, so name it — along with the
+        // decoded size the ceiling actually bounds, and how much of the planned
+        // job that ceiling let this tick take.
+        let kind = if swap.bump_rename.is_some() {
+            "bump"
+        } else {
+            "merge"
+        };
+        let merged_inputs = swap.removed.len();
+        let input_arrow_bytes = swap.input_arrow_bytes;
         self.commit_swap(swap)?;
         tracing::info!(
             namespace = %self.name,
@@ -777,6 +731,9 @@ impl Namespace {
             output_path = %output_path,
             output_bytes,
             output_rows,
+            merged_inputs,
+            planned_inputs = job.inputs.len(),
+            input_arrow_bytes,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "compaction job committed"
         );

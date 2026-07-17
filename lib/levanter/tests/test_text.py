@@ -29,7 +29,7 @@ from levanter.data.text.formats import (
     ChatLmDatasetFormat,
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
-    SupervisedLmDatasetFormat,
+    TextLmDatasetFormat,
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
@@ -427,119 +427,6 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
 
 
-def test_supervised_text_cache_masks_target_tokens_for_training_and_eval(tmp_path):
-    records = [
-        {"input": "1 2 ", "target": "3 4"},
-        {"input": "5 ", "target": "6 7 8"},
-    ]
-    data_path = tmp_path / "supervised.jsonl"
-    with data_path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[str(data_path)]),
-        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        cache_dir=str(tmp_path),
-    )
-    config = LmDataConfig(
-        components={"supervised": component},
-        tokenizer="passthrough",
-        vocab_size=16,
-    )
-
-    train_cache = config.build_caches("train")["supervised"]
-    first_row = train_cache.as_sync_dataset()[0]
-    np.testing.assert_array_equal(first_row["input_ids"], np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(first_row["loss_weights"], np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float32))
-
-    Pos = hax.Axis("position", 4)
-    train_example = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
-        "supervised"
-    ].as_sync_dataset()[0]
-    np.testing.assert_array_equal(np.asarray(train_example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(train_example.loss_weight), np.array([0.0, 1.0, 1.0, 0.0]))
-
-    tagged_eval_sets = config.tagged_eval_sets(Pos)
-    assert tagged_eval_sets[0][1] == ["supervised"]
-    eval_example = tagged_eval_sets[0][0].as_sync_dataset()[0]
-    np.testing.assert_array_equal(eval_example.tokens.array, np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(eval_example.loss_weight.array, np.array([0.0, 1.0, 1.0, 0.0]))
-
-
-def test_supervised_text_processor_preserves_input_target_token_boundary():
-    class BoundaryMergingTokenizer:
-        name_or_path = "boundary-merging"
-        vocab_size = 128
-        bos_token_id = None
-        eos_token_id = None
-        pad_token_id = None
-        bos_token = None
-        eos_token = None
-        chat_template = None
-
-        def __len__(self):
-            return self.vocab_size
-
-        def encode(self, text, *, add_special_tokens=False):
-            if text == "ab":
-                return [99]
-            if text == "a":
-                return [1]
-            if text == "b":
-                return [2]
-            raise ValueError(f"Unexpected text: {text!r}")
-
-    processor = preprocessor_for_format(
-        SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        BoundaryMergingTokenizer(),  # type: ignore[arg-type]
-        enforce_bos=False,
-        enforce_eos=False,
-    )
-
-    row = processor([{"input": "a", "target": "b"}])[0]
-
-    np.testing.assert_array_equal(row["input_ids"], np.array([1, 2], dtype=np.int32))
-    np.testing.assert_array_equal(row["loss_weights"], np.array([1.0, 0.0], dtype=np.float32))
-
-
-def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
-    records = [
-        {"input": "1 ", "target": "2"},
-        {"input": "3 ", "target": "4"},
-    ]
-    data_path = tmp_path / "supervised_pack.jsonl"
-    with data_path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record) + "\n")
-
-    component = DatasetComponent(
-        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
-        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
-        cache_dir=str(tmp_path),
-        pack=2,
-    )
-    config = LmDataConfig(
-        components={"supervised": component},
-        tokenizer="passthrough",
-        vocab_size=16,
-    )
-
-    cache = config.build_caches("train")["supervised"]
-    Pos = hax.Axis("position", 4)
-    dataset = dataset_for_component(
-        component,
-        Pos,
-        cache,
-        eos_id=None,
-        block_cross_document_attention=config.block_cross_document_attention,
-    ).as_sync_dataset()
-
-    example = dataset[0]
-    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
-    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
-
-
 def test_train_set_last_mile_wraps_to_named(tmp_path):
     records = [{"input_ids": [1, 2, 3, 4]}]
     data_path = tmp_path / "prebuilt_train.jsonl"
@@ -829,6 +716,94 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+# --- one example per document ----------------------------------------------
+#
+# A falsy pack (for chat/trace) and pack=1 select one document per example, padded to
+# Pos. These tests drive the config-level dispatch (dataset_for_component /
+# dataset_for_trace_chat_format) rather than the dataset classes directly, since the
+# crash and bool/int coercion defects lived in that dispatch.
+
+
+def _build_train_cache(component, tokenizer):
+    source = component.source.get_shard_source("train")
+    return build_lm_dataset_cache(component.cache_dir, source, component.format, tokenizer)
+
+
+def assert_padding_never_contributes_loss(example):
+    """The pad value must not leak into the objective.
+
+    GreedyPrepackedDataset marks padding positions with segment id -1. Both a padding
+    position and any position whose successor is padding (i.e. that would predict a pad
+    token) must carry zero loss weight.
+    """
+    segment_ids = np.asarray(example.attn_mask.segment_ids[0])
+    loss_weight = np.asarray(example.loss_weight)
+    is_padding = segment_ids == -1
+    assert is_padding.any(), "expected the document to be shorter than Pos, leaving padding"
+    predicts_padding = np.roll(segment_ids, -1) == -1
+    leaking = loss_weight[is_padding | predicts_padding]
+    np.testing.assert_array_equal(leaking, np.zeros_like(leaking))
+
+
+@pytest.mark.parametrize("pack", [False, 1])
+def test_dataset_for_component_chat_unpacked_yields_one_padded_example_per_conversation(
+    dummy_chat_data, tmp_path, pack
+):
+    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
+        format=ChatLmDatasetFormat(messages_field="messages"),
+        cache_dir=str(tmp_path),
+        pack=pack,
+    )
+    cache = _build_train_cache(component, tokenizer)
+    Pos = hax.Axis("position", 128)
+    ds = dataset_for_component(
+        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+    ).as_sync_dataset()
+
+    # dummy_chat_data holds two conversations; unpacked mode never merges them
+    assert len(ds) == 2
+    for ex in ds:
+        assert ex.tokens.shape == (Pos.size,)
+        assert ex.loss_weight.shape == (Pos.size,)
+        assert_padding_never_contributes_loss(ex)
+        # assistant spans survive intact
+        assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+def test_dataset_for_component_text_unpacked_masks_padding(tmp_path):
+    """Regression: one-document-per-example raw text must not train on padding.
+
+    PackedTokenDataset supplies loss_weight=1 everywhere for raw text, so without the
+    padding-aware masking the pad positions (and the final real token that would predict
+    a pad token) would leak into the loss.
+    """
+    records = [{"text": "Hello world"}, {"text": "Short"}]
+    data_path = tmp_path / "text_pad.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=TextLmDatasetFormat(text_key="text"),
+        cache_dir=str(tmp_path),
+        pack=1,
+    )
+    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+    cache = _build_train_cache(component, tokenizer)
+    Pos = hax.Axis("position", 16)
+    ds = dataset_for_component(
+        component, Pos, cache, eos_id=None, block_cross_document_attention=True
+    ).as_sync_dataset()
+
+    assert len(ds) == 2
+    for ex in ds:
+        assert ex.tokens.shape == (Pos.size,)
+        assert_padding_never_contributes_loss(ex)
 
 
 # --- LmDataConfig.build_caches ---------------------------------------------

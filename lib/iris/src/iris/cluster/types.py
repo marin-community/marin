@@ -687,6 +687,10 @@ _root.addHandler(_handler)
 _root.setLevel(logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# botocore/aiobotocore log credential discovery + retry chatter at INFO once per
+# fresh S3 session; pure noise on S3-backed tasks (mirror of rigging.log_setup).
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("aiobotocore").setLevel(logging.WARNING)
 
 workdir = os.environ["IRIS_WORKDIR"]
 
@@ -849,6 +853,13 @@ def is_task_finished(state: int) -> bool:
 JobState = job_pb2.JobState
 TaskState = job_pb2.TaskState
 EndpointAccess = controller_pb2.Controller.EndpointAccess
+
+# Endpoint-metadata key a registrant sets (as a stringified number of seconds) to
+# override the controller proxy's per-request upstream timeout for that endpoint —
+# e.g. ``marin-serve`` sizing it to long model generations. In the shared types
+# module so registry client and controller proxy agree on the key with no client
+# dependency on controller code.
+PROXY_TIMEOUT_METADATA_KEY = "proxy_timeout_seconds"
 
 
 # TPU topology table and lookup helpers live in iris.cluster.tpu_topology so

@@ -139,6 +139,13 @@ message Controller {
     // allowlist gates on. The peer re-checks it against the same claim carried in
     // the federation JWT before trusting it (defense in depth).
     string submitting_user = 3;
+    // Identifies one parent-side handoff incarnation. A re-drive of the same
+    // handle repeats it; a resubmission that replaced the parent's job mints a
+    // new one. The peer matches it against the nonce stored on its RECEIVED
+    // handle: equal means idempotent replay (return the existing job), different
+    // means a new incarnation (the existing-job policy applies, so a finished
+    // previous run is replaced and re-run).
+    string handoff_nonce = 4;
   }
 
   message LaunchJobResponse {
@@ -679,6 +686,11 @@ message Controller {
     // Free amount per resource token, in the token's natural unit (accelerator
     // variant -> free chips, e.g. {"h100": 8}). Keys are lowercased device-variants.
     map<string, int64> amounts = 3;
+    // Total amount per resource token over the same capacity the free amounts were
+    // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
+    // keys as `amounts`; a token's free amount never exceeds its total. Display
+    // only — the federation availability gate reads `amounts` alone.
+    map<string, int64> total_amounts = 4;
   }
 
   message BackendSummary {

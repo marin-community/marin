@@ -35,9 +35,10 @@ from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
-from tests.cluster.conftest import eq_constraint, in_constraint
 from tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+
+from tests.cluster.conftest import eq_constraint, in_constraint
 
 from .conftest import (
     building_counts as _building_counts,

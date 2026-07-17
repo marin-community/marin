@@ -15,6 +15,8 @@ from iris.cluster.backends.k8s.tasks import (
     _KUEUE_PRIORITY_CLASS,
     _KUEUE_QUEUE_NAME,
     _KUEUE_REQUIRED_TOPOLOGY,
+    _KUEUE_SLICE_REQUIRED_TOPOLOGY,
+    _KUEUE_SLICE_SIZE,
     _LABEL_JOB_ID,
     _LABEL_TASK_HASH,
     _build_init_container_spec,
@@ -34,6 +36,13 @@ from iris.cluster.backends.k8s.tasks import (
     _task_update_from_pod,
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    NVL72_GPUS_PER_NODE,
+    RACK_SIZE,
+    SCHEDULABLE_RACK_NODES,
+    KueueTopologyBinding,
+    TopologyMode,
+)
 from iris.cluster.platforms.k8s.types import parse_k8s_quantity
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -1079,10 +1088,115 @@ def test_kueue_priority_class_stamped_from_config():
 def test_kueue_required_topology_for_nvlink_domain():
     """group_by=nvlink.domain -> required (hard) NVLink-domain topology."""
     manifest = _build_pod_manifest(
-        _cosched_req("/job/task/0", group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
+        _cosched_req("/job/task/0", num_tasks=8, group_by="nvlink.domain"), pod_config(local_queue="iris-lq")
     )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_kueue_required_nvlink_gang_rejects_above_schedulable_slice():
+    """A hard nvlink.domain gang larger than a rack's guaranteed-schedulable slice can hang
+    whenever the rack is short a node, so it must fail fast (the guard for a programmatic or
+    stale client; the CLI routes 17+ NVL72 replicas to the sliced level, never to a hard gang
+    this large)."""
+    with pytest.raises(ValueError, match="guaranteed-schedulable rack slice"):
+        _build_pod_manifest(
+            _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES + 1, group_by="nvlink.domain"),
+            pod_config(local_queue="iris-lq"),
+        )
+
+
+def test_kueue_required_nvlink_gang_allows_schedulable_slice():
+    """A hard nvlink.domain gang of exactly the guaranteed-schedulable rack slice
+    (SCHEDULABLE_RACK_NODES nodes) is the largest hard single-domain gang and is valid."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=SCHEDULABLE_RACK_NODES, group_by="nvlink.domain"),
+        pod_config(local_queue="iris-lq"),
+    )
+    assert manifest["metadata"]["annotations"][_KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+
+
+def test_kueue_preferred_nvlink_gang_packs_multi_rack():
+    """A multi-rack GB200 gang uses the SOFT nvlink.domain.preferred level: it binds the
+    nvlink.domain label as a PREFERRED (not required) topology, so Kueue packs the replicas
+    into as few whole NVLink domains as possible instead of demanding one (impossible) domain.
+    It is admitted for a gang larger than one rack rather than rejected."""
+    manifest = _build_pod_manifest(
+        _cosched_req("/job/task/0", num_tasks=RACK_SIZE + 1, group_by="nvlink.domain.preferred"),
+        pod_config(local_queue="iris-lq"),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
+
+
+def _sliced_req(
+    task_id: str, num_tasks: int, *, gpu_count: int = NVL72_GPUS_PER_NODE, group_by: str = "nvlink.domain.sliced"
+):
+    """A coscheduled request on the sliced level with a GB200 GPU device (node-saturating by default)."""
+    req = _cosched_req(task_id, num_tasks=num_tasks, group_by=group_by)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="GB200", count=gpu_count))
+    return req
+
+
+@pytest.mark.parametrize("num_tasks,slice_size", [(24, 12), (32, 16), (48, 16), (20, 10), (64, 16)])
+def test_kueue_sliced_nvlink_gang_stamps_balanced_slice_size(num_tasks, slice_size):
+    """A multi-rack GB200 gang on the sliced level binds podset-slice-required-topology to
+    nvlink.domain with a podset-slice-size that spreads it evenly over the fewest racks (24->12,
+    32->16, 48->16), pairs a soft coarse leafgroup preference, and stamps the per-pod index that
+    makes slice membership rank-contiguous. It carries neither the whole-podset required nor a
+    preferred nvlink.domain request."""
+    manifest = _build_pod_manifest(_sliced_req("/job/task/0", num_tasks=num_tasks), pod_config(local_queue="iris-lq"))
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_SLICE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert annotations[_KUEUE_SLICE_SIZE] == str(slice_size)
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "backend.coreweave.cloud/leafgroup"
+    assert _KUEUE_REQUIRED_TOPOLOGY not in annotations
+    assert manifest["metadata"]["labels"][_KUEUE_POD_GROUP_POD_INDEX] == "0"
+
+
+def test_kueue_sliced_gang_rejects_uneven_split():
+    """A sliced gang that cannot split into equal per-rack slices (17 over ceil(17/16)=2 racks)
+    can't place as a balanced layout, so it is rejected at build time."""
+    with pytest.raises(ValueError, match="do not divide evenly"):
+        _build_pod_manifest(_sliced_req("/job/task/0", num_tasks=17), pod_config(local_queue="iris-lq"))
+
+
+def test_kueue_sliced_gang_rejects_slice_too_small():
+    """A gang whose balanced slices would each be <= half a rack (18 -> two 9-node slices) lets
+    two slices share one rack, breaking one slice per rack, so it is rejected."""
+    with pytest.raises(ValueError, match="must exceed half a rack"):
+        _build_pod_manifest(_sliced_req("/job/task/0", num_tasks=18), pod_config(local_queue="iris-lq"))
+
+
+def test_kueue_sliced_gang_requires_node_saturating_pods():
+    """The one-slice-per-rack guarantee holds only if each pod fills a whole node; a sub-node
+    GB200 pod would let two slices share a rack, so the sliced level rejects it."""
+    with pytest.raises(ValueError, match="node-saturating"):
+        _build_pod_manifest(
+            _sliced_req("/job/task/0", num_tasks=32, gpu_count=1),
+            pod_config(local_queue="iris-lq"),
+        )
+
+
+def test_kueue_sliced_gang_without_coarse_preferred_omits_preferred_annotation():
+    """A sliced binding whose coarse_preferred_label is unset stamps only the slice request, no
+    whole-podset preferred topology."""
+    manifest = _build_pod_manifest(
+        _sliced_req("/job/task/0", num_tasks=32),
+        pod_config(
+            local_queue="iris-lq",
+            kueue_topologies={
+                "nvlink.domain.sliced": KueueTopologyBinding(
+                    "ds.coreweave.com/nvlink.domain", TopologyMode.SLICE_REQUIRED
+                )
+            },
+        ),
+    )
+    annotations = manifest["metadata"]["annotations"]
+    assert annotations[_KUEUE_SLICE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+    assert annotations[_KUEUE_SLICE_SIZE] == "16"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
@@ -1122,24 +1236,19 @@ def test_pod_group_name_is_valid_label_value():
     assert len(name) <= 63
 
 
-def test_coscheduled_without_local_queue_raises():
-    """A coscheduled job dispatched to a cluster with no LocalQueue is a
-    misconfiguration: Kueue gang admission is required, with no fallback."""
-    req = _cosched_req("/job/task/0", num_tasks=4, group_by="leafgroup")
-    with pytest.raises(ValueError, match="requires Kueue gang admission"):
-        _build_pod_manifest(req, pod_config(local_queue=""))
-
-
-def test_kueue_drops_active_deadline_seconds():
-    """Kueue-gated pods omit activeDeadlineSeconds (gated wait would burn the deadline)."""
+def test_kueue_gang_drops_active_deadline_seconds():
+    """A gang omits activeDeadlineSeconds: k8s counts it from creation, so a gang waiting
+    SchedulingGated for the autoscaler could burn the deadline before it runs."""
     req = _cosched_req("/job/task/0")
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert "activeDeadlineSeconds" not in manifest["spec"]
 
 
-def test_non_coscheduled_keeps_active_deadline_seconds():
-    """A non-coscheduled job (not Kueue-gated) keeps the activeDeadlineSeconds budget."""
+def test_non_coscheduled_pod_keeps_active_deadline_seconds():
+    """A non-coscheduled pod keeps activeDeadlineSeconds even though it routes through Kueue:
+    single pods admit quickly, and on a K8s-only cluster this is their only timeout
+    enforcement (the controller's execution-timeout scan runs only for worker-daemon backends)."""
     req = make_run_req("/job/task/0", num_tasks=4)
     req.timeout.milliseconds = 3600_000
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
@@ -1154,10 +1263,38 @@ def test_kueue_gang_uses_topology_not_affinity():
     assert _KUEUE_PREFERRED_TOPOLOGY in manifest["metadata"]["annotations"]
 
 
-def test_non_coscheduled_pod_has_no_kueue_labels():
-    """A non-coscheduled pod never carries Kueue labels even with a LocalQueue configured."""
+def test_non_coscheduled_pod_routed_through_kueue_without_gang_metadata():
+    """Every pod routes through Kueue when a LocalQueue is set: a non-coscheduled pod
+    carries the queue-name label but none of the gang-only pod-group labels or topology
+    annotations."""
     manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue="iris-lq"))
-    assert _KUEUE_POD_GROUP_NAME not in manifest["metadata"]["labels"]
+    labels = manifest["metadata"]["labels"]
+    assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
+    assert _KUEUE_POD_GROUP_NAME not in labels
+    assert _KUEUE_POD_GROUP_POD_INDEX not in labels
+    assert "annotations" not in manifest["metadata"]
+
+
+def test_single_pod_gpu_job_routed_through_kueue():
+    """A single-pod GPU job (not coscheduled) routes through Kueue so its GPU capacity is
+    accounted and preemptible: queue-name label and no gang pod-group metadata, but a soft
+    finest-level topology request so the topology-aware cw-ib flavor will admit it (a GPU
+    workload with no topology request is rejected by TAS)."""
+    req = make_run_req("/gpu-job/task/0", num_tasks=1)
+    req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
+    labels = manifest["metadata"]["labels"]
+    annotations = manifest["metadata"]["annotations"]
+    assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
+    assert _KUEUE_POD_GROUP_NAME not in labels
+    assert annotations[_KUEUE_PREFERRED_TOPOLOGY] == "kubernetes.io/hostname"
+    assert _KUEUE_POD_GROUP_TOTAL not in annotations
+
+
+def test_single_pod_cpu_job_has_no_topology_annotation():
+    """A CPU-only pod routes to the non-TAS cw-cpu flavor, so it must NOT carry a topology
+    annotation (Kueue would reject a topology request against a non-topology flavor)."""
+    manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), pod_config(local_queue="iris-lq"))
     assert "annotations" not in manifest["metadata"]
 
 
@@ -1165,7 +1302,10 @@ def test_kueue_topologies_override_config():
     """A configured topologies mapping overrides the CoreWeave defaults for a group_by."""
     manifest = _build_pod_manifest(
         _cosched_req("/job/task/0", group_by="leafgroup"),
-        pod_config(local_queue="iris-lq", kueue_topologies={"leafgroup": ("rack.example.com/pod", True)}),
+        pod_config(
+            local_queue="iris-lq",
+            kueue_topologies={"leafgroup": KueueTopologyBinding("rack.example.com/pod", TopologyMode.REQUIRED)},
+        ),
     )
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"

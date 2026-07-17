@@ -312,24 +312,6 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
     return _record(label, 0)
 
 
-def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
-    if not files:
-        return 0
-
-    args = ["uvx", "mypy@1.19.1", "--ignore-missing-imports", "--python-version=3.12"]
-
-    test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
-    if not test_excluded:
-        return _record("Mypy type checker", 0)
-
-    file_args = [str(f.relative_to(ROOT_DIR)) for f in test_excluded]
-    args.extend(file_args)
-
-    result = run_cmd(args)
-    output = (result.stdout + result.stderr).strip()
-    return _record("Mypy type checker", result.returncode, output)
-
-
 def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -813,7 +795,6 @@ PRECOMMIT_CONFIGS = [
             check_ruff,
             partial(check_black, config=LEVANTER_BLACK_CONFIG),
             partial(check_license_headers, license_file=LEVANTER_LICENSE),
-            # check_mypy,
         ],
     ),
     PrecommitConfig(

@@ -36,6 +36,9 @@ class NemotronV2Dataset:
     """Allow to point at existing download output to avoid re-downloading"""
 
 
+NEMOTRON_PRETRAINING_LEGAL_V1 = "nemotron_pretraining_legal_v1"
+NEMOTRON_PRETRAINING_SPECIALIZED_V1_2 = "nemotron_pretraining_specialized_v1_2"
+
 NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
     "nemotron_cc_v2": NemotronV2Dataset(
         hf_dataset_id="nvidia/Nemotron-CC-v2",
@@ -154,6 +157,35 @@ NEMOTRON_V2_DATASETS: dict[str, NemotronV2Dataset] = {
             "unconditional_algorithmic": "Nemotron-Pretraining-Unconditional-Algorithmic/**/*.parquet",
         },
         override_output_path="raw/nemotron_pretraining_specialized_v1_1-b12f71",
+    ),
+    NEMOTRON_PRETRAINING_SPECIALIZED_V1_2: NemotronV2Dataset(
+        hf_dataset_id="nvidia/Nemotron-Pretraining-Specialized-v1.2",
+        revision="807afc1",
+        subsets={
+            "fact_seeking": "Nemotron-Pretraining-Fact-Seeking/**/*.parquet",
+            "generative": "Nemotron-Pretraining-Generative/**/*.parquet",
+            "moral_scenarios": "Nemotron-Pretraining-Moral-Scenarios/**/*.parquet",
+            "multiple_choice": "Nemotron-Pretraining-Multiple-Choice/**/*.parquet",
+        },
+    ),
+    NEMOTRON_PRETRAINING_LEGAL_V1: NemotronV2Dataset(
+        hf_dataset_id="nvidia/Nemotron-Pretraining-Legal-v1",
+        revision="3d91d58",
+        subsets={
+            "california_code_of_regulations": "Nemotron-Pretraining-Legal-California-Code-Of-Regulations/**/*.parquet",
+            "case_law_summary": "Nemotron-Pretraining-Legal-Case-Law-Summary/**/*.parquet",
+            "casehold": "Nemotron-Pretraining-Legal-CaseHOLD/**/*.parquet",
+            "definition_classification": "Nemotron-Pretraining-Legal-Definition-Classification/**/*.parquet",
+            "diversity_jurisdiction": "Nemotron-Pretraining-Legal-Diversity-Jurisdiction/**/*.parquet",
+            "ecfr": "Nemotron-Pretraining-Legal-eCFR/**/*.parquet",
+            "ecfr_qa": "Nemotron-Pretraining-Legal-eCFR-QA/**/*.parquet",
+            "function_of_decision": "Nemotron-Pretraining-Legal-Function-Of-Decision/**/*.parquet",
+            "globalcit": "Nemotron-Pretraining-Legal-GlobalCit/**/*.parquet",
+            "legalbench_cuad_v2": "Nemotron-Pretraining-Legal-LegalBench-CUAD-v2/**/*.parquet",
+            "nycourts_judicial_ethics_opinions": (
+                "Nemotron-Pretraining-Legal-NYCourts-Judicial-Ethics-Opinions/**/*.parquet"
+            ),
+        },
     ),
 }
 

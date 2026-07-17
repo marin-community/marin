@@ -26,7 +26,7 @@ from iris.cluster.controller.projections.endpoints import (
     EndpointRow,
     EndpointsProjection,
 )
-from iris.cluster.types import EndpointAccess, JobName
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
 
@@ -56,6 +56,25 @@ def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
     return f"/{slashed}", slashed
 
 
+def parse_proxy_timeout(metadata: dict[str, str]) -> float | None:
+    """Per-endpoint proxy timeout (seconds) from endpoint metadata, or None.
+
+    None when the key is absent or the value is not a positive number: a malformed
+    override falls back to the proxy default rather than breaking resolution.
+    """
+    raw = metadata.get(PROXY_TIMEOUT_METADATA_KEY)
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = 0.0
+    if seconds <= 0:
+        logger.warning("Ignoring invalid %s=%r on endpoint metadata", PROXY_TIMEOUT_METADATA_KEY, raw)
+        return None
+    return seconds
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedEndpoint:
     """A proxy request's resolved target: canonical endpoint name, address, and access mode."""
@@ -70,6 +89,8 @@ class ResolvedEndpoint:
     # The task that owns the endpoint; used to authorize a federation-peer's proxy
     # against the owning job's federation handle. None for ``/system/`` endpoints.
     task_id: JobName | None = None
+    # Per-endpoint upstream proxy timeout in seconds, or None to use the proxy default.
+    timeout_seconds: float | None = None
 
 
 class EndpointServiceImpl:
@@ -243,7 +264,12 @@ class EndpointServiceImpl:
                     return None
                 row = rows[0]
                 return ResolvedEndpoint(
-                    name=row.name, address=row.address, access=row.access, peer_id=row.peer_id, task_id=row.task_id
+                    name=row.name,
+                    address=row.address,
+                    access=row.access,
+                    peer_id=row.peer_id,
+                    task_id=row.task_id,
+                    timeout_seconds=parse_proxy_timeout(row.metadata),
                 )
             address = self._system_endpoints.get(name)
             if address is not None:

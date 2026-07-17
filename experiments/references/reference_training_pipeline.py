@@ -20,8 +20,9 @@ with ChatLmDatasetFormat via a custom Dataset handle.
 from fray.cluster import ResourceConfig
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
@@ -55,8 +56,10 @@ _MODEL = GrugModelConfig(
 )
 
 
-def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def build(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
+    name = "references/reference-pipeline"
+    version = resolve_version(name, version)
     dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]
     dolmino_math = dolmino_datasets(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]
     validation = [
@@ -95,7 +98,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name=user_namespaced_name("references/reference-pipeline", version),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,
@@ -106,4 +109,4 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
 
 
 if __name__ == "__main__":
-    StepRunner().run([build().lower()])
+    experiment_main(build)()
