@@ -32,7 +32,7 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import write_workdir_files
+from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
     capture_cpu,
@@ -368,15 +368,31 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
                 result[mount.container_path] = str(config.workdir_host_path)
         elif mount.kind == MountKind.CACHE:
             if cache_dir:
-                host_dir = cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir = cache_dir / cache_host_dirname(mount.container_path)
                 host_dir.mkdir(parents=True, exist_ok=True)
                 result[mount.container_path] = str(host_dir)
         elif mount.kind == MountKind.TMPFS:
             if cache_dir:
-                prefix = mount.container_path.strip("/").replace("/", "-") + "-"
+                prefix = cache_host_dirname(mount.container_path) + "-"
                 host_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=cache_dir))
                 result[mount.container_path] = str(host_dir)
     return result
+
+
+def _remap_container_path(value: str, mount_map: dict[str, str]) -> str:
+    """Rewrite a container path to its host equivalent, or return it unchanged.
+
+    Sub-paths of a mount are rewritten too: a task's caches sit under their mount
+    (CARGO_TARGET_DIR under CARGO_HOME, UV_PYTHON_INSTALL_DIR under UV_CACHE_DIR),
+    and with no container to bind them, the process runtime must land those on the
+    host as well. Longest mount first, so a nested mount wins over its parent.
+    """
+    for container_path in sorted(mount_map, key=len, reverse=True):
+        if value == container_path:
+            return mount_map[container_path]
+        if value.startswith(f"{container_path}/"):
+            return mount_map[container_path] + value[len(container_path) :]
+    return value
 
 
 @dataclass
@@ -417,10 +433,7 @@ class ProcessContainerHandle:
 
         # Remap container paths to host paths in env vars
         mount_map = _resolve_mount_map(config, cache_dir=self.runtime._cache_dir)
-        env = dict(config.env)
-        for key, value in env.items():
-            if value in mount_map:
-                env[key] = mount_map[value]
+        env = {key: _remap_container_path(value, mount_map) for key, value in config.env.items()}
 
         # Track TMPFS dirs for cleanup and set TMPDIR so tempfile uses the mapped path
         for mount in config.mounts:
@@ -438,13 +451,7 @@ class ProcessContainerHandle:
         cmd = list(config.entrypoint.run_command.argv)
 
         # Remap container mount paths in command args to host paths
-        remapped_cmd = []
-        for arg in cmd:
-            for container_path, host_path in mount_map.items():
-                if arg.startswith(container_path):
-                    arg = host_path + arg[len(container_path) :]
-                    break
-            remapped_cmd.append(arg)
+        remapped_cmd = [_remap_container_path(arg, mount_map) for arg in cmd]
 
         updated_config = replace(config, env=env)
 

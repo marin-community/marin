@@ -28,7 +28,7 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
-from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import controller_pb2, job_pb2
 
@@ -767,7 +767,6 @@ class EnvironmentSpec:
                     pip_packages=list(self.pip_packages or []),
                     python_version=py_version,
                     packages=list(self.sync_packages or []) or None,
-                    quiet=setup_is_quiet(merged_env_vars),
                 )
             ]
             # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)

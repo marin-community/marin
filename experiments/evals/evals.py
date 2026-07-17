@@ -3,12 +3,18 @@
 
 """Composable eval artifacts.
 
-An eval is a lazy ``ArtifactStep``: one backend run over one :class:`EvalGroup` of tasks produces
-one typed :class:`~marin.evaluation.eval_result.EvalResult`, addressed by
-``evaluation/{backend}/{model}/{group}``. Because each group carries its own identity, a user
+An eval is a lazy ``ArtifactStep``: one :class:`EvalGroup` of tasks, run against a served model,
+produces one typed :class:`~marin.evaluation.eval_result.EvalchemyResult`, addressed by
+``evaluation/evalchemy/{model}/{group}``. Because each group carries its own identity, a user
 *combines the groups they want* instead of calling a fixed ``default_*`` bundle, and any group is
 cached and reused across experiments. :func:`eval_report` aggregates a suite's results into one
 :class:`~marin.evaluation.eval_result.EvalReport` a downstream step can pick up.
+
+Every group runs through the evalchemy path (:mod:`experiments.evals.evalchemy.serve_and_eval`): the
+model is served once as an OpenAI-compatible endpoint (marin-serve: vLLM or Levanter), the evalchemy
+fork evaluates the tasks against that URL, and the server is torn down. The eval is decoupled from the
+model backend by the URL (issue #4827), so multiple-choice and generation tasks run the same way — no
+separate JAX-logprob backend.
 
 The task menus (``core_evals`` / ``key_evals`` / ``base_model_evals``) are data — lists of
 ``EvalGroup`` — drawn from :mod:`experiments.evals.task_configs`, the same task menu the in-loop
@@ -18,22 +24,21 @@ checkpoint. :func:`evaluate_harbor` is a separate backend for Harbor registry da
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import dataclass, field
 from typing import cast
 
 from fray.cluster import ResourceConfig
 from marin.evaluation.eval_result import (
+    EvalchemyResult,
     EvalReport,
     EvalResult,
-    LevanterEvalResult,
-    LmEvalHarnessResult,
     ReportEntry,
     compile_eval_report,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
+from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact, result_type_name
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -41,7 +46,12 @@ from marin.execution.remote import remote
 from marin.inference.vllm_server import validate_vllm_mode_env
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
+from experiments.evals.evalchemy.serve_and_eval import (
+    DEFAULT_NUM_CONCURRENT,
+    EvalchemyEvalConfig,
+    ServeSpec,
+    serve_and_eval,
+)
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -58,174 +68,93 @@ logger = logging.getLogger(__name__)
 # Eval steps defer their version to the ambient BuildContext (see marin.experiment.cli): a driver
 # supplies it via --version, so nothing here hardcodes a calendar version.
 
-# lm-eval's ``code_eval`` metric (humaneval) executes model-generated code; the harness refuses to run
-# it unless this is set on the worker, and the coordinator's env does not propagate to iris children.
-HUMANEVAL_ENV = {"HF_ALLOW_CODE_EVAL": "1"}
+# lm-eval's ``code_eval`` metric (humaneval) executes model-generated code; the eval client sets
+# HF_ALLOW_CODE_EVAL on its worker (serve_and_eval), so no per-group env is needed for it.
 
-# Marin optional-dependency extras installed on the eval worker. The vLLM backend is TPU-only (it
-# shells out to the ``tpu-inference`` vllm CLI); the Levanter backend is JAX and runs on TPU or GPU,
-# so its extras follow the device.
-VLLM_EVAL_GROUPS = ["eval", "vllm", "tpu"]
-_LEVANTER_EVAL_GROUPS: dict[str, list[str]] = {
-    "tpu": ["eval", "tpu"],
-    "gpu": ["eval", "gpu"],
-    "cpu": ["eval", "cpu"],
-}
-
-
-def _levanter_dependency_groups(resources: ResourceConfig) -> list[str]:
-    """The marin extras a Levanter eval worker installs, keyed by the resource's device kind."""
-    groups = _LEVANTER_EVAL_GROUPS.get(resources.device.kind)
-    if groups is None:
-        raise ValueError(f"no Levanter eval dependency group for device kind {resources.device.kind!r}")
-    return groups
-
-
-class Backend(StrEnum):
-    """The eval engine. Each value is the evaluator-registry key in ``marin.evaluation.run``."""
-
-    LEVANTER = "levanter_lm_evaluation_harness"
-    """MCQ / logprob tasks, run through Levanter; writes a flat ``results.json``."""
-
-    LM_EVAL = "lm_evaluation_harness"
-    """Generation tasks, run through vLLM + EleutherAI lm-eval; writes lm-eval's native tree."""
+# The orchestrator step is a lightweight CPU job: it submits the serve + eval child jobs and waits.
+# The serving slice rides on the group's ServeSpec, not on this resource.
+_ORCHESTRATOR_RESOURCES = ResourceConfig.with_cpu(cpu=1)
 
 
 @dataclass(frozen=True)
 class EvalGroup:
-    """A set of tasks run together on one backend as a single job -> one ``EvalResult`` artifact.
+    """A set of tasks evaluated together against one served model -> one ``EvalchemyResult`` artifact.
 
-    The composable unit. Granularity is the *group*, not the task: a group is what one backend job
-    evaluates together (a single model load, batched), so a suite of groups does not pay per-task
-    startup. Users compose groups; each group is addressed and cached on its own.
+    The composable unit. Granularity is the *group*: a group is served once (one model boot) and its
+    tasks are evaluated against that endpoint, so a suite of groups does not pay per-task startup.
+    Users compose groups; each group is addressed and cached on its own.
 
-    ``id`` is the task-group segment of the artifact name (``evaluation/{backend}/{model}/{id}``) — the
+    ``id`` is the task-group segment of the artifact name (``evaluation/evalchemy/{model}/{id}``) — the
     author's explicit statement of the group's identity. Changing the *tasks* under a fixed ``id``
     trips the advisory drift check (bump ``id`` or the step version to fork identity).
+
+    ``serve`` picks the serving backend (vLLM or Levanter) and slice; ``apply_chat_template`` selects
+    the chat vs completion OpenAI route. ``tokenizer`` overrides the HF tokenizer the eval client loads
+    (defaults to the served checkpoint; set it to a base-model HF id when serving a ``gs://`` path).
     """
 
     tasks: tuple[EvalTaskConfig, ...]
-    backend: Backend
-    resources: ResourceConfig
     id: str
-    engine_kwargs: dict | None = None
+    serve: ServeSpec = field(default_factory=ServeSpec)
+    tokenizer: str | None = None
     apply_chat_template: bool = False
+    max_gen_toks: int = 2048
     max_eval_instances: int | None = None
+    num_concurrent: int = DEFAULT_NUM_CONCURRENT
     discover_latest_checkpoint: bool = True
-    env_vars: dict[str, str] | None = None
-    """Extra env vars for the child worker (e.g. ``HF_ALLOW_CODE_EVAL=1`` for humaneval)."""
 
 
-def evaluate_lm_evaluation_harness(
+def evaluate_evalchemy(
     model_name: str,
     model: ArtifactStep[LevanterCheckpoint],
-    evals: list[EvalTaskConfig],
+    evals: Sequence[EvalTaskConfig],
     task_group_id: str,
-    max_eval_instances: int | None = None,
-    engine_kwargs: dict | None = None,
-    resource_config: ResourceConfig | None = None,
+    serve: ServeSpec,
+    *,
+    tokenizer: str | None = None,
+    max_gen_toks: int = 2048,
     apply_chat_template: bool = False,
-    wandb_tags: list[str] | None = None,
+    max_eval_instances: int | None = None,
+    num_concurrent: int = DEFAULT_NUM_CONCURRENT,
     discover_latest_checkpoint: bool = True,
-    env_vars: dict[str, str] | None = None,
     version: str | None = None,
-) -> ArtifactStep[LmEvalHarnessResult]:
-    """A vLLM lm-eval-harness eval of one task group -> :class:`LmEvalHarnessResult`. TPU-only.
+) -> ArtifactStep[EvalchemyResult]:
+    """An evalchemy eval of one task group against a served model -> :class:`EvalchemyResult`.
 
-    Args:
-        model_name: Name of the model.
-        model: LevanterCheckpoint handle to evaluate. Wrap a pre-existing checkpoint path with
-            ``ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)`` to pass one in.
-        evals: Tasks to run with lm-eval.
-        task_group_id: Stable identity segment for this task group, so two groups on one model get
-            distinct ``name@version`` addresses instead of colliding.
-        env_vars: Extra env vars for the child iris worker. Needed for vLLM-on-TPU bring-up (e.g.
-            ``VLLM_ENABLE_V1_MULTIPROCESSING=0``) and code-eval tasks (``HF_ALLOW_CODE_EVAL=1``); the
-            coordinator's ``os.environ`` does not propagate to iris-spawned children.
-        version: Explicit version, or None to defer to the ambient BuildContext.
+    A CPU orchestrator step serves ``model`` (marin-serve), evaluates ``evals`` against its OpenAI URL
+    with the evalchemy fork, and tears the server down. ``task_group_id`` is the stable identity
+    segment so two groups on one model get distinct ``name@version`` addresses. ``tokenizer`` is the HF
+    tokenizer the eval client loads (defaults to the served checkpoint, which the eval image cannot
+    load from a ``gs://`` path -- set it to the base model's HF id in that case). ``version`` is
+    explicit, or None to defer to the ambient BuildContext.
     """
-    if resource_config is not None and resource_config.device.kind == "gpu":
-        raise ValueError(
-            "the vLLM lm-eval backend is TPU-only (tpu-inference); run generation evals on TPU, or "
-            "use the Levanter backend on GPU"
-        )
     deps = (model,)
-    name = f"evaluation/lm_evaluation_harness/{model_name}/{task_group_id}"
+    name = f"evaluation/evalchemy/{model_name}/{task_group_id}"
 
-    def build_config(ctx: StepContext) -> EvaluationConfig:
-        return EvaluationConfig(
-            evaluator=Backend.LM_EVAL,
-            model_name=model_name,
-            model_path=ctx.artifact_path(model),
-            evaluation_path=ctx.output_path,
-            evals=evals,
-            max_eval_instances=max_eval_instances,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
+    def build_config(ctx: StepContext) -> EvalchemyEvalConfig:
+        model_path = ctx.artifact_path(model)
+        if discover_latest_checkpoint:
+            model_path = discover_hf_checkpoints(model_path)[-1]
+        return EvalchemyEvalConfig(
+            model=model_path,
+            tasks=tuple(evals),
+            out_path=ctx.output_path,
+            serve=serve,
+            tokenizer=tokenizer,
+            max_gen_toks=max_gen_toks,
             apply_chat_template=apply_chat_template,
-            wandb_tags=wandb_tags,
+            max_eval_instances=max_eval_instances,
+            num_concurrent=num_concurrent,
         )
 
     return ArtifactStep(
         name=name,
         version=resolve_version(name, version),
-        artifact_type=LmEvalHarnessResult,
+        artifact_type=EvalchemyResult,
         run=remote(
-            evaluate,
-            resources=resource_config,
-            pip_dependency_groups=VLLM_EVAL_GROUPS,
-            env_vars=env_vars,
-        ),
-        build_config=build_config,
-        deps=deps,
-    )
-
-
-def evaluate_levanter_lm_evaluation_harness(
-    model_name: str,
-    model: ArtifactStep[LevanterCheckpoint],
-    evals: list[EvalTaskConfig],
-    resource_config: ResourceConfig,
-    task_group_id: str,
-    max_eval_instances: int | None = None,
-    apply_chat_template: bool = False,
-    discover_latest_checkpoint: bool = True,
-    env_vars: dict[str, str] | None = None,
-    version: str | None = None,
-) -> ArtifactStep[LevanterEvalResult]:
-    """A Levanter lm-eval-harness eval of one task group -> :class:`LevanterEvalResult`.
-
-    The Levanter evaluator writes a single top-level ``results.json``, so ``resolve(...).averages()``
-    reads the cross-task scores without touching the directory layout. ``env_vars`` sets env on the
-    child iris worker. ``version`` is explicit, or None to defer to the ambient BuildContext.
-    """
-    logger.info(f"Running levanter evals on the following tasks: {evals}")
-    deps = (model,)
-    name = f"evaluation/lm_evaluation_harness_levanter/{model_name}/{task_group_id}"
-
-    def build_config(ctx: StepContext) -> EvaluationConfig:
-        return EvaluationConfig(
-            evaluator=Backend.LEVANTER,
-            model_name=None,  # imputed automatically
-            model_path=ctx.artifact_path(model),
-            evaluation_path=ctx.output_path,
-            evals=evals,
-            discover_latest_checkpoint=discover_latest_checkpoint,
-            max_eval_instances=max_eval_instances,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, version),
-        artifact_type=LevanterEvalResult,
-        run=remote(
-            evaluate,
-            resources=resource_config,
-            pip_dependency_groups=_levanter_dependency_groups(resource_config),
-            env_vars=env_vars,
+            serve_and_eval,
+            resources=_ORCHESTRATOR_RESOURCES,
+            env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
         ),
         build_config=build_config,
         deps=deps,
@@ -235,41 +164,26 @@ def evaluate_levanter_lm_evaluation_harness(
 def eval_step(
     model: ArtifactStep[LevanterCheckpoint], group: EvalGroup, *, version: str | None = None
 ) -> ArtifactStep[EvalResult]:
-    """One eval group -> one typed ``EvalResult`` artifact, addressed by backend + model + group id.
+    """One eval group -> one typed ``EvalResult`` artifact, addressed by model + group id.
 
     ``version`` is explicit, or None to defer to the ambient BuildContext.
     """
-    if group.backend == Backend.LEVANTER:
-        levanter_step = evaluate_levanter_lm_evaluation_harness(
-            model_name=model.name,
-            model=model,
-            evals=list(group.tasks),
-            resource_config=group.resources,
-            task_group_id=group.id,
-            max_eval_instances=group.max_eval_instances,
-            apply_chat_template=group.apply_chat_template,
-            discover_latest_checkpoint=group.discover_latest_checkpoint,
-            env_vars=group.env_vars,
-            version=version,
-        )
-        # ArtifactStep is invariant in its artifact type, so widen the concrete result to the base.
-        return cast("ArtifactStep[EvalResult]", levanter_step)
-    if group.backend == Backend.LM_EVAL:
-        lm_eval_step = evaluate_lm_evaluation_harness(
-            model_name=model.name,
-            model=model,
-            evals=list(group.tasks),
-            task_group_id=group.id,
-            engine_kwargs=group.engine_kwargs,
-            resource_config=group.resources,
-            max_eval_instances=group.max_eval_instances,
-            apply_chat_template=group.apply_chat_template,
-            discover_latest_checkpoint=group.discover_latest_checkpoint,
-            env_vars=group.env_vars,
-            version=version,
-        )
-        return cast("ArtifactStep[EvalResult]", lm_eval_step)
-    raise ValueError(f"unknown eval backend {group.backend!r}")
+    step = evaluate_evalchemy(
+        model_name=model.name,
+        model=model,
+        evals=list(group.tasks),
+        task_group_id=group.id,
+        serve=group.serve,
+        tokenizer=group.tokenizer,
+        max_gen_toks=group.max_gen_toks,
+        apply_chat_template=group.apply_chat_template,
+        max_eval_instances=group.max_eval_instances,
+        num_concurrent=group.num_concurrent,
+        discover_latest_checkpoint=group.discover_latest_checkpoint,
+        version=version,
+    )
+    # ArtifactStep is invariant in its artifact type, so widen the concrete result to the base.
+    return cast("ArtifactStep[EvalResult]", step)
 
 
 def eval_steps(
@@ -288,7 +202,7 @@ def eval_report(
     """Aggregate a suite's ``EvalResult`` artifacts into one :class:`EvalReport`.
 
     A CPU step depending on every result. It reads each result's metrics through the typed accessor
-    (one code path across backends) and writes the merged per-task metrics + averages. ``name`` is the
+    (one code path across groups) and writes the merged per-task metrics + averages. ``name`` is the
     report's identity segment (``evaluation/report/{name}``), e.g. ``f"{model.name}/key"``. ``version``
     is explicit, or None to defer to the ambient BuildContext.
     """
@@ -326,89 +240,61 @@ def eval_report(
 # --------------------------------------------------------------------------------------------------
 
 
-def core_evals(resources: ResourceConfig | None = None) -> list[EvalGroup]:
-    """CORE_TASKS through the Levanter harness — the default multiple-choice suite."""
-    resources = resources or ResourceConfig.with_tpu("v4-8")
-    return [EvalGroup(tasks=CORE_TASKS, backend=Backend.LEVANTER, resources=resources, id="core")]
+def core_evals(serve: ServeSpec | None = None) -> list[EvalGroup]:
+    """CORE_TASKS as one served group — the default multiple-choice suite (logprobs over the OpenAI API)."""
+    serve = serve or ServeSpec(tpu_type="v6e-8")
+    return [EvalGroup(tasks=CORE_TASKS, id="core", serve=serve)]
 
 
-def key_evals(resources: ResourceConfig | None = None, max_eval_instances: int | None = None) -> list[EvalGroup]:
-    """The key-evals bundle: generation tasks (lm-eval) + multiple-choice tasks (Levanter).
+def key_evals(serve: ServeSpec | None = None, max_eval_instances: int | None = None) -> list[EvalGroup]:
+    """The key-evals bundle: generation tasks + multiple-choice tasks, each as its own served group.
 
     ``max_eval_instances`` caps examples per task — pass a small value for a fast cluster smoke.
     """
-    resources = resources or ResourceConfig.with_tpu("v6e-8")
+    serve = serve or ServeSpec(tpu_type="v6e-8")
     return [
         EvalGroup(
             tasks=KEY_GENERATION_TASKS,
-            backend=Backend.LM_EVAL,
-            resources=resources,
             id="key_generation",
-            engine_kwargs=DEFAULT_LM_EVAL_MODEL_KWARGS,
+            serve=serve,
+            max_gen_toks=4096,
             max_eval_instances=max_eval_instances,
-            env_vars=HUMANEVAL_ENV,  # KEY_GENERATION_TASKS includes humaneval (code_eval)
         ),
         EvalGroup(
             tasks=KEY_MULTIPLE_CHOICE_TASKS,
-            backend=Backend.LEVANTER,
-            resources=resources,
             id="key_multiple_choice",
+            serve=serve,
             max_eval_instances=max_eval_instances,
         ),
     ]
 
 
 def base_model_evals(
-    resources: ResourceConfig | None = None,
-    engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
+    serve: ServeSpec | None = None,
     run_generation_evals: bool = True,
     discover_latest_checkpoint: bool = True,
 ) -> list[EvalGroup]:
-    """Base-model suite: CORE+leaderboard and each MMLU cut as distinct Levanter groups, plus generation.
+    """Base-model suite: CORE+leaderboard and each MMLU cut as distinct served groups, plus generation.
 
     Each MMLU cut is its own group with its own ``id``, so all four run (unlike the old bundle, whose
     identical step names collided and silently dropped three of them).
     """
-    resources = resources or ResourceConfig.with_tpu("v6e-8")
+    serve = serve or ServeSpec(tpu_type="v6e-8")
+    discover = discover_latest_checkpoint
     groups = [
-        EvalGroup(
-            CORE_TASKS_PLUS_LEADERBOARD,
-            Backend.LEVANTER,
-            resources,
-            "core_leaderboard",
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        ),
-        EvalGroup(
-            (MMLU_0_SHOT,),
-            Backend.LEVANTER,
-            resources,
-            "mmlu_0shot",
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        ),
-        EvalGroup(
-            (MMLU_5_SHOT,),
-            Backend.LEVANTER,
-            resources,
-            "mmlu_5shot",
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        ),
-        EvalGroup(
-            (MMLU_PRO_5_SHOT,),
-            Backend.LEVANTER,
-            resources,
-            "mmlu_pro_5shot",
-            discover_latest_checkpoint=discover_latest_checkpoint,
-        ),
+        EvalGroup(CORE_TASKS_PLUS_LEADERBOARD, "core_leaderboard", serve=serve, discover_latest_checkpoint=discover),
+        EvalGroup((MMLU_0_SHOT,), "mmlu_0shot", serve=serve, discover_latest_checkpoint=discover),
+        EvalGroup((MMLU_5_SHOT,), "mmlu_5shot", serve=serve, discover_latest_checkpoint=discover),
+        EvalGroup((MMLU_PRO_5_SHOT,), "mmlu_pro_5shot", serve=serve, discover_latest_checkpoint=discover),
     ]
     if run_generation_evals:
         groups.append(
             EvalGroup(
                 BASE_GENERATION_TASKS,
-                Backend.LM_EVAL,
-                resources,
                 "base_generation",
-                engine_kwargs=engine_kwargs,
-                discover_latest_checkpoint=discover_latest_checkpoint,
+                serve=serve,
+                max_gen_toks=4096,
+                discover_latest_checkpoint=discover,
             )
         )
     return groups

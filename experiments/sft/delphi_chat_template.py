@@ -55,6 +55,21 @@ sft/delphi/canonicalize_warmup_think.py), so the template's reasoning-extraction
 — identical to the LF path.
 """
 
+# The reserved Llama-3 slots repurposed as single-id think/tool tokens (id -> canonical string).
+# The raw laion/delphi-* checkpoints ship these as ``<|reserved_special_token_N|>``; the SFT
+# checkpoint preparation renames them so the canonical strings above tokenize to one id each and
+# reinitializes their embedding rows. Native Llama-3 control tokens (bos/eot/header ids) are
+# already single ids and are left untouched. Verified against laion/delphi-{3e18,1e22}-* on
+# 2026-07-09; see the TOKEN PROTOCOL block above.
+DELPHI_RESERVED_TOKEN_RENAMES = {
+    128002: "<|start_think|>",  # was <|reserved_special_token_0|>
+    128003: "<|end_think|>",  # was <|reserved_special_token_1|>
+    128005: "<|tool_call|>",  # was <|reserved_special_token_2|>
+    128011: "<|tool_call_end|>",  # was <|reserved_special_token_3|>
+    128012: "<|tool_result|>",  # was <|reserved_special_token_4|>
+    128013: "<|tool_result_end|>",  # was <|reserved_special_token_5|>
+}
+
 DELPHI_V0_CHAT_TEMPLATE = r"""{#- ===================================================================== -#}
 {#- Delphi v0 chat template  (Llama-3 tokenizer; static; MVP)              -#}
 {#- Ported for Levanter: {% generation %} wraps the supervised assistant   -#}

@@ -856,10 +856,41 @@ in `CoreweavePlatform`):
 | `cache_dir` | string | — | **Must point to NVMe** (see warning below) |
 | `runtime` | string | — | Set to `kubernetes` for CoreWeave (enables Pod-per-task) |
 
-> **Warning — Disk layout**: CoreWeave bare-metal nodes have a **15 GB RAM disk**
-> as the root filesystem and multi-TB NVMe at `/mnt/local`. The `cache_dir` must
+> **Warning — Disk layout**: CoreWeave bare-metal nodes boot a **15 GB RAM disk**
+> as the root filesystem, with the node's NVMe RAID (`/dev/md127`, 7.7 TB on CPU
+> nodes, 15–31 TB on GPU nodes) mounted at `/mnt/local`. The `cache_dir` must
 > point to NVMe (e.g. `/mnt/local/iris-cache`). Using the default root path will
 > fill the RAM disk immediately and cause Pod eviction.
+>
+> Only `cache_dir` needs this: the kubelet root is on the NVMe, so task `emptyDir`
+> volumes (`/app`, `/tmp`) and container writable layers already land there.
+
+### Task storage layout
+
+Task pods use no PVCs — nothing on the task path touches the `shared-vast`
+(distributed) storage class, which backs only the controller state and finelog
+caches. Every task volume is node-local NVMe:
+
+| Container path | Volume | Lifetime |
+|----------------|--------|----------|
+| `/app`, `/tmp` | `emptyDir` (kubelet root) | Pod |
+| `/uv/cache`, `/hf/cache`, `/cargo` | `hostPath` under `cache_dir` | Node |
+| `/dev/shm` | `emptyDir` (memory) | Pod |
+
+Iris points `UV_CACHE_DIR`, `HF_HUB_CACHE`, and `CARGO_HOME` at those
+`hostPath` mounts for every task, including tasks that bring their own image, so
+wheels and model weights are fetched once per node rather than once per task.
+`HF_HOME` is deliberately not among them. It holds the submitter's `HF_TOKEN`, so
+it stays under the pod's own `$HOME` (`iris job run` defaults it to
+`~/.cache/huggingface`) rather than a directory every task on the node can read.
+`HF_HUB_CACHE` covers the part worth sharing: the content-addressed blobs.
+
+The `cache_dir` tree is never pruned; it grows until the node is rebuilt or an
+operator clears it. Watch it on long-lived reserved fleets:
+
+```bash
+kubectl exec -n iris <pod> -c task -- du -sh /uv/cache /hf/cache
+```
 
 ### Startup grace period
 
@@ -1212,6 +1243,13 @@ kubectl logs <pod> -n iris --previous    # Logs from the last crash
 
 If `cache_dir` is not set to `/mnt/local/...`, the 15 GB root RAM disk fills
 instantly. Fix in config and redeploy.
+
+A pod evicted for `ephemeral-storage` while `cache_dir` is correct is a different
+fault: that limit comes from the task's own `disk` resource request and covers
+only `emptyDir` plus the container layer, not the `hostPath` caches. Either the
+task is writing large files under `/app` or `/tmp`, or it is writing to a cache
+path Iris does not mount (check `env | grep -iE 'CACHE|HF_'` against the task
+storage layout above) and needs a larger `disk` request.
 
 ## 17. References
 

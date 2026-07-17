@@ -42,23 +42,7 @@ from marin.execution.lazy import Artifact, ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 
-# The :evalchemy-tpu image (FROM ghcr.io/open-thoughts/openthoughts-agent:tpu -> vllm-tpu 0.20.0 reused,
-# + marin-community/evalchemy@a84543c (main HEAD) + lm-eval v0.4.12 + graders + nltk cache). Reference
-# BY DIGEST (immutable). Built + pushed via `docker buildx --platform linux/amd64` on the Mac
-# (docker/evalchemy-tpu/Dockerfile; the CPU-only amd64 layer cross-builds under QEMU). Overridable via
-# env so the launcher can be pointed at a fresh build without a code edit.
-# Pinned tag: :evalchemy-tpu-2d9321df. The floating :evalchemy-tpu tag is NOT yet promoted (waits on the
-# live TPU smoke); pin the immutable digest here.
-EVALCHEMY_IMAGE = os.environ.get(
-    "EVALCHEMY_TPU_IMAGE",
-    "ghcr.io/open-thoughts/openthoughts-agent@sha256:defdfcced0c130867a434a7e08f4eee6affcf9cf39cd23d94f40b88ca57c200c",
-)
-
-# evalchemy/lm-eval are installed into the image's OWN venv (docker/evalchemy-tpu/Dockerfile:
-# VIRTUAL_ENV=/opt/openthoughts/.venv), NOT the Iris repo venv (/app/.venv) that the `remote()` child
-# job syncs + activates. So `python -m eval.eval` under the repo venv can't import the baked `eval`
-# package — invoke the baked interpreter explicitly. Overridable via env for a differently-built image.
-EVALCHEMY_PYTHON = os.environ.get("EVALCHEMY_PYTHON", "/opt/openthoughts/.venv/bin/python")
+from experiments.evals.evalchemy.image import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
 
 # The OT-Agent "--preset" analog: suite name -> lm-eval task names (evalchemy fork registry).
 SUITE_TO_TASKS: dict[str, list[str]] = {

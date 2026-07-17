@@ -71,6 +71,7 @@ class MountKind(StrEnum):
 
 @dataclass(frozen=True)
 class MountSpec:
+    name: str  # K8s volume name; the Docker and process runtimes key off container_path
     container_path: str
     kind: MountKind = MountKind.CACHE
     read_only: bool = False

@@ -13,11 +13,11 @@ handle, build one eval step per ``EvalGroup`` in the ``key_evals`` menu, aggrega
 """
 
 import click
-from fray.cluster import ResourceConfig
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 from marin.training.training import LevanterCheckpoint
 
+from experiments.evals.evalchemy.serve_and_eval import ServeSpec
 from experiments.evals.evals import eval_report, eval_steps, key_evals
 
 # A pre-existing checkpoint produced outside this graph: adopt it as a typed handle. Adoption
@@ -32,7 +32,7 @@ llama_200m = ArtifactStep.adopt(
 
 
 def build(limit: int | None):
-    results = eval_steps(llama_200m, key_evals(resources=ResourceConfig.with_tpu("v6e-8"), max_eval_instances=limit))
+    results = eval_steps(llama_200m, key_evals(serve=ServeSpec(tpu_type="v6e-8"), max_eval_instances=limit))
     return eval_report(results, name=f"{llama_200m.name}/key")
 
 

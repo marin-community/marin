@@ -5,16 +5,13 @@
 
 An eval step writes its backend's native output; the typed artifact reads the metrics back
 *through* the artifact, so a consumer calls ``result.task_metrics()`` instead of guessing the
-directory layout:
+directory layout. :class:`EvalchemyResult` reads the evalchemy fork's output — lm-eval's native
+nested tree (``<task_dir>/<model>/results_<ts>.json``, one file per task-config) — by globbing and
+keying each file's metrics by its ``<task_dir>`` (which the producer makes unique per task-config).
 
-- :class:`LevanterEvalResult` — the Levanter lm-eval-harness backend writes a single top-level
-  ``results.json`` spanning every task it ran.
-- :class:`LmEvalHarnessResult` — the vLLM lm-eval backend writes lm-eval's native nested tree
-  (``{task}_{n}shot/<model>/results_<ts>.json``); the accessor globs and merges it.
-
-:func:`eval_step` picks the subclass by backend, so :func:`compile_eval_report` reads every
-dependency uniformly (``dep.artifact_type.raw_load(path).task_metrics()``) and materializes one
-:class:`EvalReport` — a value artifact carrying the merged per-task metrics and averages.
+:func:`compile_eval_report` reads every dependency uniformly
+(``dep.artifact_type.raw_load(path).task_metrics()``) and materializes one :class:`EvalReport` — a
+value artifact carrying the merged per-task metrics and averages.
 """
 
 import functools
@@ -23,19 +20,30 @@ import logging
 from dataclasses import dataclass
 
 from pydantic import Field
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact, result_type_name
 
 logger = logging.getLogger(__name__)
 
-_RESULTS_FILE = "results.json"
 _REPORT_FILE = "report.json"
 
 
 def _numeric(values: dict) -> dict[str, float]:
     """The numeric entries of a metric dict, dropping string aliases and config echoes."""
     return {key: float(value) for key, value in values.items() if isinstance(value, bool | int | float)}
+
+
+def _result_task_dir(result_file: StoragePath) -> str:
+    """The task-config directory a results file sits under: ``<task_dir>/<model>/results_<ts>.json``.
+
+    The evalchemy client uploads each task-config's lm-eval output under a dir unique to that config
+    (alias or ``name_Nshot``), so this dir — not the bare task name inside the JSON — is the stable key.
+    """
+    task_dir = result_file.parent.parent.name
+    if not task_dir:
+        raise ValueError(f"unexpected evalchemy results layout (want <task_dir>/<model>/file): {result_file}")
+    return task_dir
 
 
 class EvalResult(Artifact):
@@ -54,32 +62,18 @@ class EvalResult(Artifact):
         raise NotImplementedError
 
 
-class LevanterEvalResult(EvalResult):
-    """A Levanter lm-eval-harness run's output (flat top-level ``results.json``)."""
+class EvalchemyResult(EvalResult):
+    """An evalchemy run's output: lm-eval's native ``<task_dir>/<model>/results_<ts>.json`` tree.
 
-    @functools.cached_property
-    def _results(self) -> dict:
-        """The raw ``results.json`` payload (read once)."""
-        path = f"{self.path}/{_RESULTS_FILE}"
-        if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
-            raise FileNotFoundError(f"no {_RESULTS_FILE} for eval result at {self.path}")
-        return json.loads(StoragePath(path).read_text())
-
-    def task_metrics(self) -> dict[str, dict[str, float]]:
-        return {task: _numeric(metrics) for task, metrics in self._results.get("results", {}).items()}
-
-    def averages(self) -> dict[str, float]:
-        """The cross-task ``macro_avg_*`` / ``micro_avg_*`` scalars Levanter records."""
-        return _numeric(self._results.get("averages", {}))
-
-
-class LmEvalHarnessResult(EvalResult):
-    """A vLLM lm-eval run's output: lm-eval's native ``{task}_{n}shot/<model>/results_<ts>.json`` tree.
-
-    ``LMEvaluationHarnessEvaluator`` runs each task through lm-eval's ``EvaluationTracker`` and uploads
-    the whole results directory, so the metrics live in one ``results_<ts>.json`` per task. The accessor
-    globs them and merges each file's ``results`` block. lm-eval records no cross-task average, so
-    :meth:`averages` is empty — the report computes suite-level rollups.
+    The evalchemy fork runs each task-config through lm-eval's ``EvaluationTracker`` and writes one
+    ``results_<ts>.json``, uploaded whole under a ``<task_dir>`` the producer makes unique per config
+    (see :func:`~experiments.evals.evalchemy.serve_and_eval._task_dir`). The accessor keys each file's
+    metrics by that dir, not by the task name lm-eval writes inside the JSON: two shot variants of one
+    task (``hellaswag`` at 0- and 10-shot) share that inner name but land in different dirs, so keying
+    by the dir keeps them distinct instead of silently overwriting. A group task (e.g. ``mmlu``) writes
+    several entries in one file, so those are namespaced ``<task_dir>/<subtask>``. evalchemy records no
+    cross-task average, so :meth:`averages` is empty — :func:`compile_eval_report` computes suite-level
+    rollups instead.
     """
 
     @functools.cached_property
@@ -88,12 +82,15 @@ class LmEvalHarnessResult(EvalResult):
         # gs:// prefix and would reopen as a local path.
         result_files = sorted(StoragePath(prefix_join(self.path, "**/results_*.json")).glob(), key=str)
         if not result_files:
-            raise FileNotFoundError(f"no lm-eval results_*.json under {self.path}")
+            raise FileNotFoundError(f"no evalchemy results_*.json under {self.path}")
         metrics: dict[str, dict[str, float]] = {}
         for result_file in result_files:
-            payload = json.loads(result_file.read_text())
-            for task, task_metrics in payload.get("results", {}).items():
-                metrics[task] = _numeric(task_metrics)
+            task_dir = _result_task_dir(result_file)
+            results = json.loads(result_file.read_text()).get("results", {})
+            for task, task_metrics in results.items():
+                # One entry -> the dir is the whole identity; several (a group task) -> namespace them.
+                key = task_dir if len(results) == 1 else f"{task_dir}/{task}"
+                metrics[key] = _numeric(task_metrics)
         return metrics
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
@@ -121,9 +118,7 @@ class EvalReport(Artifact):
 
 # result_type name -> reader class, so :func:`compile_eval_report` reconstructs the right accessor
 # from the identity string a step records (the class itself cannot ride through the JSON config).
-_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {
-    result_type_name(cls): cls for cls in (LevanterEvalResult, LmEvalHarnessResult)
-}
+_EVAL_RESULT_TYPES: dict[str, type[EvalResult]] = {result_type_name(cls): cls for cls in (EvalchemyResult,)}
 
 
 @dataclass(frozen=True)

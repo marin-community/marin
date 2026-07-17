@@ -28,14 +28,13 @@ jobs:
         with:
           filters: |
             relevant:
-              # dupekit is a standalone uv project, NOT a root workspace member
-              # (see [tool.uv.workspace] in the root pyproject.toml). Its tests
-              # run `uv run --frozen` against lib/dupekit/uv.lock — already
-              # covered by lib/dupekit/** below — so the root uv.lock does not
-              # affect this suite and must not gate it. The other unit workflows
-              # (iris/zephyr/marin/...) DO resolve against the root lock, which
-              # is why they keep 'uv.lock' here and dupekit does not.
+              # marin-dupekit is a root workspace member (see [tool.uv.workspace]
+              # in the root pyproject.toml). Its tests resolve against the root
+              # uv.lock via `uv run --package marin-dupekit`, so a lock change can
+              # move the suite out from under it — gate on 'uv.lock' like the
+              # other workspace unit workflows.
               - 'lib/dupekit/**'
+              - 'uv.lock'
               - '.github/workflows/dupekit-unit.yaml'
             # The dev-mode guard below inspects the pyprojects where a leaked
             # rust path source (written by scripts/rust_mode.py dev) lands —
@@ -44,6 +43,7 @@ jobs:
             # expensive test/cargo jobs onto every root-pyproject edit.
             user_mode:
               - 'pyproject.toml'
+              - 'lib/dupekit/pyproject.toml'
               - 'lib/finelog/pyproject.toml'
 
   check-user-mode:
@@ -57,9 +57,10 @@ jobs:
 
       - name: Ensure pyprojects are in user mode
         run: |
-          # The RUST-DEV SOURCES blocks govern the native packages (dupekit and
-          # the finelog pair); any path source committed means dev mode leaked.
-          if grep -qE 'marin-(dupekit|finelog|finelog-server) = \{ path' pyproject.toml lib/finelog/pyproject.toml; then
+          # The RUST-DEV SOURCES blocks govern the native packages
+          # (marin-dupekit-native and marin-finelog-server); any path source
+          # committed means dev mode leaked.
+          if grep -qE 'marin-(dupekit-native|finelog-server) = \{ path' pyproject.toml lib/dupekit/pyproject.toml lib/finelog/pyproject.toml; then
             echo "ERROR: a pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
             exit 1
           fi
@@ -85,11 +86,13 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          cache-dependency-glob: "lib/dupekit/uv.lock"
 
       - name: Test dupekit
+        # Resolve against the root workspace lock (marin-dupekit is a member);
+        # the native marin-dupekit-native extension comes from its pre-built
+        # wheel, so no Rust toolchain is needed here.
         run: |
-          uv run --directory lib/dupekit --frozen --group test pytest -v tests/
+          uv run --package marin-dupekit --group test pytest --durations=5 --tb=short -v lib/dupekit/tests/
 
   rust-checks:
     needs: changes
