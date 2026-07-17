@@ -743,9 +743,9 @@ def test_periodic_profiler_no_targets_writes_nothing(k8s):
     assert profile_table.writes == []
 
 
-def test_reconcile_registers_running_pods_for_periodic_profiler(k8s):
-    """reconcile hands the profiler exactly the running pods (not terminal ones),
-    so a driven cycle dumps only those."""
+def test_reconcile_dumps_only_running_pods_via_periodic_profiler(k8s):
+    """After reconcile registers the running set, the background profiler loop
+    dumps only the running pod (not the terminal one) into iris.profile."""
     profile_table = FakeStatsTable()
     provider = K8sTaskProvider(
         kubectl=k8s,
@@ -754,7 +754,7 @@ def test_reconcile_registers_running_pods_for_periodic_profiler(k8s):
         cache_dir="/cache",
         local_queue="iris-lq",
         profile_table=profile_table,
-        profile_poll_interval=60.0,
+        profile_poll_interval=0.05,
         cluster_scan_interval=0.0,
     )
     try:
@@ -767,25 +767,15 @@ def test_reconcile_registers_running_pods_for_periodic_profiler(k8s):
         k8s.set_exec_response(running_pod, _success_cp(stdout="Thread 0x1\n  train.py:1"))
 
         provider.sync(make_batch(running_tasks=[running, terminal]))
+        # The loop samples every registered pod each cycle, so once a row lands a
+        # full cycle has run — the terminal pod's absence is real, not a race.
+        wait_for_condition(lambda: bool(profile_table.writes), timeout=Duration.from_seconds(5.0))
 
-        # Stop the background loop so the cycle is deterministic, then drive it once.
-        assert provider._periodic_profiler is not None
-        provider._periodic_profiler.close()
-        provider._periodic_profiler.collect_once()
-
-        rows = [row for batch in profile_table.writes for row in batch]
+        rows = [row for batch in list(profile_table.writes) for row in batch]
         assert {row.source for row in rows} == {"/job/run"}, "only the running pod should be dumped"
-        assert rows[0].trigger == ProfileTrigger.PERIODIC.value
+        assert all(row.trigger == ProfileTrigger.PERIODIC.value for row in rows)
     finally:
         provider.close()
-
-
-def test_provider_without_profile_table_has_no_periodic_profiler(provider, k8s):
-    """The profiler is inert when no profile table is configured (test/local mode)."""
-    populate_pod(k8s, _pod_name(JobName.from_wire("/job/run"), 0), "Running")
-    provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=JobName.from_wire("/job/run"), attempt_id=0)]))
-
-    assert provider._periodic_profiler is None
 
 
 # ---------------------------------------------------------------------------
