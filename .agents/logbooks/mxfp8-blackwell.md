@@ -65,11 +65,7 @@ author: mcwitt
   6.2 TB/s kernel leaves ~1.6 ms > 0.7 target; MXFP8-000c). The fusion-grade
   producer exists upstream as MIT-licensed cudnn-frontend fused grouped
   kernels. Superseded by `MXFP8-H8`.
-- `MXFP8-H8` (CONFIRMED, MXFP8-004a @ aa998a01f: full fused pipeline 8.777 ms
-  vs 12.220 full-bf16-layer = 1.39x; 1.13x vs strict 6-GEMM; all four fused
-  kernels correctness-green, several bit-exact). Remaining headroom: dswiglu
-  leg (1244 TF/s) and x/g2 producer folding (1.43 ms). Next: MXFP8-004c op
-  wiring, then MXFP8-005.
+
 - `MXFP8-H7` (NEW, from the 001b+002c pattern): a per-tensor-scaled fp8
   grouped kernel on sm100 (vendor the non-scaled DSL grouped GEMM, delayed
   scaling like the dense path) beats mxfp8 at LAYER level — per-tensor
@@ -105,7 +101,12 @@ author: mcwitt
 
 ### Promoted
 
-(none)
+- `MXFP8-H8`: fused cudnn-frontend kernels -> layer 1.39x (MXFP8-004a) ->
+  wired op (004c) -> **e2e win: mxfp8 15.51-15.65% MFU vs bf16 14.34% /
+  per-tensor 14.57% at B64 GB200x4, loss tracks bf16 to ~4e-4/step,
+  `replicated` across 3 nodes** (MXFP8-005 @ bd98e7d0d). Thread goal
+  ("mxfp8 at least similar to per-tensor") met and exceeded e2e. Remaining
+  headroom items tracked in the MXFP8-005 ranked-gaps list.
 
 ## Experiment Matrix (v1)
 
