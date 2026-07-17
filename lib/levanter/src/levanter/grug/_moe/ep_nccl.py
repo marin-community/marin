@@ -88,6 +88,13 @@ def _moe_mlp_ep_nccl(
     def _local_ffn(recv_tokens_l, token_counts_l, w13_l, w2_l):
         x_dispatch = recv_tokens_l.reshape(recv_tokens_l.shape[-2], recv_tokens_l.shape[-1])
         group_sizes = token_counts_l.reshape(-1).astype(jnp.int32)
+        # The QuACK seam extends the last group over the capacity tail so every
+        # output row is defined — zero the tail first: those rows are
+        # uninitialized dispatch buffer, and garbage (Inf/NaN bit patterns)
+        # poisons the wgrad accumulation even under zero cotangents.
+        total = jnp.sum(group_sizes)
+        row_ids = jnp.arange(x_dispatch.shape[0], dtype=jnp.int32)
+        x_dispatch = jnp.where((row_ids < total)[:, None], x_dispatch, 0)
         expert_mlp_fn = _quack_expert_mlp_fn(w13_l, w2_l, implementation="nccl_ep")
         out = expert_mlp_fn(x_dispatch, group_sizes)
         return out.reshape(recv_tokens_l.shape)
@@ -113,13 +120,12 @@ def _moe_mlp_ep_nccl(
         )
         expert_out = ffn(recv_tokens, token_counts, w13_b, w2_b)
 
-        # ep_combine is unweighted: apply the routing weights (zero-masked —
-        # padded slots carry weight 0) before the scatter-sum; grad w.r.t.
-        # combine_weights flows through this hadamard, not the FFI.
-        # Compute in the FFN dtype: an fp32 upcast materializes a 2x-capacity
-        # intermediate (tens of GiB at the reference config).
-        mask = (recv_w != 0).astype(expert_out.dtype)[..., None]
-        weighted = expert_out * recv_w[..., None].astype(expert_out.dtype) * mask
+        # ep_combine is unweighted: apply the routing weights before the
+        # scatter-sum; grad w.r.t. combine_weights flows through this
+        # hadamard, not the FFI. `where` (not a 0-mask multiply): padded slots
+        # can hold garbage NaN/Inf and 0*NaN = NaN, in both fwd and the VJP.
+        w_slot = recv_w[..., None].astype(expert_out.dtype)
+        weighted = jnp.where(w_slot != 0, expert_out * w_slot, jnp.zeros((), expert_out.dtype))
         weighted = jax.lax.with_sharding_constraint(weighted, lead)
         out = ep_combine(cfg, handle_mem, token_counts, weighted, tuple(x_b.shape[:-1]))
         return out.astype(x_b.dtype)
