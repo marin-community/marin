@@ -362,3 +362,30 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
 - Decision: goal met; promote results to #7331; next-step queue posted there
   (cmd-buffer scoping, tail-zero removal, MoE-layer chunking for b1024+,
   max_num_sms sweep, fp8 wire from the TE quantization WIP branch → #7282).
+
+### 2026-07-17 — NCCLEP-007 (in flight): MoE-layer chunking — decouple EP capacity from batch size
+- Motivation (new goal): the no-drop capacity wall (NCCLEP-006) blocks the
+  b1024 reference config; NVIDIA's intended NCCL_EP usage is small per-dispatch
+  token counts. Prototype rank-local token chunking and derisk at
+  production-scale batch/seqlen (b1024 seq4096, 64 GPUs EP8).
+- Design (commit cb735f9f3 on `mcwitt/moe-standalone-ep-ncclep`):
+  - `configure_nccl_ep(..., chunk_tokens_per_rank=C)`; backend splits the
+    global token stream `[T,H] → [K, shards, C, H]` (reshape + moveaxis with
+    the shard dim pinned to the batch mesh axes — rank-local, no resharding)
+    and `lax.scan`s dispatch → shard_map(QuACK FFN) → combine per chunk.
+  - Bench `--ep-chunk-tokens`; `ep_bootstrap(max_tokens_per_rank=C,
+    recv_capacity_per_rank=ep×C×topk)` — staging + no-drop capacity now scale
+    with C, not batch. At C=8192/EP8/top4: 262 k rows ≈ 2.6 GiB/buffer vs
+    21.5 GiB unchunked at b1024.
+  - Numerics: chunking is a pure partition of tokens (each token dispatched
+    exactly once; per-token FFN math unchanged) → expect loss parity with
+    unchunked nccl_ep to float-accumulation noise.
+- Risks to watch: TE handle cache growth (K× more handle_mem entries under
+  unlimited cache), scan×custom_vjp×remat interaction (fwd replay re-executes
+  dispatch FFI in bwd — already true unchunked), per-chunk fixed overheads at
+  small C (6.5 k+ EP-op launches/step at L48×K8).
+- Plan: (a) single-node EP4 chunked smoke (d2560 L4 b16, C=4096 → K=4) vs
+  unchunked final loss 11.558435; (b) 64-GPU EP8 **b1024** seq4096 chunked
+  (C=8192 → K=8) — the previously-OOM production config — vs a2a_cute b1024
+  (19.1 %, 8.746); (c) optionally C sweep (16384/K4) for the
+  capacity-vs-overhead tradeoff.
