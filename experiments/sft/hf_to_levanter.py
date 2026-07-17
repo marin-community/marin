@@ -114,6 +114,12 @@ def resolve_lm_config(
 def run_hf_to_levanter(config: HfToLevanterConfig) -> None:
     """Convert the HF checkpoint to a native Levanter model checkpoint and emit a padded tokenizer.
 
+    Uses the same core as ``levanter.main.export_hf_to_lm`` (``converter.load_pretrained`` +
+    ``save_checkpoint``, same ``resize_vocab`` rationale), but saves under a ``model`` subtree — so a
+    weights-only ``initialize_model_from_checkpoint_path`` reads it with ``subpath="model"`` — waits for
+    the async commit, and emits a padded tokenizer alongside; that entrypoint saves the bare model at
+    the checkpoint root with none of those.
+
     Runs on a worker; reads the base checkpoint from the Hub, so it needs ``HF_TOKEN`` in the
     environment for gated repos (propagated the same way as the training job).
     """
