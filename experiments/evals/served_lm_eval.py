@@ -112,13 +112,13 @@ def brokered_lm_eval_step(
             eval_run=replace(eval_run, output_path=ctx.output_path),
         )
 
-    def run_step(cfg: BrokeredLmEvalArtifactConfig) -> None:
+    def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
         remote(
             _run_brokered_lm_eval_artifact,
             name=name,
             resources=parent_resources,
             env_vars=dict(parent_env_vars),
-        )(inference, cfg.eval_run)
+        )(inference, config.eval_run)
 
     return ArtifactStep(
         name=name,
