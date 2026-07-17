@@ -27,6 +27,13 @@ pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
 /// transmitted on the wire and never declared by callers.
 pub const IMPLICIT_SEQ_COLUMN: &str = "seq";
 
+/// Origin-cluster column, added to every registered table that does not declare
+/// one (see [`with_implicit_cluster`]). Local writers leave it empty; the
+/// cross-cluster forwarder stamps it with the origin cluster on the way to a hub
+/// finelog, so a hub that collects rows from many federated clusters can filter or
+/// group them by the cluster that produced them.
+pub const IMPLICIT_CLUSTER_COLUMN: &str = "cluster";
+
 /// Max bytes per WriteRows request body.
 pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 
@@ -320,6 +327,33 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
     ));
     columns.extend(schema.columns);
     Schema::new(columns, schema.key_column)
+}
+
+/// Return `schema` with the implicit nullable STRING `cluster` column appended.
+/// No-op if a `cluster` column is already declared.
+///
+/// Nullable and appended so it evolves an already-registered namespace additively:
+/// [`merge_schemas`] admits a new nullable column, and segments written before the
+/// column existed null-fill it on read. Local writers leave it empty; the
+/// cross-cluster forwarder fills it (see [`IMPLICIT_CLUSTER_COLUMN`]).
+pub fn with_implicit_cluster(schema: Schema) -> Schema {
+    if schema
+        .columns
+        .iter()
+        .any(|c| c.name == IMPLICIT_CLUSTER_COLUMN)
+    {
+        return schema;
+    }
+    let Schema {
+        mut columns,
+        key_column,
+    } = schema;
+    columns.push(Column::new(
+        IMPLICIT_CLUSTER_COLUMN,
+        ColumnType::COLUMN_TYPE_STRING,
+        true,
+    ));
+    Schema::new(columns, key_column)
 }
 
 /// Resolve the ordering key column name (presence-only), raising if invalid.
@@ -703,6 +737,37 @@ mod tests {
         assert!(!stored.columns[0].nullable);
         let again = with_implicit_seq(stored.clone());
         assert_eq!(again, stored);
+    }
+
+    #[test]
+    fn with_implicit_cluster_appends_nullable_string_cluster_and_is_idempotent() {
+        let stored = with_implicit_cluster(worker_schema());
+        let last = stored.columns.last().unwrap();
+        assert_eq!(last.name, "cluster");
+        assert_eq!(last.r#type, ColumnType::COLUMN_TYPE_STRING);
+        assert!(last.nullable, "the implicit cluster column is nullable");
+        // The rest of the schema is untouched, and the key column is preserved.
+        assert_eq!(
+            stored.column_names(),
+            vec!["worker_id", "mem_bytes", "timestamp_ms", "cluster"]
+        );
+        let again = with_implicit_cluster(stored.clone());
+        assert_eq!(again, stored, "re-applying it does not add a second column");
+    }
+
+    #[test]
+    fn with_implicit_cluster_keeps_a_declared_cluster_column_as_is() {
+        // A schema that already declares `cluster` (e.g. the privileged `log`
+        // namespace, whose writer supplies it) is left exactly as it is — the
+        // column is not moved, duplicated, or re-typed.
+        let declared = Schema::new(
+            vec![
+                col("cluster", ColumnType::COLUMN_TYPE_STRING, false),
+                col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "",
+        );
+        assert_eq!(with_implicit_cluster(declared.clone()), declared);
     }
 
     #[test]
