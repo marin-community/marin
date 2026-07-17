@@ -486,3 +486,58 @@ author: mcwitt
   (CuTe or Mosaic, Hopper CT-kernel analog) targeting <=0.7 ms marginal for
   the four activation tensors; this is the 0.58x-vs-1.25x decision point.
   Op wiring (MXFP8-004) proceeds in parallel once the producer verdict is in.
+
+### 2026-07-16 - MXFP8-002c: CuTe dual-write quantizer — 2.5x over XLA, layer-quad lands at break-even
+
+- Hypothesis: MXFP8-H5 (fusion-grade producer turns 0.58x into ~1.25x).
+- Commit Hash: 68bbe7d5a / 764ee12c2 / 48e363421 / 189c3faf0
+  (`mxfp8_grouped/quantize_cute.py`, `bench_mxfp8_quantizer.py`, probe).
+- Command: usual 1x GB200 submit; jobs `/mwittmann/mxfp8-002c-g1..g11`
+  (g11 = final green bench; g3-g8 were a libNVVM bisect, see gotchas).
+- Config: CuTe DSL via cutlass_call. One bf16 read of x[M,K]; 8x8 sub-tile
+  per thread, warp-shuffle amax for both orientations, integer-only e8m0
+  round-up (exhaustively validated on all 32,640 finite |bf16| amax values),
+  inline-PTX `cvt.rn.satfinite.e4m3x2.f32`. No transpose stage needed —
+  wgrad consumes the columnwise copy in natural (M,K) storage. Group-dependent
+  SF swizzles stay on the XLA path.
+- Result:
+  - Bit-exact vs the (corrected) XLA reference on all outputs, incl.
+    adversarial cases (all-zero blocks, denormals, 2^120, powers of two).
+  - **Found a real bug in the XLA reference**: `e8m0_to_f32` via `jnp.exp2`
+    is inexact on 217/256 exponent bytes on GPU — the reference was
+    quantizing with wrong scales at extreme exponents. Fixed in adapter.py
+    (bit-constructed decode). Any e8m0 decode must never use exp2.
+  - Perf: (262144,2560) 0.573 ms kernel / 0.658 ms with swizzle (4.8 TB/s
+    effective total) vs 1.698 ms XLA = 2.58x; (262144,1280) 0.337/0.379 vs
+    0.896 = 2.36x. Producer total for 4 activation tensors: **2.074 ms**
+    (was 5.19 XLA; break-even 2.09).
+  - **Layer quad: 1.002x** with weight producers amortized; 0.802x if the
+    XLA weight producers run every microbatch. Threshold <=1.0 ms NOT met;
+    this design's op-count ceiling is ~1.4 ms (issue/latency bound, 25%
+    occupancy). <=1.0 ms needs TMA pipelining + in-kernel swizzle; ~0.7 ms
+    (=> ~1.25x) realistically needs epilogue fusion.
+  - Epilogue-fusion probe: feasible but a targeted rewrite (~1-2 weeks):
+    single elementwise point at `torch_scaled_grouped_mm.py:1995-2004`; needs
+    w13 column interleave (offline relayout), shuffle-consistent amaxes
+    within the epi subtile (both block orientations fit), SIMT side-stores
+    bypassing TMA incl. the k_tile_cnt==0 zero-fill path. No EVT multi-output
+    mechanism exists in the vendored kernel.
+- Interpretation (`exploratory`): H5 partially confirmed — the standalone
+  producer removes quantization as the DOMINANT cost (0.58x -> 1.00x) but
+  standalone-optimal is structurally short of fusion-grade. MXFP8 grouped is
+  now at parity, not a win. Two ranked paths to a real layer win:
+  (a) epilogue fusion (1-2 wk kernel work, ~1.25x), and/or
+  (b) NEW `MXFP8-H7`: a per-tensor-scaled fp8 grouped kernel on sm100 (vendor
+  the non-scaled DSL grouped GEMM, delayed scaling like the dense path) —
+  per-tensor quantize is a scalar multiply+cast that XLA fuses for free, so
+  GEMM-level ~1.4x could translate to layer-level nearly intact. Same lesson
+  as dense (MXFP8-001b): block scaling pays a producer tax per-tensor doesn't.
+- New gotchas (durable): GB200 nodes are HETEROGENEOUS for libNVVM —
+  `nvvm.cvt.packfloat` fails on most nodes but passes on some (same wheel);
+  inline PTX bypasses it. CPU-only sm_100a compile does NOT exercise the
+  pod's libNVVM/SASS stage. `iris job logs` tails 1000 lines by default
+  (`--max-lines --no-tail` for compile errors). `cutlass.range_constexpr`
+  only inside @cute.kernel AST-preprocessed code.
+- Next action (decision point for the thread): pick between epilogue fusion
+  (a), per-tensor grouped (b), or wiring MXFP8-004 with the current
+  break-even producer while (a)/(b) are explored.
