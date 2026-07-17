@@ -18,6 +18,7 @@ from levanter.grug._moe.ep_common import (
     _expert_prefix_keep_mask,
     _local_permute_from_counts,
     _permute_by_global_expert,
+    _quack_expert_mlp_fn,
     _shard_a2a_params,
     _sort_activations,
     _unpermute_from_global_expert,
@@ -25,17 +26,22 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug.sharding import _batch_axes
 
 
-def _moe_mlp_ep_ragged_a2a_local(
+def _a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
     *,
-    activation_fn: Callable[[jax.Array], jax.Array],
+    expert_mlp_fn: Callable[[jax.Array, jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Ragged-a2a EP routed path: a2a dispatch + a2a combine.
+
+    ``expert_mlp_fn(x_dispatch, group_sizes) -> out_dispatch`` runs the grouped
+    expert GEMMs on the capacity-padded, expert-grouped local rows.
+    """
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -91,10 +97,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
-        moe_dim = moe_w2_local.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        out_dispatch = expert_mlp_fn(x_dispatch, local_group_sizes)
 
     with jax.named_scope("combine"):
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
@@ -122,3 +125,64 @@ def _moe_mlp_ep_ragged_a2a_local(
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
         dropped_total = jax.lax.psum(dropped_local, _batch_axes(jax.sharding.get_abstract_mesh()))
     return out_local, dropped_total
+
+
+def _moe_mlp_ep_ragged_a2a_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Ragged-a2a EP with the generic grouped GEMM (`haliax.nn.ragged_dot`)."""
+
+    def expert_mlp_fn(x_dispatch: jax.Array, group_sizes: jax.Array) -> jax.Array:
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        return ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+
+    return _a2a_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        expert_mlp_fn=expert_mlp_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
+
+
+def _moe_mlp_ep_ragged_a2a_cute_local(
+    x_local: Float[Array, "Tlocal H"],
+    selected_experts_local: Int[Array, "Tlocal K"],
+    combine_weights_local: Float[Array, "Tlocal K"],
+    moe_w13_local: Float[Array, "Elocal H I2"],
+    moe_w2_local: Float[Array, "Elocal I H"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
+    """Ragged-a2a EP with the QuACK SM100 grouped GEMMs (sonic_cute's expert MLP).
+
+    SwiGLU is fused into the QuACK gated GEMM, so ``activation_fn`` is unused
+    (same contract as the ``sonic_cute`` local backend).
+    """
+    expert_mlp_fn = _quack_expert_mlp_fn(moe_w13_local, moe_w2_local, implementation="ragged_all_to_all_cute")
+
+    return _a2a_local(
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        moe_w13_local,
+        moe_w2_local,
+        expert_mlp_fn=expert_mlp_fn,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )

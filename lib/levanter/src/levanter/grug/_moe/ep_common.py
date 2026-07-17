@@ -3,9 +3,58 @@
 
 """Shared expert-parallel routing helpers for Grug MoE."""
 
+from collections.abc import Callable
+
 import jax
 import jax.numpy as jnp
+from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Bool, Float, Int
+
+from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_OUTPUT
+
+try:
+    from levanter.grug._moe.sonic_cute import _expert_mlp as _quack_expert_mlp
+    from levanter.grug._moe.sonic_cute import _interleave_gate_up
+except ModuleNotFoundError as _e:  # quack-kernels (and its torch dep) are optional
+    _quack_import_error = _e
+    _quack_expert_mlp = None
+    _interleave_gate_up = None
+
+
+def _quack_expert_mlp_fn(
+    moe_w13_local: jax.Array, moe_w2_local: jax.Array, *, implementation: str
+) -> Callable[[jax.Array, jax.Array], jax.Array]:
+    """Expert-MLP callable running sonic_cute's QuACK grouped GEMMs on ``(x_dispatch, group_sizes)``.
+
+    SwiGLU is fused into the QuACK gated GEMM (same contract as the ``sonic_cute``
+    local backend), so the caller's ``activation_fn`` is unused. Raises at trace
+    time if quack-kernels is not installed.
+    """
+    quack_expert_mlp, interleave_gate_up = _quack_expert_mlp, _interleave_gate_up
+    if quack_expert_mlp is None or interleave_gate_up is None:
+        raise ModuleNotFoundError(
+            f"moe_implementation='{implementation}' requires quack-kernels and torch: {_quack_import_error}"
+        ) from _quack_import_error
+
+    def expert_mlp_fn(x_dispatch: jax.Array, group_sizes: jax.Array) -> jax.Array:
+        moe_dim = moe_w2_local.shape[1]
+        w13_il = interleave_gate_up(moe_w13_local, moe_dim)
+        # The QuACK varlen kernel only writes rows below cu[-1]; attribute any
+        # capacity-padding tail (zero rows) to the final expert segment so every
+        # output row is defined.
+        group_sizes = group_sizes.at[-1].add(x_dispatch.shape[0] - jnp.sum(group_sizes, dtype=jnp.int32))
+        cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+        # EP dispatch produces x_dispatch via collectives, so there is no cheap
+        # (x, token_dispatch) re-gather like the local path — pass identity hints.
+        # x_dispatch stays a residual, but the slim vjp still drops h (recomputed
+        # from gu) and stores the expert weights FSDP-sharded.
+        token_hint = jnp.arange(x_dispatch.shape[0], dtype=jnp.int32)
+        return tree_checkpoint_name(
+            quack_expert_mlp(x_dispatch, w13_il, moe_w2_local, group_sizes, cu, x_dispatch, token_hint),
+            _CHECKPOINT_DISPATCH_OUTPUT,
+        )
+
+    return expert_mlp_fn
 
 
 def _sort_activations(inputs: Float[Array, "N *tail"], sort_indices: Int[Array, "N"]) -> Float[Array, "N *tail"]:
