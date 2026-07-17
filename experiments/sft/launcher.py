@@ -8,25 +8,42 @@
 
     dataset transform (ShareGPT/OpenAI -> canonical messages)
         -> chat tokenize/pack (a pluggable chat template + completions-only masking)
-        -> Levanter SFT (``initialize_from_hf`` + ``use_hf_model_config``)
-        -> HF export
+        -> weights init from a :class:`ModelSource`
+        -> SFT training (Levanter ``train_lm`` or a vendored backend)
 
-The chat template, dataset mixture, model, sequence length, and packing are all fields of
-:class:`SFTSpec`, so nothing is hardcoded to a model family; ``configs/delphi_1e22.py`` is one
-worked example. The accelerator is *not* part of the spec — it is chosen at launch time (see
+The chat template, dataset mixture, sequence length, and packing are fields of :class:`SFTSpec`;
+the model — architecture, tokenizer, where the initial weights come from, and which training
+backend runs it — is a separate :class:`ModelSource`, so an experiment composes *model* and *data*
+as independent inputs. ``configs/delphi_1e22.py`` is one worked example (a :class:`HfModel` source
+plus a magpie/warmup mixture).
+
+Init sources (the :class:`ModelSource` implementations):
+
+- :class:`HfModel` — SFT of an HF checkpoint (``initialize_from_hf`` + ``use_hf_model_config``);
+  Levanter re-derives the arch from the checkpoint.
+- :class:`LevanterCheckpointModel` — SFT from a native Levanter checkpoint
+  (``initialize_from_checkpoint_path``); the init path may be a static string or a dependency step
+  (an HF->Levanter conversion, or a prior ``sft_step`` output for stage chaining). Its model config
+  must match the checkpoint's architecture.
+
+A vendored model family that is *not* a Levanter-registry ``LmHeadModel`` (its own train loop and
+train state) supplies its own :class:`ModelSource` implementing the same protocol — see
+``experiments/june_tpu_67b_a2b/moe/sft_launch.py``'s ``GrugModel``. The dependency runs vendored
+experiment -> this launcher, never the reverse, so this module stays model-family-agnostic.
+
+The accelerator is *not* part of the spec — it is chosen at launch time (see
 :func:`resources_from_accelerator` and :func:`run_sft_cli`) and threaded to the training job as a
 runtime arg, so the same recipe fingerprints identically whether it runs on TPU or GPU.
 
-Why a custom step rather than ``marin.experiment.train.train_lm``: that helper inits from a
-checkpoint handle (``initialize_from_checkpoint_path``), not ``initialize_from_hf`` +
-``use_hf_model_config`` (the SFT-of-an-HF-checkpoint path), and ``marin.experiment.data.tokenized``
-cannot emit a chat cache (template + completions-only masking). The dataset side uses the native
-``transform_dataset_step`` + ``multi_turn_adapter`` (``experiments/datasets/instruction.py``) to
-canonicalize each source into an OpenAI-messages cache the chat tokenizer reads.
+Why a custom step rather than ``marin.experiment.train.train_lm``: that helper cannot emit a chat
+cache (``marin.experiment.data.tokenized`` has no template + completions-only masking) and only
+inits from a checkpoint handle. The dataset side uses the native ``transform_dataset_step`` +
+``multi_turn_adapter`` (``experiments/datasets/instruction.py``) to canonicalize each source into an
+OpenAI-messages cache the chat tokenizer reads.
 
-Identity vs execution: the ``ArtifactStep`` graph is cluster-agnostic; ``remote()`` dispatches the
-training job onto whatever ``resources`` name (Fray -> Iris on TPU/CoreWeave). On a single-driver
-``remote()`` dispatch the per-step ``StepRunner`` lock is a no-op.
+Identity vs execution: the ``ArtifactStep`` graph is cluster-agnostic; the training backend
+dispatches the job onto whatever ``resources`` name (Fray -> Iris on TPU/CoreWeave). On a
+single-driver dispatch the per-step ``StepRunner`` lock is a no-op.
 
 Launch (a CPU coordinator job submits the training sub-job)::
 
@@ -42,9 +59,10 @@ that has them).
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Protocol, runtime_checkable
 
 import click
 import jmp
@@ -54,7 +72,7 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatas
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
-from levanter.optim.config import AdamConfig
+from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from marin.execution.lazy import ArtifactStep, StepContext, lower
@@ -94,27 +112,197 @@ class DatasetSpec:
 
 @dataclass(frozen=True)
 class SFTSpec:
-    """A full chat-SFT run. The chat template is a parameter, so Delphi is just one instance."""
+    """A full chat-SFT run: the *data* and the training hyperparameters.
+
+    The *model* (arch, tokenizer, init source, backend) is a separate :class:`ModelSource` so the
+    two compose independently. The chat template is a parameter, so Delphi is just one instance.
+    """
 
     name: str  # artifact name, e.g. "checkpoints/delphi-1e22-magpie-warmup-levanter-sft"
     version: str  # calver "2026.07.15"; a "-dev" suffix opts out of the cache (always rebuild)
-    model_ref: str  # HF id or prepared-checkpoint dir -> initialize_from_hf
-    tokenizer_path: str  # tokenizer dir (Delphi: the prepared single-id think/tool tokenizer)
+    model: ModelSource  # arch + tokenizer + where the initial weights come from + training backend
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec]  # the instruction mixture
-    # Levanter model registry key. Selects the HF-checkpoint converter class; use_hf_model_config
-    # then re-derives the arch from the checkpoint, so this only has to match its architecture.
-    # Delphi and the Qwen3 smoke are both Qwen3ForCausalLM; set it per config for another arch.
-    model_type: str = "qwen3"
+    optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; num_train_steps must count packed examples
-    lr: float = 1e-5
     batch_size: int = 16
     num_train_steps: int = 5307  # packed 1-epoch: total_tokens/seq_len / weight / batch
-    beta2: float = 0.98
-    warmup_ratio: float = 0.1
-    eos_token_ids: Sequence[int] = (128001, 128009)  # Delphi: <|end_of_text|> + <|eot_id|>
     wandb_project: str = "marin-sft-launcher"
+
+
+@runtime_checkable
+class ModelSource(Protocol):
+    """A model to fine-tune: its tokenizer, its training backend, and how it is initialised.
+
+    An implementation owns the backend-specific training config and the backend dispatch callable
+    (``run``). ``sft_step`` builds the shared chat-data config and hands it to
+    :meth:`build_train_config`; the returned object is what ``run`` is called with.
+    """
+
+    tokenizer_path: str
+
+    @property
+    def run(self) -> Callable[..., None]:
+        """The Fray-dispatched backend entry point invoked with :meth:`build_train_config`'s output."""
+        ...
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        """Extra dependency steps this source contributes (e.g. an init checkpoint produced upstream)."""
+        ...
+
+    def build_train_config(
+        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+    ) -> object:
+        """Build the backend training config from the shared spec + chat-data config."""
+        ...
+
+
+def _levanter_train_config(
+    spec: SFTSpec,
+    *,
+    model_type: str,
+    data_config: LmDataConfig,
+    initialize_from_hf: bool | str,
+    initialize_from_checkpoint_path: str | None,
+    use_hf_model_config: bool,
+    eos_token_ids: Sequence[int],
+    gpu_allocator: bool,
+) -> TrainLmConfig:
+    """Assemble the identity-bearing ``TrainLmConfig`` for a Levanter-backend SFT run."""
+    # The model config *class* selects the HF converter (LevConfigClass); with use_hf_model_config
+    # its fields are re-derived from the checkpoint, so only the class matters.
+    model = LmConfig.get_choice_class(model_type)()
+    return TrainLmConfig(
+        data=data_config,
+        model=model,
+        optimizer=spec.optimizer,
+        trainer=_trainer(spec, gpu_allocator=gpu_allocator),
+        train_seq_len=spec.seq_len,
+        initialize_from_hf=initialize_from_hf,
+        initialize_from_checkpoint_path=initialize_from_checkpoint_path,
+        use_hf_model_config=use_hf_model_config,
+        # Qwen (and others) pad the embedding vocab past the tokenizer's for TPU efficiency
+        # (Qwen3: model 151936 vs tokenizer 151669). Without this the Vocab axis is built from
+        # len(tokenizer) while the checkpoint embedding is larger -> a pytree Vocab-size mismatch
+        # at train_step trace. No-op when they already match (e.g. the Delphi prepared tokenizer).
+        pad_tokenizer_to_match_model=True,
+        hf_save_steps=spec.num_train_steps,  # one HF export at the end
+        hf_generation_eos_token_ids=list(eos_token_ids),
+        z_loss_weight=0.0,
+    )
+
+
+def _levanter_pod_config(
+    ctx: StepContext,
+    spec: SFTSpec,
+    data_config: LmDataConfig,
+    resources: ResourceConfig,
+    *,
+    model_type: str,
+    initialize_from_hf: bool | str,
+    initialize_from_checkpoint_path: str | None,
+    use_hf_model_config: bool,
+    eos_token_ids: Sequence[int],
+) -> TrainLmOnPodConfig:
+    """Wrap a Levanter ``TrainLmConfig`` in the on-pod config the ``train_lm`` backend dispatches."""
+    gpu_allocator = not ctx.is_fingerprint and isinstance(resources.device, GpuConfig)
+    return TrainLmOnPodConfig(
+        train_config=_levanter_train_config(
+            spec,
+            model_type=model_type,
+            data_config=data_config,
+            initialize_from_hf=initialize_from_hf,
+            initialize_from_checkpoint_path=initialize_from_checkpoint_path,
+            use_hf_model_config=use_hf_model_config,
+            eos_token_ids=eos_token_ids,
+            gpu_allocator=gpu_allocator,
+        ),
+        resources=resources,
+        output_path=ctx.output_path,
+        auto_build_caches=True,
+    )
+
+
+def _levanter_train_job(pod_config: TrainLmOnPodConfig) -> None:
+    """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
+    remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
+
+
+@dataclass(frozen=True)
+class HfModel:
+    """Init from an HF checkpoint: ``initialize_from_hf`` + ``use_hf_model_config`` (Levanter backend).
+
+    ``model_type`` is the Levanter model-registry key; ``use_hf_model_config`` re-derives the arch
+    from the checkpoint, so it only has to match the architecture (Delphi and the Qwen3 smoke are
+    both ``qwen3``).
+    """
+
+    model_ref: str  # HF id or prepared-checkpoint dir
+    tokenizer_path: str  # tokenizer dir (Delphi: the prepared single-id think/tool tokenizer)
+    model_type: str = "qwen3"
+    eos_token_ids: Sequence[int] = (128001, 128009)  # Delphi: <|end_of_text|> + <|eot_id|>
+
+    @property
+    def run(self) -> Callable[..., None]:
+        return _levanter_train_job
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        return ()
+
+    def build_train_config(
+        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+    ) -> TrainLmOnPodConfig:
+        return _levanter_pod_config(
+            ctx,
+            spec,
+            data_config,
+            resources,
+            model_type=self.model_type,
+            initialize_from_hf=self.model_ref,
+            initialize_from_checkpoint_path=None,
+            use_hf_model_config=True,
+            eos_token_ids=self.eos_token_ids,
+        )
+
+
+@dataclass(frozen=True)
+class LevanterCheckpointModel:
+    """Init from a native Levanter checkpoint: ``initialize_from_checkpoint_path`` (Levanter backend).
+
+    ``init_from`` is either a static checkpoint dir or a dependency step whose output is the
+    checkpoint — an HF->Levanter conversion (:func:`hf_to_levanter`) or a prior ``sft_step`` output
+    for stage chaining. Unlike :class:`HfModel` the arch is not re-derived, so ``model_type`` must
+    name the class whose default fields match the checkpoint.
+    """
+
+    init_from: str | ArtifactStep
+    tokenizer_path: str
+    model_type: str = "qwen3"
+    eos_token_ids: Sequence[int] = (128001, 128009)
+
+    @property
+    def run(self) -> Callable[..., None]:
+        return _levanter_train_job
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
+
+    def build_train_config(
+        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+    ) -> TrainLmOnPodConfig:
+        init_path = ctx.artifact_path(self.init_from) if isinstance(self.init_from, ArtifactStep) else self.init_from
+        return _levanter_pod_config(
+            ctx,
+            spec,
+            data_config,
+            resources,
+            model_type=self.model_type,
+            initialize_from_hf=False,
+            initialize_from_checkpoint_path=init_path,
+            use_hf_model_config=False,
+            eos_token_ids=self.eos_token_ids,
+        )
 
 
 # Accelerator strings: "<count>x<gpu>" (e.g. "8xH100") for GPU, else a TPU slice variant ("v4-64").
@@ -148,11 +336,12 @@ def _chat_format(spec: SFTSpec) -> ChatLmDatasetFormat:
     )
 
 
-def _data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
+def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
     """One cache-backed chat component per dataset, weighted by ``spec.datasets``.
 
     ``dep_paths`` are the resolved ``transform_dataset_step`` outputs, aligned with
-    ``spec.datasets``; Levanter builds the chat caches from them at train time.
+    ``spec.datasets``; Levanter builds the chat caches from them at train time. The tokenizer comes
+    from ``spec.model`` (the model's tokenizer), so data and model stay consistent.
     """
     fmt = _chat_format(spec)
     components: dict[str, DatasetComponent] = {}
@@ -166,27 +355,13 @@ def _data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataConfig:
         )
         weights[dataset.slug] = dataset.weight
     return LmDataConfig(
-        tokenizer=spec.tokenizer_path,
+        tokenizer=spec.model.tokenizer_path,
         chat_template=spec.chat_template,  # data-level default; the component format overrides it
         enforce_eos=True,
         auto_build_caches=True,
         components=components,
         train_weights=weights,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
-    )
-
-
-def _optimizer(spec: SFTSpec) -> AdamConfig:
-    return AdamConfig(
-        learning_rate=spec.lr,
-        beta1=0.9,
-        beta2=spec.beta2,
-        epsilon=1e-8,
-        max_grad_norm=1.0,
-        weight_decay=0.0,
-        lr_schedule="cosine",
-        warmup=spec.warmup_ratio,
-        min_lr_ratio=0.0,
     )
 
 
@@ -217,30 +392,6 @@ def _trainer(spec: SFTSpec, *, gpu_allocator: bool) -> TrainerConfig:
     )
 
 
-def build_sft_train_config(spec: SFTSpec, dep_paths: Sequence[str], *, gpu_allocator: bool) -> TrainLmConfig:
-    """Assemble the identity-bearing ``TrainLmConfig`` for ``spec`` (full-FT chat, init-from-HF)."""
-    # use_hf_model_config re-derives the arch from the checkpoint, so only the model config *class*
-    # matters here — it selects the HF converter (LevConfigClass). Its fields would be discarded.
-    model = LmConfig.get_choice_class(spec.model_type)()
-    return TrainLmConfig(
-        data=_data_config(spec, dep_paths),
-        model=model,
-        optimizer=_optimizer(spec),
-        trainer=_trainer(spec, gpu_allocator=gpu_allocator),
-        train_seq_len=spec.seq_len,
-        initialize_from_hf=spec.model_ref,
-        use_hf_model_config=True,
-        # Qwen (and others) pad the embedding vocab past the tokenizer's for TPU efficiency
-        # (Qwen3: model 151936 vs tokenizer 151669). Without this the Vocab axis is built from
-        # len(tokenizer) while the checkpoint embedding is larger -> a pytree Vocab-size mismatch
-        # at train_step trace. No-op when they already match (e.g. the Delphi prepared tokenizer).
-        pad_tokenizer_to_match_model=True,
-        hf_save_steps=spec.num_train_steps,  # one HF export at the end
-        hf_generation_eos_token_ids=list(spec.eos_token_ids),
-        z_loss_weight=0.0,
-    )
-
-
 def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
     """One native ShareGPT/OpenAI -> canonical transform per source (schema from adapter_kwargs)."""
     return tuple(
@@ -257,37 +408,29 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
     )
 
 
-def _train_job(pod_config: TrainLmOnPodConfig) -> None:
-    """The step's ``run``: dispatch the config as its own Fray training job."""
-    remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
-
-
 def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterCheckpoint]:
     """The chat-SFT run as a lazy ``ArtifactStep[LevanterCheckpoint]``.
 
-    ``resources`` is where/how the run executes, not what it computes: it is a runtime arg, so
-    changing the accelerator never forks the checkpoint's identity. The GPU-only cuda_async
-    allocator is likewise resolved from the run-time accelerator, keeping the fingerprint
-    device-agnostic.
+    The dataset transforms are shared across every backend; ``spec.model`` supplies the
+    backend-specific training config and dispatch. ``resources`` is where/how the run executes, not
+    what it computes: it is a runtime arg, so changing the accelerator never forks the checkpoint's
+    identity.
     """
-    deps = _dataset_deps(spec)
+    data_deps = _dataset_deps(spec)
+    model = spec.model
+    deps = (*data_deps, *model.init_deps())
 
-    def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
+    def build_config(ctx: StepContext) -> object:
         run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
-        gpu_allocator = not ctx.is_fingerprint and isinstance(run_resources.device, GpuConfig)
-        dep_paths = [ctx.artifact_path(dep) for dep in deps]
-        return TrainLmOnPodConfig(
-            train_config=build_sft_train_config(spec, dep_paths, gpu_allocator=gpu_allocator),
-            resources=run_resources,
-            output_path=ctx.output_path,
-            auto_build_caches=True,
-        )
+        dep_paths = [ctx.artifact_path(dep) for dep in data_deps]
+        data_config = build_chat_data_config(spec, dep_paths)
+        return model.build_train_config(ctx, spec, data_config, run_resources)
 
     return ArtifactStep(
         name=spec.name,
         version=spec.version,
         artifact_type=LevanterCheckpoint,
-        run=_train_job,
+        run=model.run,
         build_config=build_config,
         deps=deps,
         runtime_args={_TRAIN_RESOURCES: resources},

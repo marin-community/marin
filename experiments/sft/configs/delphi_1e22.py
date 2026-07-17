@@ -32,13 +32,32 @@ Launch on a TPU slice or CoreWeave H100s::
     python -m experiments.sft.configs.delphi_1e22 --accelerator 8xH100
 """
 
+from levanter.optim.config import AdamConfig
+
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
-from experiments.sft.launcher import DatasetSpec, SFTSpec, run_sft_cli
+from experiments.sft.launcher import DatasetSpec, HfModel, SFTSpec, run_sft_cli
 
 # Prepared (reserved-slot-renamed + mean-init'd) checkpoint + tokenizer dirs. Stage per prefix
 # (gs:// for TPU, s3:// for CoreWeave) before launch — see #7243.
 DELPHI_1E22_PREPARED_CKPT = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
 DELPHI_PREPARED_TOKENIZER = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
+
+# The prepared tokenizer already has <|start_think|>=128002 … as single ids, so HfModel's defaults
+# (qwen3, eos 128001 + 128009) apply unchanged; both specs share this model source.
+_DELPHI_MODEL = HfModel(model_ref=DELPHI_1E22_PREPARED_CKPT, tokenizer_path=DELPHI_PREPARED_TOKENIZER)
+
+# The magpie-90 / warmup-10 cold-start recipe LR; cosine to 0, 10% warmup (LLaMA-Factory parity).
+_DELPHI_OPTIMIZER = AdamConfig(
+    learning_rate=1e-5,
+    beta1=0.9,
+    beta2=0.98,
+    epsilon=1e-8,
+    max_grad_norm=1.0,
+    weight_decay=0.0,
+    lr_schedule="cosine",
+    warmup=0.1,
+    min_lr_ratio=0.0,
+)
 
 _MAGPIE = DatasetSpec(
     slug="magpie",  # math-strong
@@ -75,12 +94,11 @@ _WILDCHAT_386K = DatasetSpec(
 SPEC = SFTSpec(
     name="checkpoints/delphi-1e22-magpie-warmup-levanter-sft",
     version="2026.07.15",
-    model_ref=DELPHI_1E22_PREPARED_CKPT,
-    tokenizer_path=DELPHI_PREPARED_TOKENIZER,
+    model=_DELPHI_MODEL,
     chat_template=DELPHI_V0_CHAT_TEMPLATE,  # the Delphi jinja passed in as a parameter
     datasets=[_MAGPIE, _WARMUP],
+    optimizer=_DELPHI_OPTIMIZER,
     seq_len=4096,
-    lr=1e-5,
     batch_size=16,
     num_train_steps=5307,  # packed 1-epoch (magpie); recompute if the dataset/seq_len changes
 )
@@ -89,12 +107,11 @@ SPEC = SFTSpec(
 SPEC_WC50M = SFTSpec(
     name="checkpoints/delphi-1e22-wc50m-warmup-levanter-sft",
     version="2026.07.15",
-    model_ref=DELPHI_1E22_PREPARED_CKPT,
-    tokenizer_path=DELPHI_PREPARED_TOKENIZER,
+    model=_DELPHI_MODEL,
     chat_template=DELPHI_V0_CHAT_TEMPLATE,
     datasets=[_WILDCHAT_386K, _WARMUP],
+    optimizer=_DELPHI_OPTIMIZER,
     seq_len=4096,
-    lr=1e-5,
     batch_size=16,
     num_train_steps=5307,  # TODO: recompute from the wildchat_386k packed token count
 )
