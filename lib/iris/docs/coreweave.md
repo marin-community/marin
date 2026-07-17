@@ -880,8 +880,10 @@ caches. Every task volume is node-local NVMe:
 Iris points `UV_CACHE_DIR`, `HF_HUB_CACHE`, and `CARGO_HOME` at those
 `hostPath` mounts for every task, including tasks that bring their own image, so
 wheels and model weights are fetched once per node rather than once per task.
-`HF_HOME` is left at the image default: it holds the submitter's `HF_TOKEN`, so
-it stays on the pod's own writable layer rather than a node-shared directory.
+`HF_HOME` is deliberately not among them. It holds the submitter's `HF_TOKEN`, so
+it stays under the pod's own `$HOME` (`iris job run` defaults it to
+`~/.cache/huggingface`) rather than a directory every task on the node can read.
+`HF_HUB_CACHE` covers the part worth sharing: the content-addressed blobs.
 
 The `cache_dir` tree is never pruned; it grows until the node is rebuilt or an
 operator clears it. Watch it on long-lived reserved fleets:

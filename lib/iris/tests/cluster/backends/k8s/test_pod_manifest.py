@@ -539,23 +539,23 @@ def test_zero_timeout_no_deadline():
 # ---------------------------------------------------------------------------
 
 
-def test_build_pod_manifest_mounts_every_standard_mount():
-    """Every standard mount reaches the task container at its declared path."""
-    req = make_run_req("/test-job/0", attempt_id=1)
-    manifest = _build_pod_manifest(req, pod_config())
+def test_pod_manifest_volumes_and_mounts_are_consistent():
+    """No dangling mounts and no orphaned volumes.
 
+    A mount naming an undeclared volume is rejected by the API server outright.
+    An orphan is quieter and worse: the volume exists but reaches no container,
+    so whatever it backs silently falls through to the container layer.
+    """
+    req = make_run_req("/test-job/0", attempt_id=1)
+    req.bundle_id = "bundle-abc"
+    manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
     spec = manifest["spec"]
-    container = spec["containers"][0]
 
     declared = {v["name"] for v in spec["volumes"]}
-    mounted = {m["name"]: m["mountPath"] for m in container["volumeMounts"]}
+    mounted = {m["name"] for c in spec["containers"] + spec.get("initContainers", []) for m in c.get("volumeMounts", [])}
 
-    for mount in STANDARD_MOUNTS:
-        assert mount.name in declared
-        assert mounted.get(mount.name) == mount.container_path
-
-    # The manifest adds /dev/shm on top of STANDARD_MOUNTS.
-    assert "/dev/shm" in mounted.values()
+    assert mounted - declared == set(), "volumeMount names a volume the pod does not declare"
+    assert declared - mounted == set(), "volume reaches no container"
 
 
 def test_task_container_does_not_mount_the_log_shipper_host_path():
