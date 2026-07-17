@@ -77,3 +77,19 @@ never seen in the single-process 8-GPU benches. Both jobs stopped.
 Fix attempt (smoke round 2): resubmitted as `fp8val-{bf16,fp8}-smoke2` with
 `XLA_FLAGS=--xla_gpu_shard_autotuning=false` on both arms (the grug dispatcher
 forwards `XLA_FLAGS`/`NCCL_*`/`JAX_*` to the train gang).
+
+**Smoke round 2 result:** the flag fixed the hang — compile completed and
+execution began — but the bf16 arm **OOM'd in `jit_train_step` (59.78 GiB
+allocation)**. Same structural cause as the earlier B128-on-8-GPU OOM: 26
+*unrolled* layers (no array-stacked scan on either ref) make XLA hold giant
+buffers; here it's the cross-node FSDP (`data=4`) weight-gathers rather than
+activation scratch — per-device batch was identical to the single-node fit.
+
+**Topology pivot (smoke round 3):** drop the data axis entirely —
+**2 nodes/arm, EP16, batch 64** (`FP8VAL_GPU_REPLICAS=2 FP8VAL_EXPERT_AXIS=16
+FP8VAL_BATCH=64`), 32 H100 total. Per-device batch unchanged (4 seqs); expert
+shards are half the size of the proven single-node EP8 fit, and dense params
+replicate exactly as in that fit, so memory is strictly below a validated
+configuration. 2-node EP16 with FP8 wire is also exactly the topology the June
+e2e spike validated (1.134x full train step). Cost: ~4B tokens/arm instead of
+5.8B — still ~2.7x the #6486 resolution budget.
