@@ -18,7 +18,7 @@ use crate::proto::finelog::stats::{
     OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
-use crate::query::{make_ctx, run_query_over};
+use crate::query::{make_ctx, query_deadline, run_query_over, QueryRunError};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -69,6 +69,18 @@ fn map_query_error(e: DataFusionError) -> ConnectError {
         | DataFusionError::NotImplemented(_) => ConnectError::invalid_argument(msg),
         DataFusionError::ResourcesExhausted(_) => ConnectError::resource_exhausted(msg),
         _ => ConnectError::internal(msg),
+    }
+}
+
+/// Map a bounded query run's error to a Connect status: a DataFusion fault
+/// classifies via [`map_query_error`]; a wall-clock timeout -> `deadline_exceeded`.
+fn map_run_error(e: QueryRunError) -> ConnectError {
+    match e {
+        QueryRunError::DataFusion(df) => map_query_error(df),
+        QueryRunError::DeadlineExceeded(limit) => ConnectError::deadline_exceeded(format!(
+            "query exceeded the {:.0}s server deadline",
+            limit.as_secs_f64()
+        )),
     }
 }
 
@@ -141,10 +153,17 @@ impl StatsService for StatsServiceImpl {
 
     async fn query(
         &self,
-        _ctx: RequestContext,
+        req_ctx: RequestContext,
         request: OwnedQueryRequestView,
     ) -> ServiceResult<QueryResponse> {
         let sql = request.sql.unwrap_or("").to_string();
+
+        // Bound execution by the server ceiling, tightened to the client's
+        // remaining deadline when it set one (matching write_rows). Without this
+        // a single expensive query runs unbounded until it exhausts memory.
+        let deadline = req_ctx
+            .time_remaining()
+            .map_or_else(query_deadline, |rem| rem.min(query_deadline()));
 
         // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
         // opens the snapshotted parquet files LAZILY during collect(), so the
@@ -161,9 +180,9 @@ impl StatsService for StatsServiceImpl {
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
         // faults are client errors, IO/execution faults are server errors.
         let ctx = make_ctx();
-        let result = run_query_over(&ctx, providers, &sql)
+        let result = run_query_over(&ctx, providers, &sql, deadline)
             .await
-            .map_err(map_query_error)?;
+            .map_err(map_run_error)?;
 
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result
@@ -248,5 +267,29 @@ impl StatsService for StatsServiceImpl {
             schema: MessageField::some(schema_to_proto_owned(&schema)),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use connectrpc::ErrorCode;
+    use std::time::Duration;
+
+    #[test]
+    fn deadline_exceeded_maps_to_deadline_exceeded() {
+        let code = map_run_error(QueryRunError::DeadlineExceeded(Duration::from_secs(60))).code;
+        assert_eq!(code, ErrorCode::DeadlineExceeded);
+    }
+
+    #[test]
+    fn resources_exhausted_still_maps_to_resource_exhausted() {
+        // map_run_error must keep delegating DataFusion faults to map_query_error:
+        // an exhausted memory pool is resource_exhausted, not deadline_exceeded.
+        let code = map_run_error(QueryRunError::DataFusion(
+            DataFusionError::ResourcesExhausted("pool full".into()),
+        ))
+        .code;
+        assert_eq!(code, ErrorCode::ResourceExhausted);
     }
 }

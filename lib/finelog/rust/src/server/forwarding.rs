@@ -60,7 +60,7 @@ use tokio::task::JoinHandle;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{RegisterTableRequest, StatsServiceClient, WriteRowsRequest};
 use crate::query::provider::NamespaceProvider;
-use crate::query::{make_ctx, run_query_over, QueryResult, RegisteredProvider};
+use crate::query::{make_ctx, query_deadline, run_query_over, QueryResult, RegisteredProvider};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
@@ -551,7 +551,7 @@ where
             name: name.to_string(),
             provider,
         }];
-        let result = run_query_over(&make_ctx(), providers, &sql)
+        let result = run_query_over(&make_ctx(), providers, &sql, query_deadline())
             .await
             .map_err(|e| StatsError::Internal(format!("read {name:?} failed: {e}")))?;
 

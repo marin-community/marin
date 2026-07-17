@@ -23,7 +23,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
-use datafusion::error::Result as DFResult;
+use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -163,6 +163,65 @@ pub struct QueryResult {
     pub batches: Vec<RecordBatch>,
 }
 
+/// Why a bounded query run ended without a result.
+#[derive(Debug)]
+pub enum QueryRunError {
+    /// The DataFusion plan/execution failed.
+    DataFusion(DataFusionError),
+    /// The wall-clock deadline elapsed before the query finished. The query
+    /// future was dropped, which cancels the DataFusion scan driving it, so the
+    /// RPC returns instead of running unbounded until it exhausts memory.
+    DeadlineExceeded(Duration),
+}
+
+impl std::fmt::Display for QueryRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueryRunError::DataFusion(e) => write!(f, "{e}"),
+            QueryRunError::DeadlineExceeded(d) => {
+                write!(f, "query exceeded the {:.0}s wall-clock deadline", d.as_secs_f64())
+            }
+        }
+    }
+}
+
+impl std::error::Error for QueryRunError {}
+
+/// Default wall-clock ceiling for a single query execution (60s). Well above the
+/// slow-query WARN bar so legitimately heavy dashboard queries still complete,
+/// but low enough that a runaway scan is aborted before it can exhaust memory.
+const DEFAULT_QUERY_TIMEOUT_MS: u64 = 60_000;
+
+/// The server-side wall-clock ceiling for a single query's execution.
+///
+/// `FINELOG_QUERY_TIMEOUT_MS` overrides the [`DEFAULT_QUERY_TIMEOUT_MS`] default
+/// (a zero/unparseable value falls back to the default). The Query RPC clamps
+/// this further to the client's remaining deadline when one is set.
+pub fn query_deadline() -> Duration {
+    static MS: OnceLock<u64> = OnceLock::new();
+    let ms = *MS.get_or_init(|| {
+        std::env::var("FINELOG_QUERY_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(DEFAULT_QUERY_TIMEOUT_MS)
+    });
+    Duration::from_millis(ms)
+}
+
+/// Await `query` under a wall-clock `deadline`. On elapse the query future is
+/// dropped — cancelling the DataFusion scan that drives it — and
+/// [`QueryRunError::DeadlineExceeded`] is returned instead of running unbounded.
+async fn await_query_within(
+    deadline: Duration,
+    query: impl std::future::Future<Output = DFResult<QueryResult>>,
+) -> Result<QueryResult, QueryRunError> {
+    match tokio::time::timeout(deadline, query).await {
+        Ok(inner) => inner.map_err(QueryRunError::DataFusion),
+        Err(_elapsed) => Err(QueryRunError::DeadlineExceeded(deadline)),
+    }
+}
+
 /// Relax every field in `schema` to `nullable = true` and re-stamp `batches`
 /// with the relaxed schema.
 ///
@@ -246,8 +305,10 @@ fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>)
     );
 }
 
-/// Register every namespace in `providers`, run `sql` verbatim, collect, and
-/// deregister. Returns the result schema + batches.
+/// Register every namespace in `providers`, run `sql` verbatim under a
+/// wall-clock `deadline`, collect, and deregister. Returns the result schema +
+/// batches, or [`QueryRunError::DeadlineExceeded`] if execution outran the
+/// deadline.
 ///
 /// Registration is per-call (a fresh `ctx`): names are used exactly as the
 /// catalog records them, so `FROM "iris.worker"` resolves. An unknown namespace
@@ -255,29 +316,36 @@ fn log_slow_query(elapsed: Duration, kind: &str, sql: &str, rows: Option<usize>)
 /// `invalid_argument`, the DuckDB CatalogException slot). The schema is captured
 /// from the planned `DataFrame` BEFORE deregistration, so an empty result still
 /// carries the correct typed schema without re-planning.
+///
+/// The `deadline` bounds execution so a single pathological query can't run
+/// until it exhausts the process memory (the memory pool caps concurrent bytes,
+/// not wall-clock). On elapse the scan is aborted and the timed-out SQL is
+/// logged at WARN. Deregistration runs regardless of outcome.
 pub async fn run_query_over(
     ctx: &SessionContext,
     providers: Vec<RegisteredProvider>,
     sql: &str,
-) -> DFResult<QueryResult> {
+    deadline: Duration,
+) -> Result<QueryResult, QueryRunError> {
     let names: Vec<String> = providers.iter().map(|p| p.name.clone()).collect();
     for rp in providers {
         // `TableReference::bare` keeps a dotted name (`iris.worker`) as ONE
         // table identifier rather than a `schema.table` split, so the user's
         // quoted `FROM "iris.worker"` resolves to exactly this registration.
-        ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
+        ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))
+            .map_err(QueryRunError::DataFusion)?;
     }
     let started = Instant::now();
-    let result = async {
+    let query = async {
         let df = ctx.sql(sql).await?;
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
         // keeps source non-nullability that DuckDB would have dropped).
         let (schema, batches) = relax_result_nullability(&schema, batches)?;
-        Ok(QueryResult { schema, batches })
-    }
-    .await;
+        Ok::<QueryResult, DataFusionError>(QueryResult { schema, batches })
+    };
+    let result = await_query_within(deadline, query).await;
     let elapsed = started.elapsed();
     for name in &names {
         // Best-effort cleanup; a deregister failure must not mask the query
@@ -289,6 +357,14 @@ pub async fn run_query_over(
         .ok()
         .map(|r| r.batches.iter().map(|b| b.num_rows()).sum());
     log_slow_query(elapsed, "Query", sql, rows);
+    if let Err(QueryRunError::DeadlineExceeded(limit)) = &result {
+        tracing::warn!(
+            elapsed_ms = elapsed.as_millis() as u64,
+            deadline_ms = limit.as_millis() as u64,
+            sql = %truncate_sql_for_log(sql),
+            "query aborted: exceeded the server wall-clock deadline",
+        );
+    }
     result
 }
 
@@ -413,6 +489,54 @@ mod tests {
         let out = truncate_sql_for_log(&long);
         assert!(out.ends_with("…[truncated]"));
         assert_eq!(out.chars().filter(|&c| c == '✓').count(), 4000);
+    }
+
+    #[tokio::test]
+    async fn deadline_aborts_a_never_completing_query() {
+        // A query future that never resolves (stand-in for a runaway scan) must
+        // be aborted at the wall-clock deadline and surface as DeadlineExceeded —
+        // not hang forever. Deterministic: the future can never finish first, so
+        // there is no timing race. Without the timeout this test never returns.
+        let never = futures::future::pending::<DFResult<QueryResult>>();
+        let started = Instant::now();
+        let result = await_query_within(Duration::from_millis(100), never).await;
+        assert!(
+            matches!(result, Err(QueryRunError::DeadlineExceeded(_))),
+            "expected DeadlineExceeded from a never-completing query"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the query must be aborted at the deadline, not run unbounded"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_query_over_returns_result_within_deadline() {
+        // A normal query that completes well inside the deadline returns its rows
+        // (the deadline wrapping must not perturb the happy path).
+        use datafusion::arrow::datatypes::DataType;
+
+        let schema: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("worker_id", DataType::Utf8, false),
+        ]));
+        let provider = NamespaceProvider::build(schema, &[]).unwrap();
+        let providers = vec![RegisteredProvider {
+            name: "iris.worker".to_string(),
+            provider,
+        }];
+        let ctx = make_ctx();
+        let result = run_query_over(
+            &ctx,
+            providers,
+            "SELECT count(*) AS n FROM \"iris.worker\"",
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("a trivial count must complete inside the deadline");
+        // count(*) over an empty namespace is one row carrying 0.
+        let total: usize = result.batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 1);
     }
 
     #[tokio::test]
