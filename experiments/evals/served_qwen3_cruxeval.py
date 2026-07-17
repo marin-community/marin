@@ -21,7 +21,7 @@ from marin.execution.lazy import Artifact, ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.evals.served_lm_eval import brokered_lm_eval_step
-from experiments.evals.served_qwen3 import EVAL_PARENT_RESOURCES, QWEN3_INFERENCE
+from experiments.evals.served_qwen3 import QWEN3_INFERENCE
 
 CRUXEVAL_RUN = LmEvalRun(
     tasks=("cruxeval_input", "cruxeval_output"),
@@ -35,7 +35,6 @@ def cruxeval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Art
         replace(CRUXEVAL_RUN, limit=limit),
         name="evals/qwen3-0.6b/cruxeval",
         version=version,
-        parent_resources=EVAL_PARENT_RESOURCES,
         parent_env_vars={},
     )
 

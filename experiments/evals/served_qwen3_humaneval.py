@@ -17,7 +17,7 @@ from marin.execution.lazy import Artifact, ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.evals.served_lm_eval import brokered_lm_eval_step
-from experiments.evals.served_qwen3 import EVAL_PARENT_RESOURCES, QWEN3_INFERENCE
+from experiments.evals.served_qwen3 import QWEN3_INFERENCE
 
 HUMANEVAL_RUN = LmEvalRun(
     tasks=("humaneval",),
@@ -31,7 +31,6 @@ def humaneval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Ar
         replace(HUMANEVAL_RUN, limit=limit),
         name="evals/qwen3-0.6b/humaneval",
         version=version,
-        parent_resources=EVAL_PARENT_RESOURCES,
         parent_env_vars={"HF_ALLOW_CODE_EVAL": "1"},
     )
 

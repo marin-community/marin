@@ -3,9 +3,10 @@
 
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from typing import Any
 
-from fray.types import ResourceConfig
+from fray.types import ANY_REGION, ResourceConfig
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalRun, run_lm_eval
 from marin.execution.lazy import Artifact, ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -15,13 +16,13 @@ from marin.inference.vllm import (
 )
 from rigging.filesystem import StoragePath
 
-
-@dataclass(frozen=True)
-class BrokeredLmEvalArtifactConfig:
-    inference: BrokeredVllmSystemConfig
-    lm_eval_uv_packages: tuple[str, ...]
-    eval_run: LmEvalRun
-    output_path: str
+_EVAL_PARENT_RESOURCES = ResourceConfig.with_cpu(
+    cpu=0.5,
+    ram="6g",
+    disk="16g",
+    regions=[ANY_REGION],
+    preemptible=False,
+)
 
 
 def _run_brokered_lm_eval_artifact(
@@ -41,7 +42,6 @@ def brokered_lm_eval_step(
     *,
     name: str,
     version: str,
-    parent_resources: ResourceConfig,
     parent_env_vars: Mapping[str, str],
 ) -> ArtifactStep[Artifact]:
     """Build a lazy artifact containing lm-eval metrics and samples."""
@@ -58,23 +58,23 @@ def brokered_lm_eval_step(
         },
     )
 
-    def build_config(context: StepContext) -> BrokeredLmEvalArtifactConfig:
-        return BrokeredLmEvalArtifactConfig(
-            inference=replace(inference, worker_resources=context.runtime_arg("worker_resources")),
-            lm_eval_uv_packages=LM_EVAL_UV_PACKAGES,
-            eval_run=eval_run,
-            output_path=context.output_path,
-        )
+    def build_config(context: StepContext) -> dict[str, Any]:
+        return {
+            "inference": replace(inference, worker_resources=context.runtime_arg("worker_resources")),
+            "lm_eval_uv_packages": LM_EVAL_UV_PACKAGES,
+            "eval_run": eval_run,
+            "output_path": context.output_path,
+        }
 
-    def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
-        if config.lm_eval_uv_packages != LM_EVAL_UV_PACKAGES:
+    def run_step(config: dict[str, Any]) -> None:
+        if config["lm_eval_uv_packages"] != LM_EVAL_UV_PACKAGES:
             raise ValueError("artifact lm-eval packages must match the pinned runtime packages")
         remote(
             _run_brokered_lm_eval_artifact,
             name=name,
-            resources=parent_resources,
+            resources=_EVAL_PARENT_RESOURCES,
             env_vars=dict(parent_env_vars),
-        )(config.inference, config.eval_run, config.output_path)
+        )(config["inference"], config["eval_run"], config["output_path"])
 
     return ArtifactStep(
         name=name,
