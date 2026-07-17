@@ -93,28 +93,41 @@ def main(argv):
         )
         cfg = EpLayerConfig(top_k=K, dispatch_output_per_expert_alignment=16)
 
-        rng = np.random.default_rng(1234)
-        if args.routing == "uniform":
-            # Round-robin over experts: exactly uniform load.
-            idx = (np.arange(T_global * K, dtype=np.int32).reshape(T_global, K) + rng.integers(0, E)) % E
-        else:
-            # Zipf-ish skew: stresses capacity headroom.
-            probs = 1.0 / np.arange(1, E + 1)
-            probs /= probs.sum()
-            idx = rng.choice(E, size=(T_global, K), p=probs).astype(np.int32)
-        tokens_np = rng.standard_normal((T_global, H), dtype=np.float32).astype(np.float16)
-
+        # Per-shard generation: never materialize the [T_global, ...] arrays on
+        # host (43 GB/process at 64 ranks x 5120). Each callback builds only its
+        # own rows; routing derives from the global row offset so uniform stays
+        # exactly uniform.
+        rng = np.random.default_rng(1234 + rank)
         sharding = NamedSharding(mesh, PartitionSpec(("dp", "ep")))
 
-        def _shard(arr):
-            return jax.make_array_from_callback(
-                arr.shape, sharding, lambda i: arr[i]
-            )
+        def _shard(shape, dtype, gen):
+            def cb(index):
+                start = index[0].start or 0
+                local = (min(shape[0], index[0].stop or shape[0]) - start, *shape[1:])
+                return gen(start, local).astype(dtype)
 
-        topk_idx = _shard(idx)
-        tokens = _shard(tokens_np.astype(jnp.bfloat16))
-        topk_w = _shard(np.full((T_global, K), 1.0 / K, dtype=np.float32).astype(np.float16))
-        num_local_tokens = args.tokens_per_rank * dp  # leading dim of the per-EP-group output? asserted below
+            return jax.make_array_from_callback(shape, sharding, cb)
+
+        if args.routing == "uniform":
+            def gen_idx(start, local):
+                base = np.arange(start * K, start * K + local[0] * K, dtype=np.int64)
+                return (base % E).reshape(local).astype(np.int32)
+        else:
+            probs = 1.0 / np.arange(1, E + 1)
+            probs /= probs.sum()
+
+            def gen_idx(start, local):
+                return rng.choice(E, size=local, p=probs).astype(np.int32)
+
+        topk_idx = _shard((T_global, K), jnp.int32, gen_idx)
+        tokens = _shard(
+            (T_global, H), jnp.bfloat16,
+            lambda start, local: rng.standard_normal(local, dtype=np.float32),
+        )
+        topk_w = _shard(
+            (T_global, K), jnp.float16,
+            lambda start, local: np.full(local, 1.0 / K, dtype=np.float32),
+        )
 
         def round_trip(tokens, topk_idx, topk_w):
             recv_tokens, recv_w, handle_mem, token_counts = ep_dispatch(
