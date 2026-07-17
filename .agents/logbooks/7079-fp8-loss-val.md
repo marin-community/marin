@@ -153,7 +153,36 @@ full communicator init instead of ncclCommSplit — the stock mitigation for
 lazy-split clique hangs). Monitor now has explicit stall detection
 (no-progress ≈19 min → alert).
 
-### FP8VAL-003 — full A/B launched (2026-07-17 13:32 UTC; superseded by full2 15:41 UTC)
+### FP8VAL-003b — ACTUAL stall root cause: heavy log reads wedge the training process (2026-07-17 19:40 UTC)
+
+The full2 arms ran cleanly for 3.5 h (bf16 to step 11199) and 1 h (fp8-full3 to
+2269) — then **both wedged within ~2 minutes of one event: a heavy
+`iris job logs --max-lines 900000` harvest against both running jobs** (for the
+mid-run loss plot). Retro-correlating every earlier stall: fp8-full2's 17:43
+stall followed two consecutive full-log greps; bf16-full1's 13:52 stall
+followed the traceback-investigation reads; smoke9's "checkpoint stall"
+coincided with log inspection. The log server is a uvicorn thread *inside* the
+training process; a heavy read freezes the host loop mid-dispatch (GPUs 0%,
+loader queue full, storage healthy, `Acquire clique` watchdog spam) and never
+recovers. The comm-splitting flag, checkpoint, allocator, mem-fraction, and
+bad-node theories were all chasing this confound (the mem-fraction and
+sharded-autotune fixes remain real, independently verified issues).
+
+**Rules adopted:** full-log harvests only on terminal jobs (history is fully
+retained server-side); running jobs get only small-window default-cap reads at
+≥2.5 min cadence. Both arms restarted 19:38 UTC **with s3 checkpoints** so any
+future wedge costs ≤10 min: `fp8val-bf16-full3` (from scratch, checkpoints on)
+and `fp8val-fp8-full3b` (same RUN_ID `fp8val-fp8-full3` → resumes from the
+~step-2200 checkpoint). ETA ~02:45 / ~01:15 UTC.
+
+**Interim parity (mid-run snapshot, before restart):** over 6118 matched steps
+(fp8-full2 replica vs bf16): mean Δ = +0.0050 (σ 0.0029), window means flat
+(+0.002→+0.006→+0.006→+0.004); the independent fp8-full3 series agrees
+(+0.0036 over its first 2268 steps). Max single-step |Δ| 0.087 (noise). Well
+inside the ≤0.01 bar, no growth trend. Plot artifact:
+https://claude.ai/code/artifact/99ec4cac-2537-494c-b9e2-1b285311fa32
+
+### FP8VAL-003 — full A/B launched (2026-07-17 13:32 UTC; superseded by full2 15:41, full3 19:38 UTC)
 
 `/mwittmann/fp8val-bf16-full1` and `/mwittmann/fp8val-fp8-full1`, 24000 steps
 × B16 × seq 4096 = **1.57B tokens/arm** (≥ the 1.44B that resolved 0.01-level
