@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayRef, RecordBatch};
+use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use buffa::MessageField;
@@ -392,27 +392,37 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     Schema::new(columns, key_column)
 }
 
-/// Resolve the ordering key column name (presence-only), raising if invalid.
+/// Resolve the ordering key column name, raising if invalid.
 ///
 /// If `key_column` is set it must name an existing column; otherwise the schema
-/// must contain a `timestamp_ms` column. Deliberately does NOT enforce the
-/// proto comment's INT64/TIMESTAMP_MS type rule — presence is the only check.
+/// must contain a `timestamp_ms` column. The only type rule enforced is that the
+/// key may not be a `MAP` column: compaction sorts the key through
+/// `RowConverter`/`lexsort`, which cannot order a nested map, so a map key would
+/// wedge every compaction. The proto comment's INT64/TIMESTAMP_MS rule is
+/// otherwise deliberately not enforced (a STRING key is accepted).
 pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
-    if !schema.key_column.is_empty() {
+    let resolved = if !schema.key_column.is_empty() {
         if schema.column(&schema.key_column).is_none() {
             return Err(StatsError::SchemaValidation(format!(
                 "key_column={:?} is not present in the schema columns",
                 schema.key_column
             )));
         }
-        return Ok(schema.key_column.clone());
-    }
-    if schema.column(IMPLICIT_KEY_COLUMN).is_none() {
+        schema.key_column.clone()
+    } else {
+        if schema.column(IMPLICIT_KEY_COLUMN).is_none() {
+            return Err(StatsError::SchemaValidation(format!(
+                "schema declares no key_column and has no implicit '{IMPLICIT_KEY_COLUMN}' column"
+            )));
+        }
+        IMPLICIT_KEY_COLUMN.to_string()
+    };
+    if schema.column(&resolved).map(|c| c.r#type) == Some(ColumnType::COLUMN_TYPE_MAP) {
         return Err(StatsError::SchemaValidation(format!(
-            "schema declares no key_column and has no implicit '{IMPLICIT_KEY_COLUMN}' column"
+            "key_column={resolved:?} is a MAP column, which cannot be an ordering key"
         )));
     }
-    Ok(IMPLICIT_KEY_COLUMN.to_string())
+    Ok(resolved)
 }
 
 // ---------------------------------------------------------------------------
@@ -591,8 +601,17 @@ pub struct AlignedBatch {
     pub byte_size: i64,
 }
 
+/// Sum the raw buffer bytes an array occupies, recursing into child data so a
+/// nested column (e.g. a `Map`'s key/value buffers) is counted in full rather
+/// than only its top-level offset/validity buffers. A monotone approximation
+/// feeding the flush-trigger accounting.
 fn array_buffer_size(arr: &ArrayRef) -> i64 {
-    arr.to_data().buffers().iter().map(|b| b.len() as i64).sum()
+    fn data_buffer_size(data: &ArrayData) -> i64 {
+        let own: i64 = data.buffers().iter().map(|b| b.len() as i64).sum();
+        let children: i64 = data.child_data().iter().map(data_buffer_size).sum();
+        own + children
+    }
+    data_buffer_size(&arr.to_data())
 }
 
 /// Validate an incoming `RecordBatch` against a registered schema.
@@ -892,6 +911,22 @@ mod tests {
             "k",
         );
         assert_eq!(resolve_key_column(&s).unwrap(), "k");
+    }
+
+    #[test]
+    fn resolve_key_column_rejects_a_map_key() {
+        // A MAP column cannot be the ordering key (compaction can't sort a map).
+        let s = Schema::new(
+            vec![
+                col("labels", ColumnType::COLUMN_TYPE_MAP, false),
+                col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "labels",
+        );
+        assert!(matches!(
+            resolve_key_column(&s),
+            Err(StatsError::SchemaValidation(_))
+        ));
     }
 
     #[test]
@@ -1393,6 +1428,23 @@ mod tests {
         assert!(arrow_to_column_type(&int_valued).is_err());
         // A list is still rejected (proves the Map arm didn't widen the reject).
         let _ = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![Some(vec![Some(1_i64)])]);
+    }
+
+    #[test]
+    fn array_buffer_size_counts_map_child_buffers() {
+        // The byte estimate must recurse into a map's key/value child buffers,
+        // not just its top-level offset/validity buffers (otherwise the RAM
+        // flush-trigger under-accounts map columns). One row with keys
+        // "scope"/"region" and values "fleet"/"us-east" = 23 bytes of string
+        // data alone, above the ~8-byte top-level map offset buffer.
+        let map = canonical_map_array(vec![vec![
+            ("scope", Some("fleet")),
+            ("region", Some("us-east")),
+        ]]);
+        assert!(
+            array_buffer_size(&map) >= 23,
+            "map byte size must include child key/value bytes"
+        );
     }
 
     #[test]
