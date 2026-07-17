@@ -6,7 +6,7 @@ over Direct VPC egress, and provisions a datasource for each. `marin` is the
 federation hub — the CoreWeave clusters forward their rows to it — so its
 datasource sees the whole fleet; `marin-dev` sees only itself.
 
-Dashboards, datasources, and alerts are code. Grafana's SQLite is ephemeral here,
+Dashboards and datasources are code. Grafana's SQLite is ephemeral here,
 so **edits made in the UI do not persist**: change the JSON under `dashboards/`
 and redeploy.
 
@@ -59,7 +59,7 @@ server-side, so nothing outside the container reaches it.
 ## Layout
 
 ```
-src/series.py          SQL generation, label decode, long->wide pivot, micros->millis
+src/series.py          SQL generation, label decode and grouping, micros->millis
 src/server.py          the metric API (Starlette)
 src/finelog_source.py  GCE internal-IP discovery + LogClient
 src/config.py          cluster targets (code, not env) and bridge settings

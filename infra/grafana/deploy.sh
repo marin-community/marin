@@ -9,7 +9,10 @@
 # same IAP gate. Run `./deploy.sh setup` for the one-time SA/IAM steps.
 set -euo pipefail
 
-PROJECT="${PROJECT:-hai-gcp-models}"
+# Not overridable: src/config.py pins the same project for the finelog VM
+# lookup, so a PROJECT override here would deploy elsewhere and still read
+# hai-gcp-models. Change both together or neither.
+PROJECT="hai-gcp-models"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-marin-grafana}"
 SA_NAME="marin-grafana"

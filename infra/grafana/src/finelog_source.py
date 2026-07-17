@@ -35,10 +35,8 @@ class MetricSource(Protocol):
 class FinelogSource:
     """A query handle for one cluster's finelog, addressed by the VM's internal IP.
 
-    The address is supplied as a ``LogClient`` resolver, so the client resolves it
-    once on first use, caches the connection, and re-resolves only after a
-    transient failure invalidates it — a rebuilt VM's new IP is picked up without
-    any cache of our own, and the Compute API stays off the query path.
+    The address is looked up lazily and refreshed after a connection failure, so a
+    rebuilt VM's new IP is picked up without a restart.
     """
 
     def __init__(self, target: ClusterTarget, *, timeout_ms: int) -> None:

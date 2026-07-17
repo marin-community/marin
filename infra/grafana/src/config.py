@@ -16,9 +16,14 @@ silently point prod dashboards at dev data.
 import dataclasses
 import os
 
-# The finelog namespace infra/probes writes its flat metric samples to. Every
-# series the bridge serves comes from here; see infra/probes/src/sample.py for
-# the row shape.
+# The finelog namespace infra/probes writes its flat metric samples to, and the
+# source of every series the bridge serves (see infra/probes/src/sample.py for the
+# row shape). Copied rather than imported: infra/probes depends on marin-iris, and
+# Grafana must stay readable when the cluster it monitors is not.
+#
+# The producer's copy is PROBE_RESULTS_NAMESPACE in infra/probes/src/infra_probes.py.
+# The two are only coupled by this string, so changing it there greps to here;
+# every panel silently empties if they diverge.
 CANARY_METRICS_NAMESPACE = "infra.canary.metrics"
 
 # finelog listens here on both VMs (lib/finelog/config/{marin,marin-dev}.yaml).
