@@ -12,25 +12,13 @@ Examples:
 
 from dataclasses import replace
 
-from fray.types import ResourceConfig
 from marin.evaluation.lm_eval import LmEvalRun
 from marin.execution.lazy import Artifact, ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 
-from experiments.evals.served_lm_eval import brokered_lm_eval_step, brokered_vllm_config
+from experiments.evals.served_lm_eval import brokered_lm_eval_step
+from experiments.evals.served_qwen3 import EVAL_PARENT_RESOURCES, QWEN3_INFERENCE
 
-QWEN3_INFERENCE = brokered_vllm_config(
-    model="Qwen/Qwen3-0.6B-Base",
-    tokenizer="Qwen/Qwen3-0.6B",
-    worker_resources=ResourceConfig.with_tpu("v5litepod-4", ram="96g", regions=["us-west4"]),
-)
-EVAL_PARENT_RESOURCES = ResourceConfig.with_cpu(
-    cpu=0.5,
-    ram="6g",
-    disk="16g",
-    regions=["us-west4"],
-    preemptible=False,
-)
 HUMANEVAL_RUN = LmEvalRun(
     tasks=("humaneval",),
     confirm_run_unsafe_code=True,
