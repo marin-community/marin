@@ -1,7 +1,7 @@
 {
   "uid": "marin-fleet",
   "title": "Fleet",
-  "description": "Worker fleet and canary health from the infra.canary.metrics namespace that infra/probes writes. Its labels are a JSON string, so panels filter with finelog's contains() UDF and group by the label_<key> columns the bridge flattens; both go away once finelog has JSON functions (#7317).",
+  "description": "Worker fleet and canary health from the infra.canary.metrics namespace that infra/probes writes. Its labels are a JSON string, so panels filter with finelog's contains() UDF and group by the label_<key> columns the bridge flattens.",
   "tags": ["marin", "generated"],
   "timezone": "utc",
   "editable": false,
