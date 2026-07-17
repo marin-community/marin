@@ -370,13 +370,13 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
 Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
 
-Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
+Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (periodic thread dumps of every running pod + on-demand all types), and by the controller for `/system/controller` self-captures. The k8s backend has no per-node worker daemon, so its `PeriodicProfiler` runs the equivalent 10-minute loop controller-side (`profile_poll_interval`), dumping each running pod's threads off the reconcile path.
 
 Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `finelog.config`):
 
