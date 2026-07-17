@@ -92,9 +92,9 @@ async def _run_episode(task_dir: Path, cluster: str, index: int) -> float:
         task_dir=task_dir,
         cluster=cluster,
         name=f"hello-world-{index}",
-        # The task's verifier installs packages with apt, which needs setuid;
-        # Iris's default profile drops all capabilities, so opt up. Admin-gated.
-        container_profile="privileged",
+        # The default gvisor profile gives the verifier's apt full in-container
+        # root under runsc; submitting still needs the admin role (privileged
+        # outer container).
     ) as sandbox:
         await sandbox.upload_dir(task_dir / "solution", "/solution")
         agent = await sandbox.exec("bash /solution/solve.sh")

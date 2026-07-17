@@ -4,10 +4,16 @@
 """Harbor environment backend that runs each sandbox as an Iris job.
 
 Each sandbox runs as its own CPU-only Iris job on cluster workers (bin-packed
-onto spare host CPU, TPU hosts included), needing no docker socket and no
-elevated container profile. Only prebuilt-image tasks
+onto spare host CPU, TPU hosts included). Only prebuilt-image tasks
 (``[environment] docker_image = ...``) are supported; Dockerfile/compose
 builds are not.
+
+The default ``gvisor`` profile follows lib/iris/docs/container-profiles.md
+("Running gVisor inside a container"): the job runs a privileged podman
+container as trusted plumbing, and the task image runs inside it under
+``podman run --runtime runsc``, so untrusted agent code gets full in-container
+root (apt/setuid work) behind gVisor's intercepted guest kernel instead of the
+host kernel. Submitting the privileged outer job requires the Iris admin role.
 
 Usage:
     harbor trials start -p <task-dir> -a oracle \\
@@ -26,6 +32,7 @@ from pathlib import Path
 
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
+from harbor.trial.errors import EnvironmentStartTimeoutError
 from iris.cli.connect import open_controller_endpoint
 from iris.client import IrisClient, Job
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
@@ -33,12 +40,16 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import Duration
+from upath import UPath
 
 ENVIRONMENT_TYPE = "iris"
 
 UPLOAD_CHUNK_BYTES = 256 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 DEFAULT_SCHEDULING_TIMEOUT = 600
+# Hard job TTL so a sandbox whose harness died without stop() cannot reserve
+# fleet CPU forever (the Daytona backend's auto-stop safety net, as a job timeout).
+DEFAULT_SANDBOX_TTL = 6 * 60 * 60
 # Padding on the RPC deadline so the in-container timeout fires first.
 EXEC_RPC_PADDING = 60
 # RPC deadline for execs with no in-container timeout.
@@ -48,11 +59,76 @@ DEFAULT_CPUS = 1
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_STORAGE_MB = 10240
 
+# Outer image for the gvisor profile. Podman over dind: daemonless, takes the
+# runsc path as a plain --runtime flag, and (unlike alpine dind) has the bash
+# that Iris's docker runtime needs to launch the task. Cached by the worker.
+GVISOR_OUTER_IMAGE = "quay.io/podman/stable:v5.4"
+# Pin explicitly; bump by checking https://github.com/google/gvisor/releases
+# (tag "release-YYYYMMDD.P" publishes to the "YYYYMMDD.P" release path).
+RUNSC_VERSION = "20260714.0"
+RUNSC_BASE_URL = f"https://storage.googleapis.com/gvisor/releases/release/{RUNSC_VERSION}"
+# User-mode networking for the inner sandbox: a per-container tap device with
+# NAT through ordinary outer-container sockets. The outer container shares the
+# host netns (Iris tasks are host-networked), so bridge networking would mutate
+# worker firewall state and collide between sandboxes; slirp4netns does neither,
+# and gVisor's netstack drives its tap directly (verified: bridge veths do not
+# come up under runsc here). Podman v5 dropped the binary, so fetch it pinned.
+SLIRP4NETNS_VERSION = "1.3.1"
+SLIRP4NETNS_URL = f"https://github.com/rootless-containers/slirp4netns/releases/download/v{SLIRP4NETNS_VERSION}"
+INNER_CONTAINER = "sandbox"
+# vfs sidesteps overlay-on-overlay inside the outer container.
+PODMAN = "podman --storage-driver=vfs"
+# Register runsc with --ignore-cgroups: podman (--cgroups=enabled, overriding
+# the image's nested-use cgroups="disabled" that only crun may run under) owns
+# the cgroup, runsc stays out of it. Verified working combination.
+RUNSC_PODMAN_CONF = '[engine.runtimes]\\nrunsc = ["/usr/local/bin/runsc", "--ignore-cgroups"]\\n'
+# The outer container is host-networked and resolves via the host's
+# systemd-resolved loopback stub, which is unreachable from the inner bridge
+# network — give the sandbox real resolvers (GCP metadata DNS + public fallback).
+INNER_DNS_FLAGS = "--dns 169.254.169.254 --dns 8.8.8.8"
+IMAGE_PULL_TIMEOUT = 600
+
+GVISOR_PROFILE = "gvisor"
 _CONTAINER_PROFILES = {
     "restricted": job_pb2.CONTAINER_PROFILE_RESTRICTED,
     "default": job_pb2.CONTAINER_PROFILE_DEFAULT,
     "privileged": job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    # gvisor submits PRIVILEGED but nests the task image under runsc.
+    GVISOR_PROFILE: job_pb2.CONTAINER_PROFILE_PRIVILEGED,
 }
+
+_LOCAL_PROTOCOLS = ("", "file", "local")
+
+
+class IrisSandboxError(RuntimeError):
+    """Infrastructure failure in the Iris sandbox (not the task's own code).
+
+    A distinct type so RL harnesses can classify trials that died to sandbox
+    infrastructure (mask from the advantage baseline) apart from agent
+    failures (reward 0).
+    """
+
+
+def _local_download_target(target: Path | str) -> Path | None:
+    """Return a local ``Path`` for *target*, or ``None`` if it is remote.
+
+    Harbor passes trial-dir download targets as ``UPath`` and the trial dir may
+    live in object storage (``gs://...``); remote targets must be staged
+    through a local temp path, never coerced with ``Path(...)``.
+    """
+    upath = target if isinstance(target, UPath) else UPath(str(target))
+    if upath.protocol in _LOCAL_PROTOCOLS:
+        return Path(upath.path)
+    return None
+
+
+def _copy_local_tree_to_remote(local_root: Path, remote_root: UPath) -> None:
+    remote_root.mkdir(parents=True, exist_ok=True)
+    for local_file in local_root.rglob("*"):
+        if local_file.is_file():
+            remote_file = remote_root / local_file.relative_to(local_root).as_posix()
+            remote_file.parent.mkdir(parents=True, exist_ok=True)
+            remote_file.write_bytes(local_file.read_bytes())
 
 
 def _owned_by_root(info: tarfile.TarInfo) -> tarfile.TarInfo:
@@ -70,7 +146,8 @@ class IrisEnvironment(BaseEnvironment):
         cluster: str | None = None,
         controller_url: str | None = None,
         scheduling_timeout_sec: int | str = DEFAULT_SCHEDULING_TIMEOUT,
-        container_profile: str = "default",
+        container_profile: str = GVISOR_PROFILE,
+        sandbox_ttl_sec: int | str = DEFAULT_SANDBOX_TTL,
         **kwargs,
     ):
         """
@@ -80,10 +157,15 @@ class IrisEnvironment(BaseEnvironment):
             controller_url: Direct controller URL, bypassing cluster config.
             scheduling_timeout_sec: How long to wait for the sandbox task to
                 be scheduled and reach RUNNING.
-            container_profile: Iris container security profile for the sandbox
-                ("restricted", "default", or "privileged"). The default profile
-                drops all capabilities, so tasks whose commands need setuid
-                (e.g. apt-get) currently require "privileged" (admin-gated).
+            container_profile: "gvisor" (default) runs the task image nested
+                under runsc inside a privileged podman job — full
+                in-container root (apt/setuid) isolated from the host kernel.
+                "restricted"/"default"/"privileged" run the task image directly
+                under that Iris profile; "default" drops all capabilities, so
+                setuid commands fail there. gvisor and privileged require the
+                admin role to submit.
+            sandbox_ttl_sec: Hard job TTL after which Iris kills the sandbox
+                even if stop() is never called (leaked-harness safety net).
         """
         super().__init__(*args, **kwargs)
         if (cluster is None) == (controller_url is None):
@@ -91,7 +173,9 @@ class IrisEnvironment(BaseEnvironment):
         self._cluster = cluster
         self._controller_url = controller_url
         self._scheduling_timeout = int(scheduling_timeout_sec)
+        self._gvisor = container_profile == GVISOR_PROFILE
         self._container_profile = _CONTAINER_PROFILES[container_profile]
+        self._sandbox_ttl = int(sandbox_ttl_sec)
         self._iris: IrisClient | None = None
         self._rpc: ControllerServiceClientSync | None = None
         self._job: Job | None = None
@@ -124,6 +208,8 @@ class IrisEnvironment(BaseEnvironment):
     async def start(self, force_build: bool) -> None:
         del force_build  # Prebuilt images only; nothing to build.
         await asyncio.to_thread(self._start_sync)
+        if self._gvisor:
+            await self._start_inner_sandbox()
         # Non-mounting environments use the trial's mount targets as mkdir
         # hints (e.g. /logs/agent, /logs/verifier); see BaseEnvironment.mounts.
         dirs = self._mount_targets(writable_only=True)
@@ -131,7 +217,16 @@ class IrisEnvironment(BaseEnvironment):
         # may not carry it, so create it like the docker backend would.
         if self.task_env_config.workdir:
             dirs = [*dirs, self.task_env_config.workdir]
-        await self.ensure_dirs(dirs)
+        if dirs:
+            # cwd="/": exec's default cwd is the workdir, which may not exist
+            # until this very command creates it (ensure_dirs would cd first
+            # and silently fail).
+            result = await self.exec(self._ensure_dirs_command(dirs, chmod=True), cwd="/", user=self._reset_dirs_user())
+            if result.return_code != 0:
+                raise IrisSandboxError(
+                    f"failed to create sandbox dirs {dirs} (rc={result.return_code}): "
+                    f"{result.stderr or result.stdout or 'no output'}"
+                )
         await self._upload_environment_dir_after_start()
 
     def _start_sync(self) -> None:
@@ -162,9 +257,10 @@ class IrisEnvironment(BaseEnvironment):
                 memory=(self.task_env_config.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
                 disk=(self.task_env_config.storage_mb or DEFAULT_STORAGE_MB) * 1024 * 1024,
             ),
-            task_image=self.task_env_config.docker_image,
+            task_image=GVISOR_OUTER_IMAGE if self._gvisor else self.task_env_config.docker_image,
             container_profile=self._container_profile,
             scheduling_timeout=Duration.from_seconds(self._scheduling_timeout),
+            timeout=Duration.from_seconds(self._sandbox_ttl),
             # A restarted sandbox is a fresh container with all trial state lost,
             # so never retry: fail the trial and let harbor-level resume handle it.
             max_retries_failure=0,
@@ -172,6 +268,36 @@ class IrisEnvironment(BaseEnvironment):
         )
         self._task_id = self._wait_for_running()
         self.logger.info(f"Sandbox task {self._task_id} running (job {self._job.job_id})")
+
+    async def _start_inner_sandbox(self) -> None:
+        """Bring up the task image under runsc inside the outer podman container.
+
+        The outer container is trusted plumbing (podman, daemonless); the task
+        image — where untrusted agent code runs — only ever executes under the
+        runsc runtime.
+        """
+        arch = (await self._outer_check_exec("uname -m")).stdout.strip()
+        await self._outer_check_exec(
+            f"curl -fsSL {RUNSC_BASE_URL}/{arch}/runsc -o /usr/local/bin/runsc"
+            f" && curl -fsSL {RUNSC_BASE_URL}/{arch}/runsc.sha512 -o /usr/local/bin/runsc.sha512"
+            f" && cd /usr/local/bin && sha512sum -c runsc.sha512 && chmod 0755 runsc",
+            error="failed to install runsc",
+        )
+        await self._outer_check_exec(
+            f"curl -fsSL {SLIRP4NETNS_URL}/slirp4netns-{arch} -o /usr/local/bin/slirp4netns"
+            " && chmod 0755 /usr/local/bin/slirp4netns",
+            error="failed to install slirp4netns",
+        )
+        await self._outer_check_exec(
+            "mkdir -p /etc/containers/containers.conf.d"
+            f" && printf '{RUNSC_PODMAN_CONF}' > /etc/containers/containers.conf.d/runsc.conf"
+        )
+        image = shlex.quote(self.task_env_config.docker_image)
+        await self._outer_check_exec(f"{PODMAN} pull {image}", timeout_sec=IMAGE_PULL_TIMEOUT)
+        await self._outer_check_exec(
+            f"{PODMAN} run -d --name {INNER_CONTAINER} --cgroups=enabled --network=slirp4netns"
+            f" --runtime runsc {INNER_DNS_FLAGS} --entrypoint sleep {image} infinity"
+        )
 
     def _wait_for_running(self) -> str:
         assert self._job is not None
@@ -187,12 +313,14 @@ class IrisEnvironment(BaseEnvironment):
                     job_pb2.TASK_STATE_BUILDING,
                     job_pb2.TASK_STATE_ASSIGNED,
                 ):
-                    raise RuntimeError(
+                    raise IrisSandboxError(
                         f"Sandbox task {tasks[0].task_id} entered "
                         f"{job_pb2.TaskState.Name(status.state)} before running: {status.error or 'no error'}"
                     )
             time.sleep(2)
-        raise TimeoutError(f"Sandbox job {self._job.job_id} not running after {self._scheduling_timeout}s")
+        raise EnvironmentStartTimeoutError(
+            f"Sandbox job {self._job.job_id} not running after {self._scheduling_timeout}s"
+        )
 
     async def stop(self, delete: bool):
         del delete  # A terminated Iris job cannot be resumed; stop always deletes.
@@ -218,7 +346,19 @@ class IrisEnvironment(BaseEnvironment):
     ) -> ExecResult:
         effective_cwd = cwd or self.task_env_config.workdir
         script = self._build_script(command, cwd=effective_cwd, env=env, user=user)
+        if self._gvisor:
+            script = f"{PODMAN} exec {INNER_CONTAINER} sh -c {shlex.quote(script)}"
         return await asyncio.to_thread(self._exec_sync, script, timeout_sec)
+
+    async def _outer_check_exec(
+        self, command: str, timeout_sec: int | None = None, error: str | None = None
+    ) -> ExecResult:
+        """Run a command in the outer job container (podman plumbing, not the sandbox)."""
+        result = await asyncio.to_thread(self._exec_sync, command, timeout_sec)
+        if result.return_code != 0:
+            detail = result.stderr or result.stdout or "no output"
+            raise IrisSandboxError(f"{error or f'command failed: {command}'} (rc={result.return_code}): {detail}")
+        return result
 
     def _build_script(
         self,
@@ -259,7 +399,7 @@ class IrisEnvironment(BaseEnvironment):
             timeout_ms=rpc_timeout_ms,
         )
         if response.error:
-            raise RuntimeError(f"exec in {self._task_id} failed: {response.error}")
+            raise IrisSandboxError(f"exec in {self._task_id} failed: {response.error}")
         return ExecResult(stdout=response.stdout, stderr=response.stderr, return_code=response.exit_code)
 
     async def upload_file(self, source_path: Path | str, target_path: str):
@@ -286,9 +426,17 @@ class IrisEnvironment(BaseEnvironment):
         )
 
     async def download_file(self, source_path: str, target_path: Path | str):
+        target = _local_download_target(target_path)
+        if target is None:
+            # Remote (e.g. gs://) trial dir: stage locally, then copy the bytes out.
+            with tempfile.NamedTemporaryFile() as staging:
+                await self.download_file(source_path, staging.name)
+                remote = UPath(str(target_path))
+                remote.parent.mkdir(parents=True, exist_ok=True)
+                remote.write_bytes(Path(staging.name).read_bytes())
+            return
         quoted = shlex.quote(source_path)
         await self._check_exec(f"test -f {quoted}", error=f"remote file not found: {source_path}")
-        target = Path(target_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "wb") as out:
             offset = 0
@@ -303,12 +451,18 @@ class IrisEnvironment(BaseEnvironment):
                     break
 
     async def download_dir(self, source_dir: str, target_dir: Path | str):
+        target = _local_download_target(target_dir)
+        if target is None:
+            # Remote (e.g. gs://) trial dir: extract locally, then copy the tree out.
+            with tempfile.TemporaryDirectory() as staging:
+                await self.download_dir(source_dir, staging)
+                _copy_local_tree_to_remote(Path(staging), UPath(str(target_dir)))
+            return
         remote_tar = f"/tmp/.hb-download-{Path(source_dir).name}.tar.gz"
         await self._check_exec(
             f"tar czf {shlex.quote(remote_tar)} -C {shlex.quote(source_dir)} .",
             error=f"failed to archive remote dir: {source_dir}",
         )
-        target = Path(target_dir)
         target.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(suffix=".tar.gz") as local_tar:
             await self.download_file(remote_tar, local_tar.name)
