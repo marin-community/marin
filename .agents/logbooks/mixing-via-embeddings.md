@@ -485,11 +485,45 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   (cw-us-east-08a.yaml); direct route also closed (no 08a kubeconfig, IP-locked
   surface). Smoke + panel commands ready in seedpanel_monitor.md; needs rav:
   admit the SA, or submit from an admitted identity, or drop creds here.
+- **22:14–22:27 UTC: PR #7275 merged (22:13Z) but NOT live** — 3 post-merge
+  submits (smoke2/3/4) all rejected with the same reason. `allowed_submitters`
+  is baked into `ControllerAuth` at controller start (auth.py:538, no reload
+  RPC) → the change is inert until the 08a controller is redeployed
+  (`iris cluster controller restart` from a checkout with #7275; controller-only,
+  workers/jobs unaffected per OPS.md — but needs the 08a kubeconfig + express
+  permission, neither in this session). Federation link healthy (sync cursors
+  advancing); all 4 smoke jobs terminal at handoff, nothing scheduled/billed.
 - Per-task evals are POST-HOC (lm-eval logprob harness, 1 results.json per (run,task),
   60-task readout set ⊂ 150 dirs/run at `gs://marin-us-central2/evaluation/grug_logprob/`);
   harness vendored to `experiments/grug/moe/eval_logprob.py` (from swarm-branch, adapted:
   no legacy layout, capacity raise post-load). Eval + readout plan, monitoring commands,
   abort/resume: `scratch/mixture_features/grug/seedpanel_monitor.md`.
+
+## 2026-07-17 seed panel LAUNCHED on GB200 (cw-us-east-08a) — 10 runs training
+
+- Admission unblocked (PR #7275 + 08a controller redeploy ~22:54Z). Smoke ladder
+  (5 informative failures, each with a precise fix; full record in
+  seedpanel_monitor.md): CPU-only jaxlib (→ `--extra gpu`; CUDA jax resolves on
+  linux_aarch64/Grace); grug attention None→reference on GPU = 64GiB
+  [B,H,S,S] scores (→ `attention_implementation="gpu_fa4_cute"`, the CW canary
+  default, SM100-tuned); 520.77GiB `jit_train_step` alloc on 1 GPU — full
+  2M-token batch, grug has NO microbatch knob (→ shard 4-way = swarm's v4-8
+  layout); BFC fragmentation at 133.91GiB/GPU (→ `TF_GPU_ALLOCATOR=
+  cuda_malloc_async` + mem fraction 0.97). **smoke9 PASSED**: 200 steps, loss
+  11.5→4.93, checkpoint→CW object store verified.
+- **Measured: 837,461 tok/s on GB200x4** (2.504 s/step at 2.097M tok/step) →
+  **33.2 h/run**; 10 runs × 1 gb200-4x node = 40/864 GPUs, ETA ~2026-07-18 am.
+- Panel: `/rav/rav-mve-seedpanel-b200-r2-{00..09}` (direct federated jobs,
+  `--max-retries 3`, resume-from-checkpoint), seeds 1000–1009, W&B
+  stanford-mercury/marin_moe group `rav_mve_seedpanel`, checkpoints
+  `s3://marin-us-east-02a/marin/users/rav/grug/rav_mve_seedpanel_NN/dev/`.
+  First attempt (run{00..09}) OOM-thrashed: `TF_GPU_ALLOCATOR` is a TF env,
+  no-op for JAX (smoke9 had fit under BFC by allocation-order luck vs NCCL
+  clique buffers); r2 uses **`XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`** →
+  **10/10 stepping by 00:51Z** (steps ~100-131, loss ≈11.5 in the real 4,776-step
+  warmup). Deltas vs swarm (accepted): B200 numerics, CW mirror data, no
+  in-training validation, code drift — itemized in seedpanel_monitor.md with
+  the eval + SNR readout plan.
 
 ## 2026-07-16 codex-collaborative validation (rigor vs PR 2393, epoching, literature)
 

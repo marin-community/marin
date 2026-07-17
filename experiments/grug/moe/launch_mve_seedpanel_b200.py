@@ -17,8 +17,13 @@ only placement and I/O change:
   GCS us-central2 and are not mirrored on CW. Evals do not touch training
   state, so the training stream is unchanged; the panel readout is the
   post-hoc ``eval_logprob`` suite either way.
+- ``attention_implementation="gpu_fa4_cute"``: grug's ``None`` default resolves
+  to TPU splash on TPU but to *reference* attention on GPU, which materializes
+  the full [B, H, S, S] score matrix (64GiB at 512x4x4096x4096 — OOM-thrashed
+  the first smoke). ``gpu_fa4_cute`` is the segmented FA4/CuTe flash kernel the
+  CW GPU canary uses, with explicit SM100/B200 tile tuning.
 - CAVEAT (accepted by rav 2026-07-16): hardware numerics differ from the v4
-  swarm (Blackwell matmuls, cuDNN attention vs TPU splash, different
+  swarm (Blackwell matmuls, FA4 flash attention vs TPU splash, different
   reduction orders), so the measured seed-variance is under B200 numerics.
 
 Modes:
@@ -57,6 +62,10 @@ from experiments.grug.moe.train import GrugRunConfig, GrugTrainerConfig, _run_gr
 from experiments.marin_tokenizer import marin_tokenizer
 
 logger = logging.getLogger(__name__)
+
+# The swarm model with the GPU flash-attention backend selected (see module
+# docstring). Backend selection only — every shape/math field stays identical.
+B200_MODEL = dataclasses.replace(tpu_panel.SWARM_MODEL, attention_implementation="gpu_fa4_cute")
 
 DEFAULT_GPUS_PER_RUN = 1
 # One gb200-4x node = 4 GPUs / 144 vCPU / 960GB; request a proportional host share.
@@ -140,7 +149,7 @@ def _panel_launch_config(
         run_id = f"{run_id}-{run_suffix}"
     seed = tpu_panel.SEED_BASE + index
     return GrugMoeLaunchConfig(
-        model=tpu_panel.SWARM_MODEL,
+        model=B200_MODEL,
         data=_panel_data_config(),
         output_path=output_path,
         run_id=run_id,
