@@ -29,7 +29,7 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
-GET /github/ferries | builds                      GitHub REST / GraphQL
+GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /health                                       bridge liveness
 ```
 
@@ -50,8 +50,11 @@ terminal) and `query` use the controller's `ExecuteRawQuery`; `workers` aggregat
 `/health`. These rely on the marin controller's null-auth mode — `ExecuteRawQuery` is
 admin-only — so an authed controller would break `jobs` and the ad-hoc `query`.
 
-GitHub: `ferries` and `builds` fan out over the Actions REST and GraphQL APIs with a
-server-side token (the rate-limit shield), cached, panel fields precomputed.
+GitHub: `ferries`, `builds`, and `nightlies` fan out over the Actions REST and GraphQL
+APIs with a server-side token (the rate-limit shield), cached, panel fields precomputed.
+`nightlies` fetches each configured nightly workflow (across the marin repo and the fork
+repos) and projects the runs onto a 7-day-by-lane matrix — one row per lane and day, with
+the cell's health, overdue, and duration state resolved server-side.
 
 The controller and finelog IPs are resolved from GCE labels and refreshed after a
 connection failure. A dead controller or GitHub returns 5xx (not empty rows) and the
@@ -78,7 +81,8 @@ Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
 Dashboards: `infra.json` (the infra overview — builds and ferries, the Iris control
-plane, probes, and 24h history), `fleet.json` (canary + worker health), `iris.json`
+plane, probes, 24h history, and the nightly regression matrix), `fleet.json` (canary +
+worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
 grouped by run).

@@ -15,6 +15,7 @@ from config import BridgeConfig, ClusterTarget
 from errors import UpstreamError
 from github_source import GithubSource
 from iris_source import IrisSource
+from nightly_config import NIGHTLY_LANES
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -222,7 +223,7 @@ class _FakeIris:
         return self._rows
 
 
-def _app(iris_source) -> TestClient:
+def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
     config = BridgeConfig(
         max_rows=1000,
         cache_ttl=20,
@@ -232,7 +233,9 @@ def _app(iris_source) -> TestClient:
         http_timeout=5,
         github_token=None,
     )
-    return TestClient(create_app(config, {}, {"marin": iris_source}, GithubSource(token=None, timeout=5.0)))
+    return TestClient(
+        create_app(config, {}, {"marin": iris_source}, github_source or GithubSource(token=None, timeout=5.0))
+    )
 
 
 def test_iris_endpoint_returns_rows():
@@ -249,3 +252,50 @@ def test_dead_controller_fails_loud_not_empty():
 
 def test_unknown_cluster_on_iris_route_is_400():
     assert _app(_FakeIris(TARGET)).get("/iris/nope/jobs").status_code == 400
+
+
+def test_nightlies_endpoint_returns_full_matrix():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "workflow_runs": [
+                    {
+                        "id": 1,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": "abcdef1234567890",
+                        "created_at": "2026-07-17T06:05:00Z",
+                        "run_started_at": "2026-07-17T06:05:00Z",
+                        "updated_at": "2026-07-17T07:30:00Z",
+                        "html_url": "https://x",
+                        "event": "schedule",
+                    }
+                ]
+            },
+        )
+
+    rows = _app(_FakeIris(TARGET), github_source=_github(handler)).get("/github/nightlies").json()
+    # One row per configured lane per day over the trailing 7 days.
+    assert len(rows) == len(NIGHTLY_LANES) * 7
+    expected_keys = {
+        "ts",
+        "date",
+        "lane",
+        "label",
+        "group",
+        "subgroup",
+        "repository",
+        "workflow",
+        "state",
+        "status_code",
+        "healthy",
+        "due",
+        "duration_state",
+        "duration_seconds",
+        "conclusion",
+        "url",
+    }
+    assert all(set(row) == expected_keys for row in rows)
+    # StrEnum cell/duration states must cross the wire as plain strings, not repr.
+    assert all(isinstance(row["state"], str) and "." not in row["state"] for row in rows)

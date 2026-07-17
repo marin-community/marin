@@ -18,6 +18,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /iris/{cluster}/query?sql=               ad-hoc SELECT via ExecuteRawQuery (admin/null-auth)
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
+    GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -277,6 +278,9 @@ def create_app(
     def github_builds(_: Request) -> JSONResponse:
         return github_endpoint("builds", github_source.builds)
 
+    def github_nightlies(_: Request) -> JSONResponse:
+        return github_endpoint("nightlies", github_source.nightlies)
+
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
@@ -285,6 +289,7 @@ def create_app(
             Route("/health", health),
             Route("/github/ferries", github_ferries),
             Route("/github/builds", github_builds),
+            Route("/github/nightlies", github_nightlies),
             Route("/finelog/{cluster}/query", query),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),

@@ -977,6 +977,105 @@
           ]
         }
       ]
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Nightly regression matrix",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      },
+      "panels": []
+    },
+    {
+      "id": 18,
+      "type": "state-timeline",
+      "title": "Nightly lanes (7 days)",
+      "description": "Each nightly workflow lane over the last 7 UTC days: green healthy, yellow slow, red failed, dark-red missing (overdue, no run), orange source unavailable, blue not yet due. Blank cells are days the lane was not scheduled or not yet introduced.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "github"
+      },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 80
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": { "text": "healthy", "color": "green", "index": 0 },
+                "2": { "text": "slow", "color": "yellow", "index": 1 },
+                "3": { "text": "failed", "color": "red", "index": 2 },
+                "4": { "text": "missing", "color": "dark-red", "index": 3 },
+                "5": { "text": "unavailable", "color": "orange", "index": 4 },
+                "6": { "text": "not yet due", "color": "blue", "index": 5 }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": false,
+        "showValue": "never",
+        "alignValue": "center",
+        "rowHeight": 0.9,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/nightlies",
+          "url_options": {
+            "method": "GET",
+            "params": []
+          },
+          "columns": [
+            {
+              "selector": "ts",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "lane",
+              "text": "lane",
+              "type": "string"
+            },
+            {
+              "selector": "status_code",
+              "text": "status",
+              "type": "number"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

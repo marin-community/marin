@@ -13,11 +13,14 @@ required for the GraphQL build query, which GitHub gates even on public repos.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 import httpx
 from config import BUILD_HISTORY, FERRY_GROUPS, FERRY_RUN_LIMIT, GITHUB_REPO
 from errors import UpstreamError
+from nightly import NightlyLaneSnapshot, NightlyRun, project_nightlies
+from nightly_config import NIGHTLY_LANES, NightlyLane
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,10 @@ _GRAPHQL_URL = "https://api.github.com/graphql"
 
 # Per-commit rollup states GitHub reports; the build success rate is over finalized ones.
 _FINALIZED_STATES = ("SUCCESS", "FAILURE", "ERROR")
+
+# Runs fetched per nightly lane; each lane runs at most once (weekly lanes) to a
+# handful of times (daily lanes) within the trailing query window.
+_NIGHTLY_RUN_LIMIT = 30
 
 _BUILD_QUERY = """
 query MainCommits($owner: String!, $repo: String!, $count: Int!) {
@@ -57,6 +64,31 @@ def _iso_to_ms(value: str | None) -> int | None:
     if not value:
         return None
     return round(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+def _nightly_query_start(lane: NightlyLane, now: datetime) -> datetime:
+    """The earliest run creation time worth fetching for a lane's 7-day matrix.
+
+    Daily lanes only need one extra day of slack for the oldest matrix column;
+    weekly (or sparser) lanes need a full extra cadence period so that column's
+    occurrence isn't cut off.
+    """
+    today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    cadence_days = 1 if len(lane.weekdays) == 7 else 7
+    return today - timedelta(days=6 + cadence_days)
+
+
+def _to_nightly_run(run: dict) -> NightlyRun:
+    return NightlyRun(
+        id=run["id"],
+        status=run["status"],
+        conclusion=run.get("conclusion"),
+        sha=run["head_sha"],
+        created_at=run["created_at"],
+        run_started_at=run.get("run_started_at"),
+        updated_at=run["updated_at"],
+        url=run["html_url"],
+    )
 
 
 class GithubSource:
@@ -162,3 +194,29 @@ class GithubSource:
                 }
             )
         return rows
+
+    def _nightly_lane_snapshot(self, lane: NightlyLane, now: datetime) -> NightlyLaneSnapshot:
+        """Fetch one lane's recent scheduled runs; a failure becomes an error snapshot, not a raise."""
+        url = f"{_REST_BASE}/repos/{lane.repository}/actions/workflows/{quote(lane.workflow_file, safe='')}/runs"
+        params = {
+            "branch": lane.branch,
+            "event": "schedule",
+            "per_page": _NIGHTLY_RUN_LIMIT,
+            "created": f">={_nightly_query_start(lane, now).strftime('%Y-%m-%dT%H:%M:%S.000Z')}",
+        }
+        try:
+            payload = self._get(url, params=params)
+        except UpstreamError as err:
+            return NightlyLaneSnapshot(lane_id=lane.id, runs=[], error=str(err))
+        runs = [_to_nightly_run(run) for run in payload.get("workflow_runs", [])]
+        return NightlyLaneSnapshot(lane_id=lane.id, runs=runs, error=None)
+
+    def nightlies(self, now: datetime | None = None) -> list[dict]:
+        """One flat row per (lane, day) over the trailing 7 UTC days.
+
+        Each configured lane is fetched independently; a lane whose fetch fails
+        renders its cells "unavailable" rather than failing the whole matrix.
+        """
+        effective_now = now or datetime.now(UTC)
+        snapshots = [self._nightly_lane_snapshot(lane, effective_now) for lane in NIGHTLY_LANES]
+        return project_nightlies(NIGHTLY_LANES, snapshots, effective_now)
