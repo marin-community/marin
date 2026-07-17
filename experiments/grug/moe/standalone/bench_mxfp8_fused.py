@@ -674,7 +674,11 @@ def parse_tiler(s: str):
 
 
 def main():
+    global E, D, F, N2
     p = argparse.ArgumentParser()
+    p.add_argument("--experts", type=int, default=E, help="groups per kernel call (E_local under EP)")
+    p.add_argument("--d-model", type=int, default=D)
+    p.add_argument("--f-dim", type=int, default=F)
     p.add_argument("--tokens", type=int, default=262144)
     p.add_argument("--check-tokens", type=int, default=32768)
     p.add_argument("--iters", type=int, default=50)
@@ -687,6 +691,8 @@ def main():
     p.add_argument("--wgrad-tiler", default="256,256,2,2")
     p.add_argument("--out", default="bench_mxfp8_fused.json")
     a = p.parse_args()
+    E, D, F = a.experts, a.d_model, a.f_dim
+    N2 = 2 * F
     phases = set(a.phases.split(","))
     tilers = {
         "swiglu": parse_tiler(a.swiglu_tiler),
@@ -704,6 +710,8 @@ def main():
         "tokens": a.tokens,
         "check_tokens": a.check_tokens,
         "experts": E,
+        "d_model": D,
+        "f_dim": F,
         "tilers": {k: [list(v[0]), list(v[1])] for k, v in tilers.items()},
     }
     if "check" in phases:
