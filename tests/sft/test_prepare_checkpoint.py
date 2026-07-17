@@ -3,24 +3,35 @@
 
 """Unit tests for the SFT checkpoint-preparation step and its wiring into ``sft_step``.
 
-The heavy pieces the preparation composes are tested elsewhere: the tokenizer rename in
-``tests/test_marin_tokenizer.py`` and the embedding reinit in ``lib/levanter/tests/test_sft.py``.
-These tests cover the marin-side contract this launcher adds — the SFT spec depends on the
-preparation step and resolves its model + tokenizer from that step's output, identity tracks the
-preparation inputs, and ``override_path`` pins an existing artifact instead of regenerating.
+Coverage splits three ways: the ArtifactStep wiring (the SFT spec depends on the preparation step
+and resolves its model + tokenizer from that step's output; identity tracks the inputs;
+``override_path`` pins an existing artifact); the shard surgery (``_reinit_embedding_shards``
+reseeds the embedding rows and leaves every other shard byte-for-byte identical); and the tokenizer
+rename against the real base tokenizer.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+
+import numpy as np
 import pytest
 from fray.types import ResourceConfig
 from marin.execution.lazy import materialized_config
+from safetensors.numpy import load_file, save_file
 from transformers import AutoTokenizer
 
 from experiments.marin_tokenizer import inject_special_tokens
 from experiments.sft.configs.delphi_1e22 import DELPHI_1E22_BASE_MODEL, DELPHI_1E22_BASE_REVISION
 from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedModel, SFTSpec, sft_step
-from experiments.sft.prepare_checkpoint import PrepareCheckpointConfig, prepare_checkpoint_step
+from experiments.sft.prepare_checkpoint import (
+    PrepareCheckpointConfig,
+    _reinit_embedding_shards,
+    _reinit_rows,
+    prepare_checkpoint_step,
+)
 
 _PREFIX = "gs://test-prefix"
 _DATASET = DatasetSpec(
@@ -39,7 +50,6 @@ def _prepared_step(**overrides):
         source_model="some-org/base-model",
         source_revision="deadbeef",
         token_renames=DELPHI_RESERVED_TOKEN_RENAMES,
-        model_type="qwen3",
     )
     kwargs.update(overrides)
     return prepare_checkpoint_step(**kwargs)
@@ -126,6 +136,71 @@ def test_override_path_adopts_existing_checkpoint():
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf == "gs://staged/base-prepared"
     assert train_config.data.tokenizer == "gs://staged/base-prepared"
+
+
+def _sha256(path: str) -> str:
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def _write_tiny_checkpoint(path: str, vocab: int = 16, hidden: int = 8) -> None:
+    """A two-shard checkpoint: embed + lm_head + a layer tensor in shard 1, another in shard 2."""
+    rng = np.random.default_rng(123)
+    shard1 = "model-00001-of-00002.safetensors"
+    shard2 = "model-00002-of-00002.safetensors"
+    save_file(
+        {
+            "model.embed_tokens.weight": rng.standard_normal((vocab, hidden), dtype=np.float32),
+            "lm_head.weight": rng.standard_normal((vocab, hidden), dtype=np.float32),
+            "model.layers.0.mlp.weight": rng.standard_normal((hidden, hidden), dtype=np.float32),
+        },
+        os.path.join(path, shard1),
+    )
+    save_file(
+        {"model.layers.1.mlp.weight": rng.standard_normal((hidden, hidden), dtype=np.float32)},
+        os.path.join(path, shard2),
+    )
+    weight_map = {
+        "model.embed_tokens.weight": shard1,
+        "lm_head.weight": shard1,
+        "model.layers.0.mlp.weight": shard1,
+        "model.layers.1.mlp.weight": shard2,
+    }
+    with open(os.path.join(path, "model.safetensors.index.json"), "w") as f:
+        json.dump({"metadata": {"total_size": 0}, "weight_map": weight_map}, f)
+
+
+def test_reinit_rows_reseeds_only_target_rows():
+    """``_reinit_rows`` changes exactly the target rows, preserves dtype, and is deterministic."""
+    matrix = np.arange(16 * 8, dtype=np.float32).reshape(16, 8)
+    out = _reinit_rows(matrix, [2, 5], np.random.default_rng(0))
+
+    assert out.dtype == matrix.dtype
+    assert np.array_equal(matrix, np.arange(16 * 8, dtype=np.float32).reshape(16, 8))  # input untouched
+    changed = {i for i in range(matrix.shape[0]) if not np.array_equal(out[i], matrix[i])}
+    assert changed == {2, 5}
+    assert np.array_equal(out, _reinit_rows(matrix, [2, 5], np.random.default_rng(0)))  # deterministic
+
+
+def test_reinit_embedding_shards_rewrites_only_the_embedding_shard(tmp_path):
+    """Only the shard holding embed/lm_head is rewritten; every other shard stays byte-for-byte."""
+    d = str(tmp_path)
+    _write_tiny_checkpoint(d)
+    shard1, shard2 = "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"
+    before = load_file(os.path.join(d, shard1))
+    sha2_before = _sha256(os.path.join(d, shard2))
+
+    _reinit_embedding_shards(d, ids=[2, 5], seed=0)
+
+    after = load_file(os.path.join(d, shard1))
+    # The shard with no embedding tensors is never rewritten -> identical bytes on disk.
+    assert _sha256(os.path.join(d, shard2)) == sha2_before
+    # A non-embedding tensor inside the rewritten shard is preserved exactly.
+    assert np.array_equal(after["model.layers.0.mlp.weight"], before["model.layers.0.mlp.weight"])
+    # Exactly rows 2 and 5 of both embed and lm_head are reseeded.
+    for name in ("model.embed_tokens.weight", "lm_head.weight"):
+        changed = {i for i in range(before[name].shape[0]) if not np.array_equal(after[name][i], before[name][i])}
+        assert changed == {2, 5}, name
 
 
 def test_delphi_renames_produce_single_ids_on_the_real_tokenizer():

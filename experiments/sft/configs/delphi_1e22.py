@@ -54,7 +54,6 @@ _DELPHI_PREPARED = prepare_checkpoint_step(
     source_model=DELPHI_1E22_BASE_MODEL,
     source_revision=DELPHI_1E22_BASE_REVISION,
     token_renames=DELPHI_RESERVED_TOKEN_RENAMES,
-    model_type="qwen3",
     override_path=DELPHI_PREPARED_OVERRIDE,
 )
 _DELPHI_MODEL = PreparedModel(_DELPHI_PREPARED)
