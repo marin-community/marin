@@ -217,19 +217,15 @@ Run before PR creation:
 - TPU import/build smoke;
 - direct `vllm.LLM.generate` TPU smoke;
 - bounded brokered Marin runtime smoke, preferring an existing script such as
-  `experiments/evals/served_qwen3_humaneval.py` over writing a new smoke.
+  `experiments/evals/served_qwen3.py` over writing a new smoke.
 
-Run the brokered smoke with a bounded HumanEval sample unless a better existing
-brokered test is already closer to the touched code:
+Run the brokered suite with a bounded sample by composing its existing pieces:
 
 ```sh
-uv run python experiments/evals/served_qwen3_humaneval.py \
-  --limit 8 \
-  --region europe-west4 \
-  --tpu-type v6e-4 \
-  --priority interactive \
-  --job-name served-qwen3-humaneval-<run-id> \
-  --output-path /tmp/served-qwen3-humaneval-<run-id>
+uv run iris --config lib/iris/config/marin.yaml job run \
+  --job-name served-qwen3-<run-id> --cpu 1 --memory 2G --extra cpu \
+  --priority interactive --no-wait -- python -c \
+  "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.brokered_eval_suite import brokered_eval_suite; from experiments.evals.served_qwen3 import QWEN3_INFERENCE; inference = replace(QWEN3_INFERENCE, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4'])); StepRunner().run([lower(brokered_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
 ```
 
 Inspect the Iris parent, broker, and worker logs; confirm the proxy served
