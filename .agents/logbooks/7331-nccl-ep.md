@@ -311,3 +311,23 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   + a2a_cute EP8 control at the identical mesh/flags. Watch: HBM at no-drop
   capacity (mem fraction 0.90), the intermittent CUBIN failure envelope
   (B200MFU-035), first-step NCCL_EP JIT compiles.
+
+### 2026-07-17 — NCCLEP-006 (in flight): 64-GPU EP8 — b1024 does not fit under no-drop capacity
+- `/mwittmann/ncclep-64g-ep8` (d5120 L48 b1024 seq4096, EP8, data8×expert8,
+  16-node gang, mem fraction 0.90): **OOM at first execution — 172.34 GiB
+  temp arena** for `jit_train_step`. Driver: no-drop recv capacity =
+  ep × tokens_per_rank × top_k = 8 × 65,536 × 4 = **2.1 M rows/rank**, making
+  every EP-side buffer (recv_tokens, zeroed x_dispatch, gu, expert_out,
+  weighted, plus bwd mirrors) ~20 GiB each.
+- **This is a first-class derisk finding, not just a config error**: NCCL_EP
+  has no drop path, so capacity must cover the worst case, and worst-case
+  capacity scales ∝ EP degree × per-rank tokens. b1024 at EP8/64 GPUs is
+  exactly NVIDIA's "8k max_tokens_per_rank limits local batch to 2" wall from
+  the other side — their intended usage is small per-dispatch token counts
+  (their chunked pipeline), not one giant per-layer dispatch. Upstream asks:
+  (a) capacity-clipped dispatch with drop counts, or (b) the WIP
+  chunked-dispatch mode. Until then, big-batch NCCL_EP needs MoE-layer
+  chunking on our side.
+- Retry at **b512** (tokens/rank 32,768 → capacity 1.05 M rows, ~10 GiB/buffer)
+  in flight (`ncclep-64g-ep8-b512`) + a2a_cute b512 control at the identical
+  mesh/flags + the a2a_cute b1024 reference-config baseline.
