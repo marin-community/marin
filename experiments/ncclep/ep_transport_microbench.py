@@ -30,9 +30,9 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 
 def parse_args(argv):
     p = argparse.ArgumentParser()
-    p.add_argument("coord_addr")
-    p.add_argument("proc_id", type=int)
-    p.add_argument("num_procs", type=int)
+    p.add_argument("coord_addr", nargs="?", help="omit under the iris supervised launcher")
+    p.add_argument("proc_id", nargs="?", type=int)
+    p.add_argument("num_procs", nargs="?", type=int)
     p.add_argument("--ep", type=int, required=True, help="EP group size (dp = num_procs // ep)")
     p.add_argument("--tokens-per-rank", type=int, default=65536)
     p.add_argument("--hidden-dim", type=int, default=5120)
@@ -49,14 +49,24 @@ def parse_args(argv):
 
 
 def main(argv):
+    import os
+
     args = parse_args(argv)
-    jax.distributed.initialize(
-        coordinator_address=args.coord_addr,
-        num_processes=args.num_procs,
-        process_id=args.proc_id,
-        local_device_ids=[args.proc_id % 4],
-    )
-    rank, world = args.proc_id, args.num_procs
+    if os.environ.get("IRIS_MULTIGPU_PROCESS_COUNT"):
+        # iris gang job with --processes-per-task: supervised jax_init joins
+        # the mesh (one GPU per process) via the endpoint registry.
+        from iris.runtime.jax_init import initialize_jax
+
+        initialize_jax()
+    else:
+        assert args.coord_addr and args.num_procs is not None, "coord_addr/proc_id/num_procs required"
+        jax.distributed.initialize(
+            coordinator_address=args.coord_addr,
+            num_processes=args.num_procs,
+            process_id=args.proc_id,
+            local_device_ids=[args.proc_id % 4],
+        )
+    rank, world = jax.process_index(), jax.process_count()
     ep, dp = args.ep, world // args.ep
     assert dp * ep == world, f"num_procs {world} must equal dp*ep"
     assert args.num_experts % ep == 0
