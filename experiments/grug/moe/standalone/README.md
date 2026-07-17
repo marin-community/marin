@@ -109,11 +109,16 @@ copy, 16 seq/GPU): `sonic_cute` EP1 20.2%, **`ring_cute` EP4 20.8%** (best),
 `ragged_all_to_all_cute` EP8 19.1%, `ragged_all_to_all` EP8 18.8%. EP's margin
 over EP1 compresses to +0.6pp — the larger per-GPU batch amortizes the FSDP
 weight all-gathers. `all_but_moe`/`none` OOM at this scale (439 GiB–1.6 TiB step
-temporaries); `recompute_all` is the only viable remat mode. Known bug: ring
-backends at EP≥8 with batch 1024 (and `ragged_all_to_all_cute` at EP16) fail at
-the first step with `Failed to load in-memory CUBIN … CUDA_ERROR_INVALID_VALUE`
-— for the ring family the boundary is the EP-group token all-gather (`x_global`
-in `ep_ring.py`) crossing 2³¹ elements. The allocator choice
+temporaries); `recompute_all` is the only viable remat mode. Known limit: **EP8
+is the ceiling at batch 1024 — every backend fails above it.** Ring backends
+fail from EP8 up with `Failed to load in-memory CUBIN …
+CUDA_ERROR_INVALID_VALUE` (the EP-group token all-gather, `x_global` in
+`ep_ring.py`, crossing 2³¹ elements). Both a2a backends hit the same CUBIN
+failure at EP16 — including pure-XLA `ragged_all_to_all`, so it is upstream XLA
+codegen, not the CuTe adapter — and at EP32 (data axis = 1) OOM instead on a
+~104 GiB temporary from the SPMD partitioner's replicate-then-repartition
+fallback ("Involuntary full rematerialization", XLA b/433785288); EP64 at
+`--replica-axis-size 1` fails likewise. The allocator choice
 (`XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async` vs default `bfc`) is an exact tie on
 this benchmark at the reference config.
 
