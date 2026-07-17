@@ -273,8 +273,7 @@ fn contains_udf() -> ScalarUDF {
 }
 
 /// The raw JSON value at top-level object key `key` in the document `text`, if
-/// `text` parses as a JSON object that contains `key`. Shared by the `json_get*`
-/// extractors and `json_contains`.
+/// `text` parses as a JSON object that contains `key`.
 ///
 /// `None` when `text` is not a JSON object (invalid JSON, or a top-level
 /// scalar/array) or the key is absent; a key present with an explicit JSON
@@ -641,8 +640,8 @@ mod tests {
         );
     }
 
-    /// The motivating use case (#7316): filter and group a JSON-string `labels`
-    /// column in SQL, end-to-end through the query engine.
+    /// The motivating use case: filter and group a JSON-string `labels` column in
+    /// SQL, end-to-end through the query engine.
     #[tokio::test]
     async fn json_get_filters_and_groups_labels() {
         let labels = vec![
