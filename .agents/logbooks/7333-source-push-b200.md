@@ -124,3 +124,32 @@ ring_cute,ragged_all_to_all_cute --warmup 2 --steps 10 --repeat-runs 3`,
 `XLA_FLAGS=--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`.
 
 Source-push arms (preplanned amortized + direct honest-API) in flight.
+
+### 2026-07-17 — SPB-001 (part 3): gate numbers — source-push loses 2× at best case, 530× honest
+
+Same shape/venue as part 2 (EP4, d5120, I2560, 65536 tokens/rank, topk 4, cf
+1.0, roughly_balanced, 4×GB200). Source-push arms via `--public-timing
+--public-implementations pallas_mgpu_source_push_blackwell`:
+
+| arm | median fwd | vs ring_cute |
+| --- | --- | --- |
+| ring_cute (jit, direct) | 26.96 ms | 1.00× |
+| ragged_all_to_all_cute (jit, direct) | 33.42 ms | 1.24× |
+| source-push blackwell, preplanned (planner amortized, `staged_device_sync`) | 53.5 ms | 1.98× |
+| source-push blackwell, direct (honest API, host planner per call) | 14.27 s | ~530× |
+
+- Preplanned = the impossible-best case (static routing, plan built once,
+  transport + staged local compute only). It still loses to ring_cute by
+  26.5 ms/layer-forward. Over 48 layers that is ~+1.3 s/step forward-only.
+- Direct = the honest public API. Host planning at this shape (262144
+  routes/rank × 4 ranks) costs ~14.2 s/call — SPF-005's 380 ms/plan scaled to
+  production routing volume. Hardware-independent, unchanged on GB200.
+- Roofline context: ring_cute's 27 ms is ~31% of bf16 peak on useful FLOPs
+  against a ~6 ms NVLink comm floor (2×2.68 GB/rank) + ~8 ms GEMM floor —
+  the backend ladder itself has headroom, which makes the source-push deficit
+  worse than it looks.
+
+Ops note: the full-shape (65k tokens/rank) `bench_blackwell_source_push_forward_smoke`
+run OOM-killed the 128 GB pod (fp32 host reference arrays), which took down
+the dev-gpu holder task and the reservation. Re-allocated with `--memory
+240GB`; anatomy runs at 32k tokens/rank.
