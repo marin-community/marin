@@ -116,8 +116,10 @@ def _moe_mlp_ep_nccl(
         # ep_combine is unweighted: apply the routing weights (zero-masked —
         # padded slots carry weight 0) before the scatter-sum; grad w.r.t.
         # combine_weights flows through this hadamard, not the FFI.
-        mask = (recv_w != 0).astype(jnp.float32)[..., None]
-        weighted = (expert_out.astype(jnp.float32) * recv_w[..., None] * mask).astype(expert_out.dtype)
+        # Compute in the FFN dtype: an fp32 upcast materializes a 2x-capacity
+        # intermediate (tens of GiB at the reference config).
+        mask = (recv_w != 0).astype(expert_out.dtype)[..., None]
+        weighted = expert_out * recv_w[..., None].astype(expert_out.dtype) * mask
         weighted = jax.lax.with_sharding_constraint(weighted, lead)
         out = ep_combine(cfg, handle_mem, token_counts, weighted, tuple(x_b.shape[:-1]))
         return out.astype(x_b.dtype)

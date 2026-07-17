@@ -2262,7 +2262,10 @@ def main():
     with set_mesh(mesh), ep_guard:
         if a.moe_implementation == "nccl_ep":
             tokens_per_rank = a.batch_size * a.seq_len // jax.process_count()
-            recv_capacity = max(1, math.ceil(tokens_per_rank * a.num_experts_per_token * a.capacity_factor))
+            # NCCL_EP has no drop path: dispatch overflow beyond recv capacity
+            # is an OOB write (poisons the CUDA context). Size for the no-drop
+            # worst case; sub-worst-case capacities need TE-side drop support.
+            recv_capacity = a.expert_parallelism * tokens_per_rank * a.num_experts_per_token
             _te_ep_bootstrap(
                 world_size=jax.process_count(),
                 rank=jax.process_index(),
