@@ -3,13 +3,20 @@
 
 """Two-stage chat SFT of the June TPU 67B-A2B Grug MoE (step-42150 cooldown checkpoint).
 
+An experiment on the general ``experiments.sft`` launcher: each stage composes the shared
+``sft_step`` (dataset transforms + chat template + spec + CLI) with a ``GrugModel`` model source
+(native weights-only init + the ring-EP ``run_grug`` backend). Model and data are independent
+inputs — swap ``_JOB{1,2}_DATASET`` for a different mixture, or the ``GrugModel`` for another
+checkpoint, without touching the launcher.
+
 Stage 1 (``wildchat``): math-weak plain chat -- establishes the chat template / format, no
 thinking traces -- initialised (weights-only) from the step-42150 base checkpoint.
 Stage 2 (``thinking``): the larger Llama-Nemotron science-reasoning canonical-think dataset --
-builds the reasoning region -- chained (weights-only) from Stage 1's output checkpoint.
+builds the reasoning region -- chained (weights-only) from Stage 1's output checkpoint (Stage 1's
+``ArtifactStep`` is the Stage 2 ``GrugModel.init_from``, so the chain is a real graph dependency).
 
 Order is load-bearing (chat format first, reasoning second). Each stage is 1 epoch, sequence
-packing on, completions-masked (assistant span only), chat template = the ported Delphi v0 jinja.
+packing on, completions-masked (assistant span only), chat template = the shared Delphi v0 jinja.
 
 The model architecture is the EXACT cooldown ``_model`` (this is why the launcher lives in the
 vendored ``june_tpu_67b_a2b`` tree -- the live ``experiments/grug/moe`` tree's Transformer pytree
@@ -18,10 +25,9 @@ is incompatible with the checkpoint). Weights-only init + optimizer/step reset i
 
 LAUNCH-GATED NUMBERS (finalise before a real launch; see the experiment POLICY/STATE):
   * ``_JOB{1,2}_STEPS`` -- packed 1-epoch step counts = total_tokens / seq_len / batch, read from
-    each tokenized cache's shard ledger AFTER a dry-run cache build. Placeholders below.
+    each tokenized cache's shard ledger AFTER a dry-run cache build (the cache is now built from the
+    ``transform_dataset_step`` output, so re-derive the count on the transform cache before Stage 2).
   * ``_REVISION_*`` -- pin each HF dataset to a 7-char commit for a content-stable fingerprint.
-  * ``_SFT_MUON_LR`` / ``_SFT_ADAM_LR`` -- no corpus-stated Grug SFT LR exists; first-pass values,
-    validate in the smoke and confirm with the operator.
   * GPU mesh geometry (``_NODES`` / ``_EXPERT_PARALLEL`` / ``_REPLICA_AXIS`` / ``_BATCH`` / ``_SEQ`` /
     ``_PER_DEVICE_PARALLELISM``) -- 67B full-FT on H100x8 nodes at long context is memory-tight;
     confirm feasibility (drop ``_SEQ`` or raise ``_NODES``) before launch.
@@ -41,32 +47,31 @@ AWS creds auto-injected in-pod via the iris-task-env secret -- do NOT forward AW
     uv run iris --cluster=cw-us-east-02a job run --job-name grug-67b-sft-smoke-coord \\
       --cpu 1 --memory 2G --extra cpu --priority interactive --max-retries 10 --no-wait \\
       -e MARIN_PREFIX s3://marin-us-east-02a/marin -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
-      -- python -m experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage smoke
+      -- python -m experiments.june_tpu_67b_a2b.moe.sft_67b_a2b_2stage --stage smoke --version dev --run
+
+Drop ``--run`` to print the lowered plan (and each artifact's resolved ``name@version``) without
+launching; ``--version`` is required (pass ``--version dev`` to iterate).
 """
 
 import dataclasses
 import math
-import os
 
+import click
 from fray.cluster import ResourceConfig
-from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
-from experiments.june_tpu_67b_a2b.moe.sft_launch import (
-    ChatDatasetSpec,
-    GrugMoeSFTConfig,
-    build_grug_chat_data_config,
-    run_grug_moe_sft_trial,
-)
-from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
+from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugModel
 from experiments.marin_tokenizer import marin_tokenizer
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
+from experiments.sft.launcher import DatasetSpec, SFTSpec, sft_step
+
+_WANDB_PROJECT = "marin_moe_sft"
 
 # --- Model: the EXACT cooldown architecture (arch parity is required for the weights load) -------
 _DIM: int = 2560
@@ -100,6 +105,8 @@ _BATCH: int = 64  # global batch = 8N = batch_shards (replica*data*expert = 1*8*
 _SMOKE_BATCH: int = 64  # smoke at the target global batch
 _PER_DEVICE_PARALLELISM: int = -1  # auto: Levanter derives batch/(batch_shards); grug real pd = 64/64 = 1
 
+# GrugModel.build_train_config pins model.max_seq_len to each stage's seq_len, so _model carries the
+# base cooldown arch and the run's seq_len is set on the spec (max_seq_len below is the default stage).
 _model = dataclasses.replace(
     _model_base,
     disable_pko=True,
@@ -115,7 +122,6 @@ _model = dataclasses.replace(
     # (~15.7 GiB/dev on the default full-logits GPU path). Cheap HBM insurance for the tensor-parallel fit.
     ce_implementation="batched_xla",
 )
-_smoke_model = dataclasses.replace(_model, max_seq_len=_SMOKE_SEQ)  # smoke at target seq32k
 
 # --- Optimizer: AdamH (NOT Muon). Muon's Newton-Schulz workspace is a ~21GiB replicated per-device
 # floor that never shards -> guaranteed H100 OOM (marin #6693). AdamH (grug_moe_adamh_v2) has no NS
@@ -135,20 +141,22 @@ _optimizer = GrugMoeAdamHConfig(
     lr_schedule="cosine",
 )
 
-# --- Datasets (both already OpenAI role/content; no ShareGPT remap) ------------------------------
+# --- Datasets (both already OpenAI role/content; multi_turn_adapter canonicalizes columns) --------
 _REVISION_WILDCHAT: str = "46a5bb5"  # nyu-dice-lab/wildchat50m-rewild-sft-385700 HEAD (2026-07-15)
 _REVISION_THINKING: str = "bae881d"  # laion/llama-nemotron-science-reasoning-on-canonical-think-full HEAD
-_JOB1_DATASET = ChatDatasetSpec(
+_JOB1_DATASET = DatasetSpec(
     slug="wildchat_386k",
     hf_dataset_id="nyu-dice-lab/wildchat50m-rewild-sft-385700",
     revision=_REVISION_WILDCHAT,
-    messages_field="conversation",
+    adapter_kwargs=dict(conversation_column="conversation"),  # role/content, user/assistant defaults
+    weight=1.0,
 )
-_JOB2_DATASET = ChatDatasetSpec(
+_JOB2_DATASET = DatasetSpec(
     slug="nemotron_science_think",
     hf_dataset_id="laion/llama-nemotron-science-reasoning-on-canonical-think-full",
     revision=_REVISION_THINKING,
-    messages_field="messages",
+    adapter_kwargs=dict(),  # multi_turn_adapter defaults: messages / role / user / assistant
+    weight=1.0,
 )
 
 # --- Packed 1-epoch step counts (steps = total_tokens / seq_len / batch) -------------------------
@@ -157,6 +165,7 @@ _JOB2_DATASET = ChatDatasetSpec(
 # (1 packed epoch at seq=32768, bs=64). Job2 still a placeholder (recompute from its cache before Stage 2).
 _JOB1_STEPS: int = 257
 _JOB2_STEPS: int = 2000
+_SMOKE_STEPS: int = 8  # cheap validation: clear the first jit_train_step at the target geometry + bank a few
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
 # cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). AWS creds are injected
@@ -169,165 +178,131 @@ _BASE_CKPT: str = (
 
 _JOB1_RUN_ID: str = "grug_67b_a2b_sft_s1_wildchat"
 _JOB2_RUN_ID: str = "grug_67b_a2b_sft_s2_thinking"
+_SMOKE_RUN_ID: str = "grug_67b_a2b_sft_smoke"
 
 
-def _tracker(run_id: str, stage: str, seq: int) -> WandbConfig:
-    return WandbConfig(
-        project="marin_moe_sft",
-        tags=["moe", "june_tpu", "67b_a2b", "sft", stage, f"seq{seq}", "cw-h100"],
-        group="grug-67b-a2b-sft",
-        name=None,
-    )
+def _gpu_resources(nodes: int) -> ResourceConfig:
+    return ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512g", disk="256g", replicas=nodes, preemptible=True)
 
 
-def _sft_config(
-    ctx: StepContext,
+def _grug_source(
+    init_from: str | ArtifactStep,
     *,
-    run_id: str,
-    dataset: ChatDatasetSpec,
-    init_from: str,
-    steps: int,
     stage: str,
-    model: GrugModelConfig = _model,
-    batch_size: int = _BATCH,
-):
-    data = build_grug_chat_data_config(
-        datasets=[dataset],
-        tokenizer=marin_tokenizer,
-        chat_template=DELPHI_V0_CHAT_TEMPLATE,
-        mixture_block_size=2048,
-    )
-    return GrugMoeSFTConfig(
-        model=model,
-        data=data,
-        output_path=ctx.output_path,
-        run_id=run_id,
-        resources=ctx.runtime_arg("train_resources"),
-        steps=steps,
-        batch_size=batch_size,
-        seed=0,
-        mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=_tracker(run_id, stage, model.max_seq_len),
-        optimizer=_optimizer,
-        init_from_path=init_from,
+    seq: int,
+    save_interval_minutes: int = 30,
+    checkpoint_keep: list[dict] | None = None,
+) -> GrugModel:
+    """The Grug 67B model source for one stage (native weights-only init from ``init_from``)."""
+    return GrugModel(
+        model=_model,
+        tokenizer_path=marin_tokenizer,
+        init_from=init_from,
         expert_parallel=_EXPERT_PARALLEL,
+        model_axis=_MODEL_PARALLEL,
+        replica_axis=_REPLICA_AXIS,
         per_device_parallelism=_PER_DEVICE_PARALLELISM,
-        save_interval_minutes=30,
-        checkpoint_keep=[{"every": 1000}],
-        grug_trainer=GrugTrainerConfig(
-            z_loss_weight=1e-4,
-            ema_beta=None,
-            log_every=1,
-            replica_axis_size=_REPLICA_AXIS,
-            model_axis_size=_MODEL_PARALLEL,
-        ),
-        eval=None,
+        z_loss_weight=1e-4,
+        ema_beta=None,
+        log_every=1,
+        save_interval_minutes=save_interval_minutes,
+        checkpoint_keep=checkpoint_keep if checkpoint_keep is not None else [{"every": 1000}],
+        wandb_tags=["moe", "june_tpu", "67b_a2b", "sft", stage, f"seq{seq}", "cw-h100"],
+        wandb_group="grug-67b-a2b-sft",
     )
 
 
-def build_job1(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Stage 1 — wildchat plain chat, weights-only init from the step-42150 base."""
-
-    def build_config(ctx: StepContext) -> GrugMoeSFTConfig:
-        return _sft_config(
-            ctx, run_id=_JOB1_RUN_ID, dataset=_JOB1_DATASET, init_from=_BASE_CKPT, steps=_JOB1_STEPS, stage="s1_chat"
-        )
-
-    return ArtifactStep(
-        name=user_namespaced_name(f"grug/{_JOB1_RUN_ID}", version),
+def _spec(
+    *,
+    name: str,
+    version: str,
+    dataset: DatasetSpec,
+    model_source: GrugModel,
+    steps: int,
+    seq: int = _SEQ,
+    batch: int = _BATCH,
+) -> SFTSpec:
+    return SFTSpec(
+        name=name,
         version=version,
-        artifact_type=LevanterCheckpoint,
-        run=run_grug_moe_sft_trial,
-        build_config=build_config,
-        deps=(),
-        runtime_args={
-            "train_resources": ResourceConfig.with_gpu(
-                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=_NODES, preemptible=True
-            )
-        },
+        model=model_source,
+        chat_template=DELPHI_V0_CHAT_TEMPLATE,
+        datasets=[dataset],
+        optimizer=_optimizer,
+        seq_len=seq,
+        batch_size=batch,
+        num_train_steps=steps,
+        wandb_project=_WANDB_PROJECT,
     )
 
 
-def build_job2(job1: ArtifactStep[LevanterCheckpoint], *, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
-    """Stage 2 — thinking dataset, weights-only init CHAINED from Stage 1's output checkpoint."""
-
-    def build_config(ctx: StepContext) -> GrugMoeSFTConfig:
-        init_from = os.path.join(ctx.artifact_path(job1), "checkpoints")
-        return _sft_config(
-            ctx, run_id=_JOB2_RUN_ID, dataset=_JOB2_DATASET, init_from=init_from, steps=_JOB2_STEPS, stage="s2_think"
-        )
-
-    return ArtifactStep(
-        name=user_namespaced_name(f"grug/{_JOB2_RUN_ID}", version),
+def build_job1(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Stage 1 -- wildchat plain chat, weights-only init from the step-42150 base."""
+    step_name = f"grug/{_JOB1_RUN_ID}"
+    version = resolve_version(step_name, version)
+    spec = _spec(
+        name=user_namespaced_name(step_name, version),
         version=version,
-        artifact_type=LevanterCheckpoint,
-        run=run_grug_moe_sft_trial,
-        build_config=build_config,
-        deps=(job1,),
-        runtime_args={
-            "train_resources": ResourceConfig.with_gpu(
-                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=_NODES, preemptible=True
-            )
-        },
+        dataset=_JOB1_DATASET,
+        model_source=_grug_source(_BASE_CKPT, stage="s1_chat", seq=_SEQ),
+        steps=_JOB1_STEPS,
     )
+    return sft_step(spec, _gpu_resources(_NODES))
 
 
-_SMOKE_STEPS: int = 8  # cheap validation: clear first jit_train_step at the target geometry + bank a few steps
+def build_job2(job1: ArtifactStep[LevanterCheckpoint], version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
+    """Stage 2 -- thinking dataset, weights-only init CHAINED from Stage 1's output checkpoint."""
+    step_name = f"grug/{_JOB2_RUN_ID}"
+    version = resolve_version(step_name, version)
+    spec = _spec(
+        name=user_namespaced_name(step_name, version),
+        version=version,
+        dataset=_JOB2_DATASET,
+        model_source=_grug_source(job1, stage="s2_think", seq=_SEQ),
+        steps=_JOB2_STEPS,
+    )
+    return sft_step(spec, _gpu_resources(_NODES))
 
 
-def build_smoke(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 8x H100x8 nodes (cw-us-east-02a),
     AdamH, expert=8, model=1 (data-parallel), replica=1, bs=64, seq=32768, per_device=1, few steps +
-    a mid-run native checkpoint save. Validates native S3 ckpt load -> chat+packing -> weights-only init
-    (step starts at 0) -> the UNTESTED model_axis>1 path -> first jit_train_step with NO OOM (AdamH kills
-    the ~21GiB Muon-NS floor) -> loss finite -> save, before committing to the 1-epoch Job1. (HF export
-    is validated separately via the grug->HF converter on the saved checkpoint.)"""
-
-    def build_config(ctx: StepContext) -> GrugMoeSFTConfig:
-        cfg = _sft_config(
-            ctx,
-            run_id="grug_67b_a2b_sft_smoke",
-            dataset=_JOB1_DATASET,
-            init_from=_BASE_CKPT,
-            steps=_SMOKE_STEPS,
-            stage="smoke",
-            model=_smoke_model,  # seq 32k
-            batch_size=_SMOKE_BATCH,  # 8 = batch_shards (replica*data*expert = 1*1*8); per_device -> 1
-        )
-        # Save a native checkpoint mid-smoke so the save path (and resume-on-preempt) is exercised.
-        return dataclasses.replace(cfg, save_interval_minutes=5, checkpoint_keep=[{"every": 20}])
-
-    return ArtifactStep(
-        name=user_namespaced_name("grug/grug_67b_a2b_sft_smoke", version),
+    a mid-run native checkpoint save. Validates native S3 ckpt load -> chat+packing -> weights-only
+    init (step starts at 0) -> first jit_train_step with NO OOM (AdamH kills the ~21GiB Muon-NS floor)
+    -> loss finite -> save, before committing to the 1-epoch Job1."""
+    step_name = f"grug/{_SMOKE_RUN_ID}"
+    version = resolve_version(step_name, version)
+    spec = _spec(
+        name=user_namespaced_name(step_name, version),
         version=version,
-        artifact_type=LevanterCheckpoint,
-        run=run_grug_moe_sft_trial,
-        build_config=build_config,
-        deps=(),
-        runtime_args={
-            "train_resources": ResourceConfig.with_gpu(
-                "H100", count=8, cpu=32, ram="512g", disk="256g", replicas=_SMOKE_NODES, preemptible=True
-            )
-        },
+        dataset=_JOB1_DATASET,
+        # Save a native checkpoint mid-smoke so the save path (and resume-on-preempt) is exercised.
+        model_source=_grug_source(
+            _BASE_CKPT, stage="smoke", seq=_SMOKE_SEQ, save_interval_minutes=5, checkpoint_keep=[{"every": 20}]
+        ),
+        steps=_SMOKE_STEPS,
+        seq=_SMOKE_SEQ,
+        batch=_SMOKE_BATCH,
     )
+    return sft_step(spec, _gpu_resources(_SMOKE_NODES))
+
+
+@click.command()
+@click.option(
+    "--stage",
+    type=click.Choice(["smoke", "job1", "2stage"]),
+    default="2stage",
+    show_default=True,
+    help="Which stage(s) to build: smoke | job1 | 2stage (Stage 1 -> Stage 2 chained).",
+)
+@build_options
+def main(stage: str) -> ArtifactStep[LevanterCheckpoint]:
+    if stage == "smoke":
+        return build_smoke()
+    if stage == "job1":
+        return build_job1()
+    return build_job2(build_job1())
 
 
 if __name__ == "__main__":
-    import sys
-
-    # Usage: python -m ...sft_67b_a2b_2stage [smoke|job1|2stage] [version]
-    # The optional version (default "dev") namespaces the executor output dir, so a re-run under a
-    # fresh version gets a distinct output path (avoids racing a prior coordinator's StepRunner on
-    # the same step-status file).
-    which = sys.argv[1] if len(sys.argv) > 1 else "2stage"
-    version = sys.argv[2] if len(sys.argv) > 2 else "dev"
-    if which == "smoke":
-        StepRunner().run([build_smoke(version=version).lower()])
-    elif which == "job1":
-        StepRunner().run([build_job1(version=version).lower()])
-    elif which == "2stage":
-        job1 = build_job1(version=version)
-        job2 = build_job2(job1, version=version)
-        StepRunner().run([job2.lower()])
-    else:
-        raise SystemExit(f"unknown target {which!r}; use one of: smoke | job1 | 2stage")
+    main()

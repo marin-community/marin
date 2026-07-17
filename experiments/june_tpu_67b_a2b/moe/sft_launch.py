@@ -1,30 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SFT launcher for the vendored June TPU 67B-A2B Grug MoE.
+"""Grug MoE backend for the general chat-SFT launcher.
 
-A sibling to ``launch.py``'s ``run_grug_moe_trial`` and ``launch_2x_bs.py``'s
-``run_grug_moe_trial_2x_bs``, specialised for supervised fine-tuning of the native
-``GrugTrainState`` checkpoint:
+``GrugModel`` is the :class:`~experiments.sft.launcher.ModelSource` for the native ``GrugTrainState``
+checkpoint: it plugs the vendored Grug training engine into ``experiments.sft.launcher.sft_step`` so
+a Grug run shares that launcher's dataset transforms, chat template, spec, and CLI while keeping its
+own model pytree, optimizer, mesh, and train loop. The dependency runs vendored experiment ->
+launcher, never the reverse.
 
-- **Weights-only init (marin #650).** ``init_from_path`` supplies only the model weights
-  (``params`` + ``pending_qb_betas``); the optimizer state and step counter start fresh, so
-  SFT runs a new LR schedule over the base weights instead of resuming the base run's
-  optimizer/step. This is wired through ``GrugTrainerConfig.sft_weights_only_init`` (see
-  ``train.py``). Own-run checkpoints still take precedence, so iris preemption auto-resumes.
-- **Chat data + completions masking + packing.** ``build_grug_chat_data_config`` assembles an
-  ``LmDataConfig`` whose components are ``ChatLmDatasetFormat`` (pluggable chat template,
-  ``mask_user_turns`` so only the assistant span is supervised, packing on) reading HF chat
-  datasets directly — the Grug trainer already consumes ``LmDataConfig`` unchanged.
+Two things make Grug a distinct backend rather than a config on the Levanter ``train_lm`` path:
+
+- **Weights-only native init (marin #650).** ``init_from`` supplies only the model weights
+  (``params`` + ``pending_qb_betas``) from a native Levanter Grug checkpoint; the optimizer state and
+  step counter start fresh, so SFT runs a new LR schedule over the base weights. Wired through
+  ``GrugTrainerConfig.sft_weights_only_init`` (see ``train.py``). Own-run checkpoints still take
+  precedence, so iris preemption auto-resumes. ``initialize_from_hf`` (the Levanter path) does not
+  apply — the base is a native Grug pytree, not an HF checkpoint.
+- **Model + train loop.** The vendored ``Transformer`` is not a Levanter-registry ``LmHeadModel``, so
+  it runs through ``run_grug`` with its own ring-EP mesh, not ``train_lm.main``.
+
+The data side is shared: ``sft_step`` builds the chat ``LmDataConfig`` from the same
+``transform_dataset_step`` outputs used for every other model, and hands it to
+:meth:`GrugModel.build_train_config`, which the Grug trainer consumes unchanged.
 
 The model architecture must match the checkpoint exactly (this is why the launcher lives in the
-vendored tree, not ``experiments/grug/moe/``): pass the same ``GrugModelConfig`` the checkpoint
-was trained with.
+vendored tree, not ``experiments/grug/moe/``): pass the same ``GrugModelConfig`` the checkpoint was
+trained with. ``build_train_config`` pins ``model.max_seq_len`` to ``spec.seq_len`` so the model and
+the training sequence length cannot drift apart.
 """
 
 import dataclasses
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -32,81 +40,18 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
-from levanter.data.text.datasets import DatasetComponent, HfDatasetSourceConfig, LmDataConfig
-from levanter.data.text.formats import ChatLmDatasetFormat
+from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem import marin_prefix, prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-
-
-@dataclass(frozen=True)
-class ChatDatasetSpec:
-    """One chat SFT source. ``messages_field`` names the transcript column (both target
-    datasets are already OpenAI role/content lists, so no ShareGPT remap is needed:
-    wildchat uses ``conversation``, nemotron uses ``messages``)."""
-
-    slug: str
-    hf_dataset_id: str
-    revision: str
-    messages_field: str
-    weight: float = 1.0
-
-
-def build_grug_chat_data_config(
-    *,
-    datasets: Sequence[ChatDatasetSpec],
-    tokenizer: str,
-    chat_template: str,
-    pack: bool | None = None,
-    mixture_block_size: int = 2048,
-    cache_dir: str | None = None,
-) -> LmDataConfig:
-    """Assemble a chat-SFT ``LmDataConfig`` the Grug trainer can consume directly.
-
-    Each component reads its HF dataset through a ``ChatLmDatasetFormat`` carrying the shared
-    ``chat_template`` and ``mask_user_turns=True`` (assistant span only). ``pack=None`` uses
-    the format default (packing on); ``auto_build_caches`` builds each cache on first use under
-    ``cache_dir`` (``_component_cache_dir`` appends ``/<slug>`` per component).
-
-    ``cache_dir`` is the tokenized-cache ROOT. It MUST be set -- levanter raises
-    ``No cache_dir provided for component <slug>`` if both the component- and config-level roots
-    are ``None``. When ``None`` it defaults to a stable, cluster-resolved root
-    (``<marin_prefix>/tokenized/grug_sft``) so the smoke and the real Job1/Job2 -- which share a
-    dataset slug + tokenizer + template -- reuse one cache instead of re-tokenizing.
-    """
-    if cache_dir is None:
-        cache_dir = prefix_join(marin_prefix(), "tokenized/grug_sft")
-    components: dict[str, DatasetComponent] = {}
-    weights: dict[str, float] = {}
-    for d in datasets:
-        components[d.slug] = DatasetComponent(
-            source=HfDatasetSourceConfig(id=d.hf_dataset_id, revision=d.revision),
-            format=ChatLmDatasetFormat(
-                messages_field=d.messages_field,
-                chat_template=chat_template,
-                mask_user_turns=True,
-                pack=pack,
-            ),
-            split="train",
-        )
-        weights[d.slug] = d.weight
-    return LmDataConfig(
-        tokenizer=tokenizer,
-        cache_dir=cache_dir,
-        chat_template=chat_template,
-        enforce_eos=True,
-        auto_build_caches=True,
-        components=components,
-        train_weights=weights,
-        mixture_block_size=mixture_block_size,
-    )
+from experiments.sft.launcher import SFTSpec
 
 
 @dataclass(frozen=True)
@@ -223,3 +168,82 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     if isinstance(tracker, WandbConfig):
         return dataclasses.replace(tracker, name=run_id)
     return tracker
+
+
+@dataclass(frozen=True)
+class GrugModel:
+    """``ModelSource`` for the native Grug MoE: weights-only init + the ring-EP ``run_grug`` backend.
+
+    ``init_from`` is the base checkpoint: a static native-Levanter Grug checkpoint dir (the cooldown
+    ``step-N``) or a dependency step whose ``checkpoints`` output is chained (a prior Grug ``sft_step``
+    for two-stage SFT). Mesh geometry (``expert_parallel`` / ``model_axis`` / ``replica_axis``) and
+    ``mp`` are validated for this model on its target cluster, so they live with the source rather
+    than being free launch flags.
+    """
+
+    model: GrugModelConfig
+    tokenizer_path: str
+    init_from: str | ArtifactStep
+    expert_parallel: int
+    model_axis: int = 1
+    replica_axis: int = 1
+    per_device_parallelism: int = -1
+    mp: str = "params=float32,compute=bfloat16,output=bfloat16"
+    z_loss_weight: float = 1e-4
+    ema_beta: float | None = None
+    log_every: int = 1
+    seed: int = 0
+    save_interval_minutes: int = 30
+    checkpoint_keep: list[dict] | None = None
+    wandb_tags: Sequence[str] = ()
+    wandb_group: str | None = None
+
+    @property
+    def run(self) -> Callable[..., None]:
+        return run_grug_moe_sft_trial
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
+
+    def build_train_config(
+        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+    ) -> GrugMoeSFTConfig:
+        if isinstance(self.init_from, ArtifactStep):
+            # A chained Grug stage: init from the prior stage's saved checkpoints.
+            init_from_path = os.path.join(ctx.artifact_path(self.init_from), "checkpoints")
+        else:
+            init_from_path = self.init_from
+        run_id = spec.name.split("/")[-1]
+        tracker = WandbConfig(
+            project=spec.wandb_project,
+            tags=list(self.wandb_tags),
+            group=self.wandb_group,
+            name=run_id,
+        )
+        return GrugMoeSFTConfig(
+            # Pin the model's max_seq_len to the run's seq_len so arch and training length can't drift.
+            model=dataclasses.replace(self.model, max_seq_len=spec.seq_len),
+            data=data_config,
+            output_path=ctx.output_path,
+            run_id=run_id,
+            resources=resources,
+            steps=spec.num_train_steps,
+            batch_size=spec.batch_size,
+            seed=self.seed,
+            mp=self.mp,
+            tracker=tracker,
+            optimizer=spec.optimizer,
+            init_from_path=init_from_path,
+            expert_parallel=self.expert_parallel,
+            per_device_parallelism=self.per_device_parallelism,
+            save_interval_minutes=self.save_interval_minutes,
+            checkpoint_keep=self.checkpoint_keep,
+            grug_trainer=GrugTrainerConfig(
+                z_loss_weight=self.z_loss_weight,
+                ema_beta=self.ema_beta,
+                log_every=self.log_every,
+                replica_axis_size=self.replica_axis,
+                model_axis_size=self.model_axis,
+            ),
+            eval=None,
+        )
