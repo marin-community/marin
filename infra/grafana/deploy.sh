@@ -43,10 +43,10 @@ One-time setup for ${SERVICE} in ${PROJECT}:
 
 Then deploy with: ./deploy.sh
 
-Access takes two bindings, not one. IAP terminates the browser session and then
-calls the service as its own service agent, so the agent is what needs invoke
-rights and people need IAP rights — granting a person run.invoker only admits
-callers who mint their own identity token.
+Access takes two bindings. IAP terminates the browser session and calls the
+service as its own service agent, so the agent needs invoke rights and people
+need IAP rights; granting a person run.invoker only admits callers who mint their
+own identity token.
 
   # 1. Let the IAP service agent invoke the service. Project number via:
   #    gcloud projects describe ${PROJECT} --format='value(projectNumber)'

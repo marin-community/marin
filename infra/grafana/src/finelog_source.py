@@ -6,10 +6,9 @@
 The internal IP is reachable from Cloud Run over Direct VPC egress, and finelog's
 ``cidr`` auth layer admits the RFC1918 ranges, so the query carries no token.
 
-Discovery is a GCE instance lookup rather than an Iris endpoint-registry lookup:
-Grafana exists to be readable when the cluster is not, so resolving finelog
-through the thing being monitored would put it back on the path to the data about
-it.
+Discovery is a GCE instance lookup, not the Iris endpoint registry: Grafana keeps
+working when the monitored cluster is down, so it does not resolve finelog through
+that cluster's controller.
 """
 
 import logging

@@ -1,13 +1,13 @@
 {
-  "uid": "marin-fleet",
-  "title": "Fleet",
-  "description": "Worker fleet and canary health from the infra.canary.metrics namespace that infra/probes writes. Its labels are a JSON string, so panels filter with finelog's contains() UDF and group by the label_<key> columns the bridge flattens; both go away once finelog has JSON functions (#7317).",
+  "uid": "marin-pipelines",
+  "title": "Pipelines",
+  "description": "Zephyr pipeline throughput and shard resource usage from the zephyr.worker finelog namespace, summed or averaged across a stage's running shards.",
   "tags": ["marin", "generated"],
   "timezone": "utc",
   "editable": false,
   "schemaVersion": 39,
   "refresh": "1m",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": { "from": "now-3h", "to": "now" },
   "templating": {
     "list": [
       {
@@ -23,10 +23,10 @@
     {
       "id": 1,
       "type": "timeseries",
-      "title": "Healthy workers by region",
-      "description": "worker_healthy per region. Rows carrying a region label, grouped by it.",
+      "title": "Item rate by stage",
+      "description": "Items per second summed across a stage's running shards, from zephyr.worker.item_rate.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "fieldConfig": {
         "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
         "overrides": []
@@ -42,15 +42,15 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'worker_healthy' AND contains(labels, '\"region\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at" },
+              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, SUM(item_rate) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
           },
           "columns": [
             { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
-            { "selector": "label_region", "text": "region", "type": "string" },
-            { "selector": "value", "text": "workers", "type": "number" }
+            { "selector": "series", "text": "stage", "type": "string" },
+            { "selector": "value", "text": "items_per_s", "type": "number" }
           ]
         }
       ]
@@ -58,12 +58,12 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Fleet TPU chips",
-      "description": "worker_tpu_chips for the scope=fleet rollup row.",
+      "title": "Throughput by stage",
+      "description": "Bytes per second summed across a stage's running shards, from zephyr.worker.byte_rate.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": { "unit": "Bps", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
         "overrides": []
       },
       "targets": [
@@ -77,14 +77,15 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT collected_at AS t, value FROM \"infra.canary.metrics\" WHERE metric = 'worker_tpu_chips' AND contains(labels, '\"scope\": \"fleet\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at" },
+              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, SUM(byte_rate) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
           },
           "columns": [
             { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
-            { "selector": "value", "text": "chips", "type": "number" }
+            { "selector": "series", "text": "stage", "type": "string" },
+            { "selector": "value", "text": "bytes_per_s", "type": "number" }
           ]
         }
       ]
@@ -92,12 +93,12 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Canary probe health",
-      "description": "probe_up per check: 1 healthy, 0 failing. Grouped by the probe label.",
+      "title": "Shard memory by stage",
+      "description": "Mean resident memory across a stage's running shards, from zephyr.worker.mem_current_bytes.",
       "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "${cluster}" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "min": 0, "max": 1, "custom": { "drawStyle": "line", "showPoints": "never" } },
+        "defaults": { "unit": "bytes", "min": 0, "custom": { "drawStyle": "line", "showPoints": "never" } },
         "overrides": []
       },
       "targets": [
@@ -111,15 +112,15 @@
           "url_options": {
             "method": "GET",
             "params": [
-              { "key": "sql", "value": "SELECT collected_at AS t, value, labels FROM \"infra.canary.metrics\" WHERE metric = 'probe_up' AND contains(labels, '\"probe\"') AND collected_at >= {{from}} AND collected_at < {{to}} ORDER BY collected_at" },
+              { "key": "sql", "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, stage_name AS series, AVG(mem_current_bytes) AS value FROM \"zephyr.worker\" WHERE status = 'RUNNING' AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1" },
               { "key": "from", "value": "${__from}" },
               { "key": "to", "value": "${__to}" }
             ]
           },
           "columns": [
             { "selector": "t", "text": "time", "type": "timestamp_epoch_ms" },
-            { "selector": "label_probe", "text": "probe", "type": "string" },
-            { "selector": "value", "text": "up", "type": "number" }
+            { "selector": "series", "text": "stage", "type": "string" },
+            { "selector": "value", "text": "mem_bytes", "type": "number" }
           ]
         }
       ]
