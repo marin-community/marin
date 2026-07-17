@@ -73,3 +73,54 @@ per-32-GPU copy at EP4): `--ep-size 4 --tokens-per-rank 65536 --hidden-dim
 Census instrument for per-stage anatomy: `bench_blackwell_source_push_forward_smoke.py`
 (stages: input_prepare, destination_x_transport, w13, w2, return_transport,
 combine).
+
+### 2026-07-17 — SPB-001 (part 2): GB200 census — staged path RUNS on sm_100; eager-bench pitfall
+
+Venue: 4×GB200 (one tray) via `dev_gpu.py` holder
+`/mwittmann/dev-gpu-mwittmann-spb-b200` on cw-us-east-08a; aarch64 pod, jax
+0.10.1 cuda13, `uv sync --all-packages --extra=gpu`. QuACK/CuTeDSL import
+clean on aarch64.
+
+**Census: the #6933 staged Blackwell source-push path lowers and runs on
+GB200** (sm_100, aarch64) at EP4. Correctness compare at d2560/I1280/EP4/4k
+tokens-per-rank, cf 1.25, roughly_balanced, `blackwell_staged` +
+`staged_device_sync`:
+
+```
+bench_source_push_forward_public_compare.py --ep-size 4 --tokens-per-rank 4096 \
+  --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 16 --topk 4 \
+  --capacity-factor 1.25 --routing roughly_balanced --entries-per-rank 80 --inbox-slots 24 \
+  --source-push-implementation blackwell_staged --source-push-execution-mode staged_device_sync \
+  --public-implementations ring,ring_cute,ragged_all_to_all_cute
+```
+
+vs ring / ring_cute / a2a_cute: mean |Δ| 0.224 / 0.299 / 0.254, max |Δ| 4–8
+(bf16 accumulation-order scale; inter-backend spread is the same order),
+dropped_route_delta = 0 everywhere. Two gotchas: (1) the package-private path
+needs explicit queue sizing — defaults die with "entries_per_dst=2 but
+required 75" at this shape; (2) `--entries-per-rank`/`--inbox-slots` must be
+set from the shape, the public path auto-probes them.
+
+**Bench pitfall (recorded as a durable methodology note):** the compare
+bench's public timing called `moe_mlp` eagerly. At the production shape this
+is overhead-bound, not compute-bound: ring_cute EP4 d5120/65k-tokens measured
+13.6 s eager vs 27 ms jitted (~500×). Added `--jit-public` (a3d4b12b1) which
+jits non-source-push backends (how production calls them); source-push stays
+un-jitted since host planning is part of its honest public cost. Any prior
+absolute numbers from this bench's eager public timing should be treated as
+overhead-dominated at large shapes.
+
+**Gate baselines (jitted, production shard shape #7279: EP4, d5120, I2560,
+65536 tokens/rank, topk 4, cf 1.0, roughly_balanced, 4×GB200):**
+
+| implementation | median fwd | useful TFLOP/s/rank | dropped |
+| --- | --- | --- | --- |
+| ring_cute (jit) | 26.96 ms | 765 | 589 |
+| ragged_all_to_all_cute (jit, NCCL-path flag) | 33.42 ms | 617 | 589 |
+
+Command: same shape flags plus `--public-timing --jit-public
+--public-call-mode direct --public-implementations
+ring_cute,ragged_all_to_all_cute --warmup 2 --steps 10 --repeat-runs 3`,
+`XLA_FLAGS=--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false`.
+
+Source-push arms (preplanned amortized + direct honest-API) in flight.
