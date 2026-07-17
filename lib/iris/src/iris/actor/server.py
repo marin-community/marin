@@ -302,12 +302,10 @@ class ActorServer:
         return op.to_proto()
 
     def _create_app(self) -> Starlette:
-        """Build the ASGI app: the actor Connect service plus the telltale routes.
+        """Build the ASGI app: the actor Connect service, plus telltale's routes.
 
-        Telltale is mounted unconditionally rather than offered as an option. Every
-        actor process already has this port and this app, so riding them costs
-        nothing, while a separate metrics port would need its own allocation and
-        endpoint registration on every actor in the fleet.
+        Every actor server serves telltale on its own port, so any actor process
+        answers ``/metrics``, ``/health`` and ``/`` alongside its RPCs.
         """
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
         return Starlette(routes=[*telltale.routes(), Mount(rpc_app.path, app=rpc_app)])

@@ -31,12 +31,6 @@ logger = logging.getLogger(__name__)
 _METRIC_PREFIX = "levanter"
 
 
-def _metric_name(key: str) -> str:
-    """Convert a tracker metric key (``train/loss``) to a legal Prometheus name."""
-    sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in key)
-    return f"{_METRIC_PREFIX}_{sanitized}"
-
-
 class TelltaleTracker(Tracker):
     """Mirrors scalar metrics onto the telltale registry as gauges.
 
@@ -58,7 +52,8 @@ class TelltaleTracker(Tracker):
             if isinstance(value, bool) or not isinstance(value, numbers.Real):
                 continue
             try:
-                telltale.gauge(_metric_name(key), f"levanter metric {key}").set(float(value))
+                name = telltale.metric_name(key, prefix=_METRIC_PREFIX)
+                telltale.gauge(name, f"levanter metric {key}").set(float(value))
             except ValueError:
                 # Two keys sanitizing to one name, or a name already taken by a
                 # different metric type. Skip the sample; never fail a train step.

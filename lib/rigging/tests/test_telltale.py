@@ -71,9 +71,31 @@ def test_metrics_route_flattens_histograms_into_le_buckets(name, client):
 def test_samples_reports_family_type_for_each_sample(name):
     telltale.gauge(name, "d").set(7)
 
-    matching = [(family, kind, s) for family, kind, s in telltale.samples() if family == name]
+    matching = [fs for fs in telltale.samples() if fs.family == name]
 
-    assert [(kind, s.value) for _, kind, s in matching] == [("gauge", 7.0)]
+    assert [(fs.kind, fs.sample.value) for fs in matching] == [("gauge", 7.0)]
+
+
+def test_samples_flattens_a_histogram_into_le_tagged_buckets(name):
+    telltale.histogram(name, "d", []).observe(0.5)
+
+    buckets = [fs for fs in telltale.samples() if fs.sample.name == f"{name}_bucket"]
+
+    assert all(fs.kind == "histogram" for fs in buckets)
+    assert "+Inf" in {fs.sample.labels["le"] for fs in buckets}
+
+
+@pytest.mark.parametrize(
+    ("raw", "prefix", "expected"),
+    [
+        ("zephyr/records_in", "", "zephyr_records_in"),
+        ("train/loss", "levanter", "levanter_train_loss"),
+        ("already_legal", "", "already_legal"),
+        ("throughput/tokens per second", "levanter", "levanter_throughput_tokens_per_second"),
+    ],
+)
+def test_metric_name_sanitizes_keys(raw, prefix, expected):
+    assert telltale.metric_name(raw, prefix=prefix) == expected
 
 
 def test_index_renders_status_and_metric_values(name, client):

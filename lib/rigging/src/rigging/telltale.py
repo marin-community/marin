@@ -26,6 +26,7 @@ and the pages carry strictly less than whatever RPC service mounts them.
 
 import html
 import logging
+import re
 import threading
 import time
 import typing
@@ -99,12 +100,23 @@ def histogram(name: str, documentation: str, labelnames: Sequence[str] = ()) -> 
     return _get_or_create(Histogram, name, documentation, labelnames)
 
 
+def metric_name(name: str, prefix: str = "") -> str:
+    """Convert an arbitrary counter/metric key into a legal Prometheus name.
+
+    Prometheus names admit only ``[a-zA-Z0-9_:]``, while Marin's existing counter
+    keys are paths (``zephyr/records_in``) and tracker keys (``train/loss``).
+    Callers mirroring an existing naming scheme onto a telltale page share this so
+    one key cannot map to two different series depending on who converted it.
+    """
+    sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    return f"{prefix}_{sanitized}" if prefix else sanitized
+
+
 def set_status(markdown: str) -> None:
     """Set the free-form status block shown on the index page.
 
-    This is a process-local debugging view. It is not the fleet status channel —
-    that is ``IrisClient.report_task_status_text``, which persists and renders in
-    the Iris dashboard.
+    Process-local and in-memory: it is a debugging view of a live process, and is
+    neither persisted nor reported anywhere.
     """
     global _status
     with _lock:
@@ -116,31 +128,35 @@ def get_status() -> str:
         return _status
 
 
-def samples() -> Iterator[tuple[str, str, Sample]]:
-    """Yield ``(family_name, family_type, sample)`` for every sample in the registry.
+class FamilySample(typing.NamedTuple):
+    """One registry sample, tagged with the family it came from."""
 
-    Iterating samples rather than families is what makes histograms representable
-    without special-casing: ``collect()`` has already flattened them into
-    ``_bucket``/``_sum``/``_count`` samples, with the bucket bound in the ``le``
-    label. Counters likewise carry a ``_created`` sample whose value is the
-    series' start timestamp, which is what distinguishes a counter reset from
-    negative work.
+    family: str
+    kind: str
+    """The family's metric type: counter, gauge, histogram, summary, info."""
+    sample: Sample
+
+
+def samples() -> Iterator[FamilySample]:
+    """Yield every sample in the registry, tagged with its family and type.
+
+    Samples rather than families, because ``collect()`` has already flattened a
+    histogram into ``_bucket``/``_sum``/``_count`` samples with the bucket bound
+    in an ``le`` label, and a counter into a value plus a ``_created`` sample
+    holding the series' start time. A consumer that walks samples therefore needs
+    no per-type special-casing, and gets the reset boundary for free.
     """
     for family in REGISTRY.collect():
         for sample in family.samples:
-            yield family.name, family.type, sample
+            yield FamilySample(family.name, family.type, sample)
 
 
 @public
 def _metrics_route(_request: Request) -> Response:
-    """Serve the registry in Prometheus text exposition format.
-
-    Deliberately a sync def: Starlette runs sync handlers in a threadpool, so
-    collection and serialization stay off the event loop. An ``async def`` here —
-    or ``prometheus_client.make_asgi_app``, which bakes its output inline with no
-    offload — would serialize the whole registry on the loop on every scrape,
-    stalling every other request on the port for the duration.
-    """
+    """Serve the registry in Prometheus text exposition format."""
+    # Must stay a sync def: Starlette runs sync handlers in a threadpool, keeping
+    # collection off the event loop. An async def would serialize the whole
+    # registry on the loop and stall every other request on this port per scrape.
     return PlainTextResponse(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
 

@@ -59,11 +59,12 @@ def _endpoint_name() -> str:
 def start() -> str | None:
     """Serve telltale on an ephemeral port and register it for discovery.
 
-    Returns the registered address, or None outside an Iris job (where there is
-    nothing to register with and no proxy to reach it through).
+    Idempotent, so callers on a shared boot path need not coordinate.
 
-    Idempotent: repeated calls are no-ops, so callers on a shared boot path do not
-    have to coordinate.
+    Returns:
+        The registered address, or None if nothing was started — either this call
+        was a repeat, or the process is outside an in-cluster Iris job, where
+        there is nothing to register with and no proxy to reach it through.
     """
     global _started
     if _started:
