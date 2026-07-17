@@ -144,7 +144,9 @@ def main(argv):
             out = round_trip(tokens, topk_idx, topk_w)
             return jnp.sum(out.astype(jnp.float32))
 
-        grad_fn = jax.jit(jax.grad(loss, argnums=(0, 2)))
+        # value_and_grad: plain grad discards the primal, letting XLA DCE the
+        # combine_fwd FFI entirely (measured 2-5x faster than fwd-only).
+        grad_fn = jax.jit(jax.value_and_grad(loss, argnums=(0, 2)))
 
         def bench(fn, label, *fn_args):
             for _ in range(args.warmup):
