@@ -41,6 +41,11 @@ SP=$(python -c 'import nvidia, os; print(os.path.dirname(nvidia.__file__))')
 NCCL_LIB_DIR=$(dirname "$(find "$SP" -name 'libnccl.so.2' | head -1)")
 export LD_LIBRARY_PATH="${NCCL_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 python -c "import ctypes; l=ctypes.CDLL('libnccl.so.2'); v=ctypes.c_int(); l.ncclGetVersion(ctypes.byref(v)); print('runtime nccl', v.value); assert v.value >= 23004"
+TE_CORE=$(find "$(python -c 'import transformer_engine, os; print(os.path.dirname(transformer_engine.__file__))')" -name 'libtransformer_engine.so*' | head -1)
+readelf -d "$TE_CORE" | grep NEEDED
+if readelf -d "$TE_CORE" | grep NEEDED | grep -q "\.so\.12"; then
+  echo "FATAL: TE core links cu12 libraries (stale wheel?)"; exit 1
+fi
 
 echo "=== fetch TE test file @ $TE_SHA ==="
 curl -fsSL "https://raw.githubusercontent.com/NVIDIA/TransformerEngine/${TE_SHA}/tests/jax/test_multi_process_ep.py" -o test_multi_process_ep.py
