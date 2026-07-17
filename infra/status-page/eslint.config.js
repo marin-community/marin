@@ -20,7 +20,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["server/dist", "web/dist", "node_modules", "playwright-report", "test-results"],
+    ignores: ["server/dist", "web/dist", "node_modules"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -35,7 +35,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["tests/**/*.ts", "playwright.config.ts"],
+    files: ["tests/**/*.ts"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",

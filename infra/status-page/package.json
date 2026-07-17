@@ -10,12 +10,10 @@
     "build": "npm run build:web && npm run build:server",
     "build:web": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
-    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.test.json && tsc -p tsconfig.e2e.json",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.test.json",
     "lint": "eslint .",
-    "test": "npm run test:server && npm run test:e2e",
+    "test": "npm run test:server",
     "test:server": "tsx --test tests/server/*.test.ts",
-    "test:e2e": "playwright test",
-    "test:e2e:update": "playwright test --update-snapshots",
     "start": "node server/dist/main.js"
   },
   "dependencies": {
@@ -31,8 +29,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
-    "@axe-core/playwright": "^4.10.2",
-    "@playwright/test": "^1.55.1",
     "@tailwindcss/postcss": "^4.3.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",

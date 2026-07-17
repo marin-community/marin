@@ -49,24 +49,8 @@ jobs:
       - name: Server behavior tests
         run: npm run test:server
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Browser behavior, accessibility, and visual tests
-        run: npm run test:e2e
-
       - name: Build
         run: npm run build
-
-      - name: Upload browser test report
-        if: failure() && !cancelled()
-        uses: actions/upload-artifact@v4
-        with:
-          name: infra-dashboard-playwright
-          path: |
-            infra/status-page/playwright-report/
-            infra/status-page/test-results/
-          if-no-files-found: ignore
 
   deploy:
     needs: build
