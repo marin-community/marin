@@ -17,9 +17,8 @@ from experiments.evals.served_lm_eval import ServedLmEvalBenchmark, served_lm_ev
 
 HUMANEVAL_BENCHMARK = ServedLmEvalBenchmark(
     tasks=("humaneval",),
-    output_path="/tmp/served-qwen3-humaneval",
     confirm_run_unsafe_code=True,
-    parent_env_vars={"HF_ALLOW_CODE_EVAL": "1"},
+    parent_env_vars=(("HF_ALLOW_CODE_EVAL", "1"),),
 )
 
 

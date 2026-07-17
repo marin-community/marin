@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -37,7 +36,6 @@ class LmEvalRun:
     """A single lm-eval run against an already served model."""
 
     tasks: Sequence[str]
-    output_path: str
     adapter: LmEvalAdapter = LmEvalAdapter.LOCAL_COMPLETIONS
     apply_chat_template: bool = False
     limit: int | None = None
@@ -47,7 +45,7 @@ class LmEvalRun:
     extra_model_args: Mapping[str, LmEvalModelArgValue] = field(default_factory=dict)
 
 
-def run_lm_eval(model: RunningModel, run: LmEvalRun, env_vars: Mapping[str, str]) -> None:
+def run_lm_eval(model: RunningModel, run: LmEvalRun, output_path: str) -> None:
     """Evaluate tasks against a served model and persist metrics and samples."""
     if not run.tasks:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
@@ -65,7 +63,7 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun, env_vars: Mapping[str, str]
             "--tasks",
             ",".join(run.tasks),
             "--output_path",
-            run.output_path,
+            output_path,
             "--log_samples",
         ]
     )
@@ -79,18 +77,16 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun, env_vars: Mapping[str, str]
         command.extend(["--num_fewshot", str(run.num_fewshot)])
     if run.batch_size is not None:
         command.extend(["--batch_size", str(run.batch_size)])
-    environment = dict(os.environ)
-    environment.update(env_vars)
-    subprocess.run(command, check=True, env=environment)
+    subprocess.run(command, check=True)
 
 
 def run_iris_brokered_lm_eval(
     inference: BrokeredVllmSystemConfig,
     run: LmEvalRun,
-    env_vars: Mapping[str, str],
+    output_path: str,
 ) -> None:
     with start_iris_brokered_vllm(inference) as model:
-        run_lm_eval(model, run, env_vars)
+        run_lm_eval(model, run, output_path)
 
 
 def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:

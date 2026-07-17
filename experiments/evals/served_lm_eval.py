@@ -3,7 +3,7 @@
 
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from fray.types import ResourceConfig
 from marin.evaluation.lm_eval import LM_EVAL_UV_PACKAGES, LmEvalRun, run_iris_brokered_lm_eval
@@ -27,9 +27,8 @@ VLLM_WORKER_ENV_VARS = (
 @dataclass(frozen=True)
 class ServedLmEvalBenchmark:
     tasks: Sequence[str]
-    output_path: str
     confirm_run_unsafe_code: bool = False
-    parent_env_vars: Mapping[str, str] = field(default_factory=dict)
+    parent_env_vars: tuple[tuple[str, str], ...] = ()
     model: str = "Qwen/Qwen3-0.6B-Base"
     tokenizer: str = "Qwen/Qwen3-0.6B"
     tpu_type: str = "v5litepod-4"
@@ -47,15 +46,16 @@ class BrokeredLmEvalArtifactConfig:
     inference: BrokeredVllmSystemConfig
     lm_eval_uv_packages: tuple[str, ...]
     eval_run: LmEvalRun
+    output_path: str
 
 
 def _run_brokered_lm_eval_artifact(
     inference: BrokeredVllmSystemConfig,
     eval_run: LmEvalRun,
+    output_path: str,
 ) -> None:
-    output_path = eval_run.output_path
     with tempfile.TemporaryDirectory() as local_output:
-        run_iris_brokered_lm_eval(inference, replace(eval_run, output_path=local_output), {})
+        run_iris_brokered_lm_eval(inference, eval_run, local_output)
         StoragePath(output_path).upload_from(local_output + "/", recursive=True)
 
 
@@ -76,7 +76,8 @@ def brokered_lm_eval_step(
         return BrokeredLmEvalArtifactConfig(
             inference=inference,
             lm_eval_uv_packages=LM_EVAL_UV_PACKAGES,
-            eval_run=replace(eval_run, output_path=context.output_path),
+            eval_run=eval_run,
+            output_path=context.output_path,
         )
 
     def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
@@ -87,7 +88,7 @@ def brokered_lm_eval_step(
             name=name,
             resources=parent_resources,
             env_vars=dict(parent_env_vars),
-        )(config.inference, config.eval_run)
+        )(config.inference, config.eval_run, config.output_path)
 
     return ArtifactStep(
         name=name,
@@ -124,7 +125,6 @@ def brokered_lm_eval_configs(
     )
     eval_run = LmEvalRun(
         tasks=benchmark.tasks,
-        output_path=benchmark.output_path,
         limit=limit,
         confirm_run_unsafe_code=benchmark.confirm_run_unsafe_code,
         extra_model_args={
@@ -178,7 +178,6 @@ def brokered_vllm_config(
     timeout = config.server.timeout_seconds
     return replace(
         config,
-        server=replace(config.server, timeout_seconds=timeout),
         proxy=replace(
             config.proxy,
             request_timeout_seconds=timeout,

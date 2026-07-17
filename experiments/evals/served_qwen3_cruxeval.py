@@ -24,7 +24,6 @@ from experiments.evals.served_lm_eval import (
 
 CRUXEVAL_BENCHMARK = ServedLmEvalBenchmark(
     tasks=("cruxeval_input", "cruxeval_output"),
-    output_path="/tmp/served-qwen3-cruxeval",
     confirm_run_unsafe_code=True,
 )
 
