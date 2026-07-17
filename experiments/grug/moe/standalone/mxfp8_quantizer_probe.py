@@ -112,18 +112,35 @@ def run_probe(level: int, name: str):
             traceback.print_exc()
 
 
+def _fail_detail(e: BaseException) -> str:
+    """Walk the cause chain for the extracted libNVVM error."""
+    seen = []
+    cur: BaseException | None = e
+    while cur is not None:
+        nvvm = getattr(cur, "nvvm_error", None)
+        if nvvm:
+            seen.append(str(nvvm).splitlines()[0])
+        cur = cur.__cause__ or cur.__context__
+    return " | ".join(seen) if seen else " / ".join(str(e).splitlines()[:3])
+
+
+def run_full(m: int, k: int):
+    x = jax.random.normal(jax.random.PRNGKey(0), (m, k), dtype=jnp.bfloat16)
+    try:
+        out = jax.block_until_ready(jax.jit(dual_quantize_mxfp8_cute)(x))
+        print(f"PASS v5_full ({m}x{k}): outputs {[o.shape for o in out]}", flush=True)
+    except Exception as e:  # noqa: BLE001 - diagnostic ladder must continue
+        print(f"FAIL v5_full ({m}x{k}): {type(e).__name__}: {_fail_detail(e)}", flush=True)
+
+
 def main():
     ensure_blackwell_arch()
     print(f"device: {jax.devices()[0].device_kind}, cutlass {cutlass.__version__}", flush=True)
     for level, name in ((1, "v1_cvt"), (2, "v2_shuffle"), (3, "v3_e8m0"), (4, "v4_scalebyte")):
         run_probe(level, name)
-    try:
-        out = jax.block_until_ready(
-            jax.jit(dual_quantize_mxfp8_cute)(jax.random.normal(jax.random.PRNGKey(0), (M, K), dtype=jnp.bfloat16))
-        )
-        print(f"PASS v5_full: outputs {[o.shape for o in out]}", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"FAIL v5_full: {type(e).__name__}: {' / '.join(str(e).splitlines()[:3])}", flush=True)
+    # Shape scan: g2 failed at (8192, 2560) while (512, 128) passes (job g3).
+    for m, k in ((512, 128), (512, 2560), (8192, 128), (2048, 2560), (8192, 1280), (8192, 2560), (262144, 2560)):
+        run_full(m, k)
 
 
 if __name__ == "__main__":
