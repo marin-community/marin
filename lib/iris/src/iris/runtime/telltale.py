@@ -67,7 +67,10 @@ def start() -> str | None:
 
     app = Starlette(routes=telltale.routes())
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error", log_config=None))
-    get_thread_container().spawn_server(server, name=f"telltale-{port}")
+    # Daemon: this runs on the process-wide default container, which the callable
+    # runner never stop()s. As a non-daemon thread it wedged threading._shutdown()
+    # after the callable returned, so the task never reached a terminal state.
+    get_thread_container().spawn_server(server, name=f"telltale-{port}", daemon=True)
     ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
         lambda: server.started,
         timeout=Duration.from_seconds(5.0),
