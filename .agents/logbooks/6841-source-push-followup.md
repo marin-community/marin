@@ -65,7 +65,7 @@ Baselines at PR head:
 | 5 | Combine kernel at ~21% HBM roofline (per-row scalar loads, `source_push_combine.py:145`) | perf | 1.34→~0.5 ms fwd | S | SPF-004 |
 | 6 | Host-side numpy planner cost at target shape (excluded from all benchmark numbers; O(268M) element ops/plan) | measurement | unknown, possibly dominates | S (CPU) | SPF-005 |
 | 7 | Source-push dy route (fix dcombine in_specs `backward_pallas.py:2280`, reuse existing dy-route remote-write kernel, add global phase barrier) | structural | rest of the 11.6 ms API tax | M-L | next |
-| 8 | W2-return kernel: double-buffer k-loop + deferred `wait_smem_to_gmem` (`source_push_w2_return.py:680-765`) | perf | 4.05→~2.7 ms fwd | M | next |
+| 8 | W2-return kernel: double-buffer k-loop + deferred `wait_smem_to_gmem` (`source_push_w2_return.py:680-765`) | perf | 4.05→~2.7 ms fwd (baseline now from_h 6.80 ms post-hoist; see SPF-007 entry for the pipelining + output-side route-scale plan) | M | next |
 | 9 | Correctness cluster: single-jit remote-write completion barrier is scalar-only (`source_push_forward.py:1109`); fused dX-return race (no wait on `ready_sem`); failed integrated gate FUSED-MOE-094 | bug | blocking for fused promotion / single-jit | S-M | next |
 | 10 | SM-carveout restructure: persistent SM-capped comm kernel + pipelined near-stock GEMM consumers; de-fuse W2-return/combine (dense fixed-shape permute) | structural | only credible route to 250 | L | design |
 
@@ -83,7 +83,7 @@ avenue 7/10 land.
 | SPF-003b | Zero-fill double-write fix saves ≥2 ms on fused W13-bwd | FALSIFIED: +0.32 ms vs control, bit-exact; discarded | see SPF-003 entry |
 | SPF-006 | Reduced-shape fused-W13 compare regression (valid_error_count 0 -> 5 -> 3) introduced in d2ce47ca35..088831b4b | Open (needs bisect) | reduced `semantic_permute_w13_compare` valid_error_count per commit |
 | SPF-004 | XLA gather-sum reaches ≥1.5 TB/s effective on combine | CONFIRMED: 0.481 ms / 1745 GB/s, bitwise-identical to kernel; ADOPT | see SPF-004 entry |
-| SPF-007 | Staged w2_return stage regressed 4.05 -> 7.08 ms between 89f3267fc (2026-07-03) and branch head | Open (needs bisect) | staged_host_sync w2_return stage time per commit |
+| SPF-007 | Staged w2_return stage regressed 4.05 -> 7.08 ms between 89f3267fc (2026-07-03) and branch head | RESOLVED by records (no bisect): step change at `ae1c9aed1`+`e8fbfa85e` (W2-from-H switch, 2026-07-03 17:39-18:04), measured 7.048 ms same day (`6597-moe-mgpu-forward.md:4623`); deliberate H-boundary cost, not drift | see SPF-007 entry |
 | SPF-005 | Host-side plan build at target shape costs >2 ms/plan (likely ≫), making planner device-siding the top structural priority | CONFIRMED (~190x over threshold) | see SPF-005 entry: 380 ms plan build, ~1.85 s total public-path host work per plan |
 
 ## 2026-07-16 SPF-000 - Kickoff: review fan-out
@@ -261,3 +261,61 @@ owned by another OS user; `PermissionError` swallowed per port in
 `iris/cluster/backends/types.py:70-97`); manual `kubectl port-forward`
 workaround. IRIS_USER not honored by this branch's iris (jobs under
 `/marin/`).
+
+## 2026-07-16 SPF-007 - W2-return "regression" root-caused from records: deliberate W2-from-H switch, not drift
+
+No hardware bisect was needed. The 4.05 -> 7.08 ms jump is a single step
+change on 2026-07-03 evening, measured and logged the day it happened:
+
+- **4.050 ms** (roughly_balanced cf1.25, staged_host_sync) logged at
+  `89f3267fc`, 2026-07-03 13:12 (`6597-moe-mgpu-forward.md:3977`) — the
+  post-SwiGLU `_sharded_w2_return_direct_to_source_kernel`.
+- `ae1c9aed1` "Wire source-push forward through H" (17:39) +
+  `e8fbfa85e` "Fix source-push W2-from-H lowering" (17:59) switch the staged
+  forward to `_sharded_w2_from_h_return_direct_to_source_kernel`.
+- **7.048 ms** measured at `afed92f44`, 18:04 the same day
+  (`6597-moe-mgpu-forward.md:4623`: "W2 return 7.048 vs 4.079, +2.969 ms"),
+  with the slowdown explicitly attributed to the W2-from-H prologue.
+- Head (`26711f86e`) measures **7.077 ms** (SPF-004) — the other ~250 commits
+  in the range contributed ~nothing. Bisect would have converged on
+  `ae1c9aed1`/`e8fbfa85e` at ~8 GPU jobs' cost for information we already had.
+
+So SPF-007 is not silent branch drift: it is the priced-in cost of moving the
+forward to the H checkpoint boundary (W13 stores preactivation `[gate, up]`;
+W2 computes SwiGLU and applies route weights in its prologue) so the MLP-level
+custom VJP has its residual. "Regression" reclassified as **avenue 8 kernel
+work** on the from_h kernel.
+
+Mechanism (per k-tile, `source_push_w2_return.py:631-797` vs the direct kernel
+at :447-586), three compounding costs:
+
+1. **~2.5x M-side GMEM traffic**: gate + up (2I vs I hidden bytes) plus, until
+   the SPF-004 hoist, a k-invariant route-weight tile re-loaded every k
+   iteration (hoist recovered 0.27 ms of this).
+2. **Serial CUDA-core SwiGLU in the TMA->WGMMA critical path**: fp32
+   `silu(gate)*up*weight` written through an extra `activation_smem`
+   round-trip before each `wgmma`.
+3. **Single-buffered k-loop with `wgmma_wait(0)` inside**: no overlap between
+   the next tile's 4 loads, the elementwise stage, and the current wgmma. The
+   direct kernel shares the single-buffering but has no elementwise stage, so
+   it hides much less badly.
+
+Remediation plan (= avenue 8, sharpened):
+
+- **Output-side route scaling (exact algebra)**: route weight is per-row, so
+  `(diag(w)·A)·W2 == diag(w)·(A·W2)` — scale the fp32 acc tile by the
+  `block_m` weight vector after the k-loop instead of multiplying into the
+  activation every k-tile. Deletes `weight_smem` from the loop entirely and
+  removes one multiply from the critical path. (Already named as the follow-up
+  in the 2026-07-03 18:04 entry; never executed.)
+- **Double-buffer gate/up/w_down + defer `wgmma_wait`** so the elementwise
+  SwiGLU overlaps the next tile's TMA.
+- Realistic target: direct-kernel-parity is not expected (2x hidden bytes is
+  fundamental to the H boundary), but ~4.5-5 ms looks reachable vs 6.80 ms
+  post-hoist; roofline says the extra bytes alone justify only ~1 ms of the
+  +3 ms.
+
+Process note: the "silent regression" framing in the SPF-004 entry and the
+round-1 issue comment was wrong — the cost was logged contemporaneously in the
+6597 logbook; we failed to connect the two records before flagging it as
+drift-needs-bisect.
