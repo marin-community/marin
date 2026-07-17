@@ -548,3 +548,17 @@ author: mcwitt
 - Next action (decision point for the thread): pick between epilogue fusion
   (a), per-tensor grouped (b), or wiring MXFP8-004 with the current
   break-even producer while (a)/(b) are explored.
+
+### 2026-07-16 - Direction decision (mcwitt): push MXFP8 to per-tensor-class efficiency
+
+- User decision on the MXFP8-002c three-way: do NOT pivot to per-tensor
+  grouped (H7 deprioritized, kept in queue) — MXFP8's numerical-stability
+  advantages justify pushing on performance until mxfp8 performs at least
+  similarly to per-tensor fp8. Third-party kernels are in scope to import or
+  vendor (explicit question: does tokamax `ragged_dot_mgpu` support mxfp8 on
+  Hopper?).
+- New work items: (a) third-party kernel survey — tokamax (pinned 0.0.6 in
+  levanter `kernels` extra), TE JAX grouped MXFP8 surface, QuACK, triton
+  `dot_scaled`, public fused mxfp8 quantizers (fal.ai?); (b) continue the
+  engineering paths from 002c: epilogue fusion (SwiGLU+dual-quantize) and/or
+  TMA-pipelined quantizer with in-kernel swizzle.
