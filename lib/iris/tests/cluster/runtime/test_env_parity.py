@@ -74,7 +74,10 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
 
 def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None) -> dict[str, str]:
     """Extract static env vars from the k8s pod manifest (excludes downward API entries)."""
-    config = PodConfig(namespace="test", default_image="img:latest", controller_address=controller_address)
+    # Kueue is mandatory on the K8s backend, so a LocalQueue is always configured.
+    config = PodConfig(
+        namespace="test", default_image="img:latest", controller_address=controller_address, local_queue="iris-lq"
+    )
     manifest = _build_pod_manifest(req, config)
     env_list = manifest["spec"]["containers"][0]["env"]
     return {e["name"]: e["value"] for e in env_list if "value" in e}
@@ -269,15 +272,6 @@ def test_ports_set_to_zero():
     env = _common_env(_make_req(ports=["coordinator", "debug"]))
     assert env["IRIS_PORT_COORDINATOR"] == "0"
     assert env["IRIS_PORT_DEBUG"] == "0"
-
-
-def test_standard_paths_always_present():
-    env = _common_env(_make_req())
-    assert env["IRIS_WORKDIR"] == "/app"
-    assert env["IRIS_PYTHON"] == "python"
-    assert env["IRIS_BIND_HOST"] == "0.0.0.0"
-    assert env["UV_PYTHON_INSTALL_DIR"] == "/uv/cache/python"
-    assert env["CARGO_TARGET_DIR"] == "/root/.cargo/target"
 
 
 # ---------------------------------------------------------------------------

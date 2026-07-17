@@ -788,20 +788,6 @@ def test_attach_log_handler_uses_worker_log_key_before_register(mock_bundle_stor
         worker._detach_log_handler()
 
 
-def test_attach_log_handler_noop_without_worker_id(mock_bundle_store, mock_runtime, tmp_path):
-    """Before the worker_id is known, attach is a no-op."""
-    config = WorkerConfig(
-        port=0,
-        port_range=(50000, 50100),
-        cache_dir=tmp_path / "cache",
-        default_task_image="mock-image",
-    )
-    worker = _worker_with_mock_client(config, mock_bundle_store, mock_runtime)
-
-    worker._attach_log_handler()
-    assert worker._log_handler is None
-
-
 def test_attach_log_handler_idempotent_renames_key(mock_bundle_store, mock_runtime, tmp_path):
     """Re-attach under a new worker_id renames the handler's key in place."""
     config = WorkerConfig(
@@ -1456,7 +1442,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
             run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id="/test-user/test-job/0",
         attempt_id=3,
@@ -1502,7 +1488,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
             run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id="/test-user/discover-job/0",
         attempt_id=5,
@@ -1544,7 +1530,7 @@ def test_docker_adopt_container(docker_runtime, tmp_path):
             run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id="/test-user/adopt-job/0",
         attempt_id=0,
@@ -1588,7 +1574,7 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
             run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id=task_id,
         attempt_id=0,

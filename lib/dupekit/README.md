@@ -1,21 +1,27 @@
 dupekit
 ---
-Raison d'être: Home for the Rust code used for text deduplication.
+Raison d'être: text-deduplication kernels written in Rust, with a pure-Python surface.
 
-## Install
+## Packaging
 
-- **Locally:** This code is auto-magically built by `uv` via Cargo and [Maturin](https://github.com/PyO3/maturin). You
-might need to install them (e.g., `brew install maturin rust` on macOS).
-- **Cluster:** This code is compiled as part of the Docker build (`uv pip install -e ...` step): Maturin builds the Rust
-code and places it in the system `site-packages` (e.g., `/home/ray/anaconda3/lib/python3.12/site-packages/dupekit/dupekit.abi3.so`).
+dupekit ships as two PyPI dists, released in lockstep by
+`dupekit-release-wheels.yaml`:
 
->[!NOTE]
->What about making `dupekit` a hybrid Python/Rust Maturin workspace? We tried and experienced issues getting
-the Docker build to work while keeping it simple—a simple Rust workspace helps keep the setup clean.
+- `marin-dupekit` — pure Python (this directory; hatchling). A root workspace
+  member. `src/dupekit/__init__.py` is a thin proxy that re-exports the native
+  extension.
+- `marin-dupekit-native` — the native (Rust) kernels, importable as the
+  **top-level** module `dupekit_native` (maturin project at `rust/`). Top-level
+  because an editable `src/dupekit` would shadow a nested `dupekit/_native.so`
+  in site-packages.
 
->[!NOTE]
->Building from source requires a Rust toolchain (Cargo). Pre-built wheels are available
->from GitHub Releases for users who don't want to compile locally.
+`marin-dupekit` depends on `marin-dupekit-native` at runtime — the pure package
+is only the proxy/type surface. By default the extension comes from the
+pre-built PyPI wheel, so `uv sync` never compiles Rust. To build it from source
+(live Rust dev), run `python scripts/rust_mode.py dev` at the repo root — it
+points `marin-dupekit-native` at the local `rust/` tree in both the root and
+`lib/dupekit` pyprojects. Run `python scripts/rust_mode.py user` before
+committing (`make rust-dev` / `make rust-user` are the same thing).
 
 ## Benchmarking
 

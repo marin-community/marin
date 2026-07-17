@@ -116,6 +116,9 @@ export interface TaskStatus {
   currentAttemptId?: number
   attempts?: TaskAttempt[]
   pendingReason?: string
+  // Human-readable status for a task waiting to run (e.g. the Kueue admission
+  // detail explaining why a BUILDING/pending k8s task has not been placed).
+  statusMessage?: string
   canBeScheduled?: boolean
   containerId?: string
   // No per-task failure/preemption count fields — derive them from `attempts`;
@@ -512,6 +515,8 @@ export interface LogEntry {
   attemptId?: number
   level?: string
   key?: string
+  /** Store row id, ascending in write order. int64, so proto JSON sends a string. */
+  seq?: string
 }
 
 export interface FetchLogsResponse {
@@ -649,6 +654,19 @@ export interface BackendStatus {
   worker?: WorkerFleetDetail
 }
 
+/** Free vs. total consumable capacity per resource token (lowercased
+ *  device-variant → chips). map<string,int64> values JSON-encode as strings. */
+export interface ResourceAvailability {
+  version?: number
+  /** When the serving cluster computed the amounts, ms since epoch. int64 → string. */
+  observationEpochMs?: string
+  /** Free chips per variant, e.g. { h100: "24" }. */
+  amounts?: Record<string, string>
+  /** Total chips per variant over the same capacity; absent on a peer that
+   *  predates the field. */
+  totalAmounts?: Record<string, string>
+}
+
 /** Per-backend summary returned by the ListBackends RPC. */
 export interface BackendSummary {
   backendId: string
@@ -657,8 +675,6 @@ export interface BackendSummary {
   capabilities: string[]
   /** Map of attribute key → list of string values. */
   advertisedAttributes: Record<string, { values: string[] }>
-  restricted: boolean
-  allowedUserCount: number
   scaleGroups: string[]
   workerCount: number
   pendingTaskCount: number
@@ -668,6 +684,8 @@ export interface BackendSummary {
   capacityHealth: Record<string, number>
   /** Expanded per-backend status rendered in the Backends tab detail panel. */
   detail?: BackendStatus
+  /** Free/total capacity metric; unset when the backend does not supply it. */
+  availability?: ResourceAvailability
 }
 
 export interface UnroutableJob {
@@ -690,7 +708,6 @@ export interface PeerSummary {
   // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
   // absent on the wire when empty — hence optional here.
   controllerAddress?: string
-  dashboardUrl?: string
   /** Last capability heartbeat succeeded. */
   reachable?: boolean
   /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */

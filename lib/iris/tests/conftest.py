@@ -17,6 +17,7 @@ import pytest
 from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.local_client import make_local_client
 from iris.cluster.config import (
     IrisClusterConfig,
@@ -66,6 +67,18 @@ def log_client(embedded_log_server):
         yield client
     finally:
         client.close()
+
+
+@pytest.fixture
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    """A LogService RPC client against the per-test embedded server.
+
+    ``push_logs`` returns only once the batch is sealed into a segment, which is
+    what a read scans, so push→fetch is synchronously visible within a test
+    without any manual flush. The sync client exposes ``push_logs(request)`` /
+    ``fetch_logs(request)``.
+    """
+    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 def _make_controller_only_config() -> IrisClusterConfig:
@@ -175,6 +188,20 @@ def local_iris_client():
         yield client
     finally:
         client.shutdown()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_iris_user():
+    """Shield the suite from the developer's IRIS_USER.
+
+    resolve_job_user consults it when naming submitted jobs; without this, a
+    developer's exported IRIS_USER changes job names across the whole suite.
+    Session-scoped so module-scoped fixtures that submit jobs are covered too.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.delenv("IRIS_USER", raising=False)
+    yield
+    mp.undo()
 
 
 @pytest.fixture(autouse=True)

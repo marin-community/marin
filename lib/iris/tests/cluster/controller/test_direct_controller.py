@@ -51,17 +51,12 @@ class FakeDirectProvider:
         self.sync_result = ReconcileResult()
         self.closed = False
         self.advertised: dict[str, set[str]] = {}
-        self.allowed_users: frozenset[str] = frozenset({"*"})
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         self.sync_calls.append(request)

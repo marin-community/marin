@@ -404,6 +404,19 @@ class GcpWorkerProvider:
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
         return self._gcp.create_local_slice(slice_id, config, worker_config)
 
+    def _tpu_bootstrap_metadata(self, worker_config: WorkerConfig | None, slice_id: str, zone: str) -> dict[str, str]:
+        """Build TPU instance metadata, injecting the bootstrap startup-script when bootstrapping.
+
+        When ``worker_config`` is set this resolves the worker image and records the slice id on
+        the config (both consumed by the generated startup-script).
+        """
+        metadata = _gcp_instance_metadata()
+        if worker_config:
+            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=zone)
+            worker_config.slice_id = slice_id
+            metadata["startup-script"] = build_worker_bootstrap_script(worker_config)
+        return metadata
+
     def _create_tpu_slice(
         self,
         config: SliceConfig,
@@ -427,12 +440,7 @@ class GcpWorkerProvider:
         gcp = config.gcp
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
 
-        metadata = _gcp_instance_metadata()
-        if worker_config:
-            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
-            worker_config.slice_id = slice_id
-            startup_script = build_worker_bootstrap_script(worker_config)
-            metadata["startup-script"] = startup_script
+        metadata = self._tpu_bootstrap_metadata(worker_config, slice_id, gcp.zone)
 
         request = TpuCreateRequest(
             name=slice_id,
@@ -491,12 +499,7 @@ class GcpWorkerProvider:
         labels = dict(config.labels)
         labels[CAPACITY_TYPE_LABEL] = CAPACITY_TYPE_RESERVED_VALUE
 
-        metadata = _gcp_instance_metadata()
-        if worker_config:
-            worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
-            worker_config.slice_id = slice_id
-            startup_script = build_worker_bootstrap_script(worker_config)
-            metadata["startup-script"] = startup_script
+        metadata = self._tpu_bootstrap_metadata(worker_config, slice_id, gcp.zone)
 
         request = TpuCreateRequest(
             name=slice_id,

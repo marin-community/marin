@@ -141,6 +141,15 @@ def plans_from_snapshot(snapshot: ControlSnapshot) -> list[WorkerReconcilePlan]:
 
 
 @dataclass(frozen=True)
+class DeviceCapacity:
+    """Free vs. total consumable capacity for one resource token, in the token's
+    natural unit (accelerator variant → chips)."""
+
+    free: int
+    total: int
+
+
+@dataclass(frozen=True)
 class TaskTarget:
     """Addresses one task attempt for on-demand RPCs (status / profile / exec).
 
@@ -286,11 +295,6 @@ class AutoscaleRequest:
     dead_workers: list[WorkerId] = field(default_factory=list)
 
 
-def user_admitted(allowed_users: frozenset[str], user: str) -> bool:
-    """Whether an allow policy permits ``user`` (``"*"`` matches any user)."""
-    return "*" in allowed_users or user in allowed_users
-
-
 def assemble_scheduling_context(inputs: BackendSchedulingInputs, request: ScheduleRequest) -> SchedulingContext:
     """Join a backend's own worker-side inputs with the controller-owned request.
 
@@ -377,13 +381,19 @@ def run_scheduling_decision(
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
-    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
-    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
+    preemption_plan = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+
+    # Commit each preemptor onto the worker its victim frees in the same tick as
+    # the PREEMPT, so it is not re-competed for its own freed slot next tick. The
+    # freed worker is not physically empty until the victim's attempt finalizes;
+    # the reconcile dispatch gate holds the preemptor's run-intent until then.
+    assignments = all_assignments + preemption_plan.placements
+    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, assignments, order.ordered_task_ids)
 
     return ScheduleResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
-            for task_id, worker_id in all_assignments
+            for task_id, worker_id in assignments
         ],
         preemptions=[
             TerminalDecision(
@@ -391,7 +401,7 @@ def run_scheduling_decision(
                 task_id=victim_id,
                 reason=f"Preempted by {preemptor_name}",
             )
-            for preemptor_name, victim_id in preemptions
+            for preemptor_name, victim_id in preemption_plan.evictions
         ],
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
@@ -482,11 +492,6 @@ class TaskBackend(Protocol):
         prune readers and to seed/register a worker into its owning backend."""
         ...
 
-    allowed_users: frozenset[str]
-    """The allow policy: user ids permitted to route here (``"*"`` matches any).
-    Set by the composer via :meth:`configure_routing`; read for the dashboard's
-    restricted / allowed-user-count summary."""
-
     def advertised_attributes(self) -> dict[str, set[str]]:
         """Backend-global attributes the meta-scheduler routes against.
 
@@ -495,16 +500,28 @@ class TaskBackend(Protocol):
         that matches every job. Read once at startup (attributes are static)."""
         ...
 
-    def admits(self, user: str) -> bool:
-        """Whether this backend's allow policy permits ``user`` to route here."""
-        ...
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         """Set the routing metadata the meta-scheduler reads.
 
         Called once by the composer from the backend's config. ``advertised`` is
-        the (comma-expanded) attribute sets; ``allowed_users`` is the allow policy
-        (``"*"`` matches any user)."""
+        the (comma-expanded) attribute sets."""
+        ...
+
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+        """Free and total consumable capacity right now, per resource token.
+
+        A federation parent advertises this to peers so a queued federated job can
+        wait for a peer that actually has room (see ``federation.availability``);
+        the dashboard renders the same numbers. v1 reports accelerator chips keyed
+        by lowercased ``device-variant`` (e.g. ``{"h100": DeviceCapacity(8, 64)}``),
+        computed from the same live-worker ``WorkerCapacity`` (``total - committed``)
+        the scheduler uses.
+
+        Returns ``None`` when this backend does not supply the metric (a placement-
+        owning ``CLUSTER_VIEW`` backend that does not track per-worker capacity); the
+        controller then leaves ``BackendSummary.availability`` UNSET so a peer reading
+        it falls back to shape-only federation. An empty dict is an authoritative
+        "nothing free"."""
         ...
 
     def status(self) -> controller_pb2.Controller.BackendStatus:

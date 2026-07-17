@@ -35,7 +35,7 @@ from iris.client import IrisClient
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -439,11 +439,10 @@ def load_ferry_status(status_path: str | None) -> dict | None:
     if not status_path:
         return None
     try:
-        fs, path = url_to_fs(status_path)
-        if not fs.exists(path):
+        status_sp = StoragePath(status_path)
+        if not status_sp.exists():
             return None
-        with fs.open(path, "r") as fh:
-            return json.load(fh)
+        return json.loads(status_sp.read_text())
     except Exception as exc:
         logger.warning("Could not read ferry status %s: %s", status_path, exc)
         return None
@@ -560,9 +559,7 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
         raise click.UsageError(f"--gcs-prefix must start with gs://, got {gcs_prefix!r}")
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", report_name)
     dest = f"{gcs_prefix.rstrip('/')}/report_{timestamp}_{safe_name}/perf_report.json"
-    fs, path = url_to_fs(dest)
-    with fs.open(path, "w") as fh:
-        fh.write(report.to_json())
+    StoragePath(dest).write_text(report.to_json())
     return dest
 
 

@@ -76,15 +76,17 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import StrEnum
 
-import fsspec
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem import atomic_rename, marin_prefix
+from rigging.filesystem import url_to_fs as _rigging_url_to_fs
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext, counters
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
 from zephyr.shard_keys import deterministic_hash
 
 logger = logging.getLogger(__name__)
@@ -267,6 +269,9 @@ def _copy_shard(
     counters.pipeline.update_counter("upload/shards_copied", 1)
     counters.pipeline.update_counter("upload/files_copied", len(entries))
     counters.pipeline.update_counter("upload/bytes_copied", bytes_copied)
+    # Per-shard progress line so a long multi-shard sync is monitorable in the
+    # worker logs (the coordinator otherwise only dumps counters at shutdown).
+    logger.info("shard copied: %d files, %.1f MiB -> %s", len(entries), bytes_copied / 1024 / 1024, dst_dir)
     return {"shard_hash": _shard_hash(entries), "files": len(entries), "bytes": bytes_copied}
 
 
@@ -332,8 +337,8 @@ def _open_kwargs_for(path: str) -> dict:
 # This is what lets a single process copy R2 -> CoreWeave: the CW side uses the
 # ambient S3 config (the cluster default, e.g. cwlota) and the R2 side is pinned
 # to its own client via constructor kwargs, so the two never clobber each other
-# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY``,
-# ``R2_SECRET``, ``R2_ENDPOINT_URL`` in the job env.
+# (fsspec caches filesystems by their kwargs). Set ``R2_ACCESS_KEY_ID``,
+# ``R2_SECRET_ACCESS_KEY``, ``R2_ENDPOINT_URL`` in the job env.
 _R2_BUCKETS = frozenset({"marin-na"})
 
 
@@ -348,17 +353,31 @@ def _s3_creds_kwargs(path: str) -> dict:
         return {}
     bucket = path[len("s3://") :].split("/", 1)[0]
     if bucket in _R2_BUCKETS and os.environ.get("R2_ENDPOINT_URL"):
+        # ``endpoint_url`` must be a *top-level* s3fs kwarg, not inside
+        # ``client_kwargs``: fsspec shallow-merges the ambient ``FSSPEC_S3`` config
+        # (which carries the cluster's top-level ``endpoint_url``, e.g. cwlota) with
+        # ours. A top-level key overrides it; putting it in ``client_kwargs`` instead
+        # leaves the ambient top-level endpoint in place and s3fs then passes
+        # ``endpoint_url`` to ``create_client`` twice.
         return {
-            "key": os.environ["R2_ACCESS_KEY"],
-            "secret": os.environ["R2_SECRET"],
-            "client_kwargs": {"endpoint_url": os.environ["R2_ENDPOINT_URL"], "region_name": "auto"},
+            "key": os.environ["R2_ACCESS_KEY_ID"],
+            "secret": os.environ["R2_SECRET_ACCESS_KEY"],
+            "endpoint_url": os.environ["R2_ENDPOINT_URL"],
+            "client_kwargs": {"region_name": "auto"},
         }
     return {}
 
 
 def _url_to_fs(path: str, **extra):
-    """``fsspec.core.url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`)."""
-    return fsspec.core.url_to_fs(path, **_s3_creds_kwargs(path), **extra)
+    """``url_to_fs`` with per-bucket R2 creds injected (see :func:`_s3_creds_kwargs`).
+
+    Goes through rigging's ``url_to_fs`` rather than raw fsspec so every S3
+    filesystem (both the R2 source and the CoreWeave dest) gets finite
+    ``connect_timeout``/``read_timeout`` + bounded retries. Without them a wedged
+    R2/CoreWeave socket (e.g. a hung ``CompleteMultipartUpload``) blocks
+    ``fsspec.asyn.sync`` forever and the copy thread never returns (#6487).
+    """
+    return _rigging_url_to_fs(path, **_s3_creds_kwargs(path), **extra)
 
 
 def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
@@ -641,6 +660,13 @@ def _parse_args() -> argparse.Namespace:
         help=f"Where shard sentinels + step status live (default: {DEFAULT_STATUS_PREFIX!r}).",
     )
     parser.add_argument(
+        "--max-sources",
+        type=int,
+        default=8,
+        help="Max source-syncs run concurrently by StepRunner (default 8). Each source "
+        "further fans out into its own Zephyr copy workers.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Build StepSpecs and list them, but don't run.",
@@ -740,7 +766,7 @@ def main() -> None:
         print(f"{len(steps)} sync StepSpec(s) built (dry run).")
         return
 
-    StepRunner().run(steps)
+    StepRunner().run(steps, max_concurrent=args.max_sources)
     print(f"Synced {len(steps)} source(s): {src_prefix} -> {args.dest_prefix}.")
 
 

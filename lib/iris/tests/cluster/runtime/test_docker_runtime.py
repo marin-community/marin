@@ -37,7 +37,7 @@ def test_resolve_mounts_workdir(monkeypatch, tmp_path, runtime):
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)]
+    mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR, size_bytes=1024 * 1024 * 512)]
     resolved = runtime.resolve_mounts(mounts, workdir_host_path=workdir)
 
     assert len(calls) == 0
@@ -49,7 +49,7 @@ def test_resolve_mounts_workdir(monkeypatch, tmp_path, runtime):
 
 def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     """CACHE mounts resolve to subdirectories under cache_dir."""
-    mounts = [MountSpec(container_path="/root/.cache/uv", kind=MountKind.CACHE)]
+    mounts = [MountSpec("root-cache-uv", container_path="/root/.cache/uv", kind=MountKind.CACHE)]
     resolved = runtime.resolve_mounts(mounts)
 
     assert len(resolved) == 1
@@ -60,7 +60,7 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
 
 def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
     """TMPFS mounts get empty host_path (Docker --tmpfs provides per-container isolation)."""
-    mounts = [MountSpec(container_path="/tmp", kind=MountKind.TMPFS)]
+    mounts = [MountSpec("tmp", container_path="/tmp", kind=MountKind.TMPFS)]
     resolved = runtime.resolve_mounts(mounts)
 
     assert len(resolved) == 1
@@ -72,7 +72,7 @@ def test_resolve_mounts_tmpfs_has_no_host_path(tmp_path, runtime):
 def test_resolve_mounts_workdir_requires_host_path(tmp_path):
     """WORKDIR mount without workdir_host_path raises RuntimeError."""
     runtime = DockerRuntime(cache_dir=tmp_path / "cache")
-    mounts = [MountSpec(container_path="/app", kind=MountKind.WORKDIR)]
+    mounts = [MountSpec("app", container_path="/app", kind=MountKind.WORKDIR)]
     with pytest.raises(RuntimeError, match="workdir_host_path"):
         runtime.resolve_mounts(mounts)
 

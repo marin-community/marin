@@ -18,7 +18,7 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 from iris.env_resources import TaskResources as _TaskResources
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from zephyr import counters
@@ -832,8 +832,7 @@ def run_stage(
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
 
             if op.skip_existing:
-                fs = url_to_fs(output_path)[0]
-                if fs.exists(output_path):
+                if StoragePath(output_path).exists():
                     logger.info(f"Skipping write, output exists: {output_path}")
                     counters.pipeline.update_counter(counters.PARTITIONS_SKIPPED, 1)
                     yield output_path

@@ -15,7 +15,10 @@ dependencies = [
     "marin-haliax",
     "marin-levanter",
     "marin-core",
-    "marin-rigging",
+    # [secrets] so `iris cluster up` on a Kubernetes cluster can resolve the
+    # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
+    # cloud credentials and reads the key from a projected Secret instead.
+    "marin-rigging[secrets]",
     "marin-zephyr",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
@@ -30,13 +33,13 @@ dependencies = [
     "marin-ducky",
     # top level deps. try to keep these small.
     "watchdog",
-    # marin-dupekit is a native (maturin) package shipped as pre-built platform
-    # wheels (built by dupekit-release-wheels.yaml) rather than a workspace
-    # member. A `>= X.Y.Z.dev0` floor opts uv into the daily nightly wheels
-    # (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain `>= X.Y.Z` floor pins to a stable tag
-    # (`dupekit-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
-    # any earlier dev of the same Z; bump the floor to whichever is newest.
-    "marin-dupekit >= 0.1.2.dev202606060824",
+    # marin-dupekit is the pure-Python text-dedup surface, a workspace member
+    # (editable source). Its native companion marin-dupekit-native (the Rust
+    # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a
+    # member: it ships as a pre-built platform wheel and reaches us transitively
+    # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
+    # marin-dupekit-native to a local source build.
+    "marin-dupekit",
 ]
 
 [tool.uv]
@@ -45,7 +48,8 @@ fork-strategy = "fewest"
 # names one, so our intentional pre-releases resolve while everything else stays
 # on its latest stable release. (A global "allow" would instead promote any
 # transitive dependency's newest beta/rc into the lock.) Opted in: the
-# marin-dupekit nightly (above); the omegaconf dev pin in override-dependencies
+# marin-dupekit-native nightly (floor in lib/dupekit/pyproject.toml); the
+# omegaconf dev pin in override-dependencies
 # below; and the prerelease-only transitive deps in constraint-dependencies
 # (tfp-nightly / opentelemetry-semantic-conventions publish no stable release).
 prerelease = "explicit"
@@ -124,18 +128,22 @@ members = [
     "lib/iris",
     "lib/fray",
     "lib/finelog",
+    "lib/dupekit",
     "lib/ducky",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "infra/iac",
 ]
-# lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
-# log-server ext is consumed as a pre-built wheel by default and only built from
-# source under `scripts/rust_mode.py dev`. Exclude it so workspace discovery
-# doesn't pull the nested package into the workspace.
-exclude = ["lib/finelog/rust"]
+# The native (maturin) companions are NOT members: their extensions are consumed
+# as pre-built wheels by default and only built from source under
+# `scripts/rust_mode.py dev`. Exclude them so workspace discovery doesn't pull
+# the nested packages into the workspace.
+#   - lib/finelog/rust  -> marin-finelog-server (module `finelog_server`)
+#   - lib/dupekit/rust   -> marin-dupekit-native  (module `dupekit_native`)
+exclude = ["lib/finelog/rust", "lib/dupekit/rust"]
 
 [tool.uv.extra-build-variables]
 vllm = { VLLM_TARGET_DEVICE = "tpu" }
@@ -151,6 +159,7 @@ vllm = [
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -168,10 +177,10 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d
 # if this is a fixed-base overlay PR, then follow
 # .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
 # temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...808415f45bbfcb512e9c593c4a3330aed115917e
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "808415f45bbfcb512e9c593c4a3330aed115917e" }
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -240,6 +249,9 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
+# The decon report renderer embeds CSS/JS/HTML as long string literals; wrapping
+# those lines hurts readability far more than the length limit helps.
+"experiments/datakit/decontam/viewer/report.py" = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
@@ -248,13 +260,6 @@ known-first-party = ["experiments"]
 # as first-party and reorder it, so pin it to the third-party group it already sits in.
 known-third-party = ["wandb", "config"]
 
-
-[tool.mypy]
-python_version = "3.12"
-
-# Note: Grow more strict over time!
-ignore_missing_imports = true
-exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
@@ -443,17 +448,20 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
-    "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
-    "requires_cluster: mark tests that need a running iris cluster",
+    "cluster: mark smokes that submit a real job to a standing Marin cluster (run by marin-cluster-smoke.yaml)",
+    "manual: mark tests that are run by hand on demand, never by any CI workflow",
 ]
 testpaths = ["tests", "experiments"]
 pythonpath = ["."]
 
-# Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
+# Don't run slow, integration, data_integration, cluster-bound, or manual tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
-# requires_cluster tests need a running iris cluster (local or remote).
-# All are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster' --import-mode=importlib"
+# cluster tests submit a real job to a standing Marin cluster (tests/cluster/);
+# manual tests are run by hand (e.g. live TPU smokes in a custom container).
+# All but manual are run from dedicated CI workflows. Tests that need a TPU carry
+# @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
+# requires_cluster lives in lib/iris's own config, so no top-level test uses it.
+addopts = "--session-timeout=600 -m 'not slow and not integration and not data_integration and not cluster and not manual' --import-mode=importlib"

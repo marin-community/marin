@@ -24,7 +24,7 @@ A holder pod sits on an expensive 8×H100 node for the session's lifetime. Relea
 
 ## Prerequisites
 
-1. Place the cluster kubeconfig at the path the config expects. The tool passes `--kubeconfig <platform.coreweave.kubeconfig_path>` to `kubectl` verbatim and fails fast if the file is absent. For the production H100 fleet (`cw-us-east-02a`, the `marin-gpu` cluster) that path is `~/.kube/coreweave-iris-gpu`, per `lib/iris/docs/coreweave.md`.
+1. Place the cluster kubeconfig at the path the config expects. The tool passes `--kubeconfig <platform.coreweave.kubeconfig_path>` and `--context <platform.coreweave.kube_context>` to `kubectl` verbatim and fails fast if the file is absent. All CoreWeave clusters share the kubeconfig `~/.kube/coreweave-iris`; the per-cluster context (e.g. `marin-gpu_US-EAST-02A` for `cw-us-east-02a`) is pinned in the cluster yaml, per `lib/iris/docs/coreweave.md`.
 
 2. Ensure the Iris controller is running for the cluster. On the shared CoreWeave cluster this is usually already true; only start it yourself for a fresh cluster.
 
@@ -67,10 +67,11 @@ uv run iris --config=lib/iris/config/cw-us-east-02a.yaml job list --prefix /$USE
 uv run iris --config=lib/iris/config/cw-us-east-02a.yaml job logs /$USER/dev-gpu-<name>
 ```
 
-Inspect the pod directly with the same kubeconfig the tool uses:
+Inspect the pod directly with the same kubeconfig + context the tool uses:
 
 ```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris-gpu --namespace iris get pods -l iris.task_id=<sanitized-task-id>
+kubectl --kubeconfig ~/.kube/coreweave-iris --context marin-gpu_US-EAST-02A \
+  --namespace iris get pods -l iris.task_id=<sanitized-task-id>
 ```
 
 ## Session behavior

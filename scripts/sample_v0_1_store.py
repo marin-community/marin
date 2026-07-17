@@ -35,7 +35,7 @@ _PART_PREFIX = "part-"
 def _list_part_dirs(cluster_quality_root: str) -> list[str]:
     """Shallowly list completed ``part-NNNNN-of-NNNNN/`` subdirs under cluster_quality_root.
 
-    Uses ``fs.ls(detail=True)`` (one delimited call). ``fsspec_glob`` against
+    Uses ``fs.ls(detail=True)`` (one delimited call). ``StoragePath.glob`` against
     gcsfs calls ``_find`` which recursively lists every object under the
     prefix -- against a near-complete cluster=K/quality=Q/ (~98K parts x
     several files each) that's a 500K+ object listing per (cluster, quality),

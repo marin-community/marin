@@ -182,6 +182,7 @@ class CloudK8sService:
 
     namespace: str
     kubeconfig_path: str | None = None
+    context: str | None = None  # kubeconfig context; None = the file's current-context
     timeout: float = DEFAULT_TIMEOUT
     _api_client: "kubernetes.client.ApiClient" = field(init=False, repr=False)
     _dyn: "DynamicClient" = field(init=False, repr=False)
@@ -205,12 +206,17 @@ class CloudK8sService:
         cmd = ["kubectl"]
         if self.kubeconfig_path:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
+        if self.context:
+            cmd.extend(["--context", self.context])
         self._kubectl_prefix = cmd
 
     def create_api_client(self) -> "kubernetes.client.ApiClient":
-        if self.kubeconfig_path:
+        # A bare context (no kubeconfig_path) binds the named context within the
+        # default kubeconfig resolution (KUBECONFIG env var or ~/.kube/config).
+        if self.kubeconfig_path or self.context:
             return kubernetes.config.new_client_from_config(
                 config_file=self.kubeconfig_path,
+                context=self.context,
             )
 
         try:

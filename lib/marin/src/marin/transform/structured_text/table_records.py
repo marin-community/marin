@@ -24,8 +24,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
-from marin.utils import fsspec_mkdirs
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem import StoragePath, atomic_rename, open_url
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +347,7 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
                 f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
             )
 
-    fsspec_mkdirs(cfg.output_path, exist_ok=True)
+    StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
     compression = "gzip" if out_file.endswith(".gz") else None
 

@@ -7,8 +7,11 @@ GPT-OSS-generated math problems with answers. Each row has a problem statement,
 answer, topic, and answer type. We render these into a single document.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from fray.types import ResourceConfig
+from zephyr import counters
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import text_document

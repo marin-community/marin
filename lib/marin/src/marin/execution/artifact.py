@@ -23,11 +23,13 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 import functools
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
 from rigging.provenance import Provenance, launch_provenance
 
 from marin.execution.fingerprint import describe_drift
@@ -173,9 +175,46 @@ class ArtifactRecord(BaseModel):
     """Who/when/which-commit/which-argv produced this — ``None`` for a minimal manual write."""
 
 
+# The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable
+# revisions on the same day). Kept here, beside ``validate_version``, so callers agree on version
+# identity without importing ``lazy``.
+CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
+
+
 def is_mutable_version(version: str) -> bool:
     """A ``dev`` version is mutable: the drift check is skipped and it always rebuilds."""
     return version == "dev" or version.endswith("-dev")
+
+
+def validate_path_segment(label: str, value: str) -> None:
+    """A ``name``/``version`` is a single path segment: non-empty, no URL scheme, no ``..``, no
+    leading/trailing slash. A malformed one is a caller bug, not a silent malformed path."""
+    if not value:
+        raise ValueError(f"{label} must be non-empty")
+    if "://" in value or urlparse(value).scheme:
+        raise ValueError(f"{label} {value!r} must not contain a URL scheme")
+    if ".." in value:
+        raise ValueError(f"{label} {value!r} must not contain '..'")
+    if value.startswith("/") or value.endswith("/"):
+        raise ValueError(f"{label} {value!r} must not start or end with '/'")
+
+
+def validate_version(version: str) -> None:
+    """Validate an artifact version string, raising :class:`ValueError` if malformed.
+
+    A version is a path segment that is either a calendar version ``YYYY.MM.DD`` (optionally
+    ``YYYY.MM.DD.N``) or a mutable ``dev``/``<label>-dev``. ``v1``-style tags are rejected: an
+    artifact's version is the author's explicit statement of "when this recipe was frozen", not an
+    opaque label.
+    """
+    validate_path_segment("version", version)
+    if is_mutable_version(version):
+        return
+    if not CALVER_RE.match(version):
+        raise ValueError(
+            f"version {version!r} must be a calendar version YYYY.MM.DD (optionally YYYY.MM.DD.N) "
+            "or a mutable 'dev'/'<label>-dev'"
+        )
 
 
 def _resolved(output_path: str) -> str:
@@ -192,8 +231,7 @@ def _read_text(output_path: str, filename: str) -> str | None:
     fs = url_to_fs(path, use_listings_cache=False)[0]
     if not fs.exists(path):
         return None
-    with open_url(path, "r") as f:
-        return f.read()
+    return StoragePath(path).read_text()
 
 
 def _record_from_executor_info(text: str) -> ArtifactRecord | None:
@@ -265,8 +303,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
 def write_record(record: ArtifactRecord) -> None:
     """Write ``record`` to ``{record.output_path}/.artifact.json``."""
-    with open_url(prefix_join(record.output_path, RECORD_FILENAME), "w") as f:
-        f.write(record.model_dump_json(indent=2))
+    StoragePath(prefix_join(record.output_path, RECORD_FILENAME)).write_text(record.model_dump_json(indent=2))
 
 
 def _payload_json(value: object) -> JSONValue:

@@ -8,3 +8,6 @@ pub mod errors;
 pub mod query;
 pub mod server;
 pub mod store;
+
+#[cfg(test)]
+pub mod test_support;

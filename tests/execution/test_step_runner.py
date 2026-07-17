@@ -863,7 +863,7 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
 def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fray_client):
     resources = ResourceConfig.with_tpu("v6e-4")
 
-    @remote(resources=resources, pip_dependency_groups=["eval", "vllm"])
+    @remote(resources=resources, pip_dependency_groups=["vllm"])
     def my_step(output_path: str) -> Artifact:
         return Artifact(path=output_path)
 
@@ -875,7 +875,7 @@ def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fra
 
     spy = _run_step_with_submit_spy(step, fray_client)
 
-    _assert_single_submit_extras(spy, ["eval", "vllm"])
+    _assert_single_submit_extras(spy, ["vllm"])
     _assert_single_submit_env(spy, {"VLLM_TARGET_DEVICE": "tpu"})
 
 

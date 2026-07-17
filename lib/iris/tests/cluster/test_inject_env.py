@@ -82,6 +82,8 @@ def test_inject_env_round_trips_through_load_config(tmp_path: Path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         """\
+name: test-cluster
+
 platform:
   manual: {}
 

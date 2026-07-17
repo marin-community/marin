@@ -8,7 +8,7 @@ Usage:
       -- python -m experiments.rollout_data.superior_reasoning
 """
 
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from marin.datakit.download.superior_reasoning import download_superior_reasoning_step
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec

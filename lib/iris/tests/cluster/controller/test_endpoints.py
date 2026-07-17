@@ -23,7 +23,7 @@ from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, MIN_ENDPOIN
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.types import EndpointAccess, JobName, TaskAttempt
+from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -279,6 +279,37 @@ def test_resolve_proxy_target_system_endpoint_is_private(state):
     assert resolved is not None
     assert resolved.access == EndpointAccess.ENDPOINT_ACCESS_PRIVATE
     assert resolved.address == "logs:9000"
+    # System endpoints carry no metadata, so no per-endpoint timeout override.
+    assert resolved.timeout_seconds is None
+
+
+@pytest.mark.parametrize(
+    ("metadata_value", "expected"),
+    [
+        ({PROXY_TIMEOUT_METADATA_KEY: "600"}, 600.0),  # registered override surfaces
+        ({}, None),  # unset -> proxy default
+        ({PROXY_TIMEOUT_METADATA_KEY: "nope"}, None),  # non-numeric -> ignored
+        ({PROXY_TIMEOUT_METADATA_KEY: "0"}, None),  # non-positive -> ignored
+    ],
+)
+def test_resolve_proxy_target_reads_timeout_metadata(state, metadata_value, expected):
+    """A per-endpoint proxy timeout registered in metadata surfaces on the resolved
+    endpoint; absent or invalid values fall back to the proxy default (None)."""
+    task, attempt = _live_task(state)
+    svc = _service(state)
+    svc.register_endpoint(
+        controller_pb2.Controller.RegisterEndpointRequest(
+            name="/serve/foo",
+            address="up:8000",
+            task_id=task.to_wire(),
+            attempt_id=attempt,
+            metadata=metadata_value,
+        ),
+        None,
+    )
+    resolved = svc.resolve_proxy_target("serve.foo")
+    assert resolved is not None
+    assert resolved.timeout_seconds == expected
 
 
 def test_resolve_task_endpoint_returns_owner_row(state):

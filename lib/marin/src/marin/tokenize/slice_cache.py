@@ -19,12 +19,8 @@ from dataclasses import dataclass
 
 import humanfriendly
 from jax.random import PRNGKey
-from levanter.data.text import (
-    HfDatasetSourceConfig,
-    LmDatasetSourceConfigBase,
-    UrlDatasetSourceConfig,
-)
-from levanter.store import SerialCacheWriter, TreeCache
+from levanter.data.text.datasets import HfDatasetSourceConfig, LmDatasetSourceConfigBase, UrlDatasetSourceConfig
+from levanter.store.cache import SerialCacheWriter, TreeCache
 from levanter.tokenizers import load_tokenizer
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 from rigging.filesystem import open_url

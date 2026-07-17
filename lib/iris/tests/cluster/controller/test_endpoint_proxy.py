@@ -90,6 +90,14 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
         await _record(request)
         return PlainTextResponse("upstream blew up", status_code=500)
 
+    async def unauthorized(request: Request) -> Response:
+        await _record(request)
+        return PlainTextResponse(
+            "finelog rejected the controller",
+            status_code=401,
+            headers={"www-authenticate": 'Bearer realm="upstream"'},
+        )
+
     async def slow(request: Request) -> Response:
         await _record(request)
         # Just-long-enough to outlast the proxy's 0.5s timeout. Keeping this
@@ -149,6 +157,7 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
     routes = [
         Route("/echo", echo, methods=list(ALLOWED_METHODS)),
         Route("/500", upstream_500),
+        Route("/401", unauthorized),
         Route("/slow", slow),
         Route("/large", large),
         Route("/cookie", cookie_setter),
@@ -191,7 +200,7 @@ class ProxyHandle:
     endpoints: dict[str, str]
 
 
-def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
+def _build_proxy_app(proxy: EndpointProxy, timeouts: dict[str, float] | None = None) -> Starlette:
     # Mirrors the controller dashboard's wiring:
     # - ``/proxy/<name>`` (no trailing slash) -> path-only 307 to ``/proxy/<name>/``.
     #   We can't use Starlette's ``redirect_slashes=True`` because it builds
@@ -199,6 +208,11 @@ def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
     #   internal bind IP behind IAP. A path-only Location resolves against
     #   the browser's current origin instead.
     # - ``/proxy/<name>/<sub_path>`` -> the proxy itself.
+    #
+    # ``timeouts`` maps an encoded endpoint name to a per-request timeout, standing
+    # in for the override the dashboard reads from the resolved endpoint.
+    timeouts = timeouts or {}
+
     async def _redirect_to_slash(request: Request) -> Response:
         name = request.path_params["endpoint_name"]
         query = f"?{request.url.query}" if request.url.query else ""
@@ -211,6 +225,7 @@ def _build_proxy_app(proxy: EndpointProxy) -> Starlette:
             encoded_name=name,
             sub_path=request.path_params["sub_path"],
             proxy_prefix=f"/proxy/{name}",
+            timeout_seconds=timeouts.get(name),
         )
 
     app = Starlette(
@@ -229,6 +244,7 @@ def _start_proxy(
     *,
     endpoints: dict[str, str] | None = None,
     timeout_seconds: float = 30.0,
+    timeouts: dict[str, float] | None = None,
 ) -> tuple[str, dict[str, str], EndpointProxy]:
     """Spin up an EndpointProxy + its hosting Starlette server.
 
@@ -236,11 +252,13 @@ def _start_proxy(
     dict the proxy resolves against — callers can register or remove names
     at runtime. The proxy uses ``endpoints.get`` directly as its resolver,
     keeping the test wiring identical to production: a single ``name ->
-    address`` callable, no fakes for the persistent stores.
+    address`` callable, no fakes for the persistent stores. ``timeout_seconds``
+    is the proxy default; ``timeouts`` supplies per-endpoint overrides keyed by
+    the encoded name (what the dashboard reads off the resolved endpoint).
     """
     endpoints = endpoints if endpoints is not None else {}
     ep_proxy = EndpointProxy(endpoints.get, timeout_seconds=timeout_seconds)
-    app = _build_proxy_app(ep_proxy)
+    app = _build_proxy_app(ep_proxy, timeouts)
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
     server = uvicorn.Server(config)
@@ -347,6 +365,26 @@ def test_upstream_5xx_passes_through(proxy: ProxyHandle) -> None:
     assert resp.text == "upstream blew up"
 
 
+def test_upstream_401_translated_to_502(proxy: ProxyHandle) -> None:
+    """An upstream 401 must not reach the browser as a 401.
+
+    The dashboard treats any 401 as an iris auth challenge and pops its login
+    modal. A 401 from a proxied upstream (e.g. finelog refusing the controller)
+    is not a browser auth challenge — the browser never authenticated to the
+    upstream — so the proxy rewrites it to 502, folding the upstream body into
+    the error the client reads and dropping the upstream's challenge header.
+    """
+    with httpx.Client() as client:
+        resp = client.get(f"{proxy.base_url}/proxy/{ENDPOINT_URL_NAME}/401")
+    assert resp.status_code == 502
+    error = resp.json()["error"]
+    # Names the refusing upstream and carries its body, so the real cause is visible.
+    assert ENDPOINT_URL_NAME in error
+    assert "finelog rejected the controller" in error
+    # The upstream's challenge must not reach the client alongside the translated status.
+    assert "www-authenticate" not in {k.lower() for k in resp.headers}
+
+
 def test_upstream_connection_refused_returns_502(threads: ThreadContainer) -> None:
     # Bind a port and immediately release it; the address is dead by the time
     # the proxy connects.
@@ -372,6 +410,38 @@ def test_upstream_timeout_returns_504(threads: ThreadContainer, upstream: Upstre
         resp = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/slow")
     assert resp.status_code == 504
     assert "timeout" in resp.json()["error"].lower()
+
+
+def test_per_endpoint_timeout_override_shortens(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
+    # The proxy default is generous, but this endpoint registered a 0.5s override,
+    # so the /slow upstream (sleeps 1.0s) times out at the per-endpoint budget.
+    base_url, _, _ = _start_proxy(
+        threads,
+        endpoints={ENDPOINT_NAME: f"127.0.0.1:{upstream.port}"},
+        timeout_seconds=30.0,
+        timeouts={ENDPOINT_URL_NAME: 0.5},
+    )
+
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/slow")
+    assert resp.status_code == 504
+    assert "after 0.5s" in resp.json()["error"]
+
+
+def test_per_endpoint_timeout_override_extends(threads: ThreadContainer, upstream: UpstreamHandle) -> None:
+    # The proxy default (0.5s) would cut /slow off, but this endpoint's 5s override
+    # gives the 1.0s upstream response room to complete.
+    base_url, _, _ = _start_proxy(
+        threads,
+        endpoints={ENDPOINT_NAME: f"127.0.0.1:{upstream.port}"},
+        timeout_seconds=0.5,
+        timeouts={ENDPOINT_URL_NAME: 5.0},
+    )
+
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(f"{base_url}/proxy/{ENDPOINT_URL_NAME}/slow")
+    assert resp.status_code == 200
+    assert resp.text == "late"
 
 
 def test_cookies_stripped_both_directions(proxy: ProxyHandle) -> None:

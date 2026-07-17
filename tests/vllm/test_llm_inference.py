@@ -8,6 +8,8 @@ import pytest
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.vllm_server import resolve_model_name_or_path
 
+from tests.test_utils import skip_if_no_tpu
+
 try:
     from vllm import LLM, SamplingParams
 except ImportError:
@@ -30,7 +32,7 @@ def run_vllm_inference(model_path, **model_init_kwargs):
     return generated_texts
 
 
-@pytest.mark.tpu_ci
+@skip_if_no_tpu
 def test_local_llm_inference():
     config = ModelConfig(
         name="test-llama-200m",

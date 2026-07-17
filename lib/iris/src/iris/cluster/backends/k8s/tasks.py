@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
@@ -31,13 +31,13 @@ from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
     BackendRuntime,
+    DeviceCapacity,
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    user_admitted,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.loader import TransitionReader
@@ -45,7 +45,20 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_LEAFGROUP,
+    COSCHEDULE_NVLINK_DOMAIN,
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED,
+    COSCHEDULE_NVLINK_DOMAIN_SLICED,
+    CW_LABEL_LEAFGROUP,
+    CW_LABEL_NVLINK_DOMAIN,
+    NVL72_GPUS_PER_NODE,
+    RACK_SIZE,
+    SCHEDULABLE_RACK_NODES,
+    KueueTopologyBinding,
+    TopologyMode,
+    balanced_rack_slice_size,
+)
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_BATCH,
@@ -57,8 +70,11 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.runtime.env import (
+    STANDARD_MOUNTS,
     VENV_PATH,
+    WORKDIR_MOUNT,
     build_common_iris_env,
+    cache_host_dirname,
     normalize_workdir_relative_path,
     render_setup_steps,
 )
@@ -72,13 +88,27 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.types import JobName, WorkerId, get_gpu_count
-from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
+from iris.cluster.runtime.types import MountKind
+from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
+from iris.cluster.worker.stats import IrisTaskStat, TaskEventRow, build_task_stat, stats_timestamp
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+class PodManifestError(ValueError):
+    """A RunTaskRequest cannot produce a valid Pod manifest.
+
+    Raised for request-level validation failures in manifest construction: an
+    unsupported container profile, a coscheduling group_by with no topology
+    mapping, an NVLink-domain gang larger than a rack's schedulable slice, or an unsupported
+    constraint op. These are permanent — the identical request fails the same
+    way on every retry — so ``sync`` fails the task terminally instead of
+    treating it as a retryable worker loss and re-applying it every tick.
+    """
+
 
 # Label key prefix for iris-managed pod identification.
 _LABEL_MANAGED = "iris.managed"
@@ -132,6 +162,23 @@ _POD_NOT_FOUND_GRACE_CYCLES = 3
 # (requesting too little memory), not transient infrastructure failure.
 _INFRASTRUCTURE_FAILURE_REASONS = frozenset({"Evicted", "DeadlineExceeded", "Preempting"})
 
+# PodScheduled=False condition reason set by the scheduler while a pod is held by
+# an admission gate (Kueue installs one); the pod is admitted only once the gate
+# is removed. Drives Kueue-workload attribution on the diagnostic paths.
+_REASON_SCHEDULING_GATED = "SchedulingGated"
+
+# The control plane stamps a ``DisruptionTarget`` pod condition (status "True")
+# whenever it disrupts a pod: scheduler preemption (PreemptionByScheduler),
+# node-pressure or graceful node shutdown (TerminationByKubelet), taint eviction
+# (DeletionByTaintManager), API eviction (EvictionByEvictionAPI), or pod GC
+# (DeletionByPodGC). It is authoritative and independent of the container exit
+# code, so it catches a preemption whose container was SIGKILLed after the grace
+# period — which surfaces as ``reason="Error"``, exit 137 and is missed by
+# _INFRASTRUCTURE_FAILURE_REASONS above. A container that OOMs against its own
+# cgroup limit gets no such condition, so it correctly stays an application
+# failure. GA since Kubernetes 1.26.
+_DISRUPTION_TARGET_CONDITION = "DisruptionTarget"
+
 # ---------------------------------------------------------------------------
 # Kueue gang admission (coscheduled jobs only)
 # ---------------------------------------------------------------------------
@@ -147,10 +194,15 @@ _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
+# PodSet-slice request: partition the pod group into podset-slice-size chunks, each hard-bound
+# to one domain of the named level. Kueue >= 0.13 (feature under TopologyAwareScheduling).
+_KUEUE_SLICE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-slice-required-topology"
+_KUEUE_SLICE_SIZE = "kueue.x-k8s.io/podset-slice-size"
 # Per-pod ordinal within the gang. Kueue's TAS plain-pod-group path uses it to
 # assign each pod a topology domain rank; basic gang admission does not need it,
-# but stamping it is harmless and required once a podset-topology annotation is
-# present. Sourced from the task ordinal (JobName.task_index).
+# but stamping it is required for slice membership to be rank-contiguous (slice k = pod indices
+# [k*size, (k+1)*size)); without it the ungater assigns domains arbitrarily. Sourced from the
+# task ordinal (JobName.task_index).
 _KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
 # Pod finalizer Kueue's webhook stamps on admitted gang pods. Kueue only
 # strips it for pods it considers accounted for; on teardown Iris removes it
@@ -158,23 +210,39 @@ _KUEUE_POD_GROUP_POD_INDEX = "kueue.x-k8s.io/pod-group-pod-index"
 # pod-group Workload (Kueue rebuilds it from surviving labeled pods).
 _KUEUE_MANAGED_FINALIZER = "kueue.x-k8s.io/managed"
 
-# CoreWeave-convention fallback for KueueConfig.topologies: group_by -> (node
-# label, required?). Used only when the cluster config leaves topologies unset.
-# group_by names the ACTUAL topology level the gang runs against (a convention,
-# not a portable abstraction — CoreWeave names leak by design). The keys are the
-# levels in CoreWeave's Kueue Topology CRs (see scripts/install_kueue.py):
+# CoreWeave-convention fallback for KueueConfig.topologies: group_by -> KueueTopologyBinding.
+# Used only when the cluster config leaves topologies unset. group_by names the ACTUAL topology
+# level the gang runs against (a convention, not a portable abstraction — CoreWeave names leak
+# by design). The keys are the levels in CoreWeave's Kueue Topology CRs (see
+# scripts/install_kueue.py):
 #   leafgroup     soft (preferred): multi-node IB colocation on one leaf group
 #                 (H100 InfiniBand deployments).
 #   nvlink.domain hard (required): one GB200 NVLink domain (H100 has no
 #                 nvlink.domain label, so this only binds on GB200 capacity).
+#   nvlink.domain.preferred  soft (preferred) on the SAME nvlink.domain label: pack into as few
+#                 whole NVLink domains as possible. Reachable only via explicit config/group_by.
+#   nvlink.domain.sliced  PodSet-slice: partition a multi-rack GB200 gang into balanced per-rack
+#                 slices, each hard-bound to its own nvlink.domain, with a soft leafgroup
+#                 preference so the racks cluster on one IB leaf group.
 # A cluster whose Topology uses different levels overrides this via
 # kubernetes_provider.kueue.topologies. Priority classes have NO default: Iris
 # never invents WorkloadPriorityClass names (a missing one is rejected by
 # Kueue), so a band is stamped only when the config maps it explicitly.
-_CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
-    "leafgroup": (CW_LABEL_LEAFGROUP, False),
-    "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
+_CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
+    COSCHEDULE_LEAFGROUP: KueueTopologyBinding(CW_LABEL_LEAFGROUP, TopologyMode.PREFERRED),
+    COSCHEDULE_NVLINK_DOMAIN: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.REQUIRED),
+    COSCHEDULE_NVLINK_DOMAIN_PREFERRED: KueueTopologyBinding(CW_LABEL_NVLINK_DOMAIN, TopologyMode.PREFERRED),
+    COSCHEDULE_NVLINK_DOMAIN_SLICED: KueueTopologyBinding(
+        CW_LABEL_NVLINK_DOMAIN, TopologyMode.SLICE_REQUIRED, coarse_preferred_label=CW_LABEL_LEAFGROUP
+    ),
 }
+
+# Finest topology level (one node), the last level in both CoreWeave Topology CRs. The
+# GPU ResourceFlavor (cw-ib) is topology-aware, so Kueue rejects any GPU workload that
+# carries no topology request against it. A non-coscheduled GPU pod has no colocation
+# need, so it requests this always-satisfiable level as a soft preference — just enough
+# to be a valid TAS workload — so single-host GPU jobs admit instead of hanging.
+_KUEUE_SINGLE_POD_TOPOLOGY = "kubernetes.io/hostname"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,
@@ -223,7 +291,7 @@ def _constraints_to_node_selector(
         if c.op == job_pb2.CONSTRAINT_OP_EQ and c.HasField("value"):
             node_selector[label_key] = c.value.string_value
         else:
-            raise ValueError(
+            raise PodManifestError(
                 f"Unsupported constraint op={c.op} for key={c.key!r}: "
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
@@ -287,46 +355,37 @@ def _pod_name(task_id: JobName, attempt_id: int) -> str:
     return (prefix + suffix) if prefix else f"iris-task{suffix}"
 
 
-_STANDARD_MOUNTS = [
-    # (volume_name, container_path, kind)
-    ("workdir", "/app", "workdir"),
-    ("tmpfs", "/tmp", "tmpfs"),
-    ("uv-cache", "/uv/cache", "cache"),
-    ("cargo-registry", "/root/.cargo/registry", "cache"),
-    ("cargo-target", "/root/.cargo/target", "cache"),
-]
-
-
 def _build_volumes_and_mounts(
     cache_dir: str,
     has_accelerator: bool,
 ) -> tuple[list[dict], list[dict]]:
     """Build standard pod volumes and container volume mounts.
 
-    Workdir and tmpfs use emptyDir; cache mounts use hostPath so they persist
-    across pod restarts on the same node. /dev/shm is memory-backed with a
+    Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
+    they persist across pods on the same node. /dev/shm is memory-backed with a
     generous limit for GPU/TPU multi-process communication.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
-    to avoid running out of space installing torch+CUDA.
+    to avoid running out of space installing torch+CUDA. emptyDir is unaffected:
+    it lives under the kubelet root, which is on the node NVMe.
     """
     volumes: list[dict] = []
     mounts: list[dict] = []
-    for name, path, kind in _STANDARD_MOUNTS:
-        if kind in ("workdir", "tmpfs"):
-            volumes.append({"name": name, "emptyDir": {}})
-        else:
+    for spec in STANDARD_MOUNTS:
+        if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
-                    "name": name,
+                    "name": spec.name,
                     "hostPath": {
-                        "path": f"{cache_dir}/{path.strip('/').replace('/', '-')}",
+                        "path": f"{cache_dir}/{cache_host_dirname(spec.container_path)}",
                         "type": "DirectoryOrCreate",
                     },
                 }
             )
-        mounts.append({"name": name, "mountPath": path})
+        else:
+            volumes.append({"name": spec.name, "emptyDir": {}})
+        mounts.append({"name": spec.name, "mountPath": spec.container_path})
 
     shm_spec: dict = {"medium": "Memory"}
     if has_accelerator:
@@ -368,9 +427,9 @@ class PodConfig:
     # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
     # stamped (Kueue uses its default priority); Iris never invents class names.
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
-    # coscheduling group_by -> (node label, required?). Defaults to CoreWeave
+    # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
-    kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
     # PriorityBand -> Kubernetes PriorityClass name. Sets spec.priorityClassName.
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
@@ -411,8 +470,10 @@ def _build_init_container_spec(
     script_path = Path(__file__).parent / "bundle_fetch.py"
     bundle_script = script_path.read_text()
 
-    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": "/app"}]
-    init_mounts: list[dict] = [{"name": "workdir", "mountPath": "/app"}]
+    # The init container stages the bundle into the same volume the task reads it
+    # from, so both sides take the path and volume name from the one mount spec.
+    init_env: list[dict] = [{"name": "IRIS_WORKDIR", "value": WORKDIR_MOUNT.container_path}]
+    init_mounts: list[dict] = [{"name": WORKDIR_MOUNT.name, "mountPath": WORKDIR_MOUNT.container_path}]
     extra_volumes: list[dict] = []
     configmap_name: str | None = None
 
@@ -562,7 +623,7 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
     resolved = resolve_container_profile(profile)
 
     if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
-        raise ValueError(
+        raise PodManifestError(
             "container profile DOCKER_ACCESS is not supported on the Kubernetes backend "
             "(nodes run containerd, not dockerd, so there is no host docker socket); use "
             "the docker worker backend, or PRIVILEGED with an in-pod runtime"
@@ -584,6 +645,51 @@ def _security_context(profile: int, has_tpu: bool) -> dict:
         ctx["privileged"] = True
         ctx["allowPrivilegeEscalation"] = True
     return ctx
+
+
+def _topology_request_annotations(
+    binding: KueueTopologyBinding, *, group_by: str, num_tasks: int, gpu_count: int, task_ref: str
+) -> dict[str, str]:
+    """Kueue topology-request annotations for a coscheduled gang, per the binding's mode.
+
+    PREFERRED/REQUIRED bind the whole gang to one ``node_label`` domain (soft/hard). For a hard
+    nvlink.domain gang that exceeds a rack's guaranteed-schedulable slice — which could sit
+    unschedulable whenever a rack is short a node — this raises instead (the CLI never emits it;
+    the guard catches a programmatic or stale client).
+    SLICE_REQUIRED partitions the gang into balanced per-rack slices (size from
+    ``balanced_rack_slice_size``), each hard-bound to one nvlink.domain, and pairs a soft coarse
+    preference so the racks cluster on the IB fabric. The one-slice-per-rack guarantee holds only
+    for node-saturating pods and a gang that splits into equal, more-than-half-a-rack slices;
+    both are validated here.
+    """
+    node_label = binding.node_label
+    if binding.mode is TopologyMode.SLICE_REQUIRED:
+        if gpu_count != NVL72_GPUS_PER_NODE:
+            raise PodManifestError(
+                f"Coscheduled task {task_ref!r} uses sliced level {group_by!r}, which requires node-saturating "
+                f"NVL72 pods ({NVL72_GPUS_PER_NODE} GPUs each) so one slice fills whole nodes; got gpu_count={gpu_count}"
+            )
+        try:
+            slice_size = balanced_rack_slice_size(num_tasks)
+        except ValueError as e:
+            raise PodManifestError(
+                f"Coscheduled task {task_ref!r} on sliced level {group_by!r}: {e}. Round the gang size, or set "
+                f"group_by={COSCHEDULE_NVLINK_DOMAIN_PREFERRED!r} for loose (unbalanced) packing."
+            ) from e
+        annotations = {_KUEUE_SLICE_REQUIRED_TOPOLOGY: node_label, _KUEUE_SLICE_SIZE: str(slice_size)}
+        if binding.coarse_preferred_label:
+            annotations[_KUEUE_PREFERRED_TOPOLOGY] = binding.coarse_preferred_label
+        return annotations
+    if binding.mode is TopologyMode.REQUIRED:
+        if node_label == CW_LABEL_NVLINK_DOMAIN and num_tasks > SCHEDULABLE_RACK_NODES:
+            raise PodManifestError(
+                f"Coscheduled task {task_ref!r} requires a single {group_by!r} domain but num_tasks={num_tasks} "
+                f"exceeds the guaranteed-schedulable rack slice ({SCHEDULABLE_RACK_NODES} of an {RACK_SIZE}-node "
+                f"NVL72 rack). A hard NVLink-domain gang can hang if a rack is short a node; request "
+                f"<= {SCHEDULABLE_RACK_NODES} replicas, or use the sliced level for a larger balanced gang."
+            )
+        return {_KUEUE_REQUIRED_TOPOLOGY: node_label}
+    return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
 def _build_pod_manifest(
@@ -672,7 +778,7 @@ def _build_pod_manifest(
         "image": task_image,
         "imagePullPolicy": "IfNotPresent",
         "env": env_list,
-        "workingDir": "/app",
+        "workingDir": WORKDIR_MOUNT.container_path,
         "volumeMounts": vol_mounts,
         "command": ["bash", "-lc", _build_task_script(run_req)],
         # Without this, a non-zero exit leaves containerStatuses[].state.terminated
@@ -710,17 +816,24 @@ def _build_pod_manifest(
         "labels": labels,
     }
 
-    # Kueue gang admission for coscheduled jobs. Coscheduling requires Kueue:
-    # there is no non-Kueue colocation fallback, so a coscheduled job dispatched
-    # to a cluster where Kueue is not configured is a misconfiguration.
-    kueue_enabled = bool(run_req.coscheduling.group_by)
-    if kueue_enabled and not config.local_queue:
-        raise ValueError(
-            f"Coscheduled task {run_req.task_id!r} (group_by={run_req.coscheduling.group_by!r}) "
-            "requires Kueue gang admission, but Kueue is not configured. Install Kueue "
-            "(lib/iris/scripts/install_kueue.py) and set kubernetes_provider.kueue.cluster_queue."
-        )
-    if kueue_enabled:
+    # Every pod is admitted through Kueue: its accounting and preemption arbitrate
+    # all capacity. A GPU pod that bypassed Kueue would hold nodes Kueue can neither
+    # count in its topology bookkeeping nor select as a preemption victim, silently
+    # defeating priority preemption of lower-priority gangs; CPU-only pods route
+    # through it too, matching the cw-cpu ResourceFlavor. The composer enforces a
+    # configured LocalQueue for the K8s backend, so this is always set.
+    assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
+    labels[_KUEUE_QUEUE_NAME] = config.local_queue
+    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
+    # An unmapped band is not left unranked: Kueue derives the Workload's priority
+    # from the pod's own PriorityClass (spec.priorityClassName), so the
+    # iris-{production,interactive,batch} bands already order the queue. Iris never
+    # invents a WorkloadPriorityClass name (a missing one is rejected).
+    wpc = config.kueue_priority_classes.get(run_req.priority)
+    if wpc:
+        labels[_KUEUE_PRIORITY_CLASS] = wpc
+    is_gang = bool(run_req.coscheduling.group_by)
+    if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
         # unmapped value is a misconfiguration: it would gang atomically but
@@ -728,27 +841,28 @@ def _build_pod_manifest(
         # topology annotation exists to prevent. Fail fast before stamping.
         topo = config.kueue_topologies.get(group_by)
         if topo is None:
-            raise ValueError(
+            raise PodManifestError(
                 f"Coscheduled task {run_req.task_id!r} has group_by={group_by!r}, which has no "
                 f"topology mapping on this cluster (known: {sorted(config.kueue_topologies)}). "
                 "group_by must name a topology level the cluster provisioned; configure "
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        labels[_KUEUE_QUEUE_NAME] = config.local_queue
-        # Per-pod ordinal within the gang (0..total-1) for Kueue TAS rank assignment.
+        # Per-pod ordinal within the gang (0..total-1). Kueue's TAS assigns each pod a domain
+        # rank from it; for the sliced level it makes slice membership rank-contiguous.
         labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
-        # Stamp the WorkloadPriorityClass only when the cluster maps this band:
-        # an unmapped band gets Kueue's default priority, never an invented name.
-        wpc = config.kueue_priority_classes.get(run_req.priority)
-        if wpc:
-            labels[_KUEUE_PRIORITY_CLASS] = wpc
-        node_label, required = topo
-        anno_key = _KUEUE_REQUIRED_TOPOLOGY if required else _KUEUE_PREFERRED_TOPOLOGY
         metadata["annotations"] = {
             _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
-            anno_key: node_label,
+            **_topology_request_annotations(
+                topo, group_by=group_by, num_tasks=run_req.num_tasks, gpu_count=gpu_count, task_ref=run_req.task_id
+            ),
         }
+    elif gpu_count > 0:
+        # A non-coscheduled GPU pod still lands on the topology-aware cw-ib flavor, which
+        # Kueue will not admit without a topology request. It has no gang to colocate, so
+        # ask only for the finest, always-satisfiable level as a soft preference. CPU-only
+        # pods route to the non-TAS cw-cpu flavor and must NOT carry a topology annotation.
+        metadata["annotations"] = {_KUEUE_PREFERRED_TOPOLOGY: _KUEUE_SINGLE_POD_TOPOLOGY}
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is
@@ -795,11 +909,13 @@ def _build_pod_manifest(
         spec["hostNetwork"] = True
         spec["dnsPolicy"] = "ClusterFirstWithHostNet"
 
-    # Skip activeDeadlineSeconds for Kueue-gated pods: k8s counts it from pod
-    # creation, including time spent SchedulingGated waiting for admission, so
-    # a gang that waits on the autoscaler could hit DeadlineExceeded before it
-    # ever runs. The controller's own timeout accounting governs these.
-    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not kueue_enabled:
+    # Skip activeDeadlineSeconds for gangs only: k8s counts it from pod creation,
+    # including time a gang spends SchedulingGated while it waits for the autoscaler
+    # to provision every node, so a large gang could hit DeadlineExceeded before it
+    # ever runs. Single pods admit quickly and, on a K8s-only cluster, this is their
+    # only timeout enforcement (the controller's execution-timeout scan runs only for
+    # worker-daemon backends), so they keep the deadline.
+    if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to
@@ -835,13 +951,33 @@ def _task_container_status(pod: dict) -> dict | None:
     return statuses[0]
 
 
-def _is_infrastructure_failure(pod: dict) -> bool:
-    """Check if the pod failure was caused by infrastructure (OOM, eviction, etc.).
+def _has_disruption_target_condition(pod: dict) -> bool:
+    """True if the control plane marked this pod for infrastructure disruption.
 
-    Returns True when the terminated reason indicates the failure was NOT caused
-    by the application itself, so it should be classified as a worker/preemption
-    failure rather than an application failure.
+    See :data:`_DISRUPTION_TARGET_CONDITION` — the authoritative preemption/
+    eviction/drain signal, independent of the container exit code.
     """
+    for condition in pod.get("status", {}).get("conditions", []):
+        if condition.get("type") == _DISRUPTION_TARGET_CONDITION and condition.get("status") == "True":
+            return True
+    return False
+
+
+def _is_infrastructure_failure(pod: dict) -> bool:
+    """Check if the pod failure was caused by infrastructure (preemption, eviction, etc.).
+
+    Returns True when the failure was NOT caused by the application itself, so it
+    should be classified as a worker/preemption failure rather than an
+    application failure.
+    """
+    # Authoritative first: the control plane explicitly disrupted this pod
+    # (preempted/evicted/drained), regardless of how the container exited. This
+    # catches a preemption SIGKILLed after the grace period — reason="Error",
+    # exit 137 — which the terminated-reason whitelist below misses. A container
+    # that OOMs on its own cgroup limit carries no such condition and correctly
+    # falls through to an application failure.
+    if _has_disruption_target_condition(pod):
+        return True
     status = _task_container_status(pod)
     if status is None:
         # Pod-level eviction: the pod status reason indicates infrastructure.
@@ -851,13 +987,17 @@ def _is_infrastructure_failure(pod: dict) -> bool:
     return terminated.get("reason", "") in _INFRASTRUCTURE_FAILURE_REASONS
 
 
-def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
+def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
     Infrastructure failures (eviction, preemption) are reported as WORKER_FAILED
     so they count against max_retries_preemption.
     Application failures (non-zero exit code) are reported as FAILED so they
     count against max_retries_failure (default: 0, no retries).
+
+    ``status_message`` is set on every update so it clears (``""``) once the pod
+    runs or terminates and carries the waiting/admission one-liner while Pending
+    — the reconcile kernel only re-persists (and re-federates) it when it changes.
     """
     phase = pod.get("status", {}).get("phase", "Unknown")
     task_id = entry.task_id
@@ -868,6 +1008,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_BUILDING,
+            status_message=_pod_status_message(pod, workload),
         )
 
     if phase == "Running":
@@ -875,6 +1016,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_RUNNING,
+            status_message="",
         )
 
     if phase == "Succeeded":
@@ -882,9 +1024,11 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
             task_id=task_id,
             attempt_id=attempt_id,
             new_state=job_pb2.TASK_STATE_SUCCEEDED,
+            status_message="",
         )
 
-    # Failed or Unknown -- distinguish infrastructure vs application failure.
+    # Failed or Unknown -- distinguish infrastructure vs application failure. The
+    # error field carries the failure story, so clear the waiting one-liner.
     exit_code = _extract_exit_code(pod)
     if _is_infrastructure_failure(pod):
         new_state = job_pb2.TASK_STATE_WORKER_FAILED
@@ -896,6 +1040,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
         new_state=new_state,
         exit_code=exit_code,
         error=_extract_error(pod),
+        status_message="",
     )
 
 
@@ -966,19 +1111,28 @@ _GANG_GC_MAX_AGE_SECONDS = 60
 _PREEMPT_INTERVAL_SECONDS = 30
 
 
-def _has_gated_gang_pods(pods: list[dict]) -> bool:
-    """True when any Kueue gang pod is still held by a scheduling gate.
+def _has_gated_gpu_pods(pods: list[dict]) -> bool:
+    """True when any GPU-requesting pod is still held by a Kueue scheduling gate.
 
-    Kueue's webhook gates every pod carrying the queue-name label and removes
-    the gate only on Workload admission, so a surviving gate means the gang is
-    still waiting for capacity.
+    Kueue's webhook gates every pod carrying the queue-name label and removes the
+    gate only on Workload admission, so a surviving gate on a GPU pod — a gang member
+    or a single-pod GPU job, both of which now route through Kueue — means it is still
+    waiting for GPU capacity, the signal to evict foreign preemptible blockers holding
+    that capacity.
     """
     for pod in pods:
-        if _KUEUE_POD_GROUP_NAME not in pod.get("metadata", {}).get("labels", {}):
+        if not pod.get("spec", {}).get("schedulingGates"):
             continue
-        if pod.get("spec", {}).get("schedulingGates"):
+        if _pod_gpu_request(pod) > 0:
             return True
     return False
+
+
+def _run_req_gpu_count(run_req: job_pb2.RunTaskRequest) -> int:
+    """GPU count a task requests (0 for CPU-only), used to gate blocker eviction."""
+    if not run_req.HasField("resources") or not run_req.resources.HasField("device"):
+        return 0
+    return get_gpu_count(run_req.resources.device)
 
 
 def _pod_gpu_request(pod: dict) -> int:
@@ -1071,6 +1225,145 @@ def _format_kueue_workload_status(pod: dict, workload: dict | None) -> str:
     return f"Kueue workload {workload_name}: " + "; ".join(details)
 
 
+def _container_state_reason(pod: dict) -> tuple[str, str]:
+    """The task container's ``(reason, message)`` from its waiting or terminated
+    state, matched by container name; ``("", "")`` when the container is running,
+    absent, or carries no reason."""
+    status = _task_container_status(pod)
+    if status is None:
+        return "", ""
+    state = status.get("state", {})
+    for state_name in ("waiting", "terminated"):
+        if state_name in state:
+            return state[state_name].get("reason", ""), state[state_name].get("message", "")
+    return "", ""
+
+
+class _PodReason(NamedTuple):
+    reason: str
+    message: str
+    last_transition: Timestamp
+
+
+def _pod_reason_message(pod: dict, workload: dict | None) -> _PodReason:
+    """The reason a not-yet-running pod is not running.
+
+    The task container's waiting/terminated reason takes precedence; failing
+    that, the failing ``PodScheduled`` condition; and a Kueue-gated pod's message
+    carries the workload admission verdict. ``reason`` is ``""`` for a running or
+    otherwise quiet pod.
+    """
+    reason, message = _container_state_reason(pod)
+    last_ts = Timestamp.now()
+
+    if not reason:
+        for cond in pod.get("status", {}).get("conditions", []):
+            if cond.get("status") == "False":
+                reason = cond.get("reason", "")
+                message = cond.get("message", "")
+                last_transition_str = cond.get("lastTransitionTime", "")
+                if last_transition_str:
+                    try:
+                        dt = parse_k8s_timestamp(last_transition_str)
+                        last_ts = Timestamp.from_seconds(dt.timestamp())
+                    except (ValueError, AttributeError):
+                        pass
+                break
+    if reason == _REASON_SCHEDULING_GATED and pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME):
+        kueue_status = _format_kueue_workload_status(pod, workload)
+        message = f"{message}; {kueue_status}" if message else kueue_status
+    return _PodReason(reason, message, last_ts)
+
+
+def _pod_status_message(pod: dict, workload: dict | None) -> str:
+    """One-liner explaining why a pod is not running yet; "" when running or quiet."""
+    pr = _pod_reason_message(pod, workload)
+    if pr.reason and pr.message:
+        return f"{pr.reason}: {pr.message}"
+    return pr.reason or pr.message
+
+
+def _workload_for_pod(pod: dict, workloads_by_name: dict[str, dict]) -> dict | None:
+    """Resolve the Kueue workload for a pod from its pod-group label, if any."""
+    pod_group = pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME, "")
+    return workloads_by_name.get(pod_group) if pod_group else None
+
+
+# The layer that produced a task-event verdict, recorded as the event ``source``.
+_EVENT_SOURCE_CONTAINER = "k8s/container"
+_EVENT_SOURCE_KUEUE = "k8s/kueue"
+_EVENT_SOURCE_SCHEDULER = "k8s/scheduler"
+
+# Pod/container reasons that are always operator-actionable failures (rather than
+# a transient wait), surfaced as Warning-severity events.
+_WARNING_EVENT_REASONS = frozenset(
+    {
+        "ImagePullBackOff",
+        "ErrImagePull",
+        "InvalidImageName",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "RunContainerError",
+        "CrashLoopBackOff",
+        "Unschedulable",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _PodEvent:
+    """A scheduling/admission verdict for a not-yet-running pod, ready to record
+    as an ``iris.task_event`` row. ``severity`` is the k8s-style Normal/Warning."""
+
+    source: str
+    reason: str
+    message: str
+    severity: str
+
+
+def _workload_admission_blocked(workload: dict | None) -> bool:
+    """True when Kueue has evaluated the workload and cannot admit it yet.
+
+    A ``QuotaReserved=False`` condition carrying a reason means Kueue looked at
+    the workload and declined (quota/topology). A workload it has not evaluated
+    (no such condition) or has already admitted is not "blocked" — a freshly
+    gated pod that Kueue is about to admit should not read as an alarm.
+    """
+    if workload is None:
+        return False
+    for cond in workload.get("status", {}).get("conditions", []):
+        if cond.get("type") == "QuotaReserved" and cond.get("status") == "False" and cond.get("reason"):
+            return True
+    return False
+
+
+def _pod_event(pod: dict, workload: dict | None) -> _PodEvent | None:
+    """The scheduling/admission event for a not-yet-running pod, or ``None`` when
+    the pod is running or otherwise has nothing to record.
+
+    ``source`` attributes the verdict to the layer that produced it (the task
+    container, the Kueue gate, or the scheduler); ``severity`` is Warning for an
+    actionable failure (image pull, config error) or a Kueue-declined admission,
+    Normal for a transient wait.
+    """
+    pr = _pod_reason_message(pod, workload)
+    if not pr.reason:
+        return None
+
+    container_reason, _ = _container_state_reason(pod)
+    if container_reason and container_reason == pr.reason:
+        source = _EVENT_SOURCE_CONTAINER
+    elif pr.reason == _REASON_SCHEDULING_GATED and pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME):
+        source = _EVENT_SOURCE_KUEUE
+    else:
+        source = _EVENT_SOURCE_SCHEDULER
+
+    warning = pr.reason in _WARNING_EVENT_REASONS or (
+        source == _EVENT_SOURCE_KUEUE and _workload_admission_blocked(workload)
+    )
+    return _PodEvent(source=source, reason=pr.reason, message=pr.message, severity="Warning" if warning else "Normal")
+
+
 def _build_pod_statuses(
     pods: list[dict], workloads: list[dict] | None = None
 ) -> list[controller_pb2.Controller.KubernetesPodStatus]:
@@ -1084,46 +1377,17 @@ def _build_pod_statuses(
         task_id = labels.get(_LABEL_TASK_ID, "")
         node_name = pod.get("spec", {}).get("nodeName", "")
         phase = pod.get("status", {}).get("phase", "Unknown")
-        reason = ""
-        message = ""
-        last_ts = Timestamp.now()
-
-        container_statuses = pod.get("status", {}).get("containerStatuses", [])
-        if container_statuses:
-            state = container_statuses[0].get("state", {})
-            for state_name in ("waiting", "terminated"):
-                if state_name in state:
-                    reason = state[state_name].get("reason", "")
-                    message = state[state_name].get("message", "")
-                    break
-        if not reason:
-            conditions = pod.get("status", {}).get("conditions", [])
-            for cond in conditions:
-                if cond.get("status") == "False":
-                    reason = cond.get("reason", "")
-                    message = cond.get("message", "")
-                    last_transition_str = cond.get("lastTransitionTime", "")
-                    if last_transition_str:
-                        try:
-                            dt = parse_k8s_timestamp(last_transition_str)
-                            last_ts = Timestamp.from_seconds(dt.timestamp())
-                        except (ValueError, AttributeError):
-                            pass
-                    break
-        if reason == "SchedulingGated" and labels.get(_KUEUE_POD_GROUP_NAME):
-            pod_group = labels[_KUEUE_POD_GROUP_NAME]
-            kueue_status = _format_kueue_workload_status(pod, workloads_by_name.get(pod_group))
-            message = f"{message}; {kueue_status}" if message else kueue_status
+        pr = _pod_reason_message(pod, _workload_for_pod(pod, workloads_by_name))
 
         ps = controller_pb2.Controller.KubernetesPodStatus(
             pod_name=pod_name,
             task_id=task_id,
             phase=phase,
-            reason=reason,
-            message=message,
+            reason=pr.reason,
+            message=pr.message,
             node_name=node_name,
         )
-        ps.last_transition.CopyFrom(timestamp_to_proto(last_ts))
+        ps.last_transition.CopyFrom(timestamp_to_proto(pr.last_transition))
         statuses.append(ps)
     return statuses
 
@@ -1202,6 +1466,31 @@ class ClusterState:
             self._nodes = new_nodes
             self._workloads = new_workloads
             self._node_pools = list(node_pools)
+
+    def gpu_capacity(self) -> DeviceCapacity:
+        """Approximate free vs. total GPUs across the cluster.
+
+        Best-effort federation availability hint inferred from the last periodic
+        kubectl sync (no extra kubectl call): total ``nvidia.com/gpu`` allocatable
+        across nodes, with the free count subtracting what non-terminal pods
+        request. Counts GPUs on all nodes (GPU nodes are commonly tainted, and a
+        taint a GPU pod tolerates does not make the GPU unavailable). Deliberately
+        imperfect — it lags the sync and ignores per-node packing, which the
+        meta-scheduler tolerates (the peer's own Kueue is the backstop)."""
+        with self._lock:
+            nodes = self._nodes[:]
+            pods = self._pods[:]
+        allocatable = 0
+        for node in nodes:
+            gpu = node.get("status", {}).get("allocatable", {}).get(_GPU_RESOURCE)
+            if gpu:
+                allocatable += int(parse_k8s_quantity(str(gpu)))
+        requested = 0
+        for pod in pods:
+            if pod.get("status", {}).get("phase", "") in ("Succeeded", "Failed"):
+                continue
+            requested += _pod_gpu_request(pod)
+        return DeviceCapacity(free=max(0, allocatable - int(requested)), total=allocatable)
 
     def to_status_response(self, namespace: str) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Build the dashboard RPC response from current state. No kubectl calls."""
@@ -1331,6 +1620,56 @@ class ResourceCollector:
         self._thread.join(timeout=5)
 
 
+class TaskEventLog:
+    """Appends scheduling/admission events to the ``iris.task_event`` namespace.
+
+    Driven synchronously from the pod poll — no background thread, since the
+    verdicts come from the pod/workload lists ``sync`` already fetches.
+    ``observe`` is called once per tracked attempt per cycle with the attempt's
+    current verdict (or ``None`` when the pod is running/quiet); a row is written
+    only when the ``(source, reason, severity)`` verdict *changes*, so a pod
+    wedged in one state produces a single row, not one per poll — but a severity
+    upgrade (e.g. a gated pod Kueue later declines flips Normal→Warning under the
+    same source/reason) is a change and does record the actionable row. ``retain``
+    drops dedup state for attempts no longer polled so a retried attempt (new
+    ``attempt_id``) starts clean and the map stays bounded.
+    """
+
+    def __init__(self, task_event_table: Table):
+        self._table = task_event_table
+        # (task_id_wire, attempt_id) -> last written (source, reason, severity) verdict.
+        self._last_verdict: dict[tuple[str, int], tuple[str, str, str]] = {}
+
+    def observe(self, key: tuple[str, int], event: _PodEvent | None) -> None:
+        """Record ``event`` for the attempt ``key`` if its verdict has changed."""
+        if event is None:
+            return
+        verdict = (event.source, event.reason, event.severity)
+        if self._last_verdict.get(key) == verdict:
+            return
+        self._last_verdict[key] = verdict
+        row = TaskEventRow(
+            task_id=key[0],
+            attempt_id=key[1],
+            ts=stats_timestamp(),
+            type=event.severity,
+            reason=event.reason,
+            message=event.message,
+            source=event.source,
+            count=1,
+        )
+        try:
+            self._table.write([row])
+        except Exception:
+            logger.debug("TaskEventLog: write to iris.task_event failed", exc_info=True)
+
+    def retain(self, active: set[tuple[str, int]]) -> None:
+        """Forget verdicts for attempts not in ``active`` (terminal or gone)."""
+        for key in list(self._last_verdict):
+            if key not in active:
+                del self._last_verdict[key]
+
+
 def _get_pod_node_name(kubectl: K8sService, pod_name: str) -> str:
     """Return the pod's spec.nodeName, or empty string if unschedulable / not yet bound."""
     try:
@@ -1422,7 +1761,7 @@ class K8sTaskProvider:
     env_secret_name: str = ""
     local_queue: str = ""
     kueue_priority_classes: dict[int, str] = field(default_factory=dict)
-    kueue_topologies: dict[str, tuple[str, bool]] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
+    kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
     # Namespaces whose preemptible (negative-priority) GPU pods Iris evicts
     # when it has gang work for Kueue. Empty disables the feature; see
@@ -1433,6 +1772,10 @@ class K8sTaskProvider:
     # resource collector is disabled. K8s pods ship their own logs via the
     # log-shipper sidecar, so the backend needs only the tables, not the client.
     task_stats_table: Table | None = None
+    # Pre-resolved iris.task_event Table handle, passed alongside task_stats_table.
+    # When None (tests without finelog) the scheduling/admission event log is
+    # disabled; task state still flows, only the diagnostic timeline is skipped.
+    task_event_table: Table | None = None
     # Pre-resolved iris.profile Table handle, passed alongside task_stats_table.
     # None in test mode.
     profile_table: Table | None = None
@@ -1449,7 +1792,6 @@ class K8sTaskProvider:
     name: str = "kubernetes"
     # Routing metadata the meta-scheduler reads, set by the composer via configure_routing.
     advertised: dict[str, set[str]] = field(default_factory=dict)
-    allowed_users: frozenset[str] = frozenset({"*"})
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
     # A cluster backend tracks no Iris worker liveness; the controller's union read
@@ -1461,6 +1803,7 @@ class K8sTaskProvider:
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
+    _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
@@ -1479,15 +1822,34 @@ class K8sTaskProvider:
             )
         return self._resource_collector
 
+    def _ensure_task_event_log(self) -> TaskEventLog | None:
+        if self.task_event_table is None:
+            return None
+        if self._task_event_log is None:
+            self._task_event_log = TaskEventLog(self.task_event_table)
+        return self._task_event_log
+
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return user_admitted(self.allowed_users, user)
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
+
+    def resource_capacity(self) -> dict[str, DeviceCapacity] | None:
+        """Free and total GPUs inferred from the periodic kubectl cluster sync.
+
+        Kueue owns placement, so there is no per-worker Iris capacity view here; instead
+        we infer best-effort GPU counts from the cached node/pod state
+        (:meth:`ClusterState.gpu_capacity`) and attribute them to this backend's
+        advertised GPU ``device-variant`` so a parent's ``available:<variant>`` gate
+        lines up. Only when the backend advertises exactly one GPU variant can the
+        GPUs be attributed unambiguously; otherwise it returns ``None`` (unset —
+        shape-only federation)."""
+        variants = self.advertised.get(WellKnownAttribute.DEVICE_VARIANT)
+        if not variants or len(variants) != 1:
+            return None
+        variant = next(iter(variants)).strip().lower()
+        return {variant: self._cluster_state.gpu_capacity()}
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
@@ -1542,16 +1904,32 @@ class K8sTaskProvider:
         and continue to run on an idle cluster (the controller never gates a
         cluster backend's reconcile on having work) so orphaned pods are reaped.
         """
-        # Free GPU capacity for incoming gangs before their pods are created:
-        # Kueue TAS computes node capacity at admission, so blockers must be
-        # gone (or terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(r.coscheduling.group_by for r in request.tasks_to_run):
-            self._evict_preemptible_blockers(reason="coscheduled gang submission", force=True)
+        # Free GPU capacity for any incoming GPU pod before it is created (gang
+        # member or single-pod GPU job — both route through Kueue): Kueue TAS
+        # computes node capacity at admission, so blockers must be gone (or
+        # terminating) by the time it evaluates the new Workload.
+        if self.preempt_namespaces and any(_run_req_gpu_count(r) > 0 for r in request.tasks_to_run):
+            self._evict_preemptible_blockers(reason="GPU pod submission", force=True)
 
         apply_failures: list[TaskUpdate] = []
         for run_req in request.tasks_to_run:
             try:
                 self._apply_pod(run_req)
+            except PodManifestError as exc:
+                logger.error("Task %s has an invalid manifest and cannot be scheduled: %s", run_req.task_id, exc)
+                # The request itself is invalid, so it can never produce a pod: every
+                # retry rebuilds the same broken manifest, wedging this backend's
+                # reconcile tick (the error would otherwise escape sync and abort the
+                # remaining applies/polls). Fail the task terminally with the reason
+                # instead of the retryable WORKER_FAILED used for transient apply loss.
+                apply_failures.append(
+                    TaskUpdate(
+                        task_id=JobName.from_wire(run_req.task_id),
+                        attempt_id=run_req.attempt_id,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error=str(exc),
+                    )
+                )
             except KubectlError as exc:
                 logger.error("Failed to apply pod for task %s: %s", run_req.task_id, exc)
                 # The pod was never created, so there is no k8s verdict to track
@@ -1581,9 +1959,10 @@ class K8sTaskProvider:
         )
 
         # Blockers can also appear AFTER submission (health checks target any
-        # idle GPU node), so keep evicting while a gang waits for admission.
-        if self.preempt_namespaces and _has_gated_gang_pods(managed_pods):
-            self._evict_preemptible_blockers(reason="gang pods held SchedulingGated awaiting Kueue admission")
+        # idle GPU node), so keep evicting while any GPU pod waits gated for
+        # Kueue admission.
+        if self.preempt_namespaces and _has_gated_gpu_pods(managed_pods):
+            self._evict_preemptible_blockers(reason="GPU pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
         for run_req in request.tasks_to_run:
@@ -1591,22 +1970,23 @@ class K8sTaskProvider:
         for entry in request.running_tasks:
             desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
         self._delete_stray_pods(managed_pods, desired_keys)
-        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods)
+
+        # Fetched before polling so a still-Pending pod's status_message can carry the
+        # Kueue admission verdict (why a gated pod is not being admitted). Tolerates an
+        # empty list on a degraded tick — the message then omits the Kueue detail.
+        try:
+            workloads = self.kubectl.list_json(K8sResource.WORKLOADS)
+        except Exception as e:
+            logger.warning("Failed to query Kueue workloads: %s", e)
+            workloads = []
+
+        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods, workloads)
 
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)
         except Exception as e:
             logger.warning("Failed to query node resources: %s", e)
             nodes = []
-
-        if self.local_queue:
-            try:
-                workloads = self.kubectl.list_json(K8sResource.WORKLOADS)
-            except Exception as e:
-                logger.warning("Failed to query Kueue workloads: %s", e)
-                workloads = []
-        else:
-            workloads = []
 
         node_pools = _fetch_node_pools(self.kubectl, self.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
@@ -2068,7 +2448,9 @@ class K8sTaskProvider:
             )
         return pods
 
-    def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
+    def _poll_pods(
+        self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None
+    ) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
         Uses the pre-fetched active-pods list (terminal pods excluded by field
@@ -2087,9 +2469,12 @@ class K8sTaskProvider:
         if not running:
             if self._resource_collector is not None:
                 self._resource_collector.set_pods({})
+            if self._task_event_log is not None:
+                self._task_event_log.retain(set())
             return []
 
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
+        workloads_by_name = _kueue_workloads_by_name(workloads or [])
         updates: list[TaskUpdate] = []
 
         # Resolve running tasks whose pod has left the active list (completed or
@@ -2105,10 +2490,12 @@ class K8sTaskProvider:
         # appended directly to iris.task by the collector; the controller no
         # longer multiplexes them through TaskUpdate.
         resource_pods: dict[tuple[str, int], str] = {}
+        event_log = self._ensure_task_event_log()
 
         for entry in running:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
+            event_key = (entry.task_id.to_wire(), entry.attempt_id)
             pod = pods_by_name.get(pod_name)
 
             if pod is None:
@@ -2136,20 +2523,26 @@ class K8sTaskProvider:
                         attempt_id=entry.attempt_id,
                         new_state=gone_state,
                         error="Pod not found",
+                        status_message="",
                     )
                 )
                 continue
 
             self._pod_not_found_counts.pop(cursor_key, None)
-            update = _task_update_from_pod(entry, pod)
+            workload = _workload_for_pod(pod, workloads_by_name)
+            update = _task_update_from_pod(entry, pod, workload)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":
-                resource_pods[(entry.task_id.to_wire(), entry.attempt_id)] = pod_name
+                resource_pods[event_key] = pod_name
+            if event_log is not None:
+                event_log.observe(event_key, _pod_event(pod, workload))
 
             updates.append(update)
 
         resource_collector = self._ensure_resource_collector()
         if resource_collector is not None:
             resource_collector.set_pods(resource_pods)
+        if event_log is not None:
+            event_log.retain({(entry.task_id.to_wire(), entry.attempt_id) for entry in running})
 
         return updates

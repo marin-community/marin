@@ -133,6 +133,19 @@ message Controller {
   message FederationHandoff {
     string requester_id = 1;     // the handing-off (parent) cluster's id
     string owner_principal = 2;  // the end-user identity the parent asserts
+    // The authenticated principal that submitted the root (an email, or
+    // "local_admin"). Unlike owner_principal (a friendly, caller-chosen name),
+    // this is the parent's verified identity and the key a peer's per-cluster
+    // allowlist gates on. The peer re-checks it against the same claim carried in
+    // the federation JWT before trusting it (defense in depth).
+    string submitting_user = 3;
+    // Identifies one parent-side handoff incarnation. A re-drive of the same
+    // handle repeats it; a resubmission that replaced the parent's job mints a
+    // new one. The peer matches it against the nonce stored on its RECEIVED
+    // handle: equal means idempotent replay (return the existing job), different
+    // means a new incarnation (the existing-job policy applies, so a finished
+    // previous run is replaced and re-run).
+    string handoff_nonce = 4;
   }
 
   message LaunchJobResponse {
@@ -390,6 +403,10 @@ message Controller {
     string task_id = 4;              // Wire-format task ID (e.g. "/user/job/0")
     map<string, string> metadata = 5;
     EndpointAccess access = 6;       // Proxy access mode.
+    // Owning peer cluster id when this endpoint lives on a federated child (the
+    // controller reaches it by forwarding /proxy to that peer); empty for a local
+    // endpoint served from this controller's own registry.
+    string peer_id = 7;
   }
 
   message RegisterEndpointRequest {
@@ -652,14 +669,37 @@ message Controller {
     }
   }
 
+  // How much of each consumable resource a backend has free right now. Wrapped in
+  // a message (not a bare map on BackendSummary) so a peer that predates the field
+  // is distinguishable from one reporting an authoritative zero: proto3 cannot tell
+  // an omitted map from an empty one, but it CAN tell an unset message from a set
+  // one. UNSET => legacy peer, the parent falls back to shape-only federation for
+  // that backend; SET with empty amounts => authoritative "nothing free".
+  message ResourceAvailability {
+    // Metric-semantics version. A parent that does not recognize the version treats
+    // the availability as unknown rather than trusting the amounts.
+    uint32 version = 1;
+    // When the serving peer computed these amounts, ms since epoch. The parent's
+    // reservation ledger keys on this as the observation GENERATION: reservations
+    // made against one observation are held until a strictly newer one arrives.
+    int64 observation_epoch_ms = 2;
+    // Free amount per resource token, in the token's natural unit (accelerator
+    // variant -> free chips, e.g. {"h100": 8}). Keys are lowercased device-variants.
+    map<string, int64> amounts = 3;
+    // Total amount per resource token over the same capacity the free amounts were
+    // computed from (accelerator variant -> total chips, e.g. {"h100": 64}). Same
+    // keys as `amounts`; a token's free amount never exceeds its total. Display
+    // only — the federation availability gate reads `amounts` alone.
+    map<string, int64> total_amounts = 4;
+  }
+
   message BackendSummary {
     string backend_id = 1;
     string name = 2;
     string kind = 3;
     repeated string capabilities = 4;
     map<string, StringList> advertised_attributes = 5;
-    bool restricted = 6;
-    int32 allowed_user_count = 7;
+    reserved 6, 7;  // was: bool restricted, int32 allowed_user_count
     repeated string scale_groups = 8;
     int32 worker_count = 9;
     int32 pending_task_count = 10;
@@ -668,6 +708,8 @@ message Controller {
     map<string, int32> capacity_health = 13;
     // Expanded per-backend status for the always-on Backends tab's detail panel.
     BackendStatus detail = 14;
+    // Free consumable capacity for federation queueing; unset on a legacy peer.
+    ResourceAvailability availability = 15;
   }
 
   message UnroutableJob {
@@ -688,9 +730,9 @@ message Controller {
   // execution substrate this controller drives and folds into its own DAG; a
   // peer owns its own DAG and is handed whole jobs.
   message PeerSummary {
+    reserved 3;  // was dashboard_url (a peer's jobs and tasks are mirrored into the local dashboard)
     string peer_id = 1;
     string controller_address = 2;
-    string dashboard_url = 3;
     bool reachable = 4;               // last capability heartbeat succeeded
     int64 last_contact_ms = 5;        // last successful capability heartbeat, ms since epoch
     int32 active_federated_jobs = 6;
@@ -728,6 +770,24 @@ message Controller {
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
   }
 
+  // One service endpoint exported by a handed-off (RECEIVED) job on the peer.
+  // Reported as the peer's full current set each sync (independent of the job
+  // changelog cursor), so the parent set-replaces and a re-register, access
+  // change, or lease expiry self-heals within one sync interval. No proxy
+  // address of the parent's is carried: the parent reaches the endpoint by
+  // forwarding /proxy to the peer, keyed by the reporting peer's id.
+  message FederationEndpoint {
+    string endpoint_id = 1;
+    string name = 2;                 // Globally-unique wire name, e.g. "/serve/foo"
+    string address = 3;              // Peer-side host:port (service-discovery parity / display)
+    string task_id = 4;              // Wire-format task id that registered it; FKs the mirrored task
+    EndpointAccess access = 5;       // Proxy access mode the parent enforces for its users
+    map<string, string> metadata = 6;
+    // Lease time remaining, not an absolute deadline: the parent sets its mirror's
+    // expiry to now + this (clamped), sidestepping cross-cluster clock skew.
+    iris.time.Duration lease_remaining = 7;
+  }
+
   message FederationSyncResponse {
     repeated FederationJobDelta deltas = 1;
     string next_cursor = 2;   // persisted to federation_sync_state.cursor; sent back next tick
@@ -735,6 +795,10 @@ message Controller {
     // `deltas` is the peer's entire active set for this requester and the parent
     // must set-replace: drop any local handle for this peer absent from the set.
     bool cursor_stale = 3;
+    // The requester's full current endpoint set across all its RECEIVED jobs, sent
+    // every sync regardless of `cursor_stale`. The parent set-replaces its remote
+    // endpoints for this peer from it.
+    repeated FederationEndpoint endpoints = 4;
   }
 }
 

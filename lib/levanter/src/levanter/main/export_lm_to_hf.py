@@ -13,6 +13,7 @@ import jax
 from haliax import Axis
 
 import levanter
+import levanter.config
 import levanter.utils.logging as logging_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, RepoRef, load_tokenizer

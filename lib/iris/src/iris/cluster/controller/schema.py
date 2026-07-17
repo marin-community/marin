@@ -247,6 +247,12 @@ jobs_table = Table(
     # Plain owner string: roles are resolved from the config-derived RolePolicy
     # (see controller/auth.py), so there is no ``users`` table to anchor an FK to.
     Column("user_id", String, nullable=False),
+    # The authenticated principal that submitted this job, distinct from the
+    # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
+    # CIDR/loopback (null-auth) submission. Drives per-cluster federation
+    # authorization; a child inherits its root's value and a federated handoff
+    # carries it as a signed claim the receiving peer re-checks.
+    Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
     Column("root_job_id", String, nullable=False),
     Column("depth", Integer, nullable=False),
@@ -342,6 +348,11 @@ tasks_table = Table(
     Column("priority_insertion", Integer, nullable=False),
     Column("priority_band", Integer, nullable=False, server_default="2"),
     Column("container_id", String),
+    # Backend status one-liner for a waiting/building task (the current reason it is
+    # not running yet, e.g. the Kubernetes pod/Kueue admission verdict). NULL/"" when
+    # running or when the backend has nothing to say. Served as TaskStatus.status_message
+    # and mirrored across federation.
+    Column("status_message", String),
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
     Column("backend_id", String, nullable=False, server_default=""),
@@ -438,18 +449,6 @@ task_attempts_table = Table(
 )
 
 
-backends_table = Table(
-    "backends",
-    metadata,
-    Column("backend_id", String, primary_key=True),
-    Column("kind", String, nullable=False, server_default=""),
-    Column("status", Integer, nullable=False, server_default="0"),
-    Column("attributes_json", String, nullable=False, server_default="{}"),
-    Column("allow_policy_json", String, nullable=False, server_default="{}"),
-    Column("last_seen_ms", Integer),
-)
-
-
 workers_table = Table(
     "workers",
     metadata,
@@ -516,9 +515,15 @@ endpoints_table = Table(
     # existing DB without a backfill; a NULL is read as PRIVATE (today's
     # cluster-identity-required behavior), so pre-migration rows are unchanged.
     Column("access", Integer, nullable=True),
+    # Owning peer cluster id for an endpoint mirrored from a federated child; NULL
+    # for a locally-registered endpoint. The /proxy route forwards a remote row to
+    # this peer's controller instead of dialing `address` directly. Set-replaced by
+    # the federation sync loop, keyed to the mirrored (cluster=peer) job/task rows.
+    Column("peer_id", String, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
+    Index("idx_endpoints_peer_id", "peer_id"),
 )
 
 
@@ -588,6 +593,10 @@ federated_jobs_table = Table(
     Column("owner_principal", String, nullable=False, server_default=""),  # end-user identity
     Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF | HANDOFF_REJECTED
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
+    # One handoff incarnation: minted per SENT handle, carried on the delivered
+    # request, stored on the peer's RECEIVED row. A re-drive repeats it; a
+    # resubmission mints a new one — how the peer tells a replay from a new run.
+    Column("handoff_nonce", String, nullable=False, server_default=""),
     Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )
 

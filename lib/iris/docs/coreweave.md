@@ -9,10 +9,15 @@ the full operator runbook (RBAC, NodePools, Kueue, troubleshooting).
 
 Active clusters:
 
-| Iris cluster | CW cluster / region | Fleet | Kubeconfig |
-|--------------|---------------------|-------|------------|
-| `cw-us-east-02a` | `marin-gpu`, US-EAST-02A | 32× 8xH100 + 4× CPU Genoa, pinned warm | `~/.kube/coreweave-iris-gpu` |
-| `cw-rno2a` | `marin-rn02a`, RNO2A | 64× 8xH100 + 1× CPU Turin, pinned warm | `~/.kube/coreweave-iris-rno2a` |
+All clusters share one kubeconfig at `~/.kube/coreweave-iris`; each cluster
+config pins its own `kube_context` inside it, so iris/kubectl operations are
+context-bound per `--cluster` and never depend on the file's current-context
+or an exported `KUBECONFIG`.
+
+| Iris cluster | CW cluster / region | Fleet | Kube context |
+|--------------|---------------------|-------|--------------|
+| `cw-us-east-02a` | `marin-gpu`, US-EAST-02A | 32× 8xH100 + 4× CPU Genoa, pinned warm | `marin-gpu_US-EAST-02A` |
+| `cw-rno2a` | `marin-rn02a`, RNO2A | 64× 8xH100 + 1× CPU Turin, pinned warm | `marin-rn02a_RNO2A` |
 
 Console links:
 - Tokens (kubeconfig): https://console.coreweave.com/tokens
@@ -20,21 +25,27 @@ Console links:
 - Health dashboard: https://cks-grafana.coreweave.com/d/cluster-health/cluster-health?var-cluster-org=208261&var-cluster=marin-gpu&var-region=US-EAST-02
 
 **1. Make a token / kubeconfig.** In the [Tokens console](https://console.coreweave.com/tokens),
-create a token for the cluster and download its kubeconfig.
+create a token and download the kubeconfig — it carries a context per cluster
+(named `<cw-cluster>_<REGION>`).
 
-**2. Install the kubeconfig** at the path from the table above, plus controller
-extras and CoreWeave Object Storage credentials:
+**2. Install the kubeconfig** at `~/.kube/coreweave-iris`, plus controller
+extras:
 
 ```bash
 mkdir -p ~/.kube
-mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris-gpu
-export KUBECONFIG=~/.kube/coreweave-iris-gpu
-kubectl cluster-info   # sanity check
+mv ~/Downloads/kubeconfig.yaml ~/.kube/coreweave-iris
+kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts   # sanity check
 
 uv pip install 'marin-iris[controller]'
-export CW_KEY_ID=<coreweave-access-key-id>
-export CW_KEY_SECRET=<coreweave-access-key-secret>
 ```
+
+No `KUBECONFIG` export is needed: the cluster configs pin `kubeconfig_path` and
+`kube_context`, and every operation binds to that context explicitly.
+
+That's all a job submitter needs. `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave
+Object Storage access keys) are only required when running
+`iris cluster start` — they seed the in-cluster `iris-task-env` Secret (see
+"Storage defaults" below).
 
 **3. Check cluster status.** `--cluster=cw-us-east-02a` resolves the in-tree
 config and opens a `kubectl port-forward` to the controller for you:
@@ -62,6 +73,18 @@ uv run iris --cluster=cw-us-east-02a job run \
 
 Follow logs of a detached job with
 `uv run iris --cluster=cw-us-east-02a job logs <job-id> -f`.
+
+**Storage defaults.** CoreWeave clusters default to CoreWeave AI Object
+Storage — no per-job storage setup is needed:
+
+- `MARIN_PREFIX` is preset to `s3://marin-us-east-02a/marin` (via
+  `defaults.task_env` in the cluster config) on both clusters.
+- Task pods carry the CoreWeave Object Storage S3 configuration and
+  credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_ENDPOINT_URL`, `FSSPEC_S3`, ...) via the platform-managed
+  `iris-task-env` Secret, so `s3://` reads/writes work out of the box.
+- Task pods carry ONE endpoint/credential set. Data on other S3-compatible
+  stores is not reachable unless the job overrides `AWS_*`/`FSSPEC_S3` itself.
 
 ## 1. Overview
 
@@ -142,75 +165,117 @@ Key architectural properties:
 - **Public images**: All images on `ghcr.io/marin-community/` are public. No
   `imagePullSecrets` required.
 
-### Off-cluster endpoint access (exposing only `/proxy`)
+### CoreWeave controller networking (IP-locked to marin)
 
 The controller Service is `ClusterIP:10000` — reachable only in-cluster or via a
-`kubectl port-forward`. To let an off-cluster caller (e.g. a Daytona/Modal sandbox
-running an agent harness) reach a registered endpoint through the controller
-proxy, `start_controller` publishes only the `/proxy` path with an Ingress — it
-is part of controller setup, not a manual step. Unlike the GCP arm there is no
-IAP layer, so the controller's own per-endpoint auth is the sole gate: register
-the endpoint `PRIVATE` (a cluster identity / JWT) or `LINK` (a scoped capability
-URL — possession of the link is the credential) — the same access modes as the
-GCP path. Keep `auth.provider` set (never null-auth) so `PRIVATE`/`LINK` are
-actually enforced.
+`kubectl port-forward`. CoreWeave has no user surface of its own: end users reach
+Iris through `iris.oa.dev` (IAP) and the GCP `marin` controller federates jobs
+outward, so the only external caller of a CoreWeave controller is marin. Its one
+off-cluster ingress is therefore locked to marin's egress IP — there is no
+world-open route.
 
-CKS ships no ingress controller and no TLS issuer, so two cluster-wide,
-install-once prerequisites must be in place first — install them with
-`scripts/install_traefik_proxy.py` (operator-run; dry-run without `--apply`):
+`marin` federates whole jobs by dialing the CoreWeave RPC surface directly (the
+pull model — CoreWeave must be reachable *inbound*; a peer behind NAT with no
+ingress is out of scope). The auth surface is two factors, both required and
+neither alone sufficient:
+
+1. **IP allowlist** — a Traefik `ipAllowList` Middleware admits only the egress IPs
+   of the marin-side controllers that federate here (`FEDERATION_ALLOW_SOURCES` in
+   `install_cw_network.py`). The *network* factor.
+2. **The controller's own auth** — the `aud="federation"` verifier for the handoff
+   RPCs, the general auth chain for the rest. The *identity* factor.
+
+Because the controller is the identity gate, it **must be enforcing** — a
+permissive (null-auth) controller behind only an IP lock hands anonymous admin over
+its whole control plane to anything from the allowlisted IP. Both CoreWeave
+controllers enforce via `auth.trusted_cidrs`: in-cluster peers (RFC1918 pods/nodes,
+loopback for `kubectl port-forward`) authenticate by network location, while an
+off-cluster request arrives through Traefik with an appended `X-Forwarded-For`,
+never matches a CIDR, and must present a bearer.
+
+CKS ships no ingress controller and no TLS issuer, and the controller's own
+ServiceAccount can't install CRDs, so an operator runs `scripts/install_cw_network.py`
+once per cluster to set up everything the controller can't do itself — Traefik,
+cert-manager, the HTTP-01 Let's Encrypt issuers, and the single IP-locked ingress
+that publishes the whole controller host to marin. It is idempotent and warns if
+pointed at a still-permissive controller; dry-run without `--apply`:
 
 ```bash
-# Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
-uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> install --acme-email you@oa.dev --apply
-# Tear it back down (releases, namespaces, CRDs/webhooks/RBAC/IngressClass), verified:
-uv run lib/iris/scripts/install_traefik_proxy.py --cluster <name> uninstall --apply
+# Traefik + cert-manager + HTTP-01 issuers + the IP-locked ingress, in one pass.
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> \
+    install --acme-email you@oa.dev --allow-source <marin-egress-ip> --apply
+# Reconcile just the ingress on a cluster whose stack is already installed
+# (e.g. to flip staging->prod once the cert validates):
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> install \
+    --allow-source <marin-egress-ip> --skip-traefik --skip-cert-manager --skip-issuers \
+    --cluster-issuer letsencrypt-http01-prod --apply
+# Tear it all back down (ingress, releases, namespaces, CRDs/webhooks/RBAC), verified:
+uv run lib/iris/scripts/install_cw_network.py --cluster <name> uninstall --apply
 ```
 
-Then configure the controller's `coreweave` block. `start_controller` reconciles
-(idempotently, on every start) a path-restricted `iris-controller-proxy` Ingress
-that keeps the dashboard and RPC surface cluster-internal and publishes just
-`/proxy`; cert-manager auto-issues the TLS cert into `tls_secret`:
+The ingress is a standalone object, so applying it does **not** restart the
+controller. If CoreWeave's LoadBalancer SNATs (Traefik sees the LB, not the real
+client), pass `--xff-depth 1` so the allowlist reads the client IP from
+`X-Forwarded-For`; confirm a request from a non-allowlisted host is refused.
 
-```yaml
-controller:
-  coreweave:
-    scale_group: cpu
-    # Publish only /proxy off-cluster. Empty host = ClusterIP only (no ingress).
-    public_proxy_host: iris-cw.oa.dev
-    ingress_class: traefik                    # CoreWeave's blessed controller
-    tls_secret: iris-controller-proxy-tls
-    cluster_issuer: letsencrypt-http01-prod   # cert-manager auto-issues into tls_secret
-```
+#### External address and DNS (`oa.dev` -> `coreweave.app`)
 
-`start_controller` warns (never fails) if the `IngressClass` is absent — the
-Ingress is applied anyway and starts serving once Traefik is present. A plain
-`type: LoadBalancer` Service on the controller port would be simpler but exposes
-the whole origin (RPC surface included, JWT-gated only); the path-restricted
-Ingress keeps only `/proxy` public.
-
-#### External address and DNS (`oa.dev` → `coreweave.app`)
-
-The external address is served by Traefik's LoadBalancer, not the controller
-Pod, and CoreWeave gives it a stable FQDN under `*.coreweave.app` — you never
-chase a churning IP. `install_traefik_proxy.py install --apply` prints the exact
-CNAME record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS
-is at Namecheap, Advanced DNS panel.
-
-Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
-Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s
-printed off-cluster capability URLs are usable as-is). The
-`coreweave.app` name is only a stable CNAME target — all routing, Host matching,
-and TLS are on the `oa.dev` name.
+The external address is served by Traefik's LoadBalancer, not the controller Pod.
+CoreWeave publishes a wildcard record, `*.<tenant>.coreweave.app`, that resolves to
+that LoadBalancer. `install_cw_network.py install --apply` prints the exact CNAME
+record to create, substituting the ingress host's first label into the wildcard
+(`iris-cw-<cluster>.oa.dev  CNAME  iris-cw-<cluster>.<tenant>.coreweave.app`); `oa.dev`
+DNS is at Namecheap, Advanced DNS panel. Routing, Host matching, and TLS all key on
+the `oa.dev` name; `coreweave.app` is only the CNAME target.
 
 TLS terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
-`install_traefik_proxy.py` creates HTTP-01 Let's Encrypt ClusterIssuers
+`install_cw_network.py` creates HTTP-01 Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's bundled issuers only cover `*.coreweave.app` (DNS-01 via
-`acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs
-the CNAME live first (Let's Encrypt fetches `http://<host>/.well-known/...`);
-issue with `letsencrypt-http01-staging` first to avoid LE rate limits, then flip
-`cluster_issuer` to prod. Leave `tls_secret`/`cluster_issuer` empty for plain
-HTTP (dev only).
+`acme.coreweave.com`), so a custom `oa.dev` host needs these. HTTP-01 needs the
+CNAME live first (Let's Encrypt fetches `http://<host>/.well-known/...`); issue with
+the staging issuer first to avoid LE rate limits, then re-run with
+`--cluster-issuer letsencrypt-http01-prod`. cert-manager's HTTP-01 solver runs on
+its own unrestricted Ingress, so the IP allowlist does not block ACME validation.
+
+**Verify from the marin controller VM:**
+
+- `ListBackends` **with** the federation JWT from the allowlisted egress IP -> succeeds.
+- the same call **without** the JWT (controller enforcing) -> `UNAUTHENTICATED`.
+- the same call from a **non-allowlisted IP** -> refused (`403`).
+
+#### Stable egress IPs for the marin controllers
+
+The allowlist names each federating controller by address, so every one of them
+needs a **stable** egress IP: `iris-controller-marin` and `iris-controller-marin-dev`,
+reserved as `iris-marin-fed-egress` and `iris-marin-dev-fed-egress`. A controller's
+GCE VM (zone `us-central1-a`, project `hai-gcp-models`) is created with an
+*ephemeral* external IP, which changes on stop/start. Make it stable **without
+touching the VM** by promoting that in-use address to a reserved static IP — same
+address, no access-config change, no restart:
+
+```bash
+PROJECT=hai-gcp-models ZONE=us-central1-a REGION=us-central1 VM=iris-controller-marin
+# 1. Read the VM's current external IP.
+EGRESS_IP=$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+echo "marin controller egress IP: $EGRESS_IP"
+# 2. Promote that exact IP to a reserved static address (idempotent; no VM change,
+#    no connectivity drop — the VM keeps the same address).
+gcloud compute addresses create iris-marin-fed-egress --project "$PROJECT" \
+  --region "$REGION" --addresses "$EGRESS_IP"
+```
+
+Add `$EGRESS_IP` to `FEDERATION_ALLOW_SOURCES`, which is what `--allow-source`
+defaults to. The Middleware's `sourceRange` is replaced wholesale on every install
+rather than merged, so an install naming a subset strands the omitted controller at
+a `403` the peer never logs. Reserving an in-use address is safe and reversible
+(`gcloud compute addresses delete iris-marin-fed-egress` releases it back to
+ephemeral). **Alternative** (only if the controller is later moved to
+IAP-only inbound with *no* external IP, so egress goes through Cloud NAT): reserve
+a regional static IP and pin Cloud NAT to it (`gcloud compute routers nats update
+… --nat-external-ip-pool=iris-marin-fed-egress`). Removing the VM's external IP is
+a larger change — do it only with explicit approval, never as a side effect here.
 
 ## 3. Tools
 
@@ -256,20 +321,32 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Images pushed to `ghcr.io/marin-community/`
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
-For S3 storage, export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage
-access keys); `iris cluster start` folds them — plus the derived
+CoreWeave clusters default to CoreWeave AI Object Storage, and the cluster configs
+give two endpoints for it. `object_storage_endpoint: http://cwlota.com` is LOTA, the
+in-cluster cache, which pods use. `external_object_storage_endpoint:
+https://cwobject.com` reaches the same buckets from an operator's own machine, which
+`iris` uses for its own S3 calls — among them the rollout record that
+`iris cluster controller restart` reads. LOTA's name resolves to a private address,
+so both fields are needed on a cluster an operator drives from outside.
+
+Export `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave Object Storage access keys) before
+`iris cluster start`; it folds them — plus the derived
 endpoint/region/`FSSPEC_S3` config — into the `iris-task-env` Secret, projected
-into the controller and task pods via `envFrom`.
+into the controller and task pods via `envFrom`. From then on every task has
+working S3 credentials embedded; job submitters never handle storage keys.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured
-> (including JAX/tensorstore checkpointing). In-cluster consumers should use
-> `http://cwlota.com` — LOTA, the node-local cache endpoint; use
-> `https://cwobject.com` from outside CoreWeave.
+> (including JAX/tensorstore checkpointing).
 
 ### CoreWeave AI Object Storage access
 
-Use `s3://marin-us-east-02a` for CoreWeave-local object storage. The bucket is
+Use `s3://marin-us-east-02a` for CoreWeave-local object storage — it is the
+shared bucket for both clusters, and `MARIN_PREFIX` is preset to
+`s3://marin-us-east-02a/marin` in every task. **Inside the cluster none of the
+setup below is needed**: task pods already carry the endpoint, addressing
+style, and credentials (see "Storage defaults" in §0). The rest of this
+section is for access from *outside* CoreWeave (laptop, GCP). The bucket is
 browsable in the
 [CoreWeave console](https://console.coreweave.com/object-storage/buckets/marin-us-east-02a).
 Follow CoreWeave's
@@ -344,10 +421,52 @@ uv run python lib/iris/scripts/install_kueue.py --variant coreweave \
   --kubeconfig <kubeconfig> --with-queues --apply
 ```
 
-This installs the CoreWeave `cks-kueue` chart, the Topology CRs, and the
-cluster-scoped `cw-ib` ResourceFlavor + `iris-cq` ClusterQueue. Iris reconciles
-its namespaced LocalQueue (`{label_prefix}-lq`) at controller start, bound via
-`kubernetes_provider.kueue.cluster_queue`.
+This installs the CoreWeave `cks-kueue` chart, the Topology CRs, the
+cluster-scoped `cw-ib` + `cw-cpu` ResourceFlavors, and the `iris-cq` ClusterQueue.
+Iris reconciles its namespaced LocalQueue (`{label_prefix}-lq`) at controller
+start, bound via `kubernetes_provider.kueue.cluster_queue`.
+
+**Flavor routing.** Every pod on the k8s backend routes through Kueue (not just
+gangs), so `iris-cq` carries two flavors in one resourceGroup:
+
+- **`cw-ib`** selects InfiniBand nodes (`backend.coreweave.cloud/flavor=infiniband`)
+  and binds the `infiniband` Topology for TAS. GPU pods request `nvidia.com/gpu` +
+  `rdma/ib` and match here.
+- **`cw-cpu`** (listed first) zeroes the `nvidia.com/gpu` and `rdma/ib` quota, so a
+  GPU pod can never be admitted under it and falls through to `cw-ib`, while a
+  CPU-only pod matches `cw-cpu`. It is **selector-less** by default — its spec is
+  empty, so Kueue injects no `nodeSelector` and the admitted CPU pod stays
+  schedulable on any node. It prefers CPU nodes (GPU nodes carry a soft
+  `PreferNoSchedule` taint) but reuses idle GPU nodes when CPU capacity is full,
+  instead of being fenced onto CPU-only capacity. Pass `--cpu-flavor-node-label
+  KEY=VALUE` to pin `cw-cpu` to specific CPU nodes instead.
+
+**GB200 NVLink-domain placement.** NVL72 nodes (GB200/GB300, `gb200-4x` — 4
+Blackwell GPUs each) carry `ds.coreweave.com/nvlink.domain`; one NVL72 rack is one
+NVLink domain of 18 physical nodes, of which CoreWeave keeps only **16 schedulable
+at once** (the rest absorb host failures and maintenance — a floor, not a cap).
+Iris picks a placement level per multi-node GB200 gang from its replica count:
+
+- **≤ 16 nodes** bind **hard** to a single `nvlink.domain`
+  (`podset-required-topology`) — the whole gang shares one rack's NVLink fabric.
+  16 is the largest hard single-domain gang; binding a 17–18-node gang hard would
+  demand a fully-healthy rack and could sit unschedulable whenever one is short a
+  node.
+- **> 16 nodes** use Kueue **PodSet slices** (`podset-slice-required-topology:
+  nvlink.domain` + a computed `podset-slice-size`). The gang is split evenly over
+  the fewest racks that hold ≤ 16 nodes each, and each slice is hard-bound to its
+  own NVLink domain, so it lands as an exact **balanced N-rack layout**: 24 → 12+12,
+  32 → 16+16, 48 → 16+16+16. Because two slices always exceed a rack (each is more
+  than half of 18), no two share a rack. A soft `leafgroup` preference is paired so
+  the racks also cluster on one IB leaf group.
+
+The sliced level requires **node-saturating pods** (one pod = one whole `gb200-4x`
+node = 4 GPUs) so a slice fills whole nodes, and a gang size that splits into equal,
+more-than-half-a-rack slices — sizes that cannot (e.g. 17, 18, 40) are rejected at
+submit. PodSet slices need **Kueue ≥ 0.13**; use **0.18+** for the `IsTAS()`
+recognition fix for slice-only pod groups (upstream #10282). On an older Kueue the
+slice annotations are silently ignored and a multi-rack gang degrades to a soft
+leafgroup gang with no per-rack NVLink guarantee.
 
 **Never install Kueue with unscoped admission webhooks on a CoreWeave cluster.**
 The script scopes them to the `iris` namespace (`--pod-namespace`); the chart
@@ -361,36 +480,159 @@ On a zero-node cluster the install's controller-rollout wait times out (the
 manager has nowhere to schedule) — provision the controller node first, or
 re-run the install after it is Ready.
 
-### Bringing up a new cluster
+### Bringing up a new cluster (end-to-end rollout runbook)
 
-1. Download the kubeconfig (§0) to `~/.kube/coreweave-iris-<region>` and export
-   `KUBECONFIG`, `CW_KEY_ID`, `CW_KEY_SECRET`.
-2. Copy an existing cluster config pair — `lib/iris/config/cw-*.yaml` and
-   `lib/finelog/config/cw-*.yaml` — and adjust region, instance types, and
-   fleet sizes. The console capacity view's display label is NOT the k8s
-   `spec.instanceType` (e.g. "turin-gp-l4" vs `turin-gp-l`); to probe a SKU,
-   create a NodePool with `minNodes: 0, maxNodes: 0, targetNodes: 0` and read
-   its `Validated` condition (server dry-run accepts any string).
-   For a reserved/prepaid fleet set `buffer_slices: max_slices` — there is
-   nothing to save by autoscaling it down.
-3. Install Kueue (previous section). On a brand-new cluster expect the
-   controller-rollout wait to time out; continue.
-4. `iris --cluster=<name> cluster start`. On a zero-node cluster this creates
-   the NodePools (kicking off node delivery) and then fails at the LocalQueue
-   step because the Kueue webhook has no backend yet — expected.
-5. Once the controller node is Ready, re-run the Kueue install (`--with-queues`)
-   and `cluster start`; both are idempotent and now complete.
-6. Verify assumptions against a live GPU node before trusting multi-host NCCL:
-   `NCCL_SOCKET_IFNAME` (the host ethernet PF carrying the node IP — same SKU
-   has different PCI names per region, e.g. `enp157s0np0` on US-EAST-02A vs
-   `enp90s0np0` on RNO2A; check with a job running `ls /sys/class/net`), and
-   scale-group `cpu`/`ram`/`disk` against `kubectl get node -o
-   jsonpath={.status.allocatable}`.
-7. Deploy finelog (`uv run finelog deploy up <name> --no-build` — the default
-   `--build` compiles the Rust server image first), point the iris config's
-   `finelog.config` at it, and `cluster start` again.
-8. Smoke: a CPU hello-world, an 8-GPU `jax.devices()` job, then the multinode
-   grug smoke (below).
+The ordered sequence to take a fresh CKS cluster to a reachable, federated,
+log-forwarding Iris cluster. `cw-us-east-08a` (a GB200 NVL72 fleet) is the worked
+example; substitute your `<cluster>`. Steps marked **(console)** or **(manual)**
+are the only ones not driven from a repo checkout on the cluster's branch — an
+operator does them in the CoreWeave console or the DNS registrar.
+
+**One-time prerequisites**
+
+- **(console)** CKS cluster created (Console or Terraform). Kubeconfig from
+  Console > Tokens installed at `~/.kube/coreweave-iris`; the context is
+  `<cks-name>_<REGION>` (e.g. `marin-us-east-08a_US-EAST-08A`).
+- **(console)** Object-storage bucket created (Console or `cwic`) and an Object
+  Storage access key: `export CW_KEY_ID=… CW_KEY_SECRET=…`.
+- Local tooling: `uv pip install 'marin-iris[controller]'`; `docker login
+  ghcr.io` with a `write:packages` PAT (`cluster start` builds + pushes images);
+  `gcloud auth application-default login` (ADC — `init-keys` and the deploy-time
+  `gcp-secret://` resolution read Secret Manager through it).
+
+**1. Write the cluster config.** Copy an existing `lib/iris/config/cw-*.yaml` and
+adjust `name`, region, `platform.coreweave.kube_context`, the CKS
+`provisioning.coreweave.cluster.name`, scale groups, and fleet sizes. The console
+capacity view's display label is NOT the k8s `spec.instanceType` (e.g.
+"turin-gp-l4" vs `turin-gp-l`); to probe a SKU, create a NodePool with `minNodes:
+0, maxNodes: 0, targetNodes: 0` and read its `Validated` condition (server
+dry-run accepts any string). For a reserved/prepaid fleet set `buffer_slices ==
+max_slices` — there is nothing to save by autoscaling it down. GB200 NVL72
+deploys in whole racks of 18, so a rack pool's node count must be a multiple of
+18.
+
+**2. Provision the static prerequisites (IaC).** The `infra/iac` Pulumi program
+declares the namespace, controller RBAC, the reserved NodePools, and the whole
+cluster-scoped Kueue substrate (`cks-kueue` release, Topology CRs, `cw-ib`
+ResourceFlavor, `iris-cq` ClusterQueue, `iris-system` PriorityClass) from the
+`provisioning:` section of the config. See `infra/iac/README.md`. (Pre-IaC path:
+`install_kueue.py --with-queues` for Kueue and let `cluster start` create the
+RBAC + NodePools.)
+
+**3. Mint the controller signing key.** The cluster's identity — signs every
+worker/proxy token it mints.
+
+```bash
+uv run iris cluster init-keys \
+  --gcp-secret projects/<project-number>/secrets/iris-<cluster>-signing-key
+```
+
+Creates the secret and stores the private key as **version 1**; pin that version
+in `auth.signing_key` alongside the `env:IRIS_SIGNING_KEY` marker. The
+credential-less controller pod never reads Secret Manager: at deploy time the
+operator's shell resolves the `gcp-secret://` ref and projects it into the
+`iris-controller-env` Secret. `--rotate` replaces it later.
+
+**4. Start the controller.**
+
+```bash
+export CW_KEY_ID=… CW_KEY_SECRET=…
+uv run iris --cluster=<cluster> cluster start
+uv run iris --cluster=<cluster> cluster status
+```
+
+Builds + pushes the controller/worker/task images, then applies (idempotently)
+the `iris-cluster-config` ConfigMap, the `iris-task-env` + `iris-controller-env`
+Secrets, the namespaced LocalQueue (`{label_prefix}-lq`), the controller
+Deployment + Service + PDB, and waits for rollout. Needs a Ready controller-pool
+node (the `cpu-*` scale group); on a still-delivering cluster the Deployment
+stays Pending until one lands.
+
+**5. Install the network stack, then the DNS record.** Publishes the controller
+off-cluster behind an IP-locked ingress.
+
+```bash
+uv run lib/iris/scripts/install_cw_network.py --cluster <cluster> \
+  install --acme-email <ops-email> --apply           # staging cert first
+```
+
+Installs Traefik + cert-manager + the HTTP-01 Let's Encrypt issuers + the
+federation `Ingress` (Traefik `ipAllowList` admitting only marin's egress IPs).
+Read the CNAME target off the Traefik LoadBalancer's `*.coreweave.app` wildcard:
+
+```bash
+kubectl get svc traefik -n traefik \
+  -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
+```
+
+**(manual)** Create the record in the `oa.dev` registrar (**Namecheap**, Advanced
+DNS panel — not Cloudflare):
+
+```
+iris-cw-<cluster>.oa.dev   CNAME   iris-cw-<cluster>.<tenant>.coreweave.app
+```
+
+The CNAME must be live before TLS issuance (HTTP-01 validates through Traefik).
+Once it resolves and the staging cert validates, flip to the prod issuer:
+
+```bash
+uv run lib/iris/scripts/install_cw_network.py --cluster <cluster> install \
+  --cluster-issuer letsencrypt-http01-prod \
+  --skip-traefik --skip-cert-manager --skip-issuers --apply
+```
+
+**6. Register federation (hub → cluster).** So marin/marin-dev can route jobs in.
+Add an address-only peer entry (no key — the cluster already trusts the hubs via
+its own `auth.federation_peers`) under `peers:` in both `lib/iris/config/marin.yaml`
+and `lib/iris/config/marin-dev.yaml`:
+
+```yaml
+  <cluster>:
+    controller_address: https://iris-cw-<cluster>.oa.dev
+```
+
+**7. Wire finelog (roll the hub first).** Until this lands the controller logs to
+an in-process store (lost on restart).
+
+```bash
+# Mint the forwarding key by hand (Ed25519); keep the printed PUBLIC half.
+openssl genpkey -algorithm ed25519 -out /tmp/<cluster>.pem
+openssl pkey -in /tmp/<cluster>.pem -pubout
+gcloud secrets create finelog-<cluster>-signing-key --project=<project> \
+  --replication-policy=automatic --labels=component=finelog,purpose=forwarding
+gcloud secrets versions add finelog-<cluster>-signing-key --project=<project> \
+  --data-file=/tmp/<cluster>.pem
+shred -u /tmp/<cluster>.pem
+```
+
+- Add a `- cluster: <cluster>` entry with that **public** key under the `jwt`
+  layer of `lib/finelog/config/marin.yaml`, then **roll the hub before the
+  sender** — a sender whose key the hub doesn't yet trust gets 401:
+  `uv run finelog deploy restart marin`.
+- Create `lib/finelog/config/<cluster>.yaml` (copy an existing one; set `name`,
+  `remote_log_dir`, `kube_context`, `object_storage_endpoint`,
+  `forwarding.cluster`, and `forwarding.signing_key`), then deploy the sender:
+  `uv run finelog deploy up <cluster> --no-build` (the default `--build`
+  recompiles the Rust image first). finelog archives to **Cloudflare R2**
+  (`s3://marin-na/finelog/<cluster>`, the R2 `object_storage_endpoint`),
+  authenticated by `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` in the deploy
+  shell — *not* the CoreWeave `CW_KEY_*` keys iris uses for its own
+  `marin-us-east-*` state and task storage. Pointing `remote_log_dir` at a
+  CoreWeave bucket with R2 keys (or vice-versa) fails the archive with
+  `403 InvalidAccessKeyId`.
+- Add `finelog: { config: <cluster> }` to the iris config and `cluster start`
+  again to pick it up. CI enforces the pairing: a sender config cannot merge
+  until some hub's `jwt` layer names its cluster.
+
+**8. Verify node assumptions before trusting multi-host NCCL:**
+`NCCL_SOCKET_IFNAME` (the host ethernet PF carrying the node IP — same SKU has
+different PCI names per region, e.g. `enp157s0np0` on US-EAST-02A vs `enp90s0np0`
+on RNO2A; check with a job running `ls /sys/class/net`), and scale-group
+`cpu`/`ram`/`disk` against `kubectl get node -o
+jsonpath={.status.allocatable}`.
+
+**9. Smoke:** a CPU hello-world, an 8-GPU `jax.devices()` job, then the multinode
+grug smoke (below).
 
 ### Connecting
 
@@ -410,7 +652,7 @@ auto-tunneled CoreWeave commands fail before connecting:
 Fallback: manual port-forward if you need a long-lived tunnel:
 
 ```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris \
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <kube_context> \
   port-forward -n <namespace> svc/<service_name> 10000:10000 &
 iris --controller-url=http://localhost:10000 ...
 ```
@@ -457,8 +699,11 @@ uv run iris --cluster=<cluster> job run \
   -e SCALE_GPU_REPLICAS 2 -e SCALE_HIDDEN_DIM 1024 -e SCALE_NUM_LAYERS 8 \
   -e SCALE_NUM_EXPERTS 16 -e SCALE_TOP_K 2 -e SCALE_BATCH 32 \
   -e SCALE_SEQ_LEN 1024 -e SCALE_STEPS 10 -e RUN_ID <run-id> \
-  -- python -m experiments.grug.moe.launch_cw_scale
+  -- python -m experiments.grug.moe.launch_cw_scale --version dev --run
 ```
+
+`--version` sets the checkpoint version (required; `dev` to iterate) and `--run` builds it —
+without `--run` the launcher prints the lowered plan and exits.
 
 Success signals: every replica enters `initialize_jax` with
 `IRIS_NUM_TASKS=<replicas>`, steps complete, a checkpoint commits, and the
@@ -531,6 +776,18 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
+- **A controller restart can CrashLoop on a stale node-local state DB.** The
+  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
+  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
+  different CPU node. If that node holds a corrupt leftover state DB from an earlier
+  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
+  trusts it (skips the checkpoint restore) and crashes with `database disk image is
+  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
+  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
+  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
+  checkpoint makes a stale node restore the clean checkpoint, and landing back on
+  the current controller node reuses its good DB. A persistently bad node needs its
+  `local_state_dir/db` wiped so startup falls back to the checkpoint.
 
 Cold-start timings:
 
@@ -570,6 +827,7 @@ in `CoreweavePlatform`):
 | `region` | string | — | CoreWeave region (e.g. `RNO2A`) |
 | `namespace` | string | `iris` | Kubernetes namespace for all resources |
 | `kubeconfig_path` | string | — | Only needed when running CLI outside the cluster |
+| `kube_context` | string | — | Kubeconfig context to bind every operation to; empty uses the file's current-context |
 | `object_storage_endpoint` | string | — | S3-compatible endpoint URL |
 
 ### CoreweaveControllerConfig
@@ -598,10 +856,41 @@ in `CoreweavePlatform`):
 | `cache_dir` | string | — | **Must point to NVMe** (see warning below) |
 | `runtime` | string | — | Set to `kubernetes` for CoreWeave (enables Pod-per-task) |
 
-> **Warning — Disk layout**: CoreWeave bare-metal nodes have a **15 GB RAM disk**
-> as the root filesystem and multi-TB NVMe at `/mnt/local`. The `cache_dir` must
+> **Warning — Disk layout**: CoreWeave bare-metal nodes boot a **15 GB RAM disk**
+> as the root filesystem, with the node's NVMe RAID (`/dev/md127`, 7.7 TB on CPU
+> nodes, 15–31 TB on GPU nodes) mounted at `/mnt/local`. The `cache_dir` must
 > point to NVMe (e.g. `/mnt/local/iris-cache`). Using the default root path will
 > fill the RAM disk immediately and cause Pod eviction.
+>
+> Only `cache_dir` needs this: the kubelet root is on the NVMe, so task `emptyDir`
+> volumes (`/app`, `/tmp`) and container writable layers already land there.
+
+### Task storage layout
+
+Task pods use no PVCs — nothing on the task path touches the `shared-vast`
+(distributed) storage class, which backs only the controller state and finelog
+caches. Every task volume is node-local NVMe:
+
+| Container path | Volume | Lifetime |
+|----------------|--------|----------|
+| `/app`, `/tmp` | `emptyDir` (kubelet root) | Pod |
+| `/uv/cache`, `/hf/cache`, `/cargo` | `hostPath` under `cache_dir` | Node |
+| `/dev/shm` | `emptyDir` (memory) | Pod |
+
+Iris points `UV_CACHE_DIR`, `HF_HUB_CACHE`, and `CARGO_HOME` at those
+`hostPath` mounts for every task, including tasks that bring their own image, so
+wheels and model weights are fetched once per node rather than once per task.
+`HF_HOME` is deliberately not among them. It holds the submitter's `HF_TOKEN`, so
+it stays under the pod's own `$HOME` (`iris job run` defaults it to
+`~/.cache/huggingface`) rather than a directory every task on the node can read.
+`HF_HUB_CACHE` covers the part worth sharing: the content-addressed blobs.
+
+The `cache_dir` tree is never pruned; it grows until the node is rebuilt or an
+operator clears it. Watch it on long-lived reserved fleets:
+
+```bash
+kubectl exec -n iris <pod> -c task -- du -sh /uv/cache /hf/cache
+```
 
 ### Startup grace period
 
@@ -715,7 +1004,7 @@ The platform detects fatal errors before the full timeout expires:
 
 | Variable | Purpose |
 |----------|---------|
-| `KUBECONFIG` | Path to kubeconfig (alternative to `kubeconfig_path` in config) |
+| `KUBECONFIG` | Overrides the config's `kubeconfig_path` (file only — the config's `kube_context` still binds the context) |
 | `CW_KEY_ID` | S3/CoreWeave Object Storage access key (required if storage uses `s3://`) |
 | `CW_KEY_SECRET` | S3/CoreWeave Object Storage secret key |
 | `CW_ACCESS_KEY_ID` | CoreWeave Object Storage key ID |
@@ -735,6 +1024,7 @@ The platform detects fatal errors before the full timeout expires:
 | `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for CoreWeave Object Storage endpoints |
 | `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
+| `MARIN_PREFIX` | `defaults.task_env` (cluster config) | Preset to `s3://marin-us-east-02a/marin` on both CoreWeave clusters |
 
 ## 11. Timeouts
 
@@ -896,9 +1186,10 @@ by polling.
 | Kubeconfig file | Operator's kubectl access | Console > Tokens > Download Kubeconfig |
 | CoreWeave Object Storage access key | S3-compatible access to CoreWeave buckets | Console > Object Storage > Access Keys |
 
-The `kubeconfig_path` config field is only needed when running the CLI
-**outside** the cluster (e.g., `iris cluster start` from a laptop). Inside the
-cluster, Pods use in-cluster auth automatically.
+The `kubeconfig_path` / `kube_context` config fields are only needed when
+running the CLI **outside** the cluster (e.g., `iris cluster start` from a
+laptop). Inside the cluster, Pods use in-cluster auth automatically (both
+fields are stripped from the `iris-cluster-config` ConfigMap).
 
 ## 15. Open Questions / Known Limitations
 
@@ -952,6 +1243,13 @@ kubectl logs <pod> -n iris --previous    # Logs from the last crash
 
 If `cache_dir` is not set to `/mnt/local/...`, the 15 GB root RAM disk fills
 instantly. Fix in config and redeploy.
+
+A pod evicted for `ephemeral-storage` while `cache_dir` is correct is a different
+fault: that limit comes from the task's own `disk` resource request and covers
+only `emptyDir` plus the container layer, not the `hostPath` caches. Either the
+task is writing large files under `/app` or `/tmp`, or it is writing to a cache
+path Iris does not mount (check `env | grep -iE 'CACHE|HF_'` against the task
+storage layout above) and needs a larger `disk` request.
 
 ## 17. References
 

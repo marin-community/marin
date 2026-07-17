@@ -23,12 +23,14 @@ from enum import StrEnum
 from typing import Any
 
 import dupekit
-from fray import ResourceConfig
+from fray.types import ResourceConfig
 from pydantic import BaseModel
-from rigging.filesystem import prefix_join, url_to_fs
-from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from zephyr import counters
+from zephyr.dataset import Dataset, ShardInfo
+from zephyr.execution import ZephyrContext
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
-from zephyr.writers import ThreadedBatchWriter
+from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
 from marin.execution.step_spec import StepSpec
@@ -45,6 +47,10 @@ DEFAULT_MAX_WHITESPACE_RUN_CHARS = 128
 
 # Counter name for documents that had whitespace runs compacted.
 COMPACTED_WHITESPACE_COUNTER = "datakit_normalize_compacted_whitespace"
+
+# Default Zephyr worker cap. Sized well above Zephyr's own default (128) because
+# a single normalize spans thousands of shards over very large staged dumps.
+DEFAULT_MAX_WORKERS = 1024
 
 
 class DedupMode(StrEnum):
@@ -86,6 +92,12 @@ def generate_id(text: str) -> str:
     return format(dupekit.hash_xxh3_128(text.encode("utf-8")), "032x")
 
 
+def _text_from_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
@@ -113,7 +125,7 @@ def _make_normalize_fn(
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
-        text = str(record[text_field])
+        text = _text_from_value(record[text_field])
 
         # --- source_id (skip silently if id_field absent) ---
         source_id = record.get(id_field)
@@ -210,11 +222,7 @@ def _discover_files(
 
 def _compute_total_bytes(file_paths: list[str]) -> int:
     """Sum the byte sizes of all *file_paths*."""
-    total = 0
-    for path in file_paths:
-        fs, resolved = url_to_fs(path)
-        total += fs.size(resolved)
-    return total
+    return sum(StoragePath(path).size() for path in file_paths)
 
 
 def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -330,7 +338,7 @@ def _build_pipeline(
 
     def has_text(record: dict[str, Any]) -> bool:
         text = record.get(text_field)
-        if text is None or str(text).strip() == "":
+        if text is None or _text_from_value(text).strip() == "":
             counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
             return False
         return True
@@ -362,7 +370,7 @@ def normalize_to_parquet(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
@@ -412,8 +420,6 @@ def normalize_to_parquet(
         aggregated zephyr counters.
     """
     resources = worker_resources or ResourceConfig(cpu=2, ram="32g", disk="10g")
-    if max_workers is None:
-        max_workers = 1024
 
     files = _discover_files(input_path, file_extensions=file_extensions)
     if not files:
@@ -441,10 +447,7 @@ def normalize_to_parquet(
         max_whitespace_run_chars,
         bare=bare,
     )
-    ctx_kwargs: dict = {"name": "normalize", "resources": resources}
-    if max_workers is not None:
-        ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
+    ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
     outcome = ctx.execute(pipeline)
     counters_dict = dict(outcome.counters)
 
@@ -473,7 +476,7 @@ def normalize_step(
     target_partition_bytes: int = 256 * 1024 * 1024,
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
+    max_workers: int = DEFAULT_MAX_WORKERS,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
@@ -491,8 +494,8 @@ def normalize_step(
         target_partition_bytes: Target size per output partition.
         worker_resources: Per-worker resource request for the Zephyr pipeline.
             See :func:`normalize_to_parquet` for the default.
-        max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
-            own default (128 for distributed backends).
+        max_workers: Maximum number of Zephyr workers. Defaults to
+            ``DEFAULT_MAX_WORKERS`` (1024).
         output_path_prefix: Optional prefix for the normalized step output.
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
@@ -524,7 +527,6 @@ def normalize_step(
     # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
-
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(

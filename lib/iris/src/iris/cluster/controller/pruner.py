@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.controller import ops, reads, writes
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
@@ -64,9 +64,10 @@ def _prune_terminal_jobs(
             break
         with db.transaction() as cur:
             # Invalidate endpoint cache BEFORE the CASCADE so the cache
-            # drops rows SQLite is about to delete for us.
+            # drops rows SQLite is about to delete for us. delete_job then drops
+            # the derived-count and run-template memos its CASCADE would strand.
             cur.caches[EndpointsProjection].remove_by_job_ids(cur, [job_name])
-            ops.job.purge_job(cur, job_name)
+            writes.delete_job(cur, job_name)
         log_event("job_pruned", job_name.to_wire())
         deleted += 1
         time.sleep(pause)
@@ -142,7 +143,7 @@ def prune_old_data(
     scheduling and heartbeats proceed.
 
     Args:
-        db: Controller DB — job pruning routes ``purge_job`` through a write cursor so
+        db: Controller DB — job pruning routes ``delete_job`` through a write cursor so
             each CASCADE also drops the job's derived-count memo (reached via
             ``cur.caches``); slice/endpoint prunes use the same handle and reach
             ``EndpointsProjection`` the same way.

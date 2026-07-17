@@ -21,18 +21,20 @@ import copy
 import ipaddress
 import logging
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 
-import fsspec
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
+from rigging.filesystem import StoragePath
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
+from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
+    AUTO_DEVICE_VARIANT,
     DEFAULT_BACKEND_ID,
     LOCAL_CLUSTER,
     AcceleratorType,
@@ -204,7 +206,13 @@ class CoreweavePlatformConfig(_Config):
     region: str = ""
     namespace: str = ""  # default: "iris"
     kubeconfig_path: str = ""  # optional; in-cluster auth if empty
+    kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     object_storage_endpoint: str = ""  # S3 base endpoint, not bucket-specific
+    # The same buckets as addressed from outside CoreWeave, for an operator running
+    # `iris` on their own machine. CoreWeave's in-cluster endpoint is a private-address
+    # cache that only a pod can resolve, so a config that names one needs the other too.
+    # Empty falls back to object_storage_endpoint.
+    external_object_storage_endpoint: str = ""
 
 
 class PlatformConfig(_OneofConfig):
@@ -459,16 +467,9 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
-    # When set, start_controller creates an Ingress publishing ONLY /proxy
-    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
-    # auth.provider set. See docs/coreweave.md.
-    public_proxy_host: str = ""
-    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
-    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
-    # cert-manager ClusterIssuer. When set, the Ingress is annotated
-    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
-    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
-    cluster_issuer: str = ""
+    # IngressClass the operator-managed federation ingress binds to; see
+    # scripts/install_cw_network.py and docs/coreweave.md.
+    ingress_class: str = "traefik"
 
 
 class ControllerVmConfig(_OneofConfig):
@@ -557,6 +558,19 @@ class AuthConfig(_OneofConfig):
     # and NOT secret. Served on JWKS alongside the current key during a rotation
     # overlap so verifiers accept tokens minted by the prior key.
     previous_public_keys: tuple[str, ...] = ()
+    # Inbound federation trust — this cluster acting as a peer that receives whole
+    # jobs. Maps a parent cluster id to its published EdDSA public key (a
+    # SubjectPublicKeyInfo PEM, inline, non-secret). The dedicated federation JWT
+    # verifier trusts exactly these issuers under aud="federation", kept off the
+    # control-plane audience set so a federation bearer never becomes a full RPC
+    # identity. Empty leaves inbound federation closed (no token verifies).
+    federation_peers: dict[str, str] = Field(default_factory=dict)
+    # Which submitters this cluster admits via an inbound federation handoff, keyed
+    # on the asserted submitting_user — allow-policy syntax ("*", "*@domain", or an
+    # exact identity). Empty admits none (fail closed); a receiving cluster narrows
+    # it explicitly, e.g. ["*@openathena.ai"]. A local_admin (CIDR/loopback) identity
+    # is never a valid federation submitter regardless of this list.
+    allowed_submitters: list[str] = Field(default_factory=list)
 
     @field_validator("trusted_cidrs")
     @classmethod
@@ -580,7 +594,8 @@ class WorkerProviderConfig(_Config):
 
 class KueueTopology(_Config):
     node_label: str = ""
-    required: bool = False  # True => required-topology (hard); False => preferred
+    mode: TopologyMode = TopologyMode.PREFERRED  # preferred (soft) / required (hard) / slice
+    coarse_preferred_label: str = ""  # optional soft coarse pairing for a sliced binding
 
 
 class KueueConfig(_Config):
@@ -592,6 +607,7 @@ class KueueConfig(_Config):
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
+    kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
     service_account: str = ""
     host_network: bool = False
@@ -619,14 +635,28 @@ class EndpointSpec(_Config):
 
 
 # ---------------------------------------------------------------------------
-# Backends
+# Submitter allowlist
 # ---------------------------------------------------------------------------
 
 
-class AllowPolicy(_Config):
-    """Which users may route tasks to a backend. ``"*"`` matches all users."""
+def user_admitted(allowed_users: Collection[str], user: str) -> bool:
+    """Whether an allowlist admits ``user``.
 
-    users: list[str] = Field(default_factory=lambda: ["*"])
+    ``"*"`` admits anyone; ``"*@example.com"`` admits any email in that domain
+    (case-insensitive on the domain part); every other entry is an exact match on
+    the full identity. An empty allowlist admits nobody.
+    """
+    if "*" in allowed_users or user in allowed_users:
+        return True
+    if "@" not in user:
+        return False
+    domain = user.rsplit("@", 1)[1].lower()
+    return f"*@{domain}" in {entry.lower() for entry in allowed_users}
+
+
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
 
 
 class BackendConfig(_Config):
@@ -637,15 +667,15 @@ class BackendConfig(_Config):
     (``kubernetes_provider``). ``transport`` must be ``in_process``; ``remote`` is
     rejected by :func:`validate_config`.
 
-    ``attributes`` values are comma-split into sets by
-    :func:`backend_attribute_sets` for the task→backend meta-scheduler (for
-    example ``device-variant: "v5e-4,v5p-8"``).
+    ``attributes`` holds any extra routing attributes as comma-split value sets
+    (for example ``device-variant: "v5e-4,v5p-8"``). Device attributes need not be
+    listed here: ``backend_attribute_sets`` derives ``device-type``/``device-variant``
+    from ``scale_groups`` and unions them in.
     """
 
     kind: Literal["worker_daemon", "k8s"]
     transport: Literal["in_process", "remote"] = "in_process"
     attributes: dict[str, str] = Field(default_factory=dict)
-    allow_policy: AllowPolicy = Field(default_factory=AllowPolicy)
     worker_provider: WorkerProviderConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
@@ -667,6 +697,9 @@ class PeerConfig(_Config):
     heartbeat), so a peer that loses a pool stops advertising it without a config
     edit here.
 
+    Which submitters a peer admits is the peer's own ``auth.allowed_submitters``,
+    enforced where the job lands and surfaced from the handoff.
+
     ``cluster`` names the peer's cluster manifest, from which the client
     credentials this controller presents to the peer are resolved (the same
     ``credentials_for`` path every cross-cluster client uses); no shared symmetric
@@ -675,30 +708,19 @@ class PeerConfig(_Config):
     """
 
     controller_address: str  # peer controller RPC address (reachability)
-    dashboard_url: str = ""  # peer public dashboard origin, for deep links
     cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
 
 
 class ClusterFinelogConfig(_Config):
-    """This cluster's finelog: the local log store, and optionally a relay to a shared one.
+    """This cluster's finelog: the log store that serves it.
 
-    ``config`` names the finelog deployment that serves this cluster (iris derives
-    ``/system/log-server`` from it). Set ``relay_address`` to also run a durable relay
-    that forwards this cluster's logs to a shared global finelog; leave it empty and the
-    log plane stays single-cluster (no relay, local reads, byte-identical behavior).
-
-    The relay authenticates its pushes with a short-lived ``aud="finelog"`` delegation
-    JWT minted by THIS controller's signer (its per-cluster EdDSA key), under this
-    cluster's name. The shared finelog verifies it against this controller's public
-    key — no shared symmetric secret. The ``aud="finelog"`` binding means the same token
-    is rejected by this controller's own control-plane verifier, so it can never be
-    replayed at the RPC surface. With no signer (null-auth), no bearer is sent and the
-    global finelog must admit this controller by a ``cidr`` layer (a same-VPC/loopback
-    dev store).
+    ``config`` names the finelog deployment (iris derives ``/system/log-server`` from
+    it). Shipping this cluster's logs on to a shared hub finelog is the log server's
+    own job, configured in its deploy config's ``forwarding:`` block — iris neither
+    forwards nor holds a credential for it.
     """
 
     config: str = ""  # finelog deploy-config name; iris derives /system/log-server from it
-    relay_address: str = ""  # shared global finelog to forward logs to (empty = single-cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -731,12 +753,15 @@ class IrisClusterConfig(_OneofConfig):
     # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
     # a single-cluster deployment is unchanged.
     peers: dict[str, PeerConfig] = Field(default_factory=dict)
-    # This cluster's finelog: the local log store (`finelog.config` names the deploy
-    # config iris derives /system/log-server from) and an optional `finelog.relay_address`
-    # for a shared global finelog. Setting `finelog.relay_address` turns on the forwarder.
+    # This cluster's finelog: `finelog.config` names the deploy config iris derives
+    # /system/log-server from.
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
+    # Infrastructure-as-code provisioning section (see infra/iac). Carried as an
+    # opaque dict so `provisioning:` can live in the cluster config file without
+    # Iris depending on the IaC schema; iac.config owns the typed validation.
+    provisioning: dict[str, Any] | None = None
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()
@@ -988,18 +1013,36 @@ def _validate_backends(config: IrisClusterConfig) -> None:
                 raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
 
 
-def _validate_peers(config: IrisClusterConfig) -> None:
-    """Validate the ``peers:`` federation registry.
+def _validate_cluster_name(config: IrisClusterConfig) -> None:
+    """Require a cluster ``name``, distinct from the federation sentinel.
 
-    ``'local'`` is reserved as the federation sentinel for "this controller"; the
-    cluster's own ``name`` and every peer id must stay disjoint from it so the
-    sentinel and the real cluster-id namespace never collide.
+    ``name`` is the cluster's identity on the wire: it issues every token this
+    controller mints and it is the id a federation peer keys its trust on. An unnamed
+    cluster mints under a fallback issuer and sends an empty requester id, which fails
+    at the peer as an opaque untrusted-issuer error rather than here.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller", so a real
+    cluster's name must stay disjoint from it.
     """
+    if not config.name.strip():
+        raise ValueError(
+            "cluster name is required: it issues this controller's tokens and identifies "
+            "it to federation peers. Set a top-level `name:` in the cluster config."
+        )
     if config.name == LOCAL_CLUSTER:
         raise ValueError(
             f"cluster name may not be {LOCAL_CLUSTER!r}: it is reserved as the federation "
             "sentinel for this controller. Choose a distinct cluster name."
         )
+
+
+def _validate_peers(config: IrisClusterConfig) -> None:
+    """Validate the ``peers:`` federation registry.
+
+    ``'local'`` is reserved as the federation sentinel for "this controller", so every
+    peer id must stay disjoint from it and the sentinel never collides with a real
+    cluster id.
+    """
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
@@ -1014,6 +1057,7 @@ def _validate_peers(config: IrisClusterConfig) -> None:
 
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
+    _validate_cluster_name(config)
     _validate_backends(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)
@@ -1117,14 +1161,86 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
 # ===========================================================================
 
 
-def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
-    """Comma-split each ``attributes`` value into a normalized set.
+def slice_template_region(template: SliceConfig) -> str | None:
+    """Region a slice template occupies: a GCP zone's region prefix or the CoreWeave region.
 
-    ``device-variant: "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``.
-    Empty and whitespace-only entries are dropped. The task→backend meta-scheduler
-    uses this to expand set-valued attributes into posting lists.
+    Returns None when the platform carries no location (manual/local), or when the
+    location field is unset.
     """
-    return {key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()}
+    if template.gcp is not None and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    if template.coreweave is not None and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``region`` a backend's scale groups occupy, from their slice templates.
+
+    Mirrors :meth:`ScaleGroup.region` so a backend advertises the same region a
+    worker self-reports, letting ``--region`` route across a federation instead of
+    only within one cluster (#7286). Scale groups in different regions union into
+    one set.
+    """
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        template = sg.slice_template
+        if template is None:
+            continue
+        region = slice_template_region(template)
+        if region:
+            derived.setdefault(WellKnownAttribute.REGION.value, set()).add(region)
+    return derived
+
+
+def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
+
+    Only accelerator scale groups contribute: a CPU (or unset) device type emits
+    nothing, matching a job's resource spec, whose CPU resources carry no device
+    constraint — so a CPU-only backend advertises no device attribute and stays a
+    catch-all. A blank or ``auto`` variant emits no ``device-variant``. Values are
+    lowercased so an advertised value equals the constraint literal a job matches
+    with, which is lowercased on construction. Scale groups of different variants
+    union into one set, e.g. ``device-variant: {"h100", "a100"}``.
+    """
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        resources = sg.resources
+        if resources is None:
+            continue
+        device_type = resources.device_type
+        if device_type is None or device_type == AcceleratorType.CPU:
+            continue
+        derived.setdefault(WellKnownAttribute.DEVICE_TYPE.value, set()).add(device_type.value)
+        variant = resources.device_variant.strip().lower()
+        if variant and variant != AUTO_DEVICE_VARIANT:
+            derived.setdefault(WellKnownAttribute.DEVICE_VARIANT.value, set()).add(variant)
+    return derived
+
+
+def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
+    """The routing attributes a backend advertises to the meta-scheduler and peers.
+
+    Explicit ``attributes`` values are comma-split into sets (``device-variant:
+    "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``); empty and
+    whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
+    additionally derived from ``scale_groups[*].resources`` and unioned in, so a
+    backend advertises the devices its scale groups offer without the operator
+    restating them in ``attributes``. ``region`` is derived the same way from each
+    scale group's slice template so the backend exports its location through the
+    federation protocol (#7286).
+    """
+    attributes = {
+        key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
+    }
+    for derived in (
+        _scale_group_device_attributes(backend.scale_groups),
+        _scale_group_region_attributes(backend.scale_groups),
+    ):
+        for key, values in derived.items():
+            attributes.setdefault(key, set()).update(values)
+    return attributes
 
 
 def resolve_backends(config: IrisClusterConfig) -> dict[str, BackendConfig]:
@@ -1450,6 +1566,6 @@ def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None =
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    fs, path = fsspec.core.url_to_fs(remote_state_dir)
-    if fs.exists(path):
-        fs.rm(path, recursive=True)
+    path = StoragePath(remote_state_dir)
+    if path.exists():
+        path.rmtree()

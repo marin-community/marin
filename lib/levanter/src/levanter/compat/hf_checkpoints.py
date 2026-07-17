@@ -46,12 +46,11 @@ from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
-from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -288,10 +287,6 @@ class ModelWithHfSerializationMixin(Generic[MConfig]):
         pass
 
 
-class ASRWithHfSerializationMixin(ASRMixin, ModelWithHfSerializationMixin[MConfig]):
-    pass
-
-
 class LmWithHfSerializationMixin(LmHeadModel, ModelWithHfSerializationMixin[MConfig]):
     @classmethod
     @abc.abstractmethod
@@ -501,6 +496,11 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @staticmethod
     def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
+        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
+        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
+        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
+        # inside `_infer_config_class` needs those imports to have already run.
+        LmConfig.get_known_choices()
         config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
         tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
 
@@ -513,7 +513,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 # requires max_seq_len; at runtime every registered choice is a concrete config
                 # that supplies a default, so the no-arg construction is safe.
                 instance = v()  # pyrefly: ignore[missing-argument]
-                if instance.hf_checkpoint_converter().HfConfigClass.__name__ == config_class.__name__:
+                # Building a candidate converter loads that model's default reference tokenizer, and
+                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
+                # access. A candidate whose converter cannot even be built is not the target model, so
+                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
+                try:
+                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
+                except Exception:
+                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
+                    continue
+                if candidate_hf_config_name == config_class.__name__:
                     LevConfigClass = v
                     break
         else:
@@ -1598,17 +1607,14 @@ def _patch_hf_hub_download():
                 revision = "main"
 
             if repo_id and filename and _is_url_like(repo_id):
-                fs, path = url_to_fs(repo_id)
-                remote_path = os.path.join(path, filename)
-                # local_path = os.path.join(tmpdir, filename)
+                remote_path = StoragePath(repo_id) / filename
                 local_path = os.path.join(
                     cache_dir, repo_folder_name(repo_id=repo_id, repo_type=repo_type), "snapshots", revision, filename
                 )
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-                if not fs.exists(remote_path):
+                if not fetch_file_atomic(str(remote_path), local_path):
                     raise EntryNotFoundError(f"File {remote_path} not found")
-
-                fs.get(remote_path, local_path)
                 return local_path
 
             # Fallback to the original implementation

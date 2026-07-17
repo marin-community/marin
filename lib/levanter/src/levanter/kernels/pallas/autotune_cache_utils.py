@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any, cast
 
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, url_to_fs
 
 
 def is_enabled_from_env(env_var: str, default: bool = True) -> bool:
@@ -18,11 +18,10 @@ def is_enabled_from_env(env_var: str, default: bool = True) -> bool:
 
 def load_json(url: str) -> dict[str, Any]:
     """Load JSON payload from a local or remote URL. Returns empty dict on missing path."""
-    fs, path = url_to_fs(url)
-    if not fs.exists(path):
+    path = StoragePath(url)
+    if not path.exists():
         return {}
-    with fs.open(path, "r") as f:
-        payload = json.load(f)
+    payload = json.loads(path.read_text())
     if not isinstance(payload, dict):
         return {}
     return cast(dict[str, Any], payload)

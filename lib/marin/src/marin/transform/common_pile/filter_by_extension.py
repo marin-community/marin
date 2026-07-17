@@ -8,7 +8,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from zephyr import Dataset, ZephyrContext, load_jsonl
+from zephyr.dataset import Dataset
+from zephyr.execution import ZephyrContext
+from zephyr.readers import load_jsonl
 
 logger = logging.getLogger(__name__)
 

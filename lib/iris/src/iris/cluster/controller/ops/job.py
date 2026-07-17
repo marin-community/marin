@@ -16,7 +16,6 @@ from iris.cluster.controller.codec import (
     proto_to_json,
 )
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile import ReconcileState
@@ -29,7 +28,7 @@ from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
 )
-from iris.cluster.types import LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
 
@@ -102,9 +101,14 @@ def submit(
     job_id: JobName,
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
+    submitting_user: str | None = None,
 ) -> None:
-    """Insert the job row and expand its tasks. Caller owns the transaction."""
-    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts)
+    """Insert the job row and expand its tasks. Caller owns the transaction.
+
+    ``submitting_user`` is the authenticated principal for a root submission; a
+    child ignores it and inherits its root's value (see :func:`insert_job_and_config`).
+    """
+    inserted = insert_job_and_config(cur, job_id=job_id, request=request, ts=ts, submitting_user=submitting_user)
     if inserted.validation_error is None:
         _materialize_tasks(
             cur,
@@ -133,12 +137,17 @@ def insert_job_and_config(
     request: controller_pb2.Controller.LaunchJobRequest,
     ts: Timestamp,
     cluster: str = LOCAL_CLUSTER,
+    submitting_user: str | None = None,
 ) -> JobInsertResult:
     """Insert the ``jobs`` + ``job_config`` (+ workdir file) rows for one job.
 
     Does NOT materialize tasks — :func:`submit` adds them for a local job; a
     federated handoff (``cluster`` set to a peer) has no local tasks (the peer
     creates them; the sync mirrors them back). Caller owns the transaction.
+
+    ``submitting_user`` — the authenticated principal — is required for a root and
+    stored verbatim. A child ignores it and inherits its root's stored value, so a
+    federated subtree keeps the root's submitter no matter who spawns each child.
     """
 
     submitted_ms = ts.epoch_ms()
@@ -156,12 +165,22 @@ def insert_job_and_config(
     root_submitted_ms = effective_submission_ms
     if job_id.parent is not None:
         parent_row = cur.execute(
-            select(jobs_table.c.root_submitted_at_ms).where(jobs_table.c.job_id == bindparam("job_id")),
+            select(jobs_table.c.root_submitted_at_ms, jobs_table.c.submitting_user).where(
+                jobs_table.c.job_id == bindparam("job_id")
+            ),
             {"job_id": job_id.parent},
         ).first()
         if parent_row is None:
             raise ValueError(f"Cannot submit job {job_id}: parent {parent_job_id} is absent from the database")
         root_submitted_ms = parent_row.root_submitted_at_ms.epoch_ms()
+        # A child inherits its root's submitter, never re-resolving to the acting
+        # caller: a federated subtree stays attributed to the principal that
+        # launched the root.
+        submitting_user = parent_row.submitting_user
+    elif submitting_user is None:
+        # A root with no resolved principal is an identity-less direct/loopback
+        # submit — the same case the submit-time resolver attributes to local_admin.
+        submitting_user = LOCAL_ADMIN_SUBMITTER
 
     deadline_epoch_ms: int | None = None
     if request.HasField("scheduling_timeout") and request.scheduling_timeout.milliseconds > 0:
@@ -208,6 +227,7 @@ def insert_job_and_config(
         cur,
         job_id=job_id,
         user_id=job_id.user,
+        submitting_user=submitting_user,
         parent_job_id=parent_job_id,
         root_job_id=job_id.root_job.to_wire(),
         depth=job_id.depth,
@@ -269,6 +289,7 @@ def insert_job_and_config(
             job_id=job_id,
             requester_id=request.federation.requester_id,
             owner_principal=request.federation.owner_principal,
+            handoff_nonce=request.federation.handoff_nonce,
         )
 
     # Record the job-level creation for any requester federating with this peer (a
@@ -316,41 +337,33 @@ def cancel(
     # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
     effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
     commit_effects(cur, effects)
-    # Sweep endpoints that survived because their owning task was already
-    # terminal before cancel ran (kernel only emits EndpointDeletion for
-    # tasks we actively killed). Derive the same subtree the kernel cancelled
-    # from the snapshot's transitive descendants.
+    # Fast-path clear of the cancelled subtree's endpoints (the FK CASCADE
+    # backstop): cancellation stops routing to these endpoints at once rather
+    # than waiting out their lease. Derive the subtree from the snapshot's
+    # transitive descendants.
     subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
     cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
-
-
-def purge_job(cur: Tx, job_id: JobName) -> None:
-    """Delete a job and drop its derived-count and run-template memos.
-
-    Deletions route through here rather than :func:`writes.delete_job` so a later
-    job minted with the same id cannot serve the dead job's cached counts or
-    template.
-    """
-    writes.delete_job(cur, job_id)
-    cur.caches[AttemptCountsProjection].invalidate_for_jobs(cur, [job_id])
-    cur.caches[RunTemplatesProjection].invalidate_for_job(cur, job_id)
 
 
 def remove_finished(
     cur: Tx,
     job_id: JobName,
+    *,
+    record_tombstone: bool = True,
 ) -> bool:
     """Remove a finished job and its tasks from state.
 
     Only removes jobs that are in a terminal state. Returns True if removed,
-    False if the job does not exist or is not finished.
+    False if the job does not exist or is not finished. ``record_tombstone=False``
+    is for a federated resubmission replacing a finished run in place — the
+    parent must see the fresh submission's changelog row, not a tombstone.
     """
     job_state = reads.get_job_state(cur, job_id)
     if job_state is None:
         return False
     if job_state not in TERMINAL_JOB_STATES:
         return False
-    purge_job(cur, job_id)
+    writes.delete_job(cur, job_id, record_tombstone=record_tombstone)
     cur.register(
         lambda: log_event(
             "job_removed",

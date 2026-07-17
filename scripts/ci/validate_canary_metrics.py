@@ -19,7 +19,7 @@ import os
 import sys
 from collections.abc import Callable
 
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath
 
 from experiments.ferries.canary_ferry import build
 
@@ -48,8 +48,7 @@ def resolve_canary_output_path() -> str:
 def read_summary(output_path: str) -> dict:
     """Read the summary dict from tracker_metrics.jsonl."""
     metrics_file = f"{output_path}/tracker_metrics.jsonl"
-    with open_url(metrics_file, "r") as f:
-        record = json.loads(f.read().strip())
+    record = json.loads(StoragePath(metrics_file).read_text().strip())
     return record["summary"]
 
 

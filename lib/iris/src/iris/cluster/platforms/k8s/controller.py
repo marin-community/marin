@@ -13,17 +13,18 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from urllib.parse import urlparse
 
 import fsspec.config
 import s3fs
+from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
 from rigging.timing import Deadline
 
 from iris.cluster.config import (
     ControllerVmConfig,
-    CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     IrisClusterConfig,
     assert_no_inlined_secrets,
@@ -31,6 +32,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_SYSTEM,
@@ -72,6 +74,12 @@ _CONTROLLER_MEMORY_REQUEST = "64Gi"
 # queued behind a reconcile tick under heavy load.
 _CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
 _CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
+# Secret holding the controller's own credentials, projected into the controller
+# container alone. Held apart from iris-task-env, which every task pod also mounts:
+# a task must never be able to mint its cluster's tokens.
+CONTROLLER_ENV_SECRET_NAME = "iris-controller-env"
+SIGNING_KEY_ENV_VAR = "IRIS_SIGNING_KEY"
+
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 # Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
 # process falls back to when storage.local_state_dir is unset.
@@ -96,11 +104,17 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
     Maps CW_KEY_ID/CW_KEY_SECRET to their AWS equivalents and sets FSSPEC_S3
     with the correct endpoint and addressing style. No-op if the config has no
     CoreWeave object storage endpoint.
+
+    This configures the operator's own process, which runs outside the cluster, so it
+    prefers ``external_object_storage_endpoint``; ``object_storage_endpoint`` is the
+    pod's view and may name an address only a pod can resolve.
     """
     coreweave = config.platform.coreweave
-    if coreweave is None or not coreweave.object_storage_endpoint:
+    if coreweave is None:
         return
-    endpoint = coreweave.object_storage_endpoint
+    endpoint = coreweave.external_object_storage_endpoint or coreweave.object_storage_endpoint
+    if not endpoint:
+        return
 
     cw_key = os.environ.get("CW_KEY_ID", "")
     cw_secret = os.environ.get("CW_KEY_SECRET", "")
@@ -133,19 +147,66 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
 # ============================================================================
 
 
+def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
+    """Whether the cluster populates the iris-controller-env Secret.
+
+    True exactly when the cluster carries its own signing key. Creation, the Deployment's
+    ``envFrom`` reference, and teardown share this one predicate, so an ``envFrom`` can
+    never dereference a Secret that was not created.
+    """
+    return bool(config.auth and config.auth.signing_key)
+
+
+def _controller_env(config: IrisClusterConfig) -> dict[str, str]:
+    """Resolve the controller's own secrets against the operator's shell.
+
+    A Kubernetes controller pod holds no cloud credentials, so a ``gcp-secret://``
+    reference can only be read here, at deploy time; the value reaches the controller
+    as ``IRIS_SIGNING_KEY`` through the iris-controller-env Secret. The cluster config
+    must therefore name ``env:IRIS_SIGNING_KEY`` among its references, so the pod reads
+    the projected value instead of re-resolving a source it cannot reach.
+    """
+    if not _projects_controller_env_secret(config):
+        return {}
+    assert config.auth is not None
+    refs = as_secret_spec(config.auth.signing_key)
+    env_ref = f"{ENV_SCHEME}{SIGNING_KEY_ENV_VAR}"
+    if env_ref not in refs:
+        raise ValueError(
+            f"auth.signing_key must list {env_ref!r} for a Kubernetes cluster: the controller pod reads "
+            f"its key from the {CONTROLLER_ENV_SECRET_NAME} Secret, which this deploy populates by "
+            f"resolving the remaining references in the operator's shell. Got {list(refs)}."
+        )
+    # The env: reference addresses the pod, not this deploy, and resolve_secret_spec takes the
+    # first source that is present: an IRIS_SIGNING_KEY in the operator's shell must never
+    # outrank the pinned reference and become the cluster's identity. A spec that names no
+    # persistent source falls back to it, which is how an operator supplies the key directly.
+    persistent = tuple(ref for ref in refs if ref != env_ref)
+    return {SIGNING_KEY_ENV_VAR: resolve_secret_spec(persistent or refs).value}
+
+
 def _build_controller_deployment(
     *,
     namespace: str,
     image: str,
     port: int,
     node_selector: dict[str, str],
-    task_env_secret: bool = False,
+    env_from_secrets: Sequence[str] = (),
     fresh: bool = False,
     state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
     local_state_hostpath: bool = False,
     checkpoint_interval_seconds: float = 0,
 ) -> dict:
-    """Build the controller Deployment manifest as a dict."""
+    """Build the controller Deployment manifest as a dict.
+
+    ``env_from_secrets`` names the Secrets the controller container sources its
+    environment from, in order.
+    """
+    # The cluster default env (S3 storage auth + operator-injected vars) arrives via
+    # the iris-task-env Secret, which task pods mount too; the controller's own
+    # credentials arrive via iris-controller-env, which they do not. optional=true so
+    # a controller-only restart that predates either Secret does not crash-loop.
+    env_from = [{"secretRef": {"name": secret, "optional": True}} for secret in env_from_secrets]
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
     # BestEffort. Only memory has a limit, so the Pod is Burstable (not
     # Guaranteed): the controller can burst onto spare node CPU during reconcile
@@ -200,14 +261,7 @@ def _build_controller_deployment(
                             ),
                         ],
                         "ports": [{"containerPort": port}],
-                        # The cluster default env (S3 storage auth + operator-injected
-                        # vars) arrives via the iris-task-env Secret. optional=true so a
-                        # controller-only restart that predates the Secret does not crash-loop.
-                        **(
-                            {"envFrom": [{"secretRef": {"name": TASK_ENV_SECRET_NAME, "optional": True}}]}
-                            if task_env_secret
-                            else {}
-                        ),
+                        **({"envFrom": env_from} if env_from else {}),
                         "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                         "resources": controller_resources,
                         "volumeMounts": [
@@ -273,57 +327,6 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
     }
 
 
-# Name of the Ingress that publishes only the controller's /proxy path.
-_CONTROLLER_PROXY_INGRESS_NAME = "iris-controller-proxy"
-
-
-def _build_controller_proxy_ingress(
-    *,
-    namespace: str,
-    service_name: str,
-    port: int,
-    host: str,
-    ingress_class: str,
-    tls_secret: str,
-    cluster_issuer: str,
-) -> dict:
-    """Build the Ingress that publishes ONLY the controller's ``/proxy`` path.
-
-    The dashboard and RPC surface stay ClusterIP-internal — only ``/proxy`` is
-    routed in. CoreWeave has no IAP layer, so the controller's own per-endpoint
-    auth (PRIVATE/PUBLIC/BEARER) is the sole gate for that path.
-
-    Ingress-controller-agnostic: no controller-specific annotations. Traefik (the
-    default class) streams responses without buffering, so vLLM SSE works out of
-    the box; raise long-request timeouts at the Traefik entrypoint if needed.
-    When ``cluster_issuer`` is set, cert-manager auto-issues the TLS cert into
-    ``tls_secret``.
-    """
-    metadata: dict = {"name": _CONTROLLER_PROXY_INGRESS_NAME, "namespace": namespace}
-    if cluster_issuer:
-        metadata["annotations"] = {"cert-manager.io/cluster-issuer": cluster_issuer}
-    spec: dict = {
-        "ingressClassName": ingress_class,
-        "rules": [
-            {
-                "host": host,
-                "http": {
-                    "paths": [
-                        {
-                            "path": "/proxy",
-                            "pathType": "Prefix",
-                            "backend": {"service": {"name": service_name, "port": {"number": port}}},
-                        }
-                    ]
-                },
-            }
-        ],
-    }
-    if tls_secret:
-        spec["tls"] = [{"hosts": [host], "secretName": tls_secret}]
-    return {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": metadata, "spec": spec}
-
-
 # ============================================================================
 # K8sControllerProvider
 # ============================================================================
@@ -351,9 +354,13 @@ class K8sControllerProvider:
         if kubectl is not None:
             self._kubectl: K8sService = kubectl
         else:
+            # KUBECONFIG (when exported) picks the file, but the configured context
+            # always binds — so a stale env var cannot redirect operations to
+            # whatever cluster that file's current-context happens to point at.
             self._kubectl = CloudK8sService(
                 namespace=self._namespace,
                 kubeconfig_path=None if os.environ.get("KUBECONFIG") else (config.kubeconfig_path or None),
+                context=config.kube_context or None,
                 timeout=_KUBECTL_TIMEOUT,
             )
         self._poll_interval = poll_interval
@@ -422,6 +429,10 @@ class K8sControllerProvider:
         if default_env:
             self.ensure_task_env_secret(default_env)
 
+        controller_env = _controller_env(config)
+        if controller_env:
+            self.ensure_controller_env_secret(controller_env)
+
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
             "apiVersion": "v1",
@@ -441,12 +452,20 @@ class K8sControllerProvider:
             self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
             logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
+        env_from_secrets = [
+            secret
+            for secret, projected in (
+                (TASK_ENV_SECRET_NAME, projects_task_env_secret(config)),
+                (CONTROLLER_ENV_SECRET_NAME, _projects_controller_env_secret(config)),
+            )
+            if projected
+        ]
         deploy_kwargs = dict(
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
-            task_env_secret=projects_task_env_secret(config),
+            env_from_secrets=env_from_secrets,
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
             checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
@@ -477,12 +496,6 @@ class K8sControllerProvider:
         self._kubectl.apply_json(svc_manifest)
         logger.info("Controller Service %s applied", service_name)
 
-        # Publish only /proxy off-cluster when a host is configured. The rest of
-        # the controller stays ClusterIP-internal; the controller's per-endpoint
-        # auth gates /proxy (CoreWeave has no IAP layer). Idempotent apply.
-        if cw.public_proxy_host:
-            self._apply_proxy_ingress(cw, service_name=service_name, port=port)
-
         pdb_manifest = {
             "apiVersion": "policy/v1",
             "kind": "PodDisruptionBudget",
@@ -502,45 +515,6 @@ class K8sControllerProvider:
             self._persist_deployment_without_fresh(deploy_kwargs)
 
         return self.discover_controller(config.controller)
-
-    def _apply_proxy_ingress(self, cw: CoreweaveControllerConfig, *, service_name: str, port: int) -> None:
-        """Apply the /proxy Ingress and validate its prerequisites.
-
-        The external address is served by the ingress controller's own
-        LoadBalancer, not the controller Pod, so this warns (rather than fails)
-        when the configured ``IngressClass`` is absent: the Ingress is still
-        applied and starts serving once a controller providing that class exists.
-        A missing ingress controller must not block the controller itself, which
-        is fine on its ClusterIP Service.
-        """
-        if self._kubectl.get_json(K8sResource.INGRESS_CLASSES, cw.ingress_class) is None:
-            logger.warning(
-                "IngressClass %r not found — the /proxy Ingress %s will stay pending (no external "
-                "address) until an ingress controller providing that class is installed (e.g. "
-                "ingress-nginx exposed as a LoadBalancer Service).",
-                cw.ingress_class,
-                _CONTROLLER_PROXY_INGRESS_NAME,
-            )
-        ingress_manifest = _build_controller_proxy_ingress(
-            namespace=self._namespace,
-            service_name=service_name,
-            port=port,
-            host=cw.public_proxy_host,
-            ingress_class=cw.ingress_class,
-            tls_secret=cw.tls_secret,
-            cluster_issuer=cw.cluster_issuer,
-        )
-        self._kubectl.apply_json(ingress_manifest)
-        logger.info(
-            "Controller /proxy Ingress %s applied (host=%s). Point DNS for %s at the ingress "
-            "controller's LoadBalancer external IP/hostname (kubectl get ingress %s -n %s -o wide); "
-            "TLS terminates in-cluster via cert-manager.",
-            _CONTROLLER_PROXY_INGRESS_NAME,
-            cw.public_proxy_host,
-            cw.public_proxy_host,
-            _CONTROLLER_PROXY_INGRESS_NAME,
-            self._namespace,
-        )
 
     def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:
         """Re-apply the controller Deployment with ``--fresh`` stripped from the pod command.
@@ -588,9 +562,10 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
-        self._kubectl.delete(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+        if _projects_controller_env_secret(config):
+            self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_ENV_SECRET_NAME)
 
         cluster_role_name = self.rbac_cluster_role_name()
         self._kubectl.delete(K8sResource.CLUSTER_ROLE_BINDINGS, cluster_role_name)
@@ -772,12 +747,16 @@ class K8sControllerProvider:
         cluster-global and admin-provisioned out of band (the CKS cluster is
         shared across tenants); see scripts/install_kueue.py. Iris owns
         only its own LocalQueue, binding its namespace to the admin ClusterQueue.
-        The LocalQueue name is derived from label_prefix, not configured. No-op
-        when Kueue is not configured (cluster_queue unset).
+        The LocalQueue name is derived from label_prefix, not configured. Kueue is
+        mandatory on the K8s backend (every pod is admitted through it), so a missing
+        cluster_queue is a fail-fast misconfiguration, not a skip.
         """
         cluster_queue = config.kubernetes_provider.kueue.cluster_queue
         if not cluster_queue:
-            return
+            raise ValueError(
+                "kubernetes_provider.kueue.cluster_queue is required: the K8s backend admits every "
+                "pod through Kueue. Provision it with scripts/install_kueue.py --with-queues."
+            )
         name = local_queue_name(self._label_prefix)
         manifest = {
             "apiVersion": "kueue.x-k8s.io/v1beta1",
@@ -894,11 +873,48 @@ class K8sControllerProvider:
         are reconciled on every cluster start. Existing pools keep one full
         slice worth of nodes warm so a transient pod deletion does not collapse
         multihost desired capacity back to a single node.
+
+        NVL72 (GB200/GB300) instances deploy in whole racks: their pools set
+        spec.targetRacks and do not autoscale (CoreWeave rejects the autoscaler
+        and a partial rack on rack-based instances). Every other instance type
+        is node-based (spec.targetNodes + autoscaling).
         """
-        target_nodes = 0
-        existing = self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name)
-        if existing is not None:
-            target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
+        node_labels = {
+            self._iris_labels.iris_managed: "true",
+            self._iris_labels.iris_scale_group: scale_group_name,
+            # Pin Konnectivity agents and monitoring pods to always-on nodes
+            # so GPU NodePools can safely scale to zero.
+            **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
+        }
+
+        if is_rack_based(instance_type):
+            if max_nodes % RACK_SIZE != 0:
+                raise InfraError(
+                    f"scale group {scale_group_name!r} is a rack-based ({instance_type}) NVL72 pool, "
+                    f"so its node count must be a whole number of {RACK_SIZE}-node racks; got {max_nodes}"
+                )
+            spec = {
+                "computeClass": "default",
+                "instanceType": instance_type,
+                "targetRacks": max_nodes // RACK_SIZE,
+                "nodeLabels": node_labels,
+            }
+            reconcile_note = f"targetRacks={max_nodes // RACK_SIZE}"
+        else:
+            target_nodes = 0
+            existing = self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name)
+            if existing is not None:
+                target_nodes = max(min_nodes, min(max_nodes, warm_nodes))
+            spec = {
+                "computeClass": "default",
+                "instanceType": instance_type,
+                "autoscaling": True,
+                "minNodes": min_nodes,
+                "maxNodes": max_nodes,
+                "targetNodes": target_nodes,
+                "nodeLabels": node_labels,
+            }
+            reconcile_note = f"targetNodes={target_nodes}"
 
         manifest = {
             "apiVersion": "compute.coreweave.com/v1alpha1",
@@ -907,24 +923,10 @@ class K8sControllerProvider:
                 "name": pool_name,
                 "labels": self._resource_labels(scale_group_name),
             },
-            "spec": {
-                "computeClass": "default",
-                "instanceType": instance_type,
-                "autoscaling": True,
-                "minNodes": min_nodes,
-                "maxNodes": max_nodes,
-                "targetNodes": target_nodes,
-                "nodeLabels": {
-                    self._iris_labels.iris_managed: "true",
-                    self._iris_labels.iris_scale_group: scale_group_name,
-                    # Pin Konnectivity agents and monitoring pods to always-on nodes
-                    # so GPU NodePools can safely scale to zero.
-                    **({"cks.coreweave.cloud/system-critical": "true"} if min_nodes > 0 else {}),
-                },
-            },
+            "spec": spec,
         }
         self._kubectl.apply_json(manifest)
-        logger.info("NodePool %s applied (instance_type=%s, targetNodes=%d)", pool_name, instance_type, target_nodes)
+        logger.info("NodePool %s applied (instance_type=%s, %s)", pool_name, instance_type, reconcile_note)
 
     # -- Storage Detection ----------------------------------------------------
 
@@ -976,6 +978,22 @@ class K8sControllerProvider:
                 "apiVersion": "v1",
                 "kind": "Secret",
                 "metadata": {"name": TASK_ENV_SECRET_NAME, "namespace": self._namespace},
+                "type": "Opaque",
+                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
+            }
+        )
+
+    def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
+        """Create the iris-controller-env Secret holding the controller's own credentials.
+
+        Only the controller Deployment references it, so a task pod cannot read the
+        cluster's signing key.
+        """
+        self._kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": CONTROLLER_ENV_SECRET_NAME, "namespace": self._namespace},
                 "type": "Opaque",
                 "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
             }
@@ -1153,4 +1171,5 @@ class K8sControllerProvider:
         config_dict = config_to_dict(config)
         cw_dict = config_dict.get("platform", {}).get("coreweave", {})
         cw_dict.pop("kubeconfig_path", None)
+        cw_dict.pop("kube_context", None)
         return json.dumps(config_dict)

@@ -9,7 +9,7 @@ Separate from orchestration.py to avoid circular imports
 
 from dataclasses import dataclass
 
-from fray import ActorHandle
+from fray.actor import ActorHandle
 
 
 @dataclass(frozen=True)

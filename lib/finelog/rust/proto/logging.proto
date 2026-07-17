@@ -42,9 +42,17 @@ message LogEntry {
   Timestamp timestamp = 1;
   string source = 2;      // Free-form: "stdout", "stderr", "build", "process", ...
   string data = 3;        // Log line content
-  int32 attempt_id = 4;   // Caller-defined; finelog stores and echoes it back
+  // Parsed from the key's `:<attempt>` suffix on read. Never stored, and ignored
+  // on write — a pushed value does not round-trip.
+  int32 attempt_id = 4;
   LogLevel level = 5;     // Best-effort parsed level (UNKNOWN if unparseable)
   string key = 6;         // Log store key. Populated on multi-key (regex) queries.
+  // Store-assigned row id: a single counter shared by every key in the store,
+  // increasing in write order. Stable for the row's lifetime, so a reader can
+  // name a row it has already seen and page around it (see
+  // FetchLogsRequest.cursor / until_cursor). Ids of one key are not contiguous:
+  // interleaved writes to other keys consume ids in between.
+  int64 seq = 7;
 }
 
 // Collection of log entries for a single source.
@@ -61,8 +69,9 @@ message PushLogsRequest {
   repeated LogEntry entries = 2;
   // Origin cluster for these entries, stored on the log row's `cluster` column so
   // a global finelog can namespace logs it collects from many federated clusters.
-  // Writer-supplied and trusted (every writer is authenticated); a relay sets it
-  // to the cluster it forwards for. Empty for a local single-cluster push.
+  // A token-authenticated writer may only claim the cluster its key is trusted for
+  // (or leave this empty and have the server stamp it); a writer admitted by a
+  // trusted network supplies it freely. Empty for a local single-cluster push.
   string cluster = 3;
 }
 
@@ -83,6 +92,12 @@ enum MatchScope {
   MATCH_SCOPE_REGEX = 3;
 }
 
+// `cursor` and `until_cursor` bound the LogEntry.seq range from below and above.
+// Both are exclusive, so `cursor = X, until_cursor = Y` reads the open interval
+// (X, Y). Combined with `tail` and `max_lines` they page in either direction
+// around a known row: the N rows before seq X are
+// `{until_cursor: X, tail: true, max_lines: N}`, and the N rows after it are
+// `{cursor: X, tail: false, max_lines: N}`.
 message FetchLogsRequest {
   string source = 1;           // Log source key, prefix, or regex pattern (see match_scope)
   int64 since_ms = 2;          // Only return entries with epoch_ms > since_ms
@@ -97,6 +112,9 @@ message FetchLogsRequest {
   // cluster's logs. Empty = unfiltered (all origins) — the local single-cluster
   // read behavior.
   string cluster = 9;
+  // Stop before this autoincrement id (exclusive). 0 = unbounded above; the
+  // first row ever written has seq 1, so no row is excluded by the default.
+  int64 until_cursor = 10;
 }
 
 message FetchLogsResponse {

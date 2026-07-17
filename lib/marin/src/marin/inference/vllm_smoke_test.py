@@ -9,7 +9,7 @@ import traceback
 from urllib.parse import urlparse
 
 import requests
-from fray import current_client
+from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.repeat < 1:
         raise ValueError("--repeat must be >= 1")
 
-    dependency_groups = ["eval", "tpu", "vllm"]
+    dependency_groups = ["tpu", "vllm"]
     resources = ResourceConfig.with_tpu(args.tpu_type)
     env_vars: dict[str, str] = {}
     if args.local_cache_dir is not None:

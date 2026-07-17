@@ -135,12 +135,28 @@ def set_job_info(info: JobInfo | None) -> None:
     _job_info.set(info)
 
 
+def _validate_user(user: str, source: str) -> str:
+    """Strip and validate a user value, naming the config source in errors."""
+    user = user.strip()
+    if not user:
+        raise ValueError(f"{source} must not be empty")
+    if "/" in user:
+        raise ValueError(f"{source} must not contain '/': {user!r}")
+    return user
+
+
 def resolve_job_user(explicit_user: str | None = None) -> str:
-    """Resolve the submitting user for a new top-level job."""
+    """Resolve the submitting user for a new top-level job.
+
+    Resolution order: the explicit argument, the ``IRIS_USER`` env var, the
+    current job's user, the OS user, and finally ``root``.
+    """
     if explicit_user is not None:
-        if not explicit_user.strip():
-            raise ValueError("Job user must not be empty")
-        return explicit_user
+        return _validate_user(explicit_user, "Job user")
+
+    env_user = os.environ.get("IRIS_USER")
+    if env_user is not None:
+        return _validate_user(env_user, "IRIS_USER")
 
     info = get_job_info()
     if info is not None:

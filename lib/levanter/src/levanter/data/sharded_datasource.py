@@ -13,11 +13,8 @@ from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, S
 import datasets
 import numpy as np
 import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+from rigging.filesystem import StoragePath, open_url
 
-from levanter.utils import fsspec_utils
-
-from levanter.utils.fsspec_utils import expand_glob
 from ._preprocessor import (
     BatchResult,
     _BatchMapTransform,
@@ -179,14 +176,6 @@ def datasource_from_hf_or_none(id: str, *, split, **kwargs) -> ShardedDataSource
     return source
 
 
-def datasource_from_jsonl(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return JsonlDataSource(urls_or_paths)
-
-
-def datasource_from_json(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return JsonDataSource(urls_or_paths)
-
-
 class WrappedHFDataSource(ShardedDataSource[dict]):
     """
     This class is responsible for loading a dataset from HuggingFace Datasets and returning the shards.
@@ -285,7 +274,6 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         compression = "infer"
         if url.endswith(".zstd"):  # hacky way to detect zstd
             compression = "zstd"
@@ -294,16 +282,11 @@ class UrlDataSource(UrlBackedShardedDataSource[dict]):
         match format:
             case ".jsonl":
                 with open_url(url, "r", compression=compression) as f:
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            obj = json.loads(line)
-                            if self.columns:
-                                yield {col: obj[col] for col in self.columns}
-                            else:
-                                yield obj
-                        i += 1
+                    for obj in _iter_jsonl_from_row(f, row):
+                        if self.columns:
+                            yield {col: obj[col] for col in self.columns}
+                        else:
+                            yield obj
             case ".json":
                 with open_url(url, "r", compression=compression) as f:
                     data = json.load(f)
@@ -361,20 +344,14 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[Tuple[np.ndarray, int, str]]:
         url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
         with open_url(url, "r", compression="infer") as f:
             format = _sniff_format_for_dataset(url)
             match format:
                 case ".jsonl":
-                    # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-                    # which is not nothing, but not ideal.
-                    for line in f:
-                        if i >= row:
-                            mat_json = json.loads(line)
-                            audio_pointer = mat_json[self.audio_key]
-                            audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
-                            yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
-                        i += 1
+                    for mat_json in _iter_jsonl_from_row(f, row):
+                        audio_pointer = mat_json[self.audio_key]
+                        audio = AudioTextUrlDataSource.resolve_audio_pointer(audio_pointer, self.sampling_rate)
+                        yield (audio["array"], audio["sampling_rate"], mat_json[self.text_key])
                 case ".json":
                     data = json.load(f)
                     for doc in data[row:]:
@@ -433,6 +410,17 @@ def _sniff_format_for_dataset(url):
     return format_from_url
 
 
+def _iter_jsonl_from_row(f: Iterable[str], row: int) -> Iterator[Any]:
+    """Yield parsed JSON objects from a JSONL stream, skipping the first ``row`` lines.
+
+    TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
+    which is not nothing, but not ideal.
+    """
+    for i, line in enumerate(f):
+        if i >= row:
+            yield json.loads(line)
+
+
 def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None) -> Iterator[dict]:
     """Iterate over rows in a ParquetFile starting from a given row offset.
 
@@ -465,33 +453,6 @@ def _iter_parquet_from_row(parquet_file: pq.ParquetFile, row: int, columns=None)
         yield from table.to_pylist()
 
 
-class JsonlDataSource(UrlBackedShardedDataSource[dict]):
-    def __init__(self, urls):
-        super().__init__(urls)
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        i = 0
-        with open_url(url, "r", compression="infer") as f:
-            # TODO: would be nice if we could seek faster than this. Right now, all we do is skip json parsing
-            # which is not nothing, but not ideal.
-            for line in f:
-                if i >= row:
-                    yield json.loads(line)
-                i += 1
-
-
-class JsonDataSource(UrlBackedShardedDataSource[dict]):
-    def __init__(self, urls):
-        super().__init__(urls)
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
-        url = self._shard_name_to_url_mapping[shard_name]
-        with open_url(url, "r", compression="infer") as f:
-            data = json.load(f)
-            return iter(data[row:])
-
-
 class ParquetDataSource(UrlBackedShardedDataSource[dict]):
     def __init__(self, urls, columns=None):
         super().__init__(urls)
@@ -508,7 +469,9 @@ def _mk_shard_name_mapping(urls):
     missing_urls: List[str] = []
 
     def _expand_or_placeholder(url):
-        expanded = list(expand_glob(url))
+        # expand_glob keeps a named-but-absent literal (so it warns/fails below rather
+        # than vanishing); the fallback keeps an all-glob spec that matched nothing.
+        expanded = [str(m) for m in StoragePath(url).expand_glob()]
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
@@ -522,7 +485,7 @@ def _mk_shard_name_mapping(urls):
         common_prefix = os.path.commonprefix(urls)
 
     for url in urls:
-        exists = fsspec_utils.exists(url)
+        exists = StoragePath(url).exists()
         # escape the url for the shard name
         shard_name = url
         if common_prefix:

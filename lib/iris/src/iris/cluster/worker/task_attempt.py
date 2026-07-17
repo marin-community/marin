@@ -25,10 +25,10 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.log_keys import classify_log_level, task_log_key
+from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
-from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.runtime.env import STANDARD_MOUNTS, build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -37,8 +37,6 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    MountKind,
-    MountSpec,
     RuntimeLogReader,
 )
 from iris.cluster.types import AttemptUid, JobName, is_task_finished
@@ -371,7 +369,7 @@ class TaskAttempt:
             self._monitor_loop(handle, log_reader)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
+            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Monitoring failed:\n{error_msg}")
             self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             self._cleanup()
@@ -628,11 +626,11 @@ class TaskAttempt:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
             error_msg = format_exception_with_traceback(e)
-            self._append_log(source="error", data=f"Infrastructure error:\n{error_msg}")
+            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Infrastructure error:\n{error_msg}")
             self.transition_to(job_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
-            self._append_log(source="error", data=f"Task failed:\n{error_msg}")
+            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Task failed:\n{error_msg}")
             self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             self._cleanup()
@@ -742,14 +740,6 @@ class TaskAttempt:
         assert self.workdir is not None
         job_id, _ = self.task_id.require_task()
 
-        mounts = [
-            MountSpec("/app", kind=MountKind.WORKDIR),
-            MountSpec("/tmp", kind=MountKind.TMPFS),
-            MountSpec("/uv/cache", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/registry", kind=MountKind.CACHE),
-            MountSpec("/root/.cargo/target", kind=MountKind.CACHE),
-        ]
-
         config = ContainerConfig(
             image=self.image_tag,
             entrypoint=rt_ep,
@@ -757,7 +747,7 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=mounts,
+            mounts=list(STANDARD_MOUNTS),
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
@@ -889,14 +879,14 @@ class TaskAttempt:
                     self.transition_to(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
                     stderr_tail: list[str] = [
-                        entry.data for entry in log_reader.read_all() if entry.source == "stderr" and entry.data
+                        entry.data for entry in log_reader.read_all() if entry.source == STDERR_SOURCE and entry.data
                     ]
                     stderr_line = stderr_tail[-1] if stderr_tail else None
                     error = _format_exit_error(status.exit_code, status.oom_killed)
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
-                        self._append_log(source="error", data="Container was OOM killed by the kernel")
+                        self._append_log(source=INJECTED_ERROR_SOURCE, data="Container was OOM killed by the kernel")
                     # Promote known TPU bad-node signatures to WORKER_FAILED.
                     tpu_pattern = detect_tpu_init_failure(stderr_tail[-_TPU_STDERR_TAIL_LINES:])
                     if tpu_pattern is not None:
@@ -906,7 +896,7 @@ class TaskAttempt:
                             tpu_pattern,
                         )
                         self._append_log(
-                            source="error",
+                            source=INJECTED_ERROR_SOURCE,
                             data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
                             "reporting as worker failure",
                         )

@@ -21,12 +21,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
 
-import levanter.utils.fsspec_utils as fsspec_utils
 from fray.client import JobHandle, JobStatus
 from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from rigging.filesystem import open_url, url_to_fs
+from iris.cluster.client.job_info import get_job_info
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
@@ -63,6 +63,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _warn_if_secondary_task() -> None:
+    """Warn when StepRunner starts on a non-primary task of a multi-task Iris job.
+
+    The per-step distributed lock is won by exactly one task; the others lose the
+    race and spin without ever entering the step body. If every task was launched
+    to run the same step (an SPMD run), those tasks never join the step's
+    collective and the job deadlocks. Flags that launch mode without blocking the
+    run (#7080).
+    """
+    info = get_job_info()
+    if info is None or info.task_index == 0:
+        return
+    logger.warning(
+        "StepRunner is starting on Iris task %d of %d. The per-step distributed lock lets only one "
+        "task run each step, so this task will lose the lock race and spin without ever entering the "
+        "step body. If every task was launched to run the same step, the tasks that never enter it "
+        "cannot join its collective and the job will DEADLOCK (marin-community/marin#7080); run the "
+        "executor on a single task instead.",
+        info.task_index,
+        info.num_tasks,
+    )
+
+
 def _write_executor_info(step: StepSpec) -> None:
     """Write a ``.executor_info`` JSON file in the ExecutorStepInfo schema.
 
@@ -89,9 +112,8 @@ def _write_executor_info(step: StepSpec) -> None:
         "dependencies": list(step.dep_paths),
         "output_path": step.output_path,
     }
-    fsspec_utils.mkdirs(step.output_path)
-    with open_url(info_path, "w") as f:
-        f.write(json.dumps(info, indent=2, cls=CustomJsonEncoder))
+    StoragePath(step.output_path).mkdirs()
+    StoragePath(info_path).write_text(json.dumps(info, indent=2, cls=CustomJsonEncoder))
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +208,10 @@ class StepRunner:
         # skipped when the driver (or a wrapping app) already installed handlers.
         if not logging.getLogger().handlers:
             configure_logging(level=logging.INFO)
+
+        # A non-primary Iris task loses the per-step lock race and never enters the
+        # step; warn before doing any work in case an SPMD launch was intended (#7080).
+        _warn_if_secondary_task()
 
         max_workers = max_concurrent or 8
         if max_workers < 1:

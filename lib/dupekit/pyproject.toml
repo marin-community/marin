@@ -1,51 +1,35 @@
 [build-system]
-requires = ["maturin>=1.5,<2.0"]
-build-backend = "maturin"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "marin-dupekit"
-# Version is read from rust/Cargo.toml by maturin so the release
-# workflow has a single source of truth to bump.
-dynamic = ["version"]
-description = "Optimized code for text de-duplication, written in Rust"
+# Canonical version for the released pair; build_package.py stamps the resolved
+# version into this file and rust/Cargo.toml so both dists agree.
+version = "0.1.2"
+description = "Optimized text de-duplication kernels (Rust) with a pure-Python surface."
 readme = "README.md"
 requires-python = ">=3.12"
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
+# `import dupekit` re-exports the native `dupekit_native` extension, which ships
+# as the companion marin-dupekit-native platform wheel (maturin, rust/), built
+# in lockstep by dupekit-release-wheels.yaml. It is a hard runtime dependency —
+# the pure package is only the proxy/type surface. The `>= X.Y.Z.dev0` floor
+# opts uv into the daily nightly wheels; `scripts/rust_mode.py dev` swaps the
+# [tool.uv.sources] entry below to the local rust/ tree so it builds from source.
+dependencies = [
+    "marin-dupekit-native >= 0.1.2.dev0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/marin-community/marin"
 Issues = "https://github.com/marin-community/marin/issues"
 
-[tool.maturin]
-sdist-include = ["README.md"]
-# Avoid linking libpython, making wheels portable
-features = ["pyo3/extension-module"]
-# The Rust crate lives in the package's own rust/ subtree (no top-level rust/).
-manifest-path = "rust/Cargo.toml"
-# Place the compiled _native.so inside the dupekit/ Python package under src/.
-module-name = "dupekit._native"
-python-source = "src"
-
-[tool.uv]
-# Force rebuild if Rust sources or Cargo manifests change
-cache-keys = [
-    "rust/Cargo.toml",
-    "rust/Cargo.lock",
-    "pyproject.toml",
-    "rust/src/**/*.rs",
-    "src/dupekit/*.pyi"
-]
-
 [dependency-groups]
 test = [
     "huggingface-hub",
     "pyarrow>=23.0.0",
     "pytest>=8.3.2",
-    "pytest-timeout"
+    "pytest-timeout",
 ]
 dev = [
     { include-group = "test" },
@@ -54,8 +38,23 @@ dev = [
 [project.optional-dependencies]
 benchmark = [
     "pytest-benchmark>=5.2.3",
-    "pytest-memray>=1.8.0"
+    "pytest-memray>=1.8.0",
 ]
+
+# Without an explicit list the sdist would sweep the whole directory, including
+# the rust/ tree that ships separately as marin-dupekit-native.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/dupekit", "tests", "README.md"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dupekit"]
+
+[tool.uv.sources]
+# `scripts/rust_mode.py dev` points marin-dupekit-native at ./rust here (and at
+# lib/dupekit/rust in the root pyproject) so the extension builds from source;
+# `user` mode clears the block and the pre-built wheel comes from PyPI.
+# ### BEGIN RUST-DEV SOURCES ###
+# ### END RUST-DEV SOURCES ###
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]

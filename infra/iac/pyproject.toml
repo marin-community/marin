@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-iac"
+version = "0.0.0"
+description = "Infrastructure-as-code for Marin clusters."
+requires-python = ">=3.12"
+dependencies = [
+    "pulumi>=3.140,<4",
+    "pulumi-kubernetes>=4.18,<5",
+    "pulumi-gcp>=9,<10",
+    "marin-iris",
+    "marin-rigging",
+]
+
+# marin-iris / marin-rigging resolve via the root workspace [tool.uv.sources]
+# (marin-iac is a workspace member), so no local sources table is needed.
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iac"]

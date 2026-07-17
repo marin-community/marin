@@ -11,7 +11,6 @@ from datetime import timedelta
 
 import equinox
 import equinox as eqx
-import fsspec
 import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
@@ -23,6 +22,7 @@ from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
+from rigging.filesystem import StoragePath
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
@@ -916,10 +916,8 @@ def test_backward_compatibility_with_ocdbt():
         manager.wait_until_finished()
 
         # Save metadata (normally done by save_checkpoint)
-        fs, _ = fsspec.core.url_to_fs(checkpoint_path)
         metadata = {"step": 10, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": False}
-        with fs.open(f"{checkpoint_path}/metadata.json", "w") as f:
-            json.dump(metadata, f)
+        StoragePath(f"{checkpoint_path}/metadata.json").write_text(json.dumps(metadata))
 
         # Now try to load it with the new OCDBT-enabled code
         restored_state = load_checkpoint(

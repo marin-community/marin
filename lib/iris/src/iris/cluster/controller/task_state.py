@@ -127,6 +127,9 @@ class TaskDetailRow:
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    # Backend status one-liner for a waiting/building task (why it is not running
+    # yet); None/"" when running or quiet. See tasks.status_message.
+    status_message: str | None
     backend_id: str
     cluster: str
     # Federated task's peer-side worker label ("" for a local task); NULL from the

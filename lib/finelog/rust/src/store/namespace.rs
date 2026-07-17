@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow::array::{Array, Int64Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
@@ -161,6 +161,13 @@ pub struct Namespace {
     /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
     /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+/// A namespace's sealed local segments as one consistent observation: the files a
+/// scan may read, and the lowest `seq` any of them holds.
+pub struct SegmentSnapshot {
+    pub paths: Vec<String>,
+    pub min_seq: Option<i64>,
 }
 
 impl Namespace {
@@ -321,20 +328,32 @@ impl Namespace {
         &self.arrow_schema
     }
 
-    /// Snapshot the SEALED local segment file paths under the insertion lock.
+    /// Snapshot the sealed local segment paths and the lowest `seq` they hold, under
+    /// one hold of the insertion lock so the two describe the same segment set.
+    /// `min_seq` is `None` when no local segment exists (an empty namespace, or one
+    /// whose segments have all been evicted to remote).
     ///
-    /// Queries see only flushed data; the in-RAM buffer is NOT exposed.
-    /// Snapshotting the paths under the lock is the read side of the
-    /// query-visibility seam — compaction takes the write side before unlinking
-    /// a file, so a query that captured the pre-compaction paths keeps scanning
-    /// the files it snapshotted.
-    pub fn query_snapshot(&self) -> Vec<String> {
+    /// Snapshotting under the lock is the read side of the query-visibility seam —
+    /// compaction takes the write side before unlinking a file, so a query that
+    /// captured the pre-compaction paths keeps scanning the files it snapshotted.
+    ///
+    /// Only SEALED segments appear: queries see flushed data, never the in-RAM buffer.
+    pub fn query_snapshot(&self) -> SegmentSnapshot {
         let inner = self.inner.lock().unwrap();
-        inner
-            .local_segments
-            .iter()
-            .map(|s| s.path.clone())
-            .collect()
+        SegmentSnapshot {
+            paths: inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.clone())
+                .collect(),
+            min_seq: inner.local_segments.iter().map(|s| s.min_seq).min(),
+        }
+    }
+
+    /// Subscribe to the durability high-water mark. The current value is already
+    /// marked seen, so a caller must read `borrow()` before awaiting `changed()`.
+    pub fn watch_persisted_seq(&self) -> watch::Receiver<i64> {
+        self.persisted_seq.subscribe()
     }
 
     /// Wake the flush task after an append. Nudges the rate-limited flush loop;
@@ -632,7 +651,8 @@ impl Namespace {
         Ok(true)
     }
 
-    /// Synthesize and apply a single L0->L1 merge of ALL L0 segments.
+    /// Synthesize and apply a single L0->L1 merge of every L0 segment that fits
+    /// `max_merge_arrow_bytes` (all of them, at test data sizes).
     ///
     /// Tests use this to land L1 state without configuring tiny `level_targets`.
     /// Production never calls it. No-op when there are no L0 segments (or in
@@ -656,28 +676,68 @@ impl Namespace {
             return Ok(());
         }
         let output_min_seq = l0.iter().map(|r| r.min_seq).min().expect("non-empty");
-        let output_max_seq = l0.iter().map(|r| r.max_seq).max().expect("non-empty");
         let job = CompactionJob {
             inputs: l0,
             output_level: 1,
             output_min_seq,
-            output_max_seq,
         };
         self.run_one_job(&dir, &job)
     }
 
     /// Execute `job` (read+merge+write or rename) then commit the resulting swap.
+    ///
+    /// The executor may consume only a prefix of `job.inputs` — as much as
+    /// `max_merge_arrow_bytes` admits — so the committed span comes from the
+    /// swap, not the job, and both counts are logged.
     fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
         let indexed = self.indexed_columns();
+        let started = Instant::now();
+        tracing::info!(
+            namespace = %self.name,
+            planned_inputs = job.inputs.len(),
+            output_level = job.output_level,
+            input_bytes = job.inputs.iter().map(|s| s.byte_size).sum::<i64>(),
+            input_rows = job.inputs.iter().map(|s| s.row_count).sum::<i64>(),
+            "compaction job starting"
+        );
         let swap = run_job(
             job,
             dir,
             &self.arrow_schema,
             self.key_column.as_deref(),
             &indexed,
+            self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
-        self.commit_swap(swap)
+        let output_path = swap.added.path.clone();
+        let output_bytes = swap.added.size_bytes;
+        let output_rows = swap.added.row_count;
+        // A bump is a rename; a merge decodes its inputs into RAM. The
+        // distinction is the whole memory story, so name it — along with the
+        // decoded size the ceiling actually bounds, and how much of the planned
+        // job that ceiling let this tick take.
+        let kind = if swap.bump_rename.is_some() {
+            "bump"
+        } else {
+            "merge"
+        };
+        let merged_inputs = swap.removed.len();
+        let input_arrow_bytes = swap.input_arrow_bytes;
+        self.commit_swap(swap)?;
+        tracing::info!(
+            namespace = %self.name,
+            kind,
+            output_level = job.output_level,
+            output_path = %output_path,
+            output_bytes,
+            output_rows,
+            merged_inputs,
+            planned_inputs = job.inputs.len(),
+            input_arrow_bytes,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "compaction job committed"
+        );
+        Ok(())
     }
 
     /// Names of the schema's STRING columns carrying a trigram substring index

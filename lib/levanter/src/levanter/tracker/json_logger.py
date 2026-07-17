@@ -7,6 +7,7 @@ from dataclasses import dataclass, fields, is_dataclass
 from typing import Any, Mapping, Optional
 
 import jax
+import numpy as np
 
 from levanter.tracker import Tracker
 from levanter.tracker.tracker import TrackerConfig
@@ -23,6 +24,12 @@ def _to_jsonable(value: Any):
         return {field.name: _to_jsonable(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, jax.Array):
         return jnp_to_python(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
 
     if isinstance(value, str | int | float | bool | type(None)):
         return value

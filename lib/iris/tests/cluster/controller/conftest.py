@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from finelog.client.log_client import Table
-from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
@@ -41,7 +40,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.controller import ops, reads
+from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -65,6 +64,7 @@ from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendW
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.federation_store import build_queued_candidates
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
@@ -205,19 +205,14 @@ class FakeProvider:
         # store over this same object), mirroring RpcTaskBackend.
         self.health: WorkerHealthTracker = WorkerHealthTracker()
         self.advertised: dict[str, set[str]] = {}
-        self.allowed_users: frozenset[str] = frozenset({"*"})
         # Workers this fake's reconcile fold reaped, awaiting run_teardown.
         self._pending_dead: list[WorkerId] = []
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
-    def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
-
-    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+    def configure_routing(self, advertised: dict[str, set[str]]) -> None:
         self.advertised = advertised
-        self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self._store, request)
@@ -346,18 +341,6 @@ class MockController:
 @pytest.fixture
 def mock_controller() -> MockController:
     return MockController()
-
-
-@pytest.fixture
-def log_service(embedded_log_server) -> LogServiceClientSync:
-    """A LogService RPC client against a fresh in-process finelog server.
-
-    The native server makes pushed log entries immediately fetchable (RAM
-    buffer), so push→fetch is synchronously visible within a test without any
-    manual flush. The sync client exposes ``push_logs(request)`` /
-    ``fetch_logs(request)``.
-    """
-    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 @pytest.fixture
@@ -669,6 +652,30 @@ def query_tasks_for_job(state: ControllerTestState, job_id: JobName) -> list:
         ).all()
 
 
+def promote_queued_federation(manager: FederationManager, state: ControllerTestState) -> None:
+    """Drive the control tick's federation pass + delivery in-process.
+
+    A submitted federated job is admitted to the queue (``QUEUED_HANDOFF``); the live
+    controller promotes it on its next tick, and the sync loop delivers it. Service-level
+    tests have no tick or sync loop, so this reproduces both steps without a peer *pull*:
+    build the queued candidates, plan promotions against peer availability + the reservation
+    ledger, apply each as the conditional CAS the commit does, then redrive the newly
+    ``PENDING_HANDOFF`` handles to the peer. After this a placeable, reachable handle is
+    ``HANDED_OFF`` with no tasks mirrored yet — exactly the post-launch state the old
+    synchronous handoff produced.
+    """
+    with state._db.read_snapshot() as tx:
+        candidates = build_queued_candidates(tx)
+    promotions = manager.plan_federation(candidates)
+    confirmed = []
+    with state._db.transaction() as cur:
+        for promotion in promotions:
+            if writes.promote_queued_handoff(cur, promotion.job_id, promotion.peer_id):
+                confirmed.append(promotion)
+    manager.confirm_promotions(confirmed)
+    manager._redrive_pending_handoffs()  # deliver, without a peer pull (keeps pre-sync postures)
+
+
 def schedulable_tasks(state: ControllerTestState) -> list:
     """Return non-terminal task SA Rows eligible for scheduling, in priority order."""
     with state._db.read_snapshot() as tx:
@@ -977,6 +984,13 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
         return reads.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
 
 
+def assign_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
+    """Assign a task to a worker (creates the attempt, leaves it ASSIGNED) without
+    driving it to RUNNING — so a caller can land its own BUILDING/terminal update."""
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+
+
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
         ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
@@ -1007,6 +1021,7 @@ def transition_task(
     *,
     error: str | None = None,
     exit_code: int | None = None,
+    status_message: str | None = None,
 ) -> object:
     task = query_task_with_attempts(state, task_id)
     assert task is not None
@@ -1039,6 +1054,7 @@ def transition_task(
                             new_state=new_state,
                             error=error,
                             exit_code=exit_code,
+                            status_message=status_message,
                         )
                     ],
                 )

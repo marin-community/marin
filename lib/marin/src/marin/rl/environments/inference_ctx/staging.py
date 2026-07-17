@@ -10,7 +10,7 @@ import os
 import tempfile
 from urllib.parse import urlparse
 
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath
 
 from .vllm import vLLMInferenceContextConfig
 
@@ -55,19 +55,19 @@ def prepare_vllm_inference_config_for_inflight(
 
 def stage_vllm_metadata_locally(model_path: str) -> str:
     """Copy the minimum vLLM metadata set for a remote model into a local cache."""
-    fs, fs_path = url_to_fs(model_path)
+    remote_root = StoragePath(model_path)
     cache_key = hashlib.sha256(model_path.encode("utf-8")).hexdigest()[:16]
     local_dir = os.path.join(_VLLM_METADATA_CACHE_ROOT, cache_key)
     os.makedirs(local_dir, exist_ok=True)
 
     for filename in _VLLM_METADATA_FILES:
-        remote_path = os.path.join(fs_path, filename)
+        remote_path = remote_root / filename
         local_path = os.path.join(local_dir, filename)
         if os.path.exists(local_path):
             continue
-        if not fs.exists(remote_path):
+        if not remote_path.exists():
             continue
-        fs.get(remote_path, local_path)
+        remote_path.download_to(local_path)
 
     config_path = os.path.join(local_dir, "config.json")
     if not os.path.exists(config_path):

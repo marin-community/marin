@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 import tensorstore as ts
 
-from levanter.data import BatchProcessor, ShardedDataSource
+from levanter.data._preprocessor import BatchProcessor
+from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.utils import batched
 from levanter.store.tree_store import TreeStore
 

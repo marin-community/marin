@@ -153,6 +153,7 @@ class ControllerTarget:
         self.namespace = cfg.kubernetes_provider.namespace
         self.label_prefix = cfg.platform.label_prefix
         self.kubeconfig = str(Path(cfg.platform.coreweave.kubeconfig_path).expanduser())
+        self.kube_context = cfg.platform.coreweave.kube_context or None
         # k8s clients are built lazily by _connect() AFTER setup() finalizes the
         # kubeconfig — kind assigns a fresh API-server port on each cluster create,
         # so a client built against a stale kubeconfig would hit a dead port.
@@ -162,17 +163,25 @@ class ControllerTarget:
 
     def _connect(self) -> None:
         """(Re)build the k8s clients against the current kubeconfig."""
-        self.kubectl = CloudK8sService(namespace=self.namespace, kubeconfig_path=self.kubeconfig)
+        self.kubectl = CloudK8sService(
+            namespace=self.namespace, kubeconfig_path=self.kubeconfig, context=self.kube_context
+        )
         self.controller = K8sControllerProvider(
             config=CoreweavePlatformConfig(
-                region=self.cfg.platform.coreweave.region, namespace=self.namespace, kubeconfig_path=self.kubeconfig
+                region=self.cfg.platform.coreweave.region,
+                namespace=self.namespace,
+                kubeconfig_path=self.kubeconfig,
+                kube_context=self.kube_context or "",
             ),
             label_prefix=self.label_prefix,
             kubectl=self.kubectl,
         )
 
     def _kc(self, *args: str) -> list[str]:
-        return ["kubectl", "--kubeconfig", self.kubeconfig, *args]
+        cmd = ["kubectl", "--kubeconfig", self.kubeconfig]
+        if self.kube_context:
+            cmd.extend(["--context", self.kube_context])
+        return [*cmd, *args]
 
     def _ensure_namespace(self) -> None:
         # Teardown deletes the namespace asynchronously; if a prior run's namespace
@@ -222,7 +231,6 @@ class ControllerTarget:
             image=cfg.controller.image,
             port=port,
             node_selector=node_selector,
-            task_env_secret=False,
             fresh=False,
         )
         if local_image:
@@ -310,7 +318,7 @@ class KindTarget(ControllerTarget):
         install_kueue.run_install(
             variant=install_kueue.VARIANT_UPSTREAM,
             kubeconfig=self.kubeconfig,
-            chart_version="0.11.0",
+            chart_version=install_kueue.UPSTREAM_DEFAULT_VERSION,
             with_queues=True,
             cluster_queue=cfg.kubernetes_provider.kueue.cluster_queue,
             flavor_topology=install_kueue.MULTINODE_TOPOLOGY_NAME,

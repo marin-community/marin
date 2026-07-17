@@ -30,7 +30,8 @@ from pathlib import Path
 from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
+from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -80,6 +81,23 @@ def _is_docker_infra_error(stderr: str) -> bool:
     """Return True if *stderr* matches a known infrastructure failure pattern."""
     stderr_lower = stderr.lower()
     return any(p.lower() in stderr_lower for p in _INFRA_ERROR_PATTERNS)
+
+
+def _run_docker(cmd: list[str], *, operation: str) -> str:
+    """Run a docker CLI command and return its stripped stdout.
+
+    On non-zero exit, raises ``ContainerInfraError`` when the stderr matches a
+    known transient infrastructure failure (see ``_is_docker_infra_error``) and
+    ``RuntimeError`` otherwise. ``operation`` names the action for the error
+    message (e.g. ``"create container"`` -> ``"Failed to create container"``).
+    """
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr
+        if _is_docker_infra_error(stderr):
+            raise ContainerInfraError(f"Failed to {operation} (infra): {stderr}")
+        raise RuntimeError(f"Failed to {operation}: {stderr}")
+    return result.stdout.strip()
 
 
 @dataclass(frozen=True)
@@ -328,11 +346,11 @@ def _docker_logs(container_id: str, since: Timestamp | None = None) -> list[LogL
     for line in result.stdout.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
-            logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
+            logs.append(LogLine(timestamp=timestamp, source=STDOUT_SOURCE, data=data))
     for line in result.stderr.splitlines():
         if line:
             timestamp, data = _parse_docker_log_line(line)
-            logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
+            logs.append(LogLine(timestamp=timestamp, source=STDERR_SOURCE, data=data))
     return logs
 
 
@@ -725,33 +743,11 @@ exec {quoted_cmd}
         logger.info("Creating container: %s", " ".join(cmd[:20]))
         logger.debug("Full docker create command: %s", cmd)
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr
-            if _is_docker_infra_error(stderr):
-                raise ContainerInfraError(f"Failed to create container (infra): {stderr}")
-            raise RuntimeError(f"Failed to create container: {stderr}")
-
-        return result.stdout.strip()
+        return _run_docker(cmd, operation="create container")
 
     def _docker_start(self, container_id: str) -> None:
         """Start a Docker container."""
-        result = subprocess.run(
-            ["docker", "start", container_id],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr
-            if _is_docker_infra_error(stderr):
-                raise ContainerInfraError(f"Failed to start container (infra): {stderr}")
-            raise RuntimeError(f"Failed to start container: {stderr}")
+        _run_docker(["docker", "start", container_id], operation="start container")
 
     def _docker_inspect(self, container_id: str) -> ContainerStatus:
         """Inspect container status."""
@@ -919,17 +915,7 @@ class DockerRuntime:
                 return
 
             logger.info("Pulling image %s", image)
-            result = subprocess.run(
-                ["docker", "pull", image],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                stderr = result.stderr
-                if _is_docker_infra_error(stderr):
-                    raise ContainerInfraError(f"Failed to pull image {image} (infra): {stderr}")
-                raise RuntimeError(f"Failed to pull image {image}: {stderr}")
+            _run_docker(["docker", "pull", image], operation=f"pull image {image}")
 
             logger.info("Image %s pulled successfully", image)
             self._pulled_images.add(image)
@@ -952,7 +938,7 @@ class DockerRuntime:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
             elif mount.kind == MountKind.CACHE:
-                host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir = self._cache_dir / cache_host_dirname(mount.container_path)
                 host_dir.mkdir(parents=True, exist_ok=True)
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
         return result
