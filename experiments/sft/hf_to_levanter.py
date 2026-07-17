@@ -1,35 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Materialize an HF->Levanter checkpoint conversion as a reproducible marin ``ArtifactStep``.
+"""HF->Levanter checkpoint conversion as a marin ``ArtifactStep``.
 
-``HfModel`` inits an SFT run straight from an HF checkpoint (``initialize_from_hf`` +
-``use_hf_model_config``): Levanter re-derives the architecture from the checkpoint and converts the
-weights in-process, on every launch. :func:`hf_to_levanter` turns that conversion into a first-class,
-cacheable graph node instead — it converts the HF checkpoint to a native Levanter checkpoint once and
-returns a handle a :class:`~experiments.sft.launcher.LevanterCheckpointModel` inits from (weights only,
-fresh optimizer), so a large base (e.g. a 67B) is converted once rather than per run and every
-``sft_step`` trains from a native Levanter checkpoint.
+:func:`hf_to_levanter` converts an HF checkpoint to a native Levanter checkpoint once, in place of
+``HfModel``'s per-launch inline ``initialize_from_hf`` conversion. It returns a handle a
+:class:`~experiments.sft.launcher.LevanterCheckpointModel` initializes weights from.
 
-Two things the inline path does implicitly have to be made explicit so native init is *numerically
-identical* to ``initialize_from_hf``:
+The conversion:
 
-  1. **The architecture is carried forward.** Native init builds the model pytree from a concrete
-     ``LmConfig`` (it does not re-derive it the way ``use_hf_model_config`` does). :func:`hf_to_levanter`
-     resolves that ``LmConfig`` from the pinned HF ``config.json`` at graph-construction time, so it is
-     an identity-bearing input available before the run and the downstream builds the matching pytree.
-  2. **The tokenizer is padded to the model vocab.** ``train_lm`` builds the ``Vocab`` axis from
-     ``len(tokenizer)``; models like Qwen3 pad their embedding past the tokenizer (151936 vs 151669).
-     The conversion emits a tokenizer padded to the model vocab (appending never-emitted dummy tokens,
-     so real text tokenizes identically) and the downstream resolves its tokenizer to it, so
-     ``Vocab == checkpoint embedding axis`` with no change to how ``Vocab`` is computed.
-
-The weights are converted at the run's *compute* dtype (bf16 under marin's ``p=f32,c=bfloat16``),
-matching how ``initialize_from_hf`` loads them, so the bf16->f32 round-trip into the f32 master params
-is the same on both paths. The checkpoint holds only the model (no optimizer state), so the artifact is
-the model's size, not ~3x it; native init loads it strictly (every model leaf must be present, see
-``TrainLmConfig.initialize_model_from_checkpoint_path``), so a malformed conversion fails loudly rather
-than silently re-initializing weights.
+- resolves the ``LmConfig`` from the pinned HF ``config.json`` at graph-construction time and carries
+  it on the returned handle. Native init builds the model pytree from a concrete ``LmConfig`` instead
+  of re-deriving it from the checkpoint as ``use_hf_model_config`` does, so the downstream needs it,
+  and resolving it now (rather than on the worker) makes it part of the step's identity;
+- loads the weights at the run's compute dtype (bf16 under marin's ``p=f32,c=bfloat16``), the dtype
+  ``initialize_from_hf`` loads them in;
+- saves the model, and only the model, under a ``model`` subtree, so
+  ``initialize_model_from_checkpoint_path`` reads it back with ``subpath="model"``;
+- emits a tokenizer padded to the model vocab. ``train_lm`` builds the ``Vocab`` axis from
+  ``len(tokenizer)`` and the downstream resolves its tokenizer to this output; padding appends
+  never-emitted dummy tokens, so text tokenizes unchanged (Qwen3, e.g., pads 151936 vs 151669).
 """
 from __future__ import annotations
 
@@ -114,14 +104,10 @@ def resolve_lm_config(
 def run_hf_to_levanter(config: HfToLevanterConfig) -> None:
     """Convert the HF checkpoint to a native Levanter model checkpoint and emit a padded tokenizer.
 
-    Uses the same core as ``levanter.main.export_hf_to_lm`` (``converter.load_pretrained`` +
-    ``save_checkpoint``, same ``resize_vocab`` rationale), but saves under a ``model`` subtree — so a
-    weights-only ``initialize_model_from_checkpoint_path`` reads it with ``subpath="model"`` — waits for
-    the async commit, and emits a padded tokenizer alongside; that entrypoint saves the bare model at
-    the checkpoint root with none of those.
-
     Runs on a worker; reads the base checkpoint from the Hub, so it needs ``HF_TOKEN`` in the
-    environment for gated repos (propagated the same way as the training job).
+    environment for gated repos. The conversion core (``load_pretrained`` + ``save_checkpoint``)
+    mirrors ``levanter.main.export_hf_to_lm``, which saves the bare model at the checkpoint root
+    rather than under a ``model`` subtree.
     """
     model_config = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     ref = RepoRef(config.hf_id, config.hf_revision)

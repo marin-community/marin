@@ -362,11 +362,10 @@ class LevanterCheckpointModel:
     - an :class:`ArtifactStep` or a static dir holding a native checkpoint (e.g. a prior ``sft_step``
       output, for stage chaining): supply ``model`` (the checkpoint's architecture) and ``tokenizer_path``.
 
-    Weights load strictly via ``initialize_model_from_checkpoint_path`` (every model leaf must be
-    present; a missing leaf is an error, not a silent re-init), leaving a fresh optimizer and step 0 —
-    the same "load weights, fresh optimizer" semantics as :class:`HFModel`'s ``initialize_from_hf``, but
-    from a native checkpoint, so every ``sft_step`` trains from a native Levanter checkpoint by one path.
-    The arch is not re-derived, so ``model`` must match the checkpoint's architecture.
+    Weights load via ``initialize_model_from_checkpoint_path``: only the ``model`` subtree, strictly
+    (every model leaf must be present), leaving a fresh optimizer and step 0 — the same init as
+    :class:`HFModel`'s ``initialize_from_hf`` but from a native checkpoint. The arch is not re-derived,
+    so ``model`` must match the checkpoint's architecture.
     """
 
     init_from: str | ArtifactStep | HfToLevanterCheckpoint
@@ -653,7 +652,9 @@ def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactSt
         artifact_type=TokenizedCache,
         run=run_tokenize,
         build_config=build_config,
-        deps=(transform_dep,),
+        # The model's init step also provides the tokenizer (a prepared checkpoint or an HF->Levanter
+        # conversion emits it), and build_config resolves the tokenizer through it, so declare it here.
+        deps=(transform_dep, *spec.model.init_deps()),
     )
 
 

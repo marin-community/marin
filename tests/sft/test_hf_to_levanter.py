@@ -11,12 +11,15 @@ draccus round-trip that carries the ``LmConfig`` from construction to the worker
 """
 from __future__ import annotations
 
+import dataclasses
+
 import draccus
 import pytest
 from fray.types import ResourceConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
 from experiments.sft.hf_to_levanter import (
@@ -101,6 +104,23 @@ def test_raw_path_without_arch_is_rejected():
     model = LevanterCheckpointModel(init_from="gs://staged/ckpt", tokenizer_path="gs://tok")
     with pytest.raises(ValueError, match="architecture"):
         materialized_config(sft_step(_spec(model), ResourceConfig.with_cpu()), _PREFIX)
+
+
+def test_epoch_chat_tokenize_declares_the_conversion_dependency():
+    """The epoch path tokenizes off-pod, resolving the tokenizer through the conversion step, so the
+    chat-tokenize step must declare it as a dep (else StepContext rejects the undeclared reference)."""
+    conv = _fake_conversion()
+    spec = dataclasses.replace(_spec(LevanterCheckpointModel(init_from=conv)), num_train_steps=None, num_train_epochs=1)
+    step = sft_step(spec, ResourceConfig.with_cpu())
+
+    chat_caches = [dep for dep in step.deps if dep.artifact_type is TokenizedCache]
+    assert chat_caches, "epoch path should materialize a chat_tokenize cache"
+    # A prefix free of the forbidden train-url tokens ("test") the tokenize config rejects.
+    prefix = "gs://sft-prefix"
+    for cache in chat_caches:
+        assert conv.step in cache.deps
+        # Materializing resolves the tokenizer through the (now declared) conversion step.
+        assert materialized_config(cache, prefix).tokenizer == conv.step.path(prefix)
 
 
 def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():

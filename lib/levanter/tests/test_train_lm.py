@@ -286,3 +286,24 @@ def test_train_lm_rejects_multiple_init_sources():
         )
         with pytest.raises(ValueError, match="at most one of"):
             train_lm.main(config)
+
+
+def test_train_lm_rejects_weights_only_init_with_trainer_initialize_from():
+    """trainer.initialize_from is a full-state resume; combined with the weights-only field it would
+    restore step > 0 and silently skip the weights-only init, so reject the combination."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=train_lm.LlamaConfig(num_layers=2, num_heads=2, num_kv_heads=2, max_seq_len=64, hidden_dim=32),
+            initialize_model_from_checkpoint_path="/some/model/checkpoint",
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=1,
+                train_batch_size=len(jax.devices()),
+                initialize_from="/some/full/checkpoint",
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+        with pytest.raises(ValueError, match="trainer.initialize_from"):
+            train_lm.main(config)
