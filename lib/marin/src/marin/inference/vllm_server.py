@@ -22,6 +22,7 @@ from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
+from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -279,8 +280,14 @@ class VllmServerHandle:
     log_dir: str
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
+    # Polls the server's /metrics and mirrors it to telltale; None until the server is ready.
+    metrics_forwarder: VllmMetricsForwarder | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
+        # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
+        if self.metrics_forwarder is not None:
+            self.metrics_forwarder.stop(timeout=timeout_seconds)
+
         self._signal(signal.SIGTERM)
         try:
             self.process.wait(timeout=timeout_seconds)
@@ -690,4 +697,8 @@ def _start_vllm_native_server(
     except Exception:
         handle.stop()
         raise
-    return handle
+
+    # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
+    # telltale so it reaches finelog. The metrics endpoint sits at the root, not under /v1.
+    metrics_url = f"http://{host}:{resolved_port}/metrics"
+    return dataclasses.replace(handle, metrics_forwarder=start_vllm_metrics_forwarding(metrics_url))
