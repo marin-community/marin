@@ -38,7 +38,7 @@ uv pip install ./transformer_engine*.whl
 mkdir -p jit-include && tar -C jit-include -xzf nccl-ep-jit-headers.tgz
 export NCCL_EP_JIT_SOURCE_DIR="$WORK/jit-include/nccl_ep"
 export NCCL_EP_JIT_BUILD_INCLUDE_DIR="$WORK/jit-include"
-export NCCL_EP_JIT_LOG=1
+export NCCL_EP_JIT_LOG=${NCCL_EP_JIT_LOG:-0}
 popd
 
 export XLA_PYTHON_CLIENT_ALLOCATOR=${XLA_PYTHON_CLIENT_ALLOCATOR:-cuda_async}
