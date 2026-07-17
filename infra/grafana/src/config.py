@@ -58,8 +58,8 @@ class BridgeConfig:
     """Resolved bridge settings."""
 
     # Rows one query may return. finelog caps a response at 64 MiB and enforces its
-    # own query deadline (#7312); this is a lower ceiling so a mis-written panel
-    # returns an error rather than a result Grafana cannot render.
+    # own query deadline; this is a lower ceiling so a mis-written panel returns an
+    # error rather than a result Grafana cannot render.
     max_rows: int
     # Result cache TTL. Grafana's own query caching is Enterprise-only, and a
     # shared dashboard auto-refreshing across viewers would otherwise multiply

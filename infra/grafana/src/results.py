@@ -4,7 +4,7 @@
 """Shape a finelog query result for Grafana's Infinity datasource.
 
 The bridge passes SQL straight to finelog, which gates it to SELECT and enforces
-a server-side deadline (#7312). The only reshaping needed on the way back:
+a server-side deadline. The only reshaping needed on the way back:
 
 - turn the Arrow result into JSON rows, since Infinity reads JSON;
 - render timestamps as epoch milliseconds, which is what Grafana plots;

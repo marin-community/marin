@@ -21,9 +21,9 @@ same substrate and queries finelog's internal IP over
 ## The bridge
 
 Panels send SQL; the bridge runs it against finelog and returns JSON rows. finelog
-gates the `Query` RPC to SELECT and enforces a server-side deadline (#7312), so
-the bridge does not police the query. It exists for three things Grafana and the
-engine cannot do themselves:
+gates the `Query` RPC to SELECT and enforces a server-side deadline, so the bridge
+does not police the query. It exists for three things Grafana and the engine
+cannot do themselves:
 
 1. Arrow to JSON. finelog's `Query` returns Arrow IPC; Grafana's Infinity
    datasource reads JSON.
@@ -38,8 +38,7 @@ engine cannot do themselves:
 
 It also flattens the EAV `labels` column into `label_<key>` fields on the way
 back, since DataFusion has no JSON functions and a panel cannot group by a label
-in SQL. Both the flatten and the `contains()` label filters the canary panels use
-go away once finelog gains JSON functions (#7317).
+in SQL; the canary panels filter labels with `contains()` for the same reason.
 
 ```
 GET /{cluster}/query?sql=&from=&to=

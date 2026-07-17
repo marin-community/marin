@@ -4,11 +4,11 @@
 """The metric API Grafana queries, backed by finelog.
 
 A panel sends SQL and the window; the bridge runs it against finelog and returns
-JSON rows. finelog gates the SQL to SELECT and enforces a server-side deadline
-(#7312), so the bridge does not police the query. It exists to convert Arrow to
-JSON, cache results (Grafana OSS has no query caching), and call only the Query
-RPC — pointing Grafana at finelog's host would expose WriteRows and DropTable,
-which finelog admits from the same VPC.
+JSON rows. finelog gates the SQL to SELECT and enforces a server-side deadline,
+so the bridge does not police the query. It exists to convert Arrow to JSON,
+cache results (Grafana OSS has no query caching), and call only the Query RPC —
+pointing Grafana at finelog's host would expose WriteRows and DropTable, which
+finelog admits from the same VPC.
 
 Routes (one datasource per cluster, addressed by path):
 
