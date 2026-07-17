@@ -58,6 +58,8 @@ that has them).
 """
 from __future__ import annotations
 
+import hashlib
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -78,6 +80,8 @@ from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
+from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
+from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 from rigging.filesystem import prefix_join
 
@@ -125,10 +129,25 @@ class SFTSpec:
     datasets: Sequence[DatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
     seq_len: int = 4096
-    pack: bool = True  # chat packs by default; num_train_steps must count packed examples
+    pack: bool = True  # chat packs by default; a step count must count packed examples
     batch_size: int = 16
-    num_train_steps: int = 5307  # packed 1-epoch: total_tokens/seq_len / weight / batch
+    # Training length is exactly one of these. ``num_train_epochs`` (single dataset only) resolves the
+    # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
+    # batch))``, the packed-sequence count -- so it is not hand-calibrated; it routes the run through a
+    # ``chat_tokenize`` dep (see :func:`sft_step`). ``num_train_steps`` is the explicit count (required
+    # for a mixture, where epoch semantics are undefined) and keeps the ``auto_build_caches`` path.
+    num_train_steps: int | None = None
+    num_train_epochs: int | None = None
     wandb_project: str = "marin-sft-launcher"
+
+    def __post_init__(self) -> None:
+        if (self.num_train_steps is None) == (self.num_train_epochs is None):
+            raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
+        if self.num_train_epochs is not None and len(self.datasets) != 1:
+            raise ValueError(
+                f"num_train_epochs is only defined for a single dataset (got {len(self.datasets)}); "
+                "use num_train_steps for a mixture."
+            )
 
 
 @runtime_checkable
@@ -152,9 +171,14 @@ class ModelSource(Protocol):
         ...
 
     def build_train_config(
-        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
     ) -> object:
-        """Build the backend training config from the shared spec + chat-data config."""
+        """Build the backend training config from the shared spec + chat-data config + resolved steps."""
         ...
 
 
@@ -163,6 +187,7 @@ def _levanter_train_config(
     *,
     model_type: str,
     data_config: LmDataConfig,
+    num_train_steps: int,
     initialize_from_hf: bool | str,
     initialize_from_checkpoint_path: str | None,
     use_hf_model_config: bool,
@@ -177,7 +202,7 @@ def _levanter_train_config(
         data=data_config,
         model=model,
         optimizer=spec.optimizer,
-        trainer=_trainer(spec, gpu_allocator=gpu_allocator),
+        trainer=_trainer(spec, num_train_steps=num_train_steps, gpu_allocator=gpu_allocator),
         train_seq_len=spec.seq_len,
         initialize_from_hf=initialize_from_hf,
         initialize_from_checkpoint_path=initialize_from_checkpoint_path,
@@ -187,7 +212,7 @@ def _levanter_train_config(
         # len(tokenizer) while the checkpoint embedding is larger -> a pytree Vocab-size mismatch
         # at train_step trace. No-op when they already match (e.g. the Delphi prepared tokenizer).
         pad_tokenizer_to_match_model=True,
-        hf_save_steps=spec.num_train_steps,  # one HF export at the end
+        hf_save_steps=num_train_steps,  # one HF export at the end
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )
@@ -198,6 +223,7 @@ def _levanter_pod_config(
     spec: SFTSpec,
     data_config: LmDataConfig,
     resources: ResourceConfig,
+    num_train_steps: int,
     *,
     model_type: str,
     initialize_from_hf: bool | str,
@@ -205,13 +231,19 @@ def _levanter_pod_config(
     use_hf_model_config: bool,
     eos_token_ids: Sequence[int],
 ) -> TrainLmOnPodConfig:
-    """Wrap a Levanter ``TrainLmConfig`` in the on-pod config the ``train_lm`` backend dispatches."""
+    """Wrap a Levanter ``TrainLmConfig`` in the on-pod config the ``train_lm`` backend dispatches.
+
+    The pod's ``auto_build_caches`` follows the data config: the step-count path passes raw urls and
+    builds the chat cache on the pod; the epoch path passes a pre-built chat cache (built by a
+    ``chat_tokenize`` dep) and disables on-the-fly building.
+    """
     gpu_allocator = not ctx.is_fingerprint and isinstance(resources.device, GpuConfig)
     return TrainLmOnPodConfig(
         train_config=_levanter_train_config(
             spec,
             model_type=model_type,
             data_config=data_config,
+            num_train_steps=num_train_steps,
             initialize_from_hf=initialize_from_hf,
             initialize_from_checkpoint_path=initialize_from_checkpoint_path,
             use_hf_model_config=use_hf_model_config,
@@ -220,7 +252,7 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
-        auto_build_caches=True,
+        auto_build_caches=data_config.auto_build_caches,
     )
 
 
@@ -251,13 +283,19 @@ class HfModel:
         return ()
 
     def build_train_config(
-        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
     ) -> TrainLmOnPodConfig:
         return _levanter_pod_config(
             ctx,
             spec,
             data_config,
             resources,
+            num_train_steps,
             model_type=self.model_type,
             initialize_from_hf=self.model_ref,
             initialize_from_checkpoint_path=None,
@@ -289,7 +327,12 @@ class LevanterCheckpointModel:
         return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
 
     def build_train_config(
-        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
     ) -> TrainLmOnPodConfig:
         init_path = ctx.artifact_path(self.init_from) if isinstance(self.init_from, ArtifactStep) else self.init_from
         return _levanter_pod_config(
@@ -297,6 +340,7 @@ class LevanterCheckpointModel:
             spec,
             data_config,
             resources,
+            num_train_steps,
             model_type=self.model_type,
             initialize_from_hf=False,
             initialize_from_checkpoint_path=init_path,
@@ -365,7 +409,7 @@ def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str]) -> LmDataCon
     )
 
 
-def _trainer(spec: SFTSpec, *, gpu_allocator: bool) -> TrainerConfig:
+def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
     jax_config = dict(DEFAULT_JAX_CONFIG)
     if gpu_allocator:
@@ -374,7 +418,7 @@ def _trainer(spec: SFTSpec, *, gpu_allocator: bool) -> TrainerConfig:
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
         train_batch_size=spec.batch_size,
-        num_train_steps=spec.num_train_steps,
+        num_train_steps=num_train_steps,
         steps_per_eval=500,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
@@ -408,23 +452,122 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
     )
 
 
+# Bump to rebuild every chat cache; the (tokenizer, template, pack) hash in the name already forks a
+# new cache when any of those change, so this is only for reprocessing the same recipe.
+_CHAT_CACHE_VERSION = "2026.07.17"
+
+
+def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactStep) -> ArtifactStep[TokenizedCache]:
+    """A chat-format ``TokenizedCache`` step: tokenize the canonical messages with the chat template +
+    completions-only mask + packing, off the training pod.
+
+    Unlike ``auto_build_caches`` (which builds the same cache lazily on the training pod), this
+    materializes the cache as an artifact, so its ``.stats.json`` token total is available to resolve
+    ``num_train_epochs`` -> ``num_train_steps`` before the run starts (marin #7244). The cache's
+    identity forks on ``(tokenizer, chat_template, pack)`` via the name suffix, so two recipes never
+    collide on the ``StepRunner``'s name@version key.
+    """
+    tokenizer = spec.model.tokenizer_path
+    key = hashlib.md5(f"{tokenizer}|{spec.chat_template}|{spec.pack}".encode()).hexdigest()[:6]
+    name = f"tokenized/{dataset.slug}-chat-{key}"
+
+    def build_config(ctx: StepContext) -> TokenizeConfig:
+        return TokenizeConfig(
+            train_paths=[prefix_join(ctx.artifact_path(transform_dep), "**/*.jsonl.gz")],
+            validation_paths=[],
+            cache_path=ctx.output_path,
+            tokenizer=tokenizer,
+            format=_chat_format(spec),
+            tags=[dataset.slug],
+        )
+
+    return ArtifactStep(
+        name=name,
+        version=_CHAT_CACHE_VERSION,
+        artifact_type=TokenizedCache,
+        run=run_tokenize,
+        build_config=build_config,
+        deps=(transform_dep,),
+    )
+
+
+def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str]) -> LmDataConfig:
+    """A chat ``LmDataConfig`` over pre-built chat caches (the ``chat_tokenize`` outputs).
+
+    ``auto_build_caches=False`` and no raw urls: the caches already exist, so Levanter reads them
+    directly instead of rebuilding on the training pod.
+    """
+    fmt = _chat_format(spec)
+    components: dict[str, DatasetComponent] = {}
+    weights: dict[str, float] = {}
+    for dataset, cache_dir in zip(spec.datasets, cache_paths, strict=True):
+        components[dataset.slug] = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
+            cache_dir=cache_dir,
+            format=fmt,
+            split="train",
+        )
+        weights[dataset.slug] = dataset.weight
+    return LmDataConfig(
+        tokenizer=spec.model.tokenizer_path,
+        chat_template=spec.chat_template,
+        enforce_eos=True,
+        auto_build_caches=False,
+        components=components,
+        train_weights=weights,
+        mixture_block_size=_MIXTURE_BLOCK_SIZE,
+    )
+
+
+def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactStep[TokenizedCache]) -> int:
+    """Steps for ``num_train_epochs`` full passes over the packed chat cache.
+
+    ``ceil(epochs * total_tokens / (seq_len * batch))`` counts packed sequences, not raw documents.
+    At fingerprint time the cache is not built, so ``num_train_epochs`` stands in as the identity
+    placeholder (it keeps the epoch count in the fingerprint); the real total is read at run time.
+    """
+    assert spec.num_train_epochs is not None
+    if ctx.is_fingerprint:
+        return spec.num_train_epochs
+    total_tokens = ctx.resolved(chat_cache).num_train_tokens
+    return math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
+
+
 def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterCheckpoint]:
     """The chat-SFT run as a lazy ``ArtifactStep[LevanterCheckpoint]``.
 
-    The dataset transforms are shared across every backend; ``spec.model`` supplies the
-    backend-specific training config and dispatch. ``resources`` is where/how the run executes, not
-    what it computes: it is a runtime arg, so changing the accelerator never forks the checkpoint's
-    identity.
-    """
-    data_deps = _dataset_deps(spec)
-    model = spec.model
-    deps = (*data_deps, *model.init_deps())
+    ``spec.model`` supplies the backend-specific training config and dispatch; ``resources`` is a
+    runtime arg, so changing the accelerator never forks the checkpoint's identity. The data flow
+    depends on how the training length is set:
 
-    def build_config(ctx: StepContext) -> object:
-        run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
-        dep_paths = [ctx.artifact_path(dep) for dep in data_deps]
-        data_config = build_chat_data_config(spec, dep_paths)
-        return model.build_train_config(ctx, spec, data_config, run_resources)
+    - ``num_train_steps`` (a mixture, or an explicit count): the transforms are the deps and Levanter
+      builds the chat cache on the training pod (``auto_build_caches``).
+    - ``num_train_epochs`` (a single dataset): a ``chat_tokenize`` dep materializes the chat cache so
+      the step count resolves from its token total, and training reads the pre-built cache.
+    """
+    model = spec.model
+    transform_deps = _dataset_deps(spec)
+
+    if spec.num_train_epochs is not None:
+        chat_caches = tuple(
+            chat_tokenize(spec, dataset, dep) for dataset, dep in zip(spec.datasets, transform_deps, strict=True)
+        )
+        deps: tuple[ArtifactStep, ...] = (*chat_caches, *model.init_deps())
+
+        def build_config(ctx: StepContext) -> object:
+            run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
+            data_config = _prebuilt_chat_data_config(spec, [ctx.artifact_path(c) for c in chat_caches])
+            num_train_steps = _resolve_epoch_steps(ctx, spec, chat_caches[0])
+            return model.build_train_config(ctx, spec, data_config, run_resources, num_train_steps)
+
+    else:
+        assert spec.num_train_steps is not None
+        deps = (*transform_deps, *model.init_deps())
+
+        def build_config(ctx: StepContext) -> object:
+            run_resources = ctx.runtime_arg(_TRAIN_RESOURCES)
+            data_config = build_chat_data_config(spec, [ctx.artifact_path(dep) for dep in transform_deps])
+            return model.build_train_config(ctx, spec, data_config, run_resources, spec.num_train_steps)
 
     return ArtifactStep(
         name=spec.name,

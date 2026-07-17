@@ -24,9 +24,8 @@ is incompatible with the checkpoint). Weights-only init + optimizer/step reset i
 ``sft_launch.run_grug_moe_sft_trial`` -> ``train.init_weights_only_from_checkpoint``).
 
 LAUNCH-GATED NUMBERS (finalise before a real launch; see the experiment POLICY/STATE):
-  * ``_JOB{1,2}_STEPS`` -- packed 1-epoch step counts = total_tokens / seq_len / batch, read from
-    each tokenized cache's shard ledger AFTER a dry-run cache build (the cache is now built from the
-    ``transform_dataset_step`` output, so re-derive the count on the transform cache before Stage 2).
+  * Step counts are no longer hand-set: Job1/Job2 are ``num_train_epochs=1`` and ``sft_step`` resolves
+    the packed-epoch step count from the ``chat_tokenize`` cache's token total at run time (marin #7244).
   * ``_REVISION_*`` -- pin each HF dataset to a 7-char commit for a content-stable fingerprint.
   * GPU mesh geometry (``_NODES`` / ``_EXPERT_PARALLEL`` / ``_REPLICA_AXIS`` / ``_BATCH`` / ``_SEQ`` /
     ``_PER_DEVICE_PARALLELISM``) -- 67B full-FT on H100x8 nodes at long context is memory-tight;
@@ -159,12 +158,9 @@ _JOB2_DATASET = DatasetSpec(
     weight=1.0,
 )
 
-# --- Packed 1-epoch step counts (steps = total_tokens / seq_len / batch) -------------------------
-# Job1 FINALIZED from the tokenized-cache ledger (2026-07-16): wildchat_386k train field_counts
-# input_ids = 538,878,179 tokens over 385,700 rows. 538_878_179 / (32768 * 64) = 256.96 -> 257 steps
-# (1 packed epoch at seq=32768, bs=64). Job2 still a placeholder (recompute from its cache before Stage 2).
-_JOB1_STEPS: int = 257
-_JOB2_STEPS: int = 2000
+# Job1/Job2 are one packed epoch (num_train_epochs=1); sft_step resolves the concrete step count from
+# the chat cache's token total at run time (marin #7244), so there is no hand-calibrated count. For
+# reference, the wildchat_386k chat cache is ~538.9M tokens -> 256.96 -> 257 steps at seq32768/bs64.
 _SMOKE_STEPS: int = 8  # cheap validation: clear the first jit_train_step at the target geometry + bank a few
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
@@ -218,7 +214,8 @@ def _spec(
     version: str,
     dataset: DatasetSpec,
     model_source: GrugModel,
-    steps: int,
+    steps: int | None = None,
+    epochs: int | None = None,
     seq: int = _SEQ,
     batch: int = _BATCH,
 ) -> SFTSpec:
@@ -232,12 +229,13 @@ def _spec(
         seq_len=seq,
         batch_size=batch,
         num_train_steps=steps,
+        num_train_epochs=epochs,
         wandb_project=_WANDB_PROJECT,
     )
 
 
 def build_job1(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Stage 1 -- wildchat plain chat, weights-only init from the step-42150 base."""
+    """Stage 1 -- wildchat plain chat, weights-only init from the step-42150 base (one packed epoch)."""
     step_name = f"grug/{_JOB1_RUN_ID}"
     version = resolve_version(step_name, version)
     spec = _spec(
@@ -245,13 +243,13 @@ def build_job1(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         version=version,
         dataset=_JOB1_DATASET,
         model_source=_grug_source(_BASE_CKPT, stage="s1_chat", seq=_SEQ),
-        steps=_JOB1_STEPS,
+        epochs=1,
     )
     return sft_step(spec, _gpu_resources(_NODES))
 
 
 def build_job2(job1: ArtifactStep[LevanterCheckpoint], version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Stage 2 -- thinking dataset, weights-only init CHAINED from Stage 1's output checkpoint."""
+    """Stage 2 -- thinking dataset, weights-only init CHAINED from Stage 1 (one packed epoch)."""
     step_name = f"grug/{_JOB2_RUN_ID}"
     version = resolve_version(step_name, version)
     spec = _spec(
@@ -259,7 +257,7 @@ def build_job2(job1: ArtifactStep[LevanterCheckpoint], version: str | None = Non
         version=version,
         dataset=_JOB2_DATASET,
         model_source=_grug_source(job1, stage="s2_think", seq=_SEQ),
-        steps=_JOB2_STEPS,
+        epochs=1,
     )
     return sft_step(spec, _gpu_resources(_NODES))
 
@@ -280,7 +278,7 @@ def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
         model_source=_grug_source(
             _BASE_CKPT, stage="smoke", seq=_SMOKE_SEQ, save_interval_minutes=5, checkpoint_keep=[{"every": 20}]
         ),
-        steps=_SMOKE_STEPS,
+        steps=_SMOKE_STEPS,  # explicit few-step count, not a full epoch
         seq=_SMOKE_SEQ,
         batch=_SMOKE_BATCH,
     )

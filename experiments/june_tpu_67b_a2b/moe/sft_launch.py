@@ -206,7 +206,12 @@ class GrugModel:
         return (self.init_from,) if isinstance(self.init_from, ArtifactStep) else ()
 
     def build_train_config(
-        self, ctx: StepContext, spec: SFTSpec, data_config: LmDataConfig, resources: ResourceConfig
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
     ) -> GrugMoeSFTConfig:
         if isinstance(self.init_from, ArtifactStep):
             # A chained Grug stage: init from the prior stage's saved checkpoints.
@@ -227,7 +232,7 @@ class GrugModel:
             output_path=ctx.output_path,
             run_id=run_id,
             resources=resources,
-            steps=spec.num_train_steps,
+            steps=num_train_steps,
             batch_size=spec.batch_size,
             seed=self.seed,
             mp=self.mp,
