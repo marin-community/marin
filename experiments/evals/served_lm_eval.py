@@ -106,15 +106,12 @@ def brokered_lm_eval_configs(
     benchmark: ServedLmEvalBenchmark,
     *,
     limit: int | None,
-    timeout_seconds: int | None,
-    priority: int,
 ) -> tuple[BrokeredVllmSystemConfig, LmEvalRun]:
     inference = brokered_vllm_config(
         model=benchmark.model,
         tokenizer=benchmark.tokenizer,
         workers=benchmark.workers,
         num_concurrent=benchmark.num_concurrent,
-        timeout_seconds=timeout_seconds,
     )
     inference = replace(
         inference,
@@ -124,7 +121,6 @@ def brokered_lm_eval_configs(
             regions=[benchmark.region] if benchmark.region is not None else None,
         ),
         worker_env_vars=dict(VLLM_WORKER_ENV_VARS),
-        priority=priority,
     )
     eval_run = LmEvalRun(
         tasks=benchmark.tasks,
@@ -150,8 +146,6 @@ def served_lm_eval_step(
     inference, eval_run = brokered_lm_eval_configs(
         benchmark,
         limit=limit,
-        timeout_seconds=None,
-        priority=0,
     )
     return brokered_lm_eval_step(
         inference,
@@ -175,14 +169,13 @@ def brokered_vllm_config(
     tokenizer: str,
     workers: int,
     num_concurrent: int,
-    timeout_seconds: int | None,
 ) -> BrokeredVllmSystemConfig:
     config = BrokeredVllmSystemConfig(
         model=model,
         tokenizer=tokenizer,
         workers=InferenceWorkerConfig(count=workers, max_in_flight_per_worker=num_concurrent),
     )
-    timeout = timeout_seconds or config.server.timeout_seconds
+    timeout = config.server.timeout_seconds
     return replace(
         config,
         server=replace(config.server, timeout_seconds=timeout),

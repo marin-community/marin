@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from marin.inference.types import RunningModel
-from marin.inference.vllm import BrokeredVllmSystemConfig, start_iris_brokered_vllm, start_local_brokered_vllm
+from marin.inference.vllm import BrokeredVllmSystemConfig, start_iris_brokered_vllm
 
 LmEvalModelArgValue = str | int | float | bool
 LM_EVAL_UV_PACKAGES = (
@@ -82,15 +82,6 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun, env_vars: Mapping[str, str]
     environment = dict(os.environ)
     environment.update(env_vars)
     subprocess.run(command, check=True, env=environment)
-
-
-def run_local_brokered_lm_eval(
-    inference: BrokeredVllmSystemConfig,
-    run: LmEvalRun,
-    env_vars: Mapping[str, str],
-) -> None:
-    with start_local_brokered_vllm(inference) as model:
-        run_lm_eval(model, run, env_vars)
 
 
 def run_iris_brokered_lm_eval(
