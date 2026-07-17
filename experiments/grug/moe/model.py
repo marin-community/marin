@@ -36,6 +36,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    fa4_cute_segment_bounds,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -329,7 +330,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
-        disable_rope: bool = False,
+        disable_rope: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -368,17 +369,32 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
+
         # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
         # (second half is rope-free on every layer). ``disable_rope`` skips
         # the RoPE step entirely on this layer — used to opt long layers out
-        # of rotary embedding when ``cfg.disable_long_rope`` is set.
-        if not disable_rope:
+        # of rotary embedding when ``cfg.disable_long_rope`` is set. It may be a
+        # traced scalar bool (per-layer choice inside the layer scan): then RoPE
+        # is always computed and selected with ``jnp.where`` so the scan body has
+        # no ``lax.cond`` (which would pin the FA4 metadata to device 0).
+        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
             half = head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+                qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            return (
+                jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
+                jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
+            )
+
+        if isinstance(disable_rope, bool):
+            if not disable_rope:
+                q, k = _rope(q, k)
+        else:
+            q_roped, k_roped = _rope(q, k)
+            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+            q = jnp.where(keep, q_roped, q)
+            k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -698,7 +714,7 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
-        disable_rope: bool = False,
+        disable_rope: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
@@ -803,6 +819,12 @@ class Transformer(eqx.Module):
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        if segment_ids is not None:
+            # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer-scan
+            # lax.cond. Otherwise they reach the cond as {maximal device=0} and the compiler falls
+            # back to an involuntary full-remat scatter to [num_devices, 1], which serializes through
+            # device 0 and can wedge the MoE all-to-all (collective rendezvous timeout at scale).
+            segment_ids = _batch_reshard(segment_ids)
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
@@ -835,22 +857,37 @@ class Transformer(eqx.Module):
         else:
             assert self.stacked_blocks is not None
             # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
-            # short/long mask choice rides in as a Bool[num_layers] scan input; lax.cond keeps
-            # the body shape uniform. PKO is never used here (scan requires disable_pko=True).
+            # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
+            # (scan requires disable_pko=True).
             mask_schedule = _long_layer_schedule(cfg.num_layers)
+            # Precompute the FA4 per-token metadata for both the full-causal (long) and
+            # sliding-window (short) layers OUTSIDE the scan, then select per layer with a
+            # jnp.where inside the body. This removes the lax.cond around the FA4 pure_callback:
+            # a conditional output feeding the callback is pinned to {maximal device=0} and forces
+            # an involuntary full rematerialization that serializes through device 0 and wedges the
+            # MoE all-to-all at 8+ racks. ``valid`` is window-independent, so it is shared;
+            # ``disable_rope`` rides in as a traced per-layer scalar.
+            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+            long_lower_bounds, valid = fa4_cute_segment_bounds(
+                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            )
+            short_lower_bounds, _ = fa4_cute_segment_bounds(
+                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+            )
+            long_lower_bounds = _batch_reshard(long_lower_bounds)
+            short_lower_bounds = _batch_reshard(short_lower_bounds)
+            valid = _batch_reshard(valid)
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
                 scan_inputs: tuple[Block, jax.Array],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
-                return jax.lax.cond(
-                    jnp.asarray(layer_use_long_mask, dtype=jnp.bool_),
-                    lambda: eqx.filter_checkpoint(layer, policy=remat_policy)(
-                        carry_hidden, long_mask, False, cfg.disable_long_rope
-                    ),
-                    lambda: eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, short_mask, False, False),
-                )
+                use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                disable_rope = use_long if cfg.disable_long_rope else False
+                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
