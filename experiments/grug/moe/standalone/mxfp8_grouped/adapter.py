@@ -271,7 +271,11 @@ def mxfp8_grouped_mm(
     offs,
     *,
     out_dtype=jnp.bfloat16,
-    mma_tiler_mnk: tuple[int, int, int] = (128, 128, 128),
+    # (128, 256, 128) measured ~8% faster than (128, 128, 128) at the row-13
+    # shapes on GB200 (2200 vs 2027 TF/s w13; 2050 vs 1892 TF/s w2), same
+    # numerics (jobs mxfp8-002-g8/g9). N=256 uses the overlapping-accumulator
+    # TMEM path. K must stay 128 (sf_vec_size * 4).
+    mma_tiler_mnk: tuple[int, int, int] = (128, 256, 128),
     cluster_shape_mnk: tuple[int, int, int] = (1, 1, 1),
 ):
     """MXFP8 scaled grouped GEMM ``x[M,K] @ w[E,K,N] -> [M,N]`` on sm100.

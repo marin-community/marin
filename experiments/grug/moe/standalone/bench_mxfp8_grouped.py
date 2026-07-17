@@ -189,7 +189,7 @@ def main():
     p.add_argument("--tokens", type=int, default=262144)
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
-    p.add_argument("--mma-tiler", default="128,128,128", help="mma tiler MNK, e.g. 128,256,128")
+    p.add_argument("--mma-tiler", default="128,256,128", help="mma tiler MNK; 128,256,128 is the measured best")
     p.add_argument("--out", default="bench_mxfp8_grouped.json")
     a = p.parse_args()
     mma_tiler = tuple(int(v) for v in a.mma_tiler.split(","))
