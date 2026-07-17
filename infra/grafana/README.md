@@ -95,7 +95,8 @@ per-instance and ephemeral, so more than one instance means divergent alert stat
 and dashboard versions, while zero means no alert rules evaluate and first paint is
 a cold start.
 
-Access is granted per user/group with `roles/run.invoker` (see `deploy.sh setup`).
+Access is granted per user/group with `roles/iap.httpsResourceAccessor`, plus a
+one-time `roles/run.invoker` for the IAP service agent (see `deploy.sh setup`).
 IAP is the only gate — Grafana itself runs anonymous **Viewer**, because IAP admits
 everyone Google admits and is not role-scoped.
 
