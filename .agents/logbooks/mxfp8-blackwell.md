@@ -382,3 +382,62 @@ author: mcwitt
 - Next action: MXFP8-002 — vendor the CuTeDSL MoE scaled-grouped-GEMM kernel
   (cutlass-dsl 4.5.2) behind the fp8-ragged-cute `cutlass_call` adapter,
   correctness first, then bench vs QuACK bf16 at row-13 expert shapes.
+
+### 2026-07-16 - MXFP8-002: CuTeDSL MXFP8 grouped GEMM working via cutlass_call on GB200 — 2.2 PF/s, gate met on fwd
+
+- Hypothesis: MXFP8-H2 (SM100 block-scaled grouped GEMM >=1.3x vs bf16).
+- Commit Hash: 42f7d9fa2 (vendored kernel + adapter + bench, pushed).
+- Command: `python experiments/grug/moe/standalone/bench_mxfp8_grouped.py` via
+  the usual 1x GB200 iris submit; jobs `/mwittmann/mxfp8-002-g1..g9` (g8 first
+  green, g9 = tile ablation green).
+- Config: cutlass v4.5.2 MoE scaled-grouped kernel (tcgen05 block-scaled MMA,
+  e4m3 + e8m0 sf_vec 32), stock aarch64 nvidia-cutlass-dsl 4.5.2 wheel, no
+  jaxlib fork, no torch. M=262144 tokens, E=64; uniform + Dirichlet-0.5
+  skewed routing incl. zero-token experts; tile (128,256,128).
+- Result (median of 50):
+
+  | shape | arm | ms | TF/s | note |
+  |---|---|---|---|---|
+  | w13 K2560 N1280 | mxfp8_kernel | 0.781 | **2200** | 1.42x vs bf16 dense yardstick (1546) |
+  | w13 skewed | mxfp8_kernel | 0.790 | 2173 | skew costs ~1% |
+  | w2 K1280 N2560 | mxfp8_kernel | 0.838 | **2050** | 1.32x vs bf16 dense (1552) |
+  | w2 skewed | mxfp8_kernel | 0.846 | 2031 | |
+  | either | bf16 XLA ragged_dot | ~80 | 21-33 | strawman only (no sm100 path) |
+
+  Correctness: 3.4e-06..9.9e-06 rel-Frobenius vs dequantized-same-operands
+  reference (gate <1e-3 passed by 2 orders); ~3.7e-2 vs unquantized = expected
+  mxfp8 noise. Tile (128,256,128) beats (128,128,128) by ~8%.
+- Interpretation (`exploratory`, single GPU):
+  - MXFP8-H2 CONFIRMED on the forward product: vs the honest tuned-bf16
+    grouped baseline (QuACK 1,449-1,560 TF/s at these shapes, B200MFU-011),
+    2,200 TF/s is ~1.41-1.52x. 2.2 PF/s is ~49% of B200 dense-FP8 peak on a
+    ragged problem. The persistent scheduler absorbs routing imbalance.
+  - Remaining before layer-level claims: dgrad + wgrad products (vendored
+    kernel's 2Dx2D scenario with accumulate_on_output covers wgrad), and the
+    quantize+swizzle producer — currently bench-only per-group gather/concat;
+    MXFP8-001b already showed XLA quantize (~1 TB/s) can eat the entire win.
+    The fused dual-write quantize+swizzle kernel is now THE critical path
+    (MXFP8-H5).
+- New gotchas (durable):
+  1. `nvidia-cutlass-dsl-libs-cu13` 4.5.2 differs from libs-base at the same
+     version: its `cute.make_ptr` ignores the requested memspace for llvm.ptr
+     values, so cutlass_call tensors arrive in GENERIC address space, not gmem
+     (the Hopper NOTES "genuine gmem pointers" claim holds only on
+     base/cu12). Fix at the launcher boundary: rebuild each tensor via
+     `iterator.toint()` + `make_ptr(dtype, int, AddressSpace.gmem,
+     assumed_align=...)` — make_ptr honors memspace for integer values.
+  2. Any `cute.recast_tensor`/`recast_ptr` on cutlass_call tensors also lands
+     in generic space — avoid recasts; `cutlass.jax` maps f8e8m0fnu/uint8
+     natively and `TensorSpec(mode=(0,2,1))` expresses layout permutations.
+  3. CPU-only local repro: `build_function_spec` + `get_or_compile_kernel`
+     with CUTE_DSL_ARCH=sm_100a compiles the full kernel on a GPU-less x86
+     box — fast iteration; but never install libs-base AND libs-cu13 in one
+     venv (silent wheel shadowing masked gotcha 1 locally).
+  4. f32 `jax.lax.ragged_dot` reference at these shapes RESOURCE_EXHAUSTEDs
+     (triton autotune profiles a ~160 GiB fusion); use per-expert dense
+     matmuls as reference. bf16 ragged_dot on sm100 is 21-33 TF/s.
+  5. The vendored kernel needed a 4th file (`moe_sched_extension.py`) beyond
+     the three surveyed; kernel HardwareInfo needs a live CUDA ctx — hardcode
+     148 SMs for GB200.
+- Next action: dgrad/wgrad products + fused quantize+swizzle kernel, then
+  layer-level fwd+bwd bench (MXFP8-004).
