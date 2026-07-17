@@ -339,3 +339,43 @@ author: mcwitt
 - Next action: MXFP8-001b — add a `mxfp8_prequant` arm (`scaled_matmul` with
   precomputed quantized operands + scales, fwd-only) to isolate GEMM-only
   throughput; keep per-tensor fp8 as the dense reference.
+
+### 2026-07-16 - MXFP8-001b: GEMM-only isolate — blockScaledDot fine, XLA quantize is the killer; dense stays per-tensor
+
+- Hypothesis: MXFP8-H1b (GEMM-only beats bf16; slowdown is quantize overhead).
+- Commit Hash: harness at branch tip (001b arm + ascontiguousarray fix on top
+  of 6d3cf1a02).
+- Command: same submit as MXFP8-001, job `/mwittmann/mxfp8-001b-dense-r2` on
+  cw-us-east-08a (1x GB200, jax 0.10.1, cuDNN 9.19).
+- Result (fwd speedup vs bf16; T=65536):
+
+  | shape | fp8_tensor | mxfp8 e2e | mxfp8 GEMM-only | quantize_x alone |
+  |---|---|---|---|---|
+  | qkvo 2560x2560 | 1.350x | 1.024x | 1.332x | 0.346 ms (~71% of GEMM) |
+  | shared_up 2560x1280 | 1.195x | 0.881x | 1.114x | 0.358 ms |
+  | shared_down 1280x2560 | 1.270x | 1.005x | 1.139x | 0.262 ms |
+
+  fwd+bwd unchanged from MXFP8-001 (fp8_tensor ~1.5x, mxfp8 e2e 0.65-0.79x).
+- Interpretation (`exploratory`):
+  - H1b split verdict: the `__cudnn$blockScaledDot` GEMM itself is healthy
+    (1.11-1.33x) — but XLA's emitted block-quantize kernel runs at roughly
+    1 TB/s effective (0.35 ms for a 336 MB bf16 activation read on ~8 TB/s
+    HBM), one full GEMM's worth of time per operand. On bwd the cotangent is
+    quantized twice (dgrad + wgrad legs), hence the 0.65x.
+  - Even with a FREE quantizer, mxfp8 GEMM-only only ties per-tensor fp8
+    (1.33 vs 1.35 at qkvo, worse at narrow shapes). Per-tensor's delayed
+    scaling has no amax reduction in the hot path and its scalar
+    multiply+cast fuses into neighboring XLA ops — structurally cheaper.
+  - DECISION: dense GEMMs stay on per-tensor `Fp8DotGeneralOp` (the #7079
+    path) on Blackwell. Native-mxfp8 dense is shelved unless/until a fused
+    quantizer exists AND #7271's quality gate shows per-tensor numerics are
+    insufficient (mxfp8's rel-err is only marginally better: 3.7e-2 vs
+    4.3e-2). MXFP8 effort concentrates on the grouped expert GEMMs, where
+    sm100 has NO working fp8 path at all and the CUTLASS DSL kernel brings
+    its own fused scale-factor handling.
+  - Recipe note for #7271: this implies a mixed recipe on Blackwell
+    (per-tensor dense + mxfp8 grouped). Per-tensor dense was already
+    exercised on H100 trainings; document the split in any quality run.
+- Next action: MXFP8-002 — vendor the CuTeDSL MoE scaled-grouped-GEMM kernel
+  (cutlass-dsl 4.5.2) behind the fp8-ragged-cute `cutlass_call` adapter,
+  correctness first, then bench vs QuACK bf16 at row-13 expert shapes.
