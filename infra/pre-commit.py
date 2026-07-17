@@ -50,6 +50,9 @@ EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
+    # Vendored harbor example task: payload that runs inside sandboxes, kept
+    # byte-identical to upstream (including its canary header).
+    "experiments/references/harbor_hello_world/**",
     # grpc generated files
     "**/*_connect.py",
     "**/*_pb2.py",
