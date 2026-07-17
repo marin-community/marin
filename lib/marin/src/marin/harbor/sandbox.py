@@ -27,7 +27,7 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 
-from marin.harbor.iris_environment import IrisEnvironment
+from marin.harbor.iris_environment import GVISOR_PROFILE, IrisEnvironment
 
 
 @dataclass(frozen=True)
@@ -70,7 +70,7 @@ async def iris_sandbox(
     cpus: int | None = None,
     memory_mb: int | None = None,
     storage_mb: int | None = None,
-    container_profile: str = "gvisor",
+    container_profile: str = GVISOR_PROFILE,
 ) -> AsyncIterator[IrisEnvironment]:
     """Run a Harbor sandbox as an Iris job for the duration of the context.
 
