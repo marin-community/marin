@@ -128,7 +128,32 @@ eliminated on the way:
 Measured B16 throughput: fp8 ~73.5k tok/s (0.89 s/step, smoke7 full 40
 steps); bf16 ~65k tok/s (1.0 s/step, smoke9 pre-save steps).
 
-### FP8VAL-003 — full A/B launched (2026-07-17 13:32 UTC)
+### FP8VAL-003a — full1 post-mortem (2026-07-17 15:40 UTC)
+
+Both full1 arms wedged within minutes and were killed:
+
+- **bf16-full1** stalled at the same NCCL "Acquire clique" signature at step ~9
+  — **with checkpoints disabled**, killing the checkpoint theory. The stall
+  follows a "Data loader stalled … queue_size=0" message: it coincides with
+  the first block-shuffle refill from object storage (~10-20 min in), i.e. a
+  shifted dispatch pattern. py-spy: main thread blocked in C inside the
+  `train_step` dispatch (`train.py:522`); the acquire that never completes is
+  a **second, lazily-created NCCL communicator** — the signature of XLA's
+  nccl **comm splitting**. The proven-clean runs (bf16-smoke4 B32, bench)
+  only ever stepped for ~1 min and never reached a refill.
+- **fp8-full1** landed on a node with the known **poisoned uv jax cache**
+  (`barrier_test` ImportError, same as the MFU-bench day) — g8498e8; purged
+  2.7 GiB of cached jax/jaxlib via `task exec` + `uv cache clean jax jaxlib`.
+  Bonus find: after the ImportError the process hung in shutdown for 2 h, so
+  fray never retried — the job sat "running" while dead.
+
+**Fix attempt (full2):** relaunched both arms 15:41 UTC with
+`--xla_gpu_enable_nccl_comm_splitting=false` appended to `XLA_FLAGS` (forces
+full communicator init instead of ncclCommSplit — the stock mitigation for
+lazy-split clique hangs). Monitor now has explicit stall detection
+(no-progress ≈19 min → alert).
+
+### FP8VAL-003 — full A/B launched (2026-07-17 13:32 UTC; superseded by full2 15:41 UTC)
 
 `/mwittmann/fp8val-bf16-full1` and `/mwittmann/fp8val-fp8-full1`, 24000 steps
 × B16 × seq 4096 = **1.57B tokens/arm** (≥ the 1.44B that resolved 0.01-level
