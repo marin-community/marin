@@ -9,8 +9,7 @@ from pathlib import Path
 
 import click
 from fray.types import ResourceConfig
-from iris.cli.connect import open_controller_endpoint
-from iris.client import IrisClient
+from iris.cli.connect import open_iris_client
 from iris.cluster.constraints import preemptible_constraint, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import job_pb2
@@ -99,7 +98,7 @@ def brokered_lm_eval_step(
     if inference.worker_resources is None:
         raise ValueError("inference.worker_resources must be set for a brokered lm-eval artifact")
 
-    def build_config(ctx: StepContext) -> BrokeredLmEvalArtifactConfig:
+    def build_config(context: StepContext) -> BrokeredLmEvalArtifactConfig:
         return BrokeredLmEvalArtifactConfig(
             model=inference.model,
             tokenizer=inference.tokenizer,
@@ -109,7 +108,7 @@ def brokered_lm_eval_step(
             worker_env_vars=tuple(sorted(inference.worker_env_vars.items())),
             ignored_request_fields=inference.proxy.ignored_request_fields,
             lm_eval_uv_packages=LM_EVAL_UV_PACKAGES,
-            eval_run=replace(eval_run, output_path=ctx.output_path),
+            eval_run=replace(eval_run, output_path=context.output_path),
         )
 
     def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
@@ -171,22 +170,17 @@ def run_iris_lm_eval_job(
     constraints = [preemptible_constraint(False)]
     if region is not None:
         constraints.append(region_constraint([region]))
-    with open_controller_endpoint(config_file=Path(iris_config_path)) as endpoint:
-        with IrisClient.remote(
-            endpoint.url,
-            workspace=Path.cwd(),
-            credentials=endpoint.credentials,
-        ) as client:
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(run_parent),
-                name=job_name,
-                resources=ResourceSpec(cpu=parent_cpu, memory=parent_ram, disk=parent_disk),
-                environment=EnvironmentSpec(env_vars=dict(parent_env_vars)),
-                constraints=constraints,
-                priority_band=priority,
-            )
-            print(f"Submitted Iris parent job {job.job_id}", flush=True)
-            job.wait(timeout=float("inf"))
+    with open_iris_client(config_file=Path(iris_config_path), workspace=Path.cwd()) as client:
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(run_parent),
+            name=job_name,
+            resources=ResourceSpec(cpu=parent_cpu, memory=parent_ram, disk=parent_disk),
+            environment=EnvironmentSpec(env_vars=dict(parent_env_vars)),
+            constraints=constraints,
+            priority_band=priority,
+        )
+        print(f"Submitted Iris parent job {job.job_id}", flush=True)
+        job.wait(timeout=float("inf"))
 
 
 def brokered_lm_eval_configs(
