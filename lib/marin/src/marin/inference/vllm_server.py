@@ -22,9 +22,8 @@ from rigging.filesystem import marin_prefix
 from marin.evaluation.evaluators.evaluator import ModelConfig
 
 logger = logging.getLogger(__name__)
-# Bounded tail surfaced inline by the failure path and diagnostics(). The full native stream now
-# streams live to the job log / finelog, so this is just a convenience snapshot — kept bounded
-# (not the whole file) because vLLM logs can be very large.
+# Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
+# this is only a convenience snapshot, capped because vLLM logs can be large.
 _NATIVE_LOG_TAIL_LINES = 1000
 _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
@@ -137,46 +136,33 @@ class IsolatedTpuVllm:
         return {"VLLM_TARGET_DEVICE": "tpu"}
 
 
-# vLLM writes almost all of its logging — including the periodic throughput lines — to the
-# subprocess's *stderr*. Iris' fd-level capture defaults an unprefixed stderr line to ERROR
-# (iris.cluster.log_keys.classify_log_level), so forwarding raw stderr would tag every throughput
-# line ERROR. Route by coarse line severity instead: only error-looking lines go to the parent's
-# stderr; everything else goes to stdout, where Iris classifies it INFO.
+# Forwarded lines route to the parent's stderr (finelog tags it ERROR) or stdout (INFO) by their
+# own level, not by source stream: vLLM writes all levels to its stderr.
 _ERROR_LEVEL_MARKERS = ("ERROR", "CRITICAL")
 
 
 def _looks_like_error(line: str) -> bool:
-    """Coarse severity check for a vLLM log line.
-
-    Deliberately a substring test, not a format parse: vLLM lines carry process/rank prefixes
-    (``(EngineCore_0 pid=…) ERROR …``) and multi-line tracebacks that no single-token parser
-    handles, and the only cost of a misroute is the finelog level tag, not lost content.
-    """
+    """Coarse severity check — a substring, not a format parse; a misroute only mislabels the level."""
     return any(marker in line for marker in _ERROR_LEVEL_MARKERS)
 
 
 class _LogPump:
     """Forward a vLLM subprocess's stdout/stderr to the parent's fds and to on-disk logs.
 
-    Iris ships a task's logs to finelog by capturing the task process's own fd 1/2, so the native
-    vLLM server's output only becomes observable if it reaches those fds — which is why routing
-    goes straight to the parent's stdout/stderr rather than through the Python logger (whose finelog
-    delivery would depend on ``rigging.configure_logging`` having run, and it has not for every
-    caller of this module). One daemon reader thread per pipe drains the child and, per line,
-    (a) appends the raw line to a capped on-disk file that backs the failure-path tail and
-    ``diagnostics()``, and (b) re-emits it to the parent's real stdout/stderr (by coarse severity)
-    so the fd capture carries it to finelog. Draining must never stall while the child is alive: an
-    undrained pipe (~64 KB) would block the child mid-startup.
+    One daemon reader thread per pipe drains the child and, per line, appends it to a capped
+    on-disk log (which backs the failure tail and ``diagnostics()``) and re-emits it to the
+    parent's stdout/stderr by severity. Forwarding goes to the fds directly, not through the
+    logger, so it does not depend on ``rigging.configure_logging`` having run — several callers of
+    this module never call it. A reader must never stall while the child lives: a full pipe blocks
+    the child.
     """
 
     def __init__(self, process: subprocess.Popen[str], stdout_path: str, stderr_path: str) -> None:
         self._process = process
-        # Held open for the whole server lifetime (closed by close()), so a context manager does
-        # not apply. Line-buffered so the failure-path tail sees the child's last lines promptly.
+        # Open for the server's lifetime (closed by close()); line-buffered so the tail stays current.
         self._stdout_file = open(stdout_path, "w", buffering=1)  # noqa: SIM115
         self._stderr_file = open(stderr_path, "w", buffering=1)  # noqa: SIM115
-        # Both reader threads may forward to the parent's stdout, so serialize the emit to keep a
-        # line and its newline together rather than interleaving with the other stream.
+        # Both readers may write to the parent's stdout; serialize so lines don't interleave.
         self._sink_lock = threading.Lock()
         assert process.stdout is not None and process.stderr is not None
         self._threads = (
@@ -193,10 +179,10 @@ class _LogPump:
             thread.start()
 
     def _pump(self, stream, log_file) -> None:
+        # A stalled reader deadlocks the child, so a failed write must not break the drain loop:
+        # guard the disk and parent-fd writes independently.
         try:
             for line in iter(stream.readline, ""):
-                # Keep draining even if a sink write fails: a blocked reader would fill the pipe and
-                # deadlock the child. Disk persistence and parent-fd forwarding fail independently.
                 try:
                     log_file.write(line)
                 except Exception:
@@ -209,11 +195,8 @@ class _LogPump:
                 except Exception:
                     logger.warning("Failed to forward a vLLM log line to the parent process", exc_info=True)
         finally:
-            # Reached at EOF (the child's pipe closed). Flush a trailing fragment that had no
-            # newline — a crash mid-write — so the startup-failure tail, which reads the file
-            # right after join() and before close(), still sees it (the file is line-buffered, so
-            # a newline-less final write would otherwise sit unflushed). Then release the read end
-            # promptly rather than waiting for GC — repeated serves would otherwise leak pipe fds.
+            # At EOF: flush so a newline-less final fragment (a crash mid-write) reaches the tail,
+            # which reads right after join(); then close the read end so serves don't leak pipe fds.
             try:
                 log_file.flush()
             except Exception:
@@ -221,7 +204,7 @@ class _LogPump:
             stream.close()
 
     def join(self, timeout: float | None = None) -> None:
-        """Wait (bounded) for both readers to finish draining once the child's pipes hit EOF."""
+        """Wait for both readers to drain and exit, bounded by ``timeout``."""
         for thread in self._threads:
             thread.join(timeout=timeout)
 
@@ -230,8 +213,7 @@ class _LogPump:
             try:
                 log_file.close()
             except Exception:
-                # Best-effort teardown: a close() failure (e.g. a flush error) is not actionable
-                # here and must not mask the caller's own shutdown path.
+                # Best-effort during teardown; a close failure must not mask the caller's shutdown.
                 logger.debug("Failed to close a vLLM native log file", exc_info=True)
 
 
@@ -244,8 +226,7 @@ class VllmServerHandle:
     process: subprocess.Popen[str]
     process_group_id: int | None
     log_dir: str
-    # Owns the reader threads + on-disk log files. Frozen forbids reassigning the field, not
-    # mutating the referenced pump, so this composes cleanly on a frozen handle.
+    # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
@@ -260,9 +241,8 @@ class VllmServerHandle:
             # The API parent can exit before EngineCore does, so check the group after wait().
             self._signal(signal.SIGKILL)
 
-        # The child and its group are gone now, so the log pipes hit EOF and the reader threads
-        # finish; join them (bounded, so a descendant still holding a pipe cannot hang teardown)
-        # and close the on-disk logs. Idempotent — safe to call more than once.
+        # Child and group are gone, so the pipes are at EOF; join the readers (bounded, so a
+        # descendant holding a pipe cannot hang teardown) and close the logs.
         if self.log_pump is not None:
             self.log_pump.join(timeout=timeout_seconds)
             self.log_pump.close()
@@ -602,7 +582,7 @@ def _start_vllm_native_server(
     # vLLM build target; overlay it after the canonical defaults so it wins.
     native_env.update(launcher.env())
     logger.info(
-        "Starting vLLM native server; subprocess stdout/stderr stream to the job log. "
+        "Starting vLLM native server (output streams to the job log). "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
@@ -617,10 +597,8 @@ def _start_vllm_native_server(
         # release the TPU instead of leaving libtpu held by a stale child.
         start_new_session=True,
     )
-    # Start pumping immediately, before readiness polling: vLLM logs copiously during the
-    # (up to timeout_seconds long) weight load + compile, and an undrained ~64 KB pipe would
-    # block the child mid-startup. The pump forwards each line to the parent's fd 1/2 — which
-    # Iris captures into finelog — and to the on-disk logs that back the failure tail.
+    # Pump before readiness polling: vLLM logs heavily during the long weight-load/compile, and an
+    # undrained pipe would block the child mid-startup.
     log_pump = _LogPump(process, stdout_path, stderr_path)
     log_pump.start()
     try:
@@ -632,8 +610,7 @@ def _start_vllm_native_server(
 
     def _check_process_alive() -> None:
         if process.poll() is not None:
-            # The child has exited, so its pipes are at EOF; drain the pump (bounded) before
-            # reading the tail so the diagnostic includes the child's final, most useful lines.
+            # Child has exited; drain the readers before reading the tail so it has the final lines.
             log_pump.join(timeout=5)
             logs = _native_logs_tail(log_dir)
             raise RuntimeError(

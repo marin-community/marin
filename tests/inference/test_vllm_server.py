@@ -3,11 +3,8 @@
 
 """Tests for native vLLM server log routing.
 
-The native server runs as a subprocess. Iris ships a job's logs to finelog by capturing the
-task process's own fd 1/2, so the server's stdout/stderr must reach those fds to be observable.
-These tests exercise ``_LogPump``: that it forwards the child's output to the parent's real
-stdout/stderr, persists it to the on-disk logs that back the failure tail, routes by coarse
-severity, and tears down cleanly.
+``_LogPump`` forwards the subprocess's stdout/stderr to the parent's fds and to the on-disk logs,
+routing by severity and flushing/draining on teardown; these exercise that.
 """
 
 import os
@@ -30,9 +27,8 @@ def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[
 
 
 def test_log_pump_forwards_to_parent_fds_and_persists(tmp_path, capsys):
-    # The child writes an INFO-level line on each of its own streams plus an ERROR line on
-    # stderr. vLLM emits throughput at INFO on *its* stderr, so severity — not source stream —
-    # must decide the parent fd: INFO anywhere -> parent stdout (finelog INFO), ERROR -> stderr.
+    # The child writes an INFO line on each of its streams plus an ERROR line. Severity, not the
+    # source stream, picks the parent fd: INFO -> parent stdout, ERROR -> parent stderr.
     script = (
         "import sys\n"
         "print('INFO worker throughput: 42 tokens/s')\n"
@@ -56,8 +52,8 @@ def test_log_pump_forwards_to_parent_fds_and_persists(tmp_path, capsys):
     assert "gen throughput: 100.0 tokens/s" in stderr_text
     assert "EngineCore boom" in stderr_text
 
-    # Parent fds: both INFO lines (including the one the child wrote to *its* stderr) land on the
-    # parent's stdout, and only the ERROR line lands on stderr.
+    # Both INFO lines (including the one the child wrote to its stderr) go to the parent's stdout;
+    # only the ERROR line goes to stderr.
     captured = capsys.readouterr()
     assert "worker throughput: 42 tokens/s" in captured.out
     assert "gen throughput: 100.0 tokens/s" in captured.out
