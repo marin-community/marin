@@ -1,35 +1,36 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exp 117: contacts-v1 1.5B LR / weight-decay / epochs tuning, one point per launch.
+"""Exp 117: contacts-v1 1.5B LR / weight-decay / batch-size / epochs tuning.
 
 Single-point trainer for the contacts-v1 1.5B tuning sweep of MarinFold #117
 (https://github.com/Open-Athena/MarinFold/issues/117), the multi-epoch extension of #75.
-This module trains **exactly one explicit ``(epochs, lr, wd, tpu, region)`` point per
+This module trains **exactly one explicit ``(epochs, lr, wd, batch_size, tpu, region)`` point per
 invocation** and nothing else: no grid, no ladder, no scheduling. The search over
-``(epochs, lr, wd)`` is owned by the ``design-adaptive-sweep`` / ``run-adaptive-sweep``
+``(epochs, lr, wd, batch_size)`` is owned by the ``design-adaptive-sweep`` / ``run-adaptive-sweep``
 skills, which drive this script one point at a time. ``SMOKE=yes`` overrides the point
 with a tiny, identity-isolated end-to-end run (see below) for validating a launch on a
 target slice/region; it never resumes or overwrites a real sweep point.
 
-The recipe (Qwen3 1.5B, ``seq_len=8192``, global batch 128, AdamW + cosine with 10%
-warmup, unmasked loss, pack-prefix-only, full Feistel shuffle at ``seed=0``, the contacts-v1
-documents tokenized in-pipeline) mirrors #75 / MarinFold #70. Where #117 and #75 differ,
+The recipe (Qwen3 1.5B, ``seq_len=8192``, AdamW + cosine with 10%
+warmup, unmasked loss, pack-prefix-only, hierarchical Feistel block shuffle at ``data_seed=0``,
+the contacts-v1 documents tokenized in-pipeline) mirrors #75 / MarinFold #70. Where #117 and #75 differ,
 **#117 wins** -- notably one permanent checkpoint every epoch (in addition to the 10-minute
 rolling resumption checkpoint).
 
 Objective being optimized: **final-step ``eval/tokenized/contacts-v1-val/loss``** (read from W&B).
 
 Interface for the adaptive-sweep skills (identity-vs-execution split):
-  * ``TPU`` selects the slice and drives per-device batch sizing without touching run identity:
-    global batch stays 128 on every slice, so a same-region slice change resumes the same run.
+  * ``BATCH_SIZE`` is a search coordinate and part of run identity. ``TPU`` selects the slice and
+    drives per-device batch fitting without touching run identity. Production points require the
+    slice's chip count to divide and not exceed the global batch size.
   * ``REGION`` sets the storage prefix (cache + checkpoint locality) and the run id. A region
     change starts a fresh run; a same-region re-dispatch resumes. Documents are tokenized
     in-pipeline into a region-local cache (raw docs are staged in every eligible region).
 
 Preview a point (builds nothing, submits nothing)::
 
-    EPOCHS=8 LR=1e-2 WD=0.1 TPU=v5p-8 REGION=us-east5 PREVIEW=yes \\
+    EPOCHS=8 LR=1e-3 WD=0.1 BATCH_SIZE=128 TPU=v6e-128 REGION=us-east5 PREVIEW=yes \\
         uv run python -m experiments.protein.exp117_sweep
 
 Launch one run (secrets come from the iris command, never baked into the config)::
@@ -39,12 +40,13 @@ Launch one run (secrets come from the iris command, never baked into the config)
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
-        -e EPOCHS 8 -e LR 1e-2 -e WD 0.1 -e TPU v5p-8 -e REGION us-east5 \\
+        -e EPOCHS 8 -e LR 1e-3 -e WD 0.1 -e BATCH_SIZE 128 \\
+        -e TPU v6e-128 -e REGION us-east5 \\
         -- python -m experiments.protein.exp117_sweep
 
-Smoke test one slice/region (a real but tiny end-to-end run: ~20 steps, one eval, one
-permanent checkpoint, under an isolated ``exp117-smoke`` identity that never touches a real
-point). EPOCHS/LR/WD are optional in smoke mode but honored if given; ``SMOKE_STEPS``
+Smoke test one slice/region (a real but tiny end-to-end run with evals and permanent checkpoints,
+under an isolated ``exp117-smoke`` identity that never touches a real
+point). EPOCHS/LR/WD/BATCH_SIZE are optional in smoke mode but honored if given; ``SMOKE_STEPS``
 overrides the step budget. ``CORRECTION_FACTOR`` overrides the batch-fit correction factor (else the
 slice's calibrated per-family default) -- a smaller value packs a larger per-device batch. In smoke
 mode the slice and effective correction factor are folded into the run identity, so each
@@ -55,7 +57,7 @@ mode the slice and effective correction factor are folded into the run identity,
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -e HUGGING_FACE_HUB_TOKEN "$HF_TOKEN" \\
         -e WANDB_ENTITY "$WANDB_ENTITY" -e WANDB_PROJECT "$WANDB_PROJECT" \\
-        -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 -e SMOKE_BATCH 64 \\
+        -e SMOKE yes -e TPU v6e-4 -e REGION us-east5 \\
         -- python -m experiments.protein.exp117_sweep
 """
 
@@ -66,7 +68,8 @@ from dataclasses import dataclass, replace
 from typing import TypeVar
 
 from fray.cluster import ResourceConfig
-from fray.types import tpu_family
+from fray.types import get_tpu_topology, tpu_family
+from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
@@ -93,15 +96,19 @@ _T = TypeVar("_T")
 # --- Identity ----------------------------------------------------------------
 
 # Calendar versions (marin's ArtifactStep requires calendar ``YYYY.MM.DD[.N]`` or a mutable
-# ``dev``). Split so the training campaign and the tokenized cache version independently:
+# ``dev``). Share the date while versioning the training campaign and tokenized cache independently:
 #   * SWEEP_VERSION keys the run / checkpoint identity (``{run_id}/{SWEEP_VERSION}/``).
 #   * CACHE_VERSION keys the tokenize cache path (``tokenized/contacts-v1{,-val}/{CACHE_VERSION}/``).
-# Bump SWEEP_VERSION to fork a fresh training campaign while reusing the existing cache; bump
-# CACHE_VERSION to rebuild the cache. The train handle depends on the cache handles, so if
+# Bump SWEEP_SUBVERSION to fork a fresh training campaign while reusing the existing cache. Keep
+# DATA_SUBVERSION fixed unless the data recipe itself must be rebuilt. The train handle depends on
+# the cache handles, so if
 # SWEEP_VERSION is a (fixed) calendar version the cache versions must be too -- a fixed handle
 # cannot depend on a mutable ``dev`` dep (marin ``_lower``).
-SWEEP_VERSION: str = "2026.07.13.1"
-CACHE_VERSION: str = "2026.07.13.1"
+VERSION_DATE: str = "2026.07.13"
+SWEEP_SUBVERSION: str = "02"
+DATA_SUBVERSION: str = "1"  # Preserve the existing cache identity exactly: 2026.07.13.1.
+SWEEP_VERSION: str = f"{VERSION_DATE}.{SWEEP_SUBVERSION}"
+CACHE_VERSION: str = f"{VERSION_DATE}.{DATA_SUBVERSION}"
 RUN_PREFIX: str = "prot-exp117"
 WANDB_GROUP: str = "exp117-contacts-v1-tune"
 
@@ -116,10 +123,9 @@ SMOKE_WANDB_GROUP: str = "exp117-smoke"
 SMOKE_VERSION: str = "v3"  # v3: overhead_factor -> per-family correction_factor (identity token oh->cf)
 SMOKE_STEPS_DEFAULT: int = 20
 SMOKE_NUM_EVALS: int = 2  # evals (and permanent checkpoints) spread across the smoke run
-# Nominal point used when EPOCHS/LR/WD are omitted in smoke mode; overridden by any that are
-# set. The values are immaterial to what smoke validates (the pipeline mechanics), but must
-# be valid so the optimizer builds.
-SMOKE_POINT_DEFAULTS: tuple[int, float, float] = (1, 1e-3, 0.1)
+# Representative point used when EPOCHS/LR/WD/BATCH_SIZE are omitted in smoke mode; any explicit
+# values override it.
+SMOKE_POINT_DEFAULTS: tuple[int, float, float, int] = (1, 1e-3, 0.1, 128)
 
 
 # --- Data (contacts-v1 documents, tokenized in-pipeline) ---------------------
@@ -163,17 +169,14 @@ MODEL_CONFIG = Qwen3Config(
 MODEL_SIZE: str = "1_5b"  # size label for the run id and tags; matches MODEL_CONFIG
 
 
-# --- Fixed training recipe (mirrors #70/#75; only LR/WD/epochs vary per launch) ---
+# --- Fixed training recipe (mirrors #70/#75) ---------------------------------
 
-BATCH_SIZE: int = 128
 SEQ_LEN: int = 8192
+DATA_SEED: int = 0
+SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=512, perm_type="feistel")
 WARMUP: float = 0.1  # 10% warmup
 LR_SCHEDULE: str = "cosine"  # AdamW + cosine decay
 NUM_EVALS_PER_EPOCH: int = 2
-
-TOKENS_PER_STEP: int = BATCH_SIZE * SEQ_LEN
-STEPS_PER_EPOCH: int = round(TRAIN_TOKENS / TOKENS_PER_STEP)
-STEPS_PER_EVAL: int = max(1, round(STEPS_PER_EPOCH / NUM_EVALS_PER_EPOCH))
 
 # Per-family correction factor for the batch-fit estimate, calibrated against measured per-chip
 # ceilings (see exp117_batch_calibration.md): each value sits inside its family's measured range with
@@ -186,19 +189,32 @@ CORRECTION_FACTORS: dict[str, float] = {"v5e": 0.5, "v6e": 0.3, "v5p": 0.45}
 
 @dataclass(frozen=True)
 class Point:
-    """One trial: explicit epoch count, peak LR, and weight decay."""
+    """One trial: explicit epoch count, peak LR, weight decay, and global batch size."""
 
     epochs: int
     learning_rate: float
     weight_decay: float
+    batch_size: int
+
+    @property
+    def tokens_per_step(self) -> int:
+        return self.batch_size * SEQ_LEN
+
+    @property
+    def steps_per_epoch(self) -> int:
+        return round(TRAIN_TOKENS / self.tokens_per_step)
+
+    @property
+    def steps_per_eval(self) -> int:
+        return max(1, round(self.steps_per_epoch / NUM_EVALS_PER_EPOCH))
 
     @property
     def num_train_steps(self) -> int:
-        return self.epochs * STEPS_PER_EPOCH
+        return self.epochs * self.steps_per_epoch
 
     @property
     def point_id(self) -> str:
-        return f"e{self.epochs}-lr{_fmt_lr(self.learning_rate)}-wd{_fmt_wd(self.weight_decay)}"
+        return f"e{self.epochs}-lr{_fmt_lr(self.learning_rate)}-wd{_fmt_wd(self.weight_decay)}-bs{self.batch_size}"
 
 
 def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
@@ -209,7 +225,7 @@ def run_id(point: Point, region: str, prefix: str = RUN_PREFIX) -> str:
     selects the identity namespace (``SMOKE_RUN_PREFIX`` isolates smoke runs from real ones).
     Run outputs (checkpoints, W&B mirror) land at ``gs://marin-<region>/{run_id}/{SWEEP_VERSION}/``.
     """
-    return f"{prefix}-cv1-{MODEL_SIZE}-{point.point_id}-{region}"
+    return f"{prefix}-cv1-s{SWEEP_SUBVERSION}-{MODEL_SIZE}-{point.point_id}-{region}"
 
 
 # --- Env inputs (one point per launch) ---------------------------------------
@@ -221,26 +237,29 @@ def _env_value(name: str, cast: Callable[[str], _T], default: _T | None) -> _T:
     if raw is not None:
         return cast(raw)
     if default is None:
-        raise SystemExit(f"missing required env var '{name}'; set EPOCHS, LR, WD, TPU, REGION")
+        raise SystemExit(f"missing required env var '{name}'; set EPOCHS, LR, WD, BATCH_SIZE, TPU, REGION")
     return default
 
 
 def parse_point(defaults: Point | None = None) -> Point:
-    """Read the ``(epochs, lr, wd)`` point from the environment.
+    """Read the ``(epochs, lr, wd, batch_size)`` point from the environment.
 
     A full sweep launch passes ``defaults=None`` and requires every variable. Smoke mode
-    passes a fallback point so EPOCHS/LR/WD are optional (any that are set still win).
+    passes a fallback point so EPOCHS/LR/WD/BATCH_SIZE are optional (any that are set still win).
     """
     epochs = _env_value("EPOCHS", int, defaults.epochs if defaults else None)
     learning_rate = _env_value("LR", float, defaults.learning_rate if defaults else None)
     weight_decay = _env_value("WD", float, defaults.weight_decay if defaults else None)
+    batch_size = _env_value("BATCH_SIZE", int, defaults.batch_size if defaults else None)
     if epochs < 1:
         raise SystemExit(f"EPOCHS must be >= 1, got {epochs}")
     if learning_rate <= 0:
         raise SystemExit(f"LR must be > 0, got {learning_rate}")
     if weight_decay < 0:
         raise SystemExit(f"WD must be >= 0, got {weight_decay}")
-    return Point(epochs=epochs, learning_rate=learning_rate, weight_decay=weight_decay)
+    if batch_size < 1:
+        raise SystemExit(f"BATCH_SIZE must be >= 1, got {batch_size}")
+    return Point(epochs=epochs, learning_rate=learning_rate, weight_decay=weight_decay, batch_size=batch_size)
 
 
 def parse_tpu() -> str:
@@ -255,6 +274,21 @@ def parse_region() -> str:
     if not region:
         raise SystemExit("missing required env var REGION (e.g. us-east5)")
     return region.lower()
+
+
+def validate_sweep_target(point: Point, tpu: str) -> None:
+    """Reject a production placement incompatible with the global batch."""
+    chip_count = get_tpu_topology(tpu).chip_count
+    if chip_count > point.batch_size:
+        raise SystemExit(
+            f"TPU {tpu} has {chip_count} chips, more than BATCH_SIZE={point.batch_size}; "
+            "choose a slice with no more chips than the global batch"
+        )
+    if point.batch_size % chip_count != 0:
+        raise SystemExit(
+            f"BATCH_SIZE={point.batch_size} must be divisible by TPU {tpu}'s {chip_count} data-axis chips; "
+            "choose a smaller compatible slice or another batch size"
+        )
 
 
 def preview() -> bool:
@@ -297,24 +331,6 @@ def correction_factor_for(tpu: str, override: float | None) -> float:
     return CORRECTION_FACTORS[family]
 
 
-def parse_smoke_batch() -> int | None:
-    """Global-batch override for the direct max-batch probe (``SMOKE_BATCH``); smoke mode only.
-
-    When set, the run trains at exactly this global batch with ``per_device_parallelism=-1``
-    (full per-chip batch, NO gradient accumulation), bypassing the HBM estimate and correction factor
-    entirely. The job then either fits (succeeds) or OOMs, so a binary search over powers of 2 finds
-    each slice's true batch ceiling -- the empirical ground truth the estimate is calibrated against.
-    Folded into the run identity so every probe is a distinct W&B run.
-    """
-    raw = os.environ.get("SMOKE_BATCH")
-    if raw is None or not raw.strip():
-        return None
-    batch = int(raw)
-    if batch < 1:
-        raise SystemExit(f"SMOKE_BATCH must be >= 1, got {batch}")
-    return batch
-
-
 # --- Helpers -----------------------------------------------------------------
 
 
@@ -335,12 +351,12 @@ def _fmt_correction(correction_factor: float) -> str:
     return f"{correction_factor:g}".replace(".", "p")
 
 
-def _batch_bytes(correction_factor: float) -> int:
+def _batch_bytes(batch_size: int, correction_factor: float) -> int:
     """Estimated HBM to place the full global batch (params + Adam state + activations)."""
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     param_bytes, activation_bytes = dense_transformer_bytes(
         parameter_count=params,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         seq_len=SEQ_LEN,
         hidden_dim=MODEL_CONFIG.hidden_dim,
         intermediate_dim=MODEL_CONFIG.intermediate_dim,
@@ -354,14 +370,18 @@ def _batch_bytes(correction_factor: float) -> int:
     )
 
 
-def batch_fit(tpu: str, correction_factor: float | None) -> tuple[int, int]:
-    """``(per_device_parallelism, gradient_accumulation)`` that fits global batch 128 on ``tpu``.
+def batch_fit(tpu: str, batch_size: int, correction_factor: float | None) -> tuple[int, int]:
+    """Return ``(per_device_parallelism, gradient_accumulation)`` for ``batch_size`` on ``tpu``.
 
-    ``per_device_parallelism == -1`` means the full per-chip batch fits with no accumulation. The
-    global batch is always 128, so the objective is comparable across every slice. ``correction_factor``
-    is the per-launch override, or ``None`` to use the slice's calibrated per-family default.
+    ``per_device_parallelism == -1`` means the full per-chip batch fits with no accumulation.
+    ``correction_factor`` is the per-launch override, or ``None`` to use the slice's calibrated
+    per-family default.
     """
-    return tpu_batch_config(tpu, BATCH_SIZE, _batch_bytes(correction_factor_for(tpu, correction_factor)))
+    return tpu_batch_config(
+        tpu,
+        batch_size,
+        _batch_bytes(batch_size, correction_factor_for(tpu, correction_factor)),
+    )
 
 
 def _tokenize_cache(name: str, docs: str, *, validation: bool) -> ArtifactStep[TokenizedCache]:
@@ -393,27 +413,28 @@ def _training_env(region: str) -> dict[str, str]:
     return env
 
 
-def _tags(point: Point, region: str) -> list[str]:
+def _tags(point: Point, region: str, *, num_train_steps: int) -> list[str]:
     # Stable, identity-bearing facts only. TPU / per-device parallelism are deliberately
     # omitted: a run may migrate slices over its life, so they are neither stable tags nor
     # part of run identity -- keeping them out also leaves the fingerprint TPU-independent.
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
-    tokens = TOKENS_PER_STEP * point.num_train_steps
+    tokens = point.batch_size * SEQ_LEN * num_train_steps
     return [
         "protein",
         "exp117",
         "contacts-v1",
         "qwen3",
-        "unmasked",
         f"model_size={MODEL_SIZE}",
-        f"global_batch={BATCH_SIZE}",
+        f"global_batch={point.batch_size}",
         f"params={params}",
         f"epochs={point.epochs}",
         f"lr={point.learning_rate:g}",
         f"wd={point.weight_decay:g}",
         f"region={region}",
-        f"steps={point.num_train_steps}",
+        f"steps={num_train_steps}",
         f"tokens={tokens}",
+        f"sweep_subversion={int(SWEEP_SUBVERSION)}",
+        f"data_subversion={int(DATA_SUBVERSION)}",
         f"sweep_version={SWEEP_VERSION}",
         f"cache_version={CACHE_VERSION}",
     ]
@@ -438,7 +459,6 @@ class RunShape:
     steps_per_eval: int
     checkpoint_every: int  # permanent-checkpoint keep interval (in steps)
     tags: list[str]
-    batch_override: int | None = None  # SMOKE_BATCH: force this global batch + per_device_parallelism=-1
 
 
 def production_shape(point: Point, region: str) -> RunShape:
@@ -447,15 +467,13 @@ def production_shape(point: Point, region: str) -> RunShape:
         run_id=run_id(point, region),
         wandb_group=WANDB_GROUP,
         num_train_steps=point.num_train_steps,
-        steps_per_eval=STEPS_PER_EVAL,
-        checkpoint_every=STEPS_PER_EPOCH,
-        tags=_tags(point, region),
+        steps_per_eval=point.steps_per_eval,
+        checkpoint_every=point.steps_per_epoch,
+        tags=_tags(point, region, num_train_steps=point.num_train_steps),
     )
 
 
-def smoke_shape(
-    point: Point, region: str, steps: int, tpu: str, correction_factor: float | None, batch_override: int | None
-) -> RunShape:
+def smoke_shape(point: Point, region: str, steps: int, tpu: str, correction_factor: float | None) -> RunShape:
     """Tiny, identity-isolated end-to-end run: ``SMOKE_NUM_EVALS`` evals + permanent ckpts.
 
     Reuses the real caches, model, and TPU batch-fit so it validates the actual launch path, but under
@@ -469,16 +487,12 @@ def smoke_shape(
     cf = correction_factor_for(tpu, correction_factor)
     identity = f"{base}-{tpu}-cf{_fmt_correction(cf)}-{SMOKE_VERSION}"
     tags = [
-        *_tags(point, region),
+        *_tags(point, region, num_train_steps=steps),
         "smoke",
-        "batch-calib",
         f"tpu={tpu}",
         f"correction_factor={cf:g}",
         f"smoke_version={SMOKE_VERSION}",
     ]
-    if batch_override is not None:
-        identity = f"{identity}-b{batch_override}"
-        tags.append(f"smoke_batch={batch_override}")
     return RunShape(
         run_id=identity,
         wandb_group=SMOKE_WANDB_GROUP,
@@ -486,7 +500,6 @@ def smoke_shape(
         steps_per_eval=every,
         checkpoint_every=every,
         tags=tags,
-        batch_override=batch_override,
     )
 
 
@@ -495,14 +508,13 @@ def _apply_recipe_overrides(
     tpu: str,
     checkpoint_every: int,
     correction_factor: float | None,
-    force_full_batch: bool,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """Apply the #117 knobs :func:`train_lm` does not expose.
 
     Identity-bearing (always applied, so they enter the fingerprint): a permanent checkpoint
     every ``checkpoint_every`` steps alongside the 10-minute rolling resumption checkpoint,
-    pack-prefix-only components (documents are never concat-and-split), and full-eval with no
-    downsampling (``max_eval_batches=None``, per #117). Execution-only (run time
+    the shuffle policy and seed, pack-prefix-only components (documents are never concat-and-split),
+    and full-eval with no downsampling (``max_eval_batches=None``, per #117). Execution-only (run time
     only, so run identity stays TPU-independent): fit the global batch to the actual TPU via
     per-device parallelism.
     """
@@ -524,12 +536,13 @@ def _apply_recipe_overrides(
             ),
         )
         data = pod.train_config.data
-        data = replace(data, components={key: replace(c, pack=True) for key, c in data.components.items()})
+        data = replace(
+            data,
+            shuffle=SHUFFLE,
+            components={key: replace(c, pack=True) for key, c in data.components.items()},
+        )
         if not ctx.is_fingerprint:
-            # force_full_batch (SMOKE_BATCH probe): place the whole per-chip batch with no
-            # accumulation and skip the estimate, so the run directly tests whether this global
-            # batch fits the slice's HBM.
-            per_device_parallelism = -1 if force_full_batch else batch_fit(tpu, correction_factor)[0]
+            per_device_parallelism = batch_fit(tpu, pod.train_config.trainer.train_batch_size, correction_factor)[0]
             eval_parallelism = (
                 trainer.per_device_eval_parallelism if per_device_parallelism == -1 else per_device_parallelism
             )
@@ -538,7 +551,7 @@ def _apply_recipe_overrides(
                 per_device_parallelism=per_device_parallelism,
                 per_device_eval_parallelism=eval_parallelism,
             )
-        train_config = replace(pod.train_config, trainer=trainer, data=data)
+        train_config = replace(pod.train_config, trainer=trainer, data=data, data_seed=DATA_SEED)
         return replace(pod, train_config=train_config)
 
     return replace(step, build_config=build_config)
@@ -554,7 +567,6 @@ def build_run(
     per-device batch fit at run time; ``region`` scopes storage and cache locality.
     """
     name = shape.run_id
-    batch_size = shape.batch_override or BATCH_SIZE
     train_cache = _tokenize_cache(COMPONENT_TRAIN, TRAIN_DOCS, validation=False)
     val_cache = _tokenize_cache(COMPONENT_VAL, VAL_DOCS, validation=True)
     step = train_lm(
@@ -568,7 +580,7 @@ def build_run(
         ),
         datasets={train_cache: 1.0},
         validation=[val_cache],
-        batch_size=batch_size,
+        batch_size=point.batch_size,
         seq_len=SEQ_LEN,
         num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
@@ -582,9 +594,7 @@ def build_run(
         tags=shape.tags,
         env_vars=_training_env(region),
     )
-    return _apply_recipe_overrides(
-        step, tpu, shape.checkpoint_every, correction_factor, force_full_batch=shape.batch_override is not None
-    )
+    return _apply_recipe_overrides(step, tpu, shape.checkpoint_every, correction_factor)
 
 
 # --- Preview + entry point ---------------------------------------------------
@@ -593,17 +603,15 @@ def build_run(
 def _print_preview(
     point: Point, shape: RunShape, tpu: str, region: str, mode: str, correction_factor: float | None
 ) -> None:
-    if shape.batch_override is not None:
-        per_device_parallelism, grad_accum, batch = -1, 1, shape.batch_override
-    else:
-        per_device_parallelism, grad_accum = batch_fit(tpu, correction_factor)
-        batch = BATCH_SIZE
+    per_device_parallelism, grad_accum = batch_fit(tpu, point.batch_size, correction_factor)
+    batch = point.batch_size
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = batch * SEQ_LEN * shape.num_train_steps
     print(
         f"PREVIEW exp117 [{mode}] -- no submit\n"
         f"  run_id={shape.run_id} wandb_group={shape.wandb_group}\n"
-        f"  epochs={point.epochs} lr={point.learning_rate:g} wd={point.weight_decay:g}\n"
+        f"  epochs={point.epochs} lr={point.learning_rate:g} wd={point.weight_decay:g} "
+        f"batch_size={point.batch_size}\n"
         f"  steps={shape.num_train_steps} (steps/eval={shape.steps_per_eval}, "
         f"permanent ckpt every {shape.checkpoint_every} steps)\n"
         f"  tokens={tokens / 1e9:.3f}B params={params / 1e9:.3f}B schedule={LR_SCHEDULE} warmup={WARMUP}\n"
@@ -619,9 +627,10 @@ def _resolve_run(region: str, tpu: str, correction_factor: float | None) -> tupl
     """Resolve the ``(point, shape, mode)`` for this invocation from the environment."""
     if smoke():
         point = parse_point(defaults=Point(*SMOKE_POINT_DEFAULTS))
-        shape = smoke_shape(point, region, smoke_steps(), tpu, correction_factor, parse_smoke_batch())
+        shape = smoke_shape(point, region, smoke_steps(), tpu, correction_factor)
         return point, shape, "smoke"
     point = parse_point()
+    validate_sweep_target(point, tpu)
     return point, production_shape(point, region), "sweep"
 
 

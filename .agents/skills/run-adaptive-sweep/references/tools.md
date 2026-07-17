@@ -26,7 +26,7 @@ Input:
 - `now`, `resource_levels`, corresponding positive `resource_ratios`, positive `wall_time_limit`, and `max_inflight_chips`.
 - `current_rung` and `full_exploitation_rung` as zero-based resource indices.
 - `recovery`: positive `startup_relocation_timeout`, `same_target_restart_timeout`, `same_region_relocation_timeout`, and `cross_region_restart_timeout`, with `same_target_restart_timeout < same_region_relocation_timeout < cross_region_restart_timeout`.
-- `targets`: unique target ID, region, TPU slice, and explicit chips.
+- `targets`: unique target ID, region, TPU slice, and explicit chips, already filtered for the selected trial's configuration-dependent constraints.
 - `observations`: Dispatcher history flattened to `trial_id`, `regional_run_id`, `dispatch_id`, `rung`, `target`, `state`, `submitted_at`, `observed_at`, `wandb_run_id`, and `run_progress`. Progress may be `null` before it is observable; intervals with an unknown endpoint do not contribute throughput evidence.
 
 For each observation interval in a dispatch:

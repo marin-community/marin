@@ -27,7 +27,7 @@ After the script is available, prefer one complete draft and consolidated review
 
 ## Require A Training Entry Point
 
-Require a specific training script and a command that runs exactly one declared `(configuration, resource rung, region)`. The script must accept the TPU slice and region explicitly, log the exact objective, and expose monotonic W&B `run_progress` from `0` to `1` over the declared rung. TPU selection must drive adaptive batch sizing without changing regional run identity; region must determine W&B identity and checkpoint locality. The same regional run must resume on another compatible TPU slice, while a region change starts a fresh run without reading the prior region's checkpoint.
+Require a specific training script and a command that runs exactly one declared `(configuration, resource rung, region)`. The script must accept the TPU slice and region explicitly, log the exact objective, and expose monotonic W&B `run_progress` from `0` to `1` over the declared rung. Every searched value is configuration identity; placement may change execution details without changing that identity. Region must determine W&B identity and checkpoint locality. The same regional run must resume on another compatible TPU slice, while a region change starts a fresh run without reading the prior region's checkpoint.
 
 Inspect this interface. Stop and ask for the script when none is provided. Explain any required change and obtain operator approval before editing the script.
 
@@ -36,7 +36,7 @@ Inspect this interface. Stop and ask for the script when none is provided. Expla
 Write the policy as Markdown with four sections:
 
 1. `Required Inputs` is the stable YAML contract consumed by `run-adaptive-sweep`, grouped as `experiment`, `search`, and `execution`.
-2. `Execution Preferences` is structured for agent readability but has no fixed schema.
+2. `Execution Preferences` is structured for agent readability but has no fixed schema. Record any configuration-dependent target constraints here and enforce them in the training script.
 3. `Operator Directives` contains prose rules and personal preferences.
 4. `Reviewed Assumptions` records every inferred value approved by the operator.
 
@@ -139,7 +139,7 @@ Review the following consequences with the operator, not just the field values:
 - **Objective:** `wandb_metric`, observation point, and direction define every comparison. The metric must be comparable across all trials and stable enough to tune without replicated configurations.
 - **Grid:** Values, `scale`, and `preferred_max_gap` describe the intended resolution of the initial grid and later extensions. Use them as the default when proposing adjacent values so local dominance remains meaningful. The Orchestrator may choose different spacing when evidence justifies it, but must record the value and reason. Hard domains permit convergence at a legal endpoint and limit expansion; an edge short of its hard bound cannot pass the convergence tool. `special_values` are legal exceptions to the regular transformed sequence.
 - **Resource ladder:** Every level must converge, but evidence transfers across levels and may reduce expensive upper-rung sampling. More rungs add information and mandatory work.
-- **Execution envelope:** `wall_time` is the hard elapsed limit. `max_inflight_chips` is the requested-capacity ceiling that the Orchestrator tries to fill until all rungs converge; propose `64` when unspecified. Target preferences determine which regions and slices may consume that budget. Checkpoints remain in their original region, so a cross-region placement starts that trial again.
+- **Execution envelope:** `wall_time` is the hard elapsed limit. `max_inflight_chips` is the requested-capacity ceiling that the Orchestrator tries to fill until all rungs converge; propose `64` when unspecified. Target preferences and configuration-dependent constraints determine which regions and slices may consume that budget. Require the script to reject an invalid pairing as a final guard. Checkpoints remain in their original region, so a cross-region placement starts that trial again.
 - **Placement exploration:** `full_exploitation_level` is the one operator-facing exploration control for region and slice selection. Earlier rungs admit progressively more lower-ranked or untried targets; at and beyond this level only the best currently observed feasible target is admitted. Use the highest rung when unspecified.
 - **Recovery:** Set timeouts from normal registration and progress cadence. A same-target restart preserves identity and checkpoint state but releases TPU capacity and may requeue; leave enough time before `same_region_relocation_timeout` for that attempt to queue and demonstrate progress. Require `same_target_restart_timeout < same_region_relocation_timeout < cross_region_restart_timeout`; `startup_relocation_timeout` governs the separate no-registration case. Terminal failures retry immediately. When context supplies no better values, propose `15m` polling and timeouts of `1h`, `2h`, `4h`, and `48h`, respectively. Present them for approval and request alternatives when startup, progress cadence, or queueing makes them questionable.
 
@@ -157,7 +157,7 @@ Before requesting approval, summarize:
 
 - What constitutes one trial, how rungs may interleave, how rung convergence is tested, and when the grid may expand.
 - Initial configurations per rung, maximum trials on the initial grid, and exhaustive relative work `configurations * sum(resource_ratios)`. Include the full hard-domain grid envelope when its expansion sequence is unambiguous.
-- The hard wall-time limit, eligible regions and slices, maximum inflight chips, and maximum requested chip-hours implied by those limits.
+- The hard wall-time limit, eligible regions and slices, configuration-dependent placement constraints, maximum inflight chips, and maximum requested chip-hours implied by those limits.
 - A duration estimate from prior runs when credible. Otherwise state that duration is initially unknown and will be revised after early progress establishes throughput.
 - Values inferred by the agent, missing blockers, script changes requiring permission, and assumptions that could materially change cost or behavior.
 

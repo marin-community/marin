@@ -1,5 +1,8 @@
 # TPU batch calibration
 
+This records the completed calibration. The temporary `SMOKE_BATCH` probe used to collect these
+measurements has been removed from `exp117_sweep.py`.
+
 `tpu_batch_config` predicts, for a slice and target global batch, the per-device microbatch (`pdp`)
 and gradient accumulation that fit HBM. Its one free parameter is `correction_factor` — a scalar on the
 byte estimate. **Goal: calibrate that single knob** — a value, tuned against direct measurement on a
@@ -22,9 +25,9 @@ overstate the ceiling, so every measured run must complete. Measure on the small
   - v4 excluded — its only region has no region-local raw docs, so it can't tokenize without a
     (disallowed) cross-region copy.
 - **Regions** — v5e: europe-west4, us-west4 · v6e: europe-west4, us-east1, us-east5 · v5p: us-central1, us-east5.
-- **Probe** — `SMOKE_BATCH=<N>` sets the exact global batch and forces `per_device_parallelism = -1`
+- **Probe** — `SMOKE_BATCH=<N>` set the exact global batch and forced `per_device_parallelism = -1`
   (whole per-chip batch, no accumulation), bypassing the estimator: the run fits (trains) or OOMs.
-  `N` folds into the run id + a tag, so each probe is a distinct W&B run.
+  `N` was folded into the run id and a tag, so each probe was a distinct W&B run.
 
 ## Measuring the ceiling
 
