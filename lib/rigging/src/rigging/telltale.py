@@ -43,7 +43,7 @@ _M = TypeVar("_M", bound=MetricWrapperBase)
 _lock = threading.Lock()
 _metrics: dict[str, MetricWrapperBase] = {}
 _status: str = ""
-_started = time.time()
+_start_time = time.time()
 
 
 def _get_or_create(
@@ -97,10 +97,8 @@ def histogram(name: str, documentation: str, labelnames: Sequence[str] = ()) -> 
 def metric_name(name: str, prefix: str = "") -> str:
     """Convert an arbitrary counter/metric key into a legal Prometheus name.
 
-    Prometheus names admit only ``[a-zA-Z0-9_:]``, while Marin's existing counter
-    keys are paths (``zephyr/records_in``) and tracker keys (``train/loss``).
-    Callers mirroring an existing naming scheme onto a telltale page share this so
-    one key cannot map to two different series depending on who converted it.
+    Every character outside ``[a-zA-Z0-9_]`` becomes an underscore, so path-shaped
+    keys like ``zephyr/records_in`` or ``train/loss`` become legal series names.
     """
     sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
     return f"{prefix}_{sanitized}" if prefix else sanitized
@@ -195,7 +193,7 @@ def _render_index(status: str, uptime: float) -> str:
 
 @public
 def _index_route(_request: Request) -> HTMLResponse:
-    return HTMLResponse(_render_index(get_status(), time.time() - _started))
+    return HTMLResponse(_render_index(get_status(), time.time() - _start_time))
 
 
 def routes() -> list[Route]:

@@ -3,22 +3,18 @@
 
 """Serve ``rigging.telltale`` from a process that runs no server of its own.
 
-Actor processes need none of this: ``ActorServer`` already owns a port and mounts
-the telltale routes into its own app. This module is for the other side — a
-training process, which boots the JAX network and then blocks in XLA without ever
-serving anything. It supplies the two things ``rigging`` structurally cannot: a
-server (``rigging`` has no ``uvicorn``, being the dependency leaf ``finelog``
-builds on) and Iris identity.
+For a process that boots the JAX network and then blocks in XLA without ever
+listening on anything. Processes that already serve — anything hosting an
+``ActorServer`` — get the same pages on the port they already have, and should
+not call this.
 
-Each process serves its own registry. On a multi-process host every child has its
-own Python interpreter and its own metrics, so each registers a distinct endpoint
-including its process index. A page here is rank-local by construction; merging
-across ranks is a query over shipped rows, not something this can fake.
+The page is rank-local: each process serves only its own registry, and on a
+multi-process host each registers its own endpoint under its process index.
 """
 
+import atexit
 import logging
 import os
-import socket
 
 import uvicorn
 from rigging import telltale
@@ -27,6 +23,7 @@ from starlette.applications import Starlette
 
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
 from iris.managed_thread import get_thread_container
 from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
@@ -76,21 +73,27 @@ def start() -> str | None:
         logger.debug("no in-cluster Iris job context; skipping telltale")
         return None
 
-    # Bind ephemeral rather than taking a named port: named ports are allocated
-    # per task, so multi-process hosts would collide on one, and a fixed port
-    # gets taken by whatever co-tenant grabs it first.
-    with socket.socket() as probe:
-        probe.bind(("", 0))
-        port = probe.getsockname()[1]
+    # Ephemeral rather than a named port: a named port is allocated per task, so
+    # the processes sharing a multi-process host would collide on it, and a fixed
+    # port gets taken by whatever co-tenant grabs it first.
+    port = find_free_port()
 
     app = Starlette(routes=telltale.routes())
     server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="error", log_config=None))
     get_thread_container().spawn_server(server, name=f"telltale-{port}")
-    ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(lambda: server.started, timeout=Duration.from_seconds(5.0))
+    ExponentialBackoff(initial=0.05, maximum=0.5).wait_until_or_raise(
+        lambda: server.started,
+        timeout=Duration.from_seconds(5.0),
+        error_message=f"telltale server did not start on port {port}",
+    )
 
     address = f"http://{job_info.advertise_host}:{port}"
     name = _endpoint_name()
-    ctx.registry.register(name, address, {"job_id": ctx.job_id.to_wire()})
+    endpoint_id = ctx.registry.register(name, address, {"job_id": ctx.job_id.to_wire()})
+    # Match the registrations in jax_init: drop the endpoint on a clean exit so a
+    # dead address is not served. A crash leaves it to the controller's cascade
+    # delete on task cleanup.
+    atexit.register(ctx.registry.unregister, endpoint_id)
     _started = True
     logger.info("telltale serving at %s, registered as %s", address, name)
     return address
