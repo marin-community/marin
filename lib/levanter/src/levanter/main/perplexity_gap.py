@@ -30,6 +30,7 @@ from levanter.analysis.model_perplexity import (
 )
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
+    GapScoringDataset,
     RawTextDocument,
     TokenizedChunk,
     TokenizedDocument,
@@ -41,7 +42,6 @@ from levanter.analysis.perplexity_gap import (
 )
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
-from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -68,7 +68,7 @@ class GapFinderModelConfig:
 class GapFinderConfig:
     model_a: GapFinderModelConfig
     model_b: GapFinderModelConfig
-    datasets: dict[str, DatasetComponent] = field(default_factory=dict)
+    datasets: dict[str, GapScoringDataset] = field(default_factory=dict)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     output_path: str = "perplexity-gap"
     max_eval_length: int = 4096
@@ -79,7 +79,7 @@ class GapFinderConfig:
 @dataclass
 class ModelPerplexityConfig:
     model: GapFinderModelConfig
-    datasets: dict[str, DatasetComponent] = field(default_factory=dict)
+    datasets: dict[str, GapScoringDataset] = field(default_factory=dict)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     output_path: str = "model-perplexity"
     max_eval_length: int = 4096

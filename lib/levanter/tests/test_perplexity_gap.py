@@ -29,6 +29,7 @@ import levanter.analysis.perplexity_gap as gap_analysis
 import levanter.main.perplexity_gap as perplexity_gap_main
 from levanter.analysis.perplexity_gap import (
     GapReportBuilder,
+    GapScoringDataset,
     RawTextDocument,
     TokenizedChunk,
     TokenizedDocument,
@@ -43,8 +44,7 @@ from levanter.analysis.perplexity_gap import (
 )
 from levanter.checkpoint import save_checkpoint
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text.datasets import DatasetComponent, UrlDatasetSourceConfig
-from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.data.text.datasets import UrlDatasetSourceConfig
 from levanter.distributed import DistributedConfig
 from levanter.main.perplexity_gap import (
     GapFinderConfig,
@@ -666,7 +666,7 @@ def test_score_main_writes_outputs_without_uploading_model_score_artifact(monkey
                 model=LlamaConfig(num_layers=1, num_heads=1, num_kv_heads=1, hidden_dim=8, max_seq_len=8),
                 tokenizer="fake-tokenizer",
             ),
-            datasets={"paloma/example": DatasetComponent(format=TextLmDatasetFormat())},
+            datasets={"paloma/example": GapScoringDataset(source=UrlDatasetSourceConfig())},
             trainer=FakeTrainer(),  # type: ignore[arg-type]
             output_path=tmpdir,
             max_eval_length=8,
@@ -910,12 +910,8 @@ def test_perplexity_gap_main_same_model_zero_gap():
         save_checkpoint({"model": model}, 0, ckpt_path)
 
         datasets = {
-            "tiny/raw": DatasetComponent(
-                source=UrlDatasetSourceConfig(
-                    validation_urls=[f"file://{data_path}"],
-                    format=TextLmDatasetFormat(),
-                ),
-                format=TextLmDatasetFormat(),
+            "tiny/raw": GapScoringDataset(
+                source=UrlDatasetSourceConfig(validation_urls=[f"file://{data_path}"]),
             )
         }
 

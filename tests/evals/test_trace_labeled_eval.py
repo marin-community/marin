@@ -17,7 +17,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
 
-from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 
 class FailingAfterLimitSource(ShardedDataSource[int]):
@@ -93,7 +93,7 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
     tokenizer = load_tokenizer(str(tokenizer_path))
     trace_format = TraceChatEvaluationFormat(
         messages_field="messages",
-        chat_template=LLAMA_3_1_CHAT_TEMPLATE,
+        chat_template=MARIN_CHAT_TEMPLATE,
         loss_tags=("patch", "outcome"),
     )
     dataset_config = TraceLabeledEvalDatasetConfig(

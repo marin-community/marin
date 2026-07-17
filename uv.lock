@@ -442,15 +442,6 @@ wheels = [
 ]
 
 [[package]]
-name = "antlr4-python3-runtime"
-version = "4.11.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a4/1b/59dc12d9816edee8be6a166be7c220910ff18cce2ded9877a08b27396a83/antlr4-python3-runtime-4.11.0.tar.gz", hash = "sha256:6a46d4f6033c8d7e53c8975cee5d83b3ba1b48157f6beb09a4965062dacfe2e0", size = 116951, upload-time = "2022-09-04T19:49:27.321Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/f3/2cab1ffe441ffcc4605bf638f524fed86db6699a25d04bbecb5bfdde372b/antlr4_python3_runtime-4.11.0-py3-none-any.whl", hash = "sha256:f523f91387283045f129c343b363a8dda3a07eea62721b8eda95f2d8b817b656", size = 144189, upload-time = "2022-09-04T19:49:25.198Z" },
-]
-
-[[package]]
 name = "anyio"
 version = "4.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -751,30 +742,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b0/1c6a16426d389813b48d95e26898aff79abbde42ad353958ad95cc8c9b21/beautifulsoup4-4.14.3.tar.gz", hash = "sha256:6292b1c5186d356bba669ef9f7f051757099565ad9ada5dd630bd9de5fa7fb86", size = 627737, upload-time = "2025-11-30T15:08:26.084Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/39/47f9197bdd44df24d67ac8893641e16f386c984a0619ef2ee4c51fbbc019/beautifulsoup4-4.14.3-py3-none-any.whl", hash = "sha256:0918bfe44902e6ad8d57732ba310582e98da931428d231a5ecb9e7c703a735bb", size = 107721, upload-time = "2025-11-30T15:08:24.087Z" },
-]
-
-[[package]]
-name = "bespokelabs-curator"
-version = "0.1.16"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiofiles" },
-    { name = "anthropic" },
-    { name = "datasets" },
-    { name = "instructor" },
-    { name = "litellm" },
-    { name = "matplotlib" },
-    { name = "nest-asyncio" },
-    { name = "pandas" },
-    { name = "pydantic" },
-    { name = "rich" },
-    { name = "tiktoken" },
-    { name = "tqdm" },
-    { name = "xxhash" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/4f/5b877348b9126f2474de1611a09c8a7c4c1af6abc842bb912c69c3e7c777/bespokelabs_curator-0.1.16.tar.gz", hash = "sha256:645336d7057e323dcd479412e34c4b064d3400e91ec758bc98f69b8a58f50d52", size = 1133565, upload-time = "2025-01-21T17:43:06.364Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/9b/0e8ae46de4cf5d8d5f012b52b99f368af6120d54d1a624e157432027f651/bespokelabs_curator-0.1.16-py3-none-any.whl", hash = "sha256:d8bdd5c1feee32c6694f454f90374435e06c12214efdadc9c89592ee953b481c", size = 1212972, upload-time = "2025-01-21T17:43:03.747Z" },
 ]
 
 [[package]]
@@ -2199,18 +2166,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fire"
-version = "0.7.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "termcolor" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/00/f8d10588d2019d6d6452653def1ee807353b21983db48550318424b5ff18/fire-0.7.1.tar.gz", hash = "sha256:3b208f05c736de98fb343310d090dcc4d8c78b2a89ea4f32b837c586270a9cbf", size = 88720, upload-time = "2025-08-16T20:20:24.175Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/4c/93d0f85318da65923e4b91c1c2ff03d8a458cbefebe3bc612a6693c7906d/fire-0.7.1-py3-none-any.whl", hash = "sha256:e43fd8a5033a9001e7e2973bab96070694b9f12f2e0ecf96d4683971b5ab1882", size = 115945, upload-time = "2025-08-16T20:20:22.87Z" },
-]
-
-[[package]]
 name = "flash-attn-4"
 version = "4.0.0b16"
 source = { registry = "https://pypi.org/simple" }
@@ -3289,29 +3244,6 @@ wheels = [
 ]
 
 [[package]]
-name = "instructor"
-version = "1.14.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "diskcache" },
-    { name = "docstring-parser" },
-    { name = "jinja2" },
-    { name = "jiter" },
-    { name = "openai" },
-    { name = "pydantic" },
-    { name = "pydantic-core" },
-    { name = "requests" },
-    { name = "rich" },
-    { name = "tenacity" },
-    { name = "typer" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/ef/986d059424db204ed57b29d8c07fda35de2a2c72dee8ea7994bc90a6f767/instructor-1.14.5.tar.gz", hash = "sha256:fcb6432867f2fe4a5986e8bf389dcc64ed2ad4039a12a2dff85464e51c2f171a", size = 69950754, upload-time = "2026-01-29T14:18:50.454Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/04/e442e1356c97b03a6d30d2b462f7c0bdfbf207e75f6833815fd1225a75b4/instructor-1.14.5-py3-none-any.whl", hash = "sha256:2a5a31222b008c0989be1cc001e33a237f49506e80ac5833f6d36d7690bae7b1", size = 177445, upload-time = "2026-01-29T14:18:53.641Z" },
-]
-
-[[package]]
 name = "interegular"
 version = "0.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3988,39 +3920,12 @@ wheels = [
 ]
 
 [[package]]
-name = "langdetect"
-version = "1.0.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
-
-[[package]]
 name = "lark"
 version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/af/60/bc7622aefb2aee1c0b4ba23c1446d3e30225c8770b38d7aedbfb65ca9d5a/lark-1.2.2.tar.gz", hash = "sha256:ca807d0162cd16cef15a8feecb862d7319e7a09bdb13aef927968e45040fed80", size = 252132, upload-time = "2024-08-13T19:49:00.652Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2d/00/d90b10b962b4277f5e64a78b6609968859ff86889f5b898c1a778c06ec00/lark-1.2.2-py3-none-any.whl", hash = "sha256:c2276486b02f0f1b90be155f2c8ba4a8e194d42775786db622faccd652d8e80c", size = 111036, upload-time = "2024-08-13T19:48:58.603Z" },
-]
-
-[[package]]
-name = "latex2sympy2-extended"
-version = "1.11.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "antlr4-python3-runtime" },
-    { name = "sympy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/30/75/456da2da05f6380ea96e6ea804ab2c03e41fc3ed80052307fe8efe6ea20e/latex2sympy2_extended-1.11.0.tar.gz", hash = "sha256:9695657c81b50abba2636638638618db59f4663ed2a4a12d62cef74a40e28fec", size = 207023, upload-time = "2026-01-10T01:43:21.319Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/61/f75cd1fa54d8434276126034aed54dd120747de9a8fa013cdd79545ccbeb/latex2sympy2_extended-1.11.0-py3-none-any.whl", hash = "sha256:aebb77d52ce269e25028e4bea89ddb14d242ba36bcf7b636496fb5fd9728d234", size = 209050, upload-time = "2026-01-10T01:43:19.458Z" },
-]
-
-[package.optional-dependencies]
-antlr4-11-0 = [
-    { name = "antlr4-python3-runtime" },
 ]
 
 [[package]]
@@ -4294,25 +4199,6 @@ dependencies = [
     { name = "zstandard" },
 ]
 
-[package.optional-dependencies]
-api = [
-    { name = "aiohttp" },
-    { name = "requests" },
-    { name = "tenacity" },
-    { name = "tiktoken" },
-    { name = "tqdm" },
-]
-ifeval = [
-    { name = "immutabledict" },
-    { name = "langdetect" },
-    { name = "nltk" },
-]
-math = [
-    { name = "antlr4-python3-runtime" },
-    { name = "math-verify", extra = ["antlr4-11-0"] },
-    { name = "sympy" },
-]
-
 [[package]]
 name = "lm-format-enforcer"
 version = "0.11.3"
@@ -4465,17 +4351,6 @@ datakit = [
 dedup = [
     { name = "marin-dupekit" },
 ]
-eval = [
-    { name = "lm-eval", extra = ["api", "ifeval", "math"] },
-]
-evalchemy = [
-    { name = "antlr4-python3-runtime" },
-    { name = "bespokelabs-curator" },
-    { name = "fire" },
-    { name = "lm-eval", extra = ["math"] },
-    { name = "sqlalchemy" },
-    { name = "sympy" },
-]
 gpu = [
     { name = "flash-attn-4", extra = ["cu13"], marker = "(sys_platform == 'linux' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jax", extra = ["cuda13"], marker = "extra == 'extra-10-marin-core-gpu' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -4585,15 +4460,12 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "antlr4-python3-runtime", marker = "extra == 'evalchemy'", specifier = "==4.11" },
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = ">=1.0.0" },
-    { name = "bespokelabs-curator", marker = "extra == 'evalchemy'", specifier = "==0.1.16" },
     { name = "braceexpand" },
     { name = "datasets", specifier = "<5.0.0" },
     { name = "draccus", specifier = ">=0.11.6" },
     { name = "faiss-cpu", marker = "extra == 'datakit'" },
     { name = "fasttext-wheel", specifier = ">=0.9.2" },
-    { name = "fire", marker = "extra == 'evalchemy'" },
     { name = "flash-attn-4", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.0.0b16,<4.1" },
     { name = "fsspec", specifier = ">=2025.3.0" },
     { name = "gcsfs" },
@@ -4613,8 +4485,6 @@ requires-dist = [
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.41" },
     { name = "libtpu", marker = "extra == 'vllm'", specifier = "==0.0.41" },
-    { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "lm-eval", extras = ["math", "api", "ifeval"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "luxical", marker = "extra == 'datakit'" },
     { name = "marin-dupekit", marker = "extra == 'dedup'", specifier = ">=0.1.2.dev202606060824" },
     { name = "marin-fray", editable = "lib/fray" },
@@ -4641,8 +4511,6 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "scikit-learn", marker = "extra == 'datakit'" },
     { name = "scipy", marker = "extra == 'datakit'" },
-    { name = "sqlalchemy", marker = "extra == 'evalchemy'" },
-    { name = "sympy", marker = "extra == 'evalchemy'", specifier = ">=1.12.1,<1.14" },
     { name = "sympy", marker = "extra == 'math'" },
     { name = "sympy", marker = "extra == 'rl'", specifier = ">=1.12.1,<1.14" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "marin-core", extra = "gpu" } },
@@ -4670,7 +4538,7 @@ requires-dist = [
     { name = "vllm", marker = "extra == 'vllm'", git = "https://github.com/marin-community/vllm.git?rev=a0b205f2afd5b33d01703a4cd9b18453d5286f39" },
     { name = "wandb", specifier = ">0.24.0" },
 ]
-provides-extras = ["gpu", "tpu", "cpu", "rl", "eval", "evalchemy", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
+provides-extras = ["gpu", "tpu", "cpu", "rl", "vizier", "vllm", "harbor", "dedup", "datakit", "math"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5617,23 +5485,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/79/de6c16cc902f4fc372236926b0ce2ab7845268dcc30fb2fbb7f71b418631/marshmallow-3.26.2.tar.gz", hash = "sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57", size = 222095, upload-time = "2025-12-22T06:53:53.309Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/2f/5108cb3ee4ba6501748c4908b908e55f42a5b66245b4cfe0c99326e1ef6e/marshmallow-3.26.2-py3-none-any.whl", hash = "sha256:013fa8a3c4c276c24d26d84ce934dc964e2aa794345a0f8c7e5a7191482c8a73", size = 50964, upload-time = "2025-12-22T06:53:51.801Z" },
-]
-
-[[package]]
-name = "math-verify"
-version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "latex2sympy2-extended" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/12/b8d13b581e110ac2f724a2351a8361a70fa36d057eb945d6379e8747c256/math_verify-0.9.0.tar.gz", hash = "sha256:45ac6c61344ba056b9e99a660a4bc8d044ed408f730aed68c60435aa5eec4645", size = 60329, upload-time = "2026-01-10T01:48:33.056Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/76/6b4969bccc842b6567f7e6ee015684b9428a9b7fcbdf479e73716f43597f/math_verify-0.9.0-py3-none-any.whl", hash = "sha256:3703e7c4885354027fa84409d762a596a2906d1fd4deb78361876bd905a76194", size = 29967, upload-time = "2026-01-10T01:48:31.674Z" },
-]
-
-[package.optional-dependencies]
-antlr4-11-0 = [
-    { name = "latex2sympy2-extended", extra = ["antlr4-11-0"] },
 ]
 
 [[package]]

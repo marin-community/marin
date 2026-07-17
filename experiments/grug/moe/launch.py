@@ -29,8 +29,9 @@ from levanter.optim.config import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
+from marin.experiment.cli import experiment_main
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -203,13 +204,15 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
-def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
     :func:`~marin.execution.lazy.lower`. Pinned components never re-tokenize; the
     paloma/uncheatable suites are validation (weight 0).
     """
+    name = "grug/4_10_baseline_moe"
+    version = resolve_version(name, version)
     nem = nemotron_datasets(tokenizer=llama3_tokenizer)
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
     train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
@@ -243,7 +246,7 @@ def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoin
         )
 
     return ArtifactStep(
-        name=user_namespaced_name("grug/4_10_baseline_moe", version),
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
@@ -254,4 +257,4 @@ def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoin
 
 
 if __name__ == "__main__":
-    StepRunner().run([grug_moe_baseline().lower()])
+    experiment_main(grug_moe_baseline)()

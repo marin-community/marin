@@ -37,6 +37,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.data import mixture
@@ -97,7 +98,7 @@ def train_lm(
     z_loss_weight: float | None,
     evals: EvalSuite | None,
     resources: ResourceConfig,
-    version: str,
+    version: str | None = None,
     validation: Sequence[ArtifactStep[TokenizedCache]] = (),
     init_from: ArtifactStep[LevanterCheckpoint] | None = None,
     mp: str = MARIN_PRECISION,
@@ -136,8 +137,12 @@ def train_lm(
 
     A mutable (``dev``) ``version`` namespaces the checkpoint per user — its name becomes
     ``users/{username}/{name}`` so concurrent authors of the same experiment do not clobber each
-    other; a fixed (calendar) ``version`` keeps the shared name.
+    other; a fixed (calendar) ``version`` keeps the shared name. ``version`` defers to the ambient
+    :class:`~marin.execution.build_context.BuildContext` when omitted (resolved by ``name`` before
+    the per-user namespacing), so a driver can set it once for the whole run via
+    :mod:`marin.experiment.cli`.
     """
+    version = resolve_version(name, version)
     if (num_train_steps is None) == (num_train_epochs is None):
         raise ValueError("Exactly one of num_train_steps or num_train_epochs must be set.")
     if num_train_epochs is not None:

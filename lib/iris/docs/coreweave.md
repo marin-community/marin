@@ -699,8 +699,11 @@ uv run iris --cluster=<cluster> job run \
   -e SCALE_GPU_REPLICAS 2 -e SCALE_HIDDEN_DIM 1024 -e SCALE_NUM_LAYERS 8 \
   -e SCALE_NUM_EXPERTS 16 -e SCALE_TOP_K 2 -e SCALE_BATCH 32 \
   -e SCALE_SEQ_LEN 1024 -e SCALE_STEPS 10 -e RUN_ID <run-id> \
-  -- python -m experiments.grug.moe.launch_cw_scale
+  -- python -m experiments.grug.moe.launch_cw_scale --version dev --run
 ```
+
+`--version` sets the checkpoint version (required; `dev` to iterate) and `--run` builds it —
+without `--run` the launcher prints the lowered plan and exits.
 
 Success signals: every replica enters `initialize_jax` with
 `IRIS_NUM_TASKS=<replicas>`, steps complete, a checkpoint commits, and the
