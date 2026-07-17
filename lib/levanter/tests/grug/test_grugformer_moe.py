@@ -15,6 +15,13 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+import levanter.grug._moe.source_push_combine as source_push_combine
+import levanter.grug._moe.source_push_forward as source_push_forward
+from levanter.grug._moe.source_push_forward import make_source_push_forward_source_plan_raw_inputs
+import levanter.grug._moe.source_push_inbox as source_push_inbox
+from levanter.grug._moe.source_push_inbox import PushInboxConfig
+import levanter.grug._moe.source_push_public as source_push_public
+import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -117,6 +124,52 @@ def _skip_without_sonic_gpu_runtime() -> None:
         pytest.skip("raw Sonic triton_call tests require a GPU")
 
 
+def _skip_without_h100x8() -> None:
+    devices = jax.devices()
+    if len(devices) < 8:
+        pytest.skip("source-push MGPU smoke requires at least 8 visible devices")
+    if not all(device.platform == "gpu" for device in devices[:8]):
+        pytest.skip("source-push MGPU smoke requires GPUs")
+    if not all("H100" in getattr(device, "device_kind", "").upper() for device in devices[:8]):
+        pytest.skip("source-push MGPU smoke is restricted to H100")
+
+
+def _shard_public_ep_arrays(
+    mesh: Mesh,
+    x_source: jax.Array,
+    selected_source: jax.Array,
+    combine_source: jax.Array,
+    w_gate_up_source: jax.Array,
+    w_down_source: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    ep_size, tokens_per_rank, hidden_dim = x_source.shape
+    experts_per_rank = w_gate_up_source.shape[1]
+    intermediate_dim = w_down_source.shape[2]
+    topk = selected_source.shape[2]
+
+    x = jnp.asarray(x_source.reshape(ep_size * tokens_per_rank, hidden_dim), dtype=jnp.bfloat16)
+    selected_experts = jnp.asarray(selected_source.reshape(ep_size * tokens_per_rank, topk), dtype=jnp.int32)
+    combine_weights = jnp.asarray(combine_source.reshape(ep_size * tokens_per_rank, topk), dtype=jnp.bfloat16)
+    w_gate_up = jnp.asarray(
+        w_gate_up_source.reshape(ep_size * experts_per_rank, hidden_dim, 2 * intermediate_dim),
+        dtype=jnp.bfloat16,
+    )
+    w_down = jnp.asarray(
+        w_down_source.reshape(ep_size * experts_per_rank, intermediate_dim, hidden_dim),
+        dtype=jnp.bfloat16,
+    )
+
+    batch_sharding = NamedSharding(mesh, P("expert", None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    return (
+        jax.device_put(x, batch_sharding),
+        jax.device_put(selected_experts, batch_sharding),
+        jax.device_put(combine_weights, batch_sharding),
+        jax.device_put(w_gate_up, expert_sharding),
+        jax.device_put(w_down, expert_sharding),
+    )
+
+
 def test_moe_mlp_runs_without_ep_axis():
     mesh = _make_dense_mesh()
     tokens = max(8, len(jax.devices()) * 8)
@@ -155,6 +208,102 @@ def test_moe_mlp_runs_without_ep_axis():
         )
         out_jit = jit_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
         np.testing.assert_allclose(np.asarray(out), np.asarray(out_jit), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_source_push_backend_requires_concrete_expert_mesh():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(101),
+        tokens=8,
+        hidden_dim=16,
+        intermediate_dim=16,
+        num_experts=2,
+        topk=1,
+    )
+
+    with pytest.raises(ValueError, match="requires a concrete expert-parallel source-push MGPU mesh"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=None,
+        )
+
+
+def test_moe_mlp_blackwell_source_push_backend_requires_concrete_expert_mesh():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(102),
+        tokens=8,
+        hidden_dim=16,
+        intermediate_dim=16,
+        num_experts=2,
+        topk=1,
+    )
+
+    with pytest.raises(ValueError, match="requires a concrete expert-parallel source-push MGPU mesh"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="pallas_mgpu_source_push_blackwell",
+            mesh=None,
+        )
+
+
+def test_source_push_public_blackwell_config_uses_tuned_transport_defaults():
+    ep_size = 8
+    tokens_per_rank = 512
+    topk = 4
+    experts_per_rank = 32
+    token_ids = jnp.arange(tokens_per_rank, dtype=jnp.int32)[None, :, None]
+    source_ids = jnp.arange(ep_size, dtype=jnp.int32)[:, None, None]
+    route_slots = jnp.arange(topk, dtype=jnp.int32)[None, None, :]
+    selected = (token_ids * topk + route_slots + source_ids) % (ep_size * experts_per_rank)
+    weights = jnp.ones((ep_size, tokens_per_rank, topk), dtype=jnp.float32)
+
+    hopper_config = source_push_public._source_push_config_from_public_inputs(
+        selected,
+        weights,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=3072,
+        intermediate_dim=3072,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=1.25,
+        implementation=source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION,
+    )
+    blackwell_config = source_push_public._source_push_config_from_public_inputs(
+        selected,
+        weights,
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        topk=topk,
+        hidden_dim=3072,
+        intermediate_dim=3072,
+        experts_per_rank=experts_per_rank,
+        capacity_factor=1.25,
+        implementation=source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION_BLACKWELL,
+    )
+
+    assert blackwell_config.entries_per_rank > 24
+    assert hopper_config.inbox_slots == 12
+    assert hopper_config.send_worker_programs_per_peer == 2
+    assert blackwell_config.inbox_slots == 24
+    assert blackwell_config.send_worker_programs_per_peer == 4
+    assert blackwell_config.worker_programs_per_peer == 32
+    assert (
+        source_push_public._source_push_execution_mode(source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION)
+        == source_push_forward.FORWARD_EXECUTION_STAGED_HOST_SYNC
+    )
+    assert (
+        source_push_public._source_push_execution_mode(source_push_public.SOURCE_PUSH_PUBLIC_IMPLEMENTATION_BLACKWELL)
+        == source_push_forward.FORWARD_EXECUTION_STAGED_DEVICE_SYNC
+    )
 
 
 def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
@@ -571,6 +720,450 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
 
     np.testing.assert_allclose(np.asarray(ragged_out), np.asarray(ring_out), rtol=1e-5, atol=1e-5)
     assert int(ragged_dropped) == int(ring_dropped)
+
+
+def test_source_push_forward_matches_public_ep_backends_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=8,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=64,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
+    mesh = Mesh(
+        np.asarray(jax.devices()[: config.ep_size]),
+        ("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x = jnp.asarray(
+        raw_inputs.x.reshape(config.ep_size * config.tokens_per_rank, config.hidden_dim),
+        dtype=jnp.bfloat16,
+    )
+    selected_experts = jnp.asarray(
+        raw_inputs.selected_experts.reshape(config.ep_size * config.tokens_per_rank, config.topk),
+        dtype=jnp.int32,
+    )
+    combine_weights = jnp.asarray(
+        raw_inputs.combine_weights.reshape(config.ep_size * config.tokens_per_rank, config.topk),
+        dtype=jnp.bfloat16,
+    )
+    w_gate_up = jnp.asarray(
+        raw_inputs.w_gate_up.reshape(
+            config.ep_size * config.experts_per_rank,
+            config.hidden_dim,
+            2 * config.intermediate_dim,
+        ),
+        dtype=jnp.bfloat16,
+    )
+    w_down = jnp.asarray(
+        raw_inputs.w_down.reshape(
+            config.ep_size * config.experts_per_rank,
+            config.intermediate_dim,
+            config.hidden_dim,
+        ),
+        dtype=jnp.bfloat16,
+    )
+
+    batch_sharding = NamedSharding(mesh, P("expert", None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    x = jax.device_put(x, batch_sharding)
+    selected_experts = jax.device_put(selected_experts, batch_sharding)
+    combine_weights = jax.device_put(combine_weights, batch_sharding)
+    w_gate_up = jax.device_put(w_gate_up, expert_sharding)
+    w_down = jax.device_put(w_down, expert_sharding)
+
+    with jax.set_mesh(mesh):
+        source_push_out, source_push_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=config.capacity_factor,
+            report_capacity_overflow=True,
+        )
+        source_push_out_repeat, source_push_dropped_repeat = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=config.capacity_factor,
+            report_capacity_overflow=True,
+        )
+        baselines = {
+            implementation: moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_gate_up,
+                w_down,
+                implementation=implementation,
+                mesh=mesh,
+                capacity_factor=config.capacity_factor,
+                report_capacity_overflow=True,
+            )
+            for implementation in ("ragged_all_to_all", "ring")
+        }
+
+    source_push_raw = np.asarray(jax.device_get(source_push_out))
+    source_push_repeat_raw = np.asarray(jax.device_get(source_push_out_repeat))
+    np.testing.assert_array_equal(source_push_repeat_raw, source_push_raw)
+    assert int(jax.device_get(source_push_dropped_repeat)) == int(jax.device_get(source_push_dropped))
+
+    source_push_host = np.asarray(source_push_raw, dtype=np.float32)
+    assert source_push_host.shape == (config.ep_size * config.tokens_per_rank, config.hidden_dim)
+    assert int(jax.device_get(source_push_dropped)) == 0
+    for baseline_out, baseline_dropped in baselines.values():
+        baseline_host = np.asarray(jax.device_get(baseline_out), dtype=np.float32)
+        diff = np.abs(source_push_host - baseline_host)
+        assert int(jax.device_get(baseline_dropped)) == 0
+        assert float(np.max(diff)) <= 0.03125
+        assert float(np.mean(diff)) <= 0.002
+
+
+@pytest.mark.parametrize(
+    ("ep_size", "topk"),
+    [(2, 2), (2, 4), (8, 2)],
+    ids=["ep2_topk2", "ep2_topk4", "ep8_topk2"],
+)
+def test_source_push_stage_kernels_match_references_on_h100(ep_size, topk):
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=ep_size,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=64,
+        topk=topk,
+        capacity_factor=1.25,
+    )
+
+    w13_rows = source_push_inbox.run_source_push_inbox_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+    )
+    w13_row = w13_rows[0]
+    assert w13_row["error_type"] is None
+    assert w13_row["metadata_mismatches"] == 0
+    assert w13_row["input_mode"] == "source_push_plan"
+    assert w13_row["row_start_mode"] == "source_padded_row_start"
+    assert w13_row["hidden_max_abs_diff"] <= 0.03125
+    assert w13_row["hidden_mean_abs_diff"] <= 0.002
+    assert w13_row["hidden_unwritten_max_abs"] == 0.0
+
+    w2_rows = source_push_w2_return.run_source_push_w2_return_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+        hidden_input_mode=source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE,
+        return_mode=source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE,
+    )
+    w2_row = w2_rows[0]
+    assert w2_row["error_type"] is None
+    assert w2_row["return_mode"] == source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE
+    assert w2_row["direct_to_source"]
+    assert w2_row["w2_input_mode"] == "source_push_plan"
+    assert w2_row["w2_hidden_input_mode"] == source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE
+    assert w2_row["source_queue_max_abs_diff"] <= 0.03125
+    assert w2_row["mean_abs_diff"] <= 0.002
+
+    combine_rows = source_push_combine.run_source_push_combine_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+    )
+    combine_row = combine_rows[0]
+    assert combine_row["error_type"] is None
+    assert combine_row["combine_mode"] == source_push_combine.SOURCE_COMBINE_MODE_DIRECT_GATHER_SUM
+    assert combine_row["dropped_routes"] == 0
+    assert combine_row["max_abs_diff"] <= 0.03125
+    assert combine_row["mean_abs_diff"] <= 0.002
+
+
+def test_source_push_exact_expert_major_w13_matches_reference_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=128,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    rows = source_push_inbox._run_one(
+        config,
+        source_push_inbox.SourcePushInboxRunSettings(
+            warmup=0,
+            steps=1,
+            repeat_runs=1,
+            check=True,
+            debug_exceptions=True,
+        ),
+        input_builder=source_push_inbox._make_exact_source_push_plan_inputs,
+    )
+
+    row = rows[0]
+    assert row["error_type"] is None
+    assert row["metadata_mismatches"] == 0
+    assert row["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert row["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert row["plan_layout_padding_rows_total"] == 0
+    assert row["hidden_max_abs_diff"] <= 0.03125
+    assert row["hidden_mean_abs_diff"] <= 0.002
+    assert row["hidden_unwritten_max_abs"] == 0.0
+
+
+def test_source_push_exact_expert_major_w2_return_matches_reference_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=128,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    rows = source_push_w2_return._run_w2_return_one(
+        config,
+        source_push_inbox.SourcePushInboxRunSettings(
+            warmup=0,
+            steps=1,
+            repeat_runs=1,
+            check=True,
+            debug_exceptions=True,
+        ),
+        input_builder=lambda run_config: source_push_w2_return.make_w2_return_exact_source_plan_inputs(
+            run_config,
+            hidden_input_mode=source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE,
+        ),
+        return_mode=source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE,
+    )
+
+    row = rows[0]
+    assert row["error_type"] is None
+    assert row["return_mode"] == source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE
+    assert row["direct_to_source"]
+    assert row["w2_input_mode"] == "exact_source_push_plan"
+    assert row["w2_hidden_input_mode"] == source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE
+    assert row["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert row["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert row["source_queue_max_abs_diff"] <= 0.03125
+    assert row["mean_abs_diff"] <= 0.002
+
+
+def test_source_push_exact_expert_major_forward_matches_reference_on_h100():
+    _skip_without_h100x8()
+
+    config = PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=1,
+        hidden_dim=128,
+        intermediate_dim=128,
+        block_m=64,
+        block_n=128,
+        block_k=64,
+        n_group=1,
+        n_groups_per_job=1,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=8,
+        send_pipeline_depth=1,
+        routing="balanced",
+        tokens_per_rank=128,
+        topk=2,
+        capacity_factor=1.25,
+    )
+
+    rows = source_push_forward.run_source_push_forward_exact_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=True,
+        debug_exceptions=True,
+        execution_mode=source_push_forward.FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    )
+
+    row = next(
+        row for row in rows if row["row_type"] == "repeat" and row["stage"] == source_push_forward.FORWARD_STAGE_TOTAL
+    )
+    assert row["error_type"] is None
+    assert row["execution_mode"] == source_push_forward.FORWARD_EXECUTION_STAGED_HOST_SYNC
+    assert row["input_mode"] == "exact_source_push_plan"
+    assert row["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert row["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert row["plan_layout_padding_rows_total"] == 0
+    assert row["dropped_routes"] == 0
+    assert row["max_abs_diff"] <= 0.03125
+    assert row["mean_abs_diff"] <= 0.002
+
+
+def test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100():
+    _skip_without_h100x8()
+
+    ep_size = 8
+    tokens_per_rank = 65
+    hidden_dim = 128
+    intermediate_dim = 128
+    experts_per_rank = 2
+    topk = 4
+    capacity_factor = 2.0
+
+    token_ids = np.arange(tokens_per_rank, dtype=np.int32)
+    route_offsets = np.arange(topk, dtype=np.int32)
+    selected_by_source = []
+    for src in range(ep_size):
+        dst_ranks = (token_ids[:, None] + route_offsets[None, :] + src) % ep_size
+        selected_by_source.append(dst_ranks * experts_per_rank)
+    selected_source = jnp.asarray(np.stack(selected_by_source, axis=0), dtype=jnp.int32)
+    selected_host = np.asarray(selected_source)
+    np.testing.assert_array_equal(selected_host % experts_per_rank, np.zeros_like(selected_host))
+    counts_by_src_dst = np.zeros((ep_size, ep_size), dtype=np.int32)
+    for src in range(ep_size):
+        counts_by_src_dst[src] = np.bincount(selected_host[src].reshape(-1) // experts_per_rank, minlength=ep_size)
+    assert np.any((counts_by_src_dst > 0) & (counts_by_src_dst % 64 != 0))
+
+    key = jax.random.key(202)
+    k_x, k_combine, k_w13, k_w2 = jax.random.split(key, 4)
+    edge_value_scale = 0.2
+    x_source = edge_value_scale * jax.random.normal(k_x, (ep_size, tokens_per_rank, hidden_dim), dtype=jnp.float32)
+    combine_source = jax.nn.softmax(
+        jax.random.normal(k_combine, (ep_size, tokens_per_rank, topk), dtype=jnp.float32),
+        axis=-1,
+    )
+    w_gate_up_source = edge_value_scale * jax.random.normal(
+        k_w13,
+        (ep_size, experts_per_rank, hidden_dim, 2 * intermediate_dim),
+        dtype=jnp.float32,
+    )
+    w_down_source = edge_value_scale * jax.random.normal(
+        k_w2,
+        (ep_size, experts_per_rank, intermediate_dim, hidden_dim),
+        dtype=jnp.float32,
+    )
+
+    mesh = Mesh(
+        np.asarray(jax.devices()[:ep_size]),
+        ("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x, selected_experts, combine_weights, w_gate_up, w_down = _shard_public_ep_arrays(
+        mesh,
+        x_source,
+        selected_source,
+        combine_source,
+        w_gate_up_source,
+        w_down_source,
+    )
+
+    with jax.set_mesh(mesh):
+        source_push_out, source_push_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=capacity_factor,
+            report_capacity_overflow=True,
+        )
+        baselines = {
+            implementation: moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_gate_up,
+                w_down,
+                implementation=implementation,
+                mesh=mesh,
+                capacity_factor=capacity_factor,
+                report_capacity_overflow=True,
+            )
+            for implementation in ("ragged_all_to_all", "ring")
+        }
+
+    source_push_host = np.asarray(jax.device_get(source_push_out), dtype=np.float32)
+    assert source_push_host.shape == (ep_size * tokens_per_rank, hidden_dim)
+    assert int(jax.device_get(source_push_dropped)) == 0
+    for baseline_out, baseline_dropped in baselines.values():
+        baseline_host = np.asarray(jax.device_get(baseline_out), dtype=np.float32)
+        diff = np.abs(source_push_host - baseline_host)
+        assert int(jax.device_get(baseline_dropped)) == 0
+        assert float(np.max(diff)) <= 0.03125
+        assert float(np.mean(diff)) <= 0.002
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():

@@ -381,6 +381,10 @@ project-excludes = [
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
+    # Package-private Mosaic GPU research kernel; pyrefly OOMs on the Pallas DSL body.
+    "lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py",
+    "lib/levanter/src/levanter/grug/_moe/source_push_combine.py",
+    "lib/levanter/src/levanter/grug/_moe/source_push_forward.py",
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
     "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
     # Keep key excludes that pyrefly normally adds heuristically.
