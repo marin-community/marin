@@ -11,13 +11,13 @@ launcher, never the reverse.
 
 Two things make Grug a distinct backend rather than a config on the Levanter ``train_lm`` path:
 
-- **Weights-only native init (marin #650).** ``init_from`` supplies only the model weights
+- Weights-only native init (marin #650): ``init_from`` supplies only the model weights
   (``params`` + ``pending_qb_betas``) from a native Levanter Grug checkpoint; the optimizer state and
   step counter start fresh, so SFT runs a new LR schedule over the base weights. Wired through
   ``GrugTrainerConfig.sft_weights_only_init`` (see ``train.py``). Own-run checkpoints still take
   precedence, so iris preemption auto-resumes. ``initialize_from_hf`` (the Levanter path) does not
   apply — the base is a native Grug pytree, not an HF checkpoint.
-- **Model + train loop.** The vendored ``Transformer`` is not a Levanter-registry ``LmHeadModel``, so
+- Model + train loop: the vendored ``Transformer`` is not a Levanter-registry ``LmHeadModel``, so
   it runs through ``run_grug`` with its own ring-EP mesh, not ``train_lm.main``.
 
 The data side is shared: ``sft_step`` builds the chat ``LmDataConfig`` from the same
@@ -70,8 +70,8 @@ class GrugMoeSFTConfig:
     tracker: TrackerConfig
     optimizer: OptimizerConfig
     init_from_path: str
-    """Base checkpoint to initialise WEIGHTS from (parent dir or a concrete ``step-N`` dir;
-    the latest under it is loaded). Optimizer state and step are NOT taken from it -- SFT
+    """Base checkpoint to initialise weights from (parent dir or a concrete ``step-N`` dir;
+    the latest under it is loaded). Optimizer state and step are not taken from it -- SFT
     starts a fresh schedule. Loaded only on the first launch; iris restarts auto-resume from
     this run's own output checkpoints instead."""
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
@@ -98,9 +98,9 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
     initialize_from = latest_checkpoint_path(config.init_from_path)
 
     # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, model) mesh for
-    # the actual compute (train.py, via set_mesh + raw PartitionSpecs -- NOT the Trainer's logical axis
+    # the actual compute (train.py, via set_mesh + raw PartitionSpecs -- not the Trainer's logical axis
     # mapping), but the TrainerConfig still derives ``data_axis_size`` (and thus the batch-divisibility
-    # check + per_device_parallelism) from THIS MeshConfig. With only ``expert`` declared, the
+    # check + per_device_parallelism) from this MeshConfig. With only ``expert`` declared, the
     # model-parallel slices get absorbed as ``replica_dcn`` and the default batch mapping
     # (replica_dcn, replica, data) then counts them -> data_axis_size = num_slices, which rejects bs=8 on
     # model_axis=5 ("train_batch_size (8) must be divisible by per_device_parallelism * data_axis_size

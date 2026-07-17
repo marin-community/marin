@@ -103,7 +103,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
-    """Extra multiplier on ``qk_mult`` applied ONLY on the long-attention branch
+    """Extra multiplier on ``qk_mult`` applied only on the long-attention branch
     (every-4th-and-last layer, full causal). Short (sliding-window) layers are
     unaffected. Intended for YaRN-style attention-temperature scaling at long
     context extension, where softmax logits sharpen with sequence length but
@@ -131,7 +131,7 @@ class GrugModelConfig:
     replicate_attn_weights: bool = False
     """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
     of FSDP-sharded across the data axis. Attention weights are small (~128 KB
-    per layer per chip after FSDP), so replicating them is cheap on HBM but
+    per layer per chip after FSDP), so replicating them costs little HBM but
     eliminates the per-layer FSDP all-gather for the QKVO matmuls. MFU probe
     knob to isolate whether attention collectives matter."""
     split_w_gate_up: bool = True

@@ -15,31 +15,31 @@ Stage 2 (``thinking``): the larger Llama-Nemotron science-reasoning canonical-th
 builds the reasoning region -- chained (weights-only) from Stage 1's output checkpoint (Stage 1's
 ``ArtifactStep`` is the Stage 2 ``GrugModel.init_from``, so the chain is a real graph dependency).
 
-Order is load-bearing (chat format first, reasoning second). Each stage is 1 epoch, sequence
+The order matters (chat format first, reasoning second). Each stage is 1 epoch, sequence
 packing on, completions-masked (assistant span only), chat template = the shared Delphi v0 jinja.
 
-The model architecture is the EXACT cooldown ``_model`` (this is why the launcher lives in the
+The model architecture is the exact cooldown ``_model`` (this is why the launcher lives in the
 vendored ``june_tpu_67b_a2b`` tree -- the live ``experiments/grug/moe`` tree's Transformer pytree
 is incompatible with the checkpoint). Weights-only init + optimizer/step reset is marin #650 (see
 ``sft_launch.run_grug_moe_sft_trial`` -> ``train.init_weights_only_from_checkpoint``).
 
-LAUNCH-GATED NUMBERS (finalise before a real launch; see the experiment POLICY/STATE):
+Launch-gated numbers (finalise before a real launch; see the experiment POLICY/STATE):
   * Step counts are no longer hand-set: Job1/Job2 are ``num_train_epochs=1`` and ``sft_step`` resolves
     the packed-epoch step count from the ``chat_tokenize`` cache's token total at run time (marin #7244).
   * ``_REVISION_*`` -- pin each HF dataset to a 7-char commit for a content-stable fingerprint.
   * GPU mesh geometry (``_NODES`` / ``_EXPERT_PARALLEL`` / ``_REPLICA_AXIS`` / ``_BATCH`` / ``_SEQ`` /
     ``_PER_DEVICE_PARALLELISM``) -- 67B full-FT on H100x8 nodes at long context is memory-tight;
     confirm feasibility (drop ``_SEQ`` or raise ``_NODES``) before launch.
-  * Stage 2 needs the Delphi think/tool tokens as SINGLE ids in the tokenizer; ``marin_tokenizer``
+  * Stage 2 needs the Delphi think/tool tokens as single ids in the tokenizer; ``marin_tokenizer``
     must be verified/prepared for those (Stage 1 plain chat is fine as-is).
 
 Compute = CoreWeave ``cw-us-east-02a`` H100 GPU cluster (8x H100-80GB + InfiniBand per node), the
 FSDP + ring-EP JAX/XLA path (mirrors ``experiments/grug/moe/launch_cw_scale.py``). The base
 checkpoint is read in-cluster from the CW ``s3://marin-us-east-02a`` (LOTA) mirror -- no cross-region
-port needed. The coordinator MUST run in-cluster (the Mac can't reach cwlota.com).
+port needed. The coordinator must run in-cluster (the Mac can't reach cwlota.com).
 
 Submit (per stage, cw-us-east-02a, preemptible; MARIN_PREFIX must be s3://marin-us-east-02a/marin;
-AWS creds auto-injected in-pod via the iris-task-env secret -- do NOT forward AWS_*)::
+AWS creds auto-injected in-pod via the iris-task-env secret -- do not forward AWS_*)::
 
     cd ~/Documents/marin && source secrets.env   # or "$DC_AGENT_SECRET_ENV"
     export KUBECONFIG=~/.kube/coreweave-iris-gpu
@@ -72,31 +72,31 @@ from experiments.sft.launcher import DatasetSpec, SFTSpec, sft_step
 
 _WANDB_PROJECT = "marin_moe_sft"
 
-# --- Model: the EXACT cooldown architecture (arch parity is required for the weights load) -------
+# --- Model: the exact cooldown architecture (arch parity is required for the weights load) -------
 _DIM: int = 2560
 _QK_MULT: float = 1.3 * (0.1 * math.log(65_536 / 8_192) + 1.0)  # 1.5703, as trained (YaRN mscale)
 _heuristic = MoeMuonHHeuristic(min_lr_ratio=0.05)
 _model_base = _heuristic.build_model_config(_DIM, seq_len=65_536)
 
-# --- GPU mesh geometry (COMPUTE PIVOT 2026-07-16: CoreWeave cw-us-east-02a H100x8 nodes) ----------
+# --- GPU mesh geometry (compute pivot 2026-07-16: CoreWeave cw-us-east-02a H100x8 nodes) ----------
 # Each node = 8x H100-80GB + InfiniBand. Params are FSDP-sharded over the cross-node ``data`` axis;
 # the 256 routed experts are sharded 8-way over the intra-node NVLink ``expert`` axis (ring-EP).
 # Batch is sharded over (replica, data, expert); batch_shards = replica*data*expert = 1*N*8 = 8N
 # where N=_NODES (data absorbs the remaining 8*N/expert = N devices). _BATCH must be a multiple of 8N.
-# GEOMETRY (2026-07-16 decision): AdamH (not Muon) + tensor/model parallelism. Muon's Newton-Schulz
-# workspace is a ~21GiB REPLICATED per-device floor that never shards (num_layers=26 is coprime to any
+# Geometry (2026-07-16 decision): AdamH (not Muon) + tensor/model parallelism. Muon's Newton-Schulz
+# workspace is a ~21GiB replicated per-device floor that never shards (num_layers=26 is coprime to any
 # expert-inclusive batch_shards), so it OOMs on H100 at any node count -> switched to AdamH (no NS).
-# PATH B (2026-07-16 operator decision): pure DATA-PARALLEL, model_axis=1. Tensor/model parallelism is
-# architecturally impossible for this model (model_axis>1 must divide num_kv_heads=5 [prime -> {1,5}] AND
+# Path B (2026-07-16 operator decision): pure data-parallel, model_axis=1. Tensor/model parallelism is
+# architecturally impossible for this model (model_axis>1 must divide num_kv_heads=5 [prime -> {1,5}] and
 # vocab_size=128256 [vocab-parallel embed/lm_head], and 128256 % 5 != 0 -> no valid width >1). Since bs=8
 # would require TP (data=1), we run data-parallel with bs=8N instead. Mesh = (replica=1, data=N, expert=8,
 # model=1) on _NODES*8 GPUs; batch_shards = replica*data*expert = 8N; _BATCH = 8N -> per_device = 1.
 # The seq32k per-seq activation (~43 GiB, pd=1) doesn't shard across DP nodes, so N=8 (bs=64) is the
 # smallest gang that fits (~68 GiB/dev, AdamH fp32 + cut-CE); N<=4 OOMs. See GEOMETRY_ANALYSIS.md.
 _NODES: int = 8  # full-run gang: 8x H100x8 = 64 GPUs (data-parallel)
-_SMOKE_NODES: int = 8  # smoke at the SAME target geometry (the real HBM test at ~68 GiB/dev prediction)
+_SMOKE_NODES: int = 8  # smoke at the same target geometry (the real HBM test at ~68 GiB/dev prediction)
 _EXPERT_PARALLEL: int = 8  # shard the 256 experts across the 8 intra-node GPUs (ring-EP over NVLink)
-_MODEL_PARALLEL: int = 1  # NO tensor parallelism (architecturally impossible; see header)
+_MODEL_PARALLEL: int = 1  # no tensor parallelism (architecturally impossible; see header)
 _REPLICA_AXIS: int = 1  # pure FSDP (one model copy sharded over all 64 GPUs; no cross-node replicate)
 _SEQ: int = 32_768  # full-run SFT packed length (operator target ctx_len=32k)
 _SMOKE_SEQ: int = 32_768  # smoke at the target seq len
@@ -114,17 +114,17 @@ _model = dataclasses.replace(
     use_array_stacked_blocks=True,
     qk_mult=_QK_MULT,
     max_seq_len=_SEQ,  # training seq len = model.max_seq_len; RoPE is position-computed (no param change)
-    # H100 GPU attention backend. gpu_fa4_cute (NOT gpu_fa4_thd) because sliding_window=2048 is a SHORT
+    # H100 GPU attention backend. gpu_fa4_cute (not gpu_fa4_thd) because sliding_window=2048 is a short
     # window; thd only handles full-causal windows (canary_ferry.py maps thd -> window=2*seq to fake it).
     attention_implementation="gpu_fa4_cute",
     # Blocked-vocab (cut) cross-entropy: avoids materializing the [tokens, vocab] logits tile at seq32k
-    # (~15.7 GiB/dev on the default full-logits GPU path). Cheap HBM insurance for the tensor-parallel fit.
+    # (~15.7 GiB/dev on the default full-logits GPU path).
     ce_implementation="batched_xla",
 )
 
-# --- Optimizer: AdamH (NOT Muon). Muon's Newton-Schulz workspace is a ~21GiB replicated per-device
-# floor that never shards -> guaranteed H100 OOM (marin #6693). AdamH (grug_moe_adamh_v2) has no NS
-# workspace (elementwise m/v moments). FRESH SFT schedule (weights-only init resets it). First-pass LRs. ---
+# --- Optimizer: AdamH (not Muon). Muon's Newton-Schulz workspace is a ~21GiB replicated per-device
+# floor that never shards -> OOMs on H100 (marin #6693). AdamH (grug_moe_adamh_v2) has no NS
+# workspace (elementwise m/v moments). Fresh SFT schedule (weights-only init resets it). First-pass LRs. ---
 _SFT_ADAMH_LR: float = 5e-5  # adamh group (attn/dense matrices) + expert group (expert_lr=None -> this)
 _SFT_ADAM_LR: float = 5e-5  # adam group (norms / router / embeddings)
 _optimizer = GrugMoeAdamHConfig(
@@ -161,7 +161,7 @@ _JOB2_DATASET = DatasetSpec(
 # Job1/Job2 are one packed epoch (num_train_epochs=1); sft_step resolves the concrete step count from
 # the chat cache's token total at run time (marin #7244), so there is no hand-calibrated count. For
 # reference, the wildchat_386k chat cache is ~538.9M tokens -> 256.96 -> 257 steps at seq32768/bs64.
-_SMOKE_STEPS: int = 8  # cheap validation: clear the first jit_train_step at the target geometry + bank a few
+_SMOKE_STEPS: int = 8  # validation: clear the first jit_train_step at the target geometry and bank a few steps
 
 # Base checkpoint, read in-cluster from the CoreWeave s3://marin-us-east-02a (LOTA) mirror. No
 # cross-region port needed on CW (contrast the TPU-era mirror:// pre-stage). AWS creds are injected
@@ -249,7 +249,7 @@ def build_job1(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
 
 
 def build_job2(job1: ArtifactStep[LevanterCheckpoint], version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Stage 2 -- thinking dataset, weights-only init CHAINED from Stage 1 (one packed epoch)."""
+    """Stage 2 -- thinking dataset, weights-only init chained from Stage 1 (one packed epoch)."""
     step_name = f"grug/{_JOB2_RUN_ID}"
     version = resolve_version(step_name, version)
     spec = _spec(
@@ -263,10 +263,10 @@ def build_job2(job1: ArtifactStep[LevanterCheckpoint], version: str | None = Non
 
 
 def build_smoke(version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
-    """Stage-5 smoke: the real 67B at the TARGET Job1 geometry -- 8x H100x8 nodes (cw-us-east-02a),
+    """Stage-5 smoke: the real 67B at the target Job1 geometry -- 8x H100x8 nodes (cw-us-east-02a),
     AdamH, expert=8, model=1 (data-parallel), replica=1, bs=64, seq=32768, per_device=1, few steps +
     a mid-run native checkpoint save. Validates native S3 ckpt load -> chat+packing -> weights-only
-    init (step starts at 0) -> first jit_train_step with NO OOM (AdamH kills the ~21GiB Muon-NS floor)
+    init (step starts at 0) -> first jit_train_step with no OOM (AdamH has no ~21GiB Muon-NS floor)
     -> loss finite -> save, before committing to the 1-epoch Job1."""
     step_name = f"grug/{_SMOKE_RUN_ID}"
     version = resolve_version(step_name, version)

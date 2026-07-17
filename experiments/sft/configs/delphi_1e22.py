@@ -16,7 +16,7 @@ model-agnostic.
     ``nyu-dice-lab/wildchat50m-rewild-sft-385700`` at the same weights and LR, so the instruction
     dataset is the only varying factor.
 
-``model_ref``/``tokenizer_path`` point at a *prepared* Delphi checkpoint + tokenizer (reserved
+``model_ref``/``tokenizer_path`` point at a prepared Delphi checkpoint + tokenizer (reserved
 slots renamed so ``<|start_think|>``=128002 … are single ids, embeddings reinitialized), staged per
 prefix before launch. :func:`delphi_prepared_checkpoint_step` regenerates that prepared checkpoint
 reproducibly from the raw ``laion/delphi-*`` base — run it to (re)stage the artifact this config

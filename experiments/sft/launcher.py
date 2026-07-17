@@ -13,7 +13,7 @@
 
 The chat template, dataset mixture, sequence length, and packing are fields of :class:`SFTSpec`;
 the model — architecture, tokenizer, where the initial weights come from, and which training
-backend runs it — is a separate :class:`ModelSource`, so an experiment composes *model* and *data*
+backend runs it — is a separate :class:`ModelSource`, so an experiment composes model and data
 as independent inputs. ``configs/delphi_1e22.py`` is one worked example (an :class:`HFModel` source
 plus a magpie/warmup mixture).
 
@@ -29,12 +29,12 @@ Init sources (the :class:`ModelSource` implementations):
   (an HF->Levanter conversion, or a prior ``sft_step`` output for stage chaining). Its model config
   must match the checkpoint's architecture.
 
-A vendored model family that is *not* a Levanter-registry ``LmHeadModel`` (its own train loop and
+A vendored model family that is not a Levanter-registry ``LmHeadModel`` (its own train loop and
 train state) supplies its own :class:`ModelSource` implementing the same protocol — see
 ``experiments/june_tpu_67b_a2b/moe/sft_launch.py``'s ``GrugModel``. The dependency runs vendored
 experiment -> this launcher, never the reverse, so this module stays model-family-agnostic.
 
-The accelerator is *not* part of the spec — it is chosen at launch time (see
+The accelerator is not part of the spec — it is chosen at launch time (see
 :func:`resources_from_accelerator` and :func:`run_sft_cli`) and threaded to the training job as a
 runtime arg, so the same recipe fingerprints identically whether it runs on TPU or GPU.
 
@@ -177,7 +177,7 @@ def _levanter_train_config(
     gpu_allocator: bool,
 ) -> TrainLmConfig:
     """Assemble the identity-bearing ``TrainLmConfig`` for a Levanter-backend SFT run."""
-    # The model config *class* selects the HF converter (LevConfigClass); with use_hf_model_config
+    # The model config class selects the HF converter (LevConfigClass); with use_hf_model_config
     # its fields are re-derived from the checkpoint, so only the class matters.
     model = LmConfig.get_choice_class(model_type)()
     return TrainLmConfig(
@@ -397,9 +397,9 @@ class LevanterCheckpointModel:
 
 @dataclass(frozen=True)
 class SFTSpec:
-    """A full chat-SFT run: the *data* and the training hyperparameters.
+    """A full chat-SFT run: the data and the training hyperparameters.
 
-    The *model* (arch, tokenizer, init source, backend) is a separate :class:`ModelSource` so the
+    The model (arch, tokenizer, init source, backend) is a separate :class:`ModelSource` so the
     two compose independently. The chat template is a parameter, so Delphi is just one instance.
     """
 

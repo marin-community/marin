@@ -36,7 +36,7 @@ from .adapters import TransformAdapter
 # One map task streams a whole HF shard (a subset/split slice) row by row. That is memory-bounded per
 # row, but chat shards carry long conversations and the Arrow reader buffers full row groups, so the
 # 1 GiB that ZephyrContext floors an unset ``resources`` to OOM-kills the worker mid-shard. Give each
-# worker real headroom; this is a runtime resource only and does not enter the transform's data
+# worker headroom; this is a runtime resource only and does not enter the transform's data
 # fingerprint or output path, so bumping it never forks an existing cache.
 _TRANSFORM_WORKER_RESOURCES = ResourceConfig(cpu=1, ram="8g")
 

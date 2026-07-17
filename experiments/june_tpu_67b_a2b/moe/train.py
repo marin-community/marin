@@ -76,10 +76,10 @@ class GrugTrainerConfig:
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
-    its own to auto-resume from, the trainer loads ONLY the model weights (params +
-    ``pending_qb_betas``) from ``TrainerConfig.initialize_from`` and keeps the FRESH
+    its own to auto-resume from, the trainer loads only the model weights (params +
+    ``pending_qb_betas``) from ``TrainerConfig.initialize_from`` and keeps the fresh
     optimizer state and ``step=0`` -- i.e. a fresh LR schedule over the base weights,
-    NOT a full-state resume. False (default) keeps the byte-identical continued-pretrain
+    not a full-state resume. False (default) keeps the byte-identical continued-pretrain
     behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
     step). Own-run checkpoints still take precedence, so preemption resumes normally."""
 
@@ -379,7 +379,7 @@ def init_weights_only_from_checkpoint(
     load_ema: bool,
     _load_fn: Callable[..., object] = load_checkpoint,
 ) -> GrugTrainState:
-    """Load ONLY model weights from an external checkpoint, resetting the optimizer.
+    """Load only model weights from an external checkpoint, resetting the optimizer.
 
     This is the SFT/RL init (marin #650): the base checkpoint supplies ``params`` and the
     ``pending_qb_betas`` router-bias state; the optimizer state and ``step`` stay at their
@@ -546,8 +546,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         checkpointer = trainer.checkpointer.create(run_id)
         if config.trainer.sft_weights_only_init:
-            # SFT/RL: auto-resume from THIS run's own checkpoints if present (preemption),
-            # otherwise load ONLY base weights (+ pending_qb_betas) and keep the fresh
+            # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
+            # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
             # optimizer/step (marin #650). initialize_from is deliberately withheld here so
             # the restore never does a full-state load; the weights-only init runs below.
             state = restore_grug_state_from_checkpoint(
