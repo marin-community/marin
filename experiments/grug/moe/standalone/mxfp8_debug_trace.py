@@ -15,20 +15,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import cutlass.jax as cjax
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-import cutlass
-import cutlass.cute as cute
-import cutlass.jax as cjax
 from cutlass.jax import compile as cjc
-
 from mxfp8_grouped.adapter import (
-    _build_launcher,
     _B200_SMS,
     _FP8_TMA_VEC,
     SF_VEC_SIZE,
+    _build_launcher,
     _ceil_div,
     _round_up,
     build_sfa,
@@ -87,9 +83,7 @@ ins_flat, in_tree = jax.tree.flatten((x_q, w_q, x_sf, w_sf, offs))
 outs_flat, out_tree = jax.tree.flatten(
     (jax.ShapeDtypeStruct((M, N), jnp.bfloat16), jax.ShapeDtypeStruct((ws_bytes,), jnp.uint8))
 )
-spec = cjc.build_function_spec(
-    ins_flat, in_tree, outs_flat, out_tree, input_spec, output_spec, {}, None, True, {}
-)
+spec = cjc.build_function_spec(ins_flat, in_tree, outs_flat, out_tree, input_spec, output_spec, {}, None, True, {})
 
 print("=== Part A: direct get_or_compile_kernel ===")
 result = cjc.get_or_compile_kernel(launcher, spec)
