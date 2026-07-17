@@ -51,10 +51,9 @@ from tests.cluster.vllm.representative_eval import (
 logger = logging.getLogger(__name__)
 
 PENDING_TIMEOUT = 30 * 60.0
-RUNTIME_TIMEOUT = 2 * 60 * 60.0
-VLLM_STARTUP_TIMEOUT = 60 * 60
+RUNTIME_TIMEOUT = 30 * 60.0
 HTTP_CONNECT_TIMEOUT = 30.0
-HTTP_READ_TIMEOUT = 30 * 60.0
+HTTP_READ_TIMEOUT = 5 * 60.0
 GPU_COUNT = 8
 MAX_MODEL_LEN = 32768
 MAX_NUM_BATCHED_TOKENS = 512
@@ -201,7 +200,6 @@ def score_vllm_against_goldens(
         )
         backend = VllmBackend(
             max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
-            startup_timeout_seconds=VLLM_STARTUP_TIMEOUT,
             extra_args=(
                 "--data-parallel-size",
                 str(GPU_COUNT),
