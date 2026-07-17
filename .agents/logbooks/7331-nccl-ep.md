@@ -389,3 +389,15 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   (C=8192 → K=8) — the previously-OOM production config — vs a2a_cute b1024
   (19.1 %, 8.746); (c) optionally C sweep (16384/K4) for the
   capacity-vs-overhead tradeoff.
+- Smoke **PASSED** (`/mwittmann/ncclep-chunk-smoke3`, C=4096/K=4): step-0 loss
+  11.805191040039062 and final loss 11.558435440063477 both **bit-identical**
+  to the unchunked nccl_ep smoke — chunking is numerically a pure token
+  partition. Tiny-config MFU 9.6 % vs 8.9 % unchunked (no chunking regression
+  even at L4/b16; scan overhead invisible).
+- Submission gotcha (2 lost attempts): the profile-PATH `iris` wrapper is a
+  cp313 env → remote setup pinned to 3.13, where `resiliparse` has no wheel;
+  and a worktree-venv submit hit the same error once transiently on a GPU node
+  (same `uv sync --frozen --python 3.12` dry-runs clean on a fresh GB200 pod —
+  suspect stale reused workdir venv). Always submit with the **worktree's own
+  `.venv/bin/iris`** (3.12, editable iris); use the main-repo venv iris (has
+  `iris[controller]`) for `job list`/`logs` against `--cluster=cw-us-east-08a`.
