@@ -52,11 +52,13 @@ class FinelogSource:
 
     def _resolve_address(self, _label: str) -> str:
         """Return ``http://<internal-ip>:<port>`` for the VM matching this cluster's filter."""
-        instances = compute_v1.InstancesClient().list(
+        # list() only flattens project/zone; the filter has to ride in on the request.
+        request = compute_v1.ListInstancesRequest(
             project=self._target.project,
             zone=self._target.zone,
             filter=self._target.instance_filter,
         )
+        instances = compute_v1.InstancesClient().list(request=request)
         for instance in instances:
             for interface in instance.network_interfaces:
                 if interface.network_i_p:
