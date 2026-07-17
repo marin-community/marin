@@ -1,110 +1,156 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generic next-token parity: score any marin-serve backend against the grug goldens.
+"""Framework-independent next-token parity against frozen Grug scores.
 
-The ``vllm`` and ``levanter`` backends both load the 67B ``grug_moe`` HF export through
-``marin.inference.serving_backend`` and are scored identically: for each golden prompt the backend's
-next-token distribution is compared to the frozen top-25 rank-independently -- the greedy token must
-match exactly, and the worst single-token probability error on the golden's token set must stay
-within a per-backend bound.
-
-The invariant that is framework-independent is the **greedy match**: both backends predict the grug
-reference's next token exactly, on every prompt. The probability-error bound is looser for vLLM than
-for Snowball, and deliberately so -- the goldens are the levanter reference (VendoredTransformer +
-sonic), Snowball is a levanter *reimplementation* of that graph (so only bf16 reduction-order noise
-separates it, which also reorders the golden's exact-tied tail tokens), while vLLM is a *different
-framework* serving the same weights (its kernels and per-DP-rank reductions diverge more on
-higher-entropy prompts). We assert the worst single-token probability error, not the summed (L1)
-error: L1 scales with the tail entropy of each prompt and with per-rank noise, so it is not a clean
-fixed threshold across a diverse prompt set. L1 is still recorded for observability.
-
-The two backends reach the distribution by different marin-serve entry points -- vLLM through
-``serve()`` + HTTP (``max_tokens=1``, ``logprobs``), Snowball through ``load_model()`` + a single
-forward, since Snowball has no paged decode yet so its ``serve()`` generation path is separate work.
+All comparisons cover the golden top-25 and gate on maximum single-token
+probability error. The legacy short-prompt comparison requires an exact golden
+winner. Representative prompts additionally allow a golden top-25 token when
+the measured probability error is large enough to explain the winner change.
 """
 
 import math
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
-from tests.cluster.vllm.june_67b_a2b import InferenceGolden, read_inference_golden
+from tests.cluster.vllm.representative_eval import TokenScore
 
-_RESOURCES = Path(__file__).parent / "resources"
-
-
-def read_golden_set() -> list[InferenceGolden]:
-    """Every committed next-token golden, sorted by filename for a deterministic parametrization.
-
-    The goldens are the grug reference's frozen top-25 next-token distributions -- one per prompt.
-    Both backends are scored against this shared set.
-    """
-    paths = sorted(_RESOURCES.glob("*_logprobs.json"))
-    assert paths, f"no goldens under {_RESOURCES}"
-    return [read_inference_golden(path) for path in paths]
-
-
-# Same-framework bound: Snowball is a levanter reimplementation of the levanter golden, so only bf16
-# reduction-order noise separates them. Observed worst across the golden set is 0.0012.
+# Preserve the existing short-prompt Snowball contract independently of the
+# representative-prompt calibration.
 LEVANTER_MAX_PROBABILITY_ERROR = 0.008
 
-# Cross-framework bound: vLLM serves the same weights through a different framework, so its per-token
-# probabilities diverge more from the levanter golden on higher-entropy prompts, and its DP ranks
-# differ from each other. Observed worst across the golden set is 0.010 (on " Paris"); bound left at
-# 0.02 for cross-run / cross-rank margin. The greedy token still matches exactly on every prompt.
-VLLM_MAX_PROBABILITY_ERROR = 0.02
+# Across the 64 representative prompts, the observed maxima were 0.06828 for
+# Levanter and 0.06447 for vLLM. This shared bound retains measurable headroom.
+REPRESENTATIVE_MAX_PROBABILITY_ERROR = 0.075
 
 
 @dataclass(frozen=True)
 class NextTokenParity:
-    """One backend's next-token agreement with a golden, for one prompt on one rank/device."""
+    """One backend observation against one frozen next-token distribution."""
 
-    prompt: str
+    case_id: str
+    backend_rank: int
     greedy_token_id: int
-    golden_greedy_token_id: int
+    golden_greedy_token_ids: tuple[int, ...]
+    golden_top_token_ids: tuple[int, ...]
+    golden_top1_probability_margin: float
+    golden_probability_gap_to_greedy: float
     max_probability_error: float
     top_probability_l1_error: float
 
     def assert_matches(self, *, max_probability_error: float) -> None:
-        assert self.greedy_token_id == self.golden_greedy_token_id, self
+        assert self.greedy_token_id in self.golden_greedy_token_ids, self
+        assert self.max_probability_error <= max_probability_error, self
+
+    def assert_distribution_matches(self, *, max_probability_error: float) -> None:
+        """Require top-25 coverage and a probability-supported greedy token."""
+        assert self.greedy_token_id in self.golden_top_token_ids, self
+        assert self.golden_probability_gap_to_greedy <= 2 * self.max_probability_error, self
         assert self.max_probability_error <= max_probability_error, self
 
 
-def parity_from_logprob_map(
-    golden: InferenceGolden, greedy_token_id: int, actual_logprobs: dict[int, float]
-) -> NextTokenParity:
-    """Score parity from a ``{token_id: logprob}`` map -- the vLLM HTTP ``top_logprobs`` path.
+@dataclass(frozen=True)
+class _GoldenGreedySummary:
+    greedy_token_ids: tuple[int, ...]
+    top_token_ids: tuple[int, ...]
+    top1_probability_margin: float
+    probability_gap_to_greedy: float
 
-    ``actual_logprobs`` must cover every golden token (the request asks for enough logprobs that the
-    golden's top-25 are always present); a missing token is a hard error, not a silent skip.
-    """
-    golden_logprobs = {entry.token_id: entry.logprob for entry in golden.top_logprobs}
+
+def parity_from_logprob_map(
+    case_id: str,
+    expected_top_logprobs: tuple[TokenScore, ...],
+    greedy_token_id: int,
+    actual_logprobs: dict[int, float],
+    *,
+    backend_rank: int,
+) -> NextTokenParity:
+    """Score a vLLM-style ``{token_id: logprob}`` response."""
+    golden_logprobs = _golden_logprob_map(case_id, expected_top_logprobs)
     missing = golden_logprobs.keys() - actual_logprobs.keys()
-    assert not missing, f"golden tokens missing from backend logprobs: {sorted(missing)}"
+    assert not missing, f"{case_id} rank {backend_rank}: golden tokens missing from backend logprobs: {sorted(missing)}"
+    assert greedy_token_id in actual_logprobs, f"{case_id} rank {backend_rank}: greedy token missing from logprobs"
+    maximum_actual_logprob = max(actual_logprobs.values())
+    assert (
+        actual_logprobs[greedy_token_id] == maximum_actual_logprob
+    ), f"{case_id} rank {backend_rank}: greedy token does not have maximum returned logprob"
     probability_errors = [
         abs(math.exp(actual_logprobs[token_id]) - math.exp(golden_logprob))
         for token_id, golden_logprob in golden_logprobs.items()
     ]
+    summary = _golden_greedy_summary(expected_top_logprobs, greedy_token_id)
     return NextTokenParity(
-        prompt=golden.prompt,
+        case_id=case_id,
+        backend_rank=backend_rank,
         greedy_token_id=greedy_token_id,
-        golden_greedy_token_id=golden.top_logprobs[0].token_id,
+        golden_greedy_token_ids=summary.greedy_token_ids,
+        golden_top_token_ids=summary.top_token_ids,
+        golden_top1_probability_margin=summary.top1_probability_margin,
+        golden_probability_gap_to_greedy=summary.probability_gap_to_greedy,
         max_probability_error=max(probability_errors),
         top_probability_l1_error=sum(probability_errors),
     )
 
 
-def parity_from_logprob_row(golden: InferenceGolden, logprobs_row: np.ndarray) -> NextTokenParity:
-    """Score parity from a full ``[vocab]`` log-softmax row -- the Levanter forward path."""
-    golden_ids = np.asarray([entry.token_id for entry in golden.top_logprobs])
-    golden_logprobs = np.asarray([entry.logprob for entry in golden.top_logprobs])
-    probability_errors = np.abs(np.exp(logprobs_row[golden_ids]) - np.exp(golden_logprobs))
+def parity_from_logprob_row(
+    case_id: str,
+    expected_top_logprobs: tuple[TokenScore, ...],
+    logprobs_row: np.ndarray,
+    *,
+    backend_rank: int,
+) -> NextTokenParity:
+    """Score a full Levanter ``[vocab]`` log-softmax row."""
+    golden_logprobs = _golden_logprob_map(case_id, expected_top_logprobs)
+    golden_ids = np.fromiter(golden_logprobs, dtype=np.int64)
+    golden_values = np.fromiter(golden_logprobs.values(), dtype=np.float64)
+    probability_errors = np.abs(np.exp(logprobs_row[golden_ids]) - np.exp(golden_values))
+    greedy_token_id = int(logprobs_row.argmax())
+    summary = _golden_greedy_summary(expected_top_logprobs, greedy_token_id)
     return NextTokenParity(
-        prompt=golden.prompt,
-        greedy_token_id=int(logprobs_row.argmax()),
-        golden_greedy_token_id=int(golden.top_logprobs[0].token_id),
+        case_id=case_id,
+        backend_rank=backend_rank,
+        greedy_token_id=greedy_token_id,
+        golden_greedy_token_ids=summary.greedy_token_ids,
+        golden_top_token_ids=summary.top_token_ids,
+        golden_top1_probability_margin=summary.top1_probability_margin,
+        golden_probability_gap_to_greedy=summary.probability_gap_to_greedy,
         max_probability_error=float(probability_errors.max()),
         top_probability_l1_error=float(probability_errors.sum()),
+    )
+
+
+def _golden_logprob_map(case_id: str, expected_top_logprobs: tuple[TokenScore, ...]) -> dict[int, float]:
+    if not expected_top_logprobs:
+        raise ValueError(f"{case_id}: expected token scores must not be empty")
+    golden_logprobs = {entry.token_id: entry.logprob for entry in expected_top_logprobs}
+    if len(golden_logprobs) != len(expected_top_logprobs):
+        raise ValueError(f"{case_id}: expected token scores contain duplicate token IDs")
+    return golden_logprobs
+
+
+def _golden_greedy_summary(
+    expected_top_logprobs: tuple[TokenScore, ...],
+    greedy_token_id: int,
+) -> _GoldenGreedySummary:
+    maximum = max(entry.logprob for entry in expected_top_logprobs)
+    greedy_ids = tuple(entry.token_id for entry in expected_top_logprobs if entry.logprob == maximum)
+    top_ids = tuple(entry.token_id for entry in expected_top_logprobs)
+    lower_logprobs = [entry.logprob for entry in expected_top_logprobs if entry.logprob < maximum]
+    if len(greedy_ids) > 1:
+        margin = 0.0
+    elif lower_logprobs:
+        margin = math.exp(maximum) - math.exp(max(lower_logprobs))
+    else:
+        margin = math.exp(maximum)
+    selected_logprob = next(
+        (entry.logprob for entry in expected_top_logprobs if entry.token_id == greedy_token_id),
+        -math.inf,
+    )
+    greedy_gap = math.exp(maximum) - math.exp(selected_logprob)
+    return _GoldenGreedySummary(
+        greedy_token_ids=greedy_ids,
+        top_token_ids=top_ids,
+        top1_probability_margin=margin,
+        probability_gap_to_greedy=greedy_gap,
     )

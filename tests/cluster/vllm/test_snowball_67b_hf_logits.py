@@ -45,7 +45,9 @@ from levanter.tokenizers import load_tokenizer
 from levanter.utils.jax_utils import parameter_count
 
 from tests.cluster.vllm.backend_parity import LEVANTER_MAX_PROBABILITY_ERROR, parity_from_logprob_row
-from tests.cluster.vllm.june_67b_a2b import JUNE_67B_A2B, InferenceGolden, read_inference_golden
+from tests.cluster.vllm.june_67b_a2b import InferenceGolden, read_inference_golden
+from tests.cluster.vllm.june_67b_a2b_identity import JUNE_67B_A2B
+from tests.cluster.vllm.representative_eval import TokenScore
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING
 
 
 def assert_snowball_hf_export_matches_golden(golden: InferenceGolden) -> None:
-    expected_top = golden.top_logprobs
+    expected_top = tuple(TokenScore(logprob=entry.logprob, token_id=entry.token_id) for entry in golden.top_logprobs)
     assert len(expected_top) == TOP_K
 
     mesh = compact_grug_mesh()
@@ -110,7 +112,9 @@ def assert_snowball_hf_export_matches_golden(golden: InferenceGolden) -> None:
 
     # Greedy-token match + rank-independent probability parity on the golden's token set (insensitive
     # to the bf16 tie reordering, meaningful against a real regression), one row per device.
-    parities = [parity_from_logprob_row(golden, row) for row in logprobs]
+    parities = [
+        parity_from_logprob_row(golden.prompt, expected_top, row, backend_rank=rank) for rank, row in enumerate(logprobs)
+    ]
     logger.info(
         "Snowball HF-export inference: %s",
         {

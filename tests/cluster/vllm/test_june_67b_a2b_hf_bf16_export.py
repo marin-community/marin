@@ -33,13 +33,13 @@ from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from tests.cluster.vllm.june_67b_a2b import (
-    JUNE_67B_A2B,
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
 )
+from tests.cluster.vllm.june_67b_a2b_identity import JUNE_67B_A2B
 
 PENDING_TIMEOUT = 5 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
