@@ -134,7 +134,7 @@ def brokered_lm_eval_step(
     )
 
 
-def submit_iris_lm_eval(
+def run_iris_lm_eval_job(
     inference: BrokeredVllmSystemConfig,
     run: LmEvalRun,
     *,
@@ -299,7 +299,7 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
             run_local_brokered_lm_eval(inference, run)
             return
 
-        submit_iris_lm_eval(
+        run_iris_lm_eval_job(
             inference,
             run,
             job_name=job_name,
