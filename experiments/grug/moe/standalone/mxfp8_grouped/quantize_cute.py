@@ -41,6 +41,7 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 import jax
 import jax.numpy as jnp
+from cutlass._mlir.dialects import llvm
 
 from .adapter import (
     _BLACKWELL_CUTE_ARCH,
@@ -69,6 +70,43 @@ def _group_max(v, offsets: tuple[int, ...]):
     for o in offsets:
         v = cute.arch.fmax(v, cute.arch.shuffle_sync_bfly(v, o))
     return v
+
+
+def _cvt2_e4m3(hi, lo):
+    """Pack two f32 into an e4m3x2 Int16 via inline PTX (``hi`` in the upper byte).
+
+    The DSL's native ``.to(Float8E4M3FN)`` lowers to the ``nvvm.cvt.packfloat``
+    intrinsic, which the cluster's libNVVM rejects (``NVVM_ERROR_COMPILATION:
+    unsupported operation``, jobs 002c-g2/g4-g7); inline asm bypasses the
+    intrinsic set entirely. ``cvt.rn.satfinite`` is RTNE with saturation to
+    +-448, bit-identical to the XLA clip+convert for finite inputs.
+    """
+    res = llvm.inline_asm(
+        cutlass.Int16.mlir_type,
+        [cutlass.Float32(hi).ir_value(), cutlass.Float32(lo).ir_value()],
+        "cvt.rn.satfinite.e4m3x2.f32 $0, $1, $2;",
+        "=h,f,f",
+        has_side_effects=False,
+        is_align_stack=False,
+        asm_dialect=llvm.AsmDialect.AD_ATT,
+    )
+    return cutlass.Int16(res)
+
+
+def _store_ssa_as_e4m3(q_ssa, frag):
+    """Convert a (8, 8) f32 TensorSSA to e4m3 into ``frag`` via inline-asm cvt.
+
+    ``frag`` must be a compact row-contiguous (8, 8) e4m3 register fragment;
+    pairs of column-adjacent values pack into one i16 (lo byte = even column,
+    matching little-endian storage order).
+    """
+    tmp = cute.make_fragment_like(frag, cutlass.Float32)
+    tmp.store(q_ssa)
+    frag16 = cute.recast_tensor(frag, cutlass.Int16)
+    # Plain range: helper is not AST-preprocessed, so unroll at trace time.
+    for r in range(_THR_TILE):
+        for c in range(_THR_TILE // 2):
+            frag16[(r, c)] = _cvt2_e4m3(tmp[(r, 2 * c + 1)], tmp[(r, 2 * c)])
 
 
 def _e8m0_round_up(amax):
@@ -172,7 +210,7 @@ def _dual_quantize_launcher():
             qr = cute.where(qr < minv, minv, qr)
             gQr = cute.local_tile(mQr, (_THR_TILE, _THR_TILE), (row_blk, col_blk))
             frag_qr = cute.make_fragment_like(gQr)
-            frag_qr.store(qr.to(frag_qr.element_type))
+            _store_ssa_as_e4m3(qr, frag_qr)
             cute.autovec_copy(frag_qr, gQr)
 
             qc = xf * inv_c.load().reshape((1, _THR_TILE)).broadcast_to((_THR_TILE, _THR_TILE))
@@ -180,7 +218,7 @@ def _dual_quantize_launcher():
             qc = cute.where(qc < minv, minv, qc)
             gQc = cute.local_tile(mQc, (_THR_TILE, _THR_TILE), (row_blk, col_blk))
             frag_qc = cute.make_fragment_like(gQc)
-            frag_qc.store(qc.to(frag_qc.element_type))
+            _store_ssa_as_e4m3(qc, frag_qc)
             cute.autovec_copy(frag_qc, gQc)
 
             # ---- scale-byte stores (one lane per 4-lane group) -------------

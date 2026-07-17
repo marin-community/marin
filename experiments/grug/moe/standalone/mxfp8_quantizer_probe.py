@@ -29,14 +29,19 @@ import cutlass.cute as cute
 import cutlass.jax as cjax
 import jax
 import jax.numpy as jnp
-from mxfp8_grouped.adapter import _as_gmem_tensor, ensure_blackwell_arch
-from mxfp8_grouped.quantize_cute import _e8m0_round_up, _group_max, dual_quantize_mxfp8_cute
+from mxfp8_grouped.adapter import _as_gmem_tensor, ensure_blackwell_arch, quantize_mxfp8, quantize_mxfp8_tokens
+from mxfp8_grouped.quantize_cute import (
+    _e8m0_round_up,
+    _group_max,
+    _store_ssa_as_e4m3,
+    dual_quantize_mxfp8_cute,
+)
 
 M, K = 512, 128
 TILE = 8  # per-thread tile; 256 threads as (32, 8)
 
 
-def _probe_launcher(level: int):
+def _probe_launcher(level: int, use_asm: bool = True):
     class ProbeKernel:
         @cute.jit
         def __call__(self, stream, mX: cute.Tensor, mQ: cute.Tensor, mS: cute.Tensor):
@@ -81,17 +86,20 @@ def _probe_launcher(level: int):
             q = xf * scale
             gQ = cute.local_tile(mQ, (TILE, TILE), (row_blk, col_blk))
             frag_q = cute.make_fragment_like(gQ)
-            frag_q.store(q.to(frag_q.element_type))
+            if cutlass.const_expr(use_asm):
+                _store_ssa_as_e4m3(q, frag_q)
+            else:
+                frag_q.store(q.to(frag_q.element_type))
             cute.autovec_copy(frag_q, gQ)
 
     return ProbeKernel()
 
 
-def run_probe(level: int, name: str):
+def run_probe(level: int, name: str, use_asm: bool = True):
     x = jax.random.normal(jax.random.PRNGKey(0), (M, K), dtype=jnp.bfloat16)
     ts = cjax.TensorSpec
     call = cjax.cutlass_call(
-        _probe_launcher(level),
+        _probe_launcher(level, use_asm),
         output_shape_dtype=(
             jax.ShapeDtypeStruct((M, K), jnp.float8_e4m3fn),
             jax.ShapeDtypeStruct((K // 32, M), jnp.uint8),
@@ -104,7 +112,15 @@ def run_probe(level: int, name: str):
     try:
         out = jax.block_until_ready(jax.jit(lambda t: call(t))(x))
         print(f"PASS {name}: q mean {float(jnp.mean(jnp.abs(out[0].astype(jnp.float32)))):.4f}", flush=True)
-    except Exception as e:  # noqa: BLE001 - diagnostic ladder must continue
+        if level == 1:
+            # Byte-order check for the inline-asm e4m3x2 pack (scale == 1).
+            ref = x.astype(jnp.float32).astype(jnp.float8_e4m3fn)
+            u_out = jax.lax.bitcast_convert_type(out[0], jnp.uint8)
+            u_ref = jax.lax.bitcast_convert_type(ref, jnp.uint8)
+            n_diff = int(jnp.sum(u_out != u_ref))
+            n_diff_sw = int(jnp.sum(u_out != u_ref.reshape(-1, 2)[:, ::-1].reshape(u_ref.shape)))
+            print(f"  {name} vs jnp cvt: {n_diff}/{u_ref.size} differ (pair-swapped: {n_diff_sw})", flush=True)
+    except Exception as e:
         msg = str(e).splitlines()
         head = " / ".join(msg[:3])
         print(f"FAIL {name}: {type(e).__name__}: {head}", flush=True)
@@ -128,8 +144,25 @@ def run_full(m: int, k: int):
     x = jax.random.normal(jax.random.PRNGKey(0), (m, k), dtype=jnp.bfloat16)
     try:
         out = jax.block_until_ready(jax.jit(dual_quantize_mxfp8_cute)(x))
-        print(f"PASS v5_full ({m}x{k}): outputs {[o.shape for o in out]}", flush=True)
-    except Exception as e:  # noqa: BLE001 - diagnostic ladder must continue
+        q_row, s_row_t, q_col, s_col = out
+        qr_ref, sr_ref = jax.jit(quantize_mxfp8)(x)
+        qc_ref, sc_ref = jax.jit(quantize_mxfp8_tokens)(x)
+        diffs = {
+            "q_row": int(
+                jnp.sum(
+                    jax.lax.bitcast_convert_type(q_row, jnp.uint8) != jax.lax.bitcast_convert_type(qr_ref, jnp.uint8)
+                )
+            ),
+            "s_row": int(jnp.sum(s_row_t.T != sr_ref)),
+            "q_col": int(
+                jnp.sum(
+                    jax.lax.bitcast_convert_type(q_col, jnp.uint8) != jax.lax.bitcast_convert_type(qc_ref, jnp.uint8)
+                )
+            ),
+            "s_col": int(jnp.sum(s_col != sc_ref)),
+        }
+        print(f"PASS v5_full ({m}x{k}): byte diffs {diffs}", flush=True)
+    except Exception as e:
         print(f"FAIL v5_full ({m}x{k}): {type(e).__name__}: {_fail_detail(e)}", flush=True)
 
 
@@ -149,14 +182,14 @@ def print_env():
     ):
         try:
             print(subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.strip(), flush=True)
-        except Exception as e:  # noqa: BLE001 - diagnostics only
+        except Exception as e:
             print(f"(diag {cmd[0]} failed: {e})", flush=True)
     try:
         from cuda import pathfinder
 
         for lib in ("nvvm",):
             print(f"libnvvm: {pathfinder.load_nvidia_dynamic_lib(lib).abs_path}", flush=True)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"(pathfinder failed: {e})", flush=True)
 
 
@@ -164,10 +197,9 @@ def main():
     ensure_blackwell_arch()
     print(f"device: {jax.devices()[0].device_kind}, cutlass {cutlass.__version__}", flush=True)
     print_env()
-    for level, name in ((1, "v1_cvt"), (2, "v2_shuffle"), (3, "v3_e8m0"), (4, "v4_scalebyte")):
+    run_probe(1, "v1_cvt_intrinsic", use_asm=False)  # control: expected FAIL on cluster libNVVM
+    for level, name in ((1, "v1_asm"), (2, "v2_shuffle"), (3, "v3_e8m0"), (4, "v4_scalebyte")):
         run_probe(level, name)
-    # Shape scan: g2 failed at (8192, 2560) while (512, 128) passed on g3's
-    # node; g4's node failed v1 at (512, 128) -- node dependence suspected.
     for m, k in ((512, 128), (8192, 2560), (262144, 2560)):
         run_full(m, k)
 
