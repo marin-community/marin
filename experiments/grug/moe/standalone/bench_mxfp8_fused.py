@@ -486,12 +486,14 @@ def cute_producer_available() -> bool:
 # Per-leg tiler variants for --ablate (mma_m, mma_n, cluster_m, cluster_n).
 # g6 verdicts: (256,256,2,1) wins every leg it applies to; dswiglu vecf32 wins.
 ABLATE_VARIANTS = {
-    "swiglu": ["128,256,1,1"],
-    "gemm_w2": ["128,256,1,1"],
-    "dswiglu": ["128,256,1,1"],
-    "gemm_w13": ["128,256,1,1"],
-    "wgrad_w13": ["128,256,1,1"],
-    "wgrad_w2": ["128,256,1,1"],
+    # "256,256,2,1" entries repeat the default config in ablation position to
+    # expose measurement-order effects (g6 vs g7 disagreed on gemm_w2 by 25%).
+    "swiglu": ["256,256,2,1"],
+    "gemm_w2": ["256,256,2,1", "256,256,2,2", "128,256,1,1"],
+    "dswiglu": ["256,256,2,1"],
+    "gemm_w13": ["256,256,2,1", "256,256,2,2"],
+    "wgrad_w13": ["256,256,2,2"],
+    "wgrad_w2": ["256,256,2,2"],
 }
 _LEG_KIND = {
     "swiglu": "swiglu",
