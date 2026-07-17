@@ -331,3 +331,18 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
 - Retry at **b512** (tokens/rank 32,768 → capacity 1.05 M rows, ~10 GiB/buffer)
   in flight (`ncclep-64g-ep8-b512`) + a2a_cute b512 control at the identical
   mesh/flags + the a2a_cute b1024 reference-config baseline.
+- **GOAL MET (b512): NCCL_EP trains at 64 GPUs / EP8 with loss parity.**
+  All 20 steps completed on the 16-node gang (64 processes, one per GPU;
+  EP groups span 2 nodes each over MNNVL). Results (d5120 L48 e64 top4
+  seq4096, EP8, single 64-GPU copy data8×expert8, recompute_all, cf 1.0):
+  | arm | b | steady MFU (B200 conv.) | s/step | tok/s | final loss |
+  |---|---|---|---|---|---|
+  | a2a_cute EP8 (`ncclep-64g-a2a-ctl`) | 1024 | **19.1 %** | 15.7 | 266 k | 8.746 |
+  | a2a_cute EP8 (`ncclep-64g-a2a-b512`) | 512 | **18.1 %** | 8.3 | 252 k | 8.762 |
+  | nccl_ep EP8 (`ncclep-64g-ep8-b512`) | 512 | 7.34 %* | 21.2* | 103 k* | **8.760** |
+  *with `NCCL_EP_JIT_LOG=1` logging EVERY EP-op launch host-side (6.5 k+ log
+  calls serializing the step) — not a representative perf number; quiet rerun
+  (`ncclep-64g-ep8-b512-q`, logging off) in flight for the honest MFU.
+  Loss check: nccl_ep 8.75977 vs a2a_cute 8.76165 at step 19 — parity.
+- The b1024 reference-config arm remains blocked by the no-drop capacity wall
+  (172 GiB temp arena) — the headline scale-derisk finding of this issue.
