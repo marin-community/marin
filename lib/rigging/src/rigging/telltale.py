@@ -7,21 +7,15 @@ A telltale is the ribbon on a sail that shows which way the wind is blowing. Thi
 module is the equivalent for a Marin process: a few HTTP routes that say what the
 process is doing right now, cheap enough to leave on everywhere.
 
-It owns the *mechanism* only — metric objects and ASGI routes over the default
-``prometheus_client`` registry. It deliberately runs no server and knows nothing
-about Iris: ``rigging`` is the dependency leaf (``finelog`` depends on it), so it
-can neither read an Iris port nor write finelog, and it has no ``uvicorn``.
-``iris.runtime.telltale`` owns the server lifecycle and job identity.
+``routes()`` returns the pages for mounting into an app that already serves; this
+module starts no server of its own.
 
-Metrics come from ``counter``/``gauge``/``histogram``, which get-or-create against
-the default registry. Constructing ``prometheus_client`` objects directly raises
-``Duplicated timeseries`` if the same process instruments twice — which happens
-whenever a worker runs a user callable more than once — so these helpers are the
-supported entry point.
+Instrument through ``counter``/``gauge``/``histogram``, which get-or-create
+against the default ``prometheus_client`` registry. Constructing those objects
+directly raises ``Duplicated timeseries`` when a process instruments the same
+name twice, which a worker running a user callable repeatedly will do.
 
-Routes are annotated for ``rigging.server_auth.RouteAuthMiddleware``, which fails
-closed on unannotated routes. They are ``@public``: the metrics are not secret,
-and the pages carry strictly less than whatever RPC service mounts them.
+The routes are ``@public`` under ``rigging.server_auth.RouteAuthMiddleware``.
 """
 
 import html
@@ -72,7 +66,7 @@ def _get_or_create(
             _metrics[name] = metric
             return metric
 
-        if type(existing) is not factory:
+        if not isinstance(existing, factory):
             raise ValueError(
                 f"Metric {name!r} is already registered as {type(existing).__name__}, "
                 f"cannot re-register as {factory.__name__}"
@@ -82,7 +76,7 @@ def _get_or_create(
                 f"Metric {name!r} is already registered with labels {list(existing._labelnames)}, "
                 f"cannot re-register with {list(labelnames)}"
             )
-        return typing.cast(_M, existing)
+        return existing
 
 
 def counter(name: str, documentation: str, labelnames: Sequence[str] = ()) -> Counter:
@@ -112,15 +106,15 @@ def metric_name(name: str, prefix: str = "") -> str:
     return f"{prefix}_{sanitized}" if prefix else sanitized
 
 
-def set_status(markdown: str) -> None:
+def set_status(text: str) -> None:
     """Set the free-form status block shown on the index page.
 
-    Process-local and in-memory: it is a debugging view of a live process, and is
-    neither persisted nor reported anywhere.
+    Rendered as preformatted plain text. Process-local and in-memory: a debugging
+    view of a live process, neither persisted nor reported anywhere.
     """
     global _status
     with _lock:
-        _status = markdown
+        _status = text
 
 
 def get_status() -> str:
