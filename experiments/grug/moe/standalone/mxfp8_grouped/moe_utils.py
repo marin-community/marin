@@ -95,14 +95,6 @@ def gmem_ptr_to_generic(
     loc: Optional[ir.Location] = None,
     ip: Optional[ir.InsertionPoint] = None,
 ) -> Pointer:
-    # Vendored (marin): pass generic pointers through unchanged. The cu13
-    # variant of the DSL wheel (nvidia-cutlass-dsl-libs-cu13 4.5.2) has a
-    # make_ptr that derives the address space from the LLVM pointer type
-    # (addrspace 0 = generic), so cutlass.jax FFI tensors arrive as generic
-    # rather than gmem; a generic pointer already satisfies this function's
-    # postcondition.
-    if gmem_ptr.memspace == AddressSpace.generic:
-        return gmem_ptr
     if gmem_ptr.memspace != AddressSpace.gmem:
         raise ValueError(
             f"gmem_ptr_to_generic requires pointer in gmem address space, "

@@ -173,6 +173,23 @@ def build_sfb(w_scales):
 # --------------------------------------------------------------------------- #
 
 
+def _as_gmem_tensor(t):
+    """Rebuild ``t`` with a gmem-space pointer (same address, same layout).
+
+    Only used inside the ``@cute.jit`` launcher trace. If the pointer is
+    already gmem this is the identity.
+    """
+    if t.iterator.memspace == cute.AddressSpace.gmem:
+        return t
+    ptr = cute.make_ptr(
+        t.element_type,
+        t.iterator.toint(),
+        cute.AddressSpace.gmem,
+        assumed_align=t.iterator.alignment,
+    )
+    return cute.make_tensor(ptr, t.layout)
+
+
 def _build_launcher(
     *,
     e: int,
@@ -204,6 +221,21 @@ def _build_launcher(
             mOut: cute.Tensor,
             mWs: cute.Tensor,
         ):
+            # Normalize every FFI tensor to a gmem-space pointer at the
+            # boundary. The cu13 DSL wheel's make_ptr derives the address
+            # space from the LLVM pointer type of the FFI buffer (addrspace
+            # 0 = generic), so cutlass.jax hands us generic-space tensors on
+            # that stack; the vendored kernel requires gmem (copy_tensormap
+            # verifier, gmem_ptr_to_generic). Rebuilding the pointer from the
+            # integer address (make_ptr honors mem_space for integer values)
+            # matches what the torch/from_dlpack flow produces.
+            mA = _as_gmem_tensor(mA)
+            mB = _as_gmem_tensor(mB)
+            mSFA = _as_gmem_tensor(mSFA)
+            mSFB = _as_gmem_tensor(mSFB)
+            mOffs = _as_gmem_tensor(mOffs)
+            mOut = _as_gmem_tensor(mOut)
+            mWs = _as_gmem_tensor(mWs)
             # Temporary debug: trace-time pointer diagnostics.
             print(f"[mxfp8-dbg] launcher mWs.iterator: {mWs.iterator}")
             print(f"[mxfp8-dbg] launcher mA.iterator: {mA.iterator}")
