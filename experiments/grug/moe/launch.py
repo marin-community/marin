@@ -37,6 +37,7 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
+from experiments.datasets.mrcr import mrcr_datasets
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.proofpile import proofpile_dataset
@@ -209,7 +210,7 @@ def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterChe
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
     :func:`~marin.execution.lazy.lower`. Pinned components never re-tokenize; the
-    paloma/uncheatable suites are validation (weight 0).
+    Paloma, Uncheatable, and MRCR suites are validation (weight 0).
     """
     name = "grug/4_10_baseline_moe"
     version = resolve_version(name, version)
@@ -217,9 +218,11 @@ def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterChe
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
     train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
     train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    mrcr = mrcr_datasets(tokenizer=llama3_tokenizer)
     validation = [
         *paloma_datasets(tokenizer=llama3_tokenizer).values(),
         *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+        *mrcr.values(),
     ]
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:

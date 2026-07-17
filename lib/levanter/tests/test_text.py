@@ -718,6 +718,39 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
 
+def test_dataset_for_component_chat_right_slice_retains_assistant_tokens(tmp_path):
+    data_path = tmp_path / "chat.jsonl"
+    data_path.write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {"role": "user", "content": "long context " * 100},
+                    {"role": "assistant", "content": "remembered answer"},
+                ]
+            }
+        )
+        + "\n"
+    )
+    tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=ChatLmDatasetFormat(messages_field="messages", pack=True, slice_strategy="right"),
+        cache_dir=str(tmp_path / "cache"),
+    )
+    cache = _build_train_cache(component, tokenizer)
+    Pos = hax.Axis("position", 32)
+
+    example = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=True,
+    ).as_sync_dataset()[0]
+
+    assert np.asarray(example.loss_weight).sum() > 0
+
+
 # --- one example per document ----------------------------------------------
 #
 # A falsy pack (for chat/trace) and pack=1 select one document per example, padded to
