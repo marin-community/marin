@@ -34,7 +34,7 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import GrugFp8Config, GrugModelConfig
-from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 from experiments.grug.moe.train import _make_train_step, initial_state
 
 _BATCH_AXES = ("replica_dcn", "data", "expert")
@@ -61,6 +61,7 @@ def _parse():
     p.add_argument("--expert-parallelism", type=int, default=8)
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument("--remat-mode", default="recompute_all", choices=["recompute_all", "save_moe"])
+    p.add_argument("--optimizer", default="muonh", choices=["muonh", "adamh"])
     p.add_argument("--top-buffers", type=int, default=25)
     return p.parse_args()
 
@@ -103,7 +104,10 @@ def main():
         fp8=fp8,
         remat_mode=a.remat_mode,
     )
-    optimizer = GrugMoeMuonHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
+    if a.optimizer == "muonh":
+        optimizer = GrugMoeMuonHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
+    else:
+        optimizer = GrugMoeAdamHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
     mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     opt = optimizer.build(20)
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
@@ -149,18 +153,55 @@ def main():
         }
         print("MEMORY_ANALYSIS " + json.dumps({k: f"{v / 2**30:.2f}GiB" if v > 2**20 else v for k, v in stats.items()}))
 
-    # Largest allocations from the buffer assignment dump, if available.
-    try:
-        text = compiled.as_text()
-    except Exception:
-        text = ""
-    if text:
-        import re  # noqa: PLC0415
-
-        allocs = re.findall(r"allocation \d+: size (\d+)[^\n]*", text)
-        sizes = sorted((int(s) for s in allocs), reverse=True)[: a.top_buffers]
-        print("TOP_ALLOCATIONS_GiB " + json.dumps([round(s / 2**30, 3) for s in sizes]))
+    _report_dump_buffers(a.top_buffers)
     print("PROBE_DONE", flush=True)
+
+
+def _report_dump_buffers(top_n: int) -> None:
+    """Aggregate large values from an XLA buffer-assignment dump, if one was requested.
+
+    Set XLA_FLAGS to include ``--xla_dump_to=<dir> --xla_dump_hlo_as_text`` and
+    pass the same dir via PROBE_DUMP_DIR; pod-local dumps die with the pod, so
+    the attribution table is parsed here and printed to stdout.
+    """
+    import collections  # noqa: PLC0415
+    import glob  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import re  # noqa: PLC0415
+
+    dump_dir = os.environ.get("PROBE_DUMP_DIR")
+    if not dump_dir:
+        return
+    cands = sorted(glob.glob(f"{dump_dir}/*buffer-assignment*"), key=os.path.getsize, reverse=True)
+    if not cands:
+        print(f"PROBE_DUMP: no buffer-assignment files under {dump_dir}")
+        return
+    path = cands[0]
+    bytes_per = {"f32": 4, "bf16": 2, "s32": 4, "u32": 4, "f8e4m3fn": 1, "f8e5m2": 1, "u8": 1, "s8": 1, "pred": 1}
+    byshape: collections.Counter = collections.Counter()
+    counts: collections.Counter = collections.Counter()
+    ops: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    with open(path) as f:
+        for line in f:
+            m = re.search(r"value: <\d+ ([\w.\-]+) @\d+>.*: *([a-z0-9]+)\[([\d,]*)\]", line)
+            if not m:
+                continue
+            op, dt, dims = m.groups()
+            elems = 1
+            for d in dims.split(","):
+                if d:
+                    elems *= int(d)
+            size = elems * bytes_per.get(dt, 4)
+            if size < 256 * 2**20:
+                continue
+            shape = f"{dt}[{dims}]"
+            byshape[shape] += size
+            counts[shape] += 1
+            ops[shape][re.sub(r"[.\d]+$", "", op)] += 1
+    print(f"PROBE_DUMP file={os.path.basename(path)}")
+    for shape, s in byshape.most_common(top_n):
+        top_ops = ",".join(f"{o}x{c}" for o, c in ops[shape].most_common(3))
+        print(f"  {s / 2**30:9.2f} GiB  n={counts[shape]:5d}  {shape}  [{top_ops}]", flush=True)
 
 
 if __name__ == "__main__":
