@@ -60,12 +60,19 @@ author: mcwitt
   per-tensor path. Next test: falls out of MXFP8-003 wiring.
 - `MXFP8-H4`: the FP8 wire (per-token scaling, permutation legs only) carries
   over to B200/GB200 unchanged. Next test: enable during MXFP8-003 smoke.
-- `MXFP8-H5` (SHARPENED by MXFP8-002b — now the gating hypothesis): a
-  fusion-grade dual-write quantize+swizzle producer (<=0.7 ms marginal for
-  the four activation tensors) turns the honest layer-quad from 0.58x into
-  ~1.25x; XLA producers max out at ~1.6-2.2 TB/s (7.06 ms total, breakeven
-  is 2.09 ms); an HBM-ideal standalone kernel only reaches ~1.11x. Next
-  test: MXFP8-002c quantizer prototype (CuTe or Mosaic, Hopper CT analog).
+- `MXFP8-H5` (PARTIALLY confirmed, MXFP8-002c): the CuTe dual-write quantizer
+  cuts producers 2.5x (2.074 ms vs 5.19; break-even 2.09) — layer-quad now
+  ~1.00x with weights amortized. Standalone-optimal is structurally short of
+  fusion-grade (~0.7 ms => ~1.25x needs epilogue fusion, est. 1-2 wk). Next
+  test: decision point — epilogue fusion vs `MXFP8-H7` vs wire-as-is.
+- `MXFP8-H7` (NEW, from the 001b+002c pattern): a per-tensor-scaled fp8
+  grouped kernel on sm100 (vendor the non-scaled DSL grouped GEMM, delayed
+  scaling like the dense path) beats mxfp8 at LAYER level — per-tensor
+  quantize is a scalar multiply+cast XLA fuses for free, so GEMM-level ~1.4x
+  survives nearly intact. Numerics: uniform-e4m3 bwd approximation (as in
+  `Fp8RaggedDotOp`) or true mixed e5m2xe4m3 (tcgen05 supports mixed A/B
+  natively — no wgmma same-dtype restriction on sm100!). Next test: vendor +
+  bench; #7271 arbitrates recipe quality vs mxfp8.
 
 ### Blocked
 
