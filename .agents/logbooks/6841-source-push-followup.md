@@ -65,7 +65,7 @@ Baselines at PR head:
 | 5 | Combine kernel at ~21% HBM roofline (per-row scalar loads, `source_push_combine.py:145`) | perf | 1.34→~0.5 ms fwd | S | SPF-004 |
 | 6 | Host-side numpy planner cost at target shape (excluded from all benchmark numbers; O(268M) element ops/plan) | measurement | unknown, possibly dominates | S (CPU) | SPF-005 |
 | 7 | Source-push dy route (fix dcombine in_specs `backward_pallas.py:2280`, reuse existing dy-route remote-write kernel, add global phase barrier) | structural | rest of the 11.6 ms API tax | M-L | next |
-| 8 | W2-return kernel: double-buffer k-loop + deferred `wait_smem_to_gmem` (`source_push_w2_return.py:680-765`) | perf | 4.05→~2.7 ms fwd (baseline now from_h 6.80 ms post-hoist; see SPF-007 entry for the pipelining + output-side route-scale plan) | M | next |
+| 8 | W2-return kernel: double-buffer k-loop + deferred `wait_smem_to_gmem` (`source_push_w2_return.py:680-765`) | perf | 4.05→~2.7 ms fwd (baseline now from_h 6.80 ms post-hoist; see SPF-007 entry for the pipelining + output-side route-scale plan) | M | SPF-008: route-scale adopted (6.36 ms); 2-stage pipeline falsified (occupancy); rest needs occupancy-neutral design |
 | 9 | Correctness cluster: single-jit remote-write completion barrier is scalar-only (`source_push_forward.py:1109`); fused dX-return race (no wait on `ready_sem`); failed integrated gate FUSED-MOE-094 | bug | blocking for fused promotion / single-jit | S-M | next |
 | 10 | SM-carveout restructure: persistent SM-capped comm kernel + pipelined near-stock GEMM consumers; de-fuse W2-return/combine (dense fixed-shape permute) | structural | only credible route to 250 | L | design |
 
@@ -85,6 +85,8 @@ avenue 7/10 land.
 | SPF-004 | XLA gather-sum reaches ≥1.5 TB/s effective on combine | CONFIRMED: 0.481 ms / 1745 GB/s, bitwise-identical to kernel; ADOPT | see SPF-004 entry |
 | SPF-007 | Staged w2_return stage regressed 4.05 -> 7.08 ms between 89f3267fc (2026-07-03) and branch head | RESOLVED by records (no bisect): step change at `ae1c9aed1`+`e8fbfa85e` (W2-from-H switch, 2026-07-03 17:39-18:04), measured 7.048 ms same day (`6597-moe-mgpu-forward.md:4623`); deliberate H-boundary cost, not drift | see SPF-007 entry |
 | SPF-005 | Host-side plan build at target shape costs >2 ms/plan (likely ≫), making planner device-siding the top structural priority | CONFIRMED (~190x over threshold) | see SPF-005 entry: 380 ms plan build, ~1.85 s total public-path host work per plan |
+| SPF-008a | Output-side route scaling (`(diag(w)A)W2 = diag(w)(AW2)`) recovers ≥0.5 ms of the W2-from-H cost | CONFIRMED, ADOPT: w2_return 7.077 -> 6.355 ms (-0.72); reduced-shape check bit-matches the pre-change smoke reference | see SPF-008 entry |
+| SPF-008b | 2-stage double-buffered k-loop + deferred wgmma_wait recovers most of the remaining W2-from-H serialization | FALSIFIED: 6.36 -> 8.57 ms; 2x SMEM (80->160 KB/CTA) halves co-resident CTAs and inter-CTA interleaving beats the intra-CTA pipeline; reverted | see SPF-008 entry |
 
 ## 2026-07-16 SPF-000 - Kickoff: review fan-out
 
@@ -319,3 +321,68 @@ Process note: the "silent regression" framing in the SPF-004 entry and the
 round-1 issue comment was wrong — the cost was logged contemporaneously in the
 6597 logbook; we failed to connect the two records before flagging it as
 drift-needs-bisect.
+
+## 2026-07-17 SPF-008 - W2-from-H recovery: output-side route scaling adopted (-0.72 ms); double-buffering falsified by occupancy
+
+Branch `spf/008-w2-from-h-kernel` off PR head `26711f86e` (tip `882f2d3d5` =
+adopt `aa38972c8` + revert of `2c0f60a70`). Jobs on cw-us-east-02a H100x8, 216
+profile, staged_host_sync, seed 0, submitted with this branch's iris client
+through a manual `kubectl port-forward` tunnel.
+
+**SPF-008a output-side route scaling (ADOPT, `aa38972c8`).** The route weight
+is per-row, so `(diag(w) @ A) @ W2 == diag(w) @ (A @ W2)`: scale the fp32
+accumulator once after the k-loop instead of multiplying the weight into every
+activation tile. Deletes the k-invariant `[block_m, block_k]` weight-tile
+reload from the k-loop (subsumes the SPF-004 hoist), the host-side
+`jnp.repeat` `[rows, block_k]` expansion, and one multiply per element in the
+serial SwiGLU stage; ready barrier drops to 3 arrivals. Applied to both
+`from_h` and `from_compact_h` kernels. The 2026-07-03 lowering blocker
+("Lane/Mosaic cannot load the block_m=64 route-weight vector", 5 failed
+attempts logged at `6597-moe-mgpu-forward.md` 2026-07-03 18:00) does not apply
+post-GEMM: `mgpu.load(..., layout=mgpu.Layout.WGMMA.reduce(1))` +
+`lax.broadcast_in_dim` into the accumulator layout lowers fine at
+`block_m=64` (idiom from `source_push_backward_w2.py`).
+
+Job `/marin/spf008-mid-aa38972c8`, roughly_balanced cf1.25, 5 repeats,
+medians: **w2_return 6.355 ms** (head 7.077, SPF-004 hoist 6.803), total
+**15.970 ms** (head 16.724), w13 8.576, combine 0.898. Numerics: reduced-shape
+staged forward (ep2/128-dims/topk1, block_m 64) with `--check` reports
+`max_abs_diff = 0.00048828125` — bit-identical to the pre-change smoke of
+2026-07-03 (`6597-moe-mgpu-forward.md` 18:00 entry), i.e. the rewrite matches
+the f32 reference exactly as well as the old kernel did (it rounds once less:
+bf16(silu*up) pre-GEMM, weight applied exactly in f32 post-GEMM).
+
+**SPF-008b 2-stage double-buffer (FALSIFIED, `2c0f60a70`, reverted
+`882f2d3d5`).** Stage-major SMEM + `Barrier(num_barriers=2)` + prefetch-next
+with `wgmma_wait(1)`, the fused-W13-backward idiom. Job
+`/marin/spf008-tipbench-2c0f60a70`: w2_return **8.573 ms** roughly_balanced
+(8.118 balanced cf1.0) — +2.2 ms WORSE than SPF-008a alone. Mechanism: the
+pipeline doubles per-CTA SMEM 80 -> 160 KB, so co-resident CTAs per SM drop
+2 -> 1 on H100 (228 KB); the single-buffered kernel's serial
+TMA -> SwiGLU -> wgmma chain was already being hidden by the second CTA's
+interleaved execution, which the intra-CTA pipeline does not replace. Lesson
+for these Lane kernels: any k-loop overlap scheme must stay under ~112 KB/CTA
+(2 CTAs/SM) to be net-positive — e.g. in-place activation into the gate stage
+buffer (~96 KB at 2 stages) or warp specialization, not naive full
+double-buffering.
+
+**Pytest.** `-k source_push` on H100x8: tip and unmodified head both report
+the same `2 failed, 13 passed`
+(`test_moe_mlp_source_push_public_adapter_preserves_mlp_gradients`,
+`test_source_push_mlp_from_plan_pallas_custom_vjp_matches_reference_on_h100`;
+control job `/marin/spf008-headctl-pytest-26711f86e`) — pre-existing at
+`26711f86e`, likely the two known round-1 failures; no new failures from
+SPF-008.
+
+**Gap analysis.** Direct post-SwiGLU kernel floor is 4.05 ms; the H-boundary
+byte overhead justifies ~+1 ms, so the from_h floor is ~5.0 ms. SPF-008a lands
+6.36: ~1.4 ms of serialization/elementwise overhead remains for an
+occupancy-neutral overlap design (queued under avenue 8/10).
+
+**Infra.** (1) `~/.kube/coreweave-iris-gpu` agenix symlink was dangling again;
+regenerated per the recorded recipe. (2) Job-script ordering lesson: the tip
+job ran pytest before the bench under `set -e`, so the two pre-existing test
+failures killed the bench phase and cost a resubmit — put benches first or
+decouple exit codes. (3) `git add` in fresh worktrees hits the user's global
+`~/.config/git/ignore` `lib/` rule; `git add -f` is required for tracked files
+under `lib/`.
