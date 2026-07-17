@@ -556,12 +556,28 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: b
     # A real bf16 layer also pays the SwiGLU fwd + dSwiGLU bwd elementwise
     # passes that the fused pipeline subsumes -- measure them for the honest
     # full-layer comparison (the 6-GEMM quad alone is generous to bf16).
+    # Block-sliced formulation: the interleave becomes reshapes/slices that XLA
+    # fuses into one elementwise pass (the reference's gather/scatter version
+    # measured 8.4 ms on GB200 -- an implementation artifact, not a baseline).
     cb = jax.random.normal(jax.random.PRNGKey(4), (m, N2), jnp.bfloat16)
     dhb = jax.random.normal(jax.random.PRNGKey(5), (m, F), jnp.bfloat16)
-    sw_fwd = jax.jit(lambda c: swiglu_interleaved(c).astype(jnp.bfloat16))
-    sw_bwd = jax.jit(lambda dh, c: dswiglu_interleaved(dh.astype(jnp.float32), c.astype(jnp.float32)).astype(jnp.bfloat16))
-    bf16["swiglu_fwd_ms"] = timed(sw_fwd, (cb,), iters, warmup) * 1e3
-    bf16["dswiglu_bwd_ms"] = timed(sw_bwd, (dhb, cb), iters, warmup) * 1e3
+
+    def sw_fwd_blocks(c):
+        blk = c.reshape(m, N2 // (2 * BLK), 2, BLK).astype(jnp.float32)
+        gate, up = blk[:, :, 0], blk[:, :, 1]
+        return (up * gate * jax.nn.sigmoid(gate)).reshape(m, F).astype(jnp.bfloat16)
+
+    def sw_bwd_blocks(dh, c):
+        blk = c.reshape(m, N2 // (2 * BLK), 2, BLK).astype(jnp.float32)
+        gate, up = blk[:, :, 0], blk[:, :, 1]
+        dh_ = dh.reshape(m, F // BLK, BLK).astype(jnp.float32)
+        sig = jax.nn.sigmoid(gate)
+        dgate = dh_ * up * sig * (1.0 + gate * (1.0 - sig))
+        dup = dh_ * gate * sig
+        return jnp.stack((dgate, dup), axis=2).reshape(m, N2).astype(jnp.bfloat16)
+
+    bf16["swiglu_fwd_ms"] = timed(jax.jit(sw_fwd_blocks), (cb,), iters, warmup) * 1e3
+    bf16["dswiglu_bwd_ms"] = timed(jax.jit(sw_bwd_blocks), (dhb, cb), iters, warmup) * 1e3
     bf16["layer_ms"] = bf16["quad_ms"] + bf16["swiglu_fwd_ms"] + bf16["dswiglu_bwd_ms"]
     print(
         f"  bf16 elementwise: swiglu fwd {bf16['swiglu_fwd_ms']:.3f} ms + dswiglu bwd {bf16['dswiglu_bwd_ms']:.3f} ms"
