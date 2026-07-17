@@ -300,7 +300,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
+            # RMSNorm per-dimension gains are the only ``.weight`` leaves: 1-D scales that must
+            # never be orthogonalized. Under scan they stack to 2-D ``[L, d]`` and would otherwise
+            # hit the ndim fallback below and route to muonh; keep them on adam in both layouts.
+            if path_lower.endswith(".weight"):
+                return "adam"
+            # Matrices -> MuonH: attention (2D, or 3D stacked under scan), MoE experts and shared
+            # expert (3D unrolled, or 4D [L,E,D,I] stacked under scan). The 4D case reaches the
+            # stack-sharded distributed Newton-Schulz in grugmuon; without it, scanned experts fall
+            # through to adam and never get orthogonalized (and pay 2x optimizer state).
+            if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
                 return "muonh"
             return "adam"
 
