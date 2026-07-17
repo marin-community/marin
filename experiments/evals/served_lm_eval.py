@@ -113,12 +113,25 @@ def brokered_lm_eval_step(
         )
 
     def run_step(config: BrokeredLmEvalArtifactConfig) -> None:
+        execution_inference = replace(
+            inference,
+            model=config.model,
+            tokenizer=config.tokenizer,
+            server=replace(
+                inference.server,
+                max_model_len=config.max_model_len,
+                max_num_batched_tokens=config.max_num_batched_tokens,
+            ),
+            workers=config.workers,
+            worker_env_vars=dict(config.worker_env_vars),
+            proxy=replace(inference.proxy, ignored_request_fields=config.ignored_request_fields),
+        )
         remote(
             _run_brokered_lm_eval_artifact,
             name=name,
             resources=parent_resources,
             env_vars=dict(parent_env_vars),
-        )(inference, config.eval_run)
+        )(execution_inference, config.eval_run)
 
     return ArtifactStep(
         name=name,
