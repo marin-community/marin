@@ -28,27 +28,19 @@ ENDPOINT_PREFIX = "telltale"
 _started = False
 
 
-def _identity(job_info: JobInfo) -> dict[str, str]:
-    """The Iris identity stamped onto every metric row this process forwards.
-
-    Authoritative: the forwarder lets it override any same-named Prometheus or
-    global label, so a metric can never spoof the job it came from.
-    """
+def _identity(job_info: JobInfo) -> telltale.MetricIdentity:
+    """The Iris job coordinates stamped onto every metric row this process forwards."""
+    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     # The job root (``/user/job``), not JobInfo.job_id — the latter is the task's
     # immediate parent, which for a nested ``.../worker/3`` task is ``.../worker``.
-    identity = {
-        "job_id": str(Namespace.from_job_id(job_info.task_id)),
-        "task_id": str(job_info.task_id),
-        "attempt": str(job_info.attempt_id),
-    }
-    if job_info.worker_id:
-        identity["worker"] = job_info.worker_id
-    if job_info.worker_region:
-        identity["region"] = job_info.worker_region
-    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
-    if process_index is not None:
-        identity["process_index"] = process_index
-    return identity
+    return telltale.MetricIdentity(
+        job_id=str(Namespace.from_job_id(job_info.task_id)),
+        task_index=job_info.task_index,
+        attempt=job_info.attempt_id,
+        worker=job_info.worker_id,
+        region=job_info.worker_region,
+        process_index=int(process_index) if process_index is not None else None,
+    )
 
 
 def _start_forwarding(job_info: JobInfo, ctx: IrisContext) -> None:

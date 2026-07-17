@@ -58,7 +58,9 @@ def test_schema_keys_on_name_with_a_native_map():
     assert by_type["value"] == stats_pb2.COLUMN_TYPE_FLOAT64
     assert by_type["ts"] == stats_pb2.COLUMN_TYPE_TIMESTAMP_MS
     assert by_type["source"] == stats_pb2.COLUMN_TYPE_STRING
-    assert by_type["task_id"] == stats_pb2.COLUMN_TYPE_STRING
+    assert by_type["job_id"] == stats_pb2.COLUMN_TYPE_STRING
+    assert by_type["task_index"] == stats_pb2.COLUMN_TYPE_INT64
+    assert by_type["attempt"] == stats_pb2.COLUMN_TYPE_INT64
     assert by_type["labels"] == stats_pb2.COLUMN_TYPE_MAP
 
 
@@ -76,7 +78,8 @@ def test_sink_round_trips_flattened_columns_and_json_get_over_the_map(embedded_s
                 source="levanter",
                 run="run-1",
                 job_id="/a/b",
-                task_id="/a/b/w/0",
+                task_index=0,
+                attempt=1,
                 labels={"le": "+Inf"},
             )
         ]
@@ -86,12 +89,20 @@ def test_sink_round_trips_flattened_columns_and_json_get_over_the_map(embedded_s
     client = LogClient.connect(embedded_server.address)
     try:
         rows = client.query(
-            "SELECT value, source, run, task_id, job_id, json_get(labels, 'le') AS le "
+            "SELECT value, source, run, job_id, task_index, attempt, json_get(labels, 'le') AS le "
             f"FROM {TELLTALE_NAMESPACE} WHERE name = 'levanter_train_loss'"
         ).to_pylist()
     finally:
         client.close()
 
     assert rows == [
-        {"value": 1.5, "source": "levanter", "run": "run-1", "task_id": "/a/b/w/0", "job_id": "/a/b", "le": "+Inf"}
+        {
+            "value": 1.5,
+            "source": "levanter",
+            "run": "run-1",
+            "job_id": "/a/b",
+            "task_index": 0,
+            "attempt": 1,
+            "le": "+Inf",
+        }
     ]

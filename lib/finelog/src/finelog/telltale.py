@@ -3,13 +3,13 @@
 
 """A finelog-backed sink for ``rigging.telltale`` metric forwarding.
 
-``rigging.telltale`` owns the metric row (:class:`~rigging.telltale.TelltaleMetric`)
-and the forward loop; this module is the finelog end of the handoff. Rows land in
-one namespace keyed on the metric ``name``, so after compaction a metric's rows
-cluster into contiguous row groups and ``WHERE name = ...`` prunes on parquet
-stats + bloom filters rather than scanning every series. Leftover Prometheus
-labels ride in the native ``Map<Utf8,Utf8>`` ``labels`` column, readable with the
-``json_get`` family of UDFs.
+``rigging.telltale`` owns the ``TelltaleMetric`` row and the forward loop; this
+module is the finelog end of the handoff. Rows land in one namespace keyed on the
+metric ``name``, so after compaction a metric's rows cluster into contiguous row
+groups and ``WHERE name = ...`` prunes on parquet stats + bloom filters rather
+than scanning every series. Leftover Prometheus labels ride in the native
+``Map<Utf8,Utf8>`` ``labels`` column, readable with the ``json_get`` family of
+UDFs.
 """
 
 from collections.abc import Sequence
@@ -26,7 +26,7 @@ class FinelogMetricSink:
     """A ``rigging.telltale`` sink that appends rows to a finelog table.
 
     Owns the connection: construct it with the finelog endpoint, hand it to
-    :func:`rigging.telltale.start_forwarding`, and the forwarder drives
+    ``rigging.telltale.start_forwarding``, and the forwarder drives
     ``write``/``close``.
     """
 

@@ -39,12 +39,12 @@ def test_identity_carries_the_job_root_worker_and_process_index(monkeypatch):
     identity = telltale._identity(info)
 
     # job_id is the job root, not the task's immediate parent (.../worker).
-    assert identity["job_id"] == "/alice/train"
-    assert identity["task_id"] == "/alice/train/worker/3"
-    assert identity["worker"] == "w-7"
-    assert identity["attempt"] == "1"
-    assert identity["region"] == "us-east5"
-    assert identity["process_index"] == "2"
+    assert identity.job_id == "/alice/train"
+    assert identity.task_index == 3
+    assert identity.worker == "w-7"
+    assert identity.attempt == 1
+    assert identity.region == "us-east5"
+    assert identity.process_index == 2
 
 
 class _FakeClient:
@@ -80,4 +80,5 @@ def test_start_forwarding_resolves_the_endpoint_and_hands_a_sink_to_telltale(mon
 
     assert built["endpoint"] == "http://finelog:10001"
     assert isinstance(built["sink"], _Sink)
-    assert built["identity"]["task_id"] == "/alice/train/0"
+    assert built["identity"].job_id == "/alice/train"
+    assert built["identity"].task_index == 0

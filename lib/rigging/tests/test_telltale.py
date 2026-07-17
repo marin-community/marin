@@ -238,32 +238,33 @@ def test_scrape_flattens_identity_and_run_source_into_columns(name, clean_global
     telltale.gauge(name, "d").set(2.0)
     telltale.set_global_labels(run="r1", source="levanter")
 
-    row = _one(name, telltale.scrape_metrics({"job_id": "/a/b", "task_id": "/a/b/w/0"}, _TS))
+    identity = telltale.MetricIdentity(job_id="/a/b", task_index=3, attempt=1)
+    row = _one(name, telltale.scrape_metrics(identity, _TS))
 
     assert row.value == 2.0
     assert row.kind == "gauge"
     assert row.source == "levanter"
     assert row.run == "r1"
-    assert row.job_id == "/a/b" and row.task_id == "/a/b/w/0"
-    # run/source/job_id/task_id are promoted to columns, not left in the map.
+    assert row.job_id == "/a/b" and row.task_index == 3 and row.attempt == 1
+    # run/source are lifted out of the label map; identity is set on the row.
     assert row.labels == {}
 
 
-def test_scrape_identity_overrides_a_colliding_metric_label(name):
-    # A metric carrying its own task_id must not spoof the job identity.
-    telltale.counter(name, "d", ["task_id"]).labels("evil").inc()
+def test_scrape_identity_is_authoritative_over_a_colliding_metric_label(name):
+    # A metric carrying its own `worker` label cannot spoof the job identity.
+    telltale.counter(name, "d", ["worker"]).labels("evil").inc()
 
-    row = _one(f"{name}_total", telltale.scrape_metrics({"task_id": "real"}, _TS))
+    row = _one(f"{name}_total", telltale.scrape_metrics(telltale.MetricIdentity(worker="real"), _TS))
 
-    assert row.task_id == "real"
-    assert "task_id" not in row.labels
+    assert row.worker == "real"
+    assert row.labels["worker"] == "evil"  # the raw label survives; the column is authoritative
 
 
 def test_scrape_drops_created_and_keeps_histogram_le_in_the_map(name):
     telltale.counter(name, "d").inc()
     telltale.histogram(f"{name}_h", "d").observe(0.5)
 
-    rows = telltale.scrape_metrics({}, _TS)
+    rows = telltale.scrape_metrics(telltale.MetricIdentity(), _TS)
     names = {r.name for r in rows}
 
     assert f"{name}_total" in names
@@ -279,7 +280,7 @@ def test_start_forwarding_pushes_to_the_sink_and_is_idempotent(name, reset_forwa
 
     # A long interval keeps the daemon thread from scraping on its own; stop
     # forces the final scrape + close deterministically.
-    assert telltale.start_forwarding(sink, identity={"job_id": "/a/b"}, interval=1000.0) is True
+    assert telltale.start_forwarding(sink, identity=telltale.MetricIdentity(job_id="/a/b"), interval=1000.0) is True
     # Second call while running is a no-op.
     assert telltale.start_forwarding(_RecordingSink(), interval=1000.0) is False
 

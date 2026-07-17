@@ -26,7 +26,7 @@ import re
 import threading
 import time
 import typing
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar, Protocol, TypeVar
@@ -168,12 +168,28 @@ def get_global_labels() -> dict[str, str]:
 #: (the default Prometheus process/platform collectors).
 _KNOWN_SOURCES = frozenset({"levanter", "zephyr", "iris"})
 
-#: Label keys lifted from the label map into top-level metric columns.
-_PROMOTED = ("run", "job_id", "task_id", "worker", "attempt", "region", "process_index")
-
 #: Seconds between registry snapshots. A durable sink typically seals at most one
 #: segment per second, so this stays clear of that while keeping dashboards live.
 DEFAULT_FORWARD_INTERVAL = 15.0
+
+
+@dataclass(frozen=True)
+class MetricIdentity:
+    """The job coordinates of the process producing the metrics.
+
+    Stamped authoritatively onto every forwarded row, so a metric's own labels can
+    never masquerade as the job it came from. ``job_id`` is the job root;
+    ``task_index`` is the task's index within it — the full task path is just those
+    two, so it is not stored. The producer's ``source``/``run`` are separate: they
+    ride on the process-global labels instead.
+    """
+
+    job_id: str | None = None
+    task_index: int | None = None
+    attempt: int | None = None
+    worker: str | None = None
+    region: str | None = None
+    process_index: int | None = None
 
 
 @dataclass
@@ -181,8 +197,8 @@ class TelltaleMetric:
     """One telltale sample as a durable row.
 
     Always-present identity — the metric ``source``, the producer's ``run``, and
-    the Iris job coordinates — is flattened into top-level columns so a sink can
-    store and filter on it directly; only leftover Prometheus labels (a
+    the Iris job coordinates — is flattened into typed top-level columns so a sink
+    can store and filter on it directly; only leftover Prometheus labels (a
     histogram's ``le``, ad-hoc labels) stay in ``labels``. A sink keys its storage
     on ``name`` so one metric's rows cluster together, and orders a series by
     ``ts``.
@@ -197,11 +213,11 @@ class TelltaleMetric:
     source: str
     run: str | None = None
     job_id: str | None = None
-    task_id: str | None = None
+    task_index: int | None = None
+    attempt: int | None = None
     worker: str | None = None
-    attempt: str | None = None
     region: str | None = None
-    process_index: str | None = None
+    process_index: int | None = None
     labels: dict[str, str] = field(default_factory=dict)
 
 
@@ -226,14 +242,13 @@ def _source_for(name: str, source_label: str | None) -> str:
     return head if head in _KNOWN_SOURCES else "process"
 
 
-def scrape_metrics(identity: Mapping[str, str], ts: datetime) -> list[TelltaleMetric]:
+def scrape_metrics(identity: MetricIdentity, ts: datetime) -> list[TelltaleMetric]:
     """Snapshot the registry into rows, stamping ``identity`` onto each. Pure; no I/O.
 
-    Label precedence on a collision is ``sample < global < identity`` — the
-    caller's identity always wins, so a metric can never spoof the job it came
-    from. Known keys are lifted into columns; the rest stay in ``labels``.
-    Prometheus ``_created`` series (a counter's start time, not a metric) are
-    dropped.
+    ``source`` and ``run`` are lifted from the process-global labels into columns;
+    the job ``identity`` is set on the row directly, so a metric's own labels can
+    never spoof it. Everything else stays in ``labels``. Prometheus ``_created``
+    series (a counter's start time, not a metric) are dropped.
     """
     global_labels = get_global_labels()
     rows: list[TelltaleMetric] = []
@@ -241,9 +256,9 @@ def scrape_metrics(identity: Mapping[str, str], ts: datetime) -> list[TelltaleMe
         sample = family.sample
         if sample.name.endswith("_created"):
             continue
-        merged = {**sample.labels, **global_labels, **identity}
-        source = _source_for(sample.name, merged.pop("source", None))
-        promoted = {key: merged.pop(key, None) for key in _PROMOTED}
+        labels = {**sample.labels, **global_labels}
+        source = _source_for(sample.name, labels.pop("source", None))
+        run = labels.pop("run", None)
         rows.append(
             TelltaleMetric(
                 name=sample.name,
@@ -251,8 +266,14 @@ def scrape_metrics(identity: Mapping[str, str], ts: datetime) -> list[TelltaleMe
                 kind=family.kind,
                 ts=ts,
                 source=source,
-                labels=merged,
-                **promoted,
+                run=run,
+                job_id=identity.job_id,
+                task_index=identity.task_index,
+                attempt=identity.attempt,
+                worker=identity.worker,
+                region=identity.region,
+                process_index=identity.process_index,
+                labels=labels,
             )
         )
     return rows
@@ -261,9 +282,9 @@ def scrape_metrics(identity: Mapping[str, str], ts: datetime) -> list[TelltaleMe
 class _Forwarder:
     """Appends the registry to a sink on a daemon thread; flushes on stop."""
 
-    def __init__(self, sink: MetricSink, identity: Mapping[str, str], interval: float) -> None:
+    def __init__(self, sink: MetricSink, identity: MetricIdentity, interval: float) -> None:
         self._sink = sink
-        self._identity = dict(identity)
+        self._identity = identity
         self._interval = interval
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="telltale-forward", daemon=True)
@@ -307,20 +328,20 @@ _forwarder: _Forwarder | None = None
 def start_forwarding(
     sink: MetricSink,
     *,
-    identity: Mapping[str, str] | None = None,
+    identity: MetricIdentity | None = None,
     interval: float = DEFAULT_FORWARD_INTERVAL,
 ) -> bool:
     """Begin forwarding the registry to ``sink`` on a background thread.
 
     Idempotent: a call while a forwarder is already running is a no-op returning
-    ``False``. ``identity`` is stamped onto every row (see :func:`scrape_metrics`).
-    The forwarder flushes a final batch at process exit.
+    ``False``. ``identity`` is stamped onto every row. The forwarder flushes a
+    final batch at process exit.
     """
     global _forwarder
     with _forward_lock:
         if _forwarder is not None:
             return False
-        forwarder = _Forwarder(sink, identity or {}, interval)
+        forwarder = _Forwarder(sink, identity or MetricIdentity(), interval)
         forwarder.start()
         atexit.register(forwarder.stop)
         _forwarder = forwarder
