@@ -18,6 +18,7 @@ kernel ~297 ms/call at ~800 MB legs; NCCL fallback via
 """
 
 import argparse
+import os
 import statistics
 import sys
 import time
@@ -26,6 +27,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
+
+# Import TE before any jax backend/distributed initialization — the EP FFI
+# handlers (te_ep_prepare_ffi etc.) must be registered before the CUDA client
+# exists, or jit lowering fails with "No FFI handler registered".
+from transformer_engine.jax.ep import EpLayerConfig, ep_bootstrap, ep_combine, ep_dispatch
+from transformer_engine.jax.sharding import MeshResource, global_shard_guard
 
 
 def parse_args(argv):
@@ -49,8 +56,6 @@ def parse_args(argv):
 
 
 def main(argv):
-    import os
-
     args = parse_args(argv)
     if os.environ.get("IRIS_MULTIGPU_PROCESS_COUNT"):
         # iris gang job with --processes-per-task: supervised jax_init joins
@@ -70,9 +75,6 @@ def main(argv):
     ep, dp = args.ep, world // args.ep
     assert dp * ep == world, f"num_procs {world} must equal dp*ep"
     assert args.num_experts % ep == 0
-
-    from transformer_engine.jax.ep import EpLayerConfig, ep_bootstrap, ep_combine, ep_dispatch
-    from transformer_engine.jax.sharding import MeshResource, global_shard_guard
 
     devs = np.asarray(jax.devices()).reshape(dp, ep)
     mesh = Mesh(devs, ("dp", "ep"))
