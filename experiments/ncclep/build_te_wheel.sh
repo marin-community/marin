@@ -57,6 +57,7 @@ for inc in $(find "$SP" -maxdepth 3 -type d -name include); do
 done
 for lib in $(find "$SP" -maxdepth 3 -type d -name lib -o -maxdepth 3 -type d -name lib64); do
   ln -sf "$lib"/*.so* "$CUDA/lib64/" 2>/dev/null || true
+  ln -sf "$lib"/*.a "$CUDA/lib64/" 2>/dev/null || true
 done
 # Unversioned .so symlinks for the linker (wheels often ship only .so.N).
 python - "$CUDA/lib64" <<'EOF'
@@ -85,6 +86,9 @@ CUDNN_H=$(find "$SP" -name cudnn.h | head -1)
 export CUDNN_PATH=$(dirname "$(dirname "$CUDNN_H")")
 NCCL_H=$(find "$SP" -name nccl.h | head -1)
 export NCCL_HOME=$(dirname "$(dirname "$NCCL_H")")
+# The wheel ships only libnccl.so.2; the EP shared-lib link needs -lnccl.
+NCCL_SO2=$(find "$NCCL_HOME" -name 'libnccl.so.2' | head -1)
+[ -e "$(dirname "$NCCL_SO2")/libnccl.so" ] || ln -s libnccl.so.2 "$(dirname "$NCCL_SO2")/libnccl.so"
 echo "CUDNN_PATH=$CUDNN_PATH NCCL_HOME=$NCCL_HOME"
 
 echo "=== PHASE 3: clone TE @ $TE_SHA with submodules ==="
