@@ -287,3 +287,31 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *GPU Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  # Hand triage to a weaver session: comment @weaverbot on the [canary-gpu] issue
+  # the in-job Claude triage filed (or file a bare tracking issue when triage died
+  # before filing). Slack notification stays with the notify-slack job.
+  weaver-triage:
+    needs: [canary-ferry-cw]
+    # cancelled matters: a job that hits its timeout-minutes reports cancelled, not failure
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (contains(needs.canary-ferry-cw.result, 'failure') || contains(needs.canary-ferry-cw.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write    # comment on / file the tracking issue
+      actions: read    # pull failed-job logs for the excerpt
+      contents: read
+    steps:
+      - uses: marin-community/marin-style/actions/report-failure@4e5736a7054318af49b0245fadee197f534519d7
+        with:
+          lane: gpu
+          issue-title-prefix: "[canary-gpu]"
+          issue-labels: bug,agent-generated,canary
+          trigger-token: ${{ secrets.WEAVERBOT_GH_TOKEN }}
+          triage-notes: >-
+            An in-runner Claude triage may already have posted its diagnosis on this
+            issue — read it first, then verify or correct it (lib/iris/OPS.md and
+            lib/zephyr/OPS.md cover the live-infrastructure debugging commands) and
+            drive the outcome: a fix PR in this repo, or a crisp handoff comment with
+            the blocking question.

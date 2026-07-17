@@ -168,3 +168,30 @@ jobs:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           fallback-text: ":red_circle: *Datakit Nemotron Ferry failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           message-artifact: ''
+
+  # Hand triage to a weaver session: file or update the [canary-datakit-tier3]
+  # tracking issue and comment @weaverbot on it. This lane has no in-job Claude
+  # triage, so the weaver session is the whole triage story here.
+  weaver-triage:
+    needs: [datakit-nemotron-ferry]
+    # cancelled matters: a job that hits its timeout-minutes reports cancelled, not failure
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (contains(needs.datakit-nemotron-ferry.result, 'failure') || contains(needs.datakit-nemotron-ferry.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write    # comment on / file the tracking issue
+      actions: read    # pull failed-job logs for the excerpt
+      contents: read
+    steps:
+      - uses: marin-community/marin-style/actions/report-failure@4e5736a7054318af49b0245fadee197f534519d7
+        with:
+          lane: datakit-tier3
+          issue-title-prefix: "[canary-datakit-tier3]"
+          issue-labels: bug,agent-generated,canary
+          trigger-token: ${{ secrets.WEAVERBOT_GH_TOKEN }}
+          triage-notes: >-
+            Diagnose from the run's diagnostics artifact and the Iris job state
+            (lib/iris/OPS.md and lib/zephyr/OPS.md cover the live-infrastructure
+            debugging commands), then drive the outcome: a fix PR in this repo, or a
+            crisp handoff comment with the blocking question.
