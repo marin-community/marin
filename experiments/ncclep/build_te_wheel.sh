@@ -80,7 +80,11 @@ ln -sf "$LIBCUDA" "$CUDA/lib64/libcuda.so"
 export CUDA_HOME="$CUDA" CUDA_PATH="$CUDA" CUDACXX="$CUDA/bin/nvcc"
 export PATH="$CUDA/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA/lib64:${LD_LIBRARY_PATH:-}"
+# nvcc resolves its implicit -L from its own (wheel) location, which has no
+# lib64 — LIBRARY_PATH covers the host-linker search for cudadevrt/cudart_static.
+export LIBRARY_PATH="$CUDA/lib64:${LIBRARY_PATH:-}"
 "$CUDA/bin/nvcc" --version
+ls -la "$CUDA/lib64/" | grep -E "\.a$|libnccl|libcudart" || true
 
 CUDNN_H=$(find "$SP" -name cudnn.h | head -1)
 export CUDNN_PATH=$(dirname "$(dirname "$CUDNN_H")")
