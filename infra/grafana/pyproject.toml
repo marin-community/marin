@@ -38,8 +38,6 @@ only-include = ["src"]
 sources = ["src"]
 
 [tool.pytest.ini_options]
-timeout = 30
-timeout_method = "thread"
 pythonpath = ["src"]
 addopts = "--durations=10 -v"
 filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,15 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A TTL cache that also collapses concurrent misses on one key into one call.
+"""A TTL cache that coalesces concurrent misses on one key into a single call.
 
-Grafana's own query caching is an Enterprise feature, so this is what keeps a
-shared, auto-refreshing dashboard from multiplying panel renders straight through
-to the finelog hub. Coalescing matters as much as the TTL: N viewers opening the
-same dashboard at once should cost one query, not N.
-
-Entries are pruned on write, since callers key on a rotating time bucket and the
-process is long-lived.
+N callers that miss the same key at once run compute once and share the result.
+Entries are pruned on write.
 """
 
 import threading
@@ -28,11 +23,10 @@ class _Entry(Generic[V]):
 
 
 class TtlCache(Generic[V]):
-    """Cache values under a key for ``ttl`` seconds, coalescing concurrent misses.
+    """Cache values under a key for ttl seconds, coalescing concurrent misses.
 
-    A miss holds a per-key lock while it computes, so concurrent callers for the
-    same key wait and then read the fresh value instead of each issuing a query.
-    Different keys never block one another.
+    A miss holds a per-key lock while it computes; concurrent callers for the same
+    key wait and read the fresh value. Different keys do not block one another.
     """
 
     def __init__(self, ttl: float) -> None:
@@ -60,11 +54,10 @@ class TtlCache(Generic[V]):
             expired = [k for k, e in self._entries.items() if e.expires_at <= now]
             for k in expired:
                 del self._entries[k]
-                # Dropping the lock alongside the entry can race a refresh that
-                # holds it: the next caller then makes a fresh lock and both
-                # compute. That costs one duplicate query and resolves itself,
-                # whereas acquiring key locks under _guard here would invert
-                # get_or_compute's lock order and deadlock.
+                # Dropping a key's lock here can race a concurrent refresh holding
+                # it, so both compute and one query is duplicated. Acquiring key
+                # locks under _guard would invert get_or_compute's lock order and
+                # deadlock.
                 self._key_locks.pop(k, None)
 
     def get_or_compute(self, key: Hashable, compute: Callable[[], V]) -> V:

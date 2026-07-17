@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve a finelog VM's internal IP and query it.
+"""Resolve a finelog VM's internal IP and query it over Direct VPC egress.
 
-The internal IP is reachable from Cloud Run over Direct VPC egress, and finelog's
-``cidr`` auth layer admits the RFC1918 ranges, so the query carries no token.
-
-Discovery is a GCE instance lookup, not the Iris endpoint registry: Grafana keeps
-working when the monitored cluster is down, so it does not resolve finelog through
-that cluster's controller.
+finelog's cidr auth layer admits the RFC1918 ranges, so the query carries no
+token. Discovery is a GCE instance lookup, so it holds while the monitored
+cluster's controller is down.
 """
 
 import logging
@@ -34,14 +31,14 @@ class MetricSource(Protocol):
 class FinelogSource:
     """A query handle for one cluster's finelog, addressed by the VM's internal IP.
 
-    The address is looked up lazily and refreshed after a connection failure, so a
+    The address is resolved lazily and refreshed after a connection failure, so a
     rebuilt VM's new IP is picked up without a restart.
     """
 
     def __init__(self, target: ClusterTarget, *, timeout_ms: int) -> None:
         self._target = target
         self._client = LogClient.connect(
-            f"finelog-{target.name}",  # logical label; the resolver supplies the real address
+            f"finelog-{target.name}",  # logical label; the resolver supplies the address
             resolver=self._resolve_address,
             timeout_ms=timeout_ms,
         )
@@ -51,8 +48,8 @@ class FinelogSource:
         return self._target
 
     def _resolve_address(self, _label: str) -> str:
-        """Return ``http://<internal-ip>:<port>`` for the VM matching this cluster's filter."""
-        # list() only flattens project/zone; the filter has to ride in on the request.
+        """Return http://<internal-ip>:<port> for the VM matching this cluster's filter."""
+        # list() flattens only project/zone; the filter rides on the request.
         request = compute_v1.ListInstancesRequest(
             project=self._target.project,
             zone=self._target.zone,
@@ -70,8 +67,5 @@ class FinelogSource:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        """Run ``sql`` against this cluster's finelog.
-
-        Raises ``QueryResultTooLargeError`` past ``max_rows``.
-        """
+        """Run sql against this cluster's finelog. Raises QueryResultTooLargeError past max_rows."""
         return self._client.query(sql, max_rows=max_rows)

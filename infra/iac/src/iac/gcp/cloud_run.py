@@ -46,10 +46,9 @@ class CloudRunServiceArgs:
     env: dict[str, str] = field(default_factory=dict)
     cpu: str = "2"
     memory: str = "2Gi"
-    # Keep CPU allocated between requests. Cloud Run throttles CPU to near-zero off the
-    # request path by default; a service with background work that must run while idle
-    # (Grafana's app-platform apiserver, search indexers, provisioning reconcilers) stalls
-    # and its UI hangs on the next request. True also turns on startup CPU boost.
+    # Keep CPU allocated between requests. Cloud Run's default throttles CPU to near-zero
+    # off the request path, which stalls a service whose background work runs while idle
+    # (an apiserver, indexers, reconcilers). True also enables startup CPU boost.
     cpu_always_allocated: bool = False
     request_timeout: int = 60
     # min == max == 1 for a service whose local SQLite is per-instance: >1 diverges alert

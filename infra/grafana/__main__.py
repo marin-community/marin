@@ -48,8 +48,8 @@ def main() -> None:
             region=REGION,
             service_name=SERVICE,
             build_context=BUILD_CONTEXT,
-            # Grafana 13's app-platform apiserver and search indexers run between requests;
-            # without always-on CPU the dashboards list hangs waiting on them.
+            # Grafana 13's apiserver and search indexers run between requests and need CPU
+            # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
             # The bridge lists finelog VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
@@ -60,9 +60,9 @@ def main() -> None:
     pulumi.export("url", service.uri)
     pulumi.export("image", service.image_ref)
 
-    # Optional vanity domain. `custom_domain` is the host (grafana.oa.dev); `dns_zone_id`
-    # is its Cloudflare zone. Cloud Run terminates TLS and IAP itself, so the CNAME stays
-    # DNS-only (unproxied) — a Cloudflare proxy would break managed-cert issuance.
+    # Optional vanity domain: custom_domain is the host, dns_zone_id its Cloudflare zone.
+    # Cloud Run terminates TLS and IAP, so the CNAME is DNS-only; a Cloudflare proxy blocks
+    # managed-cert issuance.
     custom_domain = config.get("custom_domain")
     if custom_domain:
         dns_zone_id = config.require("dns_zone_id")
