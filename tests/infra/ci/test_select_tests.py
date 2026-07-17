@@ -10,6 +10,7 @@ from infra.ci.select_tests import (
     MIN_FILES_PER_SHARD,
     SCOPES,
     SHARD_COUNT,
+    SOURCE_LEGS,
     UV_PACKAGE,
     classify,
     compute_matrix,
@@ -23,15 +24,17 @@ from infra.ci.select_tests import (
 )
 
 
-def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str]]:
+def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
     """Mirror the diff-driven branch of select_tests.main without git."""
     classification = classify(changed_files, repo_root)
+    source_build_scopes = {leg for native in classification.native_changed for leg in SOURCE_LEGS[native]}
     if classification.broad:
-        return full_matrix(repo_root)
+        return full_matrix(repo_root, source_build_scopes)
     return compute_matrix(
         classification.src_modules,
         classification.direct_tests,
         classification.forced,
+        source_build_scopes,
         repo_root,
     )
 
@@ -43,12 +46,12 @@ def write(repo_root: Path, relative: str, body: str = "") -> Path:
     return path
 
 
-def leg_paths(matrix: list[dict[str, str]], scope: str) -> list[str]:
+def leg_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
     leg = next(entry for entry in matrix if entry["package"] == UV_PACKAGE[scope])
-    return leg["test_paths"].split()
+    return str(leg["test_paths"]).split()
 
 
-def scopes_in(matrix: list[dict[str, str]]) -> set[str]:
+def scopes_in(matrix: list[dict[str, str | int]]) -> set[str]:
     packages = {entry["package"] for entry in matrix}
     return {scope for scope in SCOPES if UV_PACKAGE[scope] in packages}
 
@@ -327,5 +330,66 @@ def test_broad_trigger_runs_every_scope() -> None:
         "package": "marin-core",
         "extras": "--extra cpu --extra dedup",
         "test_paths": "tests",
+        "python": "3.12",
+        "setup": "",
+        "timeout": 15,
     }
-    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"))
+    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"), set())
+
+
+def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]:
+    return next(entry for entry in matrix if entry["label"] == label)
+
+
+def test_native_rust_change_forces_scope_and_marks_it_native(tmp_path: Path) -> None:
+    """A rust/ change is invisible to the import graph, so it force-selects its scope."""
+    result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    assert result.forced == {"dupekit"}
+    assert result.native_changed == {"dupekit"}
+    # A Cargo.lock under the crate counts as a native change too.
+    assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
+
+
+def test_native_change_source_builds_the_legs_that_exercise_it(tmp_path: Path) -> None:
+    """A finelog rust change source-builds finelog and the iris legs that run the native
+    server; a co-changed carrier scope that only ships the wheel stays on it."""
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/log.py", "X = 1\n")
+    write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
+
+    matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
+
+    assert _leg(matrix, "finelog")["setup"] == "rust"
+    assert _leg(matrix, "finelog")["timeout"] == 30
+    assert _leg(matrix, "iris")["setup"] == "rust"
+
+
+def test_dupekit_rust_change_source_builds_marin_only_when_marin_is_selected(tmp_path: Path) -> None:
+    """marin exercises dupekit's kernels, so it source-builds — but only if its own tests
+    are selected; a rust-only change does not pull marin in."""
+    labels = [leg["label"] for leg in select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)]
+    assert labels == ["dupekit"], "a rust-only change runs the owning scope, not its consumers"
+
+    write(tmp_path, "tests/__init__.py")
+    write(tmp_path, "tests/test_dedup.py", "def test_x():\n    pass\n")
+    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs", "tests/test_dedup.py"], tmp_path)
+    assert _leg(matrix, "marin")["setup"] == "rust"
+
+
+def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
+    """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
+    matrix = select_matrix(["uv.lock"], tmp_path)
+    assert matrix, "broad trigger emits the full matrix"
+    assert all(leg["setup"] == "" for leg in matrix)
+
+
+def test_extra_python_legs_run_the_wheel_and_source_builds_skip_them(tmp_path: Path) -> None:
+    """dupekit/finelog get a 3.13 wheel leg on a wheel run; a source build drops it since it
+    would only exercise the stale wheel."""
+    wheel = [leg["label"] for leg in select_matrix(["uv.lock"], tmp_path)]
+    assert "dupekit (py3.13)" in wheel and "finelog (py3.13)" in wheel
+    py313 = _leg(select_matrix(["uv.lock"], tmp_path), "dupekit (py3.13)")
+    assert py313["python"] == "3.13" and py313["setup"] == ""
+
+    source = [leg["label"] for leg in select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)]
+    assert "dupekit" in source and "dupekit (py3.13)" not in source

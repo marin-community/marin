@@ -4656,12 +4656,14 @@ dev = [
     { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "huggingface-hub" },
     { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -4678,12 +4680,14 @@ dev = [
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "huggingface-hub" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
