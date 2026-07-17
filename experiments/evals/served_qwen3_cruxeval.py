@@ -9,58 +9,36 @@ judge.
 
 \b
 Examples:
-  uv run python experiments/evals/served_qwen3_cruxeval.py
-  uv run python experiments/evals/served_qwen3_cruxeval.py --priority production
-  uv run python experiments/evals/served_qwen3_cruxeval.py --launcher local
+  uv run iris --cluster=marin job run --job-name qwen3-cruxeval --region us-west4 \
+    --cpu 1 --memory 2G --extra cpu --priority interactive --no-wait \
+    -- python -m experiments.evals.served_qwen3_cruxeval
 """
 
-from fray.types import ResourceConfig
-from marin.execution.lazy import Artifact, ArtifactStep
+from marin.execution.lazy import Artifact, ArtifactStep, lower
+from marin.execution.step_runner import StepRunner
 
 from experiments.evals.served_lm_eval import (
     ServedLmEvalBenchmark,
-    brokered_lm_eval_configs,
-    brokered_lm_eval_step,
-    served_lm_eval_command,
+    served_lm_eval_step,
 )
 
 CRUXEVAL_BENCHMARK = ServedLmEvalBenchmark(
     tasks=("cruxeval_input", "cruxeval_output"),
     output_path="/tmp/served-qwen3-cruxeval",
-    job_name="served-qwen3-cruxeval",
     confirm_run_unsafe_code=True,
 )
 
 
 def cruxeval_step(*, version: str, limit: int | None = None) -> ArtifactStep[Artifact]:
-    inference, eval_run = brokered_lm_eval_configs(
+    return served_lm_eval_step(
         CRUXEVAL_BENCHMARK,
-        limit=limit,
-        timeout_seconds=None,
-        priority=0,
-    )
-    return brokered_lm_eval_step(
-        inference,
-        eval_run,
         name="evals/qwen3-0.6b/cruxeval",
         version=version,
-        parent_resources=ResourceConfig.with_cpu(
-            cpu=CRUXEVAL_BENCHMARK.parent_cpu,
-            ram=CRUXEVAL_BENCHMARK.parent_ram,
-            disk=CRUXEVAL_BENCHMARK.parent_disk,
-            regions=[CRUXEVAL_BENCHMARK.region] if CRUXEVAL_BENCHMARK.region else None,
-            preemptible=False,
-        ),
-        parent_env_vars={},
+        limit=limit,
     )
 
 
 CRUXEVAL_RESULTS = cruxeval_step(version="2026.07.16")
 
-main = served_lm_eval_command(
-    __doc__,
-    CRUXEVAL_BENCHMARK,
-)
-
 if __name__ == "__main__":
-    main()
+    StepRunner().run([lower(CRUXEVAL_RESULTS)])
