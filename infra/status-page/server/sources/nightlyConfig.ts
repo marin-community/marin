@@ -12,6 +12,7 @@ export interface ExpectedDuration {
   minSeconds: number;
   maxSeconds: number;
   provenance: string;
+  evidenceUrls?: readonly string[];
 }
 
 export interface NightlyLaneConfig {
@@ -54,6 +55,11 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 60 * 60,
       maxSeconds: 195 * 60,
       provenance: "Verified 61–192m successes; workflow expectation ~2h",
+      evidenceUrls: [
+        "https://github.com/marin-community/marin/actions/runs/29482562619",
+        "https://github.com/marin-community/marin/actions/runs/29185545233",
+        "https://github.com/marin-community/marin/blob/main/.github/workflows/marin-canary-ferry.yaml#L107-L116",
+      ],
     },
   },
   {
@@ -72,6 +78,11 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 15 * 60,
       maxSeconds: 40 * 60,
       provenance: "Verified 17–34m successes; workflow expectation ~35m",
+      evidenceUrls: [
+        "https://github.com/marin-community/marin/actions/runs/29411190268",
+        "https://github.com/marin-community/marin/actions/runs/29328246308",
+        "https://github.com/marin-community/marin/blob/main/.github/workflows/marin-canary-ferry-coreweave.yaml#L161-L176",
+      ],
     },
   },
   {
@@ -103,6 +114,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 65 * 60,
       maxSeconds: 85 * 60,
       provenance: "Verified recent successes spanning 69–81m",
+      evidenceUrls: [
+        "https://github.com/marin-community/marin/actions/runs/29402548908",
+        "https://github.com/marin-community/marin/actions/runs/29566962629",
+      ],
     },
   },
   {
@@ -121,6 +136,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 65 * 60,
       maxSeconds: 85 * 60,
       provenance: "Verified recent successes spanning 70–81m",
+      evidenceUrls: [
+        "https://github.com/marin-community/marin/actions/runs/29320436509",
+        "https://github.com/marin-community/marin/actions/runs/29569044292",
+      ],
     },
   },
   {
@@ -139,6 +158,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 70 * 60,
       maxSeconds: 180 * 60,
       provenance: "Verified recent successes spanning 73–177m",
+      evidenceUrls: [
+        "https://github.com/marin-community/marin/actions/runs/29223772199",
+        "https://github.com/marin-community/marin/actions/runs/26737698039",
+      ],
     },
   },
   {
@@ -172,6 +195,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 14 * 60,
       maxSeconds: 20 * 60,
       provenance: "Verified recent successes spanning 16–17m",
+      evidenceUrls: [
+        "https://github.com/marin-community/evalchemy/actions/runs/29486586651",
+        "https://github.com/marin-community/evalchemy/actions/runs/29320475861",
+      ],
     },
   },
   {
@@ -191,6 +218,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 6 * 60,
       maxSeconds: 12 * 60,
       provenance: "Verified recent successes spanning 7–8m",
+      evidenceUrls: [
+        "https://github.com/marin-community/harbor/actions/runs/29406682064",
+        "https://github.com/marin-community/harbor/actions/runs/29489742635",
+      ],
     },
   },
   {
@@ -224,6 +255,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 6 * 60,
       maxSeconds: 15 * 60,
       provenance: "Workflow expectation ~8m; reviewed initial range 6–15m",
+      evidenceUrls: [
+        "https://github.com/marin-community/vllm/blob/main/.github/workflows/marin-nightly.yaml#L113-L133",
+        "https://github.com/marin-community/vllm/actions/runs/29576510987",
+      ],
     },
   },
   {
@@ -243,6 +278,10 @@ export const NIGHTLY_LANES: readonly NightlyLaneConfig[] = [
       minSeconds: 5 * 60,
       maxSeconds: 10 * 60,
       provenance: "Verified recent successes spanning 6.5–6.8m",
+      evidenceUrls: [
+        "https://github.com/marin-community/tpu-inference/actions/runs/29414101949",
+        "https://github.com/marin-community/tpu-inference/actions/runs/29497271847",
+      ],
     },
   },
 ] as const;

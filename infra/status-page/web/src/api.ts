@@ -67,6 +67,7 @@ export interface NightlyLane {
     minSeconds: number;
     maxSeconds: number;
     provenance: string;
+    evidenceUrls?: string[];
   };
 }
 

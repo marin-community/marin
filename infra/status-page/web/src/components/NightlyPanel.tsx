@@ -103,6 +103,18 @@ function compactDuration(seconds: number | null): string {
   return `${hours}h${String(minutes % 60).padStart(2, "0")}`;
 }
 
+function spokenDuration(seconds: number | null): string {
+  if (seconds === null) return "duration unavailable";
+  if (seconds < 60) return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  const hourText = `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  if (remainingMinutes === 0) return hourText;
+  return `${hourText} ${remainingMinutes} ${remainingMinutes === 1 ? "minute" : "minutes"}`;
+}
+
 function durationDescription(state: NightlyDurationState): string {
   switch (state) {
     case "too-short":
@@ -185,6 +197,21 @@ function expectedRange(lane: NightlyLane): string {
   return `${compactDuration(lane.expectedDuration.minSeconds)}–${compactDuration(lane.expectedDuration.maxSeconds)}`;
 }
 
+function spokenExpectedRange(lane: NightlyLane): string {
+  if (!lane.expectedDuration) return "baseline pending";
+  return `${spokenDuration(lane.expectedDuration.minSeconds)} to ${spokenDuration(lane.expectedDuration.maxSeconds)}`;
+}
+
+function statusClass(cell: NightlyCell): string {
+  if (cell.state === "missing") return "nightly-status-problem";
+  if (!cell.run || cell.run.status !== "completed") return "";
+  if (cell.run.conclusion === "failure") return "nightly-status-problem";
+  if (cell.run.conclusion === "cancelled" || cell.run.conclusion === "timed_out") {
+    return "nightly-status-warning";
+  }
+  return "";
+}
+
 function CellFrame({
   cell,
   lane,
@@ -197,11 +224,11 @@ function CellFrame({
   const suspicious = cell.run?.conclusion === "success" && cell.durationState === "too-short";
   return (
     <div
-      className={`nightly-cell-frame ${durationClass(cell.durationState)} ${suspicious ? "nightly-suspicious" : ""}`}
+      className={`nightly-cell-frame ${durationClass(cell.durationState)} ${statusClass(cell)} ${suspicious ? "nightly-suspicious" : ""}`}
     >
       {cell.run?.recovered && <span className="nightly-recovered" aria-hidden="true" />}
       {children}
-      <span className="sr-only">Expected duration: {expectedRange(lane)}.</span>
+      <span className="sr-only">Expected duration: {spokenExpectedRange(lane)}.</span>
     </div>
   );
 }
@@ -227,9 +254,10 @@ function NightlyDataCell({
         className={`nightly-data-cell ${boundary ? `nightly-${boundary}-start` : ""}`}
       >
         <CellFrame cell={cell} lane={lane}>
-          <div className={`nightly-cell-content ${status.tone}`} aria-label={description}>
+          <div className={`nightly-cell-content ${status.tone}`}>
             <StatusIcon kind={status.icon} />
-            <span className="nightly-duration">—</span>
+            <span className="nightly-duration" aria-hidden="true">—</span>
+            <span className="sr-only">{description}.</span>
           </div>
         </CellFrame>
       </td>
@@ -239,7 +267,7 @@ function NightlyDataCell({
   const status = runStatus(cell.run);
   const duration = compactDuration(cell.run.durationSeconds);
   const recovery = cell.run.recovered ? "; failed then passed" : "";
-  const description = `${lane.label}, ${cell.date}: ${status.label}; ${duration}; ${durationDescription(cell.durationState)}${recovery}`;
+  const description = `${lane.label}, ${cell.date}: ${status.label}; ${spokenDuration(cell.run.durationSeconds)}; ${durationDescription(cell.durationState)}${recovery}; expected ${spokenExpectedRange(lane)}`;
   return (
     <td
       headers={headerIds}
@@ -264,7 +292,38 @@ function NightlyDataCell({
               <div className="text-slate-400">attempt history unavailable</div>
             )}
             {(cell.collidingRunUrls?.length ?? 0) > 0 && (
-              <div className="text-amber-300">multiple scheduled runs; latest shown</div>
+              <div className="text-amber-300">
+                <div>multiple scheduled runs; latest shown</div>
+                {cell.collidingRunUrls?.map((url, index) => (
+                  <a
+                    key={url}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block text-sky-300 underline-offset-2 hover:underline"
+                  >
+                    Earlier scheduled run {index + 1}
+                  </a>
+                ))}
+              </div>
+            )}
+            {(lane.expectedDuration?.evidenceUrls?.length ?? 0) > 0 && (
+              <div>
+                Range evidence:{" "}
+                {lane.expectedDuration?.evidenceUrls?.map((url, index) => (
+                  <span key={url}>
+                    {index > 0 && ", "}
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sky-300 underline-offset-2 hover:underline"
+                    >
+                      {index + 1}
+                    </a>
+                  </span>
+                ))}
+              </div>
             )}
             <a
               href={cell.run.url}
@@ -419,8 +478,9 @@ function Matrix({ data }: { data: NightlyResponse }) {
 function Legend() {
   return (
     <ul aria-label="Duration legend" className="nightly-legend">
-      <li><span className="nightly-legend-swatch nightly-duration-short" />short</li>
+      <li><span className="nightly-legend-swatch nightly-duration-short nightly-suspicious" />short success</li>
       <li><span className="nightly-legend-swatch nightly-duration-slow" />slow</li>
+      <li><span className="nightly-legend-swatch nightly-duration-very-slow" />very slow</li>
       <li><span className="nightly-legend-swatch nightly-duration-pending" />pending</li>
     </ul>
   );

@@ -37,16 +37,23 @@ test("matrix communicates status, confidence, duration, and recovery", async ({ 
   await expect(table.locator("tbody tr")).toHaveCount(7);
   await expect(page.getByRole("columnheader", { name: "Data T3 · Mon" })).toBeVisible();
 
-  const falseGreen = page.getByLabel(/vLLM GPU, 2026-07-17: GitHub success; 1m; suspiciously short/);
+  const falseGreen = page.getByLabel(
+    /vLLM GPU, 2026-07-17: GitHub success; 1 minute; suspiciously short; expected 6 minutes to 15 minutes/,
+  );
   await expect(falseGreen).toBeVisible();
   await falseGreen.click();
   const falseGreenDetails = falseGreen.locator("xpath=ancestor::details");
   await expect(falseGreenDetails.getByText(/expected 6m–15m/)).toBeVisible();
 
-  const recovered = page.getByLabel(/Harbor, 2026-07-17: GitHub success; 8m; within expected range; failed then passed/);
+  const recovered = page.getByLabel(
+    /Harbor, 2026-07-17: GitHub success; 8 minutes; within expected range; failed then passed/,
+  );
   await expect(recovered).toBeVisible();
   await recovered.focus();
   await expect(recovered).toBeFocused();
+  await expect(
+    page.getByText("Datakit tier 3, Mondays, 2026-07-17: not scheduled.", { exact: true }),
+  ).toBeAttached();
 
   const vllmCell = falseGreen.locator("xpath=ancestor::td");
   await expect(vllmCell).toHaveAttribute(
@@ -79,12 +86,20 @@ for (const viewport of VIEWPORTS) {
         tableBottom: table?.bottom ?? Number.POSITIVE_INFINITY,
         buildTop: build?.top ?? Number.POSITIVE_INFINITY,
         viewportHeight: window.innerHeight,
+        durationFontSize: Number.parseFloat(
+          getComputedStyle(document.querySelector(".nightly-duration") as Element).fontSize,
+        ),
+        iconWidth: Number.parseFloat(
+          getComputedStyle(document.querySelector(".nightly-status-icon") as Element).width,
+        ),
       };
     });
     expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.tableRight).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.tableBottom).toBeLessThan(layout.viewportHeight);
     expect(layout.buildTop).toBeLessThan(layout.viewportHeight);
+    expect(layout.durationFontSize).toBeGreaterThanOrEqual(10.5);
+    expect(layout.iconWidth).toBeGreaterThanOrEqual(16);
 
     await expect(page).toHaveScreenshot(`nightly-dashboard-${viewport.width}x${viewport.height}.png`, {
       fullPage: false,

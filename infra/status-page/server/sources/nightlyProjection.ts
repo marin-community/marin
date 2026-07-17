@@ -145,10 +145,11 @@ function nextExpectedAt(lane: NightlyLaneConfig, expected: Date): Date {
 function durationState(
   durationSeconds: number | null,
   range: ExpectedDuration | undefined,
+  completed: boolean,
 ): NightlyDurationState {
   if (durationSeconds === null) return "not-applicable";
   if (!range) return "baseline-pending";
-  if (durationSeconds < range.minSeconds) return "too-short";
+  if (completed && durationSeconds < range.minSeconds) return "too-short";
   if (durationSeconds <= range.maxSeconds) return "normal";
   if (durationSeconds > range.maxSeconds * 1.5) return "very-slow";
   return "slow";
@@ -195,7 +196,11 @@ function runCell(
   );
   const run = sorted[0];
   const durationSeconds = runDuration(run, now);
-  const runDurationState = durationState(durationSeconds, lane.expectedDuration);
+  const runDurationState = durationState(
+    durationSeconds,
+    lane.expectedDuration,
+    run.status === "completed",
+  );
   const priorAttempts = snapshot.attemptsByRunId?.[String(run.id)] ?? [];
   const recovered =
     isSuccessfulRun(run) &&

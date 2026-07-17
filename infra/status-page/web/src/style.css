@@ -143,6 +143,18 @@ body {
   box-shadow: inset 0 0 0 1px rgb(251 191 36 / 82%);
 }
 
+.nightly-status-problem {
+  box-shadow:
+    inset 3px 0 0 rgb(251 113 133 / 90%),
+    inset 0 0 0 1px rgb(251 113 133 / 48%);
+}
+
+.nightly-status-warning {
+  box-shadow:
+    inset 3px 0 0 rgb(251 146 60 / 85%),
+    inset 0 0 0 1px rgb(251 146 60 / 38%);
+}
+
 .nightly-recovered {
   position: absolute;
   z-index: 2;
@@ -164,8 +176,8 @@ body {
 }
 
 .nightly-status-icon {
-  width: 0.92rem;
-  height: 0.92rem;
+  width: 1.05rem;
+  height: 1.05rem;
   flex: none;
   fill: none;
   stroke: currentColor;
@@ -182,7 +194,7 @@ body {
   min-width: 1.7rem;
   color: rgb(226 232 240);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
   letter-spacing: -0.015em;
@@ -256,9 +268,12 @@ body {
     font-size: 0.61rem;
   }
 
-  .nightly-lane-heading,
-  .nightly-duration {
+  .nightly-lane-heading {
     font-size: 0.58rem;
+  }
+
+  .nightly-duration {
+    font-size: 0.68rem;
   }
 
   .nightly-cell-content {
@@ -266,7 +281,7 @@ body {
   }
 
   .nightly-status-icon {
-    width: 0.82rem;
-    height: 0.82rem;
+    width: 1rem;
+    height: 1rem;
   }
 }

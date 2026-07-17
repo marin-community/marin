@@ -126,6 +126,34 @@ test("too-short success stays green from GitHub but is excluded from health", ()
   assert.deepEqual(response.today, { healthy: 1, due: 2 });
 });
 
+test("active run cannot be too short but becomes slow after exceeding its range", () => {
+  const bounded = lane({
+    expectedDuration: { minSeconds: 360, maxSeconds: 900, provenance: "reviewed" },
+  });
+  const early = projectNightlies(
+    [bounded],
+    [
+      snapshot(bounded.id, [
+        run({ status: "in_progress", conclusion: null, updatedAt: "2026-07-17T11:00:00.000Z" }),
+      ]),
+    ],
+    new Date("2026-07-17T11:01:00.000Z"),
+  );
+  const late = projectNightlies(
+    [bounded],
+    [
+      snapshot(bounded.id, [
+        run({ status: "in_progress", conclusion: null, updatedAt: "2026-07-17T11:00:00.000Z" }),
+      ]),
+    ],
+    new Date("2026-07-17T11:20:00.000Z"),
+  );
+
+  assert.equal(early.rows[0].cells[0].durationState, "normal");
+  assert.equal(early.rows[0].cells[0].healthy, false);
+  assert.equal(late.rows[0].cells[0].durationState, "slow");
+});
+
 test("latest colliding scheduled run wins and preserves failed-then-passed history", () => {
   const nightly = lane({
     expectedDuration: { minSeconds: 300, maxSeconds: 1200, provenance: "reviewed" },

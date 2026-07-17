@@ -173,6 +173,12 @@ separate from duration confidence, and computes `Today: healthy/due`. Grace cove
 time until GitHub creates a run, not its completion. Scheduled reruns show the final
 attempt and retain a `failed → passed` recovery marker.
 
+Each run belongs to the expected occurrence whose half-open window contains its
+`created_at` time. A scheduler delay longer than one full lane cadence is therefore
+indistinguishable from the next occurrence; the dashboard attributes it to that next
+occurrence. If multiple parent runs land in one window, the latest is shown and the
+earlier run links remain available in cell details.
+
 The UI always shows status and compact duration. Purple hatch means too short,
 amber means slow, stronger amber means over 1.5× the lane maximum, and gray dots
 mean baseline pending. Essential state never depends on hover.
