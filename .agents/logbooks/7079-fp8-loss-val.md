@@ -85,11 +85,28 @@ allocation)**. Same structural cause as the earlier B128-on-8-GPU OOM: 26
 buffers; here it's the cross-node FSDP (`data=4`) weight-gathers rather than
 activation scratch — per-device batch was identical to the single-node fit.
 
-**Topology pivot (smoke round 3):** drop the data axis entirely —
+**Topology pivot (smoke rounds 3-6):** drop the data axis entirely —
 **2 nodes/arm, EP16, batch 64** (`FP8VAL_GPU_REPLICAS=2 FP8VAL_EXPERT_AXIS=16
-FP8VAL_BATCH=64`), 32 H100 total. Per-device batch unchanged (4 seqs); expert
-shards are half the size of the proven single-node EP8 fit, and dense params
-replicate exactly as in that fit, so memory is strictly below a validated
-configuration. 2-node EP16 with FP8 wire is also exactly the topology the June
-e2e spike validated (1.134x full train step). Cost: ~4B tokens/arm instead of
-5.8B — still ~2.7x the #6486 resolution budget.
+FP8VAL_BATCH=64`), 32 H100 total — still OOM'd (remat floor 57.5 GiB, program
+peak 89 GiB; the June spike's "B64+L26 hits HBM walls" note holds). Two more
+findings and pivots:
+
+- **Round 4 (1 node/arm, EP8, B32 — the proven MFU-bench shape):** discovered
+  the dispatcher only forwarded `XLA_FLAGS`, silently dropping
+  `XLA_PYTHON_CLIENT_MEM_FRACTION` — train tasks ran at the 0.75 default pool
+  (~60 GB) while the bench had used 0.90. Fixed by widening the forward
+  prefixes to `XLA_*` (+ later `TF_GPU_ALLOCATOR`) on both branches. With 0.90
+  forwarded, **bf16 passes** (40 steps, loss 11.79→10.99, ~89k tok/s ≈ the
+  bench's 87.3k), but **FP8 OOMs at the same shape** (42.07 GiB step-scratch).
+- **Round 5 (FP8, 0.95 + `cuda_malloc_async`):** ran 9 steps (loss tracking
+  bf16 within ~0.004 at matched steps) then OOM'd at step 10 (44.91 GiB) —
+  FP8-on-merged-branch needs a few GB more than bf16 where the pre-merge bench
+  harness fit FP8 at 0.90. **Open follow-up: FP8 memory regression** — either
+  the main merge (haliax scan/core changes came in) or a real-trainer×FP8
+  interaction (e.g. state-donation defeated by callback references); the
+  standalone bench harness on the merged tree would discriminate.
+
+**Final shape (round 6): 1 node/arm, EP8, batch 16**, 0.95 +
+`cuda_malloc_async`, 16 H100 total — halves activation scratch so both arms
+have headroom. ~65k tokens/step; ~1.9B tokens/arm in the ~7h budget, still
+above the 1.44B that resolved 0.01-level deltas in #6486.
