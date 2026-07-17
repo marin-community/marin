@@ -46,6 +46,11 @@ class CloudRunServiceArgs:
     env: dict[str, str] = field(default_factory=dict)
     cpu: str = "2"
     memory: str = "2Gi"
+    # Keep CPU allocated between requests. Cloud Run throttles CPU to near-zero off the
+    # request path by default; a service with background work that must run while idle
+    # (Grafana's app-platform apiserver, search indexers, provisioning reconcilers) stalls
+    # and its UI hangs on the next request. True also turns on startup CPU boost.
+    cpu_always_allocated: bool = False
     request_timeout: int = 60
     # min == max == 1 for a service whose local SQLite is per-instance: >1 diverges alert
     # and dashboard state, 0 stops alert evaluation and makes first paint a cold start.
@@ -195,7 +200,9 @@ class CloudRunService(pulumi.ComponentResource):
                             for key, value in args.env.items()
                         ],
                         resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
-                            limits={"cpu": args.cpu, "memory": args.memory}
+                            limits={"cpu": args.cpu, "memory": args.memory},
+                            cpu_idle=not args.cpu_always_allocated,
+                            startup_cpu_boost=args.cpu_always_allocated,
                         ),
                     )
                 ],

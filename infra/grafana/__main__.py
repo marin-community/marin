@@ -48,6 +48,9 @@ def main() -> None:
             region=REGION,
             service_name=SERVICE,
             build_context=BUILD_CONTEXT,
+            # Grafana 13's app-platform apiserver and search indexers run between requests;
+            # without always-on CPU the dashboards list hangs waiting on them.
+            cpu_always_allocated=True,
             # The bridge lists finelog VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
             iap_members=tuple(viewers),
