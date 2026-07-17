@@ -272,3 +272,42 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   `global_shard_guard(MeshResource(fsdp="data", ep="expert"))`, per-process
   `ep_bootstrap` sized from `--capacity-factor`, supervised jax_init under the
   multigpu supervisor. Single-node EP4 smoke (d2560 L4 b16) in flight.
+- Integration failures fixed in order (smokes 1–9, each a real layer):
+  1. **Global-gitignore `lib/` trap**: new files under `lib/*` silently skipped
+     by `git add -A` AND by iris bundling → `git add -f` (memoried).
+  2. uv's cached `marin-levanter` wheel misses new source files (cache key =
+     pyproject only) → PYTHONPATH-shadow with the bundled tree.
+  3. TE FFI handlers must register before the JAX CUDA client exists — import
+     TE at module top, before `jax.distributed.initialize`.
+  4. The bench mesh types all axes **Explicit**; TE's partitioning rules assume
+     auto-sharding (outputs typed replicated, constraints assert) → run the EP
+     region under `jax.sharding.auto_axes(...)`, pin only the final output;
+     the FFN shard_map must take `jax.sharding.get_abstract_mesh()` (the
+     auto-typed view), not the outer mesh object.
+  5. **Command-buffer capture breaks TE's handle cache** (an EP op's host-side
+     `lookup_handle` can run before `ep_prepare`'s cache insert) →
+     `--xla_gpu_enable_command_buffer=` + `NVTE_EP_HANDLE_CACHE_SIZE=-1`
+     (TE's own documented JAX workaround). Exactly the constraint the July
+     source-read flagged ("disables command-buffer capture around the EP ops").
+  6. **NCCL_EP has no drop path**: recv overflow beyond capacity is an OOB
+     write (`CUDA_ERROR_LAUNCH_FAILED`, poisoned context). cf-1.0 exact-average
+     capacity overflows on any imbalance → provision the no-drop worst case
+     `ep × tokens_per_rank × top_k`. (Memory cost is real: 2.1 M rows ≈ 21.5 GiB
+     bf16 per buffer at the 64-GPU reference config; sub-worst-case capacity
+     needs TE-side drop support — upstream ask.)
+  7. **Garbage-row NaN**: the QuACK seam extends the last group over the
+     capacity tail (uninitialized dispatch buffer); garbage rows poison wgrad
+     accumulation, and a 0-mask *multiply* converts `0×NaN → NaN` in the VJP →
+     zero the tail rows before the GEMM + `jnp.where` for the combine
+     weighting.
+- **PASSED** (`/mwittmann/ncclep-e2e-smoke9` vs `ncclep-e2e-ctl2` ring_cute
+  control, identical config d2560 L4 e64 top4 b16 seq4096 EP4): step-0 loss
+  **bit-identical** (11.805191040039062), full 6-step trajectory parity to
+  ~2e-5 (final 11.558435 vs 11.558453). Tiny-config MFU 8.9 % vs control
+  11.2 % (per-call overheads + command-buffers-off dominate at this size —
+  not meaningful; reference-config comparison is NCCLEP-006).
+- Next (NCCLEP-006): 64-GPU EP8 reference config (d5120 L48 e64 top4 b1024
+  seq4096, single-copy data8×expert8 per the TE single-outer-axis constraint)
+  + a2a_cute EP8 control at the identical mesh/flags. Watch: HBM at no-drop
+  capacity (mem fraction 0.90), the intermittent CUBIN failure envelope
+  (B200MFU-035), first-step NCCL_EP JIT compiles.
