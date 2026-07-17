@@ -3266,7 +3266,10 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
 
     def _federated_job_summary(self, q: Tx, job) -> job_pb2.JobStatus:
-        """A ``JobStatus`` for a handed-off job as this peer holds it (sync summary)."""
+        """A ``JobStatus`` for a handed-off job as this peer holds it (sync summary).
+
+        Carries the job's resource spec, which the requester mirrors onto its config.
+        """
         summaries = reads.task_summaries_for_jobs(
             q, {job.job_id}, attempt_counts=q.caches[AttemptCountsProjection].get_jobs(q, [job.job_id])
         )
@@ -3278,6 +3281,7 @@ class ControllerServiceImpl:
             name=job.name,
             backend_id=job.backend_id or "",
             cluster=job.cluster,
+            resources=resource_spec_from_job_row(job),
             **_job_status_counts(summaries.get(job.job_id), job.job_id),
         )
         if job.started_at_ms:
