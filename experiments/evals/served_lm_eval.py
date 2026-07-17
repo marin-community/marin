@@ -93,7 +93,6 @@ def brokered_lm_eval_step(
         build_config=build_config,
         deps=(),
         runtime_args={
-            "parent_resources": parent_resources,
             "worker_resources": worker_resources,
         },
     )
