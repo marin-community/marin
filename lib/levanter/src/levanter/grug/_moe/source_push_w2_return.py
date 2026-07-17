@@ -636,7 +636,7 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
 
     def body(
         h_ref: Float[Ref, "rows twoI"],
-        h_route_weights_ref: Float[Ref, "rows W"],
+        h_route_weights_ref: Float[Ref, "rows"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
         expert_base_ref: Int[Ref, "E"],
         src_base_by_expert_ref: Int[Ref, "SRC E"],
@@ -675,8 +675,20 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
 
                 def acc_scope(acc_ref) -> jax.Array:
                     def smem_scope(
-                        gate_smem, up_smem, weight_smem, activation_smem, w_down_smem, ready_barrier
-                    ) -> None:
+                        gate_smem,
+                        up_smem,
+                        route_weight_smem,
+                        activation_smem,
+                        w_down_smem,
+                        ready_barrier,
+                        route_ready_barrier,
+                    ) -> jax.Array:
+                        mgpu.copy_gmem_to_smem(
+                            h_route_weights_ref.at[pl.ds(row_start, config.block_m)],
+                            route_weight_smem,
+                            route_ready_barrier,
+                        )
+
                         @pl.loop(0, k_tiles)
                         def _k_loop(kk) -> None:
                             k_start = kk * config.block_k
@@ -697,14 +709,6 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
                                 ready_barrier,
                             )
                             mgpu.copy_gmem_to_smem(
-                                h_route_weights_ref.at[
-                                    pl.ds(row_start, config.block_m),
-                                    pl.ds(0, config.block_k),
-                                ],
-                                weight_smem,
-                                ready_barrier,
-                            )
-                            mgpu.copy_gmem_to_smem(
                                 w_down_ref.at[
                                     expert,
                                     pl.ds(k_start, config.block_k),
@@ -715,24 +719,38 @@ def _make_w2_from_h_return_direct_to_source_kernel(config: PushInboxConfig, *, u
                             )
                             mgpu.barrier_wait(ready_barrier)
                             activation_smem[:, :] = (
-                                _silu(gate_smem[:, :].astype(jnp.float32))
-                                * up_smem[:, :].astype(jnp.float32)
-                                * weight_smem[:, :].astype(jnp.float32)
+                                _silu(gate_smem[:, :].astype(jnp.float32)) * up_smem[:, :].astype(jnp.float32)
                             ).astype(activation_smem.dtype)
                             mgpu.commit_smem()
                             mgpu.wgmma(acc_ref, activation_smem, w_down_smem)
                             mgpu.wgmma_wait(0)
 
-                    pl.run_scoped(
+                        # Route scaling moves to the fp32 accumulator: the weight is per-row, so
+                        # (diag(w) @ A) @ W2 == diag(w) @ (A @ W2), and the k-loop drops both the
+                        # k-invariant weight-tile reload and one multiply per element.
+                        mgpu.barrier_wait(route_ready_barrier)
+                        route_weight_vec = mgpu.load(
+                            route_weight_smem,
+                            (pl.ds(0, config.block_m),),
+                            layout=mgpu.Layout.WGMMA.reduce(1),
+                        ).astype(jnp.float32)
+                        route_weight = lax.broadcast_in_dim(
+                            route_weight_vec,
+                            (config.block_m, config.block_n),
+                            (0,),
+                        )
+                        return (acc_ref[...] * route_weight).astype(source_return_ref.dtype)
+
+                    return pl.run_scoped(
                         smem_scope,
                         gate_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
                         up_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
-                        weight_smem=_wgmma_smem((config.block_m, config.block_k), h_route_weights_ref.dtype),
+                        route_weight_smem=mgpu.SMEM((config.block_m,), dtype=h_route_weights_ref.dtype),
                         activation_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
                         w_down_smem=_wgmma_smem((config.block_k, config.block_n), w_down_ref.dtype),
-                        ready_barrier=mgpu.Barrier(num_arrivals=4),
+                        ready_barrier=mgpu.Barrier(num_arrivals=3),
+                        route_ready_barrier=mgpu.Barrier(num_arrivals=1),
                     )
-                    return acc_ref[...].astype(source_return_ref.dtype)
 
                 output = pl.run_scoped(
                     acc_scope,
@@ -817,15 +835,9 @@ def _sharded_w2_from_h_return_direct_to_source_kernel(
         expert_base_local = expert_base_local[0]
         src_base_by_expert_local = src_base_by_expert_local[0]
         w_down_local = w_down_local[0]
-        # Lane/Mosaic cannot load the block_m=64 row-weight vector directly into this WGMMA prologue.
-        h_route_weight_tiles = jnp.repeat(
-            h_route_weights_local[..., None],
-            config.block_k,
-            axis=-1,
-        )
         source_return = kernel(
             h_local,
-            h_route_weight_tiles,
+            h_route_weights_local,
             recv_meta_local,
             expert_base_local,
             src_base_by_expert_local,
@@ -861,7 +873,7 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
 
     def body(
         h_ref: Float[Ref, "E C twoI"],
-        h_route_weights_ref: Float[Ref, "E C W"],
+        h_route_weights_ref: Float[Ref, "E C"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
         expert_base_ref: Int[Ref, "E"],
         src_base_by_expert_ref: Int[Ref, "SRC E"],
@@ -901,22 +913,17 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
                     def smem_scope(
                         gate_smem,
                         up_smem,
-                        weight_smem,
+                        route_weight_smem,
                         activation_smem,
                         w_down_smem,
                         weight_ready_barrier,
                         tile_ready_barrier,
-                    ) -> None:
+                    ) -> jax.Array:
                         mgpu.copy_gmem_to_smem(
-                            h_route_weights_ref.at[
-                                expert,
-                                pl.ds(row_start, config.block_m),
-                                pl.ds(0, config.block_k),
-                            ],
-                            weight_smem,
+                            h_route_weights_ref.at[expert, pl.ds(row_start, config.block_m)],
+                            route_weight_smem,
                             weight_ready_barrier,
                         )
-                        mgpu.barrier_wait(weight_ready_barrier)
 
                         @pl.loop(0, k_tiles)
                         def _k_loop(kk) -> None:
@@ -950,25 +957,38 @@ def _make_w2_from_compact_h_return_direct_to_source_kernel(
                             )
                             mgpu.barrier_wait(tile_ready_barrier)
                             activation_smem[:, :] = (
-                                _silu(gate_smem[:, :].astype(jnp.float32))
-                                * up_smem[:, :].astype(jnp.float32)
-                                * weight_smem[:, :].astype(jnp.float32)
+                                _silu(gate_smem[:, :].astype(jnp.float32)) * up_smem[:, :].astype(jnp.float32)
                             ).astype(activation_smem.dtype)
                             mgpu.commit_smem()
                             mgpu.wgmma(acc_ref, activation_smem, w_down_smem)
                             mgpu.wgmma_wait(0)
 
-                    pl.run_scoped(
+                        # Route scaling moves to the fp32 accumulator: the weight is per-row, so
+                        # (diag(w) @ A) @ W2 == diag(w) @ (A @ W2), and the k-loop drops one
+                        # multiply per element.
+                        mgpu.barrier_wait(weight_ready_barrier)
+                        route_weight_vec = mgpu.load(
+                            route_weight_smem,
+                            (pl.ds(0, config.block_m),),
+                            layout=mgpu.Layout.WGMMA.reduce(1),
+                        ).astype(jnp.float32)
+                        route_weight = lax.broadcast_in_dim(
+                            route_weight_vec,
+                            (config.block_m, config.block_n),
+                            (0,),
+                        )
+                        return (acc_ref[...] * route_weight).astype(source_return_ref.dtype)
+
+                    return pl.run_scoped(
                         smem_scope,
                         gate_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
                         up_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
-                        weight_smem=_wgmma_smem((config.block_m, config.block_k), h_route_weights_ref.dtype),
+                        route_weight_smem=mgpu.SMEM((config.block_m,), dtype=h_route_weights_ref.dtype),
                         activation_smem=_wgmma_smem((config.block_m, config.block_k), h_ref.dtype),
                         w_down_smem=_wgmma_smem((config.block_k, config.block_n), w_down_ref.dtype),
                         weight_ready_barrier=mgpu.Barrier(num_arrivals=1),
                         tile_ready_barrier=mgpu.Barrier(num_arrivals=3),
                     )
-                    return acc_ref[...].astype(source_return_ref.dtype)
 
                 output = pl.run_scoped(
                     acc_scope,
@@ -1056,11 +1076,9 @@ def _sharded_w2_from_compact_h_return_direct_to_source_kernel(
         expert_base_local = expert_base_local[0]
         src_base_by_expert_local = src_base_by_expert_local[0]
         w_down_local = w_down_local[0]
-        # Lane/Mosaic cannot lower the 64-row route-weight vector load in this WGMMA prologue.
-        h_route_weight_tiles = jnp.repeat(h_route_weights_local[..., None], config.block_k, axis=-1)
         source_return = kernel(
             h_local,
-            h_route_weight_tiles,
+            h_route_weights_local,
             recv_meta_local,
             expert_base_local,
             src_base_by_expert_local,
