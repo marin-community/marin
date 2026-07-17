@@ -50,15 +50,21 @@ NVCC_ROOT=$(dirname "$(dirname "$NVCC")")
 ln -sf "$NVCC_ROOT"/bin/* "$CUDA/bin/"
 [ -d "$NVCC_ROOT/nvvm" ] && ln -sfn "$NVCC_ROOT/nvvm" "$CUDA/nvvm"
 
-# Merge every wheel's include/ and lib/ (first writer wins on collisions);
-# find-based so nested wheel layouts (e.g. nvidia/cu13/<pkg>) still resolve.
-for inc in $(find "$SP" -maxdepth 3 -type d -name include); do
-  cp -rsn "$inc"/. "$CUDA/include/" 2>/dev/null || true
+# Merge ONLY the cu13 tree plus cudnn/nccl. The venv also carries cu12 wheels
+# (torch+cu128 deps) under nvidia/<pkg>/ — merging those linked TE against
+# libcublas.so.12 (soname mismatch vs the cu13 runtime TE preloads).
+MERGE_DIRS="$SP/cu13 $SP/cudnn $SP/nccl"
+for root in $MERGE_DIRS; do
+  [ -d "$root/include" ] && cp -rsn "$root/include"/. "$CUDA/include/" 2>/dev/null || true
+  for lib in "$root"/lib "$root"/lib64; do
+    if [ -d "$lib" ]; then
+      ln -sf "$lib"/*.so* "$CUDA/lib64/" 2>/dev/null || true
+      ln -sf "$lib"/*.a "$CUDA/lib64/" 2>/dev/null || true
+    fi
+  done
 done
-for lib in $(find "$SP" -maxdepth 3 -type d -name lib -o -maxdepth 3 -type d -name lib64); do
-  ln -sf "$lib"/*.so* "$CUDA/lib64/" 2>/dev/null || true
-  ln -sf "$lib"/*.a "$CUDA/lib64/" 2>/dev/null || true
-done
+[ -e "$CUDA/include/cudnn.h" ] || { echo "FATAL: cudnn.h missing from merge"; ls "$SP"; exit 1; }
+rm -f "$CUDA"/lib64/*.so.12* 2>/dev/null || true
 # Unversioned .so symlinks for the linker (wheels often ship only .so.N).
 python - "$CUDA/lib64" <<'EOF'
 import os, sys
