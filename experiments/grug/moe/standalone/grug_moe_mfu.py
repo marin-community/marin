@@ -11,7 +11,9 @@ No real data -- deterministic synthetic tokens. Regenerate via rav/merge_minimal
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -28,6 +30,16 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+
+# TE must be imported before the JAX CUDA client exists so the NCCL_EP FFI
+# handlers register (required for --moe-implementation nccl_ep).
+try:
+    from transformer_engine.jax.ep import ep_bootstrap as _te_ep_bootstrap
+    from transformer_engine.jax.sharding import MeshResource as _TeMeshResource
+    from transformer_engine.jax.sharding import global_shard_guard as _te_global_shard_guard
+except ImportError:
+    _te_ep_bootstrap = None
+from levanter.grug._moe.ep_nccl import configure_nccl_ep
 
 try:  # iris is only present on cluster jobs; single-process runs don't need it
     from iris.runtime.jax_init import initialize_jax as _iris_initialize_jax
@@ -2092,7 +2104,9 @@ def _maybe_initialize_distributed() -> None:
     and bare-metal runs skip distributed init entirely, so the script stays
     runnable without iris installed.
     """
-    if int(os.environ.get("IRIS_NUM_TASKS", "1")) <= 1:
+    if int(os.environ.get("IRIS_NUM_TASKS", "1")) <= 1 and not os.environ.get("IRIS_MULTIGPU_PROCESS_COUNT"):
+        # Single task without the multigpu supervisor: nothing to join. The
+        # supervisor case (process-per-GPU on one node) still needs jax_init.
         return
     if _iris_initialize_jax is None:
         raise ModuleNotFoundError("multi-task iris job detected (IRIS_NUM_TASKS > 1) but iris is not importable")
@@ -2227,9 +2241,35 @@ def main():
     flops_per_example, flops_summary = _compute_flops(model_config=model)
     peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
     mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis_size)
+    ep_guard = contextlib.nullcontext()
+    if a.moe_implementation == "nccl_ep":
+        # TE NCCL_EP: process-per-GPU, single dp/fsdp axis outside expert, and
+        # a process-global bootstrap before any tracing (see ep_nccl.py).
+        if _te_ep_bootstrap is None:
+            raise ModuleNotFoundError("--moe-implementation nccl_ep requires a TE build with NCCL_EP")
+        if jax.local_device_count() != 1:
+            raise ValueError(
+                "nccl_ep requires one process per GPU; launch via the iris multigpu supervisor "
+                f"(got local_device_count={jax.local_device_count()})"
+            )
+        if int(mesh.shape.get("replica_dcn", 1)) != 1:
+            raise ValueError("nccl_ep supports one dp/fsdp axis outside expert; use --replica-axis-size 1")
+        ep_guard = _te_global_shard_guard(_TeMeshResource(fsdp_resource="data", ep_resource="expert"))
     metrics = []
     tps = a.batch_size * a.seq_len
-    with set_mesh(mesh):
+    with set_mesh(mesh), ep_guard:
+        if a.moe_implementation == "nccl_ep":
+            tokens_per_rank = a.batch_size * a.seq_len // jax.process_count()
+            recv_capacity = max(1, math.ceil(tokens_per_rank * a.num_experts_per_token * a.capacity_factor))
+            _te_ep_bootstrap(
+                world_size=jax.process_count(),
+                rank=jax.process_index(),
+                num_experts=a.num_experts,
+                max_tokens_per_rank=tokens_per_rank,
+                recv_capacity_per_rank=recv_capacity,
+                hidden_dim=a.hidden_dim,
+            )
+            configure_nccl_ep(a.num_experts_per_token, recv_capacity)
 
         @jax.jit
         def init(rng):

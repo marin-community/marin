@@ -44,6 +44,7 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
+from levanter.grug._moe.ep_nccl import _moe_mlp_ep_nccl
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_cute_local, _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_cute_local, _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -207,6 +208,30 @@ def moe_mlp(
             )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+
+        if resolved_implementation == "nccl_ep":
+            # TE NCCL_EP runs dispatch/combine as global-view FFI primitives
+            # with their own sharding rules and custom VJPs; only the grouped
+            # FFN goes through shard_map (inside _moe_mlp_ep_nccl). Bootstrap
+            # and layer config are the caller's responsibility (ep_nccl.py).
+            w_spec = P("expert", None, None)
+            x = _reshard_for_shard_map(x, mesh, batch_spec)
+            selected_experts = _reshard_for_shard_map(selected_experts, mesh, batch_spec)
+            combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
+            w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_spec)
+            w_down = _reshard_for_shard_map(w_down, mesh, w_spec)
+            out, dropped = _moe_mlp_ep_nccl(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                mesh=mesh,
+                batch_spec=batch_spec,
+            )
+            if report_capacity_overflow:
+                return out, dropped
+            return out
 
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
