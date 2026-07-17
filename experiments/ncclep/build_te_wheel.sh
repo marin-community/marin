@@ -70,6 +70,16 @@ for f in sorted(os.listdir(d)):
         if not os.path.exists(tgt):
             os.symlink(f, tgt)
 EOF
+# nvtx3 must come from ONE wheel — the per-file merge can interleave two nvtx
+# versions (e.g. cupti's copy + nvidia-nvtx's), which breaks the macro layering
+# (NVTX_NULLPTR undefined). Prefer the nvidia-nvtx wheel's tree wholesale.
+NVTX3_DIR=$(find "$SP" -type d -name nvtx3 -path "*nvtx*" | head -1)
+[ -z "$NVTX3_DIR" ] && NVTX3_DIR=$(find "$SP" -type d -name nvtx3 | head -1)
+if [ -n "$NVTX3_DIR" ]; then
+  rm -rf "$CUDA/include/nvtx3"
+  ln -sfn "$NVTX3_DIR" "$CUDA/include/nvtx3"
+fi
+
 # Driver stub: link the node's real libcuda.
 LIBCUDA=$(ldconfig -p | awk '/libcuda\.so\.1/ {print $NF; exit}')
 [ -n "$LIBCUDA" ] || LIBCUDA=$(find /usr/lib /usr/local -name 'libcuda.so.1' 2>/dev/null | head -1)
