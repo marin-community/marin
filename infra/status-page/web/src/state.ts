@@ -1,6 +1,6 @@
 // Jotai atoms for UI state.
 //
-// Network state (ferry/iris/workers/jobs/builds data) lives in
+// Network state (nightlies/iris/workers/jobs/builds data) lives in
 // react-query. Jotai handles the small UI knobs like the auto-refresh
 // toggle. This split keeps each library doing what it's best at.
 

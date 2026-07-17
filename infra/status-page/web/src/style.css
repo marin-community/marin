@@ -15,3 +15,258 @@ body {
     Roboto,
     sans-serif;
 }
+
+.nightly-table-shell {
+  overflow: visible;
+  border: 1px solid rgb(51 65 85 / 80%);
+  border-radius: 0.5rem;
+  background: rgb(15 23 42 / 55%);
+  box-shadow: 0 12px 30px rgb(2 6 23 / 18%);
+}
+
+.nightly-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: rgb(203 213 225);
+}
+
+.nightly-date-column {
+  width: 5.3rem;
+}
+
+.nightly-group-heading,
+.nightly-subgroup-heading,
+.nightly-lane-heading,
+.nightly-date-heading {
+  border-bottom: 1px solid rgb(51 65 85 / 75%);
+}
+
+.nightly-group-heading {
+  height: 1.55rem;
+  background: rgb(30 41 59 / 90%);
+  color: rgb(226 232 240);
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.nightly-subgroup-heading {
+  height: 1.35rem;
+  background: rgb(30 41 59 / 55%);
+  color: rgb(148 163 184);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+}
+
+.nightly-lane-heading {
+  height: 2.15rem;
+  padding: 0.2rem 0.12rem;
+  background: rgb(15 23 42 / 75%);
+  color: rgb(203 213 225);
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.nightly-date-heading {
+  padding: 0 0.5rem;
+  background: rgb(15 23 42 / 82%);
+  color: rgb(148 163 184);
+  font-size: 0.69rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.nightly-data-cell {
+  position: relative;
+  height: 2.2rem;
+  padding: 0.16rem;
+  border-bottom: 1px solid rgb(30 41 59 / 78%);
+  border-left: 1px solid rgb(30 41 59 / 55%);
+}
+
+.nightly-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.nightly-group-start {
+  border-left: 2px solid rgb(100 116 139 / 90%) !important;
+}
+
+.nightly-subgroup-start {
+  border-left: 1px solid rgb(71 85 105 / 95%) !important;
+}
+
+.nightly-cell-frame {
+  position: relative;
+  height: 1.82rem;
+  border-radius: 0.3rem;
+  color: rgb(226 232 240);
+}
+
+.nightly-duration-normal {
+  background: rgb(30 41 59 / 68%);
+}
+
+.nightly-duration-short {
+  background-color: rgb(46 43 79 / 78%);
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgb(129 140 248 / 18%) 0,
+    rgb(129 140 248 / 18%) 2px,
+    transparent 2px,
+    transparent 6px
+  );
+}
+
+.nightly-duration-slow {
+  background: rgb(92 58 18 / 58%);
+}
+
+.nightly-duration-very-slow {
+  background: rgb(120 67 15 / 78%);
+}
+
+.nightly-duration-pending {
+  background-color: rgb(30 41 59 / 62%);
+  background-image: radial-gradient(rgb(148 163 184 / 24%) 0.7px, transparent 0.7px);
+  background-size: 4px 4px;
+}
+
+.nightly-suspicious {
+  box-shadow: inset 0 0 0 1px rgb(251 191 36 / 82%);
+}
+
+.nightly-recovered {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 0.48rem solid rgb(251 113 133);
+  border-left: 0.48rem solid transparent;
+}
+
+.nightly-cell-content {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  border-radius: inherit;
+}
+
+.nightly-status-icon {
+  width: 0.92rem;
+  height: 0.92rem;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nightly-status-quiet {
+  stroke-width: 1.4;
+}
+
+.nightly-duration {
+  min-width: 1.7rem;
+  color: rgb(226 232 240);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.65rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  text-align: left;
+}
+
+.nightly-details {
+  position: relative;
+  height: 100%;
+}
+
+.nightly-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.nightly-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nightly-details > summary:focus-visible {
+  outline: 2px solid rgb(125 211 252);
+  outline-offset: 1px;
+}
+
+.nightly-detail-card {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.3rem);
+  left: 50%;
+  width: 14rem;
+  transform: translateX(-50%);
+  border: 1px solid rgb(71 85 105);
+  border-radius: 0.4rem;
+  background: rgb(2 6 23 / 98%);
+  padding: 0.55rem;
+  color: rgb(203 213 225);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  font-size: 0.68rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.nightly-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.nightly-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nightly-legend-swatch {
+  display: inline-block;
+  width: 0.78rem;
+  height: 0.62rem;
+  border: 1px solid rgb(100 116 139 / 55%);
+  border-radius: 0.15rem;
+}
+
+@media (max-width: 1450px) {
+  .nightly-date-column {
+    width: 4.5rem;
+  }
+
+  .nightly-date-heading {
+    padding: 0 0.35rem;
+    font-size: 0.61rem;
+  }
+
+  .nightly-lane-heading,
+  .nightly-duration {
+    font-size: 0.58rem;
+  }
+
+  .nightly-cell-content {
+    gap: 0.15rem;
+  }
+
+  .nightly-status-icon {
+    width: 0.82rem;
+    height: 0.82rem;
+  }
+}

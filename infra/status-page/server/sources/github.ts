@@ -1,5 +1,6 @@
-// Shared GitHub helpers used by both the Ferry (REST, workflow runs) and
-// Build (GraphQL, commit status rollup) sources.
+// Shared GitHub helpers used by both Nightlies (REST, workflow runs) and
+// Build (GraphQL, commit status rollup) sources. The Marin constants below
+// belong only to Build; Nightlies carries a repository per lane.
 
 export const REPO = "marin-community/marin";
 export const GH_OWNER = "marin-community";

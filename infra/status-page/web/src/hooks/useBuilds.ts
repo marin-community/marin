@@ -3,7 +3,7 @@ import { useAtomValue } from "jotai";
 import { fetchBuilds } from "../api";
 import { autoRefreshAtom } from "../state";
 
-// Same cadence as ferry — the backend TTL (60s) is the real shield
+// Same cadence as Nightlies — the backend TTL (60s) is the real shield
 // against the GitHub rate limit; the frontend just needs to keep pace.
 const REFETCH_INTERVAL_MS = 60_000;
 

@@ -5,39 +5,96 @@
 // across the server/web boundary) avoids tangling tsconfigs and lets the
 // web bundle stay independent of node types.
 
-export interface FerryRun {
-  id: number;
-  conclusion: string | null;
+export type NightlyCellState =
+  | "not-scheduled"
+  | "not-introduced"
+  | "retired"
+  | "not-yet-due"
+  | "missing"
+  | "unavailable"
+  | "run";
+
+export type NightlyDurationState =
+  | "not-applicable"
+  | "baseline-pending"
+  | "too-short"
+  | "normal"
+  | "slow"
+  | "very-slow";
+
+export interface NightlyAttempt {
+  attempt: number;
   status: string;
-  sha: string;
-  shaShort: string;
-  startedAt: string;
-  durationSeconds: number | null;
+  conclusion: string | null;
+  runStartedAt: string | null;
+  updatedAt: string;
   url: string;
+}
+
+export interface NightlyRun {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  sha: string;
+  createdAt: string;
+  runStartedAt: string | null;
+  updatedAt: string;
+  url: string;
+  runAttempt: number;
   event: string;
+  headBranch: string | null;
   actor: string;
+  shaShort: string;
+  durationSeconds: number | null;
+  recovered: boolean;
+  priorAttempts: NightlyAttempt[];
+  attemptHistoryError?: string;
 }
 
-// One strip within a ferry card. `label` is the tier caption (e.g. "tier1");
-// null for single-workflow ferries, where `file` is shown as the subtitle.
-export interface FerryTierStatus {
-  label: string | null;
-  file: string;
-  latest: FerryRun | null;
-  history: FerryRun[];
-  successRate: number | null;
-  fetchedAt: string;
-  error?: string;
+export interface NightlyLane {
+  id: string;
+  label: string;
+  shortLabel: string;
+  group: "marin" | "forks";
+  subgroup: "training" | "data" | "cluster" | "evaluation" | "rl" | "inference";
+  repository: string;
+  workflowFile: string;
+  workflowUrl: string;
+  scheduleLabel: string;
+  overdueGraceMinutes: number;
+  overdueGraceProvenance: string;
+  expectedDuration?: {
+    minSeconds: number;
+    maxSeconds: number;
+    provenance: string;
+  };
 }
 
-export interface FerryGroupStatus {
-  name: string;
-  tiers: FerryTierStatus[];
+export interface NightlyCell {
+  laneId: string;
+  date: string;
+  expectedAt: string | null;
+  state: NightlyCellState;
+  due: boolean;
+  healthy: boolean;
+  durationState: NightlyDurationState;
+  run?: NightlyRun;
+  sourceFetchedAt?: string;
+  sourceError?: string;
+  collidingRunUrls?: string[];
 }
 
-export interface FerryResponse {
-  runLimit: number;
-  groups: FerryGroupStatus[];
+export interface NightlyRow {
+  date: string;
+  label: string;
+  cells: NightlyCell[];
+}
+
+export interface NightlyResponse {
+  generatedAt: string;
+  lanes: NightlyLane[];
+  rows: NightlyRow[];
+  today: { healthy: number; due: number };
 }
 
 // Per-commit aggregate check-run status for the last N commits on main.
@@ -287,7 +344,7 @@ async function getJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-export const fetchFerry = () => getJson<FerryResponse>("/api/ferry");
+export const fetchNightlies = () => getJson<NightlyResponse>("/api/nightlies");
 export const fetchBuilds = () => getJson<BuildsResponse>("/api/builds");
 export const fetchIris = () => getJson<IrisStatus>("/api/iris");
 export const fetchControlPlaneHealth = () =>

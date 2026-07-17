@@ -1,7 +1,7 @@
 import { useAtom } from "jotai";
 import { BuildPanel } from "./components/BuildPanel";
-import { FerryPanel } from "./components/FerryPanel";
 import { IrisPanel } from "./components/IrisPanel";
+import { NightlyPanel } from "./components/NightlyPanel";
 import { ProbesPanel } from "./components/ProbesPanel";
 import { autoRefreshAtom } from "./state";
 
@@ -24,7 +24,7 @@ export function App() {
       </header>
 
       <div className="space-y-8">
-        <FerryPanel />
+        <NightlyPanel />
         <BuildPanel />
         <IrisPanel />
         <ProbesPanel />

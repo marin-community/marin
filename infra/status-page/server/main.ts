@@ -1,7 +1,7 @@
 // Hono entrypoint for the Marin status page.
 //
 // Serves:
-//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 14 runs per tier)
+//   GET /api/nightlies       — seven-day scheduled regression matrix (60s source cache)
 //   GET /api/builds          — GitHub per-commit CI rollup on main (60s cache, last 100 commits)
 //   GET /api/iris            — iris controller reachability (15s cache)
 //   GET /api/control-plane/health — active env Iris + finelog health history
@@ -22,6 +22,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { TTLCache } from "./cache.js";
 import { IrisPingHistory, ServiceHealthHistory } from "./history.js";
+import { nightliesResponse } from "./nightlies.js";
 import {
   provisioningHistory,
   workersHistory,
@@ -29,12 +30,13 @@ import {
   type WorkersHistoryResponse,
 } from "./sources/clusterHistory.js";
 import {
-  FERRY_GROUPS,
-  fetchTierStatus,
-  type FerryGroupStatus,
-  type FerryTierStatus,
-} from "./sources/githubActions.js";
+  fetchNightlyAttempt,
+  fetchNightlyLane,
+  type AttemptFetchResult,
+} from "./sources/githubNightlies.js";
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
+import { NIGHTLY_LANES } from "./sources/nightlyConfig.js";
+import type { NightlyLaneSnapshot } from "./sources/nightlyProjection.js";
 import { irisStatus, pingIris, type IrisPingResult } from "./sources/iris.js";
 import { jobsSnapshot, type JobsSnapshot } from "./sources/jobs.js";
 import { probesSnapshot, type ProbesSnapshot } from "./sources/probes.js";
@@ -47,12 +49,10 @@ import {
 import { wandbSnapshot, type WandbSnapshot } from "./sources/wandb.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
-const FERRY_RUN_LIMIT = 14;
 const BUILD_HISTORY = 100;
 
-// Cache is keyed per tier workflow file so the three datakit tiers share
-// the same shield as the single-workflow ferries.
-const ferryCache = new TTLCache<FerryTierStatus>(60_000);
+const nightlyLaneCache = new TTLCache<NightlyLaneSnapshot>(60_000);
+const nightlyAttemptCache = new TTLCache<AttemptFetchResult>(60_000);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);
@@ -130,18 +130,21 @@ const app = new Hono();
 
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
-app.get("/api/ferry", async (c) => {
-  const groups: FerryGroupStatus[] = await Promise.all(
-    FERRY_GROUPS.map(async (group) => ({
-      name: group.name,
-      tiers: await Promise.all(
-        group.tiers.map((tier) =>
-          ferryCache.get(tier.file, () => fetchTierStatus(tier, FERRY_RUN_LIMIT)),
-        ),
+app.get("/api/nightlies", async (c) => {
+  const now = new Date();
+  const response = await nightliesResponse(
+    NIGHTLY_LANES,
+    now,
+    (lane, requestNow) =>
+      nightlyLaneCache.get(`${lane.repository}/${lane.workflowFile}`, () =>
+        fetchNightlyLane(lane, requestNow),
       ),
-    })),
+    (lane, runId, attemptNumber) =>
+      nightlyAttemptCache.get(`${lane.repository}/${runId}/${attemptNumber}`, () =>
+        fetchNightlyAttempt(lane, runId, attemptNumber),
+      ),
   );
-  return c.json({ runLimit: FERRY_RUN_LIMIT, groups });
+  return c.json(response);
 });
 
 app.get("/api/builds", async (c) => {

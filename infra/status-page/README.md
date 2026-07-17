@@ -1,6 +1,6 @@
 # marin-infra-dashboard
 
-Internal dashboard for Marin: ferry workflow status from GitHub Actions,
+Internal dashboard for Marin: seven-day nightly regression status from GitHub Actions,
 a GitHub Build panel showing aggregate CI status for the last 100
 commits on main (per-commit check-run rollup), an Iris section
 surfacing controller reachability, worker counts (current + 24h
@@ -12,7 +12,7 @@ accelerator-provisioning rollup. Deployed as Cloud Run + native IAP.
 ## Stack
 
 - **Server** — Node 20 + TypeScript + [Hono](https://hono.dev). Exposes
-  `/api/ferry`, `/api/builds`, `/api/iris`, `/api/workers`,
+  `/api/nightlies`, `/api/builds`, `/api/iris`, `/api/workers`,
   `/api/control-plane/health`, `/api/workers/history`,
   `/api/provisioning/history`, `/api/jobs`, `/api/probes`, `/api/wandb`,
   `/api/health`, and serves the built web UI from `web/dist`.
@@ -29,8 +29,10 @@ server/
   cache.ts          TTL cache with in-flight coalesce
   history.ts        ring buffers for the in-process iris-ping + control-plane series
   sources/
-    github.ts          shared REPO + auth header helper
-    githubActions.ts   Ferry workflow runs (REST API)
+    github.ts          shared auth header + Build repository helper
+    nightlyConfig.ts   ordered lane schedules, grace, lifecycle, duration ranges
+    nightlyProjection.ts UTC calendar and health projection
+    githubNightlies.ts cross-repository scheduled workflow runs (REST API)
     githubCommits.ts   Build panel: per-commit CI rollup on main (GraphQL)
     iris.ts            iris controller /health caller
     serviceHealth.ts   active env Iris + finelog /health probes (+ finelog URL)
@@ -50,7 +52,7 @@ web/
     api.ts          typed fetch wrappers
     state.ts        Jotai atoms (auto-refresh)
     hooks/
-      useFerry.ts   react-query hooks
+      useNightlies.ts react-query hook
       useBuilds.ts
       useIris.ts
       useControlPlaneHealth.ts
@@ -61,7 +63,7 @@ web/
       useProbes.ts
       useWandb.ts
     components/
-      FerryPanel.tsx
+      NightlyPanel.tsx
       BuildPanel.tsx  GitHub CI, last 100 runs on main
       IrisPanel.tsx   wraps reachability + WorkersPanel + ControlPlanePanel + JobsPanel
       ControlPlanePanel.tsx active env Iris + finelog latency chart
@@ -94,6 +96,7 @@ Before committing, run the same checks CI enforces:
 ```bash
 npm run lint       # ESLint 9 flat config (server + web)
 npm run typecheck  # tsc against tsconfig.server.json + tsconfig.web.json
+npm test           # server behavior + Playwright/axe/visual tests
 npm run build      # vite bundle + tsc server compile
 ```
 
@@ -104,7 +107,7 @@ same-origin app.
 
 | Variable            | Purpose                                                               |
 |---------------------|-----------------------------------------------------------------------|
-| `GITHUB_TOKEN`      | Required for the Build panel (GraphQL needs auth even for public repos). Also lifts Ferry's REST rate limit from 60/hr to 5000/hr. |
+| `GITHUB_TOKEN`      | Required for Build GraphQL and practical Nightlies polling across 12 workflows; raises REST limits from 60/hr to 5000/hr. |
 | `CONTROLLER_URL`    | Override controller discovery. Set for local dev (see below).        |
 | `PROD_IRIS_URL`     | Override prod Iris health probe URL. Falls back to `CONTROLLER_URL`. |
 | `DEV_IRIS_URL`      | Override dev Iris health probe URL.                                  |
@@ -155,33 +158,24 @@ if it's unreachable.
 
 ## Configuration
 
-### Ferry workflows
+### Nightly regression lanes
 
-Ferries live in `server/sources/githubActions.ts`. Each ferry is one card
-and groups one or more tiers; a tier maps to a single workflow file. Most
-ferries have a single tier; the datakit ferry stacks three (tier1/2/3) as
-separate strips under one card:
+`server/sources/nightlyConfig.ts` owns the fixed 12-lane order and each lane's
+repository, workflow, branch, simple UTC schedule, inclusive lifecycle dates,
+independent overdue grace, and optional expected-duration range with provenance.
+Ranges are reviewed configuration, never learned from dashboard history. A lane
+without trustworthy bounds renders `baseline pending` instead of guessing.
 
-```ts
-export const FERRY_GROUPS: FerryGroupConfig[] = [
-  { name: "Canary ferry", tiers: [{ label: null, file: "marin-canary-ferry.yaml" }] },
-  { name: "CW ferry", tiers: [{ label: null, file: "marin-canary-ferry-coreweave.yaml" }] },
-  {
-    name: "Datakit ferry",
-    tiers: [
-      { label: "tier1", file: "marin-canary-datakit-tier1.yaml" },
-      { label: "tier2", file: "marin-canary-datakit-tier2.yaml" },
-      { label: "tier3", file: "marin-canary-datakit-tier3.yaml" },
-    ],
-  },
-];
-```
+`githubNightlies.ts` fetches only `event=schedule` runs; manual dispatches cannot
+replace or rescue a scheduled occurrence. `nightlyProjection.ts` maps parent run
+`created_at` timestamps into seven UTC calendar rows, keeps raw GitHub conclusions
+separate from duration confidence, and computes `Today: healthy/due`. Grace covers
+time until GitHub creates a run, not its completion. Scheduled reruns show the final
+attempt and retain a `failed → passed` recovery marker.
 
-Add ferries or tiers by appending to the array. `file` is the workflow
-filename under `.github/workflows/`; `label` captions the strip in a
-multi-tier card (use `null` for single-tier ferries, where the file is
-shown as the subtitle). The `main`-branch filter is hardcoded in
-`fetchTierStatus`; the 10-day history window is set in `server/main.ts`.
+The UI always shows status and compact duration. Purple hatch means too short,
+amber means slow, stronger amber means over 1.5× the lane maximum, and gray dots
+mean baseline pending. Essential state never depends on hover.
 
 ### Build panel
 
@@ -283,7 +277,7 @@ plus the dev controller discovery settings.
 
 | Source          | Backend TTL | Frontend `refetchInterval` | Window              |
 |-----------------|-------------|----------------------------|---------------------|
-| Ferry           | 60s         | 60s                        | 10 days             |
+| Nightlies       | 60s raw GitHub snapshots | 60s             | 7 UTC days          |
 | Build           | 60s         | 60s                        | 100 commits on main |
 | Iris            | 15s         | 15s                        | current only        |
 | Control plane   | in-memory   | 30s                        | 24h ring buffer     |

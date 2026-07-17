@@ -20,12 +20,22 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["server/dist", "web/dist", "node_modules"],
+    ignores: ["server/dist", "web/dist", "node_modules", "playwright-report", "test-results"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
     files: ["server/**/*.ts"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    files: ["tests/**/*.ts", "playwright.config.ts"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
