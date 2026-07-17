@@ -58,4 +58,22 @@ CoreWeave-cached data, full loss trajectories.
   `iris --config lib/iris/config/cw-us-east-02a.yaml job run --no-wait --cpu=1 --memory=4G --extra=cpu -e WANDB_API_KEY -e FP8VAL_* -e RUN_ID -- python -m experiments.grug.moe.launch_fp8_loss_val --version dev --run`
   (launcher is a CPU step; `run_grug` dispatches the 4×8-H100 gang via Fray).
 
-Next: FP8VAL-002 smoke (30 steps/arm), then FP8VAL-003 full A/B.
+Next: FP8VAL-002 smoke (40 steps/arm), then FP8VAL-003 full A/B.
+
+### FP8VAL-002 — smoke round 1: multi-host XLA compile hang (2026-07-17)
+
+`fp8val-{bf16,fp8}-smoke1` (40 steps, 4×8 H100/arm, json_logger tracker — no
+WANDB key reachable on the submit box): both arms scheduled instantly, synced
+env, logged hparams, then **hung ~2 h inside XLA compilation**. Signature on
+every rank (py-spy via `iris task exec`): main thread in
+`backend_compile_and_load` (jax 0.10.1 `compiler.py:344`) after ~10 min of real
+compile CPU (~600 s utime — matching the known single-node compile cost of the
+26-unrolled-layer graph), then **0 CPU / 0% GPU forever**; data-loader queue
+full (healthy); last log lines are `spmd_partitioner.cc` involuntary-remat
+warnings. Diagnosis: the multi-host **sharded-autotuning rendezvous** (ranks
+exchange autotune shards through the coordination service during compile) —
+never seen in the single-process 8-GPU benches. Both jobs stopped.
+
+Fix attempt (smoke round 2): resubmitted as `fp8val-{bf16,fp8}-smoke2` with
+`XLA_FLAGS=--xla_gpu_shard_autotuning=false` on both arms (the grug dispatcher
+forwards `XLA_FLAGS`/`NCCL_*`/`JAX_*` to the train gang).
