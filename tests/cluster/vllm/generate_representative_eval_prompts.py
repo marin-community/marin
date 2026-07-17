@@ -17,7 +17,7 @@ from rigging.filesystem import StoragePath
 
 TOKENIZER_NAME = "marin-community/marin-tokenizer"
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
-ARTIFACT_PREFIX = "s3://marin-us-east-02a/marin/test-data/vllm/e2e/representative-eval-prompts"
+PROMPT_FIXTURE_PREFIX = "gs://marin-public/test-data/vllm/e2e/representative-eval-prompts"
 SELECTORS_PATH = Path(__file__).parent / "resources" / "representative_eval_prompt_selectors.json"
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _render_mmmlu_row(row: dict, include_answer: bool) -> str:
     )
 
 
-def build_artifact() -> bytes:
+def build_prompt_fixture() -> bytes:
     selectors = json.loads(SELECTORS_PATH.read_text())
     prompts = {}
 
@@ -160,21 +160,21 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--stage", action="store_true")
-    parser.add_argument("--artifact-output", type=Path)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    artifact_bytes = build_artifact()
-    artifact_sha256 = hashlib.sha256(artifact_bytes).hexdigest()
-    artifact_uri = f"{ARTIFACT_PREFIX}/{artifact_sha256}.json"
+    fixture_bytes = build_prompt_fixture()
+    fixture_sha256 = hashlib.sha256(fixture_bytes).hexdigest()
+    fixture_uri = f"{PROMPT_FIXTURE_PREFIX}/{fixture_sha256}.json"
     if args.stage:
-        StoragePath(artifact_uri).write_bytes(artifact_bytes)
-    if args.artifact_output:
-        args.artifact_output.write_bytes(artifact_bytes)
+        StoragePath(fixture_uri).write_bytes(fixture_bytes)
+    if args.output:
+        args.output.write_bytes(fixture_bytes)
     logger.info(
-        "Prompt artifact: uri=%s sha256=%s byte_size=%d",
-        artifact_uri,
-        artifact_sha256,
-        len(artifact_bytes),
+        "Prompt fixture: uri=%s sha256=%s byte_size=%d",
+        fixture_uri,
+        fixture_sha256,
+        len(fixture_bytes),
     )
 
 

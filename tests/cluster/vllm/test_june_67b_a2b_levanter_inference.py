@@ -48,9 +48,10 @@ TOP_K = 25
 INFERENCE_GOLDEN_PATH = (
     Path(__file__).parent / "resources" / "june_tpu_67b_a2b_step_42150_representative_eval_golden.json"
 )
-PROMPT_ARTIFACT_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
-PROMPT_ARTIFACT_URI = (
-    f"s3://marin-us-east-02a/marin/test-data/vllm/e2e/representative-eval-prompts/{PROMPT_ARTIFACT_SHA256}.json"
+PROMPT_FIXTURE_SHA256 = "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8"
+PROMPT_FIXTURE_URL = (
+    "https://storage.googleapis.com/marin-public/test-data/vllm/e2e/representative-eval-prompts/"
+    f"{PROMPT_FIXTURE_SHA256}.json"
 )
 JAX_COMPILATION_CACHE_DIR = (
     "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-42150-sonic-fa4-representative-v2"
@@ -73,12 +74,18 @@ class PromptFixture:
 
 
 @dataclasses.dataclass(frozen=True)
+class PromptBatch:
+    max_tokens: int
+    cases: tuple[PromptCase, ...]
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenScore:
     logprob: float
     token_id: int
 
 
-def _prompt_batches(cases: tuple[PromptCase, ...]) -> tuple[tuple[int, tuple[PromptCase, ...]], ...]:
+def prompt_batches(cases: tuple[PromptCase, ...]) -> tuple[PromptBatch, ...]:
     batches = []
     remaining_cases = cases
     for bucket_max_tokens in PROMPT_BUCKET_MAX_TOKENS:
@@ -90,12 +97,13 @@ def _prompt_batches(cases: tuple[PromptCase, ...]) -> tuple[tuple[int, tuple[Pro
         )
         remaining_cases = tuple(case for case in remaining_cases if len(case.prompt_token_ids) > bucket_max_tokens)
         batches.extend(
-            (bucket_max_tokens, bucket[start : start + BATCH_SIZE]) for start in range(0, len(bucket), BATCH_SIZE)
+            PromptBatch(max_tokens=bucket_max_tokens, cases=bucket[start : start + BATCH_SIZE])
+            for start in range(0, len(bucket), BATCH_SIZE)
         )
     return tuple(batches)
 
 
-def _read_golden() -> dict[str, tuple[TokenScore, ...]]:
+def read_golden() -> dict[str, tuple[TokenScore, ...]]:
     raw = json.loads(INFERENCE_GOLDEN_PATH.read_text())
     return {
         case["id"]: tuple(
@@ -105,11 +113,11 @@ def _read_golden() -> dict[str, tuple[TokenScore, ...]]:
     }
 
 
-def _read_prompt_fixture(expected_cases: dict[str, tuple[TokenScore, ...]]) -> PromptFixture:
-    artifact_bytes = StoragePath(PROMPT_ARTIFACT_URI).read_bytes()
-    if hashlib.sha256(artifact_bytes).hexdigest() != PROMPT_ARTIFACT_SHA256:
-        raise ValueError("Prompt artifact SHA-256 mismatch")
-    raw = json.loads(artifact_bytes)
+def read_prompt_fixture(expected_cases: dict[str, tuple[TokenScore, ...]]) -> PromptFixture:
+    fixture_bytes = StoragePath(PROMPT_FIXTURE_URL).read_bytes()
+    if hashlib.sha256(fixture_bytes).hexdigest() != PROMPT_FIXTURE_SHA256:
+        raise ValueError("Prompt fixture SHA-256 mismatch")
+    raw = json.loads(fixture_bytes)
     cases = tuple(
         PromptCase(
             id=case["id"],
@@ -181,10 +189,10 @@ def compute_checkpoint_inference(
         params, pending_qb_betas = load_checkpoint(inference_model_config, mesh)
 
         computed_cases = {}
-        for bucket_max_tokens, batch_cases in _prompt_batches(prompt_fixture.cases):
-            token_ids = np.full((BATCH_SIZE, bucket_max_tokens), tokenizer.eos_token_id, dtype=np.int32)
+        for batch in prompt_batches(prompt_fixture.cases):
+            token_ids = np.full((BATCH_SIZE, batch.max_tokens), tokenizer.eos_token_id, dtype=np.int32)
             last_token_indices = np.empty(BATCH_SIZE, dtype=np.int32)
-            for row, case in enumerate(batch_cases):
+            for row, case in enumerate(batch.cases):
                 token_ids[row, : len(case.prompt_token_ids)] = case.prompt_token_ids
                 last_token_indices[row] = len(case.prompt_token_ids) - 1
             top_logprobs, top_token_ids = top_k_next_token_logprobs(
@@ -196,7 +204,7 @@ def compute_checkpoint_inference(
             )
             top_logprobs = np.asarray(jax.device_get(top_logprobs))
             top_token_ids = np.asarray(jax.device_get(top_token_ids))
-            for row, case in enumerate(batch_cases):
+            for row, case in enumerate(batch.cases):
                 computed_cases[case.id] = tuple(
                     TokenScore(
                         logprob=float(logprob),
@@ -211,14 +219,14 @@ def compute_checkpoint_inference(
 def assert_checkpoint_inference_matches_golden(
     expected_cases: dict[str, tuple[TokenScore, ...]],
 ) -> None:
-    prompt_fixture = _read_prompt_fixture(expected_cases)
+    prompt_fixture = read_prompt_fixture(expected_cases)
     actual_cases = compute_checkpoint_inference(prompt_fixture)
     for case_id, expected in expected_cases.items():
         assert actual_cases[case_id] == expected, case_id
 
 
 def test_h100_node_matches_levanter_inference_golden(marin_gpu_client: IrisClient, run_test_job) -> None:
-    expected_cases = _read_golden()
+    expected_cases = read_golden()
     run_test_job(
         marin_gpu_client,
         JobRequest(
