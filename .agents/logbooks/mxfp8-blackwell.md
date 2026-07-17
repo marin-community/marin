@@ -727,3 +727,50 @@ author: mcwitt
 - Next action: MXFP8-004c — wire `MxFp8RaggedDotOp` on the fused kernels
   (256-padded routing) into the grug MoE op path; then MXFP8-005 full-step
   MFU.
+
+### 2026-07-16 - MXFP8-004c: op wired, e2e train smoke green — mxfp8 loss tracks bf16
+
+- Hypothesis: MXFP8-H3 (stateless op, no train-step machinery) + integration.
+- Commit Hash: af2110ac5 (pushed; tree clean).
+- Command: jobs `/mwittmann/mxfp8-004c-g1..g5` (g2 op-level, g3/g4/g5 smoke
+  arms on GB200x4).
+- Design (details in commit + report): new `MoeExpertMlpOp` Protocol in
+  levanter `_moe/common.py`, threaded through `moe_mlp` into ring AND a2a EP
+  backends as a static shard_map closure (stateless — H3 CONFIRMED: no amax
+  history, no OverwriteWithGradient, no pmax cotangent). Concrete
+  `MxFp8MoeMlpOp` lives in `experiments/grug/moe/mxfp8.py` (whole expert MLP
+  w13->SwiGLU->w2 as ONE custom_vjp — forced by the fused kernel boundary);
+  levanter never imports the vendored package. Residuals: x_col/h_col+SFs +
+  bf16 c13; dgrad weight copies re-quantized in bwd (~16 GB residual savings
+  at row-13). 256-aligned repack with traced SF layouts (wgrad atom-block
+  perm verified bit-equal to host layout). `producer="auto"` probes the CuTe
+  quantizer in a SUBPROCESS (FFI compile is process-fatal) with XLA fallback.
+  Config: `GrugFp8Config(recipe="per_tensor"|"mxfp8", grouped, mxfp8_producer)`;
+  mxfp8 requires wire=False, grouped=True; dense stays per-tensor; non-sm100
+  rejected at trace time. Tilers pinned to 004a winners.
+- Result:
+  - g2 op-level (skewed routing, 2 zero-token experts): dequant-ref checks
+    7.4e-6..2.7e-5 (gate 1e-3), quantizer checks 3-5e-5, blackbox vs bf16
+    6.6-6.7e-2 (chained fwd+bwd double-quantization noise class), zero-token
+    wgrads exactly 0. ALL PASSED.
+  - Train smoke (GB200x4, EP4 ring, d2560/F1280/E64/K4, L13, B32, seq4096,
+    MuonH, 20 steps): bf16 / per-tensor-dense / mxfp8 all finite, no NaN.
+    Loss step19: 10.846 / 10.847 / 10.848 — mxfp8 tracks bf16 to ~2e-3 per
+    step. Steady median s/step 1.2608 / 1.2559 / 1.2718 (mxfp8 ~1% slower at
+    this collective-dominated smoke config; weights re-quantized every
+    microbatch and XLA producer in play — perf verdict is MXFP8-005's job).
+  - CPU tests: 31 passed (experiments) + 6 passed/1 GPU-skip (levanter seam);
+    existing ragged-dot-op tests still green.
+- Caveat: both GPU jobs landed on bad-libNVVM nodes, so the e2e ladder
+  exercised the XLA producer; the CuTe producer path in the op is untested
+  e2e (rests on 002c bit-exactness) — MXFP8-005 item.
+- New gotchas (durable): the nix-profile `iris` CLI is Python 3.13 and pins
+  the pod interpreter -> dep sync breaks (resiliparse cp312-only); submit
+  with `.venv/bin/iris`. `./infra/pre-commit.py --fix` reformats the vendored
+  mxfp8_fused/ kernels — revert those after repo-wide fix passes. A global
+  ~/.config/git/ignore has `lib/` — `git add -f` for new files under
+  lib/levanter/tests.
+- Next action: MXFP8-005 — row-13 full-config MFU on GB200x4 (comparable to
+  the #7012 4-GPU numbers: EP1 17.01% / ring EP4 16.32% / a2a 15.82%
+  B200-conv) with per-phase timing; weight-quantize amortization across
+  microbatches; exercise CuTe producer on a good node; one a2a arm.
