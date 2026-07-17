@@ -1,14 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run CruxEval input and output prediction against brokered Qwen3 vLLM.
+"""Evaluate broker-served Qwen3 on CruxEval and save metrics and samples.
 
 ``CRUXEVAL_RESULTS`` is a lazy artifact containing lm-eval metrics and samples.
-By default, the evaluator runs through an isolated ``uv run`` environment in a
-non-preemptible Iris CPU parent, with inference in TPU child jobs connected through
-Marin's inference broker. ``--launcher local`` instead runs the broker, proxy, and
-worker in the current process. CruxEval is scored by executing the predicted
-assertions rather than by an LLM judge.
+CruxEval is scored by executing the predicted assertions rather than by an LLM
+judge.
 
 \b
 Examples:

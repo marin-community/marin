@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run HumanEval against Qwen3 through brokered vLLM serving.
-
-By default, the evaluator runs through an isolated ``uv run`` environment in a
-non-preemptible Iris CPU parent, with inference in TPU child jobs connected
-through Marin's inference broker. ``--launcher local`` instead runs the broker,
-proxy, and worker in the current process.
+"""Evaluate broker-served Qwen3 on HumanEval and save metrics and samples.
 
 \b
 Examples:
