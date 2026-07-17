@@ -44,5 +44,11 @@ popd
 export XLA_PYTHON_CLIENT_ALLOCATOR=${XLA_PYTHON_CLIENT_ALLOCATOR:-cuda_async}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 
+# uv's cached marin-levanter wheel goes stale when new source files are added
+# without a version bump — shadow it with the bundled tree (stale-import
+# lesson from B200MFU-014).
+export PYTHONPATH="$REPO_ROOT/lib/levanter/src${PYTHONPATH:+:$PYTHONPATH}"
+python -c "import levanter.grug._moe.ep_nccl as m; print('ep_nccl from', m.__file__)"
+
 exec python -m iris.runtime.multigpu --nproc 4 -- \
   python "$REPO_ROOT/experiments/grug/moe/standalone/grug_moe_mfu.py" "${BENCH_ARGS[@]}"
