@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -305,6 +306,7 @@ def served_lm_eval_command(help_text: str, benchmark: ServedLmEvalBenchmark) -> 
             priority=iris_priority,
         )
         if launcher_mode is LmEvalLauncher.LOCAL:
+            os.environ.update(configured_benchmark.parent_env_vars)
             run_local_brokered_lm_eval(inference, run)
             return
 

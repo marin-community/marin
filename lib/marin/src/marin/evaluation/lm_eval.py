@@ -95,7 +95,7 @@ def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:
     """Build the comma-delimited model_args string consumed by lm-eval API models."""
     model_args: dict[str, object] = {
         "model": model.endpoint.model,
-        "base_url": _lm_eval_base_url(model, run),
+        "base_url": model.endpoint.url(run.adapter.endpoint_path),
         "tokenizer_backend": "huggingface",
         "tokenized_requests": False,
     }
@@ -107,10 +107,6 @@ def build_lm_eval_model_args(model: RunningModel, run: LmEvalRun) -> str:
     return ",".join(
         f"{_format_model_arg_key(key)}={_format_model_arg_value(value)}" for key, value in model_args.items()
     )
-
-
-def _lm_eval_base_url(model: RunningModel, run: LmEvalRun) -> str:
-    return model.endpoint.url(run.adapter.endpoint_path)
 
 
 def _format_model_arg_key(key: str) -> str:
