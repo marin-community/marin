@@ -27,6 +27,7 @@ Env knobs:
     FP8VAL_BATCH         global batch in sequences (default 128)
     FP8VAL_GPU_REPLICAS  8xH100 nodes per arm (default 4)
     FP8VAL_EXPERT_AXIS   expert-parallel axis size (default 8)
+    FP8VAL_TRACKER       wandb (default; needs WANDB_API_KEY) | json_logger
     RUN_ID               unique run identifier (also the W&B run name)
 """
 
@@ -35,6 +36,7 @@ import os
 
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -95,6 +97,20 @@ def build_val_model() -> GrugModelConfig:
     )
 
 
+def _build_tracker(arm: str) -> WandbConfig | JsonLoggerConfig:
+    tracker = os.environ.get("FP8VAL_TRACKER", "wandb")
+    if tracker == "wandb":
+        return WandbConfig(
+            project="marin_moe",
+            tags=["fp8-loss-val", "pr7079", "grug", "moe", "h100", arm],
+            group="fp8-loss-val-7079",
+            name=None,
+        )
+    if tracker == "json_logger":
+        return JsonLoggerConfig(logger_name="fp8val.metrics")
+    raise ValueError(f"FP8VAL_TRACKER={tracker!r} must be 'wandb' or 'json_logger'")
+
+
 def build_val_checkpoint(*, version: str | None = None) -> ArtifactStep[LevanterCheckpoint]:
     arm = "fp8" if _FP8_ENABLED else "bf16"
     default_run_id = f"fp8val-{arm}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d-%H%M')}"
@@ -125,12 +141,7 @@ def build_val_checkpoint(*, version: str | None = None) -> ArtifactStep[Levanter
             batch_size=batch_size,
             seed=0,
             mp="params=float32,compute=bfloat16,output=bfloat16",
-            tracker=WandbConfig(
-                project="marin_moe",
-                tags=["fp8-loss-val", "pr7079", "grug", "moe", "h100", arm],
-                group="fp8-loss-val-7079",
-                name=None,
-            ),
+            tracker=_build_tracker(arm),
             optimizer=VAL_OPTIMIZER,
             grug_trainer=GrugTrainerConfig(
                 expert_axis_size=expert_axis,
