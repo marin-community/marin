@@ -81,19 +81,9 @@ def _moe_mlp_ep_nccl(
     cfg = _LAYER_CFG
     recv_capacity = _RECV_CAPACITY
 
-    topk_idx = selected_experts.astype(jnp.int32)
-    recv_tokens, recv_w, handle_mem, token_counts = ep_dispatch(
-        cfg, topk_idx, x, combine_weights.astype(jnp.float32), recv_capacity
-    )
-
     lead = P(batch_spec[0], None, None)  # (outer, ep) leading axis of EP-output tensors
     lead2 = P(batch_spec[0], None)
-    # TE's dispatch outputs come back unconstrained under an explicit-sharding
-    # mesh — pin them (same move as TE's own multi-process test) so the FFN
-    # shard_map sees the declared specs.
-    recv_tokens = jax.lax.with_sharding_constraint(recv_tokens, jax.sharding.NamedSharding(mesh, lead))
-    recv_w = jax.lax.with_sharding_constraint(recv_w, jax.sharding.NamedSharding(mesh, lead2))
-    token_counts = jax.lax.with_sharding_constraint(token_counts, jax.sharding.NamedSharding(mesh, lead2))
+    w_spec = P("expert", None, None)
 
     def _local_ffn(recv_tokens_l, token_counts_l, w13_l, w2_l):
         x_dispatch = recv_tokens_l.reshape(recv_tokens_l.shape[-2], recv_tokens_l.shape[-1])
@@ -102,24 +92,41 @@ def _moe_mlp_ep_nccl(
         out = expert_mlp_fn(x_dispatch, group_sizes)
         return out.reshape(recv_tokens_l.shape)
 
-    w_spec = P("expert", None, None)
-    ffn = shard_map(
-        _local_ffn,
-        mesh=mesh,
-        in_specs=(lead, lead2, w_spec, w_spec),
-        out_specs=lead,
-        check_vma=False,
-    )
-    expert_out = ffn(recv_tokens, token_counts, w_up_gate, w_down)
+    def _body(x_b, topk_idx_b, combine_w_b, w13_b, w2_b):
+        recv_tokens, recv_w, handle_mem, token_counts = ep_dispatch(
+            cfg, topk_idx_b, x_b, combine_w_b, recv_capacity
+        )
+        # Pin the EP-output tensors to the (outer, ep) layout (same move as
+        # TE's own multi-process test) so the FFN shard_map sees the specs.
+        recv_tokens = jax.lax.with_sharding_constraint(recv_tokens, lead)
+        recv_w = jax.lax.with_sharding_constraint(recv_w, lead2)
+        token_counts = jax.lax.with_sharding_constraint(token_counts, lead2)
 
-    # ep_combine is unweighted: apply the routing weights (zero-masked — padded
-    # slots carry weight 0) before the scatter-sum; grad w.r.t. combine_weights
-    # flows through this hadamard, not the FFI.
-    mask = (recv_w != 0).astype(jnp.float32)[..., None]
-    weighted = (expert_out.astype(jnp.float32) * recv_w[..., None] * mask).astype(expert_out.dtype)
-    weighted = jax.lax.with_sharding_constraint(weighted, jax.sharding.NamedSharding(mesh, lead))
-    out = ep_combine(cfg, handle_mem, token_counts, weighted, tuple(x.shape[:-1]))
-    out = jax.lax.with_sharding_constraint(out, jax.sharding.NamedSharding(mesh, batch_spec))
+        ffn = shard_map(
+            _local_ffn,
+            mesh=mesh,
+            in_specs=(lead, lead2, w_spec, w_spec),
+            out_specs=lead,
+            check_vma=False,
+        )
+        expert_out = ffn(recv_tokens, token_counts, w13_b, w2_b)
+
+        # ep_combine is unweighted: apply the routing weights (zero-masked —
+        # padded slots carry weight 0) before the scatter-sum; grad w.r.t.
+        # combine_weights flows through this hadamard, not the FFI.
+        mask = (recv_w != 0).astype(jnp.float32)[..., None]
+        weighted = (expert_out.astype(jnp.float32) * recv_w[..., None] * mask).astype(expert_out.dtype)
+        weighted = jax.lax.with_sharding_constraint(weighted, lead)
+        out = ep_combine(cfg, handle_mem, token_counts, weighted, tuple(x_b.shape[:-1]))
+        return out.astype(x_b.dtype)
+
+    # The bench mesh types every axis Explicit, where sharding constraints are
+    # asserts and TE's partitioning rules (written for auto-sharding) type the
+    # FFI outputs replicated. Run the whole EP region under auto axes and pin
+    # only the final output back to the explicit batch spec.
+    out = jax.sharding.auto_axes(
+        _body, axes=tuple(mesh.axis_names), out_sharding=batch_spec
+    )(x, selected_experts.astype(jnp.int32), combine_weights.astype(jnp.float32), w_up_gate, w_down)
 
     dropped = jnp.zeros((), dtype=jnp.int32)
-    return out.astype(x.dtype), dropped
+    return out, dropped
