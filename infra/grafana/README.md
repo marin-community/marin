@@ -54,8 +54,7 @@ server-side, so nothing outside the container reaches it.
 ## Layout
 
 ```
-src/results.py         time-macro substitution, Arrow->JSON, label flatten
-src/server.py          the /query API (Starlette)
+src/server.py          the /query API (Starlette): macros, Arrow->JSON, label flatten
 src/finelog_source.py  finelog internal-IP discovery + LogClient
 src/config.py          cluster targets and bridge settings
 src/cache.py           TTL cache with in-flight coalescing
