@@ -651,7 +651,7 @@ def main():
     p.add_argument("--swiglu-tiler", default="256,256,2,1", help="mma_m,mma_n,cluster_m,cluster_n")
     p.add_argument("--dswiglu-tiler", default="256,256,2,1")
     p.add_argument("--gemm-tiler", default="256,256,2,1")
-    p.add_argument("--wgrad-tiler", default="256,256,2,1")
+    p.add_argument("--wgrad-tiler", default="256,256,2,2")
     p.add_argument("--out", default="bench_mxfp8_fused.json")
     a = p.parse_args()
     phases = set(a.phases.split(","))
