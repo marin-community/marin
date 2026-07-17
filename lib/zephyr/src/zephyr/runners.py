@@ -38,6 +38,7 @@ from typing import Any, TypeVar
 
 import cloudpickle
 import psutil
+from rigging import telltale
 from rigging.filesystem import StoragePath
 
 from zephyr import counters
@@ -202,6 +203,29 @@ def _set_counter_aggregations() -> None:
     sc.set_aggregation(ZEPHYR_WORKER_MEM_PEAK_KEY, Aggregation.MAX)
 
 
+def _telltale_metric_name(counter_name: str) -> str:
+    """Convert a zephyr counter name to a legal Prometheus metric name."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", counter_name)
+
+
+def _mirror_counters_to_telltale(values: dict[str, int | float]) -> None:
+    """Mirror the current counter values onto this process's telltale page.
+
+    Collecting these at scrape time is not possible: the counters live behind a
+    ContextVar scoped to the worker task, which the serving thread cannot see.
+    Mirroring on the sampler tick that already reads them keeps a single source of
+    truth and costs one dict walk.
+
+    They are gauges, not counters, because a zephyr counter may aggregate as MAX
+    or AVERAGE — its value is a current reading, not a monotonic total.
+
+    This is an exposition surface only. The ``zephyr.worker`` rows emitted
+    alongside remain the authoritative record; nothing here is shipped again.
+    """
+    for name, value in values.items():
+        telltale.gauge(_telltale_metric_name(name), f"zephyr counter {name}").set(value)
+
+
 def _periodic_sampler(
     stop_event: threading.Event,
     ctx: _InProcessWorkerContext,
@@ -222,13 +246,15 @@ def _periodic_sampler(
     while not stop_event.wait(timeout=interval):
         try:
             _sample_process_stats(cpu_s_at_start, proc)
+            values = ctx.get_counters()
+            _mirror_counters_to_telltale(values)
             stats_writer.emit_worker_stat(
                 task.stage_name,
                 task.shard_idx,
                 execution_id,
                 ZephyrWorkerStatStatus.RUNNING,
                 start_time,
-                ctx.get_counters(),
+                values,
             )
         except Exception:
             logger.warning("Failed to sample/emit process stats", exc_info=True)
