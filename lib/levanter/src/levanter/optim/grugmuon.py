@@ -406,6 +406,39 @@ def _newtonschulz_4d_distributed(
     layers, expert_count, d, last = x.shape
     merged = layers * expert_count
 
+    is_w_down_leaf = any(getattr(entry, "name", None) == "w_down" for entry in path)
+    if is_w_down_leaf:
+        orig_4d = PartitionSpec(None, "expert", "model", "data")
+    else:
+        orig_4d = PartitionSpec(None, "expert", "data", "model")
+
+    expert_shards = int(mesh.shape["expert"]) if "expert" in mesh.shape else 1
+    if expert_shards > 1 and expert_count % expert_shards == 0:
+        # Expert-parallel stack: the E dim is sharded over "expert", and merging (L, E)
+        # cannot preserve that sharding — XLA lowers the merge+reshard as full all-gathers
+        # of the LE stack (150 GiB+ replicated buffers at d5120/L48/E128, the MXFP8-007c
+        # OOM). Instead keep E pinned on "expert" and distribute L over the remaining
+        # batch axes with a single 4D->4D reshard: each chip then holds whole [d, last]
+        # matrices for its (L-shard, E-shard) block and runs NS locally.
+        l_axes_pool = [(n, s) for n, s in mesh_shape_items if n not in ("expert", "model")]
+        best_l_axes: tuple[str, ...] = ()
+        best_l = 1
+        for mask in range(1, 1 << len(l_axes_pool)):
+            subset = [l_axes_pool[i] for i in range(len(l_axes_pool)) if mask & (1 << i)]
+            prod = 1
+            for _, s in subset:
+                prod *= s
+            if layers % prod == 0 and prod > best_l:
+                best_l_axes = tuple(n for n, _ in subset)
+                best_l = prod
+        l_entry = None if not best_l_axes else (best_l_axes[0] if len(best_l_axes) == 1 else best_l_axes)
+        target_4d_spec = PartitionSpec(l_entry, "expert", None, None)
+        x_bf16 = x.astype(jnp.bfloat16)
+        x_distributed = reshard(x_bf16, target_4d_spec)
+        local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+        updated = jax.vmap(jax.vmap(local_ns))(x_distributed)
+        return reshard(updated, orig_4d).astype(x.dtype)
+
     # Largest subset of batch mesh axes whose product divides ``merged``; NS replicates
     # across any axes that don't divide it rather than silently skipping orthogonalization.
     best_axes: tuple[str, ...] = ()
@@ -425,13 +458,11 @@ def _newtonschulz_4d_distributed(
             f"{jax.tree_util.keystr(path)}."
         )
 
-    is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
-    if is_w_down:
+    if is_w_down_leaf:
         intermediate_3d_spec = PartitionSpec(None, "model", "data")
-        orig_4d_spec = PartitionSpec(None, "expert", "model", "data")
     else:
         intermediate_3d_spec = PartitionSpec(None, "data", "model")
-        orig_4d_spec = PartitionSpec(None, "expert", "data", "model")
+    orig_4d_spec = orig_4d
     target_3d_spec = (
         PartitionSpec(best_axes[0], None, None) if len(best_axes) == 1 else PartitionSpec(best_axes, None, None)
     )
