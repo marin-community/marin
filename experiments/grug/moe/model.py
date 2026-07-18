@@ -36,6 +36,7 @@ from levanter.grug.attention import (
     align_kv_heads,
     apply_rotary_embedding,
     attention,
+    fa4_cute_segment_bounds,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -940,8 +941,34 @@ class Transformer(eqx.Module):
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        if segment_ids is not None:
+            # Pin the per-token [B, S] segment ids batch-sharded before they enter the layer
+            # blocks. Otherwise they reach the FA4 metadata computation as {maximal device=0}
+            # and the compiler falls back to an involuntary full-remat scatter that serializes
+            # through device 0 (collective rendezvous timeout at 8+ racks).
+            segment_ids = _batch_reshard(segment_ids)
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+
+        if cfg.attention_implementation == "gpu_fa4_cute":
+            # Precompute the FA4 per-token (lower_bounds, valid) metadata for both the
+            # full-causal (long) and sliding-window (short) layers OUTSIDE the 48 checkpointed
+            # blocks. Built inside each block, the device-0-pinned arange constants make the
+            # [B, S] bounds {maximal device=0}, and the reshard to the batch-sharded metadata
+            # spec becomes an involuntary full rematerialization per layer (the 792 GiB
+            # step-0 temp arena at d5120/L48). ``valid`` is window-independent.
+            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+            long_lower_bounds, valid = fa4_cute_segment_bounds(
+                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            )
+            short_lower_bounds, _ = fa4_cute_segment_bounds(
+                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+            )
+            long_lower_bounds = _batch_reshard(long_lower_bounds)
+            short_lower_bounds = _batch_reshard(short_lower_bounds)
+            valid = _batch_reshard(valid)
+            short_mask = short_mask.with_fa4_bounds(short_lower_bounds, valid)
+            long_mask = long_mask.with_fa4_bounds(long_lower_bounds, valid)
 
         save_names: tuple[str, ...] = MOE_REMAT_SAVE_NAMES if cfg.remat_mode == "save_moe" else ()
         if cfg.fp8 is not None and cfg.fp8.recipe == "mxfp8" and cfg.fp8.mxfp8_save_qweights:
