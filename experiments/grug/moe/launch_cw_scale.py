@@ -121,11 +121,12 @@ def build_scale_model() -> GrugModelConfig:
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
     num_heads = hidden_dim // HEAD_DIM
-    # SCALE_MLA=1 switches the block to Multi-head Latent Attention with num_heads = 2*d//128
-    # and its own qk/v head dims (128 nope + 64 rope, v=128); the dense head_dim is unused.
+    # SCALE_MLA=1 switches the block to Multi-head Latent Attention with its own qk/v head dims
+    # (128 nope + 64 rope, v=128); the dense head_dim is unused. SCALE_MLA_HEAD_MULT scales the head
+    # count = mult * d/128 (default 2x, the DeepSeek-style wide-head count; 1x = dense head count).
     use_mla = os.environ.get("SCALE_MLA") == "1"
     if use_mla:
-        num_heads = 2 * hidden_dim // HEAD_DIM
+        num_heads = env_int("SCALE_MLA_HEAD_MULT", 2) * hidden_dim // HEAD_DIM
     # Q latent rank. SCALE_Q_LORA_RANK=0 uses a direct Q projection; >0 routes Q through a
     # compressed latent. Defaults to d/2 (the grug MLA prototype value) when unset.
     q_lora_rank = env_int("SCALE_Q_LORA_RANK", hidden_dim // 2)
