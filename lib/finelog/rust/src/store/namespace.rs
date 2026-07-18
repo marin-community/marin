@@ -709,9 +709,29 @@ impl Namespace {
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
-        let output_path = swap.added.path.clone();
-        let output_bytes = swap.added.size_bytes;
-        let output_rows = swap.added.row_count;
+        let merged_inputs = swap.removed.len();
+        let input_arrow_bytes = swap.input_arrow_bytes;
+        // A missing head input produces no output — the swap only names the stale
+        // reference to drop. Route it through `evict_segment`, which is
+        // location-aware (a BOTH segment collapses to REMOTE, preserving its
+        // durable archive; a LOCAL-only row is removed) and tolerates the already
+        // absent file. This unwedges compaction without deleting a segment that
+        // still has a remote copy.
+        let Some(added) = swap.added.clone() else {
+            for path in &swap.removed {
+                self.evict_segment(path);
+            }
+            tracing::warn!(
+                namespace = %self.name,
+                dropped = ?swap.removed,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "dropped stale segment reference with no local file; compaction resumed"
+            );
+            return Ok(());
+        };
+        let output_path = added.path.clone();
+        let output_bytes = added.size_bytes;
+        let output_rows = added.row_count;
         // A bump is a rename; a merge decodes its inputs into RAM. The
         // distinction is the whole memory story, so name it — along with the
         // decoded size the ceiling actually bounds, and how much of the planned
@@ -721,8 +741,6 @@ impl Namespace {
         } else {
             "merge"
         };
-        let merged_inputs = swap.removed.len();
-        let input_arrow_bytes = swap.input_arrow_bytes;
         self.commit_swap(swap)?;
         tracing::info!(
             namespace = %self.name,
@@ -809,7 +827,14 @@ impl Namespace {
         }
         let removed_set: std::collections::HashSet<&str> =
             swap.removed.iter().map(|s| s.as_str()).collect();
-        let added_row = segment_to_row(&self.name, &swap.added);
+        // A drop (missing head input) never reaches `commit_swap` — `run_one_job`
+        // routes it through `evict_segment`. Every committed swap therefore
+        // replaces its inputs with a real output segment.
+        let added = swap
+            .added
+            .as_ref()
+            .expect("commit_swap requires an output segment; drops are handled by run_one_job");
+        let added_row = segment_to_row(&self.name, added);
         {
             let mut inner = self.inner.lock().unwrap();
             let mut new_segments: VecDeque<LocalSegment> =
@@ -818,7 +843,7 @@ impl Namespace {
             for s in inner.local_segments.drain(..) {
                 if removed_set.contains(s.path.as_str()) {
                     if !inserted {
-                        new_segments.push_back(swap.added.clone());
+                        new_segments.push_back(added.clone());
                         inserted = true;
                     }
                 } else {
@@ -826,7 +851,7 @@ impl Namespace {
                 }
             }
             if !inserted {
-                new_segments.push_back(swap.added.clone());
+                new_segments.push_back(added.clone());
             }
             inner.local_segments = new_segments;
             // Atomic catalog splice. Propagate on failure: the
@@ -1847,6 +1872,63 @@ mod tests {
         ns.run_maintenance(true).await.unwrap();
 
         assert_eq!(ns.backfill_missing_sidecars(10), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn maintenance_drops_dangling_segment_reference_instead_of_wedging() {
+        // Regression for the `iris.task` compaction wedge. A merge that consumed
+        // and unlinked a segment can leave its deque/catalog reference behind (a
+        // duplicate entry the splice missed). The planner then hands back a job
+        // whose head input file is gone; the old recovery tried to promote it by
+        // rename, which failed on the absent source every `check_interval` and
+        // wedged the namespace's compaction for good (14k L0 files and growing in
+        // production). Maintenance must instead DROP the dangling reference and
+        // keep compacting.
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+
+        // Three L0 segments (seq 1, 2, 3), each its own flush.
+        write_one(&ns).await;
+        write_one(&ns).await;
+        write_one(&ns).await;
+        let before = discover_segments(&ns_dir);
+        assert_eq!(before.len(), 3, "three L0 segments on disk");
+
+        // Delete the lowest-min_seq file while its deque + catalog rows survive —
+        // the dangling reference an already-consumed-and-unlinked input leaves,
+        // and the head of the next planned run.
+        let head = before.iter().min().unwrap().clone();
+        std::fs::remove_file(&head).unwrap();
+
+        // Before the fix this returned Err (rename of the absent head failed) and
+        // every later tick replanned the identical doomed job.
+        ns.run_maintenance(true)
+            .await
+            .expect("a dangling reference must not wedge maintenance");
+
+        // The stale reference is gone from the catalog, and the two intact rows
+        // survive (compacted forward, none lost).
+        let rows = ns.catalog.list_segments("iris.worker").unwrap();
+        let head_str = head.to_string_lossy().to_string();
+        assert!(
+            rows.iter().all(|r| r.path != head_str),
+            "the dangling reference was dropped from the catalog"
+        );
+        let total_rows: i64 = rows.iter().map(|r| r.row_count).sum();
+        assert_eq!(total_rows, 2, "the two intact segments' rows survive");
+
+        // Compaction is live again: a further tick runs without error.
+        ns.run_maintenance(true)
+            .await
+            .expect("compaction stays live after the drop");
         std::fs::remove_dir_all(&dir).ok();
     }
 
