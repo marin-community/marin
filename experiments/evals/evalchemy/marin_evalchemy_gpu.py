@@ -86,7 +86,7 @@ TIER2_TASKS = (
     # AIME24 is NOT here — it runs as a dedicated 10-seed μ±σ set (EVAL_TASK_SET=aime24_seeds).
     EvalTaskConfig("HumanEvalPlus", 0),
     EvalTaskConfig("MBPPPlus", 0),
-    EvalTaskConfig("MMLUPro", 0),
+    # MMLUPro DEFERRED — fork construction load_dataset fails (not a clean pip dep); N/A in RESULTS.
     EvalTaskConfig("GPQADiamond", 0),
     # CruxEval DEFERRED — the fork's CruxEval does `from execution import ...` (local-module import,
     # not a pip dep) → registration fails; not a clean install. Marked N/A in RESULTS.
