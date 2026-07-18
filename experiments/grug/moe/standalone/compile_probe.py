@@ -70,12 +70,23 @@ def main():
     jax.config.update("jax_threefry_partitionable", True)
     a = _parse()
     initialize_jax()
+    # Code-version markers: confirm the bundle actually carries the FA4-bounds fix
+    # (levanter attention side + bench model side).
+    import experiments.grug.moe.model as _model_mod  # noqa: PLC0415
+
+    print(
+        f"PROBE_CODE levanter_fa4_bounds={hasattr(AttentionMask, 'with_fa4_bounds')} "
+        f"model_fa4_bounds={hasattr(_model_mod, 'fa4_cute_segment_bounds')}",
+        flush=True,
+    )
     if jax.device_count() != a.num_gpus:
         raise ValueError(f"--num-gpus={a.num_gpus} but jax sees {jax.device_count()} devices")
     fp8 = None
     if a.fp8:
+        # mxfp8 keeps EP collectives bf16 (MXFP8-000b); wire=True is rejected by config validation.
+        wire = False if a.fp8_recipe == "mxfp8" else not a.no_fp8_wire
         fp8 = GrugFp8Config(
-            wire=not a.no_fp8_wire,
+            wire=wire,
             dense=not a.no_fp8_dense,
             grouped=not a.no_fp8_grouped,
             recipe=a.fp8_recipe,
@@ -176,7 +187,6 @@ def _report_dump_buffers(top_n: int) -> None:
     if not cands:
         print(f"PROBE_DUMP: no buffer-assignment files under {dump_dir}")
         return
-    bytes_per = {"f32": 4, "bf16": 2, "s32": 4, "u32": 4, "f8e4m3fn": 1, "f8e5m2": 1, "u8": 1, "s8": 1, "pred": 1}
     # Allocation-level composition (true coexisting buffers): headers like
     # "allocation N: size S, ..." from the buffer-assignment file, with the
     # first value line naming the defining op/shape.
@@ -199,39 +209,35 @@ def _report_dump_buffers(top_n: int) -> None:
         for size, kind, val in allocs[:top_n]:
             print(f"  {size/2**30:9.2f} GiB  {kind[:45]:45s} {val[:130]}", flush=True)
         break
-    for path in cands[:2]:
+    # Value census keyed on the defining HLO instruction, parsed from the
+    # ``value: <ID name @0> (size=N,offset=M): shape`` lines. The op name
+    # (all-gather vs fusion vs copy) says whether a big buffer is an SPMD
+    # gather, a remat product, or a layout copy.
+    for path in cands:
+        if not path.endswith("buffer-assignment.txt"):
+            continue
         byshape: collections.Counter = collections.Counter()
         counts: collections.Counter = collections.Counter()
         ops: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
         with open(path) as f:
             for line in f:
-                m = re.search(r"([a-z0-9]+)\[([\d,]+)\]\{", line)
+                m = re.search(r"value: <\d+ ([\w.\-{}]+) @\d+> \(size=(\d+),offset=\d+\): (.+)", line)
                 if not m:
                     continue
-                dt, dims = m.groups()
-                elems = 1
-                for d in dims.split(","):
-                    elems *= int(d)
-                size = elems * bytes_per.get(dt, 4)
+                name, size_s, shape = m.groups()
+                size = int(size_s)
                 if size < 256 * 2**20:
                     continue
-                shape = f"{dt}[{dims}]"
-                mop = re.search(r"<\d+ ([\w.\-]+)[ @]", line)
-                op = re.sub(r"[.\d]+$", "", mop.group(1)) if mop else line.strip().split(" ")[0][:30]
+                op = re.sub(r"[.\d]+$", "", name.rstrip("{}"))
+                shape = shape.strip()[:60]
                 byshape[shape] += size
                 counts[shape] += 1
                 ops[shape][op] += 1
         print(f"PROBE_DUMP file={os.path.basename(path)} matched={sum(counts.values())}")
-        if not byshape:
-            with open(path) as f:
-                for i, line in enumerate(f):
-                    if i >= 5:
-                        break
-                    print(f"  RAW: {line.rstrip()[:200]}")
-            continue
         for shape, s in byshape.most_common(top_n):
-            top_ops = ",".join(f"{o}x{c}" for o, c in ops[shape].most_common(3))
+            top_ops = ",".join(f"{o}x{c}" for o, c in ops[shape].most_common(4))
             print(f"  {s / 2**30:9.2f} GiB  n={counts[shape]:5d}  {shape}  [{top_ops}]", flush=True)
+        break
 
 
 if __name__ == "__main__":
