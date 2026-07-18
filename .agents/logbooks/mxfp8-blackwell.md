@@ -1013,3 +1013,31 @@ author: mcwitt
 - Next action: if temp collapses (needs ≲138 GiB pool at B512-equivalent
   scaling) → relaunch the 8-node ladder on the fixed commit; append fp8
   temp delta here; issue comment with the root cause + fix.
+
+### 2026-07-17 21:10 - MXFP8-006 probes: FA4-bounds fix ALSO falsified; arena is activation-class
+- Correction to the 19:40 entry: the ported #7012 FA4-bounds fix is NOT the
+  arena owner. probe2ni/probe2nj (markers `levanter_fa4_bounds=True
+  model_fa4_bounds=True` prove the pods ran the fixed code; probe2ni's
+  526-580 s train_step compile = cache miss = the fix did change the HLO)
+  still report temp 792.47 GiB at d5120/L48/B128 ring-EP8. The fix is kept
+  (it is correct and matches #7012 production), but the dominant term is
+  elsewhere.
+- probe2nj B64 arm: temp 340.11 GiB (0.43x of B128's 792.47) — the arena
+  scales ~linearly with GLOBAL batch => activation-class full-batch
+  materialization, not gradient/optimizer memory. Even B64 (8 seq/GPU) is
+  2.5x the 138 GiB pool: no batch retreat rescues the unrolled model.
+- Census attempt failed benignly: the fixed program hit the XLA compile
+  cache (24.8 s), and cache hits write no dump — the census parsed a
+  stray jit_multiply module. Next census run must disable the JAX
+  compilation cache for the dump arm.
+- External datapoint (#7012 issue, 32-way records): d5120 ring_cute EP8
+  ran CLEAN at 16.2% MFU on 32 GPUs — on the scan/`use_array_stacked_blocks`
+  bench. Prime remaining suspect: our 48 individually-checkpointed
+  UNROLLED blocks let the XLA scheduler keep ~16.3 GiB/layer live
+  concurrently (~26x the residual-stream save); EP1 pure-DP probe at
+  581 GiB says it is not MoE-machinery-specific.
+- Commits: 0a3eda269 (probe markers + instruction-keyed census + mxfp8
+  wire default). Jobs: /mwittmann/mxfp8-006-probe2n{g,i,j}.
+- Next action: harvest mxfp8 arm delta; rerun dump arm with
+  JAX_ENABLE_COMPILATION_CACHE=false for the instruction census; decision
+  point after census: sharding-annotation fix vs scan-over-blocks port.
