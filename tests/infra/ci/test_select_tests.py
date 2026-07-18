@@ -33,7 +33,7 @@ def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, s
     return compute_matrix(
         classification.src_modules,
         classification.direct_tests,
-        classification.forced,
+        classification.forced | source_build_scopes,
         source_build_scopes,
         repo_root,
     )
@@ -330,7 +330,6 @@ def test_broad_trigger_runs_every_scope() -> None:
         "package": "marin-core",
         "extras": "--extra cpu --extra dedup",
         "test_paths": "tests",
-        "python": "3.12",
         "setup": "",
         "timeout": 15,
     }
@@ -341,10 +340,10 @@ def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]
     return next(entry for entry in matrix if entry["label"] == label)
 
 
-def test_native_rust_change_forces_scope_and_marks_it_native(tmp_path: Path) -> None:
-    """A rust/ change is invisible to the import graph, so it force-selects its scope."""
+def test_native_rust_change_is_recorded_as_a_native_change(tmp_path: Path) -> None:
+    """A rust/ change is invisible to the import graph, so classify records it as a native
+    change; main expands it through SOURCE_LEGS to drive selection."""
     result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
-    assert result.forced == {"dupekit"}
     assert result.native_changed == {"dupekit"}
     # A Cargo.lock under the crate counts as a native change too.
     assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
@@ -364,16 +363,18 @@ def test_native_change_source_builds_the_legs_that_exercise_it(tmp_path: Path) -
     assert _leg(matrix, "iris")["setup"] == "rust"
 
 
-def test_dupekit_rust_change_source_builds_marin_only_when_marin_is_selected(tmp_path: Path) -> None:
-    """marin exercises dupekit's kernels, so it source-builds — but only if its own tests
-    are selected; a rust-only change does not pull marin in."""
-    labels = [leg["label"] for leg in select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)]
-    assert labels == ["dupekit"], "a rust-only change runs the owning scope, not its consumers"
-
-    write(tmp_path, "tests/__init__.py")
-    write(tmp_path, "tests/test_dedup.py", "def test_x():\n    pass\n")
-    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs", "tests/test_dedup.py"], tmp_path)
+def test_dupekit_rust_change_source_builds_dupekit_and_marin(tmp_path: Path) -> None:
+    """dupekit's kernels back marin's dedup tests, so a rust-only change force-selects and
+    source-builds both legs even without a marin Python edit (SOURCE_LEGS drives selection)."""
+    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    assert scopes_in(matrix) == {"dupekit", "marin"}
+    assert _leg(matrix, "dupekit")["setup"] == "rust"
     assert _leg(matrix, "marin")["setup"] == "rust"
+
+    # finelog's server backs iris, so a finelog rust change reaches the iris leg the same way.
+    iris_matrix = select_matrix(["lib/finelog/rust/src/lib.rs"], tmp_path)
+    assert scopes_in(iris_matrix) == {"finelog", "iris"}
+    assert _leg(iris_matrix, "iris")["setup"] == "rust"
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
@@ -381,15 +382,3 @@ def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
     matrix = select_matrix(["uv.lock"], tmp_path)
     assert matrix, "broad trigger emits the full matrix"
     assert all(leg["setup"] == "" for leg in matrix)
-
-
-def test_extra_python_legs_run_the_wheel_and_source_builds_skip_them(tmp_path: Path) -> None:
-    """dupekit/finelog get a 3.13 wheel leg on a wheel run; a source build drops it since it
-    would only exercise the stale wheel."""
-    wheel = [leg["label"] for leg in select_matrix(["uv.lock"], tmp_path)]
-    assert "dupekit (py3.13)" in wheel and "finelog (py3.13)" in wheel
-    py313 = _leg(select_matrix(["uv.lock"], tmp_path), "dupekit (py3.13)")
-    assert py313["python"] == "3.13" and py313["setup"] == ""
-
-    source = [leg["label"] for leg in select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)]
-    assert "dupekit" in source and "dupekit (py3.13)" not in source

@@ -295,7 +295,9 @@ struct JwtKeyConfig {
 #[derive(Debug)]
 enum AuthLayer {
     Cidr(Vec<Cidr>),
-    Jwt(JwtVerifier),
+    // Boxed: JwtVerifier dwarfs the Cidr variant, and an unboxed enum would carry that
+    // footprint for every layer in the stack.
+    Jwt(Box<JwtVerifier>),
 }
 
 impl AuthLayer {
@@ -320,7 +322,7 @@ impl AuthLayer {
                     .into_iter()
                     .map(|k| (k.cluster, k.public_keys))
                     .collect();
-                Ok(AuthLayer::Jwt(JwtVerifier::new(pairs)?))
+                Ok(AuthLayer::Jwt(Box::new(JwtVerifier::new(pairs)?)))
             }
         }
     }
