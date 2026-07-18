@@ -55,8 +55,15 @@ in parallel under the 2048 cap).
 | 64  | 64  | v6e-{8,16,32,64}; v5litepod-{32,64}; v5p-{16,32,64,128} |
 | 128 | 128 | v6e-{8,16,32,64,128}; v5litepod-{32,64,128}; v5p-{16,32,64,128,256} |
 | 256 | 256 | v6e-{8,16,32,64,128,256}; v5litepod-{32,64,128,256}; v5p-{16,32,64,128,256,512} |
+| 512 | 512 | (grid expansion only) v5p-1024=512ch at full width; else ≤256-chip slices w/ accum |
+| 1024 | 1024 | (grid expansion only) v5p-2048=1024ch at full width; v5p-1024=512ch; else ≤256-chip w/ accum |
 
-(Region availability from policy `targets.allow`; large slices are not capacity-guaranteed.)
+(Region availability from policy `targets.allow`; large slices are not capacity-guaranteed.) **Only
+v5p exceeds 256 chips** in the topology (`v6e`/`v5litepod` have no `-512`/`-1024`), so a future
+`batch_size` 512/1024 expansion can only run at full width on `v5p-1024`/`v5p-2048` (us-east5,
+us-central1); every other family caps at 256 chips and would need gradient accumulation. `v5p-2048`
+(1024 chips) is the largest usable slice since chips ≤ batch ≤ 1024. The 512/1024 rows are inert at
+the current `[64,128,256]` batch grid.
 
 ## Env (every command)
 ```
