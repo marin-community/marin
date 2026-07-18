@@ -39,6 +39,7 @@ WORKER_PYTHON_VERSION = "3.12"
 # Stock CUDA vLLM used by GPU serving. It runs in an isolated uv-tool environment, so it does not
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
+TPU_VLLM_WORKER_EXTRAS = ("tpu", "vllm")
 # Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
 # vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"

@@ -22,6 +22,7 @@ from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import InferenceRequestProvider, InferenceResponseProvider, OpenAIEndpoint, RunningModel
 from marin.inference.vllm_server import (
     DEFAULT_CUDA_VLLM_VERSION,
+    TPU_VLLM_WORKER_EXTRAS,
     IsolatedCudaVllm,
     VllmEnvironment,
     VllmLauncher,
@@ -51,21 +52,13 @@ DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER = 16
 class BrokeredVllmBackend(Protocol):
     """Accelerator-specific vLLM worker configuration."""
 
-    def validate_worker_resources(self, resources: ResourceConfig) -> None:
-        """Validate that ``resources`` can run this backend."""
-        ...
+    def validate_worker_resources(self, resources: ResourceConfig) -> None: ...
 
-    def worker_environment_extras(self) -> tuple[str, ...]:
-        """Return Marin dependency extras installed in each worker environment."""
-        ...
+    def worker_environment_extras(self) -> tuple[str, ...]: ...
 
-    def vllm_launcher(self) -> VllmLauncher:
-        """Return the launcher for the worker's vLLM subprocess."""
-        ...
+    def vllm_launcher(self) -> VllmLauncher: ...
 
-    def server_args(self, resources: ResourceConfig | None, /) -> list[str]:
-        """Return accelerator-specific arguments passed to ``vllm serve``."""
-        ...
+    def server_args(self, resources: ResourceConfig | None, /) -> list[str]: ...
 
 
 @dataclass(frozen=True)
@@ -77,7 +70,7 @@ class TpuVllmBackend:
             raise ValueError("TpuVllmBackend requires TPU worker_resources.")
 
     def worker_environment_extras(self) -> tuple[str, ...]:
-        return ("tpu", "vllm")
+        return TPU_VLLM_WORKER_EXTRAS
 
     def vllm_launcher(self) -> VllmLauncher:
         return WorkspaceVllm()

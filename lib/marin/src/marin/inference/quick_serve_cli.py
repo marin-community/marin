@@ -68,14 +68,13 @@ from marin.inference.serving_backend import LevanterBackend, ServingBackend, Vll
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_server import (
     DEFAULT_CUDA_VLLM_VERSION,
+    TPU_VLLM_WORKER_EXTRAS,
     WORKER_PYTHON_VERSION,
     IsolatedCudaVllm,
     IsolatedTpuVllm,
     VllmType,
 )
 
-# vLLM and the dashboard need the generic TPU stack plus the TPU-vLLM runtime.
-_WORKER_EXTRAS = ("tpu", "vllm")
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
 # lock), so the worker venv needs no accelerator extra at all — base Marin suffices.
@@ -189,7 +188,7 @@ def _resolve_serving_plan(
             vllm, launcher=IsolatedTpuVllm(vllm_ref=vllm_fork_ref(), tpu_inference_ref=tpu_inference_fork_ref())
         )
         return ServingPlan(vllm, device, ("tpu", *extras), tpu_type=tpu)
-    return ServingPlan(vllm, device, (*_WORKER_EXTRAS, *extras), tpu_type=tpu)
+    return ServingPlan(vllm, device, (*TPU_VLLM_WORKER_EXTRAS, *extras), tpu_type=tpu)
 
 
 def _default_job_name(model: str) -> str:
