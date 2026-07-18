@@ -54,7 +54,11 @@ from marin.datakit.download.swe_rebench_contree import swe_rebench_contree_norma
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
+
+_FOCUS_CRAWL_ARTIFACT = "gs://marin-us-central1/data/datakit/normalized/common_crawl_focus_2026_22_ed4b8bc9"
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,16 @@ class DatakitSource:
 # triple. The chain factory, called with no args, returns the ordered
 # ``(download, ..., normalize)`` StepSpec tuple for that source.
 _SourceRow = tuple[str, Callable[[], tuple[StepSpec, ...]], float]
+
+
+def _focus_crawl_normalize_steps() -> tuple[StepSpec, ...]:
+    return (
+        StepSpec(
+            name="normalized/common-crawl-focus-2026-22",
+            hash_attrs={"artifact": _FOCUS_CRAWL_ARTIFACT},
+            fn=lambda _output_path: read_artifact(_FOCUS_CRAWL_ARTIFACT, NormalizedData),
+        ),
+    )
 
 
 def _rows_flat(
@@ -149,6 +163,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
         ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        ("common-crawl-focus-2026-22", _focus_crawl_normalize_steps, 47.5),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
         ("eai-taxonomy-code-w-dclm", eai_taxonomy_code_normalize_steps, 591.90),
