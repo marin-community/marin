@@ -140,6 +140,8 @@ The checkpointer logic has two kinds of checkpoints:
 * **time-based checkpoints**: **temporary** checkpoints that are saved every `save_interval` minutes. The previous time-based checkpoint is deleted when a new one is saved.
 * **step-based checkpoints**: **permanent** checkpoints that are saved according to a policy. These checkpoints are never deleted.
 
+Either kind is saved to a `step-N` directory, where `step-N` always contains the model after exactly `N` completed training steps.
+
 Step-based checkpoint configuration looks like this:
 ```yaml
 checkpointer:

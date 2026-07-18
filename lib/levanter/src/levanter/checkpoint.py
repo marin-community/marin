@@ -444,6 +444,12 @@ class Checkpointer:
 
         Time checkpoints are deleted after the next checkpoint is saved. Step checkpoints are never deleted.
 
+        Every checkpoint (either kind) is written to a ``step-N`` directory, and ``step-N`` always
+        holds a model that has completed exactly N training steps: periodic saves with ``every=k``
+        land at ``step-k``, ``step-2k``, ...; the end-of-training forced save lands at the final
+        ``state.step``. ``step-0`` — the initial, untrained weights — is only ever written by a
+        forced save.
+
         Args:
             base_path: the base path to save checkpoints to. may be gcs, local, or anything that tensorstore supports
             save_interval: the minimum amount of time between checkpoints (for time)
