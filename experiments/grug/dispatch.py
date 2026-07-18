@@ -22,7 +22,9 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_FLAGS", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+# SCALE_MUON_ forwards the distributed Newton-Schulz layout knobs read at trace time in
+# levanter.optim.grugmuon.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 

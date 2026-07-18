@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Large sparse-MoE scale run for the CoreWeave cw-us-east-02a H100 cluster.
+"""Large sparse-MoE scale run for the CoreWeave clusters (H100 and GB200).
 
 Launches a ~90B-total / ~5B-active Grug MoE (hidden 3072, 48 layers, 128 experts,
 top-4 -> ~17x sparsity) across all 32 nodes / 256 H100s. Parameters are fully
@@ -28,6 +28,12 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
+    SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body (one compiled
+                        layer subgraph instead of num_layers of them); default off
+    SCALE_FP8           "" (off, default) | per_tensor | mxfp8. Enables the fp8
+                        expert-GEMM path (``GrugFp8Config``); mxfp8 keeps the EP
+                        collectives bf16 (MXFP8-000b) and requires sm100 + the
+                        grouped fused kernels. Mirrors the MFU-bench fp8 defaults.
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -38,18 +44,25 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_DATA          slimpajama (default; the fast MFU/throughput dataset).
+    SCALE_OPTIMIZER     adam (default) | adamh | muonh. muonh runs Newton-Schulz on
+                        2D/3D/4D weight matrices; all use linear LR decay to 5% of
+                        peak with 1% warmup.
     RUN_ID              unique run identifier
 """
 
+import dataclasses
 import datetime
 import os
-from typing import cast
+from typing import Literal, cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import BlockShuffleConfig
-from levanter.optim import AdamConfig
+from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.grug._moe.common import resolve_moe_implementation
+from levanter.grug.attention import GrugAttentionImplementation
+from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -58,8 +71,10 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
-from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.model import GrugFp8Config, GrugModelConfig, RematMode
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -95,35 +110,63 @@ OUTPUT_SUBDIR = "experiments/grug-moe-cw"
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
 
+def _build_fp8_config() -> GrugFp8Config | None:
+    """SCALE_FP8 -> ``GrugFp8Config`` mirroring the MFU bench's fp8 defaults.
+
+    ``mxfp8`` keeps the EP collectives in bf16 (wire fp8 is rejected by config
+    validation for that recipe, per MXFP8-000b); ``per_tensor`` enables wire fp8.
+    """
+    recipe = os.environ.get("SCALE_FP8", "")
+    if not recipe:
+        return None
+    return GrugFp8Config(
+        wire=recipe != "mxfp8",
+        dense=True,
+        grouped=True,
+        recipe=cast(Literal["per_tensor", "mxfp8"], recipe),
+        mxfp8_producer="auto",
+    )
+
+
 def build_scale_model() -> GrugModelConfig:
-    """~90B-total / ~5B-active sparse MoE (overridable via SCALE_* env vars)."""
+    """Model config from the May-Recipe heuristic, with explicit architecture + backend overrides.
+
+    The heuristic (``MoeHeuristic.build_model_config``) sizes hidden/layers/heads/intermediate and
+    sets ``initializer_std = 0.5 / sqrt(hidden_dim)``. We override the routed-expert count and top-k
+    (the heuristic leaves the ``GrugModelConfig`` default 256/4) plus the runtime/backend knobs the
+    heuristic does not set (attention/MoE impl, scan, remat, head_dim, sliding window, fp8).
+    """
     hidden_dim = env_int("SCALE_HIDDEN_DIM", 3072)
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
-    num_heads = hidden_dim // HEAD_DIM
-    # ~4:1 grouped-query attention; back off to the nearest divisor of num_heads.
-    num_kv_heads = max(1, num_heads // 4)
-    while num_heads % num_kv_heads != 0:
-        num_kv_heads -= 1
-    intermediate_dim = hidden_dim // 2  # expert FFN inner width (~d/2)
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
-    return GrugModelConfig(
+    # SCALE_MOE_IMPL selects the expert-GEMM backend (e.g. "ring" = EP ring pipeline);
+    # None keeps the config default. SCALE_ATTN_IMPL likewise overrides the attention backend.
+    moe_impl_env = os.environ.get("SCALE_MOE_IMPL")
+    moe_implementation = resolve_moe_implementation(moe_impl_env) if moe_impl_env else None
+    attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
+    attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
+    base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    return dataclasses.replace(
+        base,
         vocab_size=VOCAB_SIZE,
-        hidden_dim=hidden_dim,
-        num_layers=env_int("SCALE_NUM_LAYERS", 48),
-        num_heads=num_heads,
-        num_kv_heads=num_kv_heads,
         head_dim=HEAD_DIM,
-        intermediate_dim=intermediate_dim,
-        shared_expert_intermediate_dim=intermediate_dim,
-        num_experts=env_int("SCALE_NUM_EXPERTS", 128),
+        num_layers=env_int("SCALE_NUM_LAYERS", 48),
+        num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
-        max_seq_len=seq_len,
-        sliding_window=seq_len,
+        # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
+        intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
+        shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
+        # Attention sliding-window span; default keeps the heuristic value (2048).
+        sliding_window=env_int("SCALE_SLIDING_WINDOW", base.sliding_window),
         remat_mode=cast(RematMode, remat_mode),
+        moe_implementation=moe_implementation,
+        attention_implementation=attention_implementation,
+        use_array_stacked_blocks=os.environ.get("SCALE_SCAN_LAYERS") == "1",
+        fp8=_build_fp8_config(),
     )
 
 
@@ -165,14 +208,19 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
 
+    # GPUs per node: 8 for the H100 nodes, 4 for a GB200 node (SCALE_GPUS_PER_NODE=4).
+    gpus_per_node = env_int("SCALE_GPUS_PER_NODE", GPUS_PER_NODE)
+    gpu_type = os.environ.get("SCALE_GPU_TYPE", "H100")
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    # rest of the gpus_per_node*replicas devices. Require the global batch to cover every shard.
+    data_axis = (replicas * gpus_per_node) // (replica_axis * expert_axis)
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        gpu_type, count=gpus_per_node, cpu=32, ram="256g", disk="256g", replicas=replicas
+    )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
@@ -186,7 +234,43 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     )
 
     mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
+
+    # LR from the May-Recipe heuristic: it scales the peak with (tokens x hidden_dim) and sets
+    # muonh_lr = 13/3 * adam_lr, linear decay to 5% of peak, 1% warmup. SCALE_OPTIMIZER picks the
+    # family ("muonh" uses the heuristic config directly; "adamh"/"adam" use its adam_lr). SCALE_LR
+    # overrides the peak. SCALE_MAX_LR caps the heuristic peak (heuristic default cap 0.05).
+    total_tokens = float(steps * batch_size * model.max_seq_len)
+    max_lr = float(os.environ.get("SCALE_MAX_LR", "0.05"))
+    heuristic = MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=max_lr).build_optimizer_config(
+        batch_size=batch_size, tokens=total_tokens, hidden_dim=model.hidden_dim, seq_len=model.max_seq_len
+    )
+    schedule = dict(lr_schedule="linear", min_lr_ratio=0.05, warmup=0.01)
+    lr_override = os.environ.get("SCALE_LR")
+    opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
+    optimizer: OptimizerConfig
+    if opt_name in ("muonh", "grug_moe_muonh"):
+        optimizer = (
+            dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
+            if lr_override
+            else heuristic
+        )
+    elif opt_name in ("adamh", "grug_moe_adamh"):
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
+    else:
+        lr = float(lr_override) if lr_override else heuristic.adam_lr
+        optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
+    print(
+        f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
+        f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "
+        f"peak override SCALE_LR={lr_override or 'none'}",
+        flush=True,
+    )
+
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
+    data_mode = os.environ.get("SCALE_DATA", "slimpajama").lower()
+    if data_mode != "slimpajama":
+        raise ValueError(f"SCALE_DATA={data_mode!r}: only 'slimpajama' is available on this branch")
     slim = slimpajama_6b_dataset()
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
@@ -194,16 +278,17 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             tracker = WandbConfig(
                 entity=wandb_entity,
                 project=wandb_project,
-                tags=["grug", "moe", "cw", "h100", "scale"],
+                tags=["grug", "moe", "cw", "scale"],
                 group="grug-moe-cw-scale",
                 name=None,
                 replicate_path=ctx.output_path,
             )
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
+        data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
         return GrugMoeLaunchConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=data,
             output_path=ctx.output_path,
             run_id=run_id,
             resources=ctx.runtime_arg("train_resources"),
@@ -212,7 +297,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             seed=0,
             mp=mp,
             tracker=tracker,
-            optimizer=SCALE_OPTIMIZER,
+            optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
             eval=None,
