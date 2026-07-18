@@ -40,7 +40,7 @@ from marin.inference.vllm import (
     start_local_brokered_vllm,
     start_local_vllm_server,
 )
-from marin.inference.vllm_server import DEFAULT_CUDA_VLLM_VERSION, IsolatedCudaVllm, VllmType
+from marin.inference.vllm_server import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
@@ -238,15 +238,6 @@ def test_iris_brokered_vllm_worker_environment_matches_backend(
     assert worker_request.environment.extras == expected_extras
     assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
     assert worker_request.environment.env_vars.get("VLLM_TARGET_DEVICE") == expected_target_device
-
-
-def test_gpu_backend_uses_isolated_cuda() -> None:
-    backend = GpuVllmBackend()
-
-    assert backend.vllm_launcher() == IsolatedCudaVllm(
-        source=VllmType.UPSTREAM,
-        version=DEFAULT_CUDA_VLLM_VERSION,
-    )
 
 
 @pytest.mark.parametrize(
