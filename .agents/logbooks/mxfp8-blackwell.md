@@ -1137,3 +1137,24 @@ author: mcwitt
   drivers/monitors poll controller SQL state only; logs harvested at
   terminal state.
 - Driver v3 (SQL-only polling) is retrying: base8 next, then treat{4,5}.
+
+### 2026-07-18 01:55 - CORRECTION: gang deaths were real 318 GiB OOMs, not log reads; SYRK env is prime suspect
+- Retraction of the 01:45 entry's log-read theory: the parallel session's
+  post-mortem (memory iris-log-reads-wedge-training) had already
+  architecturally exonerated log reads (finelog serves from parquet via a
+  sidecar; never touches the task), and the true error was found in the
+  controller's task_attempts.error (NOT in job logs): base7's originating
+  task died of RESOURCE_EXHAUSTED allocating 317.75 GiB in jit_train_step;
+  the other 31 tasks were then stamped TASK_STATE_COSCHED_FAILED (state
+  11) and killed — which is why every gang "died silently mid-line".
+  b64g1's 318.93 GiB OOM is the same allocation class: the full stacked
+  expert tensor [48,128,5120,2560] f32 (+pad), materialized UNSHARDED.
+- Suspect: SCALE_MUON_SYRK=1 on the branch tip (the QuACK symmetric-GEMM
+  NS path, commit b0d484ddb, landed ~when Larry's successful e128top5 run
+  started; his exact running code state is ambiguous). My runs set it; the
+  318 GiB smells like the SYRK path skipping the (L,E)-merge distribution.
+- Test in flight: mx7201-base8-coord = identical config MINUS
+  SCALE_MUON_SYRK and CE_IMPL. SQL-state-only monitoring (logs only after
+  terminal). If it survives past step 0, bisect SYRK vs liger later; the
+  comparison proceeds no-SYRK on both baselines (noting the published
+  19.0% had syrk in the name).
