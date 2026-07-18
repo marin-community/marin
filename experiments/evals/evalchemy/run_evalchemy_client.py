@@ -82,6 +82,11 @@ def build_command(config: dict, task: dict, output_path: str, python: str) -> li
         cmd += ["--limit", str(config["max_eval_instances"])]
     if config["apply_chat_template"]:
         cmd.append("--apply_chat_template")
+        # LOCAL (uncommitted): evalchemy chat_benchmarks (MATH500/AIME24/…) read `--max_tokens`, NOT
+        # `--gen_kwargs max_gen_toks` (that only bounds lm-eval NATIVE tasks). Unpinned → they truncate
+        # at a tiny default (~256 tok) → thinking CoT never reaches the boxed answer → score 0 (POLICY
+        # §3/§4: pin --max_tokens). Pin it to the generation budget.
+        cmd += ["--max_tokens", str(config["max_gen_toks"])]
     return cmd
 
 
