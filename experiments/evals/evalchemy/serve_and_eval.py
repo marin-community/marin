@@ -314,7 +314,11 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
         environment=_serve_environment(spec),
         ports=["http"],
         constraints=constraints,
-        max_retries_failure=0,
+        # LOCAL (uncommitted): retry the serve child on the TRANSIENT runai-streamer weight-load flake
+        # (`Could not receive runai_response from libstreamer: File access error`) — LOTA read
+        # contention when many 8-GPU serve-ups stream weights concurrently. iris re-brings-up the serve
+        # (time-only cost); _wait_for_endpoint keeps waiting while it retries. Env MARINBASE_SERVE_RETRIES.
+        max_retries_failure=int(os.environ.get("MARINBASE_SERVE_RETRIES", "4")),
         priority_band=_eval_child_priority(),  # local (uncommitted): env MARINBASE_EVAL_PRIORITY (default batch)
     )
     logger.info("Submitted serve job %s (backend=%s) for endpoint %s", serve_job, spec.backend, endpoint_name)
