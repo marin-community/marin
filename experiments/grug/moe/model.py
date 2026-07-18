@@ -162,6 +162,12 @@ class GrugModelConfig:
     # up-projection (kv: sqrt(d/kv_lora_rank), q: sqrt(d/q_lora_rank)). Off by default.
     mla_scale_q_lora: bool = False
     mla_scale_kv_lora: bool = False
+    # Learnable scalar probes (init 1.0, Adam group -> unconstrained by Muon's spectral ball) at MLA
+    # spots -- their drift from 1.0 reveals gradient pressure Muon suppresses. Gated independently.
+    mla_scalar_kv: bool = False  # on the kv latent right after kv_norm
+    mla_scalar_kr: bool = False  # on the decoupled rope key k_r before the nope/rope concat
+    mla_scalar_knope: bool = False  # on k_nope before the concat
+    mla_scalar_out: bool = False  # on the attention output before the residual add
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -724,6 +730,10 @@ class MultiheadLatentAttention(eqx.Module):
     q_norm: RMSNorm | None
     w_uq: Float[Array, "Cq NQ"] | None
     w_o: Float[Array, "NV D"]
+    scalar_kv: jax.Array | None
+    scalar_kr: jax.Array | None
+    scalar_knope: jax.Array | None
+    scalar_out: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -749,6 +759,11 @@ class MultiheadLatentAttention(eqx.Module):
             w_dq = reshard(_init_weight(k_dq, (d, cq), std), P("data", None))
             q_norm = RMSNorm.init(cq, cfg.layer_norm_eps)
             w_uq = reshard(_init_weight(k_uq, (cq, n * qk), std), P("data", "model"))
+
+        # Learnable scalar probes: init 1.0, replicated (1,) arrays -> Adam group, not Muon.
+        def _scalar(on: bool) -> jax.Array | None:
+            return reshard(jnp.ones((1,), dtype=jnp.float32), P(None)) if on else None
+
         return MultiheadLatentAttention(
             w_dkv=reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None)),
             kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),
@@ -760,6 +775,10 @@ class MultiheadLatentAttention(eqx.Module):
             q_norm=q_norm,
             w_uq=w_uq,
             w_o=reshard(_init_weight(k_o, (n * vd, d), std), P("model", "data")),
+            scalar_kv=_scalar(cfg.mla_scalar_kv),
+            scalar_kr=_scalar(cfg.mla_scalar_kr),
+            scalar_knope=_scalar(cfg.mla_scalar_knope),
+            scalar_out=_scalar(cfg.mla_scalar_out),
             cfg=cfg,
         )
 
@@ -787,6 +806,8 @@ class MultiheadLatentAttention(eqx.Module):
 
         # Compressed KV latent -> normed -> up-project to per-head k_nope and v.
         c_kv = self.kv_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dkv))
+        if self.scalar_kv is not None:
+            c_kv = c_kv * self.scalar_kv
         if cfg.mla_scale_kv_lora:
             c_kv = c_kv * (cfg.hidden_dim / cfg.kv_lora_rank) ** 0.5
         k_nope_up = rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk), "... (n d) -> ... n d", d=nope)
@@ -810,6 +831,10 @@ class MultiheadLatentAttention(eqx.Module):
 
         q_rope, k_r = apply_rotary_embedding(q_rope, k_r, seq_len=seq_len, head_dim=rope_d, rope=cfg.rope)
         k_r = reshard(jnp.broadcast_to(k_r, (k_r.shape[0], k_r.shape[1], n, rope_d)), head_spec)
+        if self.scalar_kr is not None:
+            k_r = k_r * self.scalar_kr
+        if self.scalar_knope is not None:
+            k_nope = k_nope * self.scalar_knope
         q = jnp.concatenate([q_nope, q_rope], axis=-1) * cfg.qk_mult
         k = jnp.concatenate([k_nope, k_r], axis=-1)
 
@@ -822,7 +847,10 @@ class MultiheadLatentAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        out = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        if self.scalar_out is not None:
+            out = out * self.scalar_out
+        return out
 
 
 class Block(eqx.Module):

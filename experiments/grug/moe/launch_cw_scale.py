@@ -145,6 +145,11 @@ def build_scale_model() -> GrugModelConfig:
     mla_default = "1" if use_mla else "0"
     mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
     mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
+    # Learnable scalar probes (init 1.0, Adam group) at MLA spots; each gated by its own env knob.
+    mla_scalar_kv = os.environ.get("SCALE_MLA_SCALAR_KV") == "1"
+    mla_scalar_kr = os.environ.get("SCALE_MLA_SCALAR_KR") == "1"
+    mla_scalar_knope = os.environ.get("SCALE_MLA_SCALAR_KNOPE") == "1"
+    mla_scalar_out = os.environ.get("SCALE_MLA_SCALAR_OUT") == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -182,6 +187,10 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         mla_scale_q_lora=mla_scale_q_lora,
         mla_scale_kv_lora=mla_scale_kv_lora,
+        mla_scalar_kv=mla_scalar_kv,
+        mla_scalar_kr=mla_scalar_kr,
+        mla_scalar_knope=mla_scalar_knope,
+        mla_scalar_out=mla_scalar_out,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,
