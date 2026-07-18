@@ -134,6 +134,12 @@ def _auto_serve_overrides(model: str, requested_max_model_len: int):
         extra += ["--gdn-prefill-backend", "triton"]
     if cfg.get("vision_config") or "forconditionalgeneration" in arch:
         extra += ["--limit-mm-per-prompt", '{"image":0,"video":0}']
+    # Reasoning parser for thinking models (POLICY §5): the model emits <think>…</think> then the
+    # answer; without a parser the chat endpoint returns empty `content` for evalchemy graders → 0.
+    # `qwen3` parser splits reasoning_content from content so the grader sees the post-</think> answer.
+    ml = model.lower()
+    if ("thinking" in ml or "qwen3.5" in ml or "qwen3-next" in ml) and "qwen" in ml:
+        extra += ["--reasoning-parser", "qwen3"]
     mpe = tcfg.get("max_position_embeddings") or cfg.get("max_position_embeddings")
     if isinstance(mpe, (int, float)) and int(mpe) < mml:
         mml = int(mpe)
@@ -183,6 +189,9 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
         tasks = (EvalTaskConfig("gsm8k", 0), EvalTaskConfig("hellaswag", 10))
     # AIME24 10-seed μ±σ (POLICY §3): one process per seed 42..51, distinct dir per seed (task_alias)
     # so results don't overwrite. Harvest = mean±std over the 10 pass@1 values.
+    if os.environ.get("EVAL_TASK_SET") == "math500":  # one-benchmark chat smoke (reasoning-parser test)
+        tasks = (EvalTaskConfig("MATH500", 0),)
+        apply_chat_template = True
     if os.environ.get("EVAL_TASK_SET") == "aime24_seeds":
         tasks = tuple(
             EvalTaskConfig("AIME24", 0, task_alias=f"AIME24_seed{s}", task_kwargs={"seed": s})
