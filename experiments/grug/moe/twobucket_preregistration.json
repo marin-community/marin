@@ -1,0 +1,1118 @@
+{
+ "branch": "rav/mixing-via-embeddings",
+ "buckets": {
+  "code": {
+   "bucket": "c01q0",
+   "group": "code_adjacent",
+   "rationale": "the characterized code bucket (transect contrast bucket; humaneval readout)",
+   "total_tokens": 152613743170
+  },
+  "web": {
+   "bucket": "c05q0",
+   "group": "web_text",
+   "rationale": "largest web_text-group bucket by total_tokens",
+   "runner_ups": [
+    {
+     "bucket": "c05q1",
+     "total_tokens": 760985092232
+    },
+    {
+     "bucket": "c05q2",
+     "total_tokens": 460778892859
+    },
+    {
+     "bucket": "c30q0",
+     "total_tokens": 255440268996
+    }
+   ],
+   "total_tokens": 876859363557
+  }
+ },
+ "constants": {
+  "batch_size": 512,
+  "checkpoint_prefix": "s3://marin-us-east-02a/marin/users/rav/grug/rav_mve_twobucket_<point>/dev/",
+  "hardware": "cw-rno2a H100x8 one node/run, cuda_async allocator, CW-mirror data",
+  "mixture_block_size": 32768,
+  "model_d256": "MoeHeuristic().build_model_config(256, seq_len=4096) + the same 4 swarm-family replacements (num_experts=64, sliding_window=4096, router_z_loss_coef=0.001, disable_long_rope=False) that reproduce the d512 swarm model exactly from build_model_config(512); d256 = 3L/2H/1KV/interm128/shared256/head_dim128; optimizer kept at SWARM_OPTIMIZER (LR not re-tuned; heuristic dim-exponent would raise adam_lr x1.11 - documented, accepted)",
+  "model_d512": "swarm d512/6L/4H/1KV/64exp + gpu_fa4_cute (== seed panel/transect)",
+  "optimizer": "GrugMoeAdamHConfig swarm constants, fractional schedule (warmup 0.1, linear); verified peak at 0.100*N for N in {1194, 4776, 19104, 47759}",
+  "seed": 0,
+  "seq_len": 4096,
+  "target_budget_tokens_when_simulated": 10372343704053,
+  "wandb_group": "rav_mve_twobucket"
+ },
+ "cost": {
+  "assumed_s_per_step_d512": 1.7,
+  "d256_step_scale": 0.7,
+  "est_total_h100x8_node_hours": 64.5,
+  "n_runs": 25,
+  "panel_run_equivalents": 2.86,
+  "runs_by_arm": {
+   "axis1": 4,
+   "axis2": 5,
+   "axis3": 4,
+   "axis4": 3,
+   "center": 1,
+   "natural": 8
+  }
+ },
+ "date_utc": "2026-07-18",
+ "epoching_note": "NATURAL arm: simulated epoching ON (target 10.372e12) - per-token repetition identical to the 100B swarm; BOTH endpoints heavily epoched (w=1: code ~53.7 phase-0 epochs; w=0: web ~9.4), inherent to the two-bucket design (as in #2846). FACTORIAL arms: budgets None, epochs real; web never epochs (<=0.05 total everywhere).",
+ "experiment": "twobucket_factorial",
+ "figures_planned": {
+  "f22": "natural sweep replica: realized humaneval/zmacro bpb vs w_code + prediction overlays + per-point epoch annotations",
+  "f23": "THE decoupling figure: weight-at-fixed-epochs (axis 1) vs epochs-at-fixed-weight (axis 2) side by side",
+  "f24": "budget x epochs and size x epochs interactions (axes 3-4)"
+ },
+ "issue": "#7067 (mixing-via-embeddings); design = #2846 transplant + decoupling factorial (rav directive 2026-07-18)",
+ "launcher": "experiments/grug/moe/launch_mve_twobucket_h100.py",
+ "predictions_note": {
+  "axis3_axis4_caveat": "kernel+swoosh were fit at 100B/d512; levels do not transport across budget/size, so axis-3/4 predictions are recorded for SHAPE only. The swoosh form has no budget or size input: it predicts harm at fixed (w, e) is budget- and size-invariant - axes 3/4 test exactly that.",
+  "kernel": "frozen Hellinger kernel ridge K=1000 (gamma 1.2475417504102333, alpha 0.1), dual on all 800 train runs; predictions validated by reproducing the transect prereg's 16+16 committed values to 1e-9",
+  "ood_note": "all two-bucket mixtures are far off the swarm's support (nearest-train Hellinger ~0.3-0.6 vs the train-train nearest-neighbor mean below); the kernel is expected to mean-revert - the natural arm is an honest OOD test of shape, not level.",
+  "sharpest_point": "AXIS 2 IS A PURE HARM-TERM TEST: sub-slicing leaves the content histogram h unchanged, so the kernel predicts NO change along the epochs axis (constant pred_kernel); the swoosh form predicts the harm curve directly. Any realized slope along axis 2 is invisible to content-only surrogates by construction.",
+  "swoosh": "kernel + transect-committed b_g1 head: zmacro tau=5.5 b=0.002902417147546668; humaneval tau=2.0 b=5.872124766140496e-05; per-phase epochs (natural arm: featurization convention swarm-f/target-budget; factorial arms: the runs' REAL epochs)",
+  "train_train_nearest_hellinger_mean": 0.3076552515318645
+ },
+ "primary_readout": {
+  "axis1": "realized metrics vs w_code at fixed e~4 - the never-before-measured pure content-share axis",
+  "axis2": "realized humaneval + zmacro vs e_code at fixed w=0.2 - the decoupled repetition axis; compare against constant-kernel and swoosh-harm predictions",
+  "axis3": "does the harm at fixed (w, e) shift with training budget (2.5B vs 10B vs 40B)",
+  "axis4": "does the harm at fixed (w, e) grow with model capacity (d256 vs d512)",
+  "conversion": "perplexity per byte = 2^bpb (reported alongside bpb)",
+  "eval": "post-hoc eval_logprob (60-task set) on each final checkpoint; zmacro_english_20 with the frozen train stats in frozen_model_hyperparams.json",
+  "natural_arm": "SHAPE of realized humaneval bpb vs w_code (expect swoosh: improve then degrade with a minimum at moderate w) and realized zmacro/web-task bpb vs w_code (expect monotone worsening or early-flat). Overlay the three committed prediction sets."
+ },
+ "runs": [
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 0.0,
+     "phase1": 0.0,
+     "total": 0.0
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 9.352218026910421,
+     "phase1": 2.476752655431785,
+     "total": 11.828970682342208
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 0.0,
+    "web_phase0": 9.447523141340087
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.42721598955479734,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w000",
+   "pred_2846_humaneval": 0.9671313319106567,
+   "pred_2846_zmacro": 12.073926110081963,
+   "pred_kernel_humaneval": 0.7325345460737908,
+   "pred_kernel_zmacro": 2.1050971069184277,
+   "pred_swoosh_humaneval": 0.7358379434688577,
+   "pred_swoosh_zmacro": 2.150769790520141,
+   "run_id": "rav_mve_twobucket_w000",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.0
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 2.6867108350091904,
+     "phase1": 0.7115229965596371,
+     "total": 3.398233831568827
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 8.884607125564902,
+     "phase1": 2.352915022660196,
+     "total": 11.237522148225096
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 2.714090145760199,
+    "web_phase0": 8.975146984273081
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.40866157369863093,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w005",
+   "pred_2846_humaneval": 0.8991136628326951,
+   "pred_2846_zmacro": 10.168251221954288,
+   "pred_kernel_humaneval": 0.7115578310858547,
+   "pred_kernel_zmacro": 2.198355093323932,
+   "pred_swoosh_humaneval": 0.7143132660192724,
+   "pred_swoosh_zmacro": 2.232245338202801,
+   "run_id": "rav_mve_twobucket_w005",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.05
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 5.373421670018381,
+     "phase1": 1.4230459931192743,
+     "total": 6.796467663137654
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 8.41699622421938,
+     "phase1": 2.229077389888607,
+     "total": 10.646073614107989
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 5.428180291520398,
+    "web_phase0": 8.502770827206078
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.4155985787054707,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w010",
+   "pred_2846_humaneval": 0.8530184385144656,
+   "pred_2846_zmacro": 8.574515070666425,
+   "pred_kernel_humaneval": 0.7033787792850691,
+   "pred_kernel_zmacro": 2.2158082809372734,
+   "pred_swoosh_humaneval": 0.7057151873018519,
+   "pred_swoosh_zmacro": 2.240256258916423,
+   "run_id": "rav_mve_twobucket_w010",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.1
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 10.746843340036762,
+     "phase1": 2.8460919862385485,
+     "total": 13.592935326275308
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 7.481774421528339,
+     "phase1": 1.9814021243454283,
+     "total": 9.463176545873766
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 10.856360583040797,
+    "web_phase0": 7.55801851307207
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w020",
+   "pred_2846_humaneval": 0.8504662705394689,
+   "pred_2846_zmacro": 8.907353356896474,
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953894530835579,
+   "pred_swoosh_zmacro": 2.2430211339527033,
+   "run_id": "rav_mve_twobucket_w020",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.2
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 18.80697584506433,
+     "phase1": 4.980660975917459,
+     "total": 23.78763682098179
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 6.078941717491774,
+     "phase1": 1.6098892260306603,
+     "total": 7.688830943522435
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 18.99863102032139,
+    "web_phase0": 6.140890041871056
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 487,
+   "nearest_train_hellinger": 0.4903362955532992,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w035",
+   "pred_2846_humaneval": 1.3009616345170834,
+   "pred_2846_zmacro": 28.402066634788195,
+   "pred_kernel_humaneval": 0.6838064918112995,
+   "pred_kernel_zmacro": 2.1770096114786375,
+   "pred_swoosh_humaneval": 0.6905788133634504,
+   "pred_swoosh_zmacro": 2.3644088927913676,
+   "run_id": "rav_mve_twobucket_w035",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.35
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 26.867108350091897,
+     "phase1": 7.115229965596371,
+     "total": 33.98233831568827
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 4.676109013455211,
+     "phase1": 1.2383763277158926,
+     "total": 5.914485341171104
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 27.140901457601988,
+    "web_phase0": 4.723761570670043
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 487,
+   "nearest_train_hellinger": 0.5367244870339535,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w050",
+   "pred_2846_humaneval": 2.680154382528328,
+   "pred_2846_zmacro": 87.15888240162384,
+   "pred_kernel_humaneval": 0.678784267515603,
+   "pred_kernel_zmacro": 2.113742599591972,
+   "pred_swoosh_humaneval": 0.6982627215716193,
+   "pred_swoosh_zmacro": 2.7971872281432506,
+   "run_id": "rav_mve_twobucket_w050",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.5
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 40.30066252513785,
+     "phase1": 10.672844948394557,
+     "total": 50.97350747353241
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 2.3380545067276053,
+     "phase1": 0.6191881638579463,
+     "total": 2.957242670585552
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 40.71135218640298,
+    "web_phase0": 2.3618807853350217
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 750,
+   "nearest_train_hellinger": 0.6087767345937819,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w075",
+   "pred_2846_humaneval": 8.23725138836511,
+   "pred_2846_zmacro": 323.2481386343802,
+   "pred_kernel_humaneval": 0.67645451107075,
+   "pred_kernel_zmacro": 1.9637232127097726,
+   "pred_swoosh_humaneval": 0.7454698993757916,
+   "pred_swoosh_zmacro": 4.71216528608921,
+   "run_id": "rav_mve_twobucket_w075",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 0.75
+  },
+  {
+   "arm": "natural",
+   "code_slice_batches": null,
+   "epochs": {
+    "code": {
+     "phase0": 53.734216700183794,
+     "phase1": 14.230459931192742,
+     "total": 67.96467663137653
+    },
+    "convention": "simulated: e = w * f_p * target_budget / T_j (short-run realized f_p)",
+    "web": {
+     "phase0": 0.0,
+     "phase1": 0.0,
+     "total": 0.0
+    }
+   },
+   "epochs_swarm_f": {
+    "code_phase0": 54.281802915203976,
+    "web_phase0": 0.0
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 44,
+   "nearest_train_hellinger": 0.7023062484559198,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "w100",
+   "pred_2846_humaneval": 19.651847501963896,
+   "pred_2846_zmacro": 807.6601690952951,
+   "pred_kernel_humaneval": 0.6835035961671322,
+   "pred_kernel_zmacro": 1.6296167347948114,
+   "pred_swoosh_humaneval": 0.8520244416926464,
+   "pred_swoosh_zmacro": 8.730752540537997,
+   "run_id": "rav_mve_twobucket_w100",
+   "seed": 0,
+   "simulated_epoching": true,
+   "steps": 4776,
+   "target_budget_tokens": 10372343704053,
+   "w_code": 1.0
+  },
+  {
+   "arm": "center",
+   "code_slice_batches": 189,
+   "code_slice_frac_of_bucket": 0.002597156191618231,
+   "code_slice_tokens": 396361728,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "ctr",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6930362076202932,
+   "pred_swoosh_zmacro": 2.215340493361334,
+   "run_id": "rav_mve_twobucket_ctr",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis1_weight",
+   "code_slice_batches": 47,
+   "code_slice_frac_of_bucket": 0.0006458536561167029,
+   "code_slice_tokens": 98566144,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 4.017021276595745,
+     "phase1": 1.0638297872340425,
+     "total": 5.080851063829788
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.008579373120774088,
+     "phase1": 0.002272079745967714,
+     "total": 0.010851452866741803
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.40866157369863093,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a1_w005",
+   "pred_kernel_humaneval": 0.7115578310858547,
+   "pred_kernel_zmacro": 2.198355093323932,
+   "pred_swoosh_humaneval": 0.7115715465977995,
+   "pred_swoosh_zmacro": 2.1983611809758536,
+   "run_id": "rav_mve_twobucket_a1_w005",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.05
+  },
+  {
+   "arm": "axis1_weight",
+   "code_slice_batches": 94,
+   "code_slice_frac_of_bucket": 0.0012917073122334058,
+   "code_slice_tokens": 197132288,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 4.017021276595745,
+     "phase1": 1.0638297872340425,
+     "total": 5.080851063829788
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.008127827167049137,
+     "phase1": 0.0021524966014430974,
+     "total": 0.010280323768492234
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.4155985787054707,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a1_w010",
+   "pred_kernel_humaneval": 0.7033787792850691,
+   "pred_kernel_zmacro": 2.2158082809372734,
+   "pred_swoosh_humaneval": 0.7034061899735513,
+   "pred_swoosh_zmacro": 2.2158204551376373,
+   "run_id": "rav_mve_twobucket_a1_w010",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.1
+  },
+  {
+   "arm": "axis1_weight",
+   "code_slice_batches": 330,
+   "code_slice_frac_of_bucket": 0.0045347171599683395,
+   "code_slice_tokens": 692060160,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 4.004848484848485,
+     "phase1": 1.0606060606060606,
+     "total": 5.065454545454545
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.005870097398424376,
+     "phase1": 0.0015545808788200147,
+     "total": 0.007424678277244391
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 487,
+   "nearest_train_hellinger": 0.4903362955532992,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a1_w035",
+   "pred_kernel_humaneval": 0.6838064918112995,
+   "pred_kernel_zmacro": 2.1770096114786375,
+   "pred_swoosh_humaneval": 0.6839014247718413,
+   "pred_swoosh_zmacro": 2.1770512916144296,
+   "run_id": "rav_mve_twobucket_a1_w035",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.35
+  },
+  {
+   "arm": "axis1_weight",
+   "code_slice_batches": 472,
+   "code_slice_frac_of_bucket": 0.0064860196954698674,
+   "code_slice_tokens": 989855744,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 4.0,
+     "phase1": 1.0593220338983051,
+     "total": 5.059322033898305
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.00451545953724952,
+     "phase1": 0.001195831445246165,
+     "total": 0.0057112909824956854
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 487,
+   "nearest_train_hellinger": 0.5367244870339535,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a1_w050",
+   "pred_kernel_humaneval": 0.678784267515603,
+   "pred_kernel_zmacro": 2.113742599591972,
+   "pred_swoosh_humaneval": 0.6789193377711548,
+   "pred_swoosh_zmacro": 2.1138016225181597,
+   "run_id": "rav_mve_twobucket_a1_w050",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.5
+  },
+  {
+   "arm": "axis2_epochs",
+   "code_slice_batches": 755,
+   "code_slice_frac_of_bucket": 0.010374883199321505,
+   "code_slice_tokens": 1583349760,
+   "e_code_phase0_target": 1.0,
+   "epochs": {
+    "code": {
+     "phase0": 1.0002649006622517,
+     "phase1": 0.26490066225165565,
+     "total": 1.2651655629139074
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a2_e1",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6929834545490391,
+   "pred_swoosh_zmacro": 2.2153171323382472,
+   "run_id": "rav_mve_twobucket_a2_e1",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis2_epochs",
+   "code_slice_batches": 378,
+   "code_slice_frac_of_bucket": 0.005194312383236462,
+   "code_slice_tokens": 792723456,
+   "e_code_phase0_target": 2.0,
+   "epochs": {
+    "code": {
+     "phase0": 1.997883597883598,
+     "phase1": 0.5291005291005291,
+     "total": 2.526984126984127
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a2_e2",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6929881191597145,
+   "pred_swoosh_zmacro": 2.215317584451663,
+   "run_id": "rav_mve_twobucket_a2_e2",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis2_epochs",
+   "code_slice_batches": 94,
+   "code_slice_frac_of_bucket": 0.0012917073122334058,
+   "code_slice_tokens": 197132288,
+   "e_code_phase0_target": 8.0,
+   "epochs": {
+    "code": {
+     "phase0": 8.03404255319149,
+     "phase1": 2.127659574468085,
+     "total": 10.161702127659575
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a2_e8",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6934167009467244,
+   "pred_swoosh_zmacro": 2.2192731989955115,
+   "run_id": "rav_mve_twobucket_a2_e8",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis2_epochs",
+   "code_slice_batches": 47,
+   "code_slice_frac_of_bucket": 0.0006458536561167029,
+   "code_slice_tokens": 98566144,
+   "e_code_phase0_target": 16.0,
+   "epochs": {
+    "code": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a2_e16",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953714432567298,
+   "pred_swoosh_zmacro": 2.2801855077343793,
+   "run_id": "rav_mve_twobucket_a2_e16",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis2_epochs",
+   "code_slice_batches": 24,
+   "code_slice_frac_of_bucket": 0.00032979761163406105,
+   "code_slice_tokens": 50331648,
+   "e_code_phase0_target": 32.0,
+   "epochs": {
+    "code": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a2_e32",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.7036506797141032,
+   "pred_swoosh_zmacro": 2.6115682004536804,
+   "run_id": "rav_mve_twobucket_a2_e32",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis3_budget",
+   "code_slice_batches": 45,
+   "code_slice_frac_of_bucket": 0.0006183705218138645,
+   "code_slice_tokens": 94371840,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 3.9822222222222226,
+     "phase1": 1.3244444444444445,
+     "total": 5.306666666666667
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.0017143439599049024,
+     "phase1": 0.0005701724330933718,
+     "total": 0.0022845163929982744
+    }
+   },
+   "experiment_budget_tokens": 2503999488,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 896,
+   "phase_fractions": [
+    0.7504187604690117,
+    0.24958123953098832
+   ],
+   "point": "a3_b2p5_e4",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6930363194994911,
+   "pred_swoosh_zmacro": 2.2153399813390036,
+   "run_id": "rav_mve_twobucket_a3_b2p5_e4",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 1194,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis3_budget",
+   "code_slice_batches": 11,
+   "code_slice_frac_of_bucket": 0.00015115723866561132,
+   "code_slice_tokens": 23068672,
+   "e_code_phase0_target": 16.0,
+   "epochs": {
+    "code": {
+     "phase0": 16.290909090909093,
+     "phase1": 5.418181818181818,
+     "total": 21.70909090909091
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.0017143439599049024,
+     "phase1": 0.0005701724330933718,
+     "total": 0.0022845163929982744
+    }
+   },
+   "experiment_budget_tokens": 2503999488,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 896,
+   "phase_fractions": [
+    0.7504187604690117,
+    0.24958123953098832
+   ],
+   "point": "a3_b2p5_e16",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6955203317036607,
+   "pred_swoosh_zmacro": 2.2831585317294074,
+   "run_id": "rav_mve_twobucket_a3_b2p5_e16",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 1194,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis3_budget",
+   "code_slice_batches": 762,
+   "code_slice_frac_of_bucket": 0.01047107416938144,
+   "code_slice_tokens": 1598029824,
+   "e_code_phase0_target": 4.0,
+   "epochs": {
+    "code": {
+     "phase0": 3.9979002624671915,
+     "phase1": 1.0162729658792653,
+     "total": 5.014173228346457
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.029143847318383344,
+     "phase1": 0.007408414969589046,
+     "total": 0.03655226228797239
+    }
+   },
+   "experiment_budget_tokens": 40063991808,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 15232,
+   "phase_fractions": [
+    0.7973199329983249,
+    0.20268006700167507
+   ],
+   "point": "a3_b40_e4",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.693036253384635,
+   "pred_swoosh_zmacro": 2.2153405796736667,
+   "run_id": "rav_mve_twobucket_a3_b40_e4",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 19104,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis3_budget",
+   "code_slice_batches": 190,
+   "code_slice_frac_of_bucket": 0.00261089775876965,
+   "code_slice_tokens": 398458880,
+   "e_code_phase0_target": 16.0,
+   "epochs": {
+    "code": {
+     "phase0": 16.033684210526317,
+     "phase1": 4.075789473684211,
+     "total": 20.109473684210528
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.029143847318383344,
+     "phase1": 0.007408414969589046,
+     "total": 0.03655226228797239
+    }
+   },
+   "experiment_budget_tokens": 40063991808,
+   "model": "d512",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 15232,
+   "phase_fractions": [
+    0.7973199329983249,
+    0.20268006700167507
+   ],
+   "point": "a3_b40_e16",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953515263436733,
+   "pred_swoosh_zmacro": 2.2797539466851173,
+   "run_id": "rav_mve_twobucket_a3_b40_e16",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 19104,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis4_size",
+   "code_slice_batches": 378,
+   "code_slice_frac_of_bucket": 0.005194312383236462,
+   "code_slice_tokens": 792723456,
+   "e_code_phase0_target": 2.0,
+   "epochs": {
+    "code": {
+     "phase0": 1.997883597883598,
+     "phase1": 0.5291005291005291,
+     "total": 2.526984126984127
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d256",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a4_d256_e2",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6929881191597145,
+   "pred_swoosh_zmacro": 2.215317584451663,
+   "run_id": "rav_mve_twobucket_a4_d256_e2",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis4_size",
+   "code_slice_batches": 94,
+   "code_slice_frac_of_bucket": 0.0012917073122334058,
+   "code_slice_tokens": 197132288,
+   "e_code_phase0_target": 8.0,
+   "epochs": {
+    "code": {
+     "phase0": 8.03404255319149,
+     "phase1": 2.127659574468085,
+     "total": 10.161702127659575
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d256",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a4_d256_e8",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6934167009467244,
+   "pred_swoosh_zmacro": 2.2192731989955115,
+   "run_id": "rav_mve_twobucket_a4_d256_e8",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  },
+  {
+   "arm": "axis4_size",
+   "code_slice_batches": 24,
+   "code_slice_frac_of_bucket": 0.00032979761163406105,
+   "code_slice_tokens": 50331648,
+   "e_code_phase0_target": 32.0,
+   "epochs": {
+    "code": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    },
+    "convention": "real: code e = w * phase_batches / n_slice_batches; web over full 876.86B cache",
+    "web": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    }
+   },
+   "experiment_budget_tokens": 10015997952,
+   "model": "d256",
+   "nearest_train_experiment_index": 17,
+   "nearest_train_hellinger": 0.4414989872355421,
+   "phase_boundary_step": 3776,
+   "phase_fractions": [
+    0.7906197654941374,
+    0.20938023450586263
+   ],
+   "point": "a4_d256_e32",
+   "pred_kernel_humaneval": 0.692982356972925,
+   "pred_kernel_zmacro": 2.2153170636730826,
+   "pred_swoosh_humaneval": 0.7036506797141029,
+   "pred_swoosh_zmacro": 2.611568200453666,
+   "run_id": "rav_mve_twobucket_a4_d256_e32",
+   "seed": 0,
+   "simulated_epoching": false,
+   "steps": 4776,
+   "target_budget_tokens": null,
+   "w_code": 0.2
+  }
+ ],
+ "slicing_mechanism": {
+  "nested": "fixed seed 0 + identical component set => identical shuffle permutation across runs; slices are nested prefixes (smaller T' subset of larger T').",
+  "prescribed": "server-side sub-cache copies of 1/m of c01q0's part-* shard dirs",
+  "used": "LmDataConfig.max_train_batches={'c01q0': n} - slice-after-shuffle of the SAME cache",
+  "why": "identical estimand (T_code' = n*512*4096 tokens, real epochs via mixture restart-wrap), but exact token control at 2.097M granularity (vs ~25M/shard), zero data movement, and the SAME subset-selection mechanism as the swarm's simulated epoching (slice of the block-shuffled stream; the block shuffle permutes io-blocks globally, so the slice is a content-fair subsample at 256-sequence granularity). Shard-dir copies would add store-order content bias and coarser quantization. Ledger verification replaced by exactness: T' is n*512*4096 by construction; the full-cache ledger total (152,613,743,170 input_ids) matches buckets_table."
+ }
+}
