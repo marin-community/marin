@@ -1377,10 +1377,21 @@ fn adopt_local_segments(
 
     // Pass 1: catalog rows.
     let catalog_rows = catalog.list_segments(namespace).unwrap_or_default();
-    // Highest seq the catalog accounts for. A local file past it is genuinely
-    // new (an uncataloged flush); a file at or below it whose row is gone is a
-    // compaction input the catalog already superseded — see the pass-2 skip.
-    let max_catalog_seq = catalog_rows.iter().map(|r| r.max_seq).max();
+    // Highest seq the catalog still ACCOUNTS FOR after reconciliation: a local
+    // file past it is genuinely new (an uncataloged flush); a file at or below it
+    // whose row is gone is a compaction input the catalog already superseded (the
+    // pass-2 skip). A `LOCAL` row whose file vanished is dropped by pass 1 below —
+    // its data is lost — so it must not extend the cutoff, or a lower-seq on-disk
+    // file it does not actually cover would be misread as superseded and skipped.
+    // Every other row's range stays covered: adopted to the deque, or kept as a
+    // `REMOTE` / `BOTH` durable archive.
+    let max_catalog_seq = catalog_rows
+        .iter()
+        .filter(|r| {
+            r.location != SegmentLocation::Local || local_files.contains_key(&r.path)
+        })
+        .map(|r| r.max_seq)
+        .max();
     for row in &catalog_rows {
         seen.insert(row.path.clone());
         let Some(local_path) = local_files.get(&row.path) else {
@@ -1858,6 +1869,35 @@ mod tests {
             "the superseded compaction input must NOT be resurrected as a phantom"
         );
         assert_eq!(deque.len(), 2, "only the output and the genuine orphan");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn adopt_recovers_low_orphan_under_a_stale_high_catalog_row() {
+        // The coverage cutoff must come only from rows whose data survives pass 1.
+        // A stale LOCAL catalog row whose file is gone is dropped (its data lost),
+        // so it must not extend the cutoff and mask a lower-seq on-disk file that
+        // it never actually covered — that file is a recoverable orphan.
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.task");
+        std::fs::create_dir_all(&ns_dir).unwrap();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // A stale LOCAL row [100..200] whose parquet was never written to disk.
+        let gone = ns_dir.join("seg_L0_00000000000000000100.parquet");
+        catalog.upsert_segment(&seg_row(&gone, 0, 100, 200)).unwrap();
+
+        // A real on-disk orphan [1..2], lower seq than the stale row, no catalog
+        // row. It must be recovered, not skipped as covered.
+        let orphan = write_seg(&ns_dir, 0, 1, 2);
+
+        let deque = adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task");
+        let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
+        assert!(
+            has(&orphan),
+            "a low-seq orphan is recovered even under a stale high catalog row"
+        );
+        assert_eq!(deque.len(), 1, "only the recovered orphan");
         std::fs::remove_dir_all(&dir).ok();
     }
 
