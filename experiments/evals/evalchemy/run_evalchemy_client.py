@@ -134,9 +134,11 @@ def main() -> None:
     # LOCAL (uncommitted): some evalchemy chat_benchmarks import deps missing from the image venv
     # (HumanEvalPlus needs `fire`) → their registration throws → "Task not found". Install on demand
     # (pod has egress). Non-fatal: a still-missing dep just skips that benchmark (loop is non-fatal).
-    for _dep in ("fire",):
+    # fire → HumanEvalPlus; langdetect/nltk/immutabledict/absl-py → IFEval (its requirements.txt).
+    for _dep, _imp in (("fire", "fire"), ("langdetect", "langdetect"), ("nltk", "nltk"),
+                       ("immutabledict", "immutabledict"), ("absl-py", "absl")):
         try:
-            __import__(_dep)
+            __import__(_imp)
         except Exception:  # noqa: BLE001
             for installer in (["uv", "pip", "install", "--python", sys.executable, _dep],
                               [sys.executable, "-m", "pip", "install", _dep]):

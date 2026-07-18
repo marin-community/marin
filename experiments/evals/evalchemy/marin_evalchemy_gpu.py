@@ -88,13 +88,22 @@ TIER2_TASKS = (
     EvalTaskConfig("MBPPPlus", 0),
     EvalTaskConfig("MMLUPro", 0),
     EvalTaskConfig("GPQADiamond", 0),
-    EvalTaskConfig("CruxEval", 0),
+    # CruxEval DEFERRED — the fork's CruxEval does `from execution import ...` (local-module import,
+    # not a pip dep) → registration fails; not a clean install. Marked N/A in RESULTS.
     EvalTaskConfig("IFEval", 0),
 )
 
 
 def _slug(model: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-")
+
+
+def _is_thinking(model: str) -> bool:
+    """Thinking/reasoning models emit long CoT under the chat template → they truncate tier-2
+    generative benchmarks at 20480 (MATH500/HumanEval → 0) and need the near-full window. The 3
+    thinking baselines: Qwen3-*-Thinking + Qwen3.5 (thinking-on default). Instruct/chat models don't."""
+    m = model.lower()
+    return "thinking" in m or "qwen3.5" in m or "qwen3-next" in m
 
 
 def _auto_serve_overrides(model: str, requested_max_model_len: int):
@@ -137,7 +146,11 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # ⚠ max_gen_toks MUST be < max_model_len (prompt + max_tokens ≤ context, else vLLM 400s every
     # request). Default 20480 leaves ~12k for even 25-shot prompts. lm-harness loglikelihood/MC tasks
     # ignore it (max_tokens=0); it only bounds the 4 generative tasks (gsm8k/triviaqa/nq_open/drop).
-    max_gen_toks = int(os.environ.get("EVAL_MAX_GEN_TOKS", "20480"))
+    # Tier-2 budget is MODEL-CLASS-dependent: thinking/GDN models need ~30720 (near-full 32k) for
+    # their CoT + boxed answer under the chat template; instruct models finish at 20480. Tier-1 uses
+    # 20480 (completion-style, shorter). AIME already forces 30720 via EVAL_MAX_GEN_TOKS in the launcher.
+    _default_gen = 30720 if (tier == 2 and _is_thinking(model)) else 20480
+    max_gen_toks = int(os.environ.get("EVAL_MAX_GEN_TOKS", str(_default_gen)))
     num_concurrent = int(os.environ.get("EVAL_NUM_CONCURRENT", "16"))
     # Per-model serve mitigations (GDN triton / limit-mm / native-context cap) derived automatically
     # from config.json — durable + identical across tiers, no hand-passed flags.
