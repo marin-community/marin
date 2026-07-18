@@ -180,6 +180,23 @@ async fn push(client: &LogServiceClient<TestTransport>, key: &str, lines: &[&str
     client.push_logs(request).await.unwrap();
 }
 
+/// Every value of `column` the hub holds for `namespace`, read straight off the hub
+/// store. Lets a test assert on a column a log reader never surfaces — notably the
+/// stamped origin `cluster` on a generic stat table. Holds the query-visibility read
+/// guard across the scan, exactly as the server does.
+async fn hub_column(store: &Store, namespace: &str, column: &str) -> Vec<Option<String>> {
+    let _guard = store.query_visibility().read().await;
+    let providers = store.query_providers().unwrap();
+    let sql = format!("SELECT {column} FROM \"{namespace}\" ORDER BY seq");
+    let result = run_query_over(&make_ctx(), providers, &sql).await.unwrap();
+    let mut values = Vec::new();
+    for batch in &result.batches {
+        let col = batch.column(0).as_string::<i32>();
+        values.extend(col.iter().map(|v| v.map(str::to_string)));
+    }
+    values
+}
+
 /// Every log row the server behind `client` holds, newest last, as `(key, data)` — read
 /// back over the wire so the assertion sees exactly what a log reader would.
 async fn read_all(client: &LogServiceClient<TestTransport>) -> Vec<(String, String)> {
@@ -625,12 +642,15 @@ async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
 // Integration test: a non-log table forwards generically.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_log_table_is_registered_on_the_hub_and_forwarded() {
+async fn a_non_log_table_is_registered_on_the_hub_and_stamped_with_its_origin() {
     // Forwarding is table-generic: a table the hub has never seen is created there with
-    // RegisterTable, then its rows arrive through the same WriteRows path as logs. The
-    // table has no origin column, so nothing is stamped -- it forwards verbatim.
+    // RegisterTable, then its rows arrive through the same WriteRows path as logs. Every
+    // registered table carries the implicit origin `cluster` column, so a generic stat
+    // table's rows land on the hub stamped with the cluster that produced them — the
+    // producer writes only its own columns and never has to know the column exists.
     let fx = Fixture::new("generic").await;
 
+    // The producer declares `id` only; `cluster` is added implicitly at registration.
     let schema = Schema::new(
         vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
         "id",
@@ -664,4 +684,13 @@ async fn a_non_log_table_is_registered_on_the_hub_and_forwarded() {
         .find(|(name, _, _, _)| name == "events")
         .expect("the hub created the events namespace from RegisterTable");
     assert_eq!(events.2.row_count, 2, "both rows landed on the hub");
+
+    assert_eq!(
+        hub_column(fx.target_store(), "events", "cluster").await,
+        vec![
+            Some(SOURCE_CLUSTER.to_string()),
+            Some(SOURCE_CLUSTER.to_string())
+        ],
+        "the forwarder stamps the origin cluster onto a table that never declared it"
+    );
 }

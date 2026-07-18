@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-infra-grafana"
+version = "0.1.0"
+description = "Grafana over finelog: a metric-API bridge and the provisioned dashboards it serves."
+requires-python = ">=3.12,<3.14"
+# marin-finelog ships to PyPI nightly (finelog-release-wheels.yaml) as
+# `0.2.x.devYYYYMMDDhhmm` prereleases; `uv lock -U` picks up the latest. The
+# bridge needs only the pure-python client (LogClient.query -> pa.Table), not
+# the native server extension.
+dependencies = [
+    "marin-finelog >= 0.2.0",
+    "google-cloud-compute >= 1.19",
+    "starlette >= 0.40",
+    "uvicorn >= 0.32",
+    # marin-finelog pulls s3fs -> aiobotocore, which breaks at import under the
+    # httpx 1.0 prereleases (no httpx.TimeoutException). Pin to the 0.28 stable
+    # line, matching infra/probes.
+    "httpx >= 0.28.1, < 1",
+]
+
+[project.scripts]
+grafana-bridge = "server:main"
+
+[dependency-groups]
+dev = ["pytest >= 8.4"]
+
+[tool.uv]
+# if-necessary (not allow): take prereleases only for packages with no stable
+# release — the marin-* dev wheels — while pinning httpx/pydantic/etc to stable.
+prerelease = "if-necessary"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src"]
+sources = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "--durations=10 -v"
+filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"

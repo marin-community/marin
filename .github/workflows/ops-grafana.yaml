@@ -1,0 +1,57 @@
+name: "Ops - Grafana"
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/grafana/**'
+      - '.github/workflows/ops-grafana.yaml'
+  pull_request:
+    paths:
+      - 'infra/grafana/**'
+      - '.github/workflows/ops-grafana.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: infra/grafana
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Bridge unit tests
+        run: uv run pytest
+
+  deploy:
+    needs: test
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: marin-grafana-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Roll the Cloud Run service
+        uses: ./.github/actions/pulumi-deploy
+        with:
+          stack: marin-grafana
+          work-dir: infra/grafana
+          gcp-credentials: ${{ secrets.MARIN_CD_CLOUD_RUN_SA_KEY }}
+          gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}

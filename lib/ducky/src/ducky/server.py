@@ -92,9 +92,7 @@ class QueryManager:
         runner: QueryRunner,
         executor: Executor | None = None,
         max_workers: int = 8,
-        cache_ttl: float = 0.0,
         max_retained_states: int = 1024,
-        max_cache_entries: int = 256,
         query_log: QueryLog | None = None,
     ) -> None:
         self._runner = runner
@@ -103,14 +101,12 @@ class QueryManager:
         # (tests, and any deploy without an in-cluster finelog endpoint).
         self._query_log = query_log
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ducky-query")
-        # Bounded LRU maps: an always-on service would otherwise grow the heap unbounded,
-        # since each result retains up to preview_row_cap rows. Oldest entries are evicted;
-        # an evicted query_id just 404s on /result (results also live on GCS).
+        # Bounded LRU of recent query states: an always-on service would otherwise grow the heap
+        # unbounded, since each result retains up to preview_row_cap rows. Oldest entries are
+        # evicted; an evicted query_id just 404s on /result (results also live on GCS). Result
+        # *reuse* across identical SQL is served by the runner's scratch-bucket cache, not here.
         self._states: OrderedDict[str, QueryState] = OrderedDict()
-        self._cache: OrderedDict[str, tuple[QueryResult, float]] = OrderedDict()  # sql -> (result, monotonic ts)
-        self._cache_ttl = cache_ttl  # seconds; entries older than this are re-run (their parquet may be gone)
         self._max_retained_states = max_retained_states
-        self._max_cache_entries = max_cache_entries
         self._lock = threading.Lock()
 
     def _set_state(self, query_id: str, state: QueryState) -> None:
@@ -120,65 +116,31 @@ class QueryManager:
         while len(self._states) > self._max_retained_states:
             self._states.popitem(last=False)
 
-    def _store_cache(self, sql: str, result: QueryResult) -> None:
-        """Cache a result (most-recent-last), evicting the oldest past the cap. Under the lock."""
-        self._cache[sql] = (result, time.monotonic())
-        self._cache.move_to_end(sql)
-        while len(self._cache) > self._max_cache_entries:
-            self._cache.popitem(last=False)
-
     def submit(self, sql: str, use_cache: bool = True) -> str:
-        """Submit ``sql`` and return a query_id. With ``use_cache`` (default), identical SQL
-        served earlier returns instantly from the cache; pass ``use_cache=False`` to force a
-        fresh run (e.g. when the underlying data changed) — it still refreshes the cache."""
+        """Submit ``sql`` and return a query_id. With ``use_cache`` (default), a result cached in
+        the scratch bucket by an earlier identical query is reused instead of re-running; pass
+        ``use_cache=False`` to force a fresh run (e.g. when the underlying data changed) — it still
+        refreshes the cache. The cache lookup runs on the worker, so submit always returns quickly."""
         query_id = uuid.uuid4().hex
-        hit_state: QueryState | None = None
         with self._lock:
-            cached = self._cached_result(sql) if use_cache else None
-            if cached is not None:
-                hit_state = QueryState(QueryStatus.DONE, result=cached, cached=True)
-                self._set_state(query_id, hit_state)
-            else:
-                self._set_state(query_id, QueryState(QueryStatus.RUNNING))
-        if hit_state is not None:
-            assert cached is not None
-            logger.info(
-                "query %s cache hit (%d rows, %s): %s",
-                query_id,
-                cached.total_rows,
-                _human_bytes(cached.result_bytes),
-                _log_sql(sql),
-            )
-            self._record(query_id, sql, hit_state)
-            return query_id
+            self._set_state(query_id, QueryState(QueryStatus.RUNNING))
         logger.info("query %s submitted: %s", query_id, _log_sql(sql))
-        self._executor.submit(self._run, sql, query_id)
+        self._executor.submit(self._run, sql, query_id, use_cache)
         return query_id
 
     def get(self, query_id: str) -> QueryState | None:
         with self._lock:
             return self._states.get(query_id)
 
-    def _cached_result(self, sql: str) -> QueryResult | None:
-        """Return a still-valid cached result, or None. Call under the lock.
-
-        Entries older than the cache TTL are dropped — their spilled parquet may have
-        been deleted by the scratch bucket's lifecycle rule, so the cached result_path
-        would dangle.
-        """
-        entry = self._cache.get(sql)
-        if entry is None:
-            return None
-        result, created = entry
-        if self._cache_ttl and (time.monotonic() - created) > self._cache_ttl:
-            del self._cache[sql]
-            return None
-        self._cache.move_to_end(sql)  # LRU: a hit keeps the entry fresh against eviction
-        return result
-
-    def _run(self, sql: str, query_id: str) -> None:
+    def _run(self, sql: str, query_id: str, use_cache: bool = True) -> None:
         try:
-            result = self._runner.run_query(sql, query_id)
+            # Reuse a prior identical query's result from the scratch-bucket cache (which survives
+            # the restarts an in-process cache wouldn't) instead of re-scanning the source. A hit
+            # here is still a "cached" reply; a miss falls through to a fresh run.
+            result = self._runner.lookup_persistent(sql) if use_cache else None
+            from_cache = result is not None
+            if result is None:
+                result = self._runner.run_query(sql, query_id)
         except DuckyError as e:
             logger.warning("query %s failed: %s", query_id, str(e).splitlines()[0])
             error_state = QueryState(QueryStatus.ERROR, error=str(e))
@@ -194,15 +156,15 @@ class QueryManager:
             self._record(query_id, sql, error_state)
             return
         logger.info(
-            "query %s done: %d rows, %s, %d ms",
+            "query %s %s: %d rows, %s, %d ms",
             query_id,
+            "persistent-cache hit" if from_cache else "done",
             result.total_rows,
             _human_bytes(result.result_bytes),
             result.elapsed_ms,
         )
-        done_state = QueryState(QueryStatus.DONE, result=result, cached=False)
+        done_state = QueryState(QueryStatus.DONE, result=result, cached=from_cache)
         with self._lock:
-            self._store_cache(sql, result)
             self._set_state(query_id, done_state)
         self._record(query_id, sql, done_state)
 
@@ -328,7 +290,6 @@ def create_app(
         runner,
         executor=executor,
         max_workers=config.max_concurrent_queries,
-        cache_ttl=config.result_ttl_days * 86400,
         query_log=query_log,
     )
 

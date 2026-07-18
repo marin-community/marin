@@ -4,7 +4,10 @@
 """Finelog stats schemas used by iris.
 
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
-  resource rows. Replace the controller's old in-memory history tables.
+  resource rows. Replace the controller's old in-memory history tables. On
+  Kubernetes clusters, which have no per-node worker daemon, the cluster backend
+  emits one ``iris.worker`` row per node (host utilization + GPU hardware), so
+  nodes surface as workers in the same dashboards.
 - ``iris.task_status`` — markdown status text pushed from inside a running
   task via ``RemoteClusterClient.report_task_status_text``.
 
@@ -109,6 +112,18 @@ class IrisWorkerStat:
     tpu_name: str
     gce_instance_name: str
     zone: str
+    # Aggregate GPU hardware readings across the host's accelerators, summed
+    # (HBM, power) or reduced (mean utilization, hottest temperature) across the
+    # devices. None on a host with no accelerator or whose device exporter did
+    # not answer. Populated for k8s nodes from the cluster's dcgm-exporter (a
+    # worker daemon leaves these unset — its accelerators report per-process
+    # usage through the in-task telltale exporter instead).
+    gpu_count: int | None = None
+    hbm_used_bytes: int | None = None
+    hbm_total_bytes: int | None = None
+    gpu_util_pct: float | None = None
+    gpu_temp_c: float | None = None
+    gpu_power_w: float | None = None
 
 
 @dataclass

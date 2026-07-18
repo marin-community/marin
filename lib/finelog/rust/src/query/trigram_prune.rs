@@ -446,7 +446,7 @@ mod tests {
         use datafusion::logical_expr::expr::ScalarFunction;
         use datafusion::prelude::SessionContext;
         let ctx = SessionContext::new();
-        crate::query::udf::register_compat_udfs(&ctx);
+        crate::query::udf::register_scalar_udfs(&ctx);
         let udf = ctx.udf("contains").unwrap();
         Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![col(column), lit(needle)]))
     }

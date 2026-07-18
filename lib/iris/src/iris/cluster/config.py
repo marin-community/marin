@@ -1161,6 +1161,38 @@ def assert_no_inlined_secrets(config: IrisClusterConfig) -> None:
 # ===========================================================================
 
 
+def slice_template_region(template: SliceConfig) -> str | None:
+    """Region a slice template occupies: a GCP zone's region prefix or the CoreWeave region.
+
+    Returns None when the platform carries no location (manual/local), or when the
+    location field is unset.
+    """
+    if template.gcp is not None and template.gcp.zone:
+        return template.gcp.zone.rsplit("-", 1)[0]
+    if template.coreweave is not None and template.coreweave.region:
+        return template.coreweave.region
+    return None
+
+
+def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect the ``region`` a backend's scale groups occupy, from their slice templates.
+
+    Mirrors :meth:`ScaleGroup.region` so a backend advertises the same region a
+    worker self-reports, letting ``--region`` route across a federation instead of
+    only within one cluster (#7286). Scale groups in different regions union into
+    one set.
+    """
+    derived: dict[str, set[str]] = {}
+    for sg in scale_groups.values():
+        template = sg.slice_template
+        if template is None:
+            continue
+        region = slice_template_region(template)
+        if region:
+            derived.setdefault(WellKnownAttribute.REGION.value, set()).add(region)
+    return derived
+
+
 def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
     """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
 
@@ -1195,13 +1227,19 @@ def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
     whitespace-only entries are dropped. ``device-type`` and ``device-variant`` are
     additionally derived from ``scale_groups[*].resources`` and unioned in, so a
     backend advertises the devices its scale groups offer without the operator
-    restating them in ``attributes``.
+    restating them in ``attributes``. ``region`` is derived the same way from each
+    scale group's slice template so the backend exports its location through the
+    federation protocol (#7286).
     """
     attributes = {
         key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()
     }
-    for key, values in _scale_group_device_attributes(backend.scale_groups).items():
-        attributes.setdefault(key, set()).update(values)
+    for derived in (
+        _scale_group_device_attributes(backend.scale_groups),
+        _scale_group_region_attributes(backend.scale_groups),
+    ):
+        for key, values in derived.items():
+            attributes.setdefault(key, set()).update(values)
     return attributes
 
 

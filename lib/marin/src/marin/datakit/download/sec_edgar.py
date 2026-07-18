@@ -81,7 +81,7 @@ def _download_once(task: _DownloadTask) -> _DownloadResult:
     batches = _iter_parquet_batches(task.hf_path)
     first = next(batches, None)
     if first is None:
-        counters.increment("sec_edgar/empty_input")
+        counters.pipeline.update_counter("sec_edgar/empty_input", 1)
         return _DownloadResult(hf_path=task.hf_path, destination_path=task.destination_path, rows=0)
     with atomic_rename(task.destination_path) as temporary_path:
         with pq.ParquetWriter(temporary_path, first.schema) as writer:
@@ -90,7 +90,7 @@ def _download_once(task: _DownloadTask) -> _DownloadResult:
             for batch in batches:
                 writer.write_batch(batch)
                 count += batch.num_rows
-    counters.increment("sec_edgar/rows_downloaded", count)
+    counters.pipeline.update_counter("sec_edgar/rows_downloaded", count)
     return _DownloadResult(hf_path=task.hf_path, destination_path=task.destination_path, rows=count)
 
 
@@ -111,7 +111,11 @@ def _list_hf_parquets() -> list[str]:
     for filing_type in FILING_TYPES:
         pattern = str(_HF_REPOSITORY_ROOT / filing_type / "*.parquet")
         for parquet_path in filesystem.glob(pattern, revision=HF_REVISION):
-            relative_path = StoragePath(parquet_path).relative_to(_HF_REPOSITORY_ROOT)
+            # glob(..., revision=...) embeds the pin in the repo segment
+            # (``datasets/<repo>@<rev>/...``); resolve_path recovers the clean
+            # in-repo path so the emitted hf:// URL stays revision-free (the pin
+            # is reapplied at open time in _iter_parquet_batches).
+            relative_path = filesystem.resolve_path(parquet_path).path_in_repo
             paths.append(str(_HF_URL_ROOT / relative_path))
     paths.sort()
     return paths

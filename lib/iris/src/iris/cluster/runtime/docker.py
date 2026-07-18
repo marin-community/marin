@@ -31,7 +31,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -247,6 +247,16 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     so on TPU even RESTRICTED/DEFAULT run privileged.
     """
     resolved = resolve_container_profile(profile)
+
+    # gVisor runs the whole container under the runsc runtime: the host worker's
+    # dockerd (root) builds the sandbox, and the intercepted guest kernel gives
+    # in-container root the docker default capability set (so setuid/apt work)
+    # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
+    # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
+    # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
+    if resolved == job_pb2.CONTAINER_PROFILE_GVISOR and not is_tpu_run:
+        return ["--runtime", "runsc"]
+
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
 
     flags: list[str] = []
@@ -938,7 +948,7 @@ class DockerRuntime:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
             elif mount.kind == MountKind.CACHE:
-                host_dir = self._cache_dir / mount.container_path.strip("/").replace("/", "-")
+                host_dir = self._cache_dir / cache_host_dirname(mount.container_path)
                 host_dir.mkdir(parents=True, exist_ok=True)
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
         return result

@@ -1,0 +1,319 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The data API Grafana queries: finelog SQL plus the live Iris and GitHub sources.
+
+A finelog panel sends SQL and a time window; the bridge substitutes the window
+macros, runs the SQL against finelog's Query RPC, shapes the Arrow result into JSON
+rows, and caches per (cluster, SQL, window bucket). The Iris and GitHub routes are
+fixed — the bridge owns their query and shape and returns flat JSON rows — so the
+dashboard never sends admin RPC SQL, and every route feeds Infinity's backend parser.
+
+Routes, grouped by source (cluster is a path segment where it applies):
+
+    GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /iris/{cluster}/jobs                     root-job counts by state (in-flight + 24h terminal)
+    GET /iris/{cluster}/workers                  healthy worker counts + resource totals per region
+    GET /iris/{cluster}/health                   controller reachability + latency
+    GET /iris/{cluster}/query?sql=               ad-hoc SELECT via ExecuteRawQuery (admin/null-auth)
+    GET /github/ferries                          recent ferry runs per tier, with success rate
+    GET /github/builds                           recent main commits with CI rollup state
+    GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
+    GET /health                                  bridge liveness
+
+A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
+cached. Handlers are sync defs; Starlette runs them in a threadpool.
+"""
+
+import json
+import logging
+from collections.abc import Mapping
+from datetime import UTC, datetime
+
+import pyarrow as pa
+import uvicorn
+from cache import TtlCache
+from config import BRIDGE_PORT, CLUSTERS, BridgeConfig, ClusterTarget
+from errors import UpstreamError
+from finelog.errors import QueryResultTooLargeError
+from finelog_source import FinelogSource, MetricSource
+from github_source import GithubSource
+from iris_source import IrisSource
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+logger = logging.getLogger(__name__)
+
+# Window macros a panel writes into its SQL, substituted with tz-naive UTC
+# TIMESTAMP literals before the query runs.
+FROM_MACRO = "{{from}}"
+TO_MACRO = "{{to}}"
+
+# infra/probes writes its label set as a JSON object string. The bridge expands
+# it into columns under this prefix so a panel can select one as a series.
+LABELS_COLUMN = "labels"
+LABEL_PREFIX = "label_"
+
+
+def _sql_timestamp(at: datetime) -> str:
+    """Format at as the tz-naive UTC literal finelog compares timestamps against."""
+    return at.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def substitute_time_macros(sql: str, start: datetime | None, end: datetime | None) -> str:
+    """Replace {{from}} / {{to}} with TIMESTAMP literals.
+
+    Raises ValueError if the SQL uses a macro without the matching bound.
+    """
+    for macro, at in ((FROM_MACRO, start), (TO_MACRO, end)):
+        if macro in sql:
+            if at is None:
+                raise ValueError(f"SQL uses {macro} but no matching time bound was supplied")
+            sql = sql.replace(macro, f"TIMESTAMP '{_sql_timestamp(at)}'")
+    return sql
+
+
+def _json_safe(value: object) -> object:
+    """Coerce one Arrow cell into a JSON-serializable value.
+
+    Timestamps become epoch milliseconds (naive cells read as UTC); bytes become
+    text; everything else passes through.
+    """
+    if isinstance(value, datetime):
+        at = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return round(at.timestamp() * 1000)
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
+    return value
+
+
+def _labels_as_dict(raw: object) -> dict | None:
+    """Coerce a labels cell to a ``{key: value}`` dict, or None if it isn't one.
+
+    Handles both label encodings finelog serves: a JSON-string column (the probes
+    EAV convention) and a native ``Map<Utf8,Utf8>`` column, which arrives from
+    ``Table.to_pylist()`` as a ``list[(key, value)]`` (or a dict).
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, list):
+        try:
+            return dict(raw)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _flatten_labels(row: dict[str, object]) -> dict[str, object]:
+    """Expand a labels cell into label_<key> fields, dropping the raw cell.
+
+    A cell that is neither a JSON object nor a native map stays in place and is
+    logged.
+    """
+    raw = row.get(LABELS_COLUMN)
+    if raw is None:
+        return row
+    parsed = _labels_as_dict(raw)
+    if parsed is None:
+        logger.warning("row has unparseable labels: %.200r", raw)
+        return row
+    flattened = {key: value for key, value in row.items() if key != LABELS_COLUMN}
+    for key, value in parsed.items():
+        flattened[f"{LABEL_PREFIX}{key}"] = value
+    return flattened
+
+
+def rows_to_json(table: pa.Table) -> list[dict[str, object]]:
+    """Turn a finelog Arrow result into JSON rows, flattening any labels column."""
+    has_labels = LABELS_COLUMN in table.column_names
+    rows: list[dict[str, object]] = []
+    for row in table.to_pylist():
+        if has_labels:
+            row = _flatten_labels(row)
+        rows.append({key: _json_safe(value) for key, value in row.items()})
+    return rows
+
+
+def _parse_time(raw: str, field: str) -> datetime:
+    """Parse epoch millis (Grafana's ${__from}/${__to}) or an ISO instant."""
+    try:
+        return datetime.fromtimestamp(int(raw) / 1000, tz=UTC)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError as err:
+        raise ValueError(f"{field} must be epoch millis or an ISO instant, got {raw!r}") from err
+
+
+class _BadRequest(Exception):
+    """A malformed request, surfaced as HTTP 400."""
+
+
+def _require(params, name: str) -> str:
+    value = params.get(name)
+    if not value:
+        raise _BadRequest(f"missing required parameter {name!r}")
+    return value
+
+
+def _optional_time(params, name: str) -> datetime | None:
+    raw = params.get(name)
+    if not raw:
+        return None
+    try:
+        return _parse_time(raw, name)
+    except ValueError as err:
+        raise _BadRequest(str(err)) from err
+
+
+def _bucket(at: datetime | None, ttl: float) -> int | None:
+    """Snap at to a TTL-wide bucket so a drifting window keeps one cache key."""
+    return None if at is None else int(at.timestamp() // max(ttl, 1))
+
+
+def _target_for(name: str, sources: Mapping[str, MetricSource]) -> ClusterTarget:
+    """Return the target for name, or raise _BadRequest naming the served clusters."""
+    if name not in sources:
+        raise _BadRequest(f"unknown cluster {name!r}; configured: {sorted(sources)}")
+    return sources[name].target
+
+
+def _query(request: Request, config: BridgeConfig, sources: Mapping[str, MetricSource], cache: TtlCache):
+    target = _target_for(request.path_params["cluster"], sources)
+    params = request.query_params
+
+    sql = _require(params, "sql")
+    start = _optional_time(params, "from")
+    end = _optional_time(params, "to")
+
+    # Key on the SQL as written, before substitution, with each window edge snapped
+    # to a TTL bucket, so a relative range stays one key as its edges drift.
+    key = (target.name, sql, _bucket(start, config.cache_ttl), _bucket(end, config.cache_ttl))
+
+    try:
+        effective_sql = substitute_time_macros(sql, start, end)
+    except ValueError as err:
+        raise _BadRequest(str(err)) from err
+
+    def run():
+        logger.info("query %s: %s", target.name, effective_sql)
+        table = sources[target.name].query(effective_sql, max_rows=config.max_rows)
+        return rows_to_json(table)
+
+    return cache.get_or_compute(key, run)
+
+
+def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
+    if name not in sources:
+        raise _BadRequest(f"unknown cluster {name!r}; configured: {sorted(sources)}")
+    return sources[name]
+
+
+def create_app(
+    config: BridgeConfig,
+    finelog_sources: Mapping[str, MetricSource],
+    iris_sources: Mapping[str, IrisSource],
+    github_source: GithubSource,
+) -> Starlette:
+    """Build the ASGI app serving finelog, Iris, and GitHub for the configured clusters."""
+    finelog_cache: TtlCache = TtlCache(config.cache_ttl)
+    iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
+    github_cache: TtlCache = TtlCache(config.github_cache_ttl)
+
+    def query(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(_query(request, config, finelog_sources, finelog_cache))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the time range or aggregate"}, status_code=400)
+
+    def iris_endpoint(request: Request, endpoint: str, run) -> JSONResponse:
+        try:
+            source = _iris_for(request.path_params["cluster"], iris_sources)
+            return JSONResponse(iris_cache.get_or_compute((source.target.name, endpoint), lambda: run(source)))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def iris_jobs(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "jobs", lambda s: s.jobs())
+
+    def iris_workers(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "workers", lambda s: s.workers())
+
+    def iris_health(request: Request) -> JSONResponse:
+        return iris_endpoint(request, "health", lambda s: s.health())
+
+    def iris_query(request: Request) -> JSONResponse:
+        # Ad-hoc SELECT: not cached (arbitrary SQL) and not used by any committed panel.
+        try:
+            source = _iris_for(request.path_params["cluster"], iris_sources)
+            sql = _require(request.query_params, "sql")
+            return JSONResponse(source.raw_query(sql))
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def github_endpoint(key: str, run) -> JSONResponse:
+        try:
+            return JSONResponse(github_cache.get_or_compute(key, run))
+        except UpstreamError as err:
+            return JSONResponse({"error": str(err), "source": err.source}, status_code=err.status_code)
+
+    def github_ferries(_: Request) -> JSONResponse:
+        return github_endpoint("ferries", github_source.ferries)
+
+    def github_builds(_: Request) -> JSONResponse:
+        return github_endpoint("builds", github_source.builds)
+
+    def github_nightlies(_: Request) -> JSONResponse:
+        return github_endpoint("nightlies", github_source.nightlies)
+
+    def health(_: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
+
+    return Starlette(
+        routes=[
+            Route("/health", health),
+            Route("/github/ferries", github_ferries),
+            Route("/github/builds", github_builds),
+            Route("/github/nightlies", github_nightlies),
+            Route("/finelog/{cluster}/query", query),
+            Route("/iris/{cluster}/jobs", iris_jobs),
+            Route("/iris/{cluster}/workers", iris_workers),
+            Route("/iris/{cluster}/health", iris_health),
+            Route("/iris/{cluster}/query", iris_query),
+        ]
+    )
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    config = BridgeConfig.from_environment()
+    finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
+    iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
+    github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
+    logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
+    # Loopback only: Grafana fetches from the same container.
+    uvicorn.run(
+        create_app(config, finelog_sources, iris_sources, github_source),
+        host="127.0.0.1",
+        port=BRIDGE_PORT,
+        access_log=False,
+    )
+
+
+if __name__ == "__main__":
+    main()

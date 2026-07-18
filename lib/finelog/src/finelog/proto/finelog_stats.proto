@@ -27,6 +27,7 @@ enum ColumnType {
   COLUMN_TYPE_TIMESTAMP_MS = 5; // pa.timestamp("ms")
   COLUMN_TYPE_BYTES = 6;        // pa.binary()
   COLUMN_TYPE_INT32 = 7;        // pa.int32()
+  COLUMN_TYPE_MAP = 8;          // pa.map_(pa.string(), pa.string())
 }
 
 // Secondary indexes a column carries to accelerate queries. Extensible: each

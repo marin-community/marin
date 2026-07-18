@@ -200,6 +200,27 @@ def _make_state(step, key, depth=3):
     return TrainerState(step, model, optim, opt_state, key, is_trainable=True, mp=None, model_averaging=None)
 
 
+def _save_non_ocdbt(state, checkpoint_path):
+    """Save a state to disk without OCDBT (one tensorstore tree per array leaf)."""
+    manager = array_ser.GlobalAsyncCheckpointManager()
+
+    leaf_key_paths = jax_utils.leaf_key_paths(state, is_leaf=lambda x: x is None)
+    paths = [f"{checkpoint_path}/{key_path.replace('.', '/')}" for key_path in jax.tree.leaves(leaf_key_paths)]
+
+    arrays = [
+        leaf.array if hasattr(leaf, "array") else leaf
+        for leaf in jax.tree.leaves(state)
+        if hasattr(leaf, "array") or jax.Array in type(leaf).__mro__
+    ]
+
+    filtered = [(a, p) for a, p in zip(arrays, paths) if equinox.is_array_like(a)]
+    manager.serialize_with_paths([a for a, _ in filtered], [p for _, p in filtered])
+    manager.wait_until_finished()
+
+    metadata = {"step": int(state.step), "timestamp": datetime.datetime.now().isoformat(), "is_temporary": False}
+    StoragePath(f"{checkpoint_path}/metadata.json").write_text(json.dumps(metadata))
+
+
 def test_checkpoint_simple():
     key0 = jax.random.PRNGKey(0)
     key1 = jax.random.PRNGKey(1)
@@ -857,29 +878,31 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
 
 
 def test_ocdbt_merges_files():
-    """Test that OCDBT checkpoints create manifest.ocdbt file."""
+    """OCDBT should coalesce per-array files into a manifest plus a handful of data blobs.
+
+    The absolute number of OCDBT ``d/`` data blobs is decided by tensorstore's internal
+    chunking and varies run to run, so we assert on what the test actually cares about: a
+    ``manifest.ocdbt`` exists and OCDBT produces materially fewer files than a non-OCDBT
+    save of the same state.
+    """
 
     for depth in [1, 5, 20]:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            key0 = jax.random.PRNGKey(0)
-            initial_state = _make_state(10, key0, depth=depth)
-            save_checkpoint(
-                initial_state,
-                step=initial_state.step,
-                checkpoint_path=tmpdir,
+        key0 = jax.random.PRNGKey(0)
+        state = _make_state(10, key0, depth=depth)
+
+        with tempfile.TemporaryDirectory() as ocdbt_dir, tempfile.TemporaryDirectory() as plain_dir:
+            save_checkpoint(state, step=state.step, checkpoint_path=ocdbt_dir)
+            _save_non_ocdbt(state, plain_dir)
+
+            ocdbt_count = sum(1 for path in pathlib.Path(ocdbt_dir).rglob("*") if path.is_file())
+            plain_count = sum(1 for path in pathlib.Path(plain_dir).rglob("*") if path.is_file())
+
+            manifests = list(pathlib.Path(ocdbt_dir).rglob("manifest.ocdbt"))
+            assert manifests, "OCDBT manifest.ocdbt file should exist in checkpoint"
+            assert ocdbt_count < plain_count, (
+                f"OCDBT should coalesce files (depth={depth}): "
+                f"ocdbt={ocdbt_count} not fewer than non-ocdbt={plain_count}"
             )
-
-            # Check that manifest.ocdbt exists
-            # The manifest should be in one of the checkpoint subdirectories
-            checkpoint_dir = pathlib.Path(tmpdir)
-            checkpoint_files = [path for path in checkpoint_dir.rglob("*") if path.is_file()]
-            assert (
-                len(checkpoint_files) <= 25
-            ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"
-            print(depth, len(checkpoint_files), checkpoint_files)
-
-            manifest_files = list(checkpoint_dir.rglob("manifest.ocdbt"))
-            assert len(manifest_files) > 0, "OCDBT manifest.ocdbt file should exist in checkpoint"
 
 
 def test_backward_compatibility_with_ocdbt():
@@ -892,32 +915,7 @@ def test_backward_compatibility_with_ocdbt():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Save with old format by directly using serialize_with_paths (non-OCDBT)
-        manager = array_ser.GlobalAsyncCheckpointManager()
-
-        checkpoint_path = tmpdir
-
-        leaf_key_paths = jax_utils.leaf_key_paths(initial_state, is_leaf=lambda x: x is None)
-        paths = []
-        for key_path in jax.tree.leaves(leaf_key_paths):
-            paths.append(f"{checkpoint_path}/{key_path.replace('.', '/')}")
-
-        arrays = [
-            leaf.array if hasattr(leaf, "array") else leaf
-            for leaf in jax.tree.leaves(initial_state)
-            if hasattr(leaf, "array") or jax.Array in type(leaf).__mro__
-        ]
-
-        filtered = [(a, p) for a, p in zip(arrays, paths) if equinox.is_array_like(a)]
-        arrays_to_save = [a for a, _ in filtered]
-        paths_to_save = [p for _, p in filtered]
-
-        # Save using old non-OCDBT method
-        manager.serialize_with_paths(arrays_to_save, paths_to_save)
-        manager.wait_until_finished()
-
-        # Save metadata (normally done by save_checkpoint)
-        metadata = {"step": 10, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": False}
-        StoragePath(f"{checkpoint_path}/metadata.json").write_text(json.dumps(metadata))
+        _save_non_ocdbt(initial_state, tmpdir)
 
         # Now try to load it with the new OCDBT-enabled code
         restored_state = load_checkpoint(

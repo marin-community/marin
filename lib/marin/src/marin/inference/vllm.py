@@ -67,6 +67,8 @@ class VllmProxyConfig:
     max_pending_requests: int = 256
     # Response poll batch size; larger than default concurrency so one poll can drain normal completions.
     response_fetch_batch_size: int = 64
+    # Request fields accepted by the eval client but unsupported by the serving backend.
+    ignored_request_fields: tuple[str, ...] = ()
     # Local uvicorn startup should be quick; vLLM startup has a separate timeout.
     server_start_timeout_seconds: float = DEFAULT_BROKERED_PROXY_START_TIMEOUT.total_seconds()
 
@@ -245,6 +247,7 @@ def _start_proxy(config: BrokeredVllmSystemConfig, broker: InferenceResponseProv
         max_pending_requests=proxy_config.max_pending_requests,
         response_fetch_batch_size=proxy_config.response_fetch_batch_size,
         server_start_timeout_seconds=proxy_config.server_start_timeout_seconds,
+        ignored_request_fields=proxy_config.ignored_request_fields,
     ) as running_model:
         yield RunningModel(endpoint=running_model.endpoint, tokenizer=config.tokenizer)
 

@@ -23,6 +23,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.runtime import telltale
 from iris.runtime.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
@@ -269,6 +270,9 @@ def initialize_jax(
     # Configure the compilation cache before any compile happens, on every
     # distributed-init path below (TPU, single-task, or the endpoint dance).
     configure_jax_compilation_cache()
+
+    # Start the telltale server to report stats for training jobs.
+    telltale.start()
 
     # Idempotent: skip if jax.distributed has already been initialized. This
     # lets a caller that must touch JAX before levanter.initialize (e.g. via

@@ -2093,15 +2093,21 @@ def changelog_min_seq(tx: Tx) -> int:
 
 
 def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
-    """Every still-present job this peer received from ``requester_id`` (the full set
-    a stale/first-contact requester is resynced with)."""
+    """Every still-present job under a root this peer received from ``requester_id``
+    (the full set a stale/first-contact requester is resynced with).
+
+    Covers the whole subtree, not just the handed-off roots: a job the root spawns
+    runs locally on this peer and is reported to the same requester, so it is matched
+    through ``root_job_id``. Ordered by depth, so a parent precedes its children.
+    """
     rows = tx.execute(
-        select(federated_jobs_table.c.job_id)
-        .select_from(federated_jobs_table.join(jobs_table, jobs_table.c.job_id == federated_jobs_table.c.job_id))
+        select(jobs_table.c.job_id)
+        .select_from(jobs_table.join(federated_jobs_table, federated_jobs_table.c.job_id == jobs_table.c.root_job_id))
         .where(
             federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
             federated_jobs_table.c.peer_id == requester_id,
         )
+        .order_by(jobs_table.c.depth)
     ).all()
     return [r.job_id for r in rows]
 

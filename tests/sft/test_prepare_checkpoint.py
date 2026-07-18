@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
+from levanter.optim.config import AdamConfig
 from marin.execution.lazy import materialized_config
 from safetensors.numpy import load, save
 from transformers import AutoTokenizer
@@ -58,6 +59,7 @@ def _spec(model) -> SFTSpec:
         model=model,
         chat_template="{% for m in messages %}{% generation %}{{ m['content'] }}{% endgeneration %}{% endfor %}",
         datasets=[_DATASET],
+        optimizer=AdamConfig(learning_rate=1e-5),
         num_train_steps=1,
     )
 
