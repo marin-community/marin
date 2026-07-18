@@ -268,6 +268,27 @@ async fn wait_for_requests(counter: &AtomicUsize, expected: usize) {
     .await;
 }
 
+/// Poll the hub until its log rows equal `expected`, or fail after five seconds. The hub
+/// ACKs a push once the row is durable (which advances the source forward cursor), but a
+/// query only ever sees *sealed* segments, never the in-RAM buffer. The seal happens on an
+/// async flush *after* the ACK, so a single read races that flush; polling waits it out.
+async fn wait_for_hub_log_rows(fx: &Fixture, expected: &[(&str, &str)]) {
+    let want: Vec<(String, String)> = expected
+        .iter()
+        .map(|(key, data)| (key.to_string(), data.to_string()))
+        .collect();
+    for _ in 0..200 {
+        if fx.hub_log_rows().await == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "hub never held {want:?} (last saw {:?})",
+        fx.hub_log_rows().await
+    );
+}
+
 /// A forwarder running on its own task, stopped and joined by [`Self::finish`].
 struct RunningForwarder {
     stop: watch::Sender<bool>,
@@ -556,10 +577,9 @@ async fn seeding_at_the_tip_ships_new_rows_and_never_backfills() {
     .await;
     running.finish().await;
 
-    assert_eq!(
-        fx.hub_log_rows().await,
-        vec![("/user/job/t".to_string(), "after".to_string())]
-    );
+    // Only "after" ever reaches the hub — "before" was seeded past, so an exact-match poll
+    // can only converge on this set, still asserting the "never backfills" guarantee.
+    wait_for_hub_log_rows(&fx, &[("/user/job/t", "after")]).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
