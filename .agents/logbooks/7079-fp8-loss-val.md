@@ -337,3 +337,55 @@ validation.
 step 9 on BFC). bf16-full6 (cuda_async) cleared the step-9 cliff that killed
 full4/full5 and is running; fp8-full4 passed step 6760 (longest fp8 run of the
 campaign).
+
+### FP8VAL-005a — CORRECTION: the cached transpose is the deliberate cast-transpose optimization, not a free memory lever (2026-07-18 00:35 UTC)
+
+FP8VAL-005 called "recompute the transposed fp8 operand instead of stashing
+it" the highest-leverage memory lever. That is **wrong / misleading** and is
+retracted. Tracing the two fp8 GEMM paths in the merged #7079 tree:
+
+- **Grouped/ragged expert GEMMs (the big MoE matmuls): the transpose is
+  CACHED, on purpose.** `fp8_scaled_ragged_dot` quantizes via `in_q_ct`
+  (`lib/haliax/src/haliax/_src/fp8_cast_transpose.py`), a fused Pallas
+  cast-transpose kernel that emits the natural AND transposed fp8 layout in one
+  bf16 read; `_qrd_fwd` saves `q_lhs_t` (+ `q_rhs`) as a custom-VJP residual
+  (`fp8_ragged.py`), held live fwd→bwd. This IS the deliberate optimization —
+  the TE rowwise+columnwise-cache pattern — and it is the source of the
+  isolated w13≈1.41–1.46x / w2≈1.27–1.32x GEMM fwd+bwd speedups (#6880 lineage;
+  Hopper fp8 wgmma needs a contiguous contracting dim and cannot transpose an
+  operand at runtime). These cached transposes are f8e4m3fn (inside the +5.0
+  GiB bucket), not the u8 bucket.
+- **Dense/attention path (`Fp8DotGeneralOp`): the transpose is ALREADY
+  RECOMPUTED** — the forward saves only the natural fp8 operand; XLA inserts
+  the operand byte-transpose in the backward (the +3.3 GiB **u8**), plus a fresh
+  e5m2 output-gradient quantize (+0.8 GiB). Nothing to un-cache here.
+
+So "just recompute the transpose" (a) does not apply to the dense/u8 3.3 GiB —
+that's already recomputed, and (b) for the ragged path would **reverse the
+cast-transpose optimization**, paying a re-read+re-quantize+re-transpose in the
+backward to reclaim memory — a speed/memory tradeoff, not a free win.
+`WgradMode.BF16` exists as the "don't need the fp8 transpose" fallback but it
+gives up the fp8 wgrad entirely. There is no knob that specifically recomputes
+the fp8 transpose while keeping fp8 wgrad.
+
+**Production-blocking assessment (does the dual-write block prod-scale
+training?): No.**
+1. It is load-bearing, not a bug — removing it forfeits the fp8 throughput win.
+2. Bounded cost: the two 1-byte fp8 copies together ≈ the one bf16 operand they
+   replace (kernel docstring); the "extra" is holding both fp8 layouts live
+   where bf16 held one. It scales with activation size, so at production
+   multi-node FSDP+EP the cached transpose shards across more devices and the
+   per-device footprint shrinks proportionally.
+3. The failure we actually hit (FP8VAL-004) was **fragmentation at ~42% pool
+   occupancy, not capacity** — cuda_async (VMM, no contiguity requirement) fixes
+   it and both arms now run. The 1.66x transient arena is far more tolerable
+   than the BFC wedges implied.
+4. Residual real cost: at a memory-marginal shape fp8's ~1.66x transient arena
+   means it may need more sharding / smaller microbatch / more remat than the
+   bf16 baseline to fit — a tuning cost when adopting fp8, not a wall.
+
+Levers if memory binds at prod scale, in order: cuda_async (fragmentation) →
+more activation sharding (the natural prod lever) → last resort, recompute the
+ragged transpose (costs the CT speedup). `mxfp8_save_qweights` is the existing
+*opposite* knob (cache more to go faster), confirming the team tunes this axis
+deliberately.
