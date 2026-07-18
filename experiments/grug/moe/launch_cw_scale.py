@@ -134,6 +134,8 @@ def build_scale_model() -> GrugModelConfig:
     # qk symmetric with v=128 (no asymmetric-192 -> avoids the widest coarse-tile forward).
     qk_nope = env_int("SCALE_QK_NOPE", 128)
     qk_rope = env_int("SCALE_QK_ROPE", 64)
+    # MLA value head dim (default 128). Set == qk for a symmetric wide head (e.g. qk=256 / v=256).
+    v_head_dim = env_int("SCALE_V_HEAD_DIM", 128)
     # SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA=1 rescale the post-RMSNorm Q/KV latents
     # by sqrt(hidden_dim / latent_dim) before the up-projection.
     mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA") == "1"
@@ -173,6 +175,7 @@ def build_scale_model() -> GrugModelConfig:
         mla_scale_kv_lora=mla_scale_kv_lora,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
+        v_head_dim=v_head_dim,
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
