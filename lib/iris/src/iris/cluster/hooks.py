@@ -55,7 +55,7 @@ class NsysHook:
     this only builds its argv and names the install script.
     """
 
-    output_uri: str
+    output_uri: str | None
     tasks: str
     trace: str
     capture_range: bool
@@ -64,17 +64,11 @@ class NsysHook:
         return nsys_setup_script()
 
     def wrap(self, command: Sequence[str]) -> list[str]:
-        argv = [
-            "python",
-            "-m",
-            _NSYS_MODULE,
-            "--tasks",
-            self.tasks,
-            "--trace",
-            self.trace,
-            "--output-uri",
-            self.output_uri,
-        ]
+        argv = ["python", "-m", _NSYS_MODULE, "--tasks", self.tasks, "--trace", self.trace]
+        # Omitted entirely when unset: the wrapper then defaults it from the task's own
+        # cluster env, which is the correct store even under federation.
+        if self.output_uri is not None:
+            argv += ["--output-uri", self.output_uri]
         if self.capture_range:
             argv.append("--capture-range")
         argv.append("--")

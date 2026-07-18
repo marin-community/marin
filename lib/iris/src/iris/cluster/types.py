@@ -735,11 +735,10 @@ class ProfileSpec:
     Attributes:
         output_uri: Directory URI each profiled task uploads its report to (any
             fsspec target the *task* can reach, e.g. ``s3://bucket/tmp/ttl=30d/nsys``).
-            The task workdir is an emptyDir, so a report that is not uploaded is
-            destroyed with the pod. The CLI defaults this to the job cluster's temp
-            bucket (``marin_temp_bucket``); it stays required at the API level because
-            only the caller knows which storage the job's cluster can write — under
-            ``--target-cluster`` the submitting cluster's storage is the wrong answer.
+            ``None`` lets the task resolve the cluster's temp bucket from its own env
+            (see ``iris.runtime.nsys.default_output_uri``) — correct even under
+            ``--target-cluster``, where the launcher's cluster is the wrong store. The
+            task workdir is an emptyDir, so a report left there dies with the pod.
         backend: Which profiler to run (see ``ProfileBackend``).
         tasks: Which tasks write a report, selected by task index: ``first``, ``all``,
             or a comma-separated list (e.g. ``0,7``). Reports are never merged, so
@@ -753,7 +752,7 @@ class ProfileSpec:
             ``trace`` (its ``--trace`` value); other keys are ignored by it.
     """
 
-    output_uri: str
+    output_uri: str | None = None
     backend: ProfileBackend = ProfileBackend.NSYS
     tasks: str = "first"
     capture_range: bool = False

@@ -21,6 +21,7 @@ from iris.cluster.types import EnvironmentSpec, ProfileSpec, ResourceSpec, gpu_d
 from iris.runtime.nsys import (
     _supervise,
     build_nsys_argv,
+    default_output_uri,
     report_path,
     resolve_nsys_bin,
     run,
@@ -107,21 +108,39 @@ def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyP
     }
 
 
-def test_collect_hooks_rejects_nsys_without_gpu() -> None:
+def test_collect_hooks_warns_but_proceeds_without_gpu(caplog: pytest.LogCaptureFixture) -> None:
+    """nsys on a GPU-less job is best-effort: logged, not rejected, and the hook still runs."""
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
     env = EnvironmentSpec(profile=ProfileSpec(output_uri=OUT))
-    with pytest.raises(ValueError, match="requires a GPU device"):
-        collect_hooks(env, cpu_only, processes_per_task=1)
+    with caplog.at_level("ERROR"):
+        hooks = collect_hooks(env, cpu_only, processes_per_task=1)
+    assert len(hooks) == 1
+    assert "no GPU device" in caplog.text
 
 
 def test_collect_hooks_orders_nsys_outside_the_multigpu_supervisor() -> None:
     """collect_hooks returns [multigpu, nsys]; folded in order, nsys ends up outermost, so
-    its child-tracing sweeps every rank the supervisor spawns into one report."""
-    env = EnvironmentSpec(profile=ProfileSpec(output_uri=OUT))
+    its child-tracing sweeps every rank the supervisor spawns into one report. Uses a
+    default (unset) output_uri, which collect_hooks must accept — the task resolves it."""
+    env = EnvironmentSpec(profile=ProfileSpec())
     command = ["python", "train.py"]
     for hook in collect_hooks(env, _gpu_resources(8), processes_per_task=8):
         command = hook.wrap(command)
     assert command.index("iris.runtime.nsys") < command.index("iris.runtime.multigpu")
+
+
+def test_hook_omits_output_uri_when_unset() -> None:
+    """An unset output_uri drops the flag entirely; the wrapper then defaults it in-task."""
+    assert "--output-uri" not in ProfileSpec().to_hook().wrap(["python", "x.py"])
+
+
+def test_default_output_uri_keys_on_the_job_and_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default is resolved from the task's own MARIN_PREFIX (so it matches the cluster
+    the task runs on) and keyed on the job so a run's reports are findable and self-expiring."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.setenv("IRIS_TASK_ID", "/rav/train-42/0")
+    monkeypatch.setenv("IRIS_NUM_TASKS", "1")
+    assert default_output_uri() == "s3://marin-us-east-02a/tmp/ttl=30d/iris-profiles/rav/train-42"
 
 
 def test_build_nsys_argv_matches_what_the_container_allows() -> None:
@@ -195,13 +214,11 @@ def test_no_setup_plus_profile_is_rejected() -> None:
     assert EnvironmentSpec(setup_scripts=[]).to_proto().setup_scripts == []
 
 
-@pytest.mark.parametrize("uri", ["reports", "/app/reports"])
-def test_scheme_less_output_uri_is_rejected(uri: str) -> None:
-    """Such a URI resolves inside the task workdir, which the pod destroys — the wrapper
-    would log a successful upload to storage that no longer exists."""
-    env = EnvironmentSpec(profile=ProfileSpec(output_uri=uri))
-    with pytest.raises(ValueError, match="needs a scheme"):
-        collect_hooks(env, _gpu_resources(1), processes_per_task=1)
+def test_caller_output_uri_is_passed_through_verbatim() -> None:
+    """No scheme validation: even a workdir-relative URI is used as the caller asked."""
+    (hook,) = collect_hooks(EnvironmentSpec(profile=ProfileSpec(output_uri="reports")), _gpu_resources(1), 1)
+    wrapped = hook.wrap(["python", "x.py"])
+    assert wrapped[wrapped.index("--output-uri") + 1] == "reports"
 
 
 class _Execed(Exception):
@@ -282,6 +299,21 @@ def test_selected_task_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selec
     assert uploaded[0].read_bytes() == b"fake report"
     # /tmp is noexec, so nsys must stage its injection libraries elsewhere.
     assert os.environ["TMPDIR"] == str(selected_task / "nsys")
+
+
+def test_run_uploads_to_the_default_when_output_uri_is_unset(
+    monkeypatch: pytest.MonkeyPatch, selected_task: Path
+) -> None:
+    """output_uri=None routes the upload through default_output_uri (resolved in-task)."""
+    destination = selected_task / "default-dest"
+    monkeypatch.setattr("iris.runtime.nsys.default_output_uri", lambda: f"file://{destination}")
+    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(0, write_report=True))
+
+    with pytest.raises(SystemExit) as excinfo:
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=None, argv=CMD)
+
+    assert excinfo.value.code == 0
+    assert len(list(destination.iterdir())) == 1
 
 
 def test_failing_command_still_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:

@@ -3,9 +3,10 @@
 
 """Per-task Nsight Systems launch wrapper.
 
-``python -m iris.runtime.nsys --tasks SPEC --output-uri URI -- <argv>`` runs ``<argv>``
+``python -m iris.runtime.nsys --tasks SPEC [--output-uri URI] -- <argv>`` runs ``<argv>``
 under ``nsys profile`` when this task is selected, and execs ``<argv>`` unchanged
-otherwise.
+otherwise. Without ``--output-uri`` the report goes to the cluster's temp bucket,
+resolved from the task env (see :func:`default_output_uri`).
 
 The wrapper sits outside the multi-process GPU supervisor, so ``<argv>`` is the
 supervisor (or the command itself at ``processes_per_task=1``) and one report covers
@@ -55,6 +56,7 @@ from types import FrameType
 from typing import NoReturn
 
 from rigging.filesystem import StoragePath
+from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, nsys_bin_glob
@@ -72,6 +74,10 @@ _REPORT_SUFFIX = ".nsys-rep"
 _NO_REPORT_EXIT = 1
 # Signals forwarded to nsys so a terminated task still finalizes its report.
 _FORWARDED_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+# Default upload location when no --output-uri is given: the cluster's temp bucket,
+# lifecycle-cleaned under tmp/ttl=Nd/, keyed on the job so a run's reports are findable.
+_DEFAULT_OUTPUT_TTL_DAYS = 30
+_DEFAULT_OUTPUT_SUBDIR = "iris-profiles"
 
 
 class TaskSelector(StrEnum):
@@ -91,6 +97,26 @@ def task_index_from_env() -> int:
     if info is None:
         raise RuntimeError("no iris job context (IRIS_TASK_ID unset); nsys task selection needs one")
     return info.task_index
+
+
+def default_output_uri() -> str:
+    """Resolve the report directory from the *task's own* marin prefix.
+
+    Uses ``MARIN_PREFIX`` (set per-cluster in the task env; region metadata otherwise),
+    so reports land on the cluster the task actually runs on. That is correct even when
+    the job was federated to a peer — a default computed at submit time from the
+    launcher's cluster would name the wrong store, which is why the URI is resolved here
+    and not on the client. Keyed on the job so a run's reports are findable and expire
+    together under the bucket's ``tmp/ttl=Nd/`` lifecycle rule.
+
+    Raises:
+        RuntimeError: If there is no iris task context to key the path on.
+    """
+    info = get_job_info()
+    if info is None:
+        raise RuntimeError("no iris job context (IRIS_TASK_ID unset); nsys needs one to default --output-uri")
+    prefix = f"{_DEFAULT_OUTPUT_SUBDIR}/{info.job_id.to_wire().lstrip('/')}"
+    return marin_temp_bucket(_DEFAULT_OUTPUT_TTL_DAYS, prefix=prefix)
 
 
 def should_profile(tasks: str, task_index: int) -> bool:
@@ -194,12 +220,13 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     return 128 - returncode if returncode < 0 else returncode
 
 
-def run(tasks: str, trace: str, capture_range: bool, output_uri: str, argv: Sequence[str]) -> NoReturn:
+def run(tasks: str, trace: str, capture_range: bool, output_uri: str | None, argv: Sequence[str]) -> NoReturn:
     """Run *argv*, profiled by nsys when this task is selected.
 
     *argv* is the multi-process supervisor (or the command itself at
     ``processes_per_task=1``), so one report covers every GPU rank the task runs —
-    nsys traces children.
+    nsys traces children. *output_uri* is where the report is uploaded; ``None`` resolves
+    the cluster's temp bucket from the task env (see :func:`default_output_uri`).
 
     An unselected task execs and never returns. A selected one supervises nsys so it
     can upload the report afterwards, then exits with the command's own status.
@@ -210,6 +237,9 @@ def run(tasks: str, trace: str, capture_range: bool, output_uri: str, argv: Sequ
         logger.info("task %d not selected by --tasks=%s; running unprofiled", task_index, tasks)
         os.execvp(command[0], command)
 
+    # Resolve the destination before profiling, so a bad/unresolvable target fails the
+    # task now rather than after the GPU work and the report are already produced.
+    destination_dir = output_uri or default_output_uri()
     output_dir = workdir() / NSYS_OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = report_path(output_dir, task_index)
@@ -229,7 +259,7 @@ def run(tasks: str, trace: str, capture_range: bool, output_uri: str, argv: Sequ
         # and its workdir dropped, having produced the one artifact it was asked for.
         logger.error("task %d wrote no report at %s (command exited %d)", task_index, report, returncode)
         sys.exit(returncode or _NO_REPORT_EXIT)
-    destination = upload_report(report, output_uri)
+    destination = upload_report(report, destination_dir)
     logger.info("task %d uploaded %s (%.1f MB)", task_index, destination, report.stat().st_size / 1e6)
     sys.exit(returncode)
 
@@ -238,14 +268,14 @@ def main(argv: list[str] | None = None) -> NoReturn:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     raw = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw:
-        raise SystemExit("usage: python -m iris.runtime.nsys --tasks SPEC --output-uri URI -- <command...>")
+        raise SystemExit("usage: python -m iris.runtime.nsys --tasks SPEC [--output-uri URI] -- <command...>")
     split = raw.index("--")
     own_args, command = raw[:split], raw[split + 1 :]
 
     parser = argparse.ArgumentParser(prog="python -m iris.runtime.nsys")
     parser.add_argument("--tasks", required=True, help="'first', 'all', or a comma-separated list of task indices")
     parser.add_argument("--trace", required=True, help="nsys --trace value (e.g. cuda,nvtx,cublas)")
-    parser.add_argument("--output-uri", required=True, help="directory URI to upload each report to")
+    parser.add_argument("--output-uri", default=None, help="report directory URI (default: the cluster temp bucket)")
     parser.add_argument(
         "--capture-range",
         action="store_true",

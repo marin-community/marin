@@ -28,7 +28,6 @@ from typing import Protocol, cast
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.filesystem import StoragePath
 from rigging.timing import Duration, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
@@ -56,7 +55,6 @@ from iris.cluster.types import (
     JobName,
     Namespace,
     ProfileBackend,
-    ProfileSpec,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
@@ -471,24 +469,6 @@ def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> Mul
     return MultiGpuHook(nproc=processes_per_task, devices_per_proc=gpu_count // processes_per_task)
 
 
-def _validate_profile(profile: ProfileSpec, resources: ResourceSpec) -> None:
-    """Reject a profile that cannot run as requested, before the entrypoint is wrapped.
-
-    nsys profiles CUDA work, so it needs a GPU device, and the setup that installs it only
-    runs on the node that uses it. A scheme-less output URI is workdir-relative, and the
-    workdir is an emptyDir: the wrapper would report a successful upload into storage that
-    dies with the pod — caught here rather than after the GPU work is done.
-    """
-    device = resources.device
-    if profile.backend is ProfileBackend.NSYS and (device is None or not device.HasField("gpu")):
-        raise ValueError("nsys profiling requires a GPU device")
-    if StoragePath(profile.output_uri).scheme is None:
-        raise ValueError(
-            f"profile output_uri needs a scheme (e.g. s3://bucket/tmp/ttl=30d/nsys); {profile.output_uri!r} "
-            f"resolves inside the task workdir, which does not outlive the task"
-        )
-
-
 def collect_hooks(
     environment: EnvironmentSpec | None, resources: ResourceSpec, processes_per_task: int
 ) -> list[TaskHook]:
@@ -496,13 +476,19 @@ def collect_hooks(
 
     Order is the nesting: the multigpu supervisor goes first (inner), the profiler last
     (outer), so a profiler traces every rank the supervisor spawns — one report per task.
+
+    Profiling is best-effort: a request without a GPU (nsys profiles CUDA work) is logged
+    and left to run rather than rejected, and the output URI is whatever the caller asked
+    for — unset means the task picks its cluster's temp bucket.
     """
     hooks: list[TaskHook] = []
     if processes_per_task > 1:
         hooks.append(build_multigpu_hook(resources, processes_per_task))
     profile = environment.profile if environment is not None else None
     if profile is not None:
-        _validate_profile(profile, resources)
+        device = resources.device
+        if profile.backend is ProfileBackend.NSYS and (device is None or not device.HasField("gpu")):
+            logger.error("nsys profiling targets CUDA work but this job requests no GPU device; the report may be empty")
         hooks.append(profile.to_hook())
     return hooks
 
