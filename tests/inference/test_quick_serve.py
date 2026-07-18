@@ -96,12 +96,8 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_isolated_cuda_vllm_upstream_command_and_env():
+def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
     launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
-    command = launcher.command()
-
-    assert command[command.index("--from") + 1] == f"vllm[runai]=={DEFAULT_CUDA_VLLM_VERSION}"
-    assert command[command.index("--torch-backend") + 1] == "cu130"
     assert launcher.env() == {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 
 

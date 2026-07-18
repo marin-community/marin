@@ -4,7 +4,7 @@
 import contextlib
 import logging
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Protocol, cast
@@ -180,7 +180,7 @@ class BrokeredVllmSystemConfig:
         default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g")
     )
     # Accelerator/vLLM-specific env vars stay explicit at the entrypoint.
-    worker_env_vars: Mapping[str, str] = field(default_factory=dict)
+    worker_env_vars: tuple[tuple[str, str], ...] = ()
     # Actor startup waits on Iris endpoint registration.
     broker_ready_timeout_seconds: float = 900.0
     # Applied to the broker actor and accelerator worker child jobs.

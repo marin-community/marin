@@ -228,7 +228,7 @@ def test_iris_brokered_vllm_worker_environment_matches_backend(
         model="gpt2",
         backend=backend,
         worker_resources=worker_resources,
-        worker_env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
+        worker_env_vars=(("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),),
     )
 
     with start_iris_brokered_vllm(config):

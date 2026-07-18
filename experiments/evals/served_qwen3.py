@@ -15,7 +15,6 @@ Examples:
 """
 
 import argparse
-from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -35,12 +34,13 @@ from experiments.evals.brokered_eval_suite import brokered_eval_suite
 
 QWEN3_EVAL_VERSION = "2026.07.17"
 _VLLM_TIMEOUT = 1800
-_TPU_VLLM_WORKER_ENV_VARS = {
-    "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
-    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
-    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
-    "VLLM_TPU_SKIP_PRECOMPILE": "1",
-}
+_TPU_VLLM_WORKER_ENV_VARS = (
+    ("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),
+    ("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1"),
+    ("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1"),
+    ("VLLM_TPU_SKIP_PRECOMPILE", "1"),
+)
+_GPU_VLLM_WORKER_ENV_VARS: tuple[tuple[str, str], ...] = ()
 
 
 class Accelerator(StrEnum):
@@ -52,7 +52,7 @@ def qwen3_inference(
     *,
     backend: BrokeredVllmBackend,
     worker_resources: ResourceConfig,
-    worker_env_vars: Mapping[str, str],
+    worker_env_vars: tuple[tuple[str, str], ...],
 ) -> BrokeredVllmSystemConfig:
     """Compose Qwen3 model policy with an accelerator-specific serving backend."""
     return BrokeredVllmSystemConfig(
@@ -96,7 +96,7 @@ QWEN3_GPU_INFERENCE = qwen3_inference(
         disk="100g",
         regions=[ANY_REGION],
     ),
-    worker_env_vars={},
+    worker_env_vars=_GPU_VLLM_WORKER_ENV_VARS,
 )
 
 QWEN3_GPU_EVAL_RESULTS = brokered_eval_suite(
