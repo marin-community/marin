@@ -177,6 +177,28 @@ def _report_dump_buffers(top_n: int) -> None:
         print(f"PROBE_DUMP: no buffer-assignment files under {dump_dir}")
         return
     bytes_per = {"f32": 4, "bf16": 2, "s32": 4, "u32": 4, "f8e4m3fn": 1, "f8e5m2": 1, "u8": 1, "s8": 1, "pred": 1}
+    # Allocation-level composition (true coexisting buffers): headers like
+    # "allocation N: size S, ..." from the buffer-assignment file, with the
+    # first value line naming the defining op/shape.
+    for path in cands:
+        if not path.endswith("buffer-assignment.txt"):
+            continue
+        allocs = []
+        cur = None
+        with open(path) as f:
+            for line in f:
+                mh = re.match(r"allocation (\d+): size (\d+), (.*)", line)
+                if mh:
+                    cur = [int(mh.group(2)), mh.group(3).strip()[:60], ""]
+                    allocs.append(cur)
+                elif cur is not None and cur[2] == "" and "value:" in line:
+                    cur[2] = line.strip()[:150]
+        allocs.sort(reverse=True)
+        temp_total = sum(a[0] for a in allocs if "parameter" not in a[1])
+        print(f"PROBE_ALLOCS file={os.path.basename(path)} n={len(allocs)} nonparam_total={temp_total/2**30:.1f}GiB")
+        for size, kind, val in allocs[:top_n]:
+            print(f"  {size/2**30:9.2f} GiB  {kind[:45]:45s} {val[:130]}", flush=True)
+        break
     for path in cands[:2]:
         byshape: collections.Counter = collections.Counter()
         counts: collections.Counter = collections.Counter()
