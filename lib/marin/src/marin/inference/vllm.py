@@ -63,7 +63,7 @@ class BrokeredVllmBackend(Protocol):
         """Return the launcher for the worker's vLLM subprocess."""
         ...
 
-    def server_args(self, _resources: ResourceConfig | None) -> list[str]:
+    def server_args(self, resources: ResourceConfig | None, /) -> list[str]:
         """Return accelerator-specific arguments passed to ``vllm serve``."""
         ...
 
@@ -82,7 +82,7 @@ class TpuVllmBackend:
     def vllm_launcher(self) -> VllmLauncher:
         return WorkspaceVllm()
 
-    def server_args(self, _resources: ResourceConfig | None) -> list[str]:
+    def server_args(self, _resources: ResourceConfig | None, /) -> list[str]:
         return []
 
 
@@ -118,11 +118,11 @@ class GpuVllmBackend:
     def vllm_launcher(self) -> VllmLauncher:
         return IsolatedCudaVllm(source=self.source, version=self.version)
 
-    def server_args(self, _resources: ResourceConfig | None) -> list[str]:
+    def server_args(self, resources: ResourceConfig | None, /) -> list[str]:
         tensor_parallel_size = self.tensor_parallel_size
-        if tensor_parallel_size is None and _resources is not None:
-            assert isinstance(_resources.device, GpuConfig)
-            tensor_parallel_size = _resources.device.count
+        if tensor_parallel_size is None and resources is not None:
+            assert isinstance(resources.device, GpuConfig)
+            tensor_parallel_size = resources.device.count
         if tensor_parallel_size is None:
             return []
         return ["--tensor-parallel-size", str(tensor_parallel_size)]
