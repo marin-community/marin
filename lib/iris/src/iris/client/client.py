@@ -45,7 +45,8 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.hooks import MultiGpuHook, NsysHook, TaskHook
+from iris.cluster.hooks import MultiGpuHook, TaskHook
+from iris.cluster.hooks.nsys import NsysHook
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,

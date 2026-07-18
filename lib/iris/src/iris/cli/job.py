@@ -39,7 +39,8 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.hooks import NsysHook, TaskHook
+from iris.cluster.hooks import TaskHook
+from iris.cluster.hooks.nsys import build_profile_hook, profile_cli_options
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -1003,51 +1004,7 @@ Examples:
         "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
     ),
 )
-@click.option(
-    "--profile",
-    type=click.Choice(["nsys"], case_sensitive=False),
-    default=None,
-    help=(
-        "Profile the run with the named backend, uploading one report per profiled task to "
-        "--profile-output. 'nsys' (Nsight Systems) requires --gpu and yields a CUDA/NVTX/NCCL "
-        "timeline; CPU sampling and GPU metrics are unavailable in an unprivileged task container."
-    ),
-)
-@click.option(
-    "--profile-output",
-    default=None,
-    help=(
-        "Directory URI for the reports. Defaults, on the task, to that cluster's "
-        "lifecycle-cleaned temp bucket (tmp/ttl=30d/iris-profiles/<job>) — correct even under "
-        "--target-cluster. Pass one to override; it must be storage the job's cluster can write, "
-        "and must outlive the pod (the task workdir does not)."
-    ),
-)
-@click.option(
-    "--profile-tasks",
-    default=NsysHook.tasks,
-    show_default=True,
-    help=(
-        "Which tasks to profile, by task index: 'first', 'all', or a comma-separated list "
-        "(e.g. 0,7). One report per selected task covers every GPU it runs — the minimum "
-        "granularity is a whole task/node. Reports are never merged, so prefer a subset."
-    ),
-)
-@click.option(
-    "--profile-trace",
-    default=NsysHook.trace,
-    show_default=True,
-    help="nsys --trace value (backend-specific). NCCL appears as CUDA kernels plus its own NVTX ranges.",
-)
-@click.option(
-    "--profile-capture-range",
-    is_flag=True,
-    default=False,
-    help=(
-        "Collect only between cuProfilerStart/Stop instead of the whole run. Keeps compile "
-        "out of the report; the app must call the API or nothing is collected."
-    ),
-)
+@profile_cli_options
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
@@ -1107,17 +1064,13 @@ def run(
         raise click.UsageError("--profile installs its profiler during setup; it cannot be combined with --no-sync.")
     if profile_output and not profile:
         raise click.UsageError("--profile-output has no effect without --profile.")
-    # --profile selects the backend; here 'nsys' is the only one. An omitted
-    # --profile-output is fine: the task defaults it to its own cluster's temp bucket.
-    profile_hook: TaskHook | None = (
-        NsysHook(
-            output_uri=profile_output,
-            tasks=profile_tasks,
-            trace=profile_trace,
-            capture_range=profile_capture_range,
-        )
-        if profile
-        else None
+    # The nsys hook owns its --profile* flags and how to build itself from them.
+    profile_hook: TaskHook | None = build_profile_hook(
+        profile,
+        output_uri=profile_output,
+        tasks=profile_tasks,
+        trace=profile_trace,
+        capture_range=profile_capture_range,
     )
 
     submit_argv = redact_submit_argv(list(sys.argv))

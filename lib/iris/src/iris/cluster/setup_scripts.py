@@ -179,63 +179,6 @@ fi
 """
 
 
-# Nsight Systems is not in the task image and has no PyPI distribution, so a profiled
-# job fetches it. Pinned: a report is read by a GUI of the same or newer version, and a
-# floating version would silently change what a rerun produces.
-NSYS_VERSION = "2026.1.3"
-_NSYS_BUILD = "2026.1.3.425-1"
-# Install root, relative to the task workdir; living there needs no new mount.
-NSYS_INSTALL_DIR = ".iris-nsys"
-_NSYS_DEB_REPO = "https://developer.download.nvidia.com/compute/cuda/repos/debian12"
-
-
-def nsys_bin_glob(install_root: str) -> str:
-    """Return the glob matching the ``nsys`` binary under *install_root*.
-
-    The deb lays the target CLI out per-architecture, so the leaf directory differs
-    between Grace (``sbsa-armv8``) and x86 nodes; the glob resolves either.
-
-    *install_root* is interpolated verbatim, so the caller decides who expands it:
-    the setup script passes a shell expression for bash, while the run-phase wrapper
-    passes an already-resolved path (it globs in Python, which expands nothing).
-    """
-    return f"{install_root}/opt/nvidia/nsight-systems/{NSYS_VERSION}/target-linux-*/nsys"
-
-
-def nsys_setup_script() -> str:
-    """Return a setup script that installs the Nsight Systems CLI into ``NSYS_HOME``.
-
-    Appended to a job's setup only when Nsight profiling is requested. The deb is
-    *extracted*, not installed: ``apt install`` would pull the Qt/GUI dependency
-    chain, while the target CLI binary is self-contained. The arm64 CLI-only deb is
-    too old for Blackwell, so the full package is the only option on Grace.
-
-    Re-running is a no-op once the binary is present, so a retry on a warm workdir
-    skips the ~450 MB fetch.
-    """
-    nsys_home = f'"$IRIS_WORKDIR"/{NSYS_INSTALL_DIR}'
-    bin_glob = nsys_bin_glob(f"$IRIS_WORKDIR/{NSYS_INSTALL_DIR}")
-    return rf"""set -e
-_nsys_bin=$(ls {bin_glob} 2>/dev/null | head -1 || true)
-if [ -n "$_nsys_bin" ]; then echo 'nsight-systems already installed'; exit 0; fi
-case "$(uname -m)" in
-  aarch64) _nsys_arch=sbsa; _nsys_pkg_arch=arm64 ;;
-  x86_64)  _nsys_arch=x86_64; _nsys_pkg_arch=amd64 ;;
-  *) echo "[iris setup] no nsight-systems build for $(uname -m)" >&2; exit 1 ;;
-esac
-echo "installing nsight-systems {NSYS_VERSION} ($_nsys_arch)"
-mkdir -p {nsys_home}
-_nsys_deb={nsys_home}/nsight-systems.deb
-curl -fsSL -o "$_nsys_deb" \
-  "{_NSYS_DEB_REPO}/$_nsys_arch/nsight-systems-{NSYS_VERSION}_{_NSYS_BUILD}_$_nsys_pkg_arch.deb"
-dpkg-deb -x "$_nsys_deb" {nsys_home}
-rm -f "$_nsys_deb"
-_nsys_bin=$(ls {bin_glob} 2>/dev/null | head -1 || true)
-if [ -z "$_nsys_bin" ]; then echo '[iris setup] nsight-systems extract produced no binary' >&2; exit 1; fi
-"$_nsys_bin" --version
-"""
-
-
 def iris_runtime_setup_script() -> str:
     """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
 

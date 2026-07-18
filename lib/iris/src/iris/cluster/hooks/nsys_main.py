@@ -3,10 +3,11 @@
 
 """Per-task Nsight Systems launch wrapper.
 
-``python -m iris.runtime.nsys --tasks SPEC [--output-uri URI] -- <argv>`` runs ``<argv>``
-under ``nsys profile`` when this task is selected, and execs ``<argv>`` unchanged
+``python -m iris.cluster.hooks.nsys_main --tasks SPEC [--output-uri URI] -- <argv>`` runs
+``<argv>`` under ``nsys profile`` when this task is selected, and execs ``<argv>`` unchanged
 otherwise. Without ``--output-uri`` the report goes to the cluster's temp bucket,
-resolved from the task env (see :func:`default_output_uri`).
+resolved from the task env (see :func:`default_output_uri`). The submit-time half —
+``NsysHook`` and the install script — is the sibling :mod:`iris.cluster.hooks.nsys`.
 
 The wrapper sits outside the multi-process GPU supervisor, so ``<argv>`` is the
 supervisor (or the command itself at ``processes_per_task=1``) and one report covers
@@ -59,7 +60,7 @@ from rigging.filesystem import StoragePath
 from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, nsys_bin_glob
+from iris.cluster.hooks.nsys import NSYS_INSTALL_DIR, nsys_bin_glob
 
 logger = logging.getLogger("iris.nsys")
 
@@ -268,11 +269,11 @@ def main(argv: list[str] | None = None) -> NoReturn:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     raw = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw:
-        raise SystemExit("usage: python -m iris.runtime.nsys --tasks SPEC [--output-uri URI] -- <command...>")
+        raise SystemExit("usage: python -m iris.cluster.hooks.nsys_main --tasks SPEC [--output-uri URI] -- <command...>")
     split = raw.index("--")
     own_args, command = raw[:split], raw[split + 1 :]
 
-    parser = argparse.ArgumentParser(prog="python -m iris.runtime.nsys")
+    parser = argparse.ArgumentParser(prog="python -m iris.cluster.hooks.nsys_main")
     parser.add_argument("--tasks", required=True, help="'first', 'all', or a comma-separated list of task indices")
     parser.add_argument("--trace", required=True, help="nsys --trace value (e.g. cuda,nvtx,cublas)")
     parser.add_argument("--output-uri", default=None, help="report directory URI (default: the cluster temp bucket)")

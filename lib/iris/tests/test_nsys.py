@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.runtime.nsys launch wrapper, the client-side entrypoint wrapping
-that drives it, and the setup script that installs the profiler. None of this runs nsys."""
+"""Tests for the iris.cluster.hooks.nsys_main launch wrapper, the client-side entrypoint
+wrapping that drives it, and the setup script that installs the profiler. None of this runs nsys."""
 
 from __future__ import annotations
 
@@ -16,10 +16,8 @@ from typing import NoReturn
 import pytest
 from iris.client.client import collect_hooks
 from iris.cluster.client.job_info import set_job_info
-from iris.cluster.hooks import NsysHook
-from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob
-from iris.cluster.types import EnvironmentSpec, ResourceSpec, gpu_device
-from iris.runtime.nsys import (
+from iris.cluster.hooks.nsys import NSYS_INSTALL_DIR, NSYS_VERSION, NsysHook, nsys_bin_glob
+from iris.cluster.hooks.nsys_main import (
     _supervise,
     build_nsys_argv,
     default_output_uri,
@@ -30,12 +28,13 @@ from iris.runtime.nsys import (
     task_index_from_env,
     workdir,
 )
-from iris.runtime.nsys import (
+from iris.cluster.hooks.nsys_main import (
     main as nsys_main,
 )
+from iris.cluster.types import EnvironmentSpec, ResourceSpec, gpu_device
 
 CMD = ["python", "train.py", "--steps", "10"]
-# Positional signature of iris.runtime.nsys.run, as main() calls it.
+# Positional signature of iris.cluster.hooks.nsys_main.run, as main() calls it.
 _RUN_PARAMS = ("tasks", "trace", "capture_range", "output_uri", "argv")
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
 
@@ -90,14 +89,14 @@ def test_task_index_from_env_requires_a_task_context(monkeypatch: pytest.MonkeyP
 
 
 def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The nsys hook builds this argv and iris.runtime.nsys parses it. Nothing else binds
-    the two, so a flag renamed on one side has to fail here rather than on a GPU."""
+    """The nsys hook builds this argv and iris.cluster.hooks.nsys_main parses it. Nothing else
+    binds the two, so a flag renamed on one side has to fail here rather than on a GPU."""
     hook = NsysHook(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True)
     wrapped = hook.wrap(["python", "train.py"])
-    assert wrapped[:3] == ["python", "-m", "iris.runtime.nsys"]
+    assert wrapped[:3] == ["python", "-m", "iris.cluster.hooks.nsys_main"]
 
     seen: dict[str, object] = {}
-    monkeypatch.setattr("iris.runtime.nsys.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
     nsys_main(wrapped[3:])
 
     assert seen == {
@@ -127,7 +126,7 @@ def test_collect_hooks_orders_nsys_outside_the_multigpu_supervisor() -> None:
     command = ["python", "train.py"]
     for hook in collect_hooks(env, _gpu_resources(8), processes_per_task=8):
         command = hook.wrap(command)
-    assert command.index("iris.runtime.nsys") < command.index("iris.runtime.multigpu")
+    assert command.index("iris.cluster.hooks.nsys_main") < command.index("iris.runtime.multigpu")
 
 
 def test_hook_omits_output_uri_when_unset() -> None:
@@ -287,7 +286,7 @@ def _fake_supervise(returncode: int, write_report: bool):
 
 
 def test_selected_task_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
-    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(0, write_report=True))
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
     destination = selected_task / "uploads"
 
     with pytest.raises(SystemExit) as excinfo:
@@ -307,8 +306,8 @@ def test_run_uploads_to_the_default_when_output_uri_is_unset(
 ) -> None:
     """output_uri=None routes the upload through default_output_uri (resolved in-task)."""
     destination = selected_task / "default-dest"
-    monkeypatch.setattr("iris.runtime.nsys.default_output_uri", lambda: f"file://{destination}")
-    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(0, write_report=True))
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main.default_output_uri", lambda: f"file://{destination}")
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
 
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=None, argv=CMD)
@@ -319,7 +318,7 @@ def test_run_uploads_to_the_default_when_output_uri_is_unset(
 
 def test_failing_command_still_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
     """A crash is exactly when the profile is worth keeping."""
-    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(7, write_report=True))
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(7, write_report=True))
     destination = selected_task / "uploads"
 
     with pytest.raises(SystemExit) as excinfo:
@@ -338,7 +337,7 @@ def test_supervise_normalizes_a_signalled_child(monkeypatch: pytest.MonkeyPatch)
 
 def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
     """If nsys wrote nothing, the command's own failure is the useful signal, not ours."""
-    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(3, write_report=False))
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(3, write_report=False))
     destination = selected_task / "uploads"
 
     with pytest.raises(SystemExit) as excinfo:
@@ -353,7 +352,7 @@ def test_missing_report_fails_even_when_the_command_succeeded(
 ) -> None:
     """Exiting 0 here would record a green task that produced no profile and then drop
     the workdir — the one artifact the run was for."""
-    monkeypatch.setattr("iris.runtime.nsys._supervise", _fake_supervise(0, write_report=False))
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main._supervise", _fake_supervise(0, write_report=False))
 
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{selected_task / 'uploads'}", argv=CMD)
