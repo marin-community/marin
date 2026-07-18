@@ -93,8 +93,7 @@ async def _run_episode(task_dir: Path, cluster: str, index: int) -> float:
         cluster=cluster,
         name=f"hello-world-{index}",
         # The default gvisor profile gives the verifier's apt full in-container
-        # root under runsc; submitting still needs the admin role (privileged
-        # outer container).
+        # root under runsc; requires runsc-equipped workers (post-#7339 boots).
     ) as sandbox:
         await sandbox.upload_dir(task_dir / "solution", "/solution")
         agent = await sandbox.exec("bash /solution/solve.sh")

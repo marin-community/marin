@@ -8,12 +8,13 @@ onto spare host CPU, TPU hosts included). Only prebuilt-image tasks
 (``[environment] docker_image = ...``) are supported; Dockerfile/compose
 builds are not.
 
-The default ``gvisor`` profile follows lib/iris/docs/container-profiles.md
-("Running gVisor inside a container"): the job runs a privileged podman
-container as trusted plumbing, and the task image runs inside it under
-``podman run --runtime runsc``, so untrusted agent code gets full in-container
-root (apt/setuid work) behind gVisor's intercepted guest kernel instead of the
-host kernel. Submitting the privileged outer job requires the Iris admin role.
+The default ``gvisor`` profile submits CONTAINER_PROFILE_GVISOR: the whole
+task container runs under the gVisor runtime (docker --runtime=runsc), so
+untrusted agent code gets full in-container root (apt/setuid work) behind
+gVisor's intercepted guest kernel instead of the host kernel, with no admin
+gate. Requires runsc on the worker — installed by the GCP worker bootstrap on
+workers booted with post-#7339 code; on older workers GVISOR jobs fail at
+container creation.
 
 Usage:
     harbor trials start -p <task-dir> -a oracle \\
@@ -60,42 +61,12 @@ DEFAULT_CPUS = 1
 DEFAULT_MEMORY_MB = 2048
 DEFAULT_STORAGE_MB = 10240
 
-# Outer image for the gvisor profile. Podman over dind: daemonless, takes the
-# runsc path as a plain --runtime flag, and (unlike alpine dind) has the bash
-# that Iris's docker runtime needs to launch the task. Cached by the worker.
-GVISOR_OUTER_IMAGE = "quay.io/podman/stable:v5.4"
-# Pin explicitly; bump by checking https://github.com/google/gvisor/releases
-# (tag "release-YYYYMMDD.P" publishes to the "YYYYMMDD.P" release path).
-RUNSC_VERSION = "20260714.0"
-RUNSC_BASE_URL = f"https://storage.googleapis.com/gvisor/releases/release/{RUNSC_VERSION}"
-# User-mode networking for the inner sandbox: a per-container tap device with
-# NAT through ordinary outer-container sockets. The outer container shares the
-# host netns (Iris tasks are host-networked), so bridge networking would mutate
-# worker firewall state and collide between sandboxes; slirp4netns does neither,
-# and gVisor's netstack drives its tap directly (verified: bridge veths do not
-# come up under runsc here). Podman v5 dropped the binary, so fetch it pinned.
-SLIRP4NETNS_VERSION = "1.3.1"
-SLIRP4NETNS_URL = f"https://github.com/rootless-containers/slirp4netns/releases/download/v{SLIRP4NETNS_VERSION}"
-INNER_CONTAINER = "sandbox"
-# vfs sidesteps overlay-on-overlay inside the outer container.
-PODMAN = "podman --storage-driver=vfs"
-# Register runsc with --ignore-cgroups: podman (--cgroups=enabled, overriding
-# the image's nested-use cgroups="disabled" that only crun may run under) owns
-# the cgroup, runsc stays out of it. Verified working combination.
-RUNSC_PODMAN_CONF = '[engine.runtimes]\\nrunsc = ["/usr/local/bin/runsc", "--ignore-cgroups"]\\n'
-# The outer container is host-networked and resolves via the host's
-# systemd-resolved loopback stub, which is unreachable from the inner bridge
-# network — give the sandbox real resolvers (GCP metadata DNS + public fallback).
-INNER_DNS_FLAGS = "--dns 169.254.169.254 --dns 8.8.8.8"
-IMAGE_PULL_TIMEOUT = 600
-
 GVISOR_PROFILE = "gvisor"
 _CONTAINER_PROFILES = {
     "restricted": job_pb2.CONTAINER_PROFILE_RESTRICTED,
     "default": job_pb2.CONTAINER_PROFILE_DEFAULT,
     "privileged": job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-    # gvisor submits PRIVILEGED but nests the task image under runsc.
-    GVISOR_PROFILE: job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    GVISOR_PROFILE: job_pb2.CONTAINER_PROFILE_GVISOR,
 }
 
 _LOCAL_PROTOCOLS = ("", "file", "local")
@@ -164,13 +135,12 @@ class IrisEnvironment(BaseEnvironment):
             scheduling_timeout: Seconds to wait for the sandbox task to be
                 scheduled and reach RUNNING. Accepts str because harbor's
                 --environment-kwarg values arrive as strings.
-            container_profile: "gvisor" (default) runs the task image nested
-                under runsc inside a privileged podman job — full
-                in-container root (apt/setuid) isolated from the host kernel.
-                "restricted"/"default"/"privileged" run the task image directly
-                under that Iris profile; "default" drops all capabilities, so
-                setuid commands fail there. gvisor and privileged require the
-                admin role to submit.
+            container_profile: "gvisor" (default) runs the task container
+                under the gVisor runtime — full in-container root (apt/setuid)
+                isolated from the host kernel, no admin gate, but the worker
+                must carry runsc (post-#7339 boots). "default" drops all
+                capabilities, so setuid commands fail there; "privileged" is
+                admin-gated.
             sandbox_ttl: Hard job TTL in seconds after which Iris kills the
                 sandbox even if stop() is never called (leaked-harness safety
                 net). Accepts str like scheduling_timeout.
@@ -181,7 +151,6 @@ class IrisEnvironment(BaseEnvironment):
         self._cluster = cluster
         self._controller_url = controller_url
         self._scheduling_timeout = int(scheduling_timeout)
-        self._gvisor = container_profile == GVISOR_PROFILE
         self._container_profile = _CONTAINER_PROFILES[container_profile]
         self._sandbox_ttl = int(sandbox_ttl)
         self._iris: IrisClient | None = None
@@ -220,8 +189,6 @@ class IrisEnvironment(BaseEnvironment):
         # (or is cancelled), so a failed start cannot leak a sandbox until
         # the TTL fires.
         try:
-            if self._gvisor:
-                await self._start_inner_sandbox()
             # Non-mounting environments use the trial's mount targets as mkdir
             # hints (e.g. /logs/agent, /logs/verifier); see BaseEnvironment.mounts.
             dirs = self._mount_targets(writable_only=True)
@@ -270,7 +237,7 @@ class IrisEnvironment(BaseEnvironment):
                 memory=(self.task_env_config.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
                 disk=(self.task_env_config.storage_mb or DEFAULT_STORAGE_MB) * 1024 * 1024,
             ),
-            task_image=GVISOR_OUTER_IMAGE if self._gvisor else self.task_env_config.docker_image,
+            task_image=self.task_env_config.docker_image,
             container_profile=self._container_profile,
             scheduling_timeout=Duration.from_seconds(self._scheduling_timeout),
             timeout=Duration.from_seconds(self._sandbox_ttl),
@@ -285,36 +252,6 @@ class IrisEnvironment(BaseEnvironment):
             self._stop_sync()
             raise
         self.logger.info(f"Sandbox task {self._task_id} running (job {self._job.job_id})")
-
-    async def _start_inner_sandbox(self) -> None:
-        """Bring up the task image under runsc inside the outer podman container.
-
-        The outer container is trusted plumbing (podman, daemonless); the task
-        image — where untrusted agent code runs — only ever executes under the
-        runsc runtime.
-        """
-        arch = (await self._outer_check_exec("uname -m")).stdout.strip()
-        await self._outer_check_exec(
-            f"curl -fsSL {RUNSC_BASE_URL}/{arch}/runsc -o /usr/local/bin/runsc"
-            f" && curl -fsSL {RUNSC_BASE_URL}/{arch}/runsc.sha512 -o /usr/local/bin/runsc.sha512"
-            f" && cd /usr/local/bin && sha512sum -c runsc.sha512 && chmod 0755 runsc",
-            error="failed to install runsc",
-        )
-        await self._outer_check_exec(
-            f"curl -fsSL {SLIRP4NETNS_URL}/slirp4netns-{arch} -o /usr/local/bin/slirp4netns"
-            " && chmod 0755 /usr/local/bin/slirp4netns",
-            error="failed to install slirp4netns",
-        )
-        await self._outer_check_exec(
-            "mkdir -p /etc/containers/containers.conf.d"
-            f" && printf '{RUNSC_PODMAN_CONF}' > /etc/containers/containers.conf.d/runsc.conf"
-        )
-        image = shlex.quote(self.task_env_config.docker_image)
-        await self._outer_check_exec(f"{PODMAN} pull {image}", timeout_sec=IMAGE_PULL_TIMEOUT)
-        await self._outer_check_exec(
-            f"{PODMAN} run -d --name {INNER_CONTAINER} --cgroups=enabled --network=slirp4netns"
-            f" --runtime runsc {INNER_DNS_FLAGS} --entrypoint sleep {image} infinity"
-        )
 
     def _wait_for_running(self) -> str:
         assert self._job is not None
@@ -363,16 +300,7 @@ class IrisEnvironment(BaseEnvironment):
     ) -> ExecResult:
         effective_cwd = cwd or self.task_env_config.workdir
         script = self._build_script(command, cwd=effective_cwd, env=env, user=user)
-        if self._gvisor:
-            script = f"{PODMAN} exec {INNER_CONTAINER} sh -c {shlex.quote(script)}"
         return await asyncio.to_thread(self._exec_sync, script, timeout_sec)
-
-    async def _outer_check_exec(
-        self, command: str, timeout_sec: int | None = None, error: str | None = None
-    ) -> ExecResult:
-        """Run a command in the outer job container (podman plumbing, not the sandbox)."""
-        result = await asyncio.to_thread(self._exec_sync, command, timeout_sec)
-        return _require_success(result, error or f"command failed: {command}", IrisSandboxError)
 
     def _build_script(
         self,
