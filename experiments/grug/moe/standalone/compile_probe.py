@@ -56,6 +56,7 @@ def _parse():
     p.add_argument("--num-experts", type=int, default=64)
     p.add_argument("--num-experts-per-token", type=int, default=4)
     p.add_argument("--head-dim", type=int, default=128)
+    p.add_argument("--num-kv-heads", type=int, default=0, help="0 = MHA (num_heads)")
     p.add_argument("--num-gpus", type=int, default=32)
     p.add_argument("--moe-implementation", default="ring")
     p.add_argument("--expert-parallelism", type=int, default=8)
@@ -95,13 +96,14 @@ def main():
             mxfp8_save_qweights=a.mxfp8_save_qweights,
         )
     nh = a.hidden_dim // a.head_dim
+    nkv = a.num_kv_heads or nh
     inter = a.hidden_dim // 2
     model = GrugModelConfig(
         vocab_size=128256,
         hidden_dim=a.hidden_dim,
         num_layers=a.num_layers,
         num_heads=nh,
-        num_kv_heads=nh,
+        num_kv_heads=nkv,
         head_dim=a.head_dim,
         intermediate_dim=inter,
         shared_expert_intermediate_dim=inter,

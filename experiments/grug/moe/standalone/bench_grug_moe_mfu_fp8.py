@@ -37,6 +37,9 @@ from experiments.grug.moe.train import _compute_flops, _make_train_step, initial
 
 _H100_BF16_PEAK_FLOPS = 9.89e14
 _B200_BF16_PEAK_FLOPS = 2.25e15
+# GB200 NVL72 bf16 dense per-GPU (360 PF sparse / 72 / 2) — matches fray device_flops
+# and the #7201 scale-run convention.
+_GB200_BF16_PEAK_FLOPS = 2.5e15
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 
 
@@ -99,6 +102,7 @@ def _parse():
     p.add_argument("--num-experts", type=int, default=64)
     p.add_argument("--num-experts-per-token", type=int, default=4)
     p.add_argument("--head-dim", type=int, default=128)
+    p.add_argument("--num-kv-heads", type=int, default=0, help="0 = MHA (num_heads)")
     p.add_argument("--num-gpus", type=int, default=8)
     p.add_argument("--moe-implementation", default="ring")
     p.add_argument("--expert-parallelism", type=int, default=8)
@@ -121,6 +125,7 @@ def main():
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     nh = a.hidden_dim // a.head_dim
+    nkv = a.num_kv_heads or nh
     inter = a.hidden_dim // 2
     fp8 = None
     if a.fp8:
@@ -137,7 +142,7 @@ def main():
         hidden_dim=a.hidden_dim,
         num_layers=a.num_layers,
         num_heads=nh,
-        num_kv_heads=nh,
+        num_kv_heads=nkv,
         head_dim=a.head_dim,
         intermediate_dim=inter,
         shared_expert_intermediate_dim=inter,
@@ -186,6 +191,7 @@ def main():
                 "achieved_flops_per_second": achieved,
                 "mfu_h100": achieved / peak,
                 "mfu_b200_conv": achieved / (a.num_gpus * _B200_BF16_PEAK_FLOPS),
+                "mfu_gb200": achieved / (a.num_gpus * _GB200_BF16_PEAK_FLOPS),
                 "loss": float(loss),
             }
             metrics.append(m)
