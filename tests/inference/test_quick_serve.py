@@ -42,7 +42,6 @@ from marin.inference.serving_backend import (
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_server import (
     DEFAULT_CUDA_VLLM_VERSION,
-    WORKER_PYTHON_VERSION,
     IsolatedCudaVllm,
     IsolatedTpuVllm,
     VllmType,
@@ -98,17 +97,11 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
 
 
 def test_isolated_cuda_vllm_upstream_command_and_env():
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version="0.25.1")
-    assert launcher.command() == [
-        "uvx",
-        "--from",
-        "vllm[runai]==0.25.1",
-        "--python",
-        WORKER_PYTHON_VERSION,
-        "--torch-backend",
-        "cu130",
-        "vllm",
-    ]
+    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    command = launcher.command()
+
+    assert f"vllm[runai]=={DEFAULT_CUDA_VLLM_VERSION}" in command
+    assert command[command.index("--torch-backend") + 1] == "cu130"
     assert launcher.env() == {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 
 

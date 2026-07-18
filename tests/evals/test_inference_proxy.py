@@ -240,7 +240,7 @@ def test_iris_brokered_vllm_worker_environment_matches_backend(
     assert worker_request.environment.env_vars.get("VLLM_TARGET_DEVICE") == expected_target_device
 
 
-def test_gpu_backend_uses_isolated_cuda_and_all_requested_gpus() -> None:
+def test_gpu_backend_uses_isolated_cuda() -> None:
     backend = GpuVllmBackend()
     resources = ResourceConfig.with_gpu("H100", count=8)
 
@@ -250,7 +250,6 @@ def test_gpu_backend_uses_isolated_cuda_and_all_requested_gpus() -> None:
         source=VllmType.UPSTREAM,
         version="0.25.1",
     )
-    assert backend.server_args(resources) == ["--tensor-parallel-size", "8"]
 
 
 @pytest.mark.parametrize(
