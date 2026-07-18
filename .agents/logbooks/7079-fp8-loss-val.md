@@ -437,3 +437,22 @@ saves, both exonerated); fix = `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`
 (FP8VAL-004). (2) FP8's transient arena is **1.66× bf16** (+15 GiB), attributed
 to the cast-transpose **dual-write** operand caching — a deliberate TE-style
 speed optimization, not a blocker (FP8VAL-005/-005a).
+
+### FP8VAL-007 — trajectories posted to W&B (2026-07-18 10:20 UTC)
+
+Both validation arms backfilled into W&B `marin-community/marin_moe`, group
+`fp8-loss-val-7079` (per the `wandb-reporting` skill: grug MoE runs live in that
+project/entity), full 24k-step per-step `train/loss` + throughput + MFU, history
+CSVs attached as artifacts:
+
+- bf16 control: https://wandb.ai/marin-community/marin_moe/runs/fp8val-bf16-control
+- FP8 (PR #7079): https://wandb.ai/marin-community/marin_moe/runs/fp8val-fp8
+- group (overlaid): https://wandb.ai/marin-community/marin_moe/groups/fp8-loss-val-7079
+
+Post-hoc backfill (runs used `json_logger` at train time — no `WANDB_API_KEY`
+on the launch box); replayed from the harvested job logs via
+`experiments/grug/moe/fp8val_wandb_backfill.py`. Gotchas for next time: the
+sandbox blocks the wandb streaming service so `wandb.init` online hangs — use
+`WANDB_MODE=offline` + `wandb sync` (REST upload works). A deleted W&B run id is
+tombstoned (409 on reuse), hence bf16's id is `fp8val-bf16-control` with display
+name `fp8val-bf16`. Key is in agenix as `wandb-api-key`.
