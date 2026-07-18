@@ -103,24 +103,14 @@ SHARD_COUNT: dict[str, int] = {"levanter": 4}
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
 MIN_FILES_PER_SHARD = 15
 
-# Native (maturin) packages, keyed by their owning scope. A change under a
-# crate's rust/ tree is invisible to the Python import graph, so classify records
-# it as a native change; main expands that through SOURCE_LEGS to select and
-# source-build the legs that exercise the extension.
+# Native (maturin) packages, keyed by their owning scope. A change under a crate's
+# rust/ tree is invisible to the Python import graph, so classify force-selects the
+# owning scope and builds it from source. Its own tests cover the extension;
+# downstream consumers are selected only by their Python-level changes and run
+# against the prebuilt wheel.
 NATIVE_CRATE_DIR: dict[str, str] = {
     "dupekit": "lib/dupekit/rust",
     "finelog": "lib/finelog/rust",
-}
-
-# Scopes whose tests exercise each native extension. When a native crate's Rust
-# changes, every one of these legs is force-selected and built from source rather
-# than installed from the prebuilt wheel, so its tests run against the new Rust.
-# marin's dedup tests call dupekit's kernels; iris runs the in-process finelog
-# server. Transitive-only carriers (levanter/zephyr/fray depend on marin-iris but
-# do not exercise finelog_server in unit tests) stay on the wheel.
-SOURCE_LEGS: dict[str, frozenset[str]] = {
-    "dupekit": frozenset({"dupekit", "marin"}),
-    "finelog": frozenset({"finelog", "iris"}),
 }
 
 # The matrix `setup` tag that unified-unit.yaml maps to the Rust source-build
@@ -384,13 +374,14 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
-        # import graph; record it, and main expands it through SOURCE_LEGS to
-        # force-select and source-build every leg that exercises the extension.
+        # import graph, so force-select the owning scope and mark it for a source
+        # build; its own tests exercise the extension.
         native_scope = next(
             (scope for scope, crate_dir in NATIVE_CRATE_DIR.items() if filepath.startswith(f"{crate_dir}/")),
             None,
         )
         if native_scope is not None:
+            forced.add(native_scope)
             native_changed.add(native_scope)
             continue
 
@@ -593,10 +584,9 @@ def main() -> None:
     # Without a base ref there is no diff to inspect, so conservatively build every native
     # extension from source and run the out-of-band suites too.
     if args.base_ref is None:
-        all_source_legs = {leg for legs in SOURCE_LEGS.values() for leg in legs}
         result = {
             "reason": "run-all-tests",
-            "matrix": full_matrix(repo_root, all_source_legs),
+            "matrix": full_matrix(repo_root, set(NATIVE_CRATE_DIR)),
             "suites": sorted(EXTRA_SUITE_TRIGGERS),
         }
         print(json.dumps(result, indent=2))
@@ -606,12 +596,11 @@ def main() -> None:
     classification = classify(changed, repo_root)
     suites = extra_suites(changed)
 
-    # The legs whose tests exercise a native extension whose Rust changed. They both
-    # force-select (a rust-only change is invisible to the import graph) and build the
-    # extension from source. This is independent of full vs. diff-driven runs: a broad
-    # trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the fast
-    # prebuilt-wheel path.
-    source_build_scopes = {leg for native in classification.native_changed for leg in SOURCE_LEGS[native]}
+    # The scopes whose native extension's Rust changed build it from source; every other
+    # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
+    # broad trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the
+    # fast prebuilt-wheel path.
+    source_build_scopes = set(classification.native_changed)
 
     if args.run_all_tests:
         reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)
@@ -622,7 +611,7 @@ def main() -> None:
         matrix = compute_matrix(
             classification.src_modules,
             classification.direct_tests,
-            classification.forced | source_build_scopes,
+            classification.forced,
             source_build_scopes,
             repo_root,
         )

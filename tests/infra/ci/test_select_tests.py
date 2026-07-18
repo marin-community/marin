@@ -10,7 +10,6 @@ from infra.ci.select_tests import (
     MIN_FILES_PER_SHARD,
     SCOPES,
     SHARD_COUNT,
-    SOURCE_LEGS,
     UV_PACKAGE,
     classify,
     compute_matrix,
@@ -27,13 +26,13 @@ from infra.ci.select_tests import (
 def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
     """Mirror the diff-driven branch of select_tests.main without git."""
     classification = classify(changed_files, repo_root)
-    source_build_scopes = {leg for native in classification.native_changed for leg in SOURCE_LEGS[native]}
+    source_build_scopes = set(classification.native_changed)
     if classification.broad:
         return full_matrix(repo_root, source_build_scopes)
     return compute_matrix(
         classification.src_modules,
         classification.direct_tests,
-        classification.forced | source_build_scopes,
+        classification.forced,
         source_build_scopes,
         repo_root,
     )
@@ -340,18 +339,28 @@ def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]
     return next(entry for entry in matrix if entry["label"] == label)
 
 
-def test_native_rust_change_is_recorded_as_a_native_change(tmp_path: Path) -> None:
-    """A rust/ change is invisible to the import graph, so classify records it as a native
-    change; main expands it through SOURCE_LEGS to drive selection."""
+def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
+    """A rust/ change is invisible to the import graph, so it force-selects its owning scope
+    and marks it for a source build."""
     result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    assert result.forced == {"dupekit"}
     assert result.native_changed == {"dupekit"}
     # A Cargo.lock under the crate counts as a native change too.
     assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
 
 
-def test_native_change_source_builds_the_legs_that_exercise_it(tmp_path: Path) -> None:
-    """A finelog rust change source-builds finelog and the iris legs that run the native
-    server; a co-changed carrier scope that only ships the wheel stays on it."""
+def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> None:
+    """A rust-only change runs the owning scope from source; its own tests cover the native,
+    and consumers are not pulled in."""
+    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    assert scopes_in(matrix) == {"dupekit"}
+    assert _leg(matrix, "dupekit")["setup"] == "rust"
+    assert _leg(matrix, "dupekit")["timeout"] == 30
+
+
+def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> None:
+    """A finelog rust change source-builds only the finelog leg; a co-changed consumer (iris)
+    is selected by its own Python change and runs against the prebuilt wheel."""
     write(tmp_path, "lib/iris/src/iris/__init__.py")
     write(tmp_path, "lib/iris/src/iris/log.py", "X = 1\n")
     write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
@@ -359,22 +368,7 @@ def test_native_change_source_builds_the_legs_that_exercise_it(tmp_path: Path) -
     matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
 
     assert _leg(matrix, "finelog")["setup"] == "rust"
-    assert _leg(matrix, "finelog")["timeout"] == 30
-    assert _leg(matrix, "iris")["setup"] == "rust"
-
-
-def test_dupekit_rust_change_source_builds_dupekit_and_marin(tmp_path: Path) -> None:
-    """dupekit's kernels back marin's dedup tests, so a rust-only change force-selects and
-    source-builds both legs even without a marin Python edit (SOURCE_LEGS drives selection)."""
-    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
-    assert scopes_in(matrix) == {"dupekit", "marin"}
-    assert _leg(matrix, "dupekit")["setup"] == "rust"
-    assert _leg(matrix, "marin")["setup"] == "rust"
-
-    # finelog's server backs iris, so a finelog rust change reaches the iris leg the same way.
-    iris_matrix = select_matrix(["lib/finelog/rust/src/lib.rs"], tmp_path)
-    assert scopes_in(iris_matrix) == {"finelog", "iris"}
-    assert _leg(iris_matrix, "iris")["setup"] == "rust"
+    assert _leg(matrix, "iris")["setup"] == ""
 
 
 def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
