@@ -143,11 +143,13 @@ jobs:
               for package in lock.get("package", [])
               if package.get("name") == "torch" and package.get("version", "").endswith("+cpu")
           }
-          if len(versions) != 1:
-              raise SystemExit(
-                  f"Expected exactly one torch +cpu version in uv.lock, found {len(versions)}: {sorted(versions)}"
-              )
-          print(next(iter(versions)))
+          if not versions:
+              raise SystemExit("Expected at least one torch +cpu version in uv.lock, found none")
+          # The vllm extra pins an older torch (2.11) than the gpu/tpu/cpu extras
+          # (2.13), so the lock can carry more than one +cpu version. The
+          # torch-marked suite runs the torch_test extra, which resolves to the
+          # primary stack, so install the newest +cpu wheel.
+          print(max(versions, key=lambda v: tuple(int(p) for p in v.split("+")[0].split("."))))
           PY
           )
           echo "Using torch ${TORCH_CPU_VERSION}"
