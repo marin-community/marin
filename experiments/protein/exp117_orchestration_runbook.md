@@ -1,10 +1,11 @@
 # exp117 adaptive-sweep — orchestration runbook (s02)
 
-> **STATUS (2026-07-17): s02 is a FRESH campaign, not yet launched.** No s02 trials exist. The
-> old s01 results (LR grid `[1e-3,3.16e-3,1e-2]`, fixed batch 128; best final loss 2.727) live in
-> `scratch/exp117-adaptive-sweep-s01.sqlite` and are **frozen** — s02 does not resume, transfer, or read
-> them (different grid + a new `batch_size` axis ⇒ different logical trials). First s02 submission is
-> gated by the policy's review directive; the assembled iris command now carries `BATCH_SIZE`.
+> **STATUS (2026-07-18): s02 EXECUTING, rung 0.** Full-scale ramp done; ~40 logical trials launched,
+> 10 rung-0 objectives in, cap `max_inflight_chips=2048`. **Two competitive basins** (top 3 within
+> 0.01): the low-LR/high-WD corner **`lr3.16e-4/wd1.6/bs128 = 2.7489` (best)** and `lr1e-3/wd1.6/bs128
+> = 2.756`, vs the high-LR basin `lr3.16e-3/wd0.2/bs256 = 2.758`. Rung 0 not converged. Operator-
+> requested **bs64 catch-up** in progress (see Slice-throughput balancing). The old s01 results
+> (best 2.727) are **frozen** in `scratch/exp117-adaptive-sweep-s01.sqlite`; s02 does not read them.
 
 The live procedure for driving the exp117 sweep as the **Orchestrator** under
 `.agents/skills/run-adaptive-sweep/`. One pass = reconcile → converge-check → replan →
@@ -64,6 +65,18 @@ v5p exceeds 256 chips** in the topology (`v6e`/`v5litepod` have no `-512`/`-1024
 us-central1); every other family caps at 256 chips and would need gradient accumulation. `v5p-2048`
 (1024 chips) is the largest usable slice since chips ≤ batch ≤ 1024. The 512/1024 rows are inert at
 the current `[64,128,256]` batch grid.
+
+## Slice-throughput balancing (bs64 catch-up)
+Every 8-epoch run is the SAME ~37.4B tokens regardless of batch, so wall-clock ≈ tokens ÷ chips. A
+chip-efficient placement (slice chips ≈ batch/2, giving 2-way accumulation) packs more parallel
+trials but makes small-batch runs lag: bs64 on 32 chips runs at ~¼ the rate of bs256 on 128 chips
+for the same tokens. If per-batch signal is needed sooner (operator-requested 2026-07-18), **upsize
+the lagging small-batch runs to their max-feasible slice** (bs64: 32→64 chips) as chips free from
+completions, BEFORE launching new grid points. Mechanism = a same-region slice change (v6e-32→v6e-64,
+v5litepod-32→v5litepod-64): stop the job, resubmit the same `--job-name`-with-new-slice + same
+`(EPOCHS,LR,WD,BATCH_SIZE,REGION)` → the run_id is unchanged so it **resumes from checkpoint** (no
+restart-from-0). Prioritize the most-progressed runs (soonest objective). Doing this off *freed*
+chips keeps ≤ `max_inflight_chips` and avoids a sudden reallocation.
 
 ## Env (every command)
 ```
