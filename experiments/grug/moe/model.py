@@ -148,6 +148,16 @@ class GrugModelConfig:
     num_heads: int = 4
     num_kv_heads: int = 1
     head_dim: int | None = None
+    # Multi-head Latent Attention (DeepSeek-V3 style). When True, the block uses
+    # MultiheadLatentAttention instead of CausalSelfAttention: compressed KV/Q latents with
+    # learnable RMSNorm, decoupled RoPE (qk = qk_nope + qk_rope), and asymmetric v_head_dim.
+    # Keeps XSA; drops the attention gate and half-RoPE.
+    use_mla: bool = False
+    kv_lora_rank: int = 512
+    q_lora_rank: int = 1024
+    qk_nope_head_dim: int = 128
+    qk_rope_head_dim: int = 64
+    v_head_dim: int = 128
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -192,6 +202,11 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.use_mla:
+            if self.q_lora_rank < 0:
+                raise ValueError("q_lora_rank must be >= 0 (0 selects a direct Q projection)")
+            if min(self.kv_lora_rank, self.qk_nope_head_dim, self.qk_rope_head_dim, self.v_head_dim) <= 0:
+                raise ValueError("MLA requires positive kv_lora_rank / qk_nope / qk_rope / v_head_dim")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -681,10 +696,131 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+class MultiheadLatentAttention(eqx.Module):
+    """DeepSeek-V3-style Multi-head Latent Attention for grug.
+
+    Compressed KV/Q latents (``kv_lora_rank`` / ``q_lora_rank``) each with a learnable
+    RMSNorm, decoupled RoPE on ``qk_rope_head_dim`` (a single shared key head broadcast to
+    all query heads), and asymmetric attention (qk = qk_nope + qk_rope, separate
+    ``v_head_dim``). Keeps XSA; unlike ``CausalSelfAttention`` there is no attention gate and
+    no half-RoPE / PKO, so ``use_pko`` / ``disable_rope`` are ignored.
+    """
+
+    w_dkv: Float[Array, "D Ckv"]
+    kv_norm: RMSNorm
+    w_uk: Float[Array, "Ckv NKnope"]
+    w_uv: Float[Array, "Ckv NV"]
+    w_kr: Float[Array, "D R"]
+    # Query projection. With ``q_lora_rank == 0`` (DeepSeek-V3 / TorchTitan default) Q is a single
+    # direct projection ``w_q`` (D -> n*qk) and ``w_dq``/``q_norm``/``w_uq`` are None. With
+    # ``q_lora_rank > 0`` Q goes through a compressed latent (``w_dq`` -> ``q_norm`` -> ``w_uq``)
+    # and ``w_q`` is None.
+    w_q: Float[Array, "D NQ"] | None
+    w_dq: Float[Array, "D Cq"] | None
+    q_norm: RMSNorm | None
+    w_uq: Float[Array, "Cq NQ"] | None
+    w_o: Float[Array, "NV D"]
+    cfg: GrugModelConfig = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MultiheadLatentAttention":
+        d, n = cfg.hidden_dim, cfg.num_heads
+        ckv, cq = cfg.kv_lora_rank, cfg.q_lora_rank
+        nope, rope_d, vd = cfg.qk_nope_head_dim, cfg.qk_rope_head_dim, cfg.v_head_dim
+        qk = nope + rope_d
+        std = cfg.initializer_std
+        # FSDP-shard the latent (D->c) and per-head up-projection weights over ``data`` so a
+        # single-node run (``model`` axis size 1) still shards them instead of replicating on
+        # every device; the up-projections keep ``model`` tensor-parallelism on the per-head
+        # output dim. RMSNorm still sees the full latent because it acts on the gathered
+        # activation, not the sharded weight.
+        k_dkv, k_uk, k_uv, k_kr, k_q, k_o = random.split(key, 6)
+        if cq == 0:
+            # Direct Q projection (DeepSeek-V3 q_lora_rank=0), TP on ``model`` like the GQA w_q.
+            w_q = reshard(_init_weight(k_q, (d, n * qk), std), P("data", "model"))
+            w_dq = q_norm = w_uq = None
+        else:
+            k_dq, k_uq = random.split(k_q, 2)
+            w_q = None
+            w_dq = reshard(_init_weight(k_dq, (d, cq), std), P("data", None))
+            q_norm = RMSNorm.init(cq, cfg.layer_norm_eps)
+            w_uq = reshard(_init_weight(k_uq, (cq, n * qk), std), P("data", "model"))
+        return MultiheadLatentAttention(
+            w_dkv=reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None)),
+            kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),
+            w_uk=reshard(_init_weight(k_uk, (ckv, n * nope), std), P("data", "model")),
+            w_uv=reshard(_init_weight(k_uv, (ckv, n * vd), std), P("data", "model")),
+            w_kr=reshard(_init_weight(k_kr, (d, rope_d), std), P("data", None)),
+            w_q=w_q,
+            w_dq=w_dq,
+            q_norm=q_norm,
+            w_uq=w_uq,
+            w_o=reshard(_init_weight(k_o, (n * vd, d), std), P("model", "data")),
+            cfg=cfg,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        use_pko: bool = False,
+        disable_rope: bool = False,
+    ) -> Float[Array, "B S D"]:
+        del use_pko, disable_rope  # MLA has no PKO / half-RoPE
+        cfg = self.cfg
+        n = cfg.num_heads
+        nope, rope_d, vd = cfg.qk_nope_head_dim, cfg.qk_rope_head_dim, cfg.v_head_dim
+        seq_len = x.shape[1]
+        batch_spec = _batch_spec()
+        # Canonical TP head layout (heads on ``model``). The nope/rope slice+concat, the k_r
+        # broadcast, and RoPE otherwise leave the head-axis sharding inconsistent across the concat
+        # operands, so every tensor entering attention is pinned to this spec. ``reshard`` (not
+        # einsum ``out_sharding``) is used uniformly: it normalizes a size-1 ``model`` axis to
+        # replicated consistently, whereas ``out_sharding`` keeps an explicit ``model`` annotation
+        # that then mismatches a resharded operand when there is no tensor parallelism.
+        head_spec = P(_BATCH_AXES, None, "model", None)
+
+        # Compressed KV latent -> normed -> up-project to per-head k_nope and v.
+        c_kv = self.kv_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dkv))
+        k_nope_up = rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk), "... (n d) -> ... n d", d=nope)
+        k_nope = reshard(k_nope_up, head_spec)
+        v_up = rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv), "... (n d) -> ... n d", d=vd)
+        v = reshard(v_up, head_spec)
+        # Decoupled RoPE key: one shared head, roped, then broadcast across all query heads.
+        k_r = jnp.einsum("bsh,hr->bsr", x, self.w_kr)[:, :, None, :]
+
+        # Query: direct projection (q_lora_rank == 0) or through the compressed Q latent. Reshard
+        # the whole q once (before the nope/rope split) so both slices share the head layout.
+        if self.w_q is not None:
+            q = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        else:
+            c_q = self.q_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dq))
+            q = jnp.einsum("bsc,cd->bsd", c_q, self.w_uq)
+        q = reshard(rearrange(q, "... (n d) -> ... n d", d=nope + rope_d), head_spec)
+        q_nope, q_rope = q[..., :nope], q[..., nope:]
+
+        q_rope, k_r = apply_rotary_embedding(q_rope, k_r, seq_len=seq_len, head_dim=rope_d, rope=cfg.rope)
+        k_r = reshard(jnp.broadcast_to(k_r, (k_r.shape[0], k_r.shape[1], n, rope_d)), head_spec)
+        q = jnp.concatenate([q_nope, q_rope], axis=-1) * cfg.qk_mult
+        k = jnp.concatenate([k_nope, k_r], axis=-1)
+
+        attn_out = attention(q, k, v, mask, implementation=cfg.attention_implementation)
+        # Exclusive Self Attention: subtract the component of the output parallel to vᵢ. v already
+        # carries head_spec; pin attn_out to match so they align per head.
+        attn_out = reshard(attn_out, head_spec)
+        aligned_v = v
+        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        attn_out = rearrange(attn_out, "... n d -> ... (n d)")
+        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
-    attn: CausalSelfAttention
+    attn: CausalSelfAttention | MultiheadLatentAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
@@ -701,7 +837,11 @@ class Block(eqx.Module):
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            attn=(
+                MultiheadLatentAttention.init(cfg, key=attn_key)
+                if cfg.use_mla
+                else CausalSelfAttention.init(cfg, key=attn_key)
+            ),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),

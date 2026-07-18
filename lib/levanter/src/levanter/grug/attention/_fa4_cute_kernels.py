@@ -110,9 +110,11 @@ def _validate_config(
 ) -> None:
     if head_dim <= 0 or head_dim_v <= 0:
         raise ValueError(f"head_dim and head_dim_v must be positive, got {head_dim=} {head_dim_v=}")
-    if head_dim_v != head_dim:
+    # Asymmetric head_dim_v (e.g. MLA qk=192 / v=128) is plumbed through the kernel (separate
+    # head_dim_v_padded / sV / sO layouts); require both multiples of 8 for the MMA tiling.
+    if head_dim % 8 != 0 or head_dim_v % 8 != 0:
         raise NotImplementedError(
-            f"segmented FA4/CuTe v1 requires head_dim_v == head_dim, got {head_dim_v=} {head_dim=}"
+            f"segmented FA4/CuTe v1 requires head_dim, head_dim_v % 8 == 0, got {head_dim=} {head_dim_v=}"
         )
     if qhead_per_kvhead <= 0:
         raise ValueError(f"qhead_per_kvhead must be positive, got {qhead_per_kvhead}")
@@ -133,9 +135,10 @@ def _validate_sm90_native_config(
 ) -> None:
     if head_dim <= 0 or head_dim_v <= 0:
         raise ValueError(f"head_dim and head_dim_v must be positive, got {head_dim=} {head_dim_v=}")
-    if head_dim_v != head_dim:
+    # Asymmetric head_dim_v (MLA) is plumbed through the SM90 native path; require multiples of 8.
+    if head_dim % 8 != 0 or head_dim_v % 8 != 0:
         raise NotImplementedError(
-            f"native SM90 segmented FA4/CuTe requires head_dim_v == head_dim, got {head_dim_v=} {head_dim=}"
+            f"native SM90 segmented FA4/CuTe requires head_dim, head_dim_v % 8 == 0, got {head_dim=} {head_dim_v=}"
         )
     if qhead_per_kvhead <= 0:
         raise ValueError(f"qhead_per_kvhead must be positive, got {qhead_per_kvhead}")
@@ -227,7 +230,7 @@ def segmented_flash_attention_forward_launcher(
         ) -> bool:
             if dtype != cutlass.Float16 and dtype != cutlass.BFloat16:
                 return False
-            if head_dim != head_dim_v or head_dim % 8 != 0:
+            if head_dim % 8 != 0 or head_dim_v % 8 != 0:
                 return False
             if (m_block_size * 2) % num_threads != 0:
                 return False
@@ -237,7 +240,9 @@ def segmented_flash_attention_forward_launcher(
                 m_block_size * max(head_dim_padded, head_dim_v_padded)
                 + n_block_size * (head_dim_padded + head_dim_v_padded)
             ) * 2
-            return smem_usage <= utils.get_smem_capacity_in_bytes("sm_80")
+            # H100 (sm_90) has ~227 KB shared memory; the sm_80 floor (~163 KB) rejects the
+            # wider tile_n=128 tile used for the 192/128 MLA case, so target the real arch.
+            return smem_usage <= utils.get_smem_capacity_in_bytes("sm_90")
 
         @cute.jit
         def __call__(
@@ -501,6 +506,27 @@ def segmented_flash_attention_forward_launcher(
                 for rest_k in cutlass.range_constexpr(tKVpKV.shape[2]):
                     tKVpKV[rest_v, 0, rest_k] = cute.elem_less(tKVcKV[(0, rest_v), 0, rest_k][1], mK.layout.shape[1])
 
+            # V carries head_dim_v, which may differ from the qk head_dim (MLA: qk=192 / v=128).
+            # Build a distinct V load predicate from V's own shape; reusing tKVpKV (sized on the qk
+            # head_dim) has the wrong head-dim block count for the V tile.
+            mcV = cute.make_identity_tensor(mV.layout.shape)
+            cV = cute.local_tile(
+                mcV[None, None, kv_head, batch_idx],
+                (self._n_block_size, self._head_dim_v_padded),
+                (n_block, 0),
+            )
+            tVcV = gmem_thr_copy_QKV.partition_S(cV)
+            tVpV = cute.make_rmem_tensor(
+                cute.make_layout(
+                    (tVsV.shape[0][1], cute.size(tVsV, mode=[1]), cute.size(tVsV, mode=[2])),
+                    stride=(cute.size(tVsV, mode=[2]), 0, 1),
+                ),
+                cutlass.Boolean,
+            )
+            for rest_v in cutlass.range_constexpr(tVpV.shape[0]):
+                for rest_k in cutlass.range_constexpr(tVpV.shape[2]):
+                    tVpV[rest_v, 0, rest_k] = cute.elem_less(tVcV[(0, rest_v), 0, rest_k][1], mV.layout.shape[1])
+
             for m in cutlass.range_constexpr(cute.size(tQsQ.shape[1])):
                 if cute.elem_less(tQcQ[0, m, 0][0], mQ.layout.shape[0]):
                     cute.copy(gmem_tiled_copy_QKV, tQgQ[None, m, None], tQsQ[None, m, None], pred=tQpQ[None, m, None])
@@ -544,6 +570,7 @@ def segmented_flash_attention_forward_launcher(
                 tVgV=tVgV,
                 tVsV=tVsV,
                 tKVpKV=tKVpKV,
+                tVpV=tVpV,
             )
             smem_copy_params = SimpleNamespace(
                 smem_tiled_copy_Q=smem_tiled_copy_Q,
@@ -664,7 +691,7 @@ def segmented_flash_attention_forward_launcher(
                             gmem_copy_params.gmem_tiled_copy_QKV,
                             gmem_copy_params.tVgV[None, n, None, basic_params.n_block],
                             gmem_copy_params.tVsV[None, n, None],
-                            pred=gmem_copy_params.tKVpKV[None, n, None],
+                            pred=gmem_copy_params.tVpV[None, n, None],
                         )
                     else:
                         gmem_copy_params.tVsV[None, n, None].fill(0.0)
@@ -673,7 +700,7 @@ def segmented_flash_attention_forward_launcher(
                     gmem_copy_params.gmem_tiled_copy_QKV,
                     gmem_copy_params.tVgV[None, None, None, basic_params.n_block],
                     gmem_copy_params.tVsV,
-                    pred=gmem_copy_params.tKVpKV,
+                    pred=gmem_copy_params.tVpV,
                 )
             cute.arch.cp_async_commit_group()
 

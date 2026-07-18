@@ -120,6 +120,25 @@ def build_scale_model() -> GrugModelConfig:
     hidden_dim = env_int("SCALE_HIDDEN_DIM", 3072)
     if hidden_dim % HEAD_DIM != 0:
         raise ValueError(f"SCALE_HIDDEN_DIM={hidden_dim} must be a multiple of head_dim={HEAD_DIM}")
+    num_heads = hidden_dim // HEAD_DIM
+    # SCALE_MLA=1 switches the block to Multi-head Latent Attention with num_heads = 2*d//128
+    # and its own qk/v head dims (128 nope + 64 rope, v=128); the dense head_dim is unused.
+    use_mla = os.environ.get("SCALE_MLA") == "1"
+    if use_mla:
+        num_heads = 2 * hidden_dim // HEAD_DIM
+    # Q latent rank. SCALE_Q_LORA_RANK=0 uses a direct Q projection; >0 routes Q through a
+    # compressed latent. Defaults to d/2 (the grug MLA prototype value) when unset.
+    q_lora_rank = env_int("SCALE_Q_LORA_RANK", hidden_dim // 2)
+    # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
+    kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
+    if kv_env is not None:
+        num_kv_heads = int(kv_env)
+        if num_kv_heads <= 0 or num_heads % num_kv_heads != 0:
+            raise ValueError(f"SCALE_NUM_KV_HEADS={num_kv_heads} must be a positive divisor of num_heads={num_heads}")
+    else:
+        num_kv_heads = max(1, num_heads // 4)
+        while num_heads % num_kv_heads != 0:
+            num_kv_heads -= 1
     seq_len = env_int("SCALE_SEQ_LEN", DEFAULT_SEQ_LEN)
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
@@ -137,6 +156,10 @@ def build_scale_model() -> GrugModelConfig:
         head_dim=HEAD_DIM,
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
+        use_mla=use_mla,
+        q_lora_rank=q_lora_rank,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
