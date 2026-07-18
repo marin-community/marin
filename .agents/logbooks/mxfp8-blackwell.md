@@ -1076,3 +1076,40 @@ author: mcwitt
 - Next action: probe2nu memory analysis -> if arena collapses under the
   138 GiB pool, relaunch the ladder in scan mode (32 GPUs, data=4 keeps
   4D NS sharded); then loss-parity smoke unrolled-vs-scan at d2560.
+
+### 2026-07-17 23:45 - MXFP8-007: #7201-best ports + smoke PASS; 128-GPU comparison blocked by gang churn, serial driver armed
+- Direction (mcwitt): base the production test on the #7201 current best
+  (ClassicLarry issuecomment-5010023509: MuonH d5120 5-of-128 i2560 sh2560
+  48L GQA40/10 sw2048, 19.0% MFU / 591,330 tok/s at 128 GPUs on the GB200
+  2.5 PF dense convention, branch grug/embedding-gather-shard-map); port
+  its wins, smoke the mxfp8 config, then apples-to-apples.
+- 007a ports (6a23eb79b): replica-local embedding gather + replicated
+  embed table (8-rack wedge fix), lm_head intra-rack sharding, liger
+  chunked CE (CE_IMPL=liger), SCALE_MUON_SYRK QuACK NS (env-gated, NOT
+  enabled: quack-kernels pins cutlass-dsl 4.6, our mxfp8 kernels are
+  validated on 4.5.2 — small known baseline advantage, NS is ~4% share),
+  --num-kv-heads GQA flag, mfu_gb200 readout (2.5 PF), --replica-axis.
+- 007b smoke (2-node EP8, d5120/L8/E128top5/GQA/scan, B64): fused kernels
+  at E_local=16 all-legs correct (relfrob<=9.5e-4, 1836-2646 TF/s, 1.588x
+  vs bf16 layer); e2e bf16 21.0% GB200-MFU / 205k tok/s vs mxfp8 24.25% /
+  237k (+15.5%); loss parity ~6e-3 over 15 steps. Two harness bumps fixed:
+  bench --run-id/--output-dir required; bench wire default for mxfp8.
+  Sizing note: L13 OOMs at 8 GPUs (state ~86 GB/GPU: E128 experts shard
+  8-way but attn/embed replicate at data=1) -> smoke at L8.
+- 007c baseline replication: Larry's launcher runs on THIS controller
+  (data cache in place); env reconstruction VERIFIED exact via the train
+  job's hparams dump (scan on, muonh lr 0.05, replica 2, watch@20).
+  Three baseline attempts + one treatment died 1-5 min in with NO in-pod
+  error: NVLink-domain gang scheduling (16-node domains; each 32-node gang
+  needs 2) recomposes gangs when the parallel session (#7331, same
+  mwittmann user) admits its own 32-node gangs — it is cycling
+  ep128-ring4/a2a8/ring8 every few minutes, and each admission killed
+  whatever was mid-placement (incl. its own muonprobe-fix). Cluster is 201
+  GB200 nodes / 804 GPUs, so it is churn, not capacity.
+- Mitigation: serial auto-retry driver (waits for <1 other large job, max
+  3 baseline + 2 treatment attempts, treatment with --max-retries 2);
+  jobs mx7201-base{4..6}-coord, mx7201-treat{2,3}.
+- Jobs: /mwittmann/mxfp8-007-smoke{,2,3,4}, /mwittmann/mx7201-{base,base2,base3}-coord, /mwittmann/mx7201-treat.
+- Next: harvest baseline steady tok/s (validate vs 591,330), then
+  treatment bf16-control + mxfp8 arms; report all on GB200 2.5 PF conv;
+  comment on #7201 if significant.
