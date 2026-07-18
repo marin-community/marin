@@ -19,12 +19,8 @@ interactive H100 validation::
 """
 
 import logging
-import os
-import tempfile
-import tomllib
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 import pytest
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
@@ -62,16 +58,6 @@ MOE_IMPLEMENTATION = "sonic"
 ATTENTION_IMPLEMENTATION = "gpu_fa4_cute"
 
 pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 300)]
-
-
-# TODO(#7135): drop this overlay for marin-core[vllm-gpu] once #7134 provides the managed baseline.
-def _vllm_setup_script() -> str:
-    source = tomllib.loads((Path(__file__).parents[3] / "pyproject.toml").read_text())["tool"]["uv"]["sources"]["vllm"]
-    return (
-        'uv pip uninstall --python "$IRIS_VENV/bin/python" torch torchvision torchaudio\n'
-        'VLLM_USE_PRECOMPILED=1 uv pip install --no-config --python "$IRIS_VENV/bin/python" '
-        f'--torch-backend=cu130 "vllm @ git+{source["git"]}@{source["rev"]}" "runai-model-streamer[s3]==0.16.0"'
-    )
 
 
 def _log_parities(backend: str, parities: list[NextTokenParity]) -> None:
@@ -180,113 +166,109 @@ def score_vllm_against_goldens(
     """Serve Snowball with vLLM and score rank-pinned representative prompts."""
     import requests  # noqa: PLC0415
     from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend  # noqa: PLC0415
+    from marin.inference.vllm_server import IsolatedCudaVllm, VllmType  # noqa: PLC0415
 
     prompt_fixture = read_prompt_fixture(goldens)
 
-    # Run:ai ignores Iris's FSSPEC_S3 setting and CoreWeave rejects path-style S3 requests.
-    with tempfile.TemporaryDirectory(prefix="snowball-parity-vllm-") as temp_dir:
-        aws_config = Path(temp_dir) / "aws-config"
-        aws_config.write_text("[default]\ns3 =\n    addressing_style = virtual\n")
-        os.environ["AWS_CONFIG_FILE"] = str(aws_config)
+    spec = ModelSpec(
+        model=JUNE_67B_A2B.vllm_model_name,
+        model_path=JUNE_67B_A2B.export_uri,
+        num_chips=GPU_COUNT,
+        tensor_parallel_size=1,
+        dtype="bfloat16",
+        max_model_len=MAX_MODEL_LEN,
+        chat_template_content=None,
+    )
+    backend = VllmBackend(
+        launcher=IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
+        extra_args=(
+            "--data-parallel-size",
+            str(GPU_COUNT),
+            "--enable-expert-parallel",
+            "--model-loader-extra-config",
+            '{"distributed":true}',
+            "--max-num-seqs",
+            "1",
+            "--max-logprobs",
+            str(RETURNED_LOGPROBS),
+            "--attention-backend",
+            attention_backend,
+        ),
+    )
+    parities: list[NextTokenParity] = []
+    with backend.serve(spec) as served:
+        completions_url = f"{served.base_url}{OPENAI_API_SUFFIX}/completions"
 
-        spec = ModelSpec(
-            model=JUNE_67B_A2B.vllm_model_name,
-            model_path=JUNE_67B_A2B.export_uri,
-            num_chips=GPU_COUNT,
-            tensor_parallel_size=1,
-            dtype="bfloat16",
-            max_model_len=MAX_MODEL_LEN,
-            chat_template_content=None,
-        )
-        backend = VllmBackend(
-            max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
-            extra_args=(
-                "--data-parallel-size",
-                str(GPU_COUNT),
-                "--enable-expert-parallel",
-                "--model-loader-extra-config",
-                '{"distributed":true}',
-                "--max-num-seqs",
-                "1",
-                "--max-logprobs",
-                str(RETURNED_LOGPROBS),
-                "--attention-backend",
-                attention_backend,
-            ),
-        )
-        parities: list[NextTokenParity] = []
-        with backend.serve(spec) as served:
-            completions_url = f"{served.base_url}{OPENAI_API_SUFFIX}/completions"
+        def request_case(case: RepresentativeCase, rank: int, request_id: str) -> NextTokenParity:
+            context = f"case={case.id} rank={rank} request={request_id}"
+            assert len(case.prompt_token_ids) + 1 <= MAX_MODEL_LEN, context
+            try:
+                response = requests.post(
+                    completions_url,
+                    headers={
+                        "X-data-parallel-rank": str(rank),
+                        "X-Request-Id": request_id,
+                    },
+                    json={
+                        "model": served.model_id,
+                        "prompt": list(case.prompt_token_ids),
+                        "add_special_tokens": False,
+                        "temperature": 0.0,
+                        "max_tokens": 1,
+                        "logprobs": RETURNED_LOGPROBS,
+                        "return_tokens_as_token_ids": True,
+                        "return_token_ids": True,
+                    },
+                    timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
+                )
+                response.raise_for_status()
+                (choice,) = response.json()["choices"]
+                assert choice["prompt_token_ids"] == list(case.prompt_token_ids)
+                (greedy_token_id,) = choice["token_ids"]
+                (returned_top_logprobs,) = choice["logprobs"]["top_logprobs"]
+                actual_logprobs = {
+                    int(token.removeprefix("token_id:")): float(logprob)
+                    for token, logprob in returned_top_logprobs.items()
+                }
+                return parity_from_logprob_map(
+                    case.id,
+                    case.top_logprobs,
+                    int(greedy_token_id),
+                    actual_logprobs,
+                    backend_rank=rank,
+                )
+            except Exception as error:
+                error.add_note(context)
+                raise
 
-            def request_case(case: RepresentativeCase, rank: int, request_id: str) -> NextTokenParity:
-                context = f"case={case.id} rank={rank} request={request_id}"
-                assert len(case.prompt_token_ids) + 1 <= MAX_MODEL_LEN, context
-                try:
-                    response = requests.post(
-                        completions_url,
-                        headers={
-                            "X-data-parallel-rank": str(rank),
-                            "X-Request-Id": request_id,
-                        },
-                        json={
-                            "model": served.model_id,
-                            "prompt": list(case.prompt_token_ids),
-                            "add_special_tokens": False,
-                            "temperature": 0.0,
-                            "max_tokens": 1,
-                            "logprobs": RETURNED_LOGPROBS,
-                            "return_tokens_as_token_ids": True,
-                            "return_token_ids": True,
-                        },
-                        timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
-                    )
-                    response.raise_for_status()
-                    (choice,) = response.json()["choices"]
-                    assert choice["prompt_token_ids"] == list(case.prompt_token_ids)
-                    (greedy_token_id,) = choice["token_ids"]
-                    (returned_top_logprobs,) = choice["logprobs"]["top_logprobs"]
-                    actual_logprobs = {
-                        int(token.removeprefix("token_id:")): float(logprob)
-                        for token, logprob in returned_top_logprobs.items()
-                    }
-                    return parity_from_logprob_map(
-                        case.id,
-                        case.top_logprobs,
-                        int(greedy_token_id),
-                        actual_logprobs,
-                        backend_rank=rank,
-                    )
-                except Exception as error:
-                    error.add_note(context)
-                    raise
+        def request_wave(
+            executor: ThreadPoolExecutor,
+            cases: tuple[RepresentativeCase, ...],
+            request_prefix: str,
+        ) -> list[NextTokenParity]:
+            assert len(cases) == GPU_COUNT
+            futures = [
+                executor.submit(request_case, case, rank, f"{request_prefix}-{case.id}-rank-{rank}")
+                for rank, case in enumerate(cases)
+            ]
+            return [future.result() for future in as_completed(futures)]
 
-            def request_wave(
-                executor: ThreadPoolExecutor,
-                cases: tuple[RepresentativeCase, ...],
-                request_prefix: str,
-            ) -> list[NextTokenParity]:
-                assert len(cases) == GPU_COUNT
-                futures = [
-                    executor.submit(request_case, case, rank, f"{request_prefix}-{case.id}-rank-{rank}")
-                    for rank, case in enumerate(cases)
-                ]
-                return [future.result() for future in as_completed(futures)]
+        with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
+            for wave, batch in enumerate(prompt_fixture.batches):
+                logger.info(
+                    "vLLM wave %d/%d: max_tokens=%d cases=%s",
+                    wave + 1,
+                    len(prompt_fixture.batches),
+                    batch.max_tokens,
+                    [case.id for case in batch.cases],
+                )
+                parities.extend(request_wave(executor, batch.cases, f"wave-{wave}"))
 
-            with ThreadPoolExecutor(max_workers=GPU_COUNT) as executor:
-                for wave, batch in enumerate(prompt_fixture.batches):
-                    logger.info(
-                        "vLLM wave %d/%d: max_tokens=%d cases=%s",
-                        wave + 1,
-                        len(prompt_fixture.batches),
-                        batch.max_tokens,
-                        [case.id for case in batch.cases],
-                    )
-                    parities.extend(request_wave(executor, batch.cases, f"wave-{wave}"))
-
-                sentinel = next(case for case in prompt_fixture.cases if case.id == "knowledge-longbench-02")
-                assert len(sentinel.prompt_token_ids) > 2048
-                logger.info("vLLM rank sentinel: case=%s tokens=%d", sentinel.id, len(sentinel.prompt_token_ids))
-                parities.extend(request_wave(executor, (sentinel,) * GPU_COUNT, "rank-sentinel"))
+            sentinel = next(case for case in prompt_fixture.cases if case.id == "knowledge-longbench-02")
+            assert len(sentinel.prompt_token_ids) > 2048
+            logger.info("vLLM rank sentinel: case=%s tokens=%d", sentinel.id, len(sentinel.prompt_token_ids))
+            parities.extend(request_wave(executor, (sentinel,) * GPU_COUNT, "rank-sentinel"))
 
     assert len(parities) == len(prompt_fixture.cases) + GPU_COUNT
     _log_parities("vllm-gpu", parities)
@@ -317,7 +299,7 @@ def _vllm_job(goldens: tuple[RepresentativeGolden, ...], attention_backend: str)
         entrypoint=Entrypoint.from_callable(score_vllm_against_goldens, args=[goldens, attention_backend]),
         resources=ResourceConfig.with_gpu("H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g"),
         environment=create_environment(
-            setup_scripts=[default_setup_script(packages=["marin-core"]), _vllm_setup_script()],
+            setup_scripts=[default_setup_script(packages=["marin-core"])],
             env_vars={
                 "VLLM_BATCH_INVARIANT": "1",
                 "VLLM_USE_FLASHINFER_SAMPLER": "0",
