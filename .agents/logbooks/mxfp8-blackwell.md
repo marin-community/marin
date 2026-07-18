@@ -1176,3 +1176,25 @@ author: mcwitt
 - mx7201-treat7 launched: our bench, 128 GPUs, r2 EP8 ring scan, bf16
   control then mxfp8, with the operative env (NCCL ifname, cuda_async,
   MUON knobs, s3 cache, liger).
+
+### 2026-07-18 07:35 - MXFP8-007c overnight: baseline anchored; treatment blocked on the B200MFU-036 CUBIN flake at 32 nodes
+- Standing results: baseline (Larry's exact env, our rerun) 609,310 tok/s /
+  19.63% GB200-MFU at 128 GPUs; smoke (8 GPUs, #7201 arch, scan):
+  mxfp8 +15.5% throughput over bf16 control with loss parity.
+- Treatment attempts at 128 GPUs (our bench, r2 EP8 ring scan, NO_NS):
+  - treat7: passed init+CUBIN load, died on the EP 4D-NS OOM (since fixed
+    twice: reshard variant -> XLA involuntary-full-remat compile hang
+    (treat8/9, killed at 70+ min); shard_map explicit-collective variant
+    is committed and CPU-verified but not yet field-validated — NO_NS
+    sidesteps it for the MFU comparison, caveat: NS excluded in treatment
+    arms only, ~4% share class, cancels in the bf16-vs-mxfp8 delta).
+  - treat10 (NO_NS): B200MFU-036 CUBIN flake ("Failed to load in-memory
+    CUBIN") at runtime start — the known no-mitigation load-call fault
+    (#7331 is fighting the same; their ncclep logbook shows 0/5 at r4).
+  - treat11 (in-job retries x4): retries die on
+    "GetKeyValue() timed out ... clique" — in-job gang retries cannot
+    re-bootstrap jax.distributed's KV store (sibling's retry pattern works
+    only for their single-node benches). In-job retry design abandoned.
+- Driver v4 running: up to 3 FRESH-job attempts (treat12..14) — fresh
+  launches re-bootstrap cleanly and empirically pass CUBIN load ~2/3.
+- Jobs: /mwittmann/mx7201-treat{6..11}, mx7201-probe32, mx7201-base{7,8,9}.
