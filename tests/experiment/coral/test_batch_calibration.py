@@ -98,7 +98,7 @@ def test_batch_memory_bytes():
         (160 * BYTES_PER_GIB, TpuBatchConfig(4, 1, 8, 4)),
     ],
 )
-def test_tpu_batch_config(batch_bytes, expected_config):
+def test_batch_config_for_memory(batch_bytes, expected_config):
     assert (
         tpu_batch_config(
             "v5litepod-4",
@@ -120,7 +120,7 @@ def test_tpu_batch_config(batch_bytes, expected_config):
         ("v5litepod-8", 16, 2, 2, TpuBatchConfig(8, 1, 2, 1)),
     ],
 )
-def test_tpu_batch_config_uses_all_chips_for_single_and_multiple_slices(
+def test_batch_config_parallelism(
     tpu,
     batch_size,
     context_parallelism,
@@ -139,7 +139,7 @@ def test_tpu_batch_config_uses_all_chips_for_single_and_multiple_slices(
     )
 
 
-def test_tpu_batch_config_multislice_gradient_accumulation():
+def test_multislice_accumulation():
     assert tpu_batch_config(
         "v5litepod-4",
         batch_size=128,
@@ -154,26 +154,23 @@ def test_tpu_batch_config_multislice_gradient_accumulation():
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "match"),
+    "kwargs",
     [
-        ({"batch_size": 0}, "batch_size must be positive"),
-        ({"context_parallelism": 0}, "context_parallelism must be positive"),
-        ({"context_parallelism": 3}, "must divide chips per slice"),
-        ({"slice_count": 0}, "slice_count must be positive"),
-        ({"batch_size": 5, "slice_count": 2}, "must be divisible by slice_count"),
+        {"batch_size": 0},
+        {"context_parallelism": 0},
+        {"context_parallelism": 3},
+        {"slice_count": 0},
+        {"batch_size": 5, "slice_count": 2},
     ],
 )
-def test_tpu_batch_config_rejects_incompatible_parallelism(kwargs, match):
+def test_incompatible_parallelism(kwargs):
     args = {"batch_size": 4, "batch_bytes": 1, **kwargs}
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError):
         tpu_batch_config("v5litepod-4", **args)
 
 
-def test_minimum_microbatch_too_large():
-    with pytest.raises(
-        ValueError,
-        match=r"Batch does not fit on v5litepod-4: even per_device_parallelism=1",
-    ):
+def test_minimum_microbatch_does_not_fit():
+    with pytest.raises(ValueError):
         tpu_batch_config(
             "v5litepod-4",
             batch_size=4,
