@@ -415,3 +415,16 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   quantifies the real arena need). NB log-retention gotcha: 16-node crash
   storms overflow the 1000-line window — pull per-task logs
   (`job logs <job>/<task>`) to find the primary failure.
+- r3 (mem 0.85): XLA arena **fits at 0.85** (no RESOURCE_EXHAUSTED at compile)
+  → CUBIN again. r4 (launcher gains in-job sequential attempts + shared
+  compile cache, commit 3b3c7ecae): **0/5 attempts, CUBIN every time** (~11
+  min/attempt, warm retries ~10). Running total 0/7 executions of the
+  chunked-b1024 program vs -036's 20–75 % same-day pass rates for ring-b1024 —
+  suspicious enough to discriminate program-vs-allocation before more retries.
+- Discriminator (`ncclep-b1024-arms`, commit ecfcd5a92, one 16-node
+  allocation, sequential arms per -036 methodology): a2a_cute b1024 control
+  (passed this morning) → nccl_ep chunked C=8192 → C=16384 → C=4096.
+  Readout: control-pass + all-chunked-fail = chunked program deterministically
+  bad (investigate module dump / unrolled loop); control-fail = bad allocation
+  (whole b1024 family env-blocked today, retry later); any-chunked-pass =
+  derisk complete, collect MFU/loss.
