@@ -533,8 +533,8 @@ async fn a_batch_the_hub_calls_malformed_is_skipped_rather_than_retried_forever(
 
 // Flaky in CI (~1/306): after the forward cursor reaches the new tip the pushed row is
 // occasionally not yet query-visible on the hub, so the final read comes back empty.
-// Re-enable once the hub read is made to wait for the row it just forwarded.
-#[ignore = "flaky: hub read races the last forwarded write"]
+// Re-enable once the hub read is made to wait for the row it just forwarded (#7376).
+#[ignore = "flaky: hub read races the last forwarded write (#7376)"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn seeding_at_the_tip_ships_new_rows_and_never_backfills() {
     let fx = Fixture::new("seed").await;
