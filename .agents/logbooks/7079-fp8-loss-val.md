@@ -277,3 +277,63 @@ declined by policy — investigation was scoped to run alongside full4).
 Secondary: leave contiguous headroom (larger mem fraction where NCCL init
 tolerates it), and upstream an XLA report: alloc failure inside collective
 launch should abort the rendezvous, not hang.
+
+### FP8VAL-005 — fp8 +15 GiB temp-arena regression attributed: float8 dual-write operands + requant scaffolding (2026-07-17 23:55 UTC)
+
+A compile-only probe (`experiments/grug/moe/fp8val_mem_probe.py`, one 8xH100
+node, builds the exact row-13 step and AOT-compiles it bf16 then fp8 without
+running a step) pins the regression precisely.
+
+`compiled.memory_analysis()` (exact):
+
+| arm | temp arena | args | output | alias |
+|---|---|---|---|---|
+| bf16 | 22.65 GiB | 29.88 | 29.88 | 29.88 |
+| fp8 | 37.67 GiB | 29.89 | 29.89 | 29.89 |
+
+**Persistent state (args/output/alias) is byte-identical** — fp8 adds nothing
+to params/grads/opt-state. The entire **+15.0 GiB is transient** peak memory in
+the single fused train step (~1.66x bf16). The ~0.3 GiB jitter across probes
+(37.67–37.94) is autotune nondeterminism — the same jitter that put bf16 arms
+±0.3 GiB across the fragmentation cliff at the step-9 watch executable.
+
+**Per-dtype arena composition** (parsed from XLA
+`...-buffer-assignment.txt` `preallocated-temp`; offset-dedup "covered" basis
+over-counts absolute peak ~1.85–2.31x because arena offsets are reused across
+the step, so read the *deltas and fp8-only dtypes*, not absolute GiB):
+
+| dtype | bf16 | fp8 | Δ | what it is |
+|---|---|---|---|---|
+| f8e4m3fn | 0 | 5.00 | **+5.00** | forward fp8 operands (e4m3 activations/weights) |
+| u8 | 0.02 | 3.29 | **+3.27** | transposed dual-write fp8 operand copies (fp8-as-u8) |
+| f8e5m2 | 0 | 0.80 | **+0.80** | backward fp8 gradient operands (e5m2) |
+| f32 | 4.88 | 9.01 | +4.13 | dequant / scale / amax-reduce / accumulation scratch |
+| bf16 | 47.23 | 51.21 | +3.97 | extra bf16 intermediates around quantize ops |
+
+**Verdict — hypothesis 1 (dual-write / mixed-dtype quantized operands held
+live) confirmed as the driver; hypothesis 2 (custom_vjp defeats remat, pinning
+*bf16* residuals) is NOT the primary cause.** The bf16 arena has **zero**
+float8 tensors; the fp8 arena adds ~9 GiB of float8-family data (e4m3 5.0 +
+u8-transpose 3.3 + e5m2 0.8) that simply does not exist in bf16. XLA
+materializes each large linear's quantized operand — and its transposed layout
+for the backward GEMM — and keeps them resident across the fused
+forward+backward rather than requantizing in each GEMM prologue. The remaining
++4 f32 (scale/dequant/amax scratch) and +4 bf16 are the requantization
+scaffolding around those ops. bf16 grew only ~4 of the 15 GiB, so remat-pinning
+is at most a minor contributor.
+
+**Reducibility:** the dominant cost is the dual-write transpose (e4m3 5.0 +
+u8 3.3 ≈ 8.3 GiB) — recomputing the transposed fp8 operand in the backward
+instead of stashing it, or not pre-casting operands that a single GEMM
+consumes, is the highest-leverage lever. The f32 scale/dequant scratch is
+secondary. This is inherent overhead of the current fp8 wiring, not a compiler
+accident — a real follow-up for PR #7079, tracked separately from the loss
+validation.
+
+**Operational aside (allocator fix landed):** `bfc_allocator` fragmentation
+(FP8VAL-004) is defeated by **`XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`**
+(VMM-backed, no contiguity requirement). NB the fix is this JAX var, NOT
+`TF_GPU_ALLOCATOR=cuda_malloc_async` (TF-only; full5 set it and still wedged at
+step 9 on BFC). bf16-full6 (cuda_async) cleared the step-9 cliff that killed
+full4/full5 and is running; fp8-full4 passed step 6760 (longest fp8 run of the
+campaign).
