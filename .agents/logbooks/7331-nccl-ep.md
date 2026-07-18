@@ -428,3 +428,20 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   bad (investigate module dump / unrolled loop); control-fail = bad allocation
   (whole b1024 family env-blocked today, retry later); any-chunked-pass =
   derisk complete, collect MFU/loss.
+- Discriminator result: **control PASS; ck8k CUBIN, ck16k honest OOM
+  (164.93 GiB), ck4k CUBIN** — and the ck16k OOM cracked the case:
+  **the chunk scan saved each chunk's capacity-sized tensors as bwd
+  residuals, and `K × (ep × C × top_k) = ep × T_local × top_k` is invariant
+  of C** — chunking as first implemented had the SAME total footprint as
+  unchunked b1024 (~165 vs 172 GiB). Reinterprets everything: r2's NCCL OOM
+  = the same pressure via cuda_async at 0.90; the earlier "capacity wall
+  cleared by chunking" claim was WRONG (r1/r3/r4 died at CUBIN load *before*
+  allocating — cuda_async allocates during execution, and XLA compile never
+  validates temp size); the CUBIN hits are the ordinary stochastic -036
+  envelope on top (ck16k's load happened to pass; 2/3 arms + the earlier 0/7
+  streak failed it, plausible at its 20–75 % rates).
+- Fix (commit 203858818): `jax.checkpoint(prevent_cse=False)` on the chunk
+  body — bwd recomputes dispatch+FFN one chunk at a time; only the [C,·]
+  chunk inputs stack. Peak EP memory becomes a single chunk's working set,
+  which is the decoupling the chunking was for. Re-smoking EP4, then b1024
+  with in-job attempts (CUBIN stochastic).
