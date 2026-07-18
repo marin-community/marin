@@ -389,3 +389,51 @@ more activation sharding (the natural prod lever) → last resort, recompute the
 ragged transpose (costs the CT speedup). `mxfp8_save_qweights` is the existing
 *opposite* knob (cache more to go faster), confirming the team tunes this axis
 deliberately.
+
+### FP8VAL-006 — RESULT: gate PASSED, both arms complete 24k steps (2026-07-18 06:10 UTC)
+
+Both arms ran the full schedule end-to-end clean on the `cuda_async` allocator
+(the FP8VAL-004 fragmentation fix) — the first full runs of the campaign to
+survive to completion. `fp8val-fp8-full4` finished 04:50 UTC, `fp8val-bf16-full6`
+finished 06:06 UTC; 24,000 steps × B16 × seq4096 = 1.57B tokens/arm, seed 0,
+identical data order.
+
+**Matched-step train loss (fp8 − bf16), all 23,998 overlapping steps:**
+- mean **+0.00390**, median +0.00378, σ 0.00276, max single-step |Δ| 0.142 (noise)
+- no-growth check: first 2k +0.0034 → mid +0.0029 → **cooldown tail (≥21600) +0.0040**
+- final 200-step mean loss: **bf16 3.084 / fp8 3.088 → +0.0040**
+
+**Verdict: PASS.** Final matched-step gap +0.0040, well inside the ≤0.01
+acceptance bar (#6486). FP8 holds a tiny constant ~+0.004 offset throughout with
+no growth trend and no divergence in the cooldown tail — the region #6486
+flagged as where precision gaps surface. No NaNs/Infs (crash_on_nan/inf armed).
+
+**Throughput:** bf16 70.1k / fp8 73.9k tok/s (**1.055×**), MFU 15.09% / 15.92%.
+Loss-vs-wall-clock (x rescaled by ∫1/throughput): fp8 reaches any loss ~4.4%
+sooner and finished 24k in 6.03h vs bf16 6.31h (~17 min ahead). Throughput
+integral validated against log timestamps: tracks real elapsed within ~7%
+(data-loader/logging overhead, equal across arms).
+
+Artifact (final): https://claude.ai/code/artifact/99ec4cac-2537-494c-b9e2-1b285311fa32
+
+**Bottom line for #7079:** enabling FP8 (wire+dense+grouped) does not perturb
+the training loss at row-13 scale — +0.004 constant, ≤0.01 bar met with margin —
+while running 5.5% faster. The loss-curve gate is cleared. Open follow-ups
+(separate from this gate): the +15 GiB transient-arena regression from the
+cast-transpose dual-write (FP8VAL-005/-005a — bounded, shards at scale, not a
+blocker) and shipping the `cuda_async` allocator default for fp8 runs.
+
+## TL;DR (sealed 2026-07-18)
+
+**GATE PASSED.** FP8 (PR #7079: wire+dense+grouped GEMMs) vs bf16 control at
+grug-MoE row-13 scale (d2560/26L/E64tk4, 8×H100/arm, EP8), full 24k-step MuonH
+schedule on SlimPajama-6B, seed 0 both arms: **final matched-step loss gap
++0.0040** (≤0.01 bar, #6486), flat through the cooldown tail, no NaNs; FP8
+**1.055× throughput** (15.9% vs 15.1% MFU), ~17 min sooner on wall-clock.
+
+Campaign also produced two infra findings: (1) every "training wedge" was BFC
+**fragmentation OOM → silent NCCL clique deadlock** (not log reads or checkpoint
+saves, both exonerated); fix = `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`
+(FP8VAL-004). (2) FP8's transient arena is **1.66× bf16** (+15 GiB), attributed
+to the cast-transpose **dual-write** operand caching — a deliberate TE-style
+speed optimization, not a blocker (FP8VAL-005/-005a).
