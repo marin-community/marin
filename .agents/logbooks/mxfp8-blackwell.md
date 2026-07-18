@@ -1113,3 +1113,27 @@ author: mcwitt
 - Next: harvest baseline steady tok/s (validate vs 591,330), then
   treatment bf16-control + mxfp8 arms; report all on GB200 2.5 PF conv;
   comment on #7201 if significant.
+
+### 2026-07-18 01:45 - MXFP8-007c: gang-death root cause isolated — log reads against RUNNING 32-task jobs kill the gang
+- Forensics across 6 failed baseline/treatment attempts (base..base7, treat,
+  b64g1): every 32-task train gang died 1-4 min after a log read (mine or a
+  monitor's) hit the RUNNING job — including base7, killed 4 min after a
+  2-line log peek, with all 32 tasks healthy mid-tokenizer-copy and the
+  controller dropping "late update for terminal attempt (attempt_state=11
+  reported=5)" — i.e. the controller declared attempts dead while workers
+  still reported running. Mechanism (extends the 2026-07-17 wedge finding):
+  at 32-task scale even a capped `job logs` read stalls the task process
+  long enough to miss heartbeats -> controller fails the attempt -> gang
+  kill cascade -> coordinator JobFailedError. NOT scheduler churn (base7
+  died on a quiet cluster), NOT capacity (201 nodes / 804 GPUs), NOT bad
+  nodes (base3/base4 node sets disjoint), NOT priority (all
+  iris-interactive). Larry's identical runs survive because nothing reads
+  their logs mid-run; 16-task (b64g1 reached its own real OOM) and 2-task
+  jobs tolerate reads.
+- Also real: b64g1 showed the 64-GPU r1 variant of the #7201 config is
+  infeasible (318.93 GiB single alloc — 4D-NS/momentum class at r1) —
+  descaling was the wrong move; the published 128-GPU r2 point stands.
+- New discipline: NO log reads (any cap) against RUNNING >=16-task jobs;
+  drivers/monitors poll controller SQL state only; logs harvested at
+  terminal state.
+- Driver v3 (SQL-only polling) is retrying: base8 next, then treat{4,5}.
