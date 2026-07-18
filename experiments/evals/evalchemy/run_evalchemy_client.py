@@ -76,6 +76,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str) -> li
     ]
     if task["num_fewshot"]:
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    if task.get("seed") is not None:  # LOCAL: AIME24 10-seed μ±σ (one process per seed)
+        cmd += ["--seed", str(task["seed"])]
     if config["max_eval_instances"] is not None:
         cmd += ["--limit", str(config["max_eval_instances"])]
     if config["apply_chat_template"]:

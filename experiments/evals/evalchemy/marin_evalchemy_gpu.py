@@ -83,7 +83,7 @@ TIER1_TASKS = (
 #     AIME24 = 10-seed (42..51) via EVAL_TIER=2 seed handling in the driver/client. ---
 TIER2_TASKS = (
     EvalTaskConfig("MATH500", 0),
-    EvalTaskConfig("AIME24", 0),
+    # AIME24 is NOT here — it runs as a dedicated 10-seed μ±σ set (EVAL_TASK_SET=aime24_seeds).
     EvalTaskConfig("HumanEvalPlus", 0),
     EvalTaskConfig("MBPPPlus", 0),
     EvalTaskConfig("MMLUPro", 0),
@@ -168,6 +168,14 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # --limit → proves BOTH request types score non-empty over local-completions before the full suite.
     if os.environ.get("EVAL_SMOKE") == "1":
         tasks = (EvalTaskConfig("gsm8k", 0), EvalTaskConfig("hellaswag", 10))
+    # AIME24 10-seed μ±σ (POLICY §3): one process per seed 42..51, distinct dir per seed (task_alias)
+    # so results don't overwrite. Harvest = mean±std over the 10 pass@1 values.
+    if os.environ.get("EVAL_TASK_SET") == "aime24_seeds":
+        tasks = tuple(
+            EvalTaskConfig("AIME24", 0, task_alias=f"AIME24_seed{s}", task_kwargs={"seed": s})
+            for s in range(42, 52)
+        )
+        apply_chat_template = True
     max_eval_instances = int(os.environ["EVAL_LIMIT"]) if os.environ.get("EVAL_LIMIT") else None
     # Durable CoreWeave LOTA object store (marin-us-east-02a): the eval child writes each task's
     # results_*.json here (run_evalchemy_client passes the LOTA virtual-addressing storage_options).

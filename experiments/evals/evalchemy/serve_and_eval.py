@@ -379,7 +379,14 @@ def _client_config_json(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) -
             "base_url": endpoint.base_url,
             "model_id": endpoint.model_id,
             "tokenizer": endpoint.tokenizer,
-            "tasks": [{"name": t.name, "num_fewshot": t.num_fewshot, "dir": _task_dir(t)} for t in config.tasks],
+            "tasks": [
+                {
+                    "name": t.name, "num_fewshot": t.num_fewshot, "dir": _task_dir(t),
+                    # LOCAL: per-task seed (AIME24 10-seed μ±σ) via EvalTaskConfig.task_kwargs["seed"].
+                    "seed": (t.task_kwargs or {}).get("seed"),
+                }
+                for t in config.tasks
+            ],
             "out_path": config.out_path,
             "apply_chat_template": config.apply_chat_template,
             "max_gen_toks": config.max_gen_toks,
