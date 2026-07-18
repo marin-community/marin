@@ -1158,3 +1158,21 @@ author: mcwitt
   terminal). If it survives past step 0, bisect SYRK vs liger later; the
   comparison proceeds no-SYRK on both baselines (noting the published
   19.0% had syrk in the name).
+
+### 2026-07-18 02:30 - MXFP8-007c: baseline REPLICATED (19.63% MFU); root cause of all failures was missing env
+- The controller's job_config.environment_json for Larry's winning run
+  revealed the real config: **EP1 + sonic_cute** (not EP8), THREE extra NS
+  distribution knobs (SCALE_MUON_INTRA_RACK=1, SCALE_MUON_DIST_NONEXPERT=1,
+  SCALE_MUON_PAD_NONEXPERT=1 — whose absence caused the 203-318 GiB
+  replicated NS gathers), NCCL_SOCKET_IFNAME='^ibs,ibp,lo,docker,veth,
+  cilium,lxc' (whose absence caused treat6's multi-node init barrier
+  deadlock), XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async, s3 JAX compile cache,
+  CE liger. His run was dirty (base b0d484ddb + uncommitted) but the
+  pushed tip + exact env reproduces.
+- mx7201-base9 (32 nodes, exact env, json_logger): **609,310 tok/s /
+  19.63% MFU**, loss 5.40 @ step 50 — vs Larry's published 591,330 /
+  19.0%. Baseline anchored on our own cluster/day. (~3% faster than his,
+  warm s3 compile cache + noise.)
+- mx7201-treat7 launched: our bench, 128 GPUs, r2 EP8 ring scan, bf16
+  control then mxfp8, with the operative env (NCCL ifname, cuda_async,
+  MUON knobs, s3 cache, liger).
