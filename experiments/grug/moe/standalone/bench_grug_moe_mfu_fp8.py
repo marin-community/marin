@@ -106,6 +106,7 @@ def _parse():
     p.add_argument("--num-gpus", type=int, default=8)
     p.add_argument("--moe-implementation", default="ring")
     p.add_argument("--expert-parallelism", type=int, default=8)
+    p.add_argument("--replica-axis", type=int, default=1, help="replica_dcn axis size (DDP replicas)")
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument("--remat-mode", default="recompute_all", choices=["recompute_all", "save_moe"])
     p.add_argument("--stacked-blocks", action="store_true", help="lax.scan over ArrayStacked blocks")
@@ -164,7 +165,7 @@ def main():
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
     flops_per_example, flops_summary = _compute_flops(model_config=model)
     peak = a.num_gpus * _H100_BF16_PEAK_FLOPS
-    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=1)
+    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis)
     metrics = []
     tps = a.batch_size * a.seq_len
     with set_mesh(mesh):

@@ -60,6 +60,7 @@ def _parse():
     p.add_argument("--num-gpus", type=int, default=32)
     p.add_argument("--moe-implementation", default="ring")
     p.add_argument("--expert-parallelism", type=int, default=8)
+    p.add_argument("--replica-axis", type=int, default=1, help="replica_dcn axis size (DDP replicas)")
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument("--remat-mode", default="recompute_all", choices=["recompute_all", "save_moe"])
     p.add_argument("--stacked-blocks", action="store_true", help="lax.scan over ArrayStacked blocks")
@@ -126,7 +127,7 @@ def main():
     mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     opt = optimizer.build(20)
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
-    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=1)
+    mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis)
 
     with set_mesh(mesh):
         t0 = time.perf_counter()
