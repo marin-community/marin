@@ -111,12 +111,28 @@ pub fn run_job(
 /// carries the new level + path but PRESERVES the input's `created_at_ms`,
 /// row_count, seq window, and typed key bounds. The rename itself is deferred to
 /// the commit via `PlannedSwap::bump_rename`.
+///
+/// A bump can only rename a file that exists. When the input's file is gone — a
+/// dangling deque/catalog reference to a segment an earlier merge already
+/// consumed and unlinked — there is nothing to rename and no recoverable rows, so
+/// the stale reference is dropped instead. This guards BOTH callers: the
+/// single-input dispatch in `run_job` (a lone planner run over a missing segment)
+/// and `apply_merge`'s head-of-run recovery. Without it a single-input job over a
+/// missing file would emit a `bump_rename` that fails on the absent source every
+/// `check_interval`, wedging the level exactly as the merge path once did.
 fn apply_level_bump(
     old: &SegmentRow,
     output_level: i32,
     dir: &Path,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
+    if !Path::new(&old.path).exists() {
+        tracing::warn!(
+            path = %old.path,
+            "level-bump input file missing; dropping the stale segment reference"
+        );
+        return Ok(drop_missing_input(old));
+    }
     let new_filename = seg_filename(output_level, old.min_seq);
     let new_path = dir.join(&new_filename);
     let (min_key, max_key) = input_key_bounds(&old.path);
@@ -144,12 +160,10 @@ fn apply_level_bump(
 /// Drop a dangling input whose file has vanished: splice its stale reference out
 /// of the deque + catalog and produce no replacement.
 ///
-/// A missing file carries no recoverable rows and cannot be renamed, so promoting
-/// it past the merge (`apply_level_bump`) would emit a rename that fails on the
-/// absent source every tick, wedging the level for good. The rows are either
-/// already durable in the output of an earlier merge that unlinked this input, or
-/// were lost with the file itself — dropping the reference loses nothing either
-/// way and lets compaction resume.
+/// A missing file carries no recoverable rows and cannot be renamed. Its rows are
+/// either already durable in the output of an earlier merge that unlinked this
+/// input, or were lost with the file itself — dropping the reference loses nothing
+/// either way and lets compaction resume instead of retrying a doomed rename.
 fn drop_missing_input(missing: &SegmentRow) -> PlannedSwap {
     PlannedSwap {
         removed: vec![missing.path.clone()],
@@ -213,31 +227,20 @@ fn apply_merge(
         // would replan the identical job every check_interval and wedge the level
         // for good. Route around it instead so compaction stays live. As a non-head
         // input it ends the prefix and becomes the next tick's head. As the run's
-        // head, the recovery depends on WHY the read failed: a file that is present
-        // but corrupt still has a real path to rename, so it is promoted past the
-        // merge by level bump; a file that is simply gone (a dangling deque/catalog
-        // reference to a segment an earlier merge already consumed and unlinked) has
-        // nothing to rename, so a bump would fail on the absent source every tick —
-        // its stale reference is dropped instead. Only the READ is forgiven — a
-        // projection or sort failure is a schema bug and still propagates.
+        // head it is handed to `apply_level_bump`, which promotes a present-but-
+        // corrupt file past the merge by rename and drops a missing one. Only the
+        // READ is forgiven — a projection or sort failure is a schema bug and still
+        // propagates.
         let raw = match read_segment_batches(Path::new(&inp.path)) {
             Ok(raw) => raw,
             Err(e) => {
                 if consumed.is_empty() {
-                    if Path::new(&inp.path).exists() {
-                        tracing::warn!(
-                            path = %inp.path,
-                            error = %e,
-                            "unreadable merge input; promoting it past the merge"
-                        );
-                        return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
-                    }
                     tracing::warn!(
                         path = %inp.path,
                         error = %e,
-                        "merge input file missing; dropping the stale segment reference"
+                        "unreadable merge input at run head; promoting or dropping it"
                     );
-                    return Ok(drop_missing_input(inp));
+                    return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
                 }
                 tracing::warn!(
                     path = %inp.path,
@@ -701,6 +704,43 @@ mod tests {
             Path::new(&p_good).exists(),
             "its readable neighbour stays live to compact next tick"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A SINGLE-input planned job (the planner emits these for an isolated
+    /// promotable segment) dispatches straight to `apply_level_bump`, never
+    /// through the merge read loop. If that lone input is a dangling reference
+    /// (file gone), the bump must still drop it rather than emit a rename that
+    /// fails on the absent source every tick — the same wedge, reached by the
+    /// single-input path.
+    #[test]
+    fn single_missing_input_is_dropped_not_bumped() {
+        let dir = tempdir("single_missing");
+        let (p_gone, min_gone, max_gone) = repeated_line_segment(&dir, 1, 100);
+        std::fs::remove_file(&p_gone).unwrap();
+
+        let job = CompactionJob {
+            inputs: vec![row_for(
+                &p_gone.to_string_lossy(),
+                2,
+                min_gone,
+                max_gone,
+                100,
+            )],
+            output_level: 3,
+            output_min_seq: min_gone,
+        };
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
+            (None, None)
+        })
+        .expect("a missing single input must not fail the tick");
+        assert!(swap.added.is_none(), "a missing input produces no output");
+        assert!(
+            swap.bump_rename.is_none(),
+            "a missing single input is dropped, never renamed"
+        );
+        assert!(!swap.unlink_removed, "nothing on disk to unlink");
+        assert_eq!(swap.removed, vec![p_gone.to_string_lossy().to_string()]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
