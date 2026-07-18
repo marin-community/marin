@@ -27,8 +27,16 @@ from iris.client import IrisClient
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
+from marin.experiment.checkpoints import hf_to_levanter
 
-from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, resources_from_accelerator, sft_step
+from experiments.sft.launcher import (
+    ConvertedCheckpointModel,
+    DatasetSpec,
+    HFModel,
+    SFTSpec,
+    resources_from_accelerator,
+    sft_step,
+)
 
 pytestmark = pytest.mark.cluster
 
@@ -85,3 +93,21 @@ def test_smoke_sft_tpu(iris_client: IrisClient, smoke_region: str) -> None:
     # multi-step run (tokenize -> train -> export) shares its cache and reads/writes region-locally.
     resources = dataclasses.replace(resources_from_accelerator(SMOKE_ACCELERATOR), regions=(smoke_region,))
     StepRunner().run([lower(sft_step(SMOKE_SPEC, resources))])
+
+
+def test_smoke_sft_tpu_hf_to_levanter(iris_client: IrisClient, smoke_region: str) -> None:
+    """The same smoke run inited from a materialized HF->Levanter conversion instead of inline HF init.
+
+    The conversion (hf_to_levanter) resolves the arch from the HF config, so it is built inside the test
+    (not at import time) to keep the default deselected collection network-free. This is the native arm
+    of the numerical-equivalence gate: launch it and ``test_smoke_sft_tpu`` with the same seed/data and
+    compare the loss curves — a weights-only native init must match inline ``initialize_from_hf``.
+    """
+    conversion = hf_to_levanter("Qwen/Qwen3-0.6B", model_type="qwen3", hf_revision="main", version="2026.07.17-dev")
+    spec = dataclasses.replace(
+        SMOKE_SPEC,
+        name="checkpoints/smoke-sft-tpu-qwen3-0p6b-hf2lev",
+        model=ConvertedCheckpointModel(conversion=conversion, eos_token_ids=(151643, 151645)),
+    )
+    resources = dataclasses.replace(resources_from_accelerator(SMOKE_ACCELERATOR), regions=(smoke_region,))
+    StepRunner().run([lower(sft_step(spec, resources))])

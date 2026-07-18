@@ -11,13 +11,28 @@ import pyarrow as pa
 from cache import TtlCache
 from config import BridgeConfig, ClusterTarget
 from finelog.errors import QueryResultTooLargeError
+from github_source import GithubSource
 from server import create_app
 from starlette.testclient import TestClient
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
 TO_MS = FROM_MS + 3_600_000
-MARIN = ClusterTarget(name="marin", project="p", zone="z", instance_filter="name = finelog-marin")
+MARIN = ClusterTarget(
+    name="marin", project="p", zone="z", instance_filter="name = finelog-marin", controller_filter="labels.x=true"
+)
+
+
+def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
+    return BridgeConfig(
+        max_rows=1000,
+        cache_ttl=cache_ttl,
+        query_timeout_ms=5000,
+        iris_cache_ttl=15.0,
+        github_cache_ttl=60.0,
+        http_timeout=5.0,
+        github_token=None,
+    )
 
 
 def finelog_result(**columns: list) -> pa.Table:
@@ -48,12 +63,12 @@ class FakeSource:
 
 
 def _client(source: FakeSource, cache_ttl: float = 20.0) -> TestClient:
-    config = BridgeConfig(max_rows=1000, cache_ttl=cache_ttl, query_timeout_ms=5000)
-    return TestClient(create_app(config, {"marin": source}))
+    github = GithubSource(token=None, timeout=5.0)
+    return TestClient(create_app(bridge_config(cache_ttl), {"marin": source}, {}, github))
 
 
 def _get(client: TestClient, sql: str, **params):
-    return client.get("/marin/query", params={"sql": sql, "from": FROM_MS, "to": TO_MS, **params})
+    return client.get("/finelog/marin/query", params={"sql": sql, "from": FROM_MS, "to": TO_MS, **params})
 
 
 def test_query_returns_json_rows_with_millis_timestamps():
@@ -71,19 +86,19 @@ def test_query_substitutes_window_macros_before_running():
 
 
 def test_missing_sql_is_a_400():
-    resp = _client(FakeSource()).get("/marin/query", params={"from": FROM_MS, "to": TO_MS})
+    resp = _client(FakeSource()).get("/finelog/marin/query", params={"from": FROM_MS, "to": TO_MS})
     assert resp.status_code == 400
     assert "sql" in resp.json()["error"]
 
 
 def test_macro_without_its_bound_is_a_400():
-    resp = _client(FakeSource()).get("/marin/query", params={"sql": "SELECT 1 WHERE ts >= {{from}}"})
+    resp = _client(FakeSource()).get("/finelog/marin/query", params={"sql": "SELECT 1 WHERE ts >= {{from}}"})
     assert resp.status_code == 400
     assert "no matching time bound" in resp.json()["error"]
 
 
 def test_unknown_cluster_is_a_400_naming_the_valid_ones():
-    resp = _client(FakeSource()).get("/nope/query", params={"sql": "SELECT 1"})
+    resp = _client(FakeSource()).get("/finelog/nope/query", params={"sql": "SELECT 1"})
     assert resp.status_code == 400
     error = resp.json()["error"]
     assert "nope" in error and "marin" in error
@@ -124,6 +139,18 @@ def test_windows_further_apart_than_the_ttl_are_cached_separately():
 
 def test_json_labels_flatten_into_columns():
     source = FakeSource(finelog_result(value=[3.0], labels=['{"region": "us-east5", "scope": "pool"}']))
+    assert _get(_client(source), "SELECT value, labels FROM t").json() == [
+        {"value": 3.0, "label_region": "us-east5", "label_scope": "pool"}
+    ]
+
+
+def test_native_map_labels_flatten_into_columns():
+    # A native Map<Utf8,Utf8> column (telltale metrics) arrives as list[(k, v)].
+    table = pa.table(
+        {"value": [3.0], "labels": [[("region", "us-east5"), ("scope", "pool")]]},
+        schema=pa.schema([("value", pa.float64()), ("labels", pa.map_(pa.string(), pa.string()))]),
+    )
+    source = FakeSource(table)
     assert _get(_client(source), "SELECT value, labels FROM t").json() == [
         {"value": 3.0, "label_region": "us-east5", "label_scope": "pool"}
     ]

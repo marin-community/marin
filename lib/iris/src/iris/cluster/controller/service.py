@@ -11,10 +11,10 @@ aggregated from task states.
 import json
 import logging
 import secrets
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -74,6 +74,7 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
+from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.log_highlights import extract_failure_highlights
@@ -108,6 +109,9 @@ from iris.rpc.proto_display import (
 from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+# Return type of a proxied on-demand RPC (a unary controller response).
+_T = TypeVar("_T")
 
 
 def submitting_user_for_root(
@@ -1213,6 +1217,27 @@ class ControllerServiceImpl:
                     return
             raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {job_id}")
         authorize_resource_owner(job_id.user)
+
+    def _authorize_federated_debug_target(self, root_job: JobName) -> None:
+        """Scope a federation peer's on-demand debug RPC to a job it federated here.
+
+        ``authorize_method`` admits ProfileTask/ExecInContainer/GetProcessStatus for a
+        ``FEDERATION_PEER_ROLE`` identity; this confirms ``root_job`` is one the peer
+        actually handed off (matching its received handle), so a peer cannot profile,
+        exec into, or inspect this cluster's own tasks. Non-peer callers pass through
+        untouched — their access stays governed by ``authorize_method``'s role
+        allowlist, so the read-only dashboard keeps reading any task's process status.
+        """
+        if not self._auth.provider:
+            return
+        identity = get_verified_identity()
+        if identity is None or identity.role != FEDERATION_PEER_ROLE:
+            return
+        with self._db.read_snapshot() as snap:
+            handoff = reads.received_handoff(snap, root_job)
+            if handoff is not None and handoff.requester_id == identity.user_id:
+                return
+        raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
 
     def _wait_until_job_drained(self, job_id: JobName, wait: Duration) -> bool:
         """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
@@ -2419,6 +2444,20 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as snap:
             return reads.federated_handle(snap, task_id.root_job)
 
+    def _proxy_if_federated(self, task_id: JobName, call: Callable[[FederationPeer], _T]) -> _T | None:
+        """Forward an on-demand RPC to its owning peer if ``task_id`` is federated.
+
+        ``call`` invokes the matching typed method on the peer connection; the peer is
+        authoritative, so its ``NOT_FOUND`` for a moved or finished task propagates
+        back. Returns the peer's response, or ``None`` when the root job runs locally —
+        the caller then resolves it against the local backend. The proxied responses
+        are unary messages, never ``None``, so callers dispatch on ``is not None``.
+        """
+        handle = self._federated_handle_for_task(task_id)
+        if handle is None:
+            return None
+        return self._controller.federation.proxy_to_peer(handle.peer_id, call)
+
     def _resolve_task_target(self, task: TaskWithAttempts, attempt_id: int, *, wire_name: str) -> TaskTarget:
         """Resolve a running task to a :class:`TaskTarget` for on-demand worker RPCs.
 
@@ -2629,6 +2668,7 @@ class ControllerServiceImpl:
             target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        self._authorize_federated_debug_target(target.task_id.root_job)
         task = _read_task_with_attempts(self._db, target.task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.target} not found")
@@ -2637,12 +2677,9 @@ class ControllerServiceImpl:
         # attempt rows. Proxy the profile through the peer controller (which does
         # its own task->worker resolution) before the local resolution below, so
         # it is never dispatched to _backend_for_id's local fallback.
-        handle = self._federated_handle_for_task(target.task_id)
-        if handle is not None:
-            return self._controller.federation.proxy_profile(
-                peer_id=handle.peer_id,
-                request=request,
-            )
+        proxied = self._proxy_if_federated(target.task_id, lambda peer: peer.profile_task(request))
+        if proxied is not None:
+            return proxied
 
         attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
         task_target = self._resolve_task_target(task, attempt_id, wire_name=request.target)
@@ -2763,6 +2800,8 @@ class ControllerServiceImpl:
         Target routing (same convention as ProfileTask):
         - empty or /system/process: the controller process itself
         - /system/worker/<worker_id>: proxy to a specific worker
+        - /job/.../task/N: the process serving that task — proxied to the owning
+          peer for a federated task, else resolved against the local backend.
         """
         target = request.target
         if not target or target == "/system/process":
@@ -2771,7 +2810,7 @@ class ControllerServiceImpl:
         # Parse /system/worker/<worker_id>
         worker_id = _parse_worker_target(target)
         if worker_id is None:
-            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
+            return self._task_process_status(target, request)
 
         worker = _read_worker(self._db, WorkerId(worker_id))
         if not worker:
@@ -2790,6 +2829,37 @@ class ControllerServiceImpl:
                 self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
             )
             return worker_backend.get_process_status(process_target, request)
+        except ProviderError as exc:
+            raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
+
+    def _task_process_status(
+        self, target: str, request: job_pb2.GetProcessStatusRequest
+    ) -> job_pb2.GetProcessStatusResponse:
+        """Process status for a ``/job/.../task/N`` target.
+
+        A federated task's subtree runs on a peer, so the request is proxied through
+        the peer controller before any local resolution. Otherwise the owning backend
+        reports it: a worker-daemon backend returns the worker hosting the task; the
+        K8s backend reads the task pod's PID 1.
+        """
+        try:
+            task_id = JobName.from_wire(target)
+            task_id.require_task()
+        except ValueError as exc:
+            raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}") from exc
+
+        self._authorize_federated_debug_target(task_id.root_job)
+        task = _read_task_with_attempts(self._db, task_id)
+        if not task:
+            raise ConnectError(Code.NOT_FOUND, f"Task {target} not found")
+
+        proxied = self._proxy_if_federated(task_id, lambda peer: peer.get_process_status(request))
+        if proxied is not None:
+            return proxied
+
+        task_target = self._resolve_task_target(task, task.current_attempt_id, wire_name=target)
+        try:
+            return self._backend_for_id(str(task.backend_id or "")).get_process_status(task_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -2862,6 +2932,7 @@ class ControllerServiceImpl:
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
 
+        self._authorize_federated_debug_target(task_id.root_job)
         task = _read_task_with_attempts(self._db, task_id)
         if not task:
             raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
@@ -2870,12 +2941,9 @@ class ControllerServiceImpl:
         # attempt rows. Proxy the exec through the peer controller (which does its
         # own task->worker resolution) before the local resolution below, so it is
         # never dispatched to _backend_for_id's local fallback.
-        handle = self._federated_handle_for_task(task_id)
-        if handle is not None:
-            return self._controller.federation.proxy_exec(
-                peer_id=handle.peer_id,
-                request=request,
-            )
+        proxied = self._proxy_if_federated(task_id, lambda peer: peer.exec_in_container(request))
+        if proxied is not None:
+            return proxied
 
         worker_request = worker_pb2.Worker.ExecInContainerRequest(
             task_id=request.task_id,

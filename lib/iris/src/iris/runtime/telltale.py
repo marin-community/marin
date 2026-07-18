@@ -8,12 +8,14 @@ import logging
 import os
 
 import uvicorn
+from finelog.telltale import FinelogMetricSink
 from rigging import telltale
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
 
-from iris.client.client import get_iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.client.client import IrisContext, get_iris_ctx
+from iris.cluster.client.job_info import JobInfo, get_job_info
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Namespace
 from iris.managed_thread import get_thread_container
@@ -24,6 +26,40 @@ logger = logging.getLogger(__name__)
 ENDPOINT_PREFIX = "telltale"
 
 _started = False
+
+
+def _identity(job_info: JobInfo) -> telltale.MetricIdentity:
+    """The Iris job coordinates stamped onto every metric row this process forwards."""
+    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    # The job root (``/user/job``), not JobInfo.job_id — the latter is the task's
+    # immediate parent, which for a nested ``.../worker/3`` task is ``.../worker``.
+    return telltale.MetricIdentity(
+        job_id=str(Namespace.from_job_id(job_info.task_id)),
+        task_index=job_info.task_index,
+        attempt=job_info.attempt_id,
+        worker=job_info.worker_id,
+        region=job_info.worker_region,
+        process_index=int(process_index) if process_index is not None else None,
+    )
+
+
+def _start_forwarding(job_info: JobInfo, ctx: IrisContext) -> None:
+    """Persist this process's telltale registry to finelog. Best-effort.
+
+    Resolves the cluster's finelog endpoint, connects a sink, and hands it to the
+    forwarder. A resolve/connect failure is logged and the job is unaffected.
+    """
+    try:
+        endpoint = ctx.client.resolve_endpoint(LOG_SERVER_ENDPOINT_NAME)
+    except Exception:
+        logger.warning("telltale: could not resolve the finelog endpoint", exc_info=True)
+        return
+    try:
+        sink = FinelogMetricSink(endpoint)
+    except Exception:
+        logger.warning("telltale: could not connect the finelog sink at %s", endpoint, exc_info=True)
+        return
+    telltale.start_forwarding(sink, identity=_identity(job_info))
 
 
 def _endpoint_name() -> str:
@@ -86,4 +122,6 @@ def start() -> str | None:
     atexit.register(ctx.registry.unregister, endpoint_id)
     _started = True
     logger.info("telltale serving at %s, registered as %s", address, name)
+    # Persist the served metrics to finelog too, so the series outlive the job.
+    _start_forwarding(job_info, ctx)
     return address

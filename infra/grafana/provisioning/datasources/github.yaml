@@ -1,0 +1,19 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The GitHub datasource, pointed at the bridge's /github path on loopback. Panels
+# append `/ferries` or `/builds`; the bridge fans out over the GitHub API, caches the
+# result (the rate-limit shield), and returns flat JSON rows with the panel fields
+# precomputed. The token lives in the bridge, never in datasource config.
+apiVersion: 1
+
+datasources:
+  - name: github
+    uid: github
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    editable: false
+    jsonData:
+      auth_method: none
+      allowedHosts: ["http://127.0.0.1:8081"]
+    url: http://127.0.0.1:8081/github

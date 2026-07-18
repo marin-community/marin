@@ -1,0 +1,56 @@
+name: "Pulumi Cloud Run deploy"
+description: "Roll an iac.gcp.cloud_run stack: GCP auth, Artifact Registry + Pulumi backend, then pulumi up."
+
+inputs:
+  stack:
+    description: "Pulumi stack name (e.g. marin-grafana)."
+    required: true
+  work-dir:
+    description: "Directory holding the Pulumi.yaml (e.g. infra/grafana)."
+    required: true
+  gcp-credentials:
+    description: "Service-account key JSON for the Cloud Run deploy account."
+    required: true
+  gcp-project-id:
+    description: "GCP project id."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        credentials_json: ${{ inputs.gcp-credentials }}
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v3
+      with:
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Configure Pulumi backend and registry auth
+      shell: bash
+      run: |
+        passphrase="$(gcloud secrets versions access latest \
+          --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
+        echo "::add-mask::$passphrase"
+        echo "PULUMI_CONFIG_PASSPHRASE=$passphrase" >> "$GITHUB_ENV"
+        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Sync the iac venv
+      shell: bash
+      run: uv sync --package marin-iac --frozen
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Roll the Cloud Run service
+      uses: pulumi/actions@v6
+      with:
+        command: up
+        stack-name: ${{ inputs.stack }}
+        work-dir: ${{ inputs.work-dir }}
+        cloud-url: gs://marin-iac-state

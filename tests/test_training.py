@@ -13,17 +13,20 @@ from levanter.adaptor import LoraAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
+from levanter.infra.cli_helpers import CliConfig
 from levanter.main import train_lm
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.trainer import TrainerConfig
 from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
+    GPU_NCCL_TERMINATION_TIMEOUT_FLAG,
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
     _maybe_auto_resolve_dpo_schedule,
     _resolve_run_id,
     apply_output_path,
     doublecheck_paths,
+    resolve_training_env,
     temporary_checkpoint_base_path,
 )
 
@@ -306,3 +309,19 @@ def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_
     assert resolved.train_config.trainer.num_train_steps == 100
     assert resolved.train_config.run_initial_eval is True
     assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
+
+
+def test_resolve_training_env_adds_collective_watchdog_for_gpu():
+    """A GPU run appends the collective-watchdog flag without dropping operator XLA_FLAGS; CPU is untouched."""
+    base = {
+        "JAX_COMPILATION_CACHE_DIR": "/tmp/cache",  # preset skips the temp-bucket lookup
+        "XLA_FLAGS": "--xla_gpu_enable_latency_hiding_scheduler=true",
+    }
+    with patch("marin.training.training._cli_helpers_module") as mod:
+        mod.return_value.load_config.return_value = CliConfig()
+        gpu_flags = resolve_training_env(dict(base), ResourceConfig.with_gpu("H100", count=8))["XLA_FLAGS"]
+        cpu_flags = resolve_training_env(dict(base), ResourceConfig.with_cpu())["XLA_FLAGS"]
+
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in gpu_flags
+    assert GPU_NCCL_TERMINATION_TIMEOUT_FLAG in gpu_flags
+    assert cpu_flags == base["XLA_FLAGS"]

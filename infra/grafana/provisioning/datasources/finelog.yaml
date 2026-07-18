@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# One Infinity datasource per cluster, each pointed at the bridge's per-cluster
-# path on loopback. Panels carry SQL in the `sql` param; the bridge runs it against
+# One Infinity datasource per cluster, each pointed at the bridge's finelog path on
+# loopback. Panels carry SQL in the `sql` param; the bridge runs it against
 # finelog (SELECT-gated and deadline-bounded there) and returns JSON rows. The
 # allowedHosts entry pins each datasource to the bridge, never to finelog itself.
 # Each panel sets its own `parser: backend`; see dashboards/iris.json.
@@ -24,7 +24,7 @@ datasources:
     jsonData:
       auth_method: none
       allowedHosts: ["http://127.0.0.1:8081"]
-    url: http://127.0.0.1:8081/marin
+    url: http://127.0.0.1:8081/finelog/marin
 
   - name: finelog-marin-dev
     uid: finelog-marin-dev
@@ -35,4 +35,4 @@ datasources:
       global_queries: []
       auth_method: none
       allowedHosts: ["http://127.0.0.1:8081"]
-    url: http://127.0.0.1:8081/marin-dev
+    url: http://127.0.0.1:8081/finelog/marin-dev
