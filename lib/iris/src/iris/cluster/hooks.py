@@ -51,14 +51,30 @@ class TaskHook(Protocol):
 class NsysHook:
     """Run the command under ``nsys profile`` on the selected tasks (see ``iris.runtime.nsys``).
 
-    Selection, report upload, and signal forwarding all happen inside the wrapper module;
-    this only builds its argv and names the install script.
+    A launch wrapper by necessity — nsys injects CUDA tracing at ``cuInit`` — so it cannot
+    profile a job that is already running, unlike the attach-based py-spy/memray profiler.
+    Sitting outside the multi-process GPU supervisor, one report covers every rank a
+    selected task runs (nsys traces children): the better artifact for intra-node
+    collectives, at the cost of no sub-node GPU selection. Selection, report upload, and
+    signal forwarding all happen inside the wrapper module; this only builds its argv and
+    names the install script.
+
+    Attributes:
+        output_uri: Report directory URI. ``None`` lets the task resolve its cluster's temp
+            bucket from its own env (``iris.runtime.nsys.default_output_uri``) — correct even
+            under ``--target-cluster``, where the launcher's cluster is the wrong store.
+        tasks: Which tasks write a report, by index: ``first``, ``all``, or a list (``0,7``).
+        trace: The nsys ``--trace`` value; CPU sampling and GPU metrics need privileges the
+            task container lacks and are never enabled.
+        capture_range: Collect only between ``cuProfilerStart``/``cuProfilerStop`` — keeps
+            compile out and aligns multi-task captures on the same step; the app must call
+            the API or nothing is collected.
     """
 
-    output_uri: str | None
-    tasks: str
-    trace: str
-    capture_range: bool
+    output_uri: str | None = None
+    tasks: str = "first"
+    trace: str = NSYS_DEFAULT_TRACE
+    capture_range: bool = False
 
     def setup(self) -> str | None:
         return nsys_setup_script()

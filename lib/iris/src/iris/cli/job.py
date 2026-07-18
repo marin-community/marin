@@ -39,7 +39,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.hooks import NSYS_DEFAULT_TRACE
+from iris.cluster.hooks import NsysHook, TaskHook
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -54,8 +54,6 @@ from iris.cluster.types import (
     Entrypoint,
     EnvironmentSpec,
     JobName,
-    ProfileBackend,
-    ProfileSpec,
     ResourceSpec,
     gpu_device,
     tpu_device,
@@ -637,7 +635,7 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
-    profile_spec: ProfileSpec | None = None,
+    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -753,7 +751,7 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         container_profile=profile,
-        profile_spec=profile_spec,
+        profile_hook=profile_hook,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -781,7 +779,7 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
-    profile_spec: ProfileSpec | None = None,
+    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -804,7 +802,7 @@ def _submit_and_wait_job(
             extras=extras or [],
             setup_scripts=setup_scripts,
             sync_packages=sync_packages or [],
-            profile=profile_spec,
+            profile=profile_hook,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
@@ -1007,7 +1005,7 @@ Examples:
 )
 @click.option(
     "--profile",
-    type=click.Choice([b.value for b in ProfileBackend], case_sensitive=False),
+    type=click.Choice(["nsys"], case_sensitive=False),
     default=None,
     help=(
         "Profile the run with the named backend, uploading one report per profiled task to "
@@ -1027,7 +1025,7 @@ Examples:
 )
 @click.option(
     "--profile-tasks",
-    default=ProfileSpec.tasks,
+    default=NsysHook.tasks,
     show_default=True,
     help=(
         "Which tasks to profile, by task index: 'first', 'all', or a comma-separated list "
@@ -1037,7 +1035,7 @@ Examples:
 )
 @click.option(
     "--profile-trace",
-    default=NSYS_DEFAULT_TRACE,
+    default=NsysHook.trace,
     show_default=True,
     help="nsys --trace value (backend-specific). NCCL appears as CUDA kernels plus its own NVTX ranges.",
 )
@@ -1109,15 +1107,14 @@ def run(
         raise click.UsageError("--profile installs its profiler during setup; it cannot be combined with --no-sync.")
     if profile_output and not profile:
         raise click.UsageError("--profile-output has no effect without --profile.")
-    # An omitted --profile-output is not an error: the task defaults it to its own
-    # cluster's temp bucket, which is the right store even under --target-cluster.
-    profile_spec = (
-        ProfileSpec(
-            backend=ProfileBackend(profile),
+    # --profile selects the backend; here 'nsys' is the only one. An omitted
+    # --profile-output is fine: the task defaults it to its own cluster's temp bucket.
+    profile_hook: TaskHook | None = (
+        NsysHook(
             output_uri=profile_output,
             tasks=profile_tasks,
+            trace=profile_trace,
             capture_range=profile_capture_range,
-            options={"trace": profile_trace},
         )
         if profile
         else None
@@ -1167,7 +1164,7 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
-            profile_spec=profile_spec,
+            profile_hook=profile_hook,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

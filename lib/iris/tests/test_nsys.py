@@ -16,8 +16,9 @@ from typing import NoReturn
 import pytest
 from iris.client.client import collect_hooks
 from iris.cluster.client.job_info import set_job_info
+from iris.cluster.hooks import NsysHook
 from iris.cluster.setup_scripts import NSYS_INSTALL_DIR, NSYS_VERSION, nsys_bin_glob
-from iris.cluster.types import EnvironmentSpec, ProfileSpec, ResourceSpec, gpu_device
+from iris.cluster.types import EnvironmentSpec, ResourceSpec, gpu_device
 from iris.runtime.nsys import (
     _supervise,
     build_nsys_argv,
@@ -91,7 +92,7 @@ def test_task_index_from_env_requires_a_task_context(monkeypatch: pytest.MonkeyP
 def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyPatch) -> None:
     """The nsys hook builds this argv and iris.runtime.nsys parses it. Nothing else binds
     the two, so a flag renamed on one side has to fail here rather than on a GPU."""
-    hook = ProfileSpec(output_uri=OUT, tasks="0,7", options={"trace": "cuda,nvtx"}, capture_range=True).to_hook()
+    hook = NsysHook(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True)
     wrapped = hook.wrap(["python", "train.py"])
     assert wrapped[:3] == ["python", "-m", "iris.runtime.nsys"]
 
@@ -111,7 +112,7 @@ def test_hook_argv_is_accepted_by_the_runtime_module(monkeypatch: pytest.MonkeyP
 def test_collect_hooks_warns_but_proceeds_without_gpu(caplog: pytest.LogCaptureFixture) -> None:
     """nsys on a GPU-less job is best-effort: logged, not rejected, and the hook still runs."""
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
-    env = EnvironmentSpec(profile=ProfileSpec(output_uri=OUT))
+    env = EnvironmentSpec(profile=NsysHook(output_uri=OUT))
     with caplog.at_level("ERROR"):
         hooks = collect_hooks(env, cpu_only, processes_per_task=1)
     assert len(hooks) == 1
@@ -122,7 +123,7 @@ def test_collect_hooks_orders_nsys_outside_the_multigpu_supervisor() -> None:
     """collect_hooks returns [multigpu, nsys]; folded in order, nsys ends up outermost, so
     its child-tracing sweeps every rank the supervisor spawns into one report. Uses a
     default (unset) output_uri, which collect_hooks must accept — the task resolves it."""
-    env = EnvironmentSpec(profile=ProfileSpec())
+    env = EnvironmentSpec(profile=NsysHook())
     command = ["python", "train.py"]
     for hook in collect_hooks(env, _gpu_resources(8), processes_per_task=8):
         command = hook.wrap(command)
@@ -131,7 +132,7 @@ def test_collect_hooks_orders_nsys_outside_the_multigpu_supervisor() -> None:
 
 def test_hook_omits_output_uri_when_unset() -> None:
     """An unset output_uri drops the flag entirely; the wrapper then defaults it in-task."""
-    assert "--output-uri" not in ProfileSpec().to_hook().wrap(["python", "x.py"])
+    assert "--output-uri" not in NsysHook().wrap(["python", "x.py"])
 
 
 def test_default_output_uri_keys_on_the_job_and_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,14 +194,14 @@ def test_setup_script_and_wrapper_agree_on_the_install_path(tmp_path: Path, monk
 def test_environment_spec_appends_profile_setup_only_when_requested() -> None:
     without = EnvironmentSpec(extras=["gpu"]).to_proto()
     assert not any("nsight-systems" in s for s in without.setup_scripts)
-    with_profile = EnvironmentSpec(extras=["gpu"], profile=ProfileSpec(output_uri=OUT)).to_proto()
+    with_profile = EnvironmentSpec(extras=["gpu"], profile=NsysHook(output_uri=OUT)).to_proto()
     assert any("nsight-systems" in s for s in with_profile.setup_scripts)
 
 
 def test_inherited_setup_still_installs_profiler() -> None:
     """A child job that reuses its parent's setup scripts still needs the profiler installed:
     its entrypoint is already wrapped, and an unwrapped install would fail at launch."""
-    inherited = EnvironmentSpec(setup_scripts=["echo parent setup"], profile=ProfileSpec(output_uri=OUT)).to_proto()
+    inherited = EnvironmentSpec(setup_scripts=["echo parent setup"], profile=NsysHook(output_uri=OUT)).to_proto()
     assert any("nsight-systems" in s for s in inherited.setup_scripts)
     assert inherited.setup_scripts[0] == "echo parent setup"
 
@@ -209,14 +210,14 @@ def test_no_setup_plus_profile_is_rejected() -> None:
     """`setup_scripts=[]` runs no install, and the wrapper looks nowhere else — so the
     combination can only fail on a GPU. It has to fail at submit instead."""
     with pytest.raises(ValueError, match="setup_scripts=\\[\\]"):
-        EnvironmentSpec(setup_scripts=[], profile=ProfileSpec(output_uri=OUT)).to_proto()
+        EnvironmentSpec(setup_scripts=[], profile=NsysHook(output_uri=OUT)).to_proto()
     # Without a profile, no-setup is still the bring-your-own-image path.
     assert EnvironmentSpec(setup_scripts=[]).to_proto().setup_scripts == []
 
 
 def test_caller_output_uri_is_passed_through_verbatim() -> None:
     """No scheme validation: even a workdir-relative URI is used as the caller asked."""
-    (hook,) = collect_hooks(EnvironmentSpec(profile=ProfileSpec(output_uri="reports")), _gpu_resources(1), 1)
+    (hook,) = collect_hooks(EnvironmentSpec(profile=NsysHook(output_uri="reports")), _gpu_resources(1), 1)
     wrapped = hook.wrap(["python", "x.py"])
     assert wrapped[wrapped.index("--output-uri") + 1] == "reports"
 

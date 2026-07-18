@@ -45,7 +45,7 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.hooks import MultiGpuHook, TaskHook
+from iris.cluster.hooks import MultiGpuHook, NsysHook, TaskHook
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -54,7 +54,6 @@ from iris.cluster.types import (
     EnvironmentSpec,
     JobName,
     Namespace,
-    ProfileBackend,
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
@@ -487,9 +486,9 @@ def collect_hooks(
     profile = environment.profile if environment is not None else None
     if profile is not None:
         device = resources.device
-        if profile.backend is ProfileBackend.NSYS and (device is None or not device.HasField("gpu")):
+        if isinstance(profile, NsysHook) and (device is None or not device.HasField("gpu")):
             logger.error("nsys profiling targets CUDA work but this job requests no GPU device; the report may be empty")
-        hooks.append(profile.to_hook())
+        hooks.append(profile)
     return hooks
 
 
