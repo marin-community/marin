@@ -62,6 +62,15 @@ DEFAULT_DATAKIT_ROOT = "gs://marin-us-east5/normalized"
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean ``DUCKY_*`` env var; unset returns ``default``, anything else is
+    truthy unless it is a recognized false token."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
 def _resolve_datakit_root() -> str | None:
     """Datakit normalized-parquet root: explicit DUCKY_DATAKIT_ROOT wins (empty disables),
     else ``<MARIN_PREFIX>/normalized`` when MARIN_PREFIX is set, else the fallback constant."""
@@ -146,7 +155,20 @@ class DuckyConfig:
     instead of holding it forever."""
 
     result_ttl_days: int = 7
-    """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
+    """Retention of spilled results: ducky never deletes them — the scratch bucket's lifecycle
+    rule does — but ducky reads this to bound cache reuse against that reaping. It's the max age of
+    a cache hit: a sidecar older than this is ignored, since its spilled result may already be
+    reaped."""
+
+    persist_cache: bool = True
+    """Whether to back the in-memory result cache with a restart-survivable tier in the scratch
+    bucket. On a fresh run ducky writes a small ``<sql_hash>.meta.parquet`` sidecar next to the
+    spilled result; on a miss in the (process-local) in-memory cache it reads that sidecar back,
+    turning a repeat query into an instant reply without re-scanning the source — even across the
+    restarts that drop the in-memory cache. The sidecar shares the ``ducky/`` prefix, so the
+    scratch bucket's lifecycle rule reaps it with the result it points at; a read past
+    ``result_ttl_days`` is dropped. Best-effort: any sidecar read/write failure falls back to a
+    normal run and never fails a user query."""
 
     @property
     def catalog_root_prefixes(self) -> tuple[str, ...]:
@@ -219,6 +241,7 @@ class DuckyConfig:
             spill_limit=os.environ.get(f"{_ENV_PREFIX}SPILL_LIMIT", cls.spill_limit),
             query_timeout=int(os.environ.get(f"{_ENV_PREFIX}QUERY_TIMEOUT", cls.query_timeout)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
+            persist_cache=_env_bool(f"{_ENV_PREFIX}PERSIST_CACHE", cls.persist_cache),
             r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),
             cw_scope=os.environ.get(f"{_ENV_PREFIX}CW_SCOPE", cls.cw_scope),
             finelog_root=os.environ.get(f"{_ENV_PREFIX}FINELOG_ROOT", DEFAULT_FINELOG_ROOT) or None,

@@ -424,6 +424,50 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
     return _record("TOML and YAML", 0)
 
 
+def check_json(files: list[pathlib.Path], fix: bool) -> int:
+    """Format JSON with a canonical 2-space indent and validate it parses.
+
+    Object key order is preserved (Grafana panel arrays are order-sensitive and
+    object keys carry no meaning, so reordering would only churn). Scoped by the
+    caller to hand-edited dashboard JSON; a repo-wide sweep would rewrite fixtures.
+    """
+    json_files = [f for f in files if f.suffix == ".json"]
+    if not json_files:
+        return 0
+
+    buf = io.StringIO()
+    invalid = []
+    reformatted = []
+    for file_path in json_files:
+        try:
+            with open(file_path) as f:
+                original = f.read()
+            data = json.loads(original)
+        except (OSError, json.JSONDecodeError) as e:
+            invalid.append((file_path, str(e)))
+            continue
+
+        formatted = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        if formatted == original:
+            continue
+        reformatted.append(file_path)
+        if fix:
+            with open(file_path, "w") as f:
+                f.write(formatted)
+
+    if invalid:
+        for path, error in invalid:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}: {error}\n")
+        return _record("JSON formatter", 1, buf.getvalue())
+
+    if reformatted:
+        for path in reformatted:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}\n")
+        return _record("JSON formatter", 1, buf.getvalue())
+
+    return _record("JSON formatter", 0)
+
+
 def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     if not files:
         return 0
@@ -837,6 +881,12 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["infra/grafana/dashboards/*.json"],
+        checks=[
+            check_json,
         ],
     ),
     PrecommitConfig(

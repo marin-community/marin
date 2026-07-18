@@ -5,7 +5,7 @@
 
 import httpx
 import pytest
-from iris.actor import ActorServer
+from iris.actor.server import ActorServer
 from rigging import telltale
 
 

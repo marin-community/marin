@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import socket
 import threading
 from collections.abc import Iterator
@@ -15,6 +16,7 @@ import httpx
 import marin.inference.vllm as vllm_module
 import pytest
 from fray.types import ResourceConfig
+from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
@@ -30,14 +32,19 @@ from marin.inference.types import (
 from marin.inference.vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
+    GpuVllmBackend,
     InferenceWorkerConfig,
+    TpuVllmBackend,
     VllmProxyConfig,
     start_iris_brokered_vllm,
     start_local_brokered_vllm,
+    start_local_vllm_server,
 )
+from marin.inference.vllm_server import DEFAULT_CUDA_VLLM_VERSION
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
+from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
     assert_completions_scoring_contract,
@@ -45,6 +52,20 @@ from tests.evals.openai_stub import (
 )
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
+    step = lower(QWEN3_GPU_EVAL_RESULTS)
+    fingerprint = json.loads(step.fingerprint_payload)
+
+    # Artifact lowering replaces runtime resources with a symbolic value. Backend validation must
+    # remain at the serving boundary, where the concrete ResourceConfig is available.
+    assert fingerprint["inference"]["worker_resources"] == "<worker_resources>"
+    assert fingerprint["inference"]["backend"] == {
+        "source": "upstream",
+        "tensor_parallel_size": None,
+        "version": DEFAULT_CUDA_VLLM_VERSION,
+    }
 
 
 @dataclass
@@ -153,7 +174,20 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
             pass
 
 
-def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("backend", "worker_resources", "expected_extras", "expected_target_device"),
+    [
+        (TpuVllmBackend(), ResourceConfig.with_tpu("v6e-4"), ["tpu", "vllm"], "tpu"),
+        (GpuVllmBackend(), ResourceConfig.with_gpu("H100", count=8), [], None),
+    ],
+)
+def test_iris_brokered_vllm_worker_environment_matches_backend(
+    monkeypatch,
+    backend,
+    worker_resources,
+    expected_extras,
+    expected_target_device,
+) -> None:
     class _FakeJob:
         job_id = "worker-0"
 
@@ -192,17 +226,33 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
 
     config = BrokeredVllmSystemConfig(
         model="gpt2",
-        worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
+        backend=backend,
+        worker_resources=worker_resources,
+        worker_env_vars=(("VLLM_ENABLE_V1_MULTIPROCESSING", "0"),),
     )
 
     with start_iris_brokered_vllm(config):
         pass
 
     [worker_request] = client.submissions
-    assert worker_request.environment.extras == ["tpu", "vllm"]
+    assert worker_request.environment.extras == expected_extras
     assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
-    assert worker_request.environment.env_vars["VLLM_TARGET_DEVICE"] == "tpu"
+    assert worker_request.environment.env_vars.get("VLLM_TARGET_DEVICE") == expected_target_device
+
+
+@pytest.mark.parametrize(
+    ("backend", "worker_resources"),
+    [
+        (TpuVllmBackend(), ResourceConfig.with_gpu("H100")),
+        (GpuVllmBackend(), ResourceConfig.with_tpu("v6e-4")),
+    ],
+)
+def test_brokered_vllm_rejects_resources_for_the_wrong_backend(backend, worker_resources) -> None:
+    config = BrokeredVllmSystemConfig(model="gpt2", backend=backend, worker_resources=worker_resources)
+
+    with pytest.raises(ValueError, match=r"Backend requires .* worker_resources"):
+        with start_local_vllm_server(config):
+            pass
 
 
 def test_inference_proxy_forwards_completions_to_running_model(mock_cluster: MockInferenceCluster) -> None:

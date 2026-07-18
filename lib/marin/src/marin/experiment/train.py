@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import jmp
-from fray.types import ResourceConfig
+from fray.types import GpuConfig, ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -43,7 +43,12 @@ from marin.execution.remote import remote
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import (
+    LevanterCheckpoint,
+    TrainLmOnPodConfig,
+    resolve_training_env,
+    run_levanter_train_lm,
+)
 
 # Compute in bf16, keep master params and optimizer state in f32. The universal marin
 # precision policy; it bears identity (it changes numerics), so overriding it is a
@@ -82,7 +87,15 @@ def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:
 
 def _train_job(pod_config: TrainLmOnPodConfig) -> None:
     """Dispatch the assembled config as its own Fray training job."""
-    remote(run_levanter_train_lm, resources=pod_config.resources)(pod_config)
+    # GPU: resolve the env now so XLA_FLAGS is in the pod environment before the
+    # worker imports JAX. TPU/CPU resolve in-worker, where the WANDB_API_KEY the
+    # TPU path requires is present (the GPU path skips that check).
+    env_vars = (
+        resolve_training_env(pod_config.env_vars, pod_config.resources)
+        if isinstance(pod_config.resources.device, GpuConfig)
+        else {}
+    )
+    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars)(pod_config)
 
 
 def train_lm(

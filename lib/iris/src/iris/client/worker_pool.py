@@ -10,7 +10,8 @@ jobs that can execute any callable.
 
 Example:
     from pathlib import Path
-    from iris.client import IrisClient, WorkerPool, WorkerPoolConfig
+    from iris.client import IrisClient
+    from iris.client.worker_pool import WorkerPool, WorkerPoolConfig
     from iris.cluster.types import ResourceSpec
 
     client = IrisClient.remote("http://controller:8080", workspace=Path("./my-project"))
@@ -41,9 +42,9 @@ import cloudpickle
 from connectrpc.errors import ConnectError
 from rigging.timing import Duration, ExponentialBackoff
 
-from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
+from iris.actor.server import ActorServer
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec

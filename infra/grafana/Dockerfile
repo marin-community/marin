@@ -42,10 +42,28 @@ USER grafana
 # Cloud Run injects PORT and routes to it; Grafana serves the UI, the bridge sits
 # on loopback beside it (Grafana's backend datasources fetch server-side, so
 # nothing outside the container needs to reach it).
+#
+# Auth: IAP is the gate, and it stamps the caller's identity into
+# X-Goog-Authenticated-User-Email (value "accounts.google.com:<email>", so the
+# Grafana username carries that prefix). auth.proxy turns that into a real Grafana
+# user — the dashboard browse, stars, and preferences endpoints all reject the
+# anonymous user (userId 0), so a real user is what makes the list page work.
+# Trusting the header is safe because the service is invokable only by the IAP
+# service agent, so every request has already passed through IAP, which sets the
+# header itself. Anonymous stays enabled as a fallback: a request without the
+# header (a health check, a misconfig) degrades to read-only rather than 401.
 ENV GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
     GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
     GF_AUTH_DISABLE_LOGIN_FORM=true \
+    GF_AUTH_PROXY_ENABLED=true \
+    GF_AUTH_PROXY_HEADER_NAME=X-Goog-Authenticated-User-Email \
+    GF_AUTH_PROXY_HEADER_PROPERTY=username \
+    GF_AUTH_PROXY_AUTO_SIGN_UP=true \
+    GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN=false \
+    GF_AUTH_PROXY_SYNC_TTL=60 \
+    GF_USERS_AUTO_ASSIGN_ORG=true \
+    GF_USERS_AUTO_ASSIGN_ORG_ROLE=Viewer \
     GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=true \
     GF_ANALYTICS_REPORTING_ENABLED=false \
     GF_ANALYTICS_CHECK_FOR_UPDATES=false \

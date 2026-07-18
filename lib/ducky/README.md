@@ -22,6 +22,15 @@ GET  /proxy/ducky/result/<id>
 Pass `{"use_cache": false}` on the POST to force a fresh run (by default an identical prior
 query's result is reused).
 
+Result caching lives in the scratch bucket, so it **survives restarts**. Next to each spilled
+result ducky writes a small `ducky/cache/<sql_hash>.meta.parquet` sidecar; on an exact-SQL repeat
+it reads that sidecar back and returns the result without re-scanning the source — even after the
+(preemptible) service restarts. The sidecar shares the `ducky/` prefix, so the scratch bucket's
+lifecycle rule reaps it alongside the result it points at; a hit older than `result_ttl_days` is
+ignored. Set `DUCKY_PERSIST_CACHE=0` to disable caching. Caching keys on the exact SQL text, so
+identical SQL reuses a prior result even if the underlying data changed — use `use_cache: false`
+to force a fresh read.
+
 ### From the CLI (auto-tunnel)
 
 ```bash

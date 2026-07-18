@@ -14,6 +14,7 @@ from ducky.runner import (
     BucketNotAllowedError,
     CrossRegionNotAllowedError,
     QueryError,
+    QueryResult,
     QueryRunner,
     _opts_in_cross_region,
     check_query_access,
@@ -79,6 +80,55 @@ def test_run_query_full_result_not_truncated(make_runner):
     assert result.total_rows == 5
     assert len(result.preview_rows) == 5
     assert result.truncated is False
+
+
+def test_persistent_cache_rebuilds_result_without_rerun(make_runner):
+    """A run leaves a sidecar; lookup_persistent rebuilds the result (as after a restart that
+    dropped the in-memory cache) without re-executing the query."""
+    runner = make_runner(preview_row_cap=2)
+    sql = "SELECT * FROM range(5) t(x)"
+    original = runner.run_query(sql, uuid.uuid4().hex)
+
+    restored = runner.lookup_persistent(sql)
+    assert restored is not None
+    assert restored.columns == original.columns
+    assert restored.preview_rows == original.preview_rows  # capped preview round-trips
+    assert restored.total_rows == original.total_rows == 5
+    assert restored.truncated is True
+    assert restored.result_path == original.result_path
+    assert restored.result_bytes == original.result_bytes
+    assert restored.elapsed_ms == original.elapsed_ms
+
+
+def test_persistent_cache_miss_for_unseen_sql(make_runner):
+    assert make_runner().lookup_persistent("SELECT 'never ran'") is None
+
+
+def test_persistent_cache_disabled_writes_no_sidecar(make_runner, tmp_path):
+    runner = make_runner(persist_cache=False)
+    runner.run_query("SELECT 1 AS x", uuid.uuid4().hex)
+    assert not list((tmp_path / "ducky" / "cache").glob("*.meta.parquet"))
+    assert runner.lookup_persistent("SELECT 1 AS x") is None
+
+
+def test_persistent_cache_drops_entry_past_ttl(make_runner):
+    """A sidecar older than result_ttl_days is ignored — its spilled result may be reaped."""
+    runner = make_runner(result_ttl_days=0)  # any positive age is already stale
+    runner.run_query("SELECT 1 AS x", uuid.uuid4().hex)
+    assert runner.lookup_persistent("SELECT 1 AS x") is None
+
+
+def test_persistent_hit_reenforces_current_access_policy(make_runner):
+    """A sidecar written under a looser policy must not keep serving SQL a tightened allowlist
+    now refuses — the persistent tier outlives the restart that re-applies policy."""
+    sql = "SELECT * FROM read_parquet('s3://marin-na/some/data/*.parquet')"
+    cached = QueryResult(["x"], [[1]], 1, False, "gs://marin-us-east5/tmp/r.parquet", 1, 1)
+    # Plant a sidecar as if this SQL had run when marin-na was allowed (allow-all default).
+    make_runner()._write_persistent_cache(sql, cached)
+    # A runner whose current allowlist excludes marin-na must refuse the cached hit, not serve it.
+    strict = make_runner(allowed_buckets=("gs://marin-",))
+    with pytest.raises(BucketNotAllowedError):
+        strict.lookup_persistent(sql)
 
 
 def test_remote_scratch_blocks_local_filesystem_access(tmp_path):

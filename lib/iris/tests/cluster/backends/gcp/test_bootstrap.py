@@ -3,6 +3,8 @@
 
 """Tests for worker bootstrap script generation."""
 
+import re
+
 import pytest
 from iris.cluster.config import GcpPlatformConfig, WorkerConfig
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
@@ -34,6 +36,17 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
 
     with pytest.raises(ValueError, match="controller_address"):
         build_worker_bootstrap_script(cfg)
+
+
+def test_bootstrap_renders_versioned_runsc_url() -> None:
+    """Every gVisor URL in the bootstrap must use the numeric release path:
+    the GCS layout is releases/release/<YYYYMMDD.P>/, and a URL built from the
+    release-<version> tag name 404s, leaving workers without the runtime."""
+    script = build_worker_bootstrap_script(_worker_config())
+    urls = re.findall(r"https://storage\.googleapis\.com/gvisor/\S+", script)
+    assert urls, "bootstrap no longer downloads runsc"
+    for url in urls:
+        assert re.match(r"https://storage\.googleapis\.com/gvisor/releases/release/\d{8}\.\d+/", url), url
 
 
 def test_render_template_preserves_docker_templates() -> None:

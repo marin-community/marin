@@ -51,7 +51,9 @@ fn now_ms() -> i64 {
 /// `removed` are the input segment paths to splice out — the prefix of the job's
 /// inputs that fit the merge memory ceiling, which may be shorter than the job.
 /// `added` is the single output segment (its file already exists for a merge;
-/// for a bump the file appears only after `bump_rename` runs in the commit).
+/// for a bump the file appears only after `bump_rename` runs in the commit). It
+/// is `None` only when the job's head input file is gone, so the swap drops that
+/// dangling reference and produces no replacement.
 /// `unlink_removed` is `false` for a level bump (the input file was renamed, so
 /// its old path is already gone after `bump_rename`) and `true` for a merge (the
 /// inputs are still on disk). `bump_rename`, when `Some((from, to))`, is the
@@ -62,7 +64,7 @@ fn now_ms() -> i64 {
 #[derive(Debug, Clone)]
 pub struct PlannedSwap {
     pub removed: Vec<String>,
-    pub added: LocalSegment,
+    pub added: Option<LocalSegment>,
     pub unlink_removed: bool,
     pub bump_rename: Option<(PathBuf, PathBuf)>,
     pub input_arrow_bytes: i64,
@@ -109,12 +111,28 @@ pub fn run_job(
 /// carries the new level + path but PRESERVES the input's `created_at_ms`,
 /// row_count, seq window, and typed key bounds. The rename itself is deferred to
 /// the commit via `PlannedSwap::bump_rename`.
+///
+/// A bump can only rename a file that exists. When the input's file is gone — a
+/// dangling deque/catalog reference to a segment an earlier merge already
+/// consumed and unlinked — there is nothing to rename and no recoverable rows, so
+/// the stale reference is dropped instead. This guards BOTH callers: the
+/// single-input dispatch in `run_job` (a lone planner run over a missing segment)
+/// and `apply_merge`'s head-of-run recovery. Without it a single-input job over a
+/// missing file would emit a `bump_rename` that fails on the absent source every
+/// `check_interval`, wedging the level exactly as the merge path once did.
 fn apply_level_bump(
     old: &SegmentRow,
     output_level: i32,
     dir: &Path,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
+    if !Path::new(&old.path).exists() {
+        tracing::warn!(
+            path = %old.path,
+            "level-bump input file missing; dropping the stale segment reference"
+        );
+        return Ok(drop_missing_input(old));
+    }
     let new_filename = seg_filename(output_level, old.min_seq);
     let new_path = dir.join(&new_filename);
     let (min_key, max_key) = input_key_bounds(&old.path);
@@ -132,11 +150,28 @@ fn apply_level_bump(
     };
     Ok(PlannedSwap {
         removed: vec![old.path.clone()],
-        added: bumped,
+        added: Some(bumped),
         unlink_removed: false,
         bump_rename: Some((PathBuf::from(&old.path), new_path)),
         input_arrow_bytes: 0,
     })
+}
+
+/// Drop a dangling input whose file has vanished: splice its stale reference out
+/// of the deque + catalog and produce no replacement.
+///
+/// A missing file carries no recoverable rows and cannot be renamed. Its rows are
+/// either already durable in the output of an earlier merge that unlinked this
+/// input, or were lost with the file itself — dropping the reference loses nothing
+/// either way and lets compaction resume instead of retrying a doomed rename.
+fn drop_missing_input(missing: &SegmentRow) -> PlannedSwap {
+    PlannedSwap {
+        removed: vec![missing.path.clone()],
+        added: None,
+        unlink_removed: false,
+        bump_rename: None,
+        input_arrow_bytes: 0,
+    }
 }
 
 /// Multi-input merge: read inputs, project, k-way merge, write the output file,
@@ -190,22 +225,28 @@ fn apply_merge(
     for inp in &job.inputs {
         // An input we cannot read is one we can never merge, and failing the tick
         // would replan the identical job every check_interval and wedge the level
-        // for good. Route around it instead: as the run's head it is promoted by
-        // rename (the branch below), and otherwise it ends the prefix and becomes
-        // the next tick's head. Either way it moves and compaction stays live.
-        // Only the READ is forgiven — a projection or sort failure is a schema bug
-        // and still propagates.
+        // for good. Route around it instead so compaction stays live. As a non-head
+        // input it ends the prefix and becomes the next tick's head. As the run's
+        // head it is handed to `apply_level_bump`, which promotes a present-but-
+        // corrupt file past the merge by rename and drops a missing one. Only the
+        // READ is forgiven — a projection or sort failure is a schema bug and still
+        // propagates.
         let raw = match read_segment_batches(Path::new(&inp.path)) {
             Ok(raw) => raw,
             Err(e) => {
+                if consumed.is_empty() {
+                    tracing::warn!(
+                        path = %inp.path,
+                        error = %e,
+                        "unreadable merge input at run head; promoting or dropping it"
+                    );
+                    return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
+                }
                 tracing::warn!(
                     path = %inp.path,
                     error = %e,
-                    "unreadable merge input; promoting it past the merge"
+                    "unreadable merge input; deferring it to the next tick"
                 );
-                if consumed.is_empty() {
-                    return apply_level_bump(inp, job.output_level, dir, input_key_bounds);
-                }
                 break;
             }
         };
@@ -299,7 +340,7 @@ fn apply_merge(
     };
     Ok(PlannedSwap {
         removed: consumed.iter().map(|s| s.path.clone()).collect(),
-        added: merged_seg,
+        added: Some(merged_seg),
         unlink_removed: true,
         bump_rename: None,
         input_arrow_bytes,
@@ -400,6 +441,14 @@ mod tests {
         .unwrap()
     }
 
+    /// Unwrap the output segment of a swap that is expected to produce one (every
+    /// merge/bump; a drop returns `None`).
+    fn added_seg(swap: &PlannedSwap) -> &LocalSegment {
+        swap.added
+            .as_ref()
+            .expect("swap produced an output segment")
+    }
+
     fn row_for(path: &str, level: i32, min_seq: i64, max_seq: i64, byte_size: i64) -> SegmentRow {
         SegmentRow {
             namespace: "ns".to_string(),
@@ -449,16 +498,16 @@ mod tests {
         assert!(swap.bump_rename.is_none());
         assert!(swap.unlink_removed);
         assert_eq!(swap.removed.len(), 3);
-        assert_eq!(swap.added.level, 1);
-        assert_eq!(swap.added.row_count, 6);
-        assert_eq!(swap.added.min_seq, 1);
-        assert_eq!(swap.added.max_seq, 6);
+        assert_eq!(added_seg(&swap).level, 1);
+        assert_eq!(added_seg(&swap).row_count, 6);
+        assert_eq!(added_seg(&swap).min_seq, 1);
+        assert_eq!(added_seg(&swap).max_seq, 6);
         // folded key bounds preserve numeric ordering.
-        assert_eq!(swap.added.min_key_value, Some(5));
-        assert_eq!(swap.added.max_key_value, Some(40));
+        assert_eq!(added_seg(&swap).min_key_value, Some(5));
+        assert_eq!(added_seg(&swap).max_key_value, Some(40));
 
         // the output file exists with the expected name and is (key,seq)-sorted.
-        let out = PathBuf::from(&swap.added.path);
+        let out = PathBuf::from(&added_seg(&swap).path);
         assert_eq!(
             out.file_name().unwrap().to_str().unwrap(),
             seg_filename(1, 1)
@@ -549,10 +598,11 @@ mod tests {
         .unwrap();
         assert_eq!(swap.removed.len(), 2, "only the fitting prefix is consumed");
         assert_eq!(
-            swap.added.max_seq, max1,
+            added_seg(&swap).max_seq,
+            max1,
             "the output spans the consumed prefix, not the planned job"
         );
-        assert_eq!(swap.added.row_count, 40_000);
+        assert_eq!(added_seg(&swap).row_count, 40_000);
         assert!(
             swap.input_arrow_bytes <= one * 2 + 1,
             "the measured decode must respect the ceiling"
@@ -568,7 +618,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(swap.removed.len(), 3);
-        assert_eq!(swap.added.max_seq, max2);
+        assert_eq!(added_seg(&swap).max_seq, max2);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -608,6 +658,92 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A head input whose FILE IS GONE (not merely corrupt) must be dropped, not
+    /// promoted. A merge that consumed and unlinked this segment can leave a stale
+    /// deque/catalog reference behind; the planner then hands back the identical
+    /// job every `check_interval`, and promoting-by-rename fails on the absent
+    /// source forever — the exact wedge that stalled `iris.task` in production.
+    /// The swap must drop the reference (no rename, no output) so compaction
+    /// resumes, and its readable neighbour stays live for the next tick.
+    #[test]
+    fn missing_head_input_is_dropped_not_promoted() {
+        let dir = tempdir("missing_head");
+        let (p_gone, min_gone, max_gone) = repeated_line_segment(&dir, 1, 100);
+        let (p_good, min_good, max_good) = repeated_line_segment(&dir, 101, 100);
+        // The file is gone from disk while its row still names it — the dangling
+        // reference an already-consumed-and-unlinked segment leaves behind.
+        std::fs::remove_file(&p_gone).unwrap();
+
+        let job = CompactionJob {
+            inputs: vec![
+                row_for(&p_gone.to_string_lossy(), 0, min_gone, max_gone, 100),
+                row_for(&p_good.to_string_lossy(), 0, min_good, max_good, 100),
+            ],
+            output_level: 1,
+            output_min_seq: min_gone,
+        };
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
+            (None, None)
+        })
+        .expect("a missing input must not fail the tick");
+        assert!(
+            swap.added.is_none(),
+            "a missing head produces no output segment"
+        );
+        assert!(
+            swap.bump_rename.is_none(),
+            "a missing head is dropped, never renamed"
+        );
+        assert!(!swap.unlink_removed, "nothing on disk to unlink");
+        assert_eq!(
+            swap.removed,
+            vec![p_gone.to_string_lossy().to_string()],
+            "only the dangling reference is spliced out"
+        );
+        assert!(
+            Path::new(&p_good).exists(),
+            "its readable neighbour stays live to compact next tick"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A SINGLE-input planned job (the planner emits these for an isolated
+    /// promotable segment) dispatches straight to `apply_level_bump`, never
+    /// through the merge read loop. If that lone input is a dangling reference
+    /// (file gone), the bump must still drop it rather than emit a rename that
+    /// fails on the absent source every tick — the same wedge, reached by the
+    /// single-input path.
+    #[test]
+    fn single_missing_input_is_dropped_not_bumped() {
+        let dir = tempdir("single_missing");
+        let (p_gone, min_gone, max_gone) = repeated_line_segment(&dir, 1, 100);
+        std::fs::remove_file(&p_gone).unwrap();
+
+        let job = CompactionJob {
+            inputs: vec![row_for(
+                &p_gone.to_string_lossy(),
+                2,
+                min_gone,
+                max_gone,
+                100,
+            )],
+            output_level: 3,
+            output_min_seq: min_gone,
+        };
+        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
+            (None, None)
+        })
+        .expect("a missing single input must not fail the tick");
+        assert!(swap.added.is_none(), "a missing input produces no output");
+        assert!(
+            swap.bump_rename.is_none(),
+            "a missing single input is dropped, never renamed"
+        );
+        assert!(!swap.unlink_removed, "nothing on disk to unlink");
+        assert_eq!(swap.removed, vec![p_gone.to_string_lossy().to_string()]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A lone input over the ceiling has nothing to merge with, so it is
     /// promoted by rename — no rewrite, no memory — rather than wedging its
     /// level forever behind a merge that can never fit.
@@ -628,7 +764,11 @@ mod tests {
         assert!(swap.bump_rename.is_some(), "must degenerate to a rename");
         assert!(!swap.unlink_removed, "a rename leaves nothing to unlink");
         assert_eq!(swap.removed, vec![p0.to_string_lossy().to_string()]);
-        assert_eq!(swap.added.max_seq, max0, "the bump carries its own span");
+        assert_eq!(
+            added_seg(&swap).max_seq,
+            max0,
+            "the bump carries its own span"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -671,8 +811,8 @@ mod tests {
         let bounds = |_: &str| (Some(1), Some(n));
         let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
 
-        assert_eq!(swap.added.row_count, n + 1, "no row loss");
-        let out = PathBuf::from(&swap.added.path);
+        assert_eq!(added_seg(&swap).row_count, n + 1, "no row loss");
+        let out = PathBuf::from(&added_seg(&swap).path);
         let mut keyed: Vec<(i64, i64)> = Vec::new();
         for b in &read_segment_batches(&out).unwrap() {
             let seqs = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
@@ -714,11 +854,15 @@ mod tests {
             seg_filename(3, 1)
         );
         assert!(!swap.unlink_removed);
-        assert_eq!(swap.added.level, 3);
-        assert_eq!(swap.added.created_at_ms, 9999, "birth time preserved");
-        assert_eq!(swap.added.size_bytes, size, "no rewrite -> same bytes");
-        assert_eq!(swap.added.min_key_value, Some(10));
-        assert_eq!(swap.added.max_key_value, Some(20));
+        assert_eq!(added_seg(&swap).level, 3);
+        assert_eq!(added_seg(&swap).created_at_ms, 9999, "birth time preserved");
+        assert_eq!(
+            added_seg(&swap).size_bytes,
+            size,
+            "no rewrite -> same bytes"
+        );
+        assert_eq!(added_seg(&swap).min_key_value, Some(10));
+        assert_eq!(added_seg(&swap).max_key_value, Some(20));
 
         // The executor itself does NOT rename (deferred to commit); the old file
         // is still present and the new one absent.
@@ -774,7 +918,7 @@ mod tests {
         .unwrap();
 
         // The merged output carries a sidecar whose mask prunes correctly.
-        let out = PathBuf::from(&swap.added.path);
+        let out = PathBuf::from(&added_seg(&swap).path);
         let sc = sidecar_path(&out);
         assert!(sc.exists(), "merge output must have a trigram sidecar");
         let index = read_column_from_bytes(&std::fs::read(&sc).unwrap(), "data").unwrap();
@@ -885,7 +1029,7 @@ mod tests {
             (None, None)
         })
         .unwrap();
-        let batches = read_segment_batches(Path::new(&swap.added.path)).unwrap();
+        let batches = read_segment_batches(Path::new(&added_seg(&swap).path)).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);
         // note column exists and the first (old) row is null.
