@@ -170,10 +170,19 @@ def _moe_mlp_ep_nccl(
 
         chunk_spec = P(lead_axes, None, None)
 
+        # Checkpoint the chunk body: without it, scan saves each chunk's
+        # capacity-sized tensors as bwd residuals and K × (ep × C × top_k)
+        # rows = the SAME total as one unchunked dispatch — the b1024 memory
+        # wall reappears (NCCLEP-007: 164.93 GiB OOM at C=16384). Recompute
+        # dispatch+FFN per chunk in the bwd instead; only the [C,·] chunk
+        # inputs are stacked. prevent_cse=False: scan iteration boundaries
+        # already prevent the CSE remat guards against.
+        chunk_fn = jax.checkpoint(_one_chunk, prevent_cse=False)
+
         def scan_fn(carry, chunk):
             x_c, idx_c, w_c = (t.reshape(shards * _CHUNK_TOKENS, t.shape[-1]) for t in chunk)
             x_c = jax.lax.with_sharding_constraint(x_c, P(lead_axes, None))
-            out_c = _one_chunk(x_c, idx_c, w_c, w13_b, w2_b)
+            out_c = chunk_fn(x_c, idx_c, w_c, w13_b, w2_b)
             out_c = out_c.reshape(shards, _CHUNK_TOKENS, out_c.shape[-1])
             return carry, jax.lax.with_sharding_constraint(out_c, chunk_spec)
 
