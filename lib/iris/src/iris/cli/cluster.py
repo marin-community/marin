@@ -851,7 +851,7 @@ def cluster_status_cmd(ctx, as_json: bool):
                         "running": True,
                         "healthy": True,
                         "address": controller_url,
-                        "version": version,
+                        "version": str(version),
                         "workers_healthy": healthy,
                         "workers_total": len(workers),
                     }

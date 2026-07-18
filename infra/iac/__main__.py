@@ -85,7 +85,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     # Bind to the cluster's declared kube_context, not the kubeconfig's current-context —
     # otherwise a stack silently targets whatever `kubectl` was last pointed at.
     #
-    # enable_patch_force=True: declared here until until the "cede" ships (spec.md §4). Iris's
+    # enable_patch_force=True: declared here until the "cede" ships (spec.md §4). Iris's
     # controller still re-applies RBAC/NodePools under its own field manager on every restart, so
     # a plain SSA dry-run reports a field conflict without forced ownership (README §Adoption
     # check).
