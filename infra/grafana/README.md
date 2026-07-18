@@ -140,8 +140,10 @@ i.e. reachable by nobody until the first grant.
 
 The ferry and build panels read the GitHub API; `GITHUB_TOKEN` comes from the
 `marin-status-page-github-token` Secret Manager secret, mounted by the CloudRunService
-`secrets` field (the value never enters Pulumi). Create it once if it does not exist — a
-classic token with no scopes or a fine-grained PAT scoped to public-repo read is enough:
+`secrets` field (the value never enters Pulumi). The name is a holdover from the retired
+`marin-infra-dashboard` status page; Grafana is now its only consumer, so keep it despite
+the name. Create it once if it does not exist — a classic token with no scopes or a
+fine-grained PAT scoped to public-repo read is enough:
 
 ```bash
 echo -n "<paste-github-token>" | gcloud secrets create marin-status-page-github-token \
