@@ -18,6 +18,7 @@ import jax.scipy as jsp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
+from haliax.nn import ArrayStacked
 from haliax.quantization import Fp8DotGeneralOp, Fp8RaggedDotOp
 from jax import core, random
 from jax.sharding import NamedSharding, auto_axes, get_abstract_mesh, reshard
@@ -27,7 +28,7 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
-from jaxtyping import Array, Float, Int, PRNGKeyArray
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.attention import (
     AttentionMask,
@@ -96,6 +97,13 @@ def _partition_spec_of(x: jax.Array) -> P | None:
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window // 2), mask.with_sliding_window(sliding_window)
+
+
+def _long_layer_schedule(num_layers: int) -> jax.Array:
+    """Bool[num_layers] = True for every 4th layer and the last layer (the full-causal
+    "long" layers); False elsewhere (sliding-window "short" layers)."""
+    idx = jnp.arange(num_layers)
+    return ((idx % 4) == 3) | (idx == num_layers - 1)
 
 
 class GrugMoeHfConfig(HfConfig):
@@ -207,6 +215,12 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    use_array_stacked_blocks: bool = False
+    """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run them
+    through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one scan body so
+    trace/compile cost and the scheduler's live-buffer set stop growing with depth. The
+    per-layer short/long mask choice rides in as precomputed FA4 bounds selected with
+    ``jnp.where`` (gpu_fa4_cute only); requires ``disable_pko=True``."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -225,6 +239,17 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.use_array_stacked_blocks and not self.disable_pko:
+            raise ValueError(
+                "use_array_stacked_blocks=True requires disable_pko=True because "
+                "CausalSelfAttention reads use_pko at trace time (not scan-expressible)."
+            )
+        if self.use_array_stacked_blocks and self.attention_implementation != "gpu_fa4_cute":
+            raise ValueError(
+                "use_array_stacked_blocks=True encodes the per-layer short/long mask choice "
+                "in precomputed FA4 bounds (gpu_fa4_cute only); other attention "
+                "implementations must use unrolled blocks."
+            )
         if self.fp8 is not None and (self.hidden_dim % 128 != 0 or self.intermediate_dim % 128 != 0):
             raise ValueError(
                 "fp8 requires hidden_dim and intermediate_dim to be multiples of 128 (the FP8 ragged-dot "
@@ -448,7 +473,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
-        disable_rope: bool = False,
+        disable_rope: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -496,17 +521,32 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
+
         # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
         # (second half is rope-free on every layer). ``disable_rope`` skips
         # the RoPE step entirely on this layer — used to opt long layers out
-        # of rotary embedding when ``cfg.disable_long_rope`` is set.
-        if not disable_rope:
+        # of rotary embedding when ``cfg.disable_long_rope`` is set. It may be a
+        # traced scalar bool (per-layer choice inside the layer scan): then RoPE
+        # is always computed and selected with ``jnp.where`` so the scan body has
+        # no ``lax.cond`` (which would pin the FA4 metadata to device 0).
+        def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
             half = head_dim // 2
             q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+                qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
             )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+            return (
+                jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
+                jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
+            )
+
+        if isinstance(disable_rope, bool):
+            if not disable_rope:
+                q, k = _rope(q, k)
+        else:
+            q_roped, k_roped = _rope(q, k)
+            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+            q = jnp.where(keep, q_roped, q)
+            k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -862,7 +902,7 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
-        disable_rope: bool = False,
+        disable_rope: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
@@ -879,7 +919,10 @@ class Transformer(eqx.Module):
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    blocks: tuple[Block, ...]
+    # Exactly one is populated: ``blocks`` (unrolled per-layer) or ``stacked_blocks``
+    # (homogeneous lax.scan), selected by ``cfg.use_array_stacked_blocks``.
+    blocks: tuple[Block, ...] | None
+    stacked_blocks: ArrayStacked[Block] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -904,18 +947,28 @@ class Transformer(eqx.Module):
                 raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
             cfg = cfg_or_vocab
 
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, embed_gn_key, final_gn_key = keys[:4]
+        block_keys = keys[4:]
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        blocks: tuple[Block, ...] | None
+        stacked_blocks: ArrayStacked[Block] | None
+        if cfg.use_array_stacked_blocks:
+            blocks = None
+            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
+        else:
+            blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+            stacked_blocks = None
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
+            stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -975,27 +1028,64 @@ class Transformer(eqx.Module):
             save_names = (*save_names, MXFP8_QWEIGHT_CHECKPOINT_NAME)
         remat_policy = jax.checkpoint_policies.save_only_these_names(*save_names) if save_names else None
 
-        num_blocks = len(self.blocks)
-        moe_router_stats: list[dict[str, jax.Array]] = []
-        for i, block in enumerate(self.blocks):
-            is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or is_last
-            layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long and not cfg.disable_pko
-            disable_rope = is_long and cfg.disable_long_rope
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope
-            )
-            moe_router_stats.append(router_stats)
+        def _apply_block(block: Block, *args) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+            return eqx.filter_checkpoint(block, policy=remat_policy)(*args)
 
-        router_metrics = {
-            "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
-            "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
-            "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
-            "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
-            "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
-            "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
-        }
+        if self.blocks is not None:
+            num_blocks = len(self.blocks)
+            moe_router_stats: list[dict[str, jax.Array]] = []
+            for i, block in enumerate(self.blocks):
+                is_last = i == num_blocks - 1
+                is_long = i % 4 == 3 or is_last
+                layer_mask = long_mask if is_long else short_mask
+                use_pko = is_long and not cfg.disable_pko
+                disable_rope = is_long and cfg.disable_long_rope
+                hidden, router_stats = _apply_block(block, hidden, layer_mask, use_pko, disable_rope)
+                moe_router_stats.append(router_stats)
+            router_metrics = {
+                "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
+                "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
+                "load_balancing_loss_per_layer": jnp.stack([s["load_balancing_loss"] for s in moe_router_stats], axis=0),
+                "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
+                "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
+                "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+            }
+        else:
+            assert self.stacked_blocks is not None
+            if cfg.attention_implementation != "gpu_fa4_cute":
+                raise NotImplementedError(
+                    "use_array_stacked_blocks=True encodes the per-layer short/long mask choice "
+                    "in precomputed FA4 bounds (gpu_fa4_cute only); other attention "
+                    "implementations must use unrolled blocks (use_array_stacked_blocks=False)."
+                )
+            # Homogeneous scan: one compiled Block body over the stacked layers; the per-layer
+            # short/long choice rides in as a Bool[num_layers] scan input, selecting between the
+            # precomputed FA4 bounds with jnp.where (no lax.cond — see the fa4 bounds comment
+            # above). ``disable_rope`` rides in as a traced per-layer scalar.
+            mask_schedule = _long_layer_schedule(cfg.num_layers)
+
+            def _scan_layers(
+                carry_hidden: Float[Array, "B S D"],
+                scan_inputs: tuple[Block, Bool[Array, ""]],
+            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                layer, layer_use_long_mask = scan_inputs
+                use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                disable_rope = use_long if cfg.disable_long_rope else False
+                return _apply_block(layer, carry_hidden, layer_mask, False, disable_rope)
+
+            hidden, stacked_router_stats = jax.lax.scan(
+                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+            )
+            router_metrics = {
+                "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
+                "routing_counts_per_layer": stacked_router_stats["routing_counts"],
+                "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
+                "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
+                "qb_beta_per_layer": stacked_router_stats["qb_beta"],
+                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+            }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
 
@@ -1081,6 +1171,11 @@ def _linear_inference_tensor(value: jax.Array) -> jax.Array:
 
 
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
+    if model.blocks is None:
+        raise NotImplementedError(
+            "grugmoe_inference_state_dict requires unrolled blocks; stacked-scan models "
+            "(use_array_stacked_blocks=True) have no per-layer export path."
+        )
     tensors: dict[str, jax.Array] = {
         "model.embed_tokens.weight": model.token_embed,
         "model.embed_norm.weight": model.embed_norm.weight,

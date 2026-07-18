@@ -61,6 +61,7 @@ def _parse():
     p.add_argument("--expert-parallelism", type=int, default=8)
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument("--remat-mode", default="recompute_all", choices=["recompute_all", "save_moe"])
+    p.add_argument("--stacked-blocks", action="store_true", help="lax.scan over ArrayStacked blocks")
     p.add_argument("--optimizer", default="muonh", choices=["muonh", "adamh"])
     p.add_argument("--top-buffers", type=int, default=25)
     return p.parse_args()
@@ -114,6 +115,7 @@ def main():
         moe_implementation=a.moe_implementation,
         fp8=fp8,
         remat_mode=a.remat_mode,
+        use_array_stacked_blocks=a.stacked_blocks,
     )
     if a.optimizer == "muonh":
         optimizer = GrugMoeMuonHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
@@ -126,9 +128,11 @@ def main():
 
     with set_mesh(mesh):
         t0 = time.perf_counter()
-        init_compiled = jax.jit(lambda rng: initial_state(model, optimizer=opt, mp=mp, key=rng, ema_beta=None)).lower(
-            jax.random.PRNGKey(0)
-        ).compile()
+        init_compiled = (
+            jax.jit(lambda rng: initial_state(model, optimizer=opt, mp=mp, key=rng, ema_beta=None))
+            .lower(jax.random.PRNGKey(0))
+            .compile()
+        )
         print(f"init compiled in {time.perf_counter() - t0:.1f}s", flush=True)
         state_shardings = init_compiled.output_shardings
         state_avals = jax.eval_shape(
@@ -158,9 +162,7 @@ def main():
     ma = compiled.memory_analysis()
     if ma is not None:
         stats = {
-            k: getattr(ma, k)
-            for k in dir(ma)
-            if not k.startswith("_") and isinstance(getattr(ma, k), (int, float))
+            k: getattr(ma, k) for k in dir(ma) if not k.startswith("_") and isinstance(getattr(ma, k), (int, float))
         }
         print("MEMORY_ANALYSIS " + json.dumps({k: f"{v / 2**30:.2f}GiB" if v > 2**20 else v for k, v in stats.items()}))
 

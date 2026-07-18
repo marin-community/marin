@@ -104,6 +104,7 @@ def _parse():
     p.add_argument("--expert-parallelism", type=int, default=8)
     p.add_argument("--attention-implementation", default="gpu_fa4_cute")
     p.add_argument("--remat-mode", default="recompute_all", choices=["recompute_all", "save_moe"])
+    p.add_argument("--stacked-blocks", action="store_true", help="lax.scan over ArrayStacked blocks")
     return p.parse_args()
 
 
@@ -150,6 +151,7 @@ def main():
         moe_implementation=a.moe_implementation,
         fp8=fp8,
         remat_mode=a.remat_mode,
+        use_array_stacked_blocks=a.stacked_blocks,
     )
     optimizer = GrugMoeMuonHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
     mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
