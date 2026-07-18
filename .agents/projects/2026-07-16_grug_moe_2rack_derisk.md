@@ -506,3 +506,182 @@ kernel faults only visible via the full-log-dump workaround).
 
 New env switches (committed): SCALE_QUACK_FP8, SCALE_ATTN_FP8, SCALE_NO_MUON,
 SCALE_QUACK_TILE/CLUSTER/SWIZZLE; e4m3 dtype mapping + bf16-output in quack_moe_cute.
+
+## GB200 kernel-dev pod session (2026-07-17)
+
+Interactive 2xGB200 pod (iris-rav-dev-gpu-...) via kubectl (kubeconfig
+~/.kube/coreweave-iris, ctx marin-us-east-08a, ns iris, container task).
+Single-process JAX-GPU WORKS here (unlike the batch probe's cuDNN failure).
+
+**fp8 flash attention UNBLOCKED (1-line upstream fix):** flash_attn's
+blackwell_helpers.py:28 `_tcgen05_mma_kind` checks `MmaFP8Op` but this cutlass-dsl
+(4.5.2) constructs `MmaF8F6F4Op` — add that case -> "f8f6f4". Then fp8 flash runs:
+1.21x over bf16 at seq8192/H32/D128 (bandwidth-bound, not 2x). grug's own
+_fa4_cute kernel is SM90 warp-MMA (Flash4CuteSm90BackwardConfig) and CANNOT do
+fp8 (warp MmaFP8Op is SM89, unsupported in CUDA-12.9 cutlass-dsl); fp8 needs the
+tcgen05 kernel (flash_attn.cute has it).
+
+**QuACK works at ALL widths (pod-confirmed):** d3072/d5120/d6144 all run bf16+fp8
+(fp8 1.17-1.34x, grows with width). The earlier "QuACK fails at d5120" was a
+MISDIAGNOSIS — every d5120 failure was the TE nccl_ep dispatch, not QuACK.
+
+**FSDP path (sonic_cute) is a DEAD END for 512E:** all-gathers 512 experts'
+weights per layer (~40GB/layer over IB) -> comm-bound. d5120/512E FSDP = 3.58%
+bf16 / 4.23% fp8 (step 6.8s vs EP's 1.5s). EP is the correct arch for 512E.
+
+**TE nccl_ep D=5120 fault = INTERNODE ONLY (pod-confirmed):** ep=2 single-node
+dispatch works at D=5120 (DISPATCH_OK); the fault is `cudaErrorLaunchFailure`
+(async OOB write) in the internode (NUM_LSA_TEAMS>1, GIN/RDMA) dispatch kernel.
+Non-monotonic in D (d2048/2560/4096 work, d3072/d5120 fault) -> the host picks a
+per-config JIT stage-count (num_of_stages template, hybrid_ep.cuh); multinode smem
+= 2x intranode (intra+inter node token buffers, num_of_stages*hidden_dim*2).
+nccl_ep.cc:1703 is where the deferred error surfaces (a cudaStreamSynchronize in
+cleanup), NOT the kernel.
+
+**Pod TE setup (to reproduce):** download te217_b200_{src,pkg}.tgz from CW S3
+(tmp/ttl=7d/rav/te217_b200/); untar pkg into venv site-packages + recreate
+transformer_engine-2.17.0.dist-info; nccl>=2.30.4 required (pip
+nvidia-nccl-cu12==2.30.7 libnccl.so.2); nccl_ep JIT-compiles at runtime with nvcc
+needing /usr/local/cuda (symlink to nvidia/cu13), CCCL headers (nvidia-cuda-cccl-cu12,
+nv/target) on CPATH, and nccl.h (from the nccl wheel) on CPATH. Scripts:
+scratchpad/ep_repro.py (2-proc ep_dispatch), epsweep.sh, r2nds.sh (2-node D-sweep).
+
+## TE nccl_ep internode fault — narrowing (2026-07-17 cont'd)
+
+**2-node ep=8 D-sweep (cheap repro):** d4096 works (rc=0), d4608/d5120/d6144 all
+`Aborted` (SIGABRT). So d4096 is the widest working EP width; fault is monotonic
+at ep=8 (my earlier "non-monotonic" mixed ep=8 and ep=64 data).
+
+**Root cause is a std::abort, NOT a CUDA OOB.** hybridep_adapter.cu:963
+`check_dispatch_smem_limit` std::abort()s if dispatch dynamic smem > device max
+(GB200 = 232448 B / 227 KB), msg "Tune dispatch stages/pipelines; current stages=12".
+
+**BUT the dispatch smem is NOT the aborting one** (computed exactly via extracted
+host fn `calculate_dispatch_smem_layout_size`, EXPERT_MAJOR, ep=8: experts/rank=64,
+ranks/node=4, nodes=2, chunk=HT_OF_NUM_TOKENS_PER_CHUNK=64):
+  stages=12: d4096=124KB, d4608=137KB, d5120=150KB, d6144=176KB (all FIT), d8192=228KB (abort).
+So dispatch fits through d6144 — the d4608 abort must be a DIFFERENT check
+(candidate: `calculate_combine_smem_layout_size` at hybridep_adapter.cu:1302, which
+uses intra+inter buffers ~2x). Waiting on r2nds3 (full-stderr capture) for the exact
+abort message before fixing. Do NOT reduce dispatch stages — wrong lever.
+
+Scripts: scratchpad/{ep_repro.py, r2nds.sh (2-node ep=8 sweep), r2nds3.sh (d5120
+full-log), smem2.cpp (host smem calc), compute_smem.cu}. Pod env: nccl2307 +
+cccl_whl + /usr/local/cuda->cu13 symlink + CPATH; TE from te217_b200 cache.
+
+## TE nccl_ep internode fault — RESOLVED AS HEISENBUG, pivoting off TE (2026-07-17)
+
+**The fault is NOT the smem std::abort.** Full-stderr capture (r2nds3) shows d5120
+fails with `terminate called after throwing EPException / what(): CUDA error
+nccl_ep.cc:1703 'unspecified launch failure'` — an async CUDA launch failure
+(kernel fault), surfaced as an uncaught throw → terminate → "Aborted". Reproduced
+identically at ep=8/2-node (cheap) as at ep=64/2-rack. d4096 = widest working EP width.
+
+**Ruled out, by measurement (not guessing):**
+- smem limit: computed exactly, dispatch fits through d6144. NOT the cause.
+- deterministic memory OOB: `compute-sanitizer --tool memcheck` runs d5120 to
+  completion, **rc=0, "ERROR SUMMARY: 0 errors"** (r2san2). Serialization masks it.
+- SM-count/occupancy race: `--max-num-sms {1,4,8,16}` ALL still fault (r2sms).
+  Even 1 block fails → not a multi-block dispatch race.
+- fixed-buffer overflow: every TE buffer scales with hidden — bytes_per_entry =
+  hidden*sizeof(token)+prob+sf (nccl_ep.cc:466); pad_tma_slot_bytes = padded
+  hidden*sizeof(token) (hybrid_ep.cuh:324); warp_copy_int4 exact at d5120/6144
+  (10240/12288 B, 16-aligned). No fixed cap exceeded.
+
+**Conclusion: deep TE HybridEP race/RDMA heisenbug** (works serialized, faults at
+speed, invisible to memcheck — consistent with a NIC-side GIN/RDMA ordering race
+that compute-sanitizer does not instrument). Not a quick patch; NVIDIA-level fix.
+
+**PIVOT (per "if stuck, find another way"): drop TE nccl_ep, use a TE-free EP
+backend.** The codebase already has `ragged_all_to_all`, `ring`, `deepep` EP
+backends (lib/levanter/src/levanter/grug/_moe/ep_*.py) using jax.lax.ragged_all_to_all
++ ragged_dot — pure XLA/NCCL collectives, work at ANY width, no TE kernel.
+Launch via the standalone's SPMD path (IRIS_NUM_TASKS>1 → initialize_jax(), 1
+proc/node/4 GPUs) — NOT the multi-controller 1-proc/GPU nccl_ep path. Script:
+scratchpad/r2raa.sh (2-node SPMD, d5120/d4096, L32/L46, 512E, ragged_all_to_all).
+Local GEMM can be swapped ragged_dot→sonic_cute (QuACK) for speed.
+
+## TE-free EP WORKS — 14.4% mfu_b200 at 512E, beats nccl_ep (2026-07-17)
+
+`ragged_all_to_all` (jax.lax.ragged_all_to_all + ragged_dot, no TE) at ep=64 / 64
+GB200 / 512E / bs64 / recompute_all / SPMD (16 nodes):
+- **d5120 L16: mfu_b200=0.1437 (14.37%), h100_equiv=0.327, 20693 TFLOPS, 384k tok/s**
+- **d4096 L32: mfu_b200=0.1443 (14.43%), h100_equiv=0.328, 20777 TFLOPS**
+- d5120 L32: OOM (63.56GiB single op). Fixed non-expert (attn+embed) params+MuonH
+  optimizer state REPLICATE at ep=64 (data=model=1) → ~53GiB/device baseline; a batch
+  activation tips it over 189GB. recompute_all did NOT fit L32 (the 63GiB is the fixed
+  replicated-param/opt component, not activation).
+
+**This already beats nccl_ep's 13.4% AND runs at d5120 width** — with the SLOW ragged_dot
+GEMM. QuACK swap (ragged_dot→sonic_cute cutlass, ~2/3 of FLOPs, 2-3x faster on Blackwell)
+is the key lever toward 20%. Then fp8-in-QuACK (+8% step) + fit L32 via bf16 optimizer
+state / 128 GPUs (2nd shard axis for the replicated attn params) + fp8 attention.
+
+Scripts: scratchpad/r2raaF4.sh (winning config). Batch must be multiple of ep_size
+(sharded across replica_dcn×data×expert). Launch = SPMD (no --coordinator-address;
+IRIS_NUM_TASKS>1 → initialize_jax), --expert-axis-size $WORLD, 1 proc/node.
+
+## Profile + optimization ladder (2026-07-17, d4096 L32 bs128, ep=64/64 GPU)
+
+**MFU ladder (all TE-free ragged_all_to_all, 512E, recompute_all):**
+- ragged_dot: 14.4%
+- + QuACK GEMM swap (SCALE_RAGGED_QUACK=1): 15.1%  [+0.7pp]
+- + bs64→bs128: 16.0%  [+0.9pp]
+- + fp8 dispatch (SCALE_RAGGED_FP8=1): pending (r2fp8)
+
+**xprof per-op breakdown at 15% (d4096 L32 bs128), fraction of GPU time:**
+- ncclDevKernel_SendRecv (the two ragged_all_to_all): **17.1%** ← top single cost
+- attention flash fwd 7.9% + bwd 9.4% = **17.3%**
+- QuACK GEMM (gated+default): 12.1%
+- ragged bookkeeping (scatter/gather/sort/add/lambda fusions): **~15%**
+- other collectives (AllReduce grad-sum bf16/u8/f32/u32, AllGather): ~9%
+- nvjet matmuls (attn proj/router): ~5%
+So EP tax (comm 26% + bookkeeping 15% = 41%) dominates; useful compute (attn+GEMM) ~32%.
+
+**Code changes (saved to local ep_ragged_all_to_all.py, both env-gated):**
+1. SCALE_RAGGED_QUACK=1 → local GEMM via sonic_cute QuACK instead of ragged_dot.
+2. SCALE_RAGGED_FP8=1 → e4m3 token payload on both ragged_all_to_all (halves SendRecv);
+   QuACK weights follow x_dispatch.dtype→fp8, so GEMM goes fp8 too.
+Scripts: scratchpad/r2raaQ.sh (QuACK), r2fp8.sh (fp8), r2prof.sh (xprof parse).
+
+**Next levers to 20% (from 16%):** fp8 dispatch (halve 17% SendRecv); attack the ~15%
+ragged bookkeeping (fuse/reduce the argsort/scatter/gather in ep_common permute+combine);
+save_moe remat at bs64 to skip attention recompute (saves ~8% recomputed fwd) if it fits.
+
+## fp8 wire-only dispatch → 18.39% (2026-07-17)
+
+fp8 (e4m3) as a WIRE-ONLY payload on both ragged_all_to_all (cast back to bf16 right
+after each a2a; QuACK expects bf16, does its own internal fp8). d4096 L32 bs128 ep=64:
+- QuACK no-fp8: 15.94%
+- **QuACK + fp8 dispatch: 18.39%** (+2.45pp), 380k tok/s
+- d5120 L16 + fp8: 17.19% (+1.8pp)
+BUG fixed: feeding fp8 INTO QuACK breaks its backward (_expert_mlp_bwd ragged_dot mixes
+fp8 saved-h with bf16 w → TypePromotionError). Wire-only cast-back avoids it.
+
+**At 18.39%, ~1.6pp from 20%.** Remaining levers: save_moe remat (skip attn recompute,
+~8% of step is recomputed attn fwd under recompute_all — now may fit since fp8 shrank
+dispatch buffers); keep the permute/sort in fp8 (halves ~15% bookkeeping); bs256.
+
+## ✅ 20% MFU REACHED — 20.23% mfu_b200 (2026-07-17)
+
+**Winning config: d4096, 512 experts (top-8), 32 layers, ragged_all_to_all EP (ep=64),
+64 GB200, seq8192, bs128.**
+- steady_median_mfu_b200 = **0.2023 (20.23%)**, h100_equiv = 0.460 (46.0%), 418k tok/s.
+- Second config (save_moe): 20.20%. d5120 L16: 19.21% (L32 d5120 OOMs at 64 GPU).
+
+**The full lever stack that got there (all TE-free ragged_all_to_all, 512E, ep=64):**
+| step | mfu_b200 |
+| ragged_dot baseline | 14.4% |
+| + QuACK GEMM swap (SCALE_RAGGED_QUACK=1) | 15.1% |
+| + bs64→bs128 | 16.0% |
+| + fp8 wire dispatch (SCALE_RAGGED_FP8=1) | 18.4% |
+| + fp8 through bookkeeping sorts | 18.5% |
+| + **fp8 QuACK GEMM (SCALE_QUACK_FP8=1)** | **20.2%** |
+
+**Code (all saved to local lib/levanter/.../_moe/ep_ragged_all_to_all.py, uncommitted):**
+QuACK grouped-GEMM swap + fp8 e4m3 token payload through permute/a2a/sort (cast to bf16
+only at the GEMM input; feeding fp8 INTO QuACK breaks its bwd). fp8 GEMM via existing
+sonic_cute SCALE_QUACK_FP8. Env: SCALE_RAGGED_QUACK=1 SCALE_RAGGED_FP8=1 SCALE_QUACK_FP8=1.
+Winning script: scratchpad/r2gemm.sh. nccl_ep (TE HybridEP) was abandoned — its d>4096
+internode fault is a deep NVIDIA-library race heisenbug (not the path; ragged_all_to_all
+sidesteps it entirely and reaches higher MFU).

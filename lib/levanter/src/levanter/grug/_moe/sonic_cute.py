@@ -70,13 +70,17 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     GEMM's dim-dependent launch failures at some hidden widths.
     """
     tm, cm, sw = _quack_tile(), _quack_cluster(), _quack_swizzle()
-    _gu, h = quack_gated_grouped_gemm(_f8(x_dispatch), _f8(w13_il), cu, return_preact=True, tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
+    _gu, h = quack_gated_grouped_gemm(
+        _f8(x_dispatch), _f8(w13_il), cu, return_preact=True, tile_mn=tm, cluster_mnk=cm, max_swizzle=sw
+    )
     return quack_grouped_gemm(_f8(h), _f8(moe_w2), cu, b_major="n", tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
 
 
 def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     tm, cm, sw = _quack_tile(), _quack_cluster(), _quack_swizzle()
-    gu, h = quack_gated_grouped_gemm(_f8(x_dispatch), _f8(w13_il), cu, return_preact=True, tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
+    gu, h = quack_gated_grouped_gemm(
+        _f8(x_dispatch), _f8(w13_il), cu, return_preact=True, tile_mn=tm, cluster_mnk=cm, max_swizzle=sw
+    )
     y = quack_grouped_gemm(_f8(h), _f8(moe_w2), cu, b_major="n", tile_mn=tm, cluster_mnk=cm, max_swizzle=sw)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
