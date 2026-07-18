@@ -707,3 +707,42 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
 - Sharpening adopted: r_δ (monotone) cannot express negative utility past ~6 epochs (their
   measured regime); free-sign hinge required for any high-epoch modeling. f18 rev to adopt
   their epochs-top-axis convention; cite #2846 in the report's epoching section.
+
+## 2026-07-18 TWO-BUCKET FACTORIAL launched — 25 runs training (the #2846 transplant + decoupling axes)
+
+- Design (rav directive, expanded mid-task): mixtures of exactly TWO buckets — code `c01q0`
+  (152.6B) x web `c05q0` (876.9B, the LARGEST web_text bucket by total_tokens; runners-up
+  c05q1 761B, c05q2 461B) — same weights both phases, deliberately outside the swarm's support
+  (nearest-train Hellinger 0.41–0.70). 25 runs, seed 0, 10B default budget (4,776 steps),
+  H100x8/cw-rno2a, W&B group `rav_mve_twobucket`:
+  NATURAL arm (8, sim-epoching ON, the #2846 replica: w_code ∈ {0,.05,.1,.2,.35,.5,.75,1},
+  endpoints heavily epoched by design — w=1 code 53.7 phase-0 epochs, w=0 web 9.4);
+  AXIS 1 weight at fixed e≈4 (w ∈ {.05,.1,.2,.35,.5}); AXIS 2 epochs at fixed w=.2
+  (e ∈ {1,2,4,8,16,32}); AXIS 3 budget x epochs ({2.5B,40B} x {4,16}); AXIS 4 d256 x
+  epochs ({2,8,32}); center (w=.2, e≈4) shared.
+- **Key mechanism**: independent epoch control via `LmDataConfig.max_train_batches={'c01q0': n}`
+  with budgets OFF → REAL, exact epochs (e0 = w·3776/n), web untouched. Deliberate substitution
+  for the prescribed shard-dir sub-cache copies: same estimand, exact 2.097M-token granularity,
+  zero data movement, and the SAME slice-after-shuffle subset mechanism as simulated epoching
+  (block shuffle permutes io-blocks globally ⇒ content-fair; fixed seed ⇒ nested ladder).
+- **Pre-registered before launch**: `grug/twobucket_preregistration.json`
+  sha `96dfba307182529ed88fc14300dc28b61fe6e432117d9e4a2c3598e37ef81083` (staged copy in
+  experiments/grug/moe/, asserted at every start). Kernel + fitted-swoosh (+#2846-import for
+  the natural arm) predictions for zmacro AND humaneval bpb per point, computed by
+  `experiments/datakit/mixture_features/twobucket_design.py` — machinery validated by
+  reproducing the transect prereg's 16+16 committed values to 1e-9. Sharpest pre-registered
+  contrast: AXIS 2 leaves content h unchanged ⇒ kernel predicts a CONSTANT (2.215 z /
+  0.693 bpb) while the swoosh predicts the harm curve (→2.612 z / 0.704 by e32); swoosh
+  U-shape on the natural arm (humaneval min near w=.35). Swoosh has no budget/size input ⇒
+  axes 3/4 test its implied invariance. ppl/byte = 2^bpb stated.
+- d256 (axis 4) built from the heuristic + 4 swarm-family replacements that exactly reproduce
+  the d512 swarm model at 512 (asserted; 3L/2H/1KV/interm128; optimizer NOT re-tuned, documented).
+- Launch: two informative failures, both fixed same-hour — (1) schedule-verification ran optax
+  (JAX) before jax.distributed.initialize in-pod → check is now --dry-run-only; (2) agent shell
+  lacks WANDB_API_KEY for iris auto-forward → recovered rav's key from the controller DB
+  (job_config.environment_json of a transect job, read-only SQL). **25/25 running; wave-1
+  stepping verified at ~0.83 s/step** (not loader-bound; 2-cache mixtures) → 10B ≈ 1.2 h/run,
+  40B ≈ 5 h. Full table, ETA, abort, readout plan (f22 sweep replica / f23 decoupling /
+  f24 interactions): `grug/twobucket_monitor.md`. Launcher:
+  `experiments/grug/moe/launch_mve_twobucket_h100.py` (dry-run: swarm parity + d256 parity +
+  25-config asserts + warmup-peak checks at N ∈ {1194,4776,19104,47759}).
