@@ -198,6 +198,10 @@ def _grug_scale_with_muon(
                 # No-op the Newton-Schulz orthogonalization (momentum-only update): skips
                 # the all-gather/reshard transient. Not real Muon; for memory/fit probes.
                 return x
+            if x.ndim == 4 and os.environ.get("SCALE_MUON_SKIP_4D") == "1":
+                # Momentum-only fallthrough for stacked expert leaves only: isolates the
+                # distributed 4D NS path when debugging expert-parallel sharding hangs.
+                return x
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
                     x,
