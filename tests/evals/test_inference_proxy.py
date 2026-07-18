@@ -15,6 +15,7 @@ import httpx
 import marin.inference.vllm as vllm_module
 import pytest
 from fray.types import ResourceConfig
+from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
@@ -30,14 +31,19 @@ from marin.inference.types import (
 from marin.inference.vllm import (
     DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER,
     BrokeredVllmSystemConfig,
+    GpuVllmBackend,
     InferenceWorkerConfig,
+    TpuVllmBackend,
     VllmProxyConfig,
     start_iris_brokered_vllm,
     start_local_brokered_vllm,
+    start_local_vllm_server,
 )
+from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
+from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
     assert_completions_scoring_contract,
@@ -45,6 +51,12 @@ from tests.evals.openai_stub import (
 )
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
+    step = lower(QWEN3_GPU_EVAL_RESULTS)
+
+    assert step.name == "evals/qwen3-0.6b-gpu/suite"
 
 
 @dataclass
@@ -153,7 +165,20 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
             pass
 
 
-def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("backend", "worker_resources", "expected_extras", "expected_target_device"),
+    [
+        (TpuVllmBackend(), ResourceConfig.with_tpu("v6e-4"), ["tpu", "vllm"], "tpu"),
+        (GpuVllmBackend(), ResourceConfig.with_gpu("H100", count=8), [], None),
+    ],
+)
+def test_iris_brokered_vllm_worker_environment_matches_backend(
+    monkeypatch,
+    backend,
+    worker_resources,
+    expected_extras,
+    expected_target_device,
+) -> None:
     class _FakeJob:
         job_id = "worker-0"
 
@@ -192,7 +217,8 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
 
     config = BrokeredVllmSystemConfig(
         model="gpt2",
-        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        backend=backend,
+        worker_resources=worker_resources,
         worker_env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
     )
 
@@ -200,9 +226,58 @@ def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) 
         pass
 
     [worker_request] = client.submissions
-    assert worker_request.environment.extras == ["tpu", "vllm"]
+    assert worker_request.environment.extras == expected_extras
     assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
-    assert worker_request.environment.env_vars["VLLM_TARGET_DEVICE"] == "tpu"
+    assert worker_request.environment.env_vars.get("VLLM_TARGET_DEVICE") == expected_target_device
+
+
+def test_gpu_brokered_vllm_uses_isolated_cuda_and_all_requested_gpus(monkeypatch) -> None:
+    captured = SimpleNamespace()
+
+    class _FakeVllmEnvironment:
+        server_url = "http://127.0.0.1:8000/v1"
+        model_id = "gpt2"
+
+        def __init__(self, model, **kwargs) -> None:
+            captured.model = model
+            captured.kwargs = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            pass
+
+    monkeypatch.setattr(vllm_module, "VllmEnvironment", _FakeVllmEnvironment)
+    config = BrokeredVllmSystemConfig(
+        model="gpt2",
+        backend=GpuVllmBackend(),
+        worker_resources=ResourceConfig.with_gpu("H100", count=8),
+    )
+
+    with start_local_vllm_server(config) as model:
+        assert model.endpoint.model == "gpt2"
+
+    assert captured.kwargs["launcher"] == IsolatedCudaVllm(
+        source=VllmType.UPSTREAM,
+        version="0.25.1",
+    )
+    assert captured.kwargs["extra_args"] == ["--tensor-parallel-size", "8"]
+
+
+@pytest.mark.parametrize(
+    ("backend", "worker_resources"),
+    [
+        (TpuVllmBackend(), ResourceConfig.with_gpu("H100")),
+        (GpuVllmBackend(), ResourceConfig.with_tpu("v6e-4")),
+    ],
+)
+def test_brokered_vllm_rejects_resources_for_the_wrong_backend(backend, worker_resources) -> None:
+    config = BrokeredVllmSystemConfig(model="gpt2", backend=backend, worker_resources=worker_resources)
+
+    with pytest.raises(ValueError, match=r"Backend requires .* worker_resources"):
+        with start_local_vllm_server(config):
+            pass
 
 
 def test_inference_proxy_forwards_completions_to_running_model(mock_cluster: MockInferenceCluster) -> None:

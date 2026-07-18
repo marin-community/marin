@@ -36,9 +36,13 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
 # worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
 WORKER_PYTHON_VERSION = "3.12"
+# Stock CUDA vLLM used by GPU serving. It runs in an isolated uv-tool environment, so it does not
+# participate in Marin's workspace dependency resolution.
+DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 # Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
 # vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
+_DISABLE_FLASHINFER_SAMPLER_ENV = {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 
 
 class VllmLauncher(Protocol):
@@ -80,7 +84,7 @@ class IsolatedCudaVllm:
 
     One launcher, two sources (see :class:`VllmType`):
 
-    - ``UPSTREAM`` — stock ``vllm[runai]==<version>`` on the cu128 torch backend. Serves any
+    - ``UPSTREAM`` — stock ``vllm[runai]==<version>`` on the cu130 torch backend. Serves any
       architecture upstream vLLM knows; this is the ``marin-serve --gpu`` default.
     - ``MARIN_FORK`` — Marin's vLLM fork (pinned by ``tool.uv.sources.vllm`` via
       :func:`~marin.inference.tpu_vllm_pins.vllm_fork_ref`), needed to serve Marin-custom
@@ -109,7 +113,7 @@ class IsolatedCudaVllm:
         if self.source is VllmType.MARIN_FORK:
             from_spec, torch_backend, extra = vllm_fork_ref(), "cu130", ["--with", _RUNAI_STREAMER_REQUIREMENT]
         else:
-            from_spec, torch_backend, extra = f"vllm[runai]=={self.version}", "cu128", []
+            from_spec, torch_backend, extra = f"vllm[runai]=={self.version}", "cu130", []
         return [
             "uvx",
             "--from",
@@ -123,13 +127,17 @@ class IsolatedCudaVllm:
         ]
 
     def env(self) -> dict[str, str]:
+        # CoreWeave runtime images provide CUDA libraries but not nvcc. FlashInfer may otherwise
+        # JIT-compile its sampling kernel; vLLM's native/Triton sampler needs no CUDA toolkit.
+        environment = dict(_DISABLE_FLASHINFER_SAMPLER_ENV)
         if self.source is VllmType.MARIN_FORK:
-            return {
-                "VLLM_USE_PRECOMPILED": "1",
-                "VLLM_USE_FLASHINFER_SAMPLER": "0",
-                "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
-            }
-        return {}
+            environment.update(
+                {
+                    "VLLM_USE_PRECOMPILED": "1",
+                    "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
+                }
+            )
+        return environment
 
 
 def _write_virtual_hosted_s3_config() -> str:

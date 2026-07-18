@@ -67,6 +67,7 @@ from marin.inference.quick_serve import QuickServeConfig, serve_in_job
 from marin.inference.serving_backend import LevanterBackend, ServingBackend, VllmBackend
 from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_server import (
+    DEFAULT_CUDA_VLLM_VERSION,
     WORKER_PYTHON_VERSION,
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -83,10 +84,6 @@ _GPU_WORKER_EXTRAS: tuple[str, ...] = ()
 # marin-core already depends on marin-levanter[serve] for the FastAPI/uvicorn surface.
 _LEVANTER_TPU_EXTRAS = ("tpu",)
 _LEVANTER_GPU_EXTRAS = ("gpu",)
-# Pinned CUDA vLLM for the GPU path, overridable with --vllm-version. Stock PyPI vLLM
-# (>=0.25) targets torch 2.11 / CUDA 13; provisioned per-job via uvx, so a bump is just
-# this string with no workspace re-lock.
-DEFAULT_CUDA_VLLM_VERSION = "0.25.0"
 _ENDPOINT_READY_POLL_SECONDS = 5.0
 
 # Options that only mean something to one backend, by Click parameter name. Passing one to the
