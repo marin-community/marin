@@ -536,7 +536,8 @@ class Checkpointer:
 
         Args:
             tree: the pytree to serialize.
-            step: 1-based count of completed training steps (= ``state.step``). Disk
+            step: count of completed training steps (= ``state.step``; 0 before any
+                  step has run — no save then unless forced). Disk
                   destination will be ``step-{step}``. This matches the convention
                   that "after the Nth step has completed, save as ``step-N``".
             force: if True, save unconditionally — except when a save was already

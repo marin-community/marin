@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for the step-naming + ckpt-naming convention.
 
-`Checkpointer.on_step` receives a 1-based count of completed steps. After the
+`Checkpointer.on_step` receives the count of completed steps (0 before any step
+has run). After the
 trainer calls the hook with ``step=info.next_step`` (= ``state.step``), the
 modulo trigger and on-disk destination should line up so that:
 
