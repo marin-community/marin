@@ -95,10 +95,11 @@ def backfill_arm(spec: dict, data_dir: Path, run_suffix: str) -> str:
             "per-step history replayed from harvested job logs."
         ),
         reinit=True,
+        settings=wandb.Settings(init_timeout=180),
     )
     for row in rows:
-        step = row.pop("step")
-        run.log(row, step=step)
+        step = row["step"]
+        run.log({k: v for k, v in row.items() if k != "step"}, step=step)
     # attach raw per-step CSV artifact (<10MB)
     csv_path = data_dir / f"{spec['run_id']}.history.csv"
     with csv_path.open("w") as f:
@@ -117,12 +118,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", required=True, type=Path, help="dir with the *.raw harvested logs")
     ap.add_argument("--run-suffix", default="", help="suffix appended to run names/ids (e.g. '-v2')")
+    ap.add_argument("--only", choices=[a["arm"] for a in ARMS], help="backfill just this arm")
     args = ap.parse_args()
     if not os.environ.get("WANDB_API_KEY"):
         raise SystemExit("WANDB_API_KEY not set — export it (or `wandb login`) before running.")
     for spec in ARMS:
+        if args.only and spec["arm"] != args.only:
+            continue
         url = backfill_arm(spec, args.data_dir, args.run_suffix)
-        print(f"{spec['run_id']}: {url}")
+        print(f"{spec['run_id']}{args.run_suffix}: {url}")
 
 
 if __name__ == "__main__":
