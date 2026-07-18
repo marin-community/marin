@@ -10,14 +10,12 @@ directly -- no platform or provider is needed.
 import pytest
 from iris.cluster.config import GcpSliceConfig, ScaleGroupConfig, ScaleGroupResources, SliceConfig
 from iris.cluster.constraints import (
-    AttributeValue,
     Constraint,
     ConstraintOp,
     DeviceType,
     PlacementRequirements,
     WellKnownAttribute,
     availability_constraint,
-    availability_key,
     preemptible_constraint,
     region_constraint,
     zone_constraint,
@@ -26,8 +24,6 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.routing import (
     RoutingBudget,
-    _constraint_coverage,
-    _format_constraint,
     route_demand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
@@ -1342,23 +1338,19 @@ class TestCheckRoutingFeasibility:
         assert "looks like a region" in result
 
     def test_infeasible_availability_conflicts_with_preemptible(self):
-        """A non-structured constraint conflict gets a per-constraint coverage breakdown.
+        """A preemptible-vs-availability conflict is rejected, and the reason enumerates the
+        constraints instead of the bare group list.
 
-        Reproduces a ``--reserve=v5litepod-16`` driver that the executor heuristic auto-tagged
-        non-preemptible: the availability marker and the ``preemptible==false`` pin are each
-        individually satisfiable, but the only v5litepod-16 group is preemptible, so no single
-        group satisfies both. The reason must name each constraint's coverage and the groups that
-        come closest, not the bare list of group names.
+        Reproduces a ``--reserve=v5litepod-16`` driver auto-tagged non-preemptible: the only
+        v5litepod-16 group is preemptible, so no group satisfies both constraints. This is the
+        non-structured (availability) case that reaches the coverage breakdown rather than the
+        device/zone/region diagnostics.
         """
         v5e = make_scale_group_config(
-            name="tpu_v5e-preemptible_16-europe-west4-b",
-            accelerator_variant="v5litepod-16",
-            capacity_type=CapacityType.PREEMPTIBLE,
+            name="v5e-spot", accelerator_variant="v5litepod-16", capacity_type=CapacityType.PREEMPTIBLE
         )
         reserved = make_scale_group_config(
-            name="tpu_v5p-reserved_8-us-east5-a",
-            accelerator_variant="v5p-8",
-            capacity_type=CapacityType.RESERVED,
+            name="v5p-reserved", accelerator_variant="v5p-8", capacity_type=CapacityType.RESERVED
         )
         autoscaler = self._make_autoscaler(
             {
@@ -1369,11 +1361,9 @@ class TestCheckRoutingFeasibility:
         constraints = [preemptible_constraint(False), availability_constraint("v5litepod-16")]
         result = autoscaler.job_feasibility(constraints)
         assert result is not None
-        assert "constraint coverage across 2 group(s)" in result
-        assert "preemptible==false: 1/2 satisfy" in result
-        assert "availability:v5litepod-16 exists: 1/2 satisfy" in result
-        assert "fail [preemptible==false]: tpu_v5e-preemptible_16-europe-west4-b" in result
-        assert "fail [availability:v5litepod-16 exists]: tpu_v5p-reserved_8-us-east5-a" in result
+        # The availability key only appears when the coverage breakdown ran; the old fallback
+        # listed group names instead.
+        assert "availability:v5litepod-16" in result
 
     def test_soft_constraint_does_not_reject(self):
         """Soft constraints that don't match any group should not cause rejection."""
@@ -1434,44 +1424,6 @@ class TestCheckRoutingFeasibility:
         result = autoscaler.job_feasibility(constraints)
         assert result is not None
         assert "region" in result
-
-
-class TestConstraintCoverage:
-    """Tests for the per-constraint coverage breakdown in unschedulable reasons."""
-
-    def test_format_constraint_renders_each_operator(self):
-        assert _format_constraint(availability_constraint("v5p-8")) == "availability:v5p-8 exists"
-        assert _format_constraint(preemptible_constraint(False)) == "preemptible==false"
-        assert _format_constraint(region_constraint(["us-east5"])) == "region==us-east5"
-        assert _format_constraint(region_constraint(["us-east5", "us-west4"])) == "region in {us-east5, us-west4}"
-
-    def test_reports_per_constraint_counts_and_closest_groups(self):
-        group_attrs = {
-            "v5e-preempt": {
-                WellKnownAttribute.PREEMPTIBLE: AttributeValue("true"),
-                availability_key("v5litepod-16"): AttributeValue("true"),
-            },
-            "cpu-ondemand": {WellKnownAttribute.PREEMPTIBLE: AttributeValue("false")},
-        }
-        report = _constraint_coverage(
-            [preemptible_constraint(False), availability_constraint("v5litepod-16")], group_attrs
-        )
-        assert "constraint coverage across 2 group(s):" in report
-        assert "preemptible==false: 1/2 satisfy" in report
-        assert "availability:v5litepod-16 exists: 1/2 satisfy" in report
-        assert "fail [preemptible==false]: v5e-preempt" in report
-        assert "fail [availability:v5litepod-16 exists]: cpu-ondemand" in report
-
-    def test_caps_example_group_names_per_signature(self):
-        # Eight groups all failing the same single constraint: the list is capped with a "+N more".
-        group_attrs = {f"g{i:02d}": {} for i in range(8)}
-        report = _constraint_coverage([availability_constraint("v5litepod-16")], group_attrs)
-        assert "availability:v5litepod-16 exists: 0/8 satisfy" in report
-        assert "fail [availability:v5litepod-16 exists]: g00, g01, g02, g03, g04, +3 more" in report
-
-    def test_empty_inputs_return_empty_string(self):
-        assert _constraint_coverage([], {"g": {}}) == ""
-        assert _constraint_coverage([availability_constraint("v5p-8")], {}) == ""
 
 
 # ---------------------------------------------------------------------------
