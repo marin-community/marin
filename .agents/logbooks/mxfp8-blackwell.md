@@ -1198,3 +1198,36 @@ author: mcwitt
 - Driver v4 running: up to 3 FRESH-job attempts (treat12..14) — fresh
   launches re-bootstrap cleanly and empirically pass CUBIN load ~2/3.
 - Jobs: /mwittmann/mx7201-treat{6..11}, mx7201-probe32, mx7201-base{7,8,9}.
+
+### 2026-07-18 10:45 - MXFP8-007c: 64-GPU pivot; baseline64 landed; clique wedges traced to gang scheduling class
+- 128->64 GPU descale (3/3 fresh 32-node treatment attempts lost to
+  CUBIN/clique flakes; 248B model floor is 64 GPUs — the 32-GPU probe
+  OOM'd at 132.79 GiB state).
+- **Baseline64 landed** (mx7201-b64g2, their branch, Larry's exact env,
+  16 nodes B1024 r1 EP1 sonic_cute): **313,666 tok/s / 20.21% GB200-MFU**
+  — better per-GPU than the 128-GPU rerun (4,901 vs 4,760 tok/s/GPU),
+  consistent with less cross-rack traffic. `exploratory` (single run).
+- Treatment arms then went 0/4 without ever finishing NCCL clique init:
+  - t64g1: transient wheel-download timeout (resiliparse via
+    marin.community) during env sync.
+  - t64g2: B200MFU-036 CUBIN load fault at jit_train_step.
+  - t64g3: clique-init rendezvous wedge (leader deadlocked in the
+    ncclCommInitRank callback; log-silent 20 min; killed).
+  - t64g4: all 16 nodes timed out on GetKeyValue(cuda:root_process:0)
+    after 10m — root process wedged in comm init despite a 600s cooldown,
+    so this is NOT (only) the fast-restart taint.
+- Root-cause lead: **gang scheduling class differs between arms.** The
+  fray-submitted baseline gangs use `coscheduling_group_by=leafgroup`
+  (soft IB-level colocation; fray iris_backend.py always uses leafgroup
+  for GPU gangs), while `iris job run --gpu GB200x4 --replicas 16`
+  hard-binds to `nvlink.domain` (cli/job.py resolve_multinode_defaults).
+  Every fray/leafgroup training gang today initialized cleanly; every
+  CLI/nvlink.domain treatment gang wedged or flaked. Correlation, not yet
+  causation — t64g7+ tests it directly.
+- Fix in flight: python submitter (tmp/submit_treat_leafgroup.py) clones
+  the CLI submit path but sets CoschedulingConfig(group_by="leafgroup");
+  also makes placement apples-to-apples with the baseline. Driver v3
+  (attempts t64g7..9) adds log-staleness wedge autokill (>900s -> kill)
+  and 600s inter-attempt cooldowns.
+- Jobs: /mwittmann/mx7201-{b64g1,b64g2,b32g}-coord, mx7201-t64g{1..4},
+  mx7201-t32g1.
