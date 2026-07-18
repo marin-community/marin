@@ -69,13 +69,16 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
-from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
+from experiments.grug.moe.launch_datakit_moe_mix import _val_component, datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.moe.train import GrugTrainerConfig
+from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.marin_tokenizer import marin_tokenizer
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
@@ -291,6 +294,19 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     use_datakit = os.environ.get("SCALE_DATA", "slimpajama").lower() == "datakit"
     slim = None if use_datakit else slimpajama_6b_dataset()
 
+    # Standard paloma + uncheatable validation suites (tokenized with marin_tokenizer to match the
+    # datakit store), run every SCALE_EVAL_INTERVAL steps. On by default; set SCALE_EVAL=0 to skip
+    # (e.g. a pure throughput/MFU run).
+    use_eval = os.environ.get("SCALE_EVAL", "1") == "1"
+    validation = (
+        [
+            *paloma_datasets(tokenizer=marin_tokenizer).values(),
+            *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
+        ]
+        if use_eval
+        else []
+    )
+
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
             tracker = WandbConfig(
@@ -303,6 +319,12 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             )
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
+        if use_eval and ctx.is_fingerprint:
+            val_components = {v.name: _val_component(ctx.artifact_path(v)) for v in validation}
+        elif use_eval:
+            val_components = {v.name: ctx.resolved(v).as_component() for v in validation}
+        else:
+            val_components = {}
         if use_datakit:
             # Two-phase datakit store mixture (phase 1 begins at 80% of steps). Bucket cache dirs
             # are relative and rooted at marin_prefix() -> the local CoreWeave bucket, so there is
@@ -312,10 +334,10 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
                 enable_simulated_epoching=False,
-                val_components={},
+                val_components=val_components,
             )
         else:
-            data = mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
+            data = mixture(ctx, {slim: 1.0}, validation=validation, shuffle=_SLIMPAJAMA_SHUFFLE)
         return GrugMoeLaunchConfig(
             model=model,
             data=data,
@@ -330,7 +352,17 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
             optimizer=optimizer,
             grug_trainer=grug_trainer,
             processes_per_task=processes_per_task,
-            eval=None,
+            eval=(
+                GrugEvalConfig(
+                    eval_batch_size=512,
+                    steps_per_eval=env_int("SCALE_EVAL_INTERVAL", 1000),
+                    max_eval_batches=8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+                if use_eval
+                else None
+            ),
             profiler=profiler,
             checkpointer=checkpointer,
         )
@@ -341,7 +373,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=() if use_datakit else (slim,),
+        deps=tuple(validation) if use_datakit else (slim, *validation),
         runtime_args={"train_resources": resources},
     )
 
