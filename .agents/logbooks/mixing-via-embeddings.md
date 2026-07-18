@@ -499,6 +499,26 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   no legacy layout, capacity raise post-load). Eval + readout plan, monitoring commands,
   abort/resume: `scratch/mixture_features/grug/seedpanel_monitor.md`.
 
+## 2026-07-18 harm transect LAUNCHED (concurrent with the panel's last ~2h)
+
+- Per frozen prereg `transect_preregistration.json` (sha 90e5a5eb…, verified,
+  UNMODIFIED; staged byte-identical into experiments/grug/moe/ for bundling;
+  launcher re-asserts the sha). 8 runs, seed 0: c26q1 e={2,4,8,16,24}
+  (phase-0 share 0.027→0.324) + c01q0 e={4,16,24} (0.074→0.442); phase-1
+  anchor; others anchor-renormalized; all other training constants = the
+  seed panel's (dry-run parity + prereg-consistency asserts PASSED).
+- Launcher `experiments/grug/moe/launch_mve_transect_h100.py`; jobs
+  `/rav/rav-mve-transect-{e2,e4,e8,e16,e24,c4,c16,c24}` on cw-rno2a H100x8
+  (1 node each), W&B marin_moe group `rav_mve_transect`, outputs
+  `s3://…/users/rav/grug/rav_mve_transect_<point>/dev/`. All 8 running at
+  submit (07:39-07:40Z); stepping verified twice (07:50 8/8; 08:03 steps
+  385-520, dose-ordered early loss drops). Panel impact mild (~2.8 vs
+  ~2.3 s/it on its finishing runs; accepted). ETA ~11-33 h/run.
+- Readout: post-hoc eval_logprob (zmacro + humaneval bpb) vs the three
+  committed prediction sets (kernel/swoosh/#2846) under S1-S3; anchor
+  reference = seed panel mean ± σ. rav's launch-now directive supersedes the
+  prereg's "launch after the panel drains" note; predictions untouched.
+
 ## 2026-07-17 seed panel MOVED to H100/cw-rno2a (rav directive) — 10 runs training
 
 - B200 panel stopped at ~1-2.9% (steps ~600-1400; 10 jobs killed 01:50Z; GB200s
