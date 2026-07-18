@@ -37,8 +37,8 @@ GROUP = "fp8-loss-val-7079"
 BASE_TAGS = ["fp8-loss-val", "pr7079", "grug", "moe", "h100", "FP8VAL"]
 
 ARMS = [
-    {"arm": "bf16", "run_id": "fp8val-bf16-full6", "raw": "fp8val-bf16-full6.raw"},
-    {"arm": "fp8", "run_id": "fp8val-fp8-full4", "raw": "fp8val-fp8-full4.raw"},
+    {"arm": "bf16", "run_id": "fp8val-bf16", "source_job": "fp8val-bf16-full6", "raw": "fp8val-bf16-full6.raw"},
+    {"arm": "fp8", "run_id": "fp8val-fp8", "source_job": "fp8val-fp8-full4", "raw": "fp8val-fp8-full4.raw"},
 ]
 
 
@@ -81,7 +81,14 @@ def backfill_arm(spec: dict, data_dir: Path, run_suffix: str) -> str:
         id=name,
         group=GROUP,
         tags=BASE_TAGS + [spec["arm"]],
-        config={**hparams, "backfilled_from": "json_logger", "arm": spec["arm"], "issue": 7298, "pr": 7079},
+        config={
+            **hparams,
+            "backfilled_from": "json_logger",
+            "arm": spec["arm"],
+            "source_job": spec["source_job"],
+            "issue": 7298,
+            "pr": 7079,
+        },
         notes=(
             "Post-hoc backfill of the FP8 loss-curve validation (issue #7298, PR #7079). "
             "Ran with json_logger at train time (no WANDB_API_KEY on the launch box); "
