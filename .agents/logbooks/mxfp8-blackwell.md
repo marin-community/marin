@@ -1276,3 +1276,33 @@ author: mcwitt
   result). The bf16-vs-mxfp8 delta stays internally consistent; EP8 is
   now a documented deployment risk owned by B200MFU-035/#7331 rather
   than a blocker for this comparison.
+
+### 2026-07-18 12:05 - MXFP8-007c: today's 0/9 re-diagnosed as a cluster incident window; standing down until recovery
+- EP4 (th-bf16) died on the same CUBIN load fault as the EP8 arms — EP-size
+  theory joins launch-path, cache-poisoning, coscheduling-class, and
+  driver-skew (all 201 nodes uniform 595.71.05/CUDA 13.2) in the falsified
+  pile.
+- The #7012 logbook (B200MFU-034..039, parallel session) already
+  characterizes both failure modes precisely:
+  - CUBIN INVALID_VALUE: intermittent fault of cuModuleLoadData itself
+    during the ~5.6k per-fusion module load storm; per-ALLOCATION
+    correlated pass rate (0%/20%/75% across node-sets, stochastic within);
+    every env/flag workaround (EAGER, compile-parallelism) REFUTED.
+  - Clique-init deadlock: deterministic on fast gang restart (22/22;
+    leaders in ib_uverbs_event_read; every NCCL knob immune). Cold
+    compiles are protected by the 15-25 min gap; warm-cache runs hit it.
+    Today's warm retries (t64g3/4/7, tg-bf16-r2) fit exactly.
+- Decisive observation: **zero multi-node successes cluster-wide since
+  16:27 UTC (09:27 PDT)** — our 9 failures, larry's 16:18 failure (his
+  own 293-GiB OOM, but he stopped submitting after), and rav has been
+  cycling 32-node debug jobs named r2l48{diag,cap,nccl,fix,mnnvl} since
+  ~16:00 UTC — i.e. the cluster owner-side is actively debugging an
+  NCCL/MNNVL-class incident in this exact window. Our failure cluster
+  starting ~09:30 PDT is the same window.
+- Actions: killed th-bf16-r2 (no GPUs held into a degraded cluster; all
+  our jobs terminal), stopped the retry driver, armed a zero-GPU
+  recovery watch (controller-DB poll for the next multi-node state=4
+  job cluster-wide). On recovery: relaunch driver v6 arms (EP4 first,
+  then EP8 if the allocation is cold) via the fray path.
+- Standing results unaffected: baseline64 313,666 tok/s / 20.21%
+  GB200-MFU; 128-GPU baseline 609,310 / 19.63%; smoke mxfp8 +15.5%.
