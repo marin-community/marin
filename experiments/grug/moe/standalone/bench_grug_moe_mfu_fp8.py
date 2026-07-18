@@ -130,8 +130,10 @@ def main():
     inter = a.hidden_dim // 2
     fp8 = None
     if a.fp8:
+        # mxfp8 keeps EP collectives bf16 (MXFP8-000b); wire=True is rejected by config validation.
+        wire = False if a.fp8_recipe == "mxfp8" else not a.no_fp8_wire
         fp8 = GrugFp8Config(
-            wire=not a.no_fp8_wire,
+            wire=wire,
             dense=not a.no_fp8_dense,
             grouped=not a.no_fp8_grouped,
             recipe=a.fp8_recipe,
