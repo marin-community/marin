@@ -401,3 +401,17 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   suspect stale reused workdir venv). Always submit with the **worktree's own
   `.venv/bin/iris`** (3.12, editable iris); use the main-repo venv iris (has
   `iris[controller]`) for `job list`/`logs` against `--cluster=cw-us-east-08a`.
+- b1024 run r1 (`ncclep-64g-ep8-b1024-ck8k`): **ZERO OOMs — the 172 GiB
+  no-drop capacity wall is cleared by chunking** (compile + allocation
+  succeeded where unchunked died). Failed at first execution with the
+  **intermittent CUBIN envelope** (B200MFU-035 signature: `Failed to load
+  in-memory CUBIN … CUDA_ERROR_INVALID_VALUE`, all ranks at once — -035 showed
+  the same all-host agreement and day-scale flakiness). Straight retry.
+- b1024 run r2: got further — died at first train step with **NCCL
+  `ncclGroupEnd` Cuda failure 'out of memory'** on 4 nodes (16/64 procs at the
+  shutdown barrier): XLA's 0.90-fraction arena (~167 GiB) fit, but b1024
+  activation growth ate the non-XLA headroom NCCL allocates its comm buffers
+  from. r3 = mem fraction 0.85 (if XLA then can't fit, the compile error
+  quantifies the real arena need). NB log-retention gotcha: 16-node crash
+  storms overflow the 1000-line window — pull per-task logs
+  (`job logs <job>/<task>`) to find the primary failure.
