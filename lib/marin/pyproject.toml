@@ -104,7 +104,7 @@ conflicts = [
     [
         # The vllm extra builds vLLM for TPUs from source and the tpu-inference
         # fork holds it at torch 2.11, so it must resolve apart from the gpu
-        # (cu130) and 2.13 cpu/tpu extras.
+        # (cu132) and 2.13 cpu/tpu extras.
         { extra = "vllm" },
         { extra = "gpu" },
     ],
@@ -225,17 +225,17 @@ torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
-    # CUDA-13 torch, unified with jax[cuda13]. cu130 torch pins nvidia-cublas
-    # ==13.1.1.3 (via cuda-toolkit), below the B200 guard; the root
-    # override-dependencies floats nvidia-cublas up to 13.4 so this resolves.
-    { index = "pytorch-cu130", extra = "gpu", marker = "sys_platform == 'linux'" },
+    # CUDA-13 torch, unified with jax[cuda13]. cu132 torch pins nvidia-cublas
+    # 13.4.0.1 (via cuda-toolkit 13.2.1), which clears the B200 guard above; the
+    # cu129/cu130 wheels pin an older cuBLAS that would not.
+    { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 torch = [
-    # CUDA-13 torch, unified with jax[cuda13]. cu130 torch pins nvidia-cublas
-    # ==13.1.1.3 (via cuda-toolkit), below the B200 guard; the root
-    # override-dependencies floats nvidia-cublas up to 13.4 so this resolves.
-    { index = "pytorch-cu130", extra = "gpu", marker = "sys_platform == 'linux'" },
+    # CUDA-13 torch, unified with jax[cuda13]. cu132 torch pins nvidia-cublas
+    # 13.4.0.1 (via cuda-toolkit 13.2.1), which clears the B200 guard above; the
+    # cu129/cu130 wheels pin an older cuBLAS that would not.
+    { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
@@ -247,8 +247,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 

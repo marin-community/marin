@@ -62,11 +62,6 @@ constraint-dependencies = [
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
-    # torch 2.13's cu130 (and generic) wheels pin nvidia-cublas==13.1.1.3 via
-    # cuda-toolkit, below the gpu extras' B200 guard (nvidia-cublas>=13.2). Float
-    # cuBLAS up to the 13.4 series so the CUDA-13 torch stack resolves; cuBLAS is
-    # forward-compatible within CUDA 13.
-    "nvidia-cublas>=13.2.0.9",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
