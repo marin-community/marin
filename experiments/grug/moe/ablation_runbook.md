@@ -57,9 +57,14 @@ formula `round(d / (64 + log2(d)·4 − 9))` — **passed explicitly** because t
 > default is ~4:1, which would give d1024 = 2 but d2048 = 4; we fix it at 2, so d1024 is 4:1 and
 > d2048 is 8:1.)
 >
-> **MLA ablations run with the attention gate off by default** — the `MultiheadLatentAttention`
-> path has no headwise gate, unlike the GQA baseline's `CausalSelfAttention` (which keeps it on).
-> Leave it off unless the ablation is specifically testing the gate.
+> **MLA defaults** (vs the GQA baseline): attention gate **off** (the `MultiheadLatentAttention`
+> path has no headwise gate; GQA's `CausalSelfAttention` keeps it on), **qk_mult off (1.0)** instead
+> of the heuristic's 1.3, and the **latent-dim corrections on** (post-RMSNorm `sqrt(hidden/latent)`
+> rescale of the Q/KV latents). Override with `SCALE_QK_MULT`, `SCALE_MLA_SCALE_Q_LORA`,
+> `SCALE_MLA_SCALE_KV_LORA`.
+>
+> **All-global attention** (no sliding window): `SCALE_SLIDING_WINDOW=4096` (= seq_len) makes the
+> short-layer window span the full sequence, so every layer is global (long layers are already).
 
 ## Optimizer / LR
 

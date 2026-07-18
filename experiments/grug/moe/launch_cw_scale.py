@@ -139,10 +139,12 @@ def build_scale_model() -> GrugModelConfig:
     qk_rope = env_int("SCALE_QK_ROPE", 64)
     # MLA value head dim (default 128). Set == qk for a symmetric wide head (e.g. qk=256 / v=256).
     v_head_dim = env_int("SCALE_V_HEAD_DIM", 128)
-    # SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA=1 rescale the post-RMSNorm Q/KV latents
-    # by sqrt(hidden_dim / latent_dim) before the up-projection.
-    mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA") == "1"
-    mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA") == "1"
+    # Rescale the post-RMSNorm Q/KV latents by sqrt(hidden_dim / latent_dim) before the
+    # up-projection -- MLA's usual latent-dim correction, on by default for MLA. Override with
+    # SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA (0 to disable).
+    mla_default = "1" if use_mla else "0"
+    mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
+    mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -164,6 +166,10 @@ def build_scale_model() -> GrugModelConfig:
     attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
     attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
     base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    # MLA defaults the qk multiplier off (1.0) instead of the heuristic's 1.3: the latent RMSNorm
+    # (plus optional latent-dim scaling) already sets the qk magnitude. GQA keeps the heuristic
+    # value. SCALE_QK_MULT overrides either.
+    qk_mult = float(os.environ.get("SCALE_QK_MULT", "1.0" if use_mla else str(base.qk_mult)))
     return dataclasses.replace(
         base,
         vocab_size=VOCAB_SIZE,
@@ -179,6 +185,7 @@ def build_scale_model() -> GrugModelConfig:
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,
+        qk_mult=qk_mult,
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
         intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
