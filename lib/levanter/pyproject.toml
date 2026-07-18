@@ -93,7 +93,12 @@ gpu = [
   "jax-triton==0.3.1; sys_platform == 'linux'",
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
-  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+  "triton>=3.7.0,<3.8; sys_platform == 'linux'",
+  # Pin torch so the source map below routes it to the cu129 wheel; that wheel
+  # bundles the CUDA-12 runtime and pins no nvidia-cublas, so it does not fight
+  # the B200 guard above the way torch 2.13's generic PyPI wheel (nvidia-cublas
+  # ==13.1.1.3) would.
+  "torch==2.13.0",
 ]
 deepep = [
   # DeepEP itself remains an external source checkout addressed by DEEPEP_SRC_ROOT.
@@ -180,6 +185,20 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+# The gpu extra carries the CUDA-13 B200 cuBLAS guard (nvidia-cublas>=13.2).
+# torch 2.13's generic PyPI wheel pins nvidia-cublas==13.1.1.3, which would
+# conflict with that guard in any split where the gpu extra is co-resolved with
+# a torch consumer (torch_test's peft, or luxical via marin-core[datakit]).
+# Route torch to the cu129 wheel whenever the gpu extra is active; that wheel
+# bundles the CUDA-12 runtime and pins no nvidia-cublas, so the guard resolves.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu129", extra = "gpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
 
 [tool.ruff]
 line-length = 119

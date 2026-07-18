@@ -102,10 +102,19 @@ conflicts = [
         { extra = "cpu" },
     ],
     [
-        # The vllm extra builds vLLM for TPUs from source, so it must use CPU
-        # torch rather than the cu128-pinned torch from the gpu extra.
+        # The vllm extra builds vLLM for TPUs from source and the tpu-inference
+        # fork holds it at torch 2.11, so it must resolve apart from the gpu
+        # (cu129) and 2.13 cpu/tpu extras.
         { extra = "vllm" },
         { extra = "gpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "tpu" },
     ],
 ]
 
@@ -126,9 +135,9 @@ gpu = [
   "jax-triton==0.3.1; sys_platform == 'linux'",
   # This module imports Triton directly; stay on the tested minor without
   # forcing an exact patch version.
-  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+  "triton>=3.7.0,<3.8; sys_platform == 'linux'",
   "torch==2.13.0",
-  "torchvision==0.26.0",
+  "torchvision==0.28.0",
 ]
 tpu = [
   "jax==0.10.1",
@@ -136,22 +145,22 @@ tpu = [
   "libtpu==0.0.41",
   "torch==2.13.0",
   # Linux x86_64
-  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.28.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 cpu = [
   "jax==0.10.1",
   "torch==2.13.0",
   # Linux x86_64
-  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.28.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 rl = [
@@ -177,8 +186,10 @@ vllm = [
     "vllm",
     "tpu-inference==0.23.0",
     # Pin torch + torchvision explicitly so the per-extra source map below
-    # routes them to the pytorch-cpu index during fresh Iris resolves.
-    "torch==2.13.0",
+    # routes them to the pytorch-cpu index during fresh Iris resolves. The
+    # tpu-inference fork constrains torchvision<0.27, so this extra stays on
+    # torch 2.11 / torchvision 0.26 rather than the 2.13 / 0.28 used elsewhere.
+    "torch==2.11.0",
     "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
     "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
@@ -214,13 +225,17 @@ torchvision = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    # cu128 stopped shipping torch after 2.11; cu129 keeps torch on the CUDA-12
+    # bundled runtime, whereas cu130 would pull CUDA-13 torch libs alongside
+    # jax[cuda13].
+    { index = "pytorch-cu129", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 torch = [
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    # cu128 stopped shipping torch after 2.11; cu129 keeps torch on the CUDA-12
+    # bundled runtime, whereas cu130 would pull CUDA-13 torch libs alongside
+    # jax[cuda13].
+    { index = "pytorch-cu129", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
     { index = "pytorch-cpu", extra = "vllm" },
@@ -232,8 +247,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 
