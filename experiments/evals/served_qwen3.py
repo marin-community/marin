@@ -40,7 +40,6 @@ _TPU_VLLM_WORKER_ENV_VARS = (
     ("VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION", "1"),
     ("VLLM_TPU_SKIP_PRECOMPILE", "1"),
 )
-_GPU_VLLM_WORKER_ENV_VARS: tuple[tuple[str, str], ...] = ()
 
 
 class Accelerator(StrEnum):
@@ -96,7 +95,7 @@ QWEN3_GPU_INFERENCE = qwen3_inference_config(
         disk="100g",
         regions=[ANY_REGION],
     ),
-    worker_env_vars=_GPU_VLLM_WORKER_ENV_VARS,
+    worker_env_vars=(),
 )
 
 QWEN3_GPU_EVAL_RESULTS = brokered_eval_suite(
