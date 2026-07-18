@@ -969,3 +969,47 @@ author: mcwitt
   tails.
 - Next action: read GPU probe memory_analysis; identify the arena owner;
   fix; re-probe; only then relaunch the ladder.
+
+### 2026-07-17 19:40 - MXFP8-006 OOM root cause: FA4 bounds built per-block on device 0 (#7012's poison, ported fix)
+- Hypothesis chain closed out this session:
+  - `eqx.error_if` (callback→device-0) — **falsified**. probe2ng reran the
+    792.47 GiB baseline config with `EQX_ON_ERROR=nan` (verified locally:
+    nan mode lowers to a pure `lax.cond`, no callback; env var confirmed
+    delivered in the job command): temp arena **byte-identical 792.47 GiB**.
+    On inspection none of the grug `error_if` sites even trace in this
+    config (`same_segment_ids` is True; no `max_segments`/THD metadata).
+  - Re-read of the probe2nf allocation dump: the arena is dominated by
+    **full-global-batch activations materialized per GPU** — 387 values of
+    bf16[524288,5120] (524288 = 128×4096 = the whole global batch, 5 GiB
+    each, ≈ 48 layers × 8) plus 432 half-batch values. Classic
+    "involuntary full rematerialization" (replicate-then-partition through
+    device 0). The `pure_callback.384` first-value line in the table was a
+    red herring for attribution (an 8-byte tuple slot), but the callback
+    itself is real and FA4-only: the CPU/reference dump has **zero**
+    callbacks, so it lives in the FA4-cute/cutlass bridge.
+- Root cause (matches #7012's B200MFU work exactly): the FA4 per-token
+  metadata (lower_bounds, valid) is computed **inside every one of the 48
+  `eqx.filter_checkpoint`ed blocks**. The `jnp.arange`/`jnp.zeros`
+  constants it's built from are placed on `{maximal device=0}`, making the
+  [B,S] bounds device-0; the downstream reshard to the batch-sharded spec
+  becomes a full-batch replicate-then-partition **per layer** (and again in
+  each backward recompute under recompute_all). At d2560 the arena stayed
+  under the pool so it was invisible; at d5120/L48 it is ~16.3 GiB/layer.
+- Fix: ported #7012's attention diff verbatim (it is the entire
+  attention-dir delta between the branches): replicated `P(None,None)`
+  pins on the metadata constants, `AttentionMask.fa4_bounds` +
+  `with_fa4_bounds`, exported `fa4_cute_segment_bounds`, metadata sharding
+  follows q's actual batch axes; bench model now precomputes short/long
+  bounds ONCE outside the layer loop and threads them through the masks
+  (plus batch-reshard pin on segment_ids). Local CPU sanity: bounds
+  compute + mask plumbing + model import green.
+- Commit Hash: 0ef1d613c
+- Command: /mwittmann/mxfp8-006-probe2ni — 2-node AOT probe chain, bf16
+  arm + mxfp8 arm at the ladder shape (d5120/L48/E64/top4, B128≙16
+  seq/GPU, ring EP8, recompute_all). Also answers "does mxfp8 cost extra
+  temp memory at production shape" (mcwitt asked whether fp8 memory
+  behavior threatens production runs — answer so far: the OOM was
+  bf16-first and dtype-agnostic; this probe gives the honest fp8 delta).
+- Next action: if temp collapses (needs ≲138 GiB pool at B512-equivalent
+  scaling) → relaunch the 8-node ladder on the fixed commit; append fp8
+  temp delta here; issue comment with the root cause + fix.
