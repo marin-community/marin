@@ -784,13 +784,7 @@ class Trainer:
 
 
 def _compose_with_telltale(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:
-    """The configured tracker(s) plus the always-on telltale mirror.
-
-    The telltale tracker publishes training metrics onto the process's telltale
-    page, which the iris runtime forwards to finelog so a run's series outlive
-    the job and drive dashboards. It is process-local and cheap, so it rides on
-    every run unless the config already names one.
-    """
+    """The configured tracker(s), with a ``TelltaleConfig`` appended unless one is already present."""
     configs = list(config) if isinstance(config, Sequence) else [config]
     if not any(isinstance(c, TelltaleConfig) for c in configs):
         configs = [*configs, TelltaleConfig()]
