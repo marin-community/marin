@@ -92,20 +92,10 @@ execution:
 ## Execution Preferences
 
 The trainer is data-parallel only. A target is feasible when its chip count does not exceed and evenly
-divides `batch_size`. `v5p-N` names count cores and have `N/2` chips (so `v5p-2048` = 1024 chips);
-`v6e-N` and `v5litepod-N` have `N` chips.
-
-Slice sizes below are the real topologies in `fray.types.TPU_TOPOLOGIES` (verified 2026-07-18). Only
-**v5p** exceeds 256 chips: `v6e` and `v5litepod` top out at 256 chips (no `-512`/`-1024` topology
-exists), while `v5p` reaches 512 chips (`v5p-1024`) and 1024 chips (`v5p-2048`). Since `chips <=
-batch_size` and the `batch_size` domain caps at 1024, the largest usable slice is 1024 chips
-(`v5p-2048`); `v5p-4096` (2048 chips) is intentionally excluded as it could never satisfy the batch
-bound. The `v5p-1024`/`v5p-2048` entries only become placeable if the grid expands to `batch_size`
-512/1024 — at the current `[64,128,256]` a batch >256 batch cannot use them yet, and any batch <=256
-still caps at 256-chip slices. Large-slice capacity is not guaranteed.
+divides `batch_size`. `v5p-N` names count cores and have `N/2` chips.
 
 The contacts-v1 raw docs and bucket must be region-local. Verified 2026-07-14 in us-east5, us-east1,
-us-central1, us-west4, and europe-west4 (`gs://marin-eu-west4`).
+us-central1, us-west4, and europe-west4 (`gs://marin-eu-west4`). Large-slice capacity is not guaranteed.
 
 ```yaml
 placement:
