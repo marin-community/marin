@@ -162,6 +162,9 @@ class GrugModelConfig:
     # up-projection (kv: sqrt(d/kv_lora_rank), q: sqrt(d/q_lora_rank)). Off by default.
     mla_scale_q_lora: bool = False
     mla_scale_kv_lora: bool = False
+    # Fold the sqrt(hidden/latent) latent correction into the q/kv RMSNorm weight init instead of a
+    # forward multiply (mutually exclusive with mla_scale_*_lora) -- a learnable starting point.
+    mla_fold_latent_scale: bool = False
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -442,8 +445,10 @@ class RMSNorm(eqx.Module):
     eps: float = eqx.field(static=True)
 
     @staticmethod
-    def init(dim: int, eps: float) -> "RMSNorm":
-        return RMSNorm(weight=jnp.ones((dim,), dtype=jnp.float32), eps=eps)
+    def init(dim: int, eps: float, scale: float = 1.0) -> "RMSNorm":
+        # ``scale`` sets the learnable per-dim gain at init (default 1.0). MLA folds its
+        # sqrt(hidden/latent) latent correction in here instead of a forward multiply.
+        return RMSNorm(weight=jnp.full((dim,), scale, dtype=jnp.float32), eps=eps)
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -747,11 +752,11 @@ class MultiheadLatentAttention(eqx.Module):
             k_dq, k_uq = random.split(k_q, 2)
             w_q = None
             w_dq = reshard(_init_weight(k_dq, (d, cq), std), P("data", None))
-            q_norm = RMSNorm.init(cq, cfg.layer_norm_eps)
+            q_norm = RMSNorm.init(cq, cfg.layer_norm_eps, scale=(d / cq) ** 0.5 if cfg.mla_fold_latent_scale else 1.0)
             w_uq = reshard(_init_weight(k_uq, (cq, n * qk), std), P("data", "model"))
         return MultiheadLatentAttention(
             w_dkv=reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None)),
-            kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),
+            kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps, scale=(d / ckv) ** 0.5 if cfg.mla_fold_latent_scale else 1.0),
             w_uk=reshard(_init_weight(k_uk, (ckv, n * nope), std), P("data", "model")),
             w_uv=reshard(_init_weight(k_uv, (ckv, n * vd), std), P("data", "model")),
             w_kr=reshard(_init_weight(k_kr, (d, rope_d), std), P("data", None)),

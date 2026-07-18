@@ -139,12 +139,14 @@ def build_scale_model() -> GrugModelConfig:
     qk_rope = env_int("SCALE_QK_ROPE", 64)
     # MLA value head dim (default 128). Set == qk for a symmetric wide head (e.g. qk=256 / v=256).
     v_head_dim = env_int("SCALE_V_HEAD_DIM", 128)
-    # Rescale the post-RMSNorm Q/KV latents by sqrt(hidden_dim / latent_dim) before the
-    # up-projection -- MLA's usual latent-dim correction, on by default for MLA. Override with
-    # SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA (0 to disable).
+    # Rescale the post-RMSNorm Q/KV latents by sqrt(hidden_dim / latent_dim) -- MLA's usual
+    # latent-dim correction, on by default for MLA. SCALE_MLA_FOLD_LATENT=1 folds that correction
+    # into the q/kv RMSNorm weight init instead (a learnable start) and turns the forward multiply
+    # off. Override the forward-multiply with SCALE_MLA_SCALE_Q_LORA / SCALE_MLA_SCALE_KV_LORA.
+    fold_latent = os.environ.get("SCALE_MLA_FOLD_LATENT") == "1"
     mla_default = "1" if use_mla else "0"
-    mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
-    mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
+    mla_scale_q_lora = (not fold_latent) and os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
+    mla_scale_kv_lora = (not fold_latent) and os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -182,6 +184,7 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         mla_scale_q_lora=mla_scale_q_lora,
         mla_scale_kv_lora=mla_scale_kv_lora,
+        mla_fold_latent_scale=fold_latent,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,
