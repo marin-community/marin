@@ -40,6 +40,9 @@ def build_model_args(config: dict) -> str:
             f"base_url={config['base_url'].rstrip('/')}/{endpoint_path}",
             f"tokenizer={config['tokenizer']}",
             "tokenizer_backend=huggingface",
+            # LOCAL (uncommitted): some tokenizers ship custom code (e.g. Moonlight/DeepseekV3) and
+            # lm-eval refuses to load them without this; harmless (no-op) for tokenizers that don't.
+            "trust_remote_code=True",
             "tokenized_requests=False",
             f"num_concurrent={config['num_concurrent']}",
         ]
@@ -67,6 +70,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str) -> li
         f"max_gen_toks={config['max_gen_toks']}",
         "--output_path",
         output_path,
+        "--log_samples",
         "--verbosity",
         "INFO",
     ]
@@ -88,7 +92,38 @@ def main() -> None:
     out_path = config["out_path"].rstrip("/")
     # Raw fsspec, not rigging's StoragePath: the eval image carries only fsspec/gcsfs, not rigging.
     # out_path is region-local (the eval child is pinned to the serve region), so no cross-region copy.
-    out_fs, _ = fsspec.core.url_to_fs(out_path)
+    # LOCAL (uncommitted): for a CoreWeave LOTA s3 out_path (marin-us-east-02a), s3fs must use the
+    # injected in-pod endpoint + VIRTUAL addressing (LOTA rejects path-style — .claude/ops/iris/ops.md
+    # §Scheduling). The iris-task-env Secret injects AWS_* + AWS_ENDPOINT_URL into the pod.
+    storage_options: dict = {}
+    if out_path.startswith("s3://") and os.environ.get("AWS_ENDPOINT_URL"):
+        storage_options = {
+            "client_kwargs": {"endpoint_url": os.environ["AWS_ENDPOINT_URL"]},
+            "config_kwargs": {"s3": {"addressing_style": "virtual"}},
+        }
+        # LOCAL (uncommitted): s3fs lives in the workspace venv, NOT the eval image's own venv
+        # (/opt/eval/evalchemy/.venv, which runs this script) → install it on demand (pod has egress).
+        try:
+            import s3fs  # noqa: F401,PLC0415
+        except ImportError:
+            for installer in (
+                ["uv", "pip", "install", "--python", sys.executable, "s3fs"],
+                [sys.executable, "-m", "pip", "install", "s3fs"],
+            ):
+                try:
+                    subprocess.run(installer, check=True)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+    # s3 write is best-effort: a durable-store hiccup must NEVER lose a task's scores (the
+    # EVALCHEMY_RESULT stdout print is the reliable, Mac-reachable harvest source). out_fs=None
+    # disables the put; the run still completes + prints every score.
+    try:
+        out_fs, _ = fsspec.core.url_to_fs(out_path, **storage_options)
+    except Exception as e:  # noqa: BLE001
+        print(f"EVALCHEMY_S3_SETUP_ERROR out_path={out_path} err={e!r} "
+              "(scores still harvestable from EVALCHEMY_RESULT log lines)", flush=True)
+        out_fs = None
     for task in tasks:
         with tempfile.TemporaryDirectory() as local_out:
             # sys.executable is the evalchemy image's interpreter, so ``-m eval.eval`` resolves the
@@ -96,8 +131,39 @@ def main() -> None:
             cmd = build_command(config, task, local_out, sys.executable)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             subprocess.run(cmd, check=True)
-            out_fs.put(local_out, f"{out_path}/{task['dir']}", recursive=True)
+            # LOCAL (uncommitted): parse the results JSON and PRINT the aggregate metrics to stdout so
+            # they land in the durable finelog. out_path is often pod-local /tmp (lost when the pod
+            # tears down) and evalchemy prints no results table — without this the scores are
+            # unrecoverable, and an empty `results: {}` (the COMPLETED-not-success trap) is invisible.
+            import glob  # noqa: PLC0415
+            result_files = sorted(glob.glob(os.path.join(local_out, "**", "results*.json"), recursive=True))
+            if not result_files:
+                print(f"EVALCHEMY_RESULT task={task['name']} STATUS=NO_RESULT_FILE "
+                      f"contents={os.listdir(local_out)}", flush=True)
+            for rf in result_files:
+                try:
+                    data = json.load(open(rf))
+                    res = data.get("results", data)
+                    status = "EMPTY" if not res else "OK"
+                    print(f"EVALCHEMY_RESULT task={task['name']} STATUS={status} "
+                          f"results={json.dumps(res)}", flush=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"EVALCHEMY_RESULT task={task['name']} STATUS=PARSE_ERROR "
+                          f"file={rf} err={e!r}", flush=True)
+            if out_fs is not None:
+                try:
+                    out_fs.put(local_out, f"{out_path}/{task['dir']}", recursive=True)
+                except Exception as e:  # noqa: BLE001
+                    print(f"EVALCHEMY_S3_PUT_ERROR task={task['name']} err={e!r}", flush=True)
     print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
+    # LOCAL (uncommitted): confirm the durable JSONs actually landed at the (LOTA) s3 prefix — an
+    # in-pod listing proves the deliverable is readable, visible in the finelog.
+    if out_fs is not None:
+        try:
+            landed = [p for p in out_fs.find(out_path) if p.endswith(".json")]
+            print(f"EVALCHEMY_S3_LANDED count={len(landed)} prefix={out_path} files={landed}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"EVALCHEMY_S3_LANDED_ERROR prefix={out_path} err={e!r}", flush=True)
 
 
 if __name__ == "__main__":

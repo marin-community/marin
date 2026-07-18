@@ -45,6 +45,7 @@ from enum import StrEnum
 
 from iris.client import iris_ctx
 from iris.cluster.constraints import region_constraint
+from iris.rpc import job_pb2  # local (uncommitted): batch-priority the serve+eval children
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import (
     Entrypoint,
@@ -60,6 +61,19 @@ from experiments.evals.evalchemy.image import EVALCHEMY_IMAGE, EVALCHEMY_PYTHON
 from experiments.evals.evalchemy.run_evalchemy_client import CONFIG_ENV_KEY
 
 logger = logging.getLogger(__name__)
+
+
+def _eval_child_priority():
+    """LOCAL (uncommitted): serve+eval child priority band, from env MARINBASE_EVAL_PRIORITY
+    (batch|interactive|production; default batch). Bump to interactive for slow models that keep
+    getting preempted mid-run (2 nodes, under the non-batch cap)."""
+    name = os.environ.get("MARINBASE_EVAL_PRIORITY", "batch").strip().lower()
+    return {
+        "production": job_pb2.PRIORITY_BAND_PRODUCTION,
+        "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
+        "batch": job_pb2.PRIORITY_BAND_BATCH,
+    }.get(name, job_pb2.PRIORITY_BAND_BATCH)
+
 
 # How long to wait for the served endpoint to register before giving up (model download + compile).
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
@@ -301,6 +315,7 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
         ports=["http"],
         constraints=constraints,
         max_retries_failure=0,
+        priority_band=_eval_child_priority(),  # local (uncommitted): env MARINBASE_EVAL_PRIORITY (default batch)
     )
     logger.info("Submitted serve job %s (backend=%s) for endpoint %s", serve_job, spec.backend, endpoint_name)
     try:
@@ -425,6 +440,7 @@ def _submit_eval_child(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) ->
         task_image=config.eval_image,
         constraints=constraints,
         max_retries_failure=0,
+        priority_band=_eval_child_priority(),  # local (uncommitted): env MARINBASE_EVAL_PRIORITY (default batch)
     )
     logger.info("Submitted evalchemy client job %s against %s", eval_job, endpoint.model_id)
     # wait(raise_on_failure=True) raises JobFailedError on any non-SUCCESS terminal state.
