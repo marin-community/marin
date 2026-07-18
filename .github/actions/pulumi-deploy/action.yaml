@@ -42,7 +42,7 @@ runs:
 
     - name: Sync the iac venv
       shell: bash
-      run: uv sync --package marin-iac --frozen
+      run: uv sync --package marin-iac --extra deploy --frozen
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4

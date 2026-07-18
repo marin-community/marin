@@ -4908,6 +4908,10 @@ source = { editable = "infra/iac" }
 dependencies = [
     { name = "marin-iris" },
     { name = "marin-rigging" },
+]
+
+[package.optional-dependencies]
+deploy = [
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-docker-build" },
@@ -4919,12 +4923,13 @@ dependencies = [
 requires-dist = [
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pulumi", specifier = ">=3.140,<4" },
-    { name = "pulumi-cloudflare", specifier = ">=6,<7" },
-    { name = "pulumi-docker-build", specifier = ">=0.0.8,<1" },
-    { name = "pulumi-gcp", specifier = ">=9,<10" },
-    { name = "pulumi-kubernetes", specifier = ">=4.18,<5" },
+    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.140,<4" },
+    { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
+    { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
+    { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
+    { name = "pulumi-kubernetes", marker = "extra == 'deploy'", specifier = ">=4.18,<5" },
 ]
+provides-extras = ["deploy"]
 
 [[package]]
 name = "marin-iris"

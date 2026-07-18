@@ -8,13 +8,22 @@ version = "0.0.0"
 description = "Infrastructure-as-code for Marin clusters."
 requires-python = ">=3.12"
 dependencies = [
+    "marin-iris",
+    "marin-rigging",
+]
+
+# The pulumi SDK is only imported when running the IaC program itself (pulumi
+# preview/up, the grafana Cloud Run deploy, and the iac tests); no Iris/Marin
+# runtime code touches it. Gating it behind the `deploy` extra keeps the
+# workspace-wide `uv sync --all-packages` that provisions every Iris job venv
+# from pulling the pulumi providers into jobs that never deploy.
+[project.optional-dependencies]
+deploy = [
     "pulumi>=3.140,<4",
     "pulumi-kubernetes>=4.18,<5",
     "pulumi-gcp>=9,<10",
     "pulumi-docker-build>=0.0.8,<1",
     "pulumi-cloudflare>=6,<7",
-    "marin-iris",
-    "marin-rigging",
 ]
 
 # marin-iris / marin-rigging resolve via the root workspace [tool.uv.sources]
