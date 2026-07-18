@@ -1231,3 +1231,27 @@ author: mcwitt
   and 600s inter-attempt cooldowns.
 - Jobs: /mwittmann/mx7201-{b64g1,b64g2,b32g}-coord, mx7201-t64g{1..4},
   mx7201-t32g1.
+
+### 2026-07-18 11:25 - MXFP8-007c: leafgroup hypothesis falsified; treatment arms moved onto the fray coordinator path
+- t64g7 (leafgroup gang via python submitter) wedged identically to the
+  nvlink.domain gangs: all 15 non-root ranks timed out after 10 min on
+  GetKeyValue(cuda:root_process:0) — root never published the clique ID.
+  Gang scheduling class is NOT the discriminator. Score: direct-CLI bench
+  gangs 0/5 today (1 env-download flake, 1 CUBIN, 3 clique-init wedges);
+  fray-coordinator gangs (baselines) N/N clean.
+- Rank-0 forensics: after "process 0/16" at init, rank 0 logged nothing for
+  15 min (python stdout buffering makes silence weak evidence); sibling
+  ranks reached jit_train_step execution. Root wedged either in the NCCL
+  comm-init callback (fast-restart taint) or in a rank-skewed compile;
+  undetermined — and not worth more 64-GPU attempts to bisect.
+- Pivot: ported their launch_cw_scale wholesale onto our branch
+  (commit above) + SCALE_FP8 knob wiring GrugFp8Config with the MFU-bench
+  defaults (mxfp8: wire=False dense grouped, producer auto); dispatch.py
+  now forwards XLA_/CE_/SCALE_MUON_ like the source branch. Dry-build
+  verified: d5120/L48/E128 top-5, GQA 40/10, scan, ring, mxfp8, muonh.
+- Treatment arms now run through the SAME fray coordinator machinery as
+  the baseline (driver v4): bf16 control (ring EP8 r1 NO_NS) then mxfp8,
+  B1024/16 nodes, real trainer + slimpajama data. This also upgrades the
+  comparison: all three arms share trainer/data/optimizer machinery, so
+  C-vs-B isolates mxfp8 kernels and B-vs-A isolates ring-EP8+NO_NS vs
+  EP1+sonic_cute+NS.
