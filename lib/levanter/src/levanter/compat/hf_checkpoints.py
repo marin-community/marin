@@ -44,6 +44,7 @@ from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidati
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
+from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem import StoragePath, fetch_file_atomic, url_to_fs
@@ -425,6 +426,18 @@ def _to_state_dict_with_dtype(
     state_dict = jax.tree.map(lambda value: jax.sharding.reshard(value, PartitionSpec()), state_dict)
 
     return state_dict
+
+
+def _gather_to_host_numpy(array) -> np.ndarray:
+    """Gather a (possibly globally-sharded) array to a full, host-local numpy array.
+
+    On a multi-host run a parameter's shards live on devices that are not all local to
+    this process, so ``np.asarray`` raises ``RuntimeError: Fetching value for jax.Array
+    that spans non-addressable ... devices``. ``process_allgather`` is a collective — every
+    process must call it in lockstep — that returns the complete array as a host-local
+    numpy array on every process, which the safetensors writer requires.
+    """
+    return np.asarray(multihost_utils.process_allgather(array, tiled=True))
 
 
 @dataclass_with_default_init(frozen=True)
@@ -1150,7 +1163,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     subset_arg = subset_keys
 
                 shard_weights = _to_state_dict_with_dtype(model, dtype, subset_arg)
-                shard_numpy = {k: np.asarray(v) for k, v in shard_weights.items()}
+                # Gather each parameter across processes: on multi-host, shards span
+                # non-addressable devices, so a bare np.asarray would raise.
+                shard_numpy = {k: _gather_to_host_numpy(v) for k, v in shard_weights.items()}
                 bytes_this_time = sum(v.nbytes for v in shard_numpy.values())
                 logger.info(
                     "Saving shard %s (%s, %.2f%% of model)",
