@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare Snowball's Levanter and vLLM backends on representative prompts.
+"""Compare Snowball serving backends against representative goldens.
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
@@ -29,14 +29,14 @@ from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
 
 from tests.cluster.vllm.backend_parity import (
-    REPRESENTATIVE_MAX_PROBABILITY_ERROR,
     NextTokenParity,
     parity_from_logprob_map,
     parity_from_logprob_row,
 )
-from tests.cluster.vllm.june_67b_a2b_identity import JUNE_67B_A2B
-from tests.cluster.vllm.representative_eval import (
+from tests.cluster.vllm.snowball import (
     BATCH_SIZE,
+    MAX_PROBABILITY_ERROR,
+    SNOWBALL,
     RepresentativeCase,
     RepresentativeGolden,
     pad_prompt_batch,
@@ -74,7 +74,7 @@ def _log_parities(backend: str, parities: list[NextTokenParity]) -> None:
 
 
 def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) -> None:
-    """Load Snowball once and score every representative prompt through Levanter."""
+    """Load the June export once and score every prompt through Levanter."""
     import haliax as hax  # noqa: PLC0415 -- entrypoint runs in the remote job's interpreter
     import jax  # noqa: PLC0415
     import jax.numpy as jnp  # noqa: PLC0415
@@ -88,13 +88,13 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
     prompt_fixture = read_prompt_fixture(goldens)
     num_chips = jax.device_count()
     assert num_chips == GPU_COUNT, f"expected {GPU_COUNT} H100s, found {num_chips} devices"
-    num_heads, num_kv_heads = read_attention_heads(JUNE_67B_A2B.export_uri)
+    num_heads, num_kv_heads = read_attention_heads(SNOWBALL.export_uri)
     tensor_parallel_size = select_tensor_parallel_size(num_heads, num_chips, num_kv_heads)
     assert tensor_parallel_size == 1, (num_heads, num_kv_heads, num_chips)
 
     spec = ModelSpec(
-        model="snowball-67b-a2b",
-        model_path=JUNE_67B_A2B.export_uri,
+        model=SNOWBALL.model_name,
+        model_path=SNOWBALL.export_uri,
         num_chips=num_chips,
         tensor_parallel_size=tensor_parallel_size,
         dtype="bfloat16",
@@ -156,14 +156,14 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
     assert len(parities) == len(prompt_fixture.cases)
     _log_parities("levanter-gpu", parities)
     for parity in parities:
-        parity.assert_distribution_matches(max_probability_error=REPRESENTATIVE_MAX_PROBABILITY_ERROR)
+        parity.assert_matches(max_probability_error=MAX_PROBABILITY_ERROR)
 
 
 def score_vllm_against_goldens(
     goldens: tuple[RepresentativeGolden, ...],
     attention_backend: str,
 ) -> None:
-    """Serve Snowball with vLLM and score rank-pinned representative prompts."""
+    """Serve the June export with vLLM and score rank-pinned prompts."""
     import requests  # noqa: PLC0415
     from marin.inference.serving_backend import OPENAI_API_SUFFIX, ModelSpec, VllmBackend  # noqa: PLC0415
     from marin.inference.vllm_server import IsolatedCudaVllm, VllmType  # noqa: PLC0415
@@ -171,8 +171,8 @@ def score_vllm_against_goldens(
     prompt_fixture = read_prompt_fixture(goldens)
 
     spec = ModelSpec(
-        model=JUNE_67B_A2B.vllm_model_name,
-        model_path=JUNE_67B_A2B.export_uri,
+        model=SNOWBALL.model_name,
+        model_path=SNOWBALL.export_uri,
         num_chips=GPU_COUNT,
         tensor_parallel_size=1,
         dtype="bfloat16",
@@ -273,12 +273,12 @@ def score_vllm_against_goldens(
     assert len(parities) == len(prompt_fixture.cases) + GPU_COUNT
     _log_parities("vllm-gpu", parities)
     for parity in parities:
-        parity.assert_distribution_matches(max_probability_error=REPRESENTATIVE_MAX_PROBABILITY_ERROR)
+        parity.assert_matches(max_probability_error=MAX_PROBABILITY_ERROR)
 
 
 def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
     return JobRequest(
-        name=f"snowball-representative-parity-levanter-{uuid.uuid4().hex[:8]}",
+        name=f"snowball-parity-levanter-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(score_levanter_against_goldens, args=[goldens]),
         resources=ResourceConfig.with_gpu("H100", count=GPU_COUNT, cpu=64, ram="256g", disk="128g"),
         environment=create_environment(
@@ -295,7 +295,7 @@ def _levanter_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
 
 def _vllm_job(goldens: tuple[RepresentativeGolden, ...], attention_backend: str) -> JobRequest:
     return JobRequest(
-        name=f"snowball-representative-parity-vllm-{uuid.uuid4().hex[:8]}",
+        name=f"snowball-parity-vllm-{uuid.uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(score_vllm_against_goldens, args=[goldens, attention_backend]),
         resources=ResourceConfig.with_gpu("H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g"),
         environment=create_environment(
@@ -310,7 +310,7 @@ def _vllm_job(goldens: tuple[RepresentativeGolden, ...], attention_backend: str)
 
 
 @pytest.mark.parametrize("backend", ["levanter-gpu", "vllm-gpu"])
-def test_snowball_backend_matches_representative_goldens(
+def test_snowball_export_matches_representative_goldens(
     marin_gpu_client: IrisClient,
     backend: str,
     vllm_attention_backend: str,

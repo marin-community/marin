@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify June 67B A2B Levanter inference against representative-prompt goldens.
+"""Verify Snowball checkpoint inference against representative-prompt goldens.
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/cluster/vllm/test_june_67b_a2b_levanter_inference.py \
+    uv run pytest tests/cluster/vllm/test_snowball_levanter_inference.py \
       -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
@@ -28,21 +28,21 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
 
-from tests.cluster.vllm.june_67b_a2b import (
+from tests.cluster.vllm.backend_parity import TokenScore
+from tests.cluster.vllm.snowball import (
+    TOP_K,
+    RepresentativeGolden,
+    RepresentativePromptFixture,
+    pad_prompt_batch,
+    read_prompt_fixture,
+    read_representative_goldens,
+)
+from tests.cluster.vllm.snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
     load_checkpoint,
     read_executor_info,
-)
-from tests.cluster.vllm.representative_eval import (
-    TOP_K,
-    RepresentativeGolden,
-    RepresentativePromptFixture,
-    TokenScore,
-    pad_prompt_batch,
-    read_prompt_fixture,
-    read_representative_goldens,
 )
 
 PENDING_TIMEOUT = 5 * 60.0
@@ -141,12 +141,12 @@ def assert_checkpoint_inference_matches_golden(
         assert actual_cases[expected.id] == expected.top_logprobs, expected.id
 
 
-def test_h100_node_matches_levanter_inference_golden(marin_gpu_client: IrisClient, run_test_job) -> None:
+def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client: IrisClient, run_test_job) -> None:
     expected_cases = read_representative_goldens()
     run_test_job(
         marin_gpu_client,
         JobRequest(
-            name=f"june-67b-checkpoint-inference-{uuid.uuid4().hex[:8]}",
+            name=f"snowball-checkpoint-inference-{uuid.uuid4().hex[:8]}",
             entrypoint=Entrypoint.from_callable(
                 assert_checkpoint_inference_matches_golden,
                 args=[expected_cases],

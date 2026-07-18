@@ -1,11 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Identity and checkpoint loading for the vendored June 67B A2B model."""
+"""Checkpoint loading for the vendored Snowball training model."""
 
 import json
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import draccus
@@ -15,34 +13,14 @@ import jax.numpy as jnp
 from levanter.checkpoint import load_checkpoint as load_levanter_checkpoint
 from rigging.filesystem import StoragePath
 
+# The vendored experiment path is the immutable training source for Snowball.
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as VendoredGrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as VendoredTransformer
-from tests.cluster.vllm.june_67b_a2b_identity import JUNE_67B_A2B
-
-
-@dataclass(frozen=True)
-class TokenLogprob:
-    logprob: float
-    text: str
-    token_id: int
-
-
-@dataclass(frozen=True)
-class InferenceGolden:
-    moe_implementation: str
-    mp: str
-    prompt: str
-    prompt_token_ids: list[int]
-    tokenizer: str
-    top_logprobs: list[TokenLogprob]
-
-
-def read_inference_golden(path: Path) -> InferenceGolden:
-    return draccus.decode(InferenceGolden, json.loads(path.read_text()))
+from tests.cluster.vllm.snowball import SNOWBALL
 
 
 def read_executor_info() -> dict[str, Any]:
-    return json.loads(StoragePath(JUNE_67B_A2B.executor_info_path).read_text())
+    return json.loads(StoragePath(SNOWBALL.executor_info_path).read_text())
 
 
 def decode_vendored_config(executor_info: dict[str, Any]) -> VendoredGrugModelConfig:
@@ -59,7 +37,7 @@ def load_checkpoint(
             "params": template,
             "pending_qb_betas": jax.ShapeDtypeStruct((config.num_layers, config.num_experts), jnp.float32),
         },
-        JUNE_67B_A2B.checkpoint_path,
+        SNOWBALL.checkpoint_path,
         mesh=mesh,
     )
     jax.block_until_ready(checkpoint_state)
