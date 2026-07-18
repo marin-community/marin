@@ -1,15 +1,14 @@
 # marin-iac
 
 Infrastructure-as-code for the static substrate of Marin clusters, per the design in
-`[.agents/projects/iac/](../../.agents/projects/iac/)`. Pulumi (Python). **CoreWeave first.**
+[`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python). **CoreWeave first.**
 
-This is the **minimal cut**: it provisions the ceded RBAC and the reserved NodePools for a
-CoreWeave cluster — enough to run `pulumi preview` end-to-end. Kueue/Traefik/object-storage
-and the CKS cluster object itself are the next slices (see the `TODO(iac)` in
-`coreweave/cluster.py` and out-of-scope in `spec.md`).
-[`gaps.md`](../../.agents/projects/iac/gaps.md) inventories every remaining prerequisite of a
-live deployment (the deferred components plus the GCP-arm bits — egress IPs, signing-key
-secrets) with the exact landing site for each.
+This is the **minimal cut**: it provisions the ceded RBAC, reserved NodePools, Kueue objects,
+and the Traefik/cert-manager/federation-ingress stack for a CoreWeave cluster. The CKS cluster
+object itself is out of scope permanently (see `coreweave/cluster.py`); object storage and the
+GCP arm's remaining pieces are tracked in [`gaps.md`](../../.agents/projects/iac/gaps.md), which
+inventories every remaining prerequisite of a live deployment with the exact landing site for
+each.
 
 Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave
 — `cw-us-east-02a`, `cw-us-east-08a` (GB200). GCP — `marin`, which so far declares only the
@@ -42,6 +41,22 @@ to just that member, so use `--all-packages`:
   ```
 - For the k8s dry-run: the CoreWeave kubeconfig at the path in the cluster's
 `platform.coreweave.kubeconfig_path` (read access to the live cluster).
+- The [Helm CLI](https://helm.sh/docs/intro/install/) (`brew install helm`), with the CoreWeave
+chart repo registered locally:
+  ```bash
+  helm repo add coreweave https://charts.core-services.ingress.coreweave.com
+  helm repo update coreweave
+  ```
+  This is a real, required prerequisite, not a nice-to-have: `TraefikAddon`'s Traefik and
+  cert-manager `Release`s deliberately omit Pulumi's `repository_opts` (a workaround for an
+  upstream Pulumi bug — see `.agents/projects/iac/gaps.md`'s "Pulumi Helm chart resolution"),
+  so Pulumi resolves those two charts by reading this local Helm config instead of fetching the
+  repo itself. Without it, `pulumi preview`/`up` fails with `"coreweave" is not a valid chart
+  repository`. Re-run `helm repo update coreweave` any time `TRAEFIK_VERSION`/
+  `CERT_MANAGER_VERSION` in `src/iac/coreweave/traefik.py` bumps to a version published after
+  your last update — a stale local index won't list it. **Any CI workflow that runs `pulumi
+  preview`/`up` against a CoreWeave stack must add this as an explicit step** — CI runners are
+  ephemeral, so this is never a "ran it once" setup step there.
 
 
 
@@ -57,8 +72,8 @@ cd infra/iac
 #    experimentation); production uses gs://marin-iac-state (see spec.md §2 backend bootstrap).
 pulumi login --local
 
-# 2. the secrets provider is a passphrase (production fetches it from Secret Manager — see
-#    "Backend bootstrap" below). For a throwaway local preview, an empty passphrase is fine:
+# 2. the secrets provider is a passphrase for local, throwaway previews (production uses a GCP
+#    KMS key — see "Backend bootstrap" below). An empty passphrase is fine here:
 export PULUMI_CONFIG_PASSPHRASE=""
 
 # 3. one-time: create the stack. This reads the committed Pulumi.cw-us-east-02a.yaml.
@@ -90,8 +105,7 @@ or a **replace**. Do this against a **local** backend so state stays in a throwa
 ```bash
 pulumi login --local
 export PULUMI_CONFIG_PASSPHRASE=""
-export KUBECONFIG=~/.kube/coreweave-iris-gpu   # read access to the live cluster
-export PULUMI_K8S_ENABLE_PATCH_FORCE=true      # required — see caveat (1) below
+export KUBECONFIG=~/.kube/coreweave-iris       # read access to the live cluster
 pulumi stack select cw-us-east-02a
 
 pulumi config set marin-iac:import true
@@ -106,11 +120,13 @@ through a destructive NodePool diff.
 
 Two caveats when reading diffs: (1) the live RBAC/NodePools were applied by Iris under the
 server-side-apply field manager `iris`, so Pulumi's SSA dry-run reports a **field conflict**
-(e.g. `conflict with "iris": .rules`) and the preview fails until you force ownership with
-`PULUMI_K8S_ENABLE_PATCH_FORCE=true` (set above). This is still a dry-run (nothing is written); it
-just lets Pulumi compute the merged result. Taking ownership for real happens only at `pulumi up`,
-which has a hard ordering rule — see **Production adoption** below. (2) Fields the live object
-carries but the program doesn't declare won't show as diffs (Pulumi only manages declared fields).
+(e.g. `conflict with "iris": .rules`) unless ownership is forced. The k8s provider declares
+`enable_patch_force=True` directly (`__main__.py`) rather than relying on the
+`PULUMI_K8S_ENABLE_PATCH_FORCE` env var, so this is automatic — still just a dry-run (nothing is
+written); it lets Pulumi compute the merged result. Taking ownership for real happens only at
+`pulumi up`, which has a hard ordering rule — see **Production adoption** below. (2) Fields the
+live object carries but the program doesn't declare won't show as diffs (Pulumi only manages
+declared fields).
 
 To discard the recon entirely, `pulumi stack rm cw-us-east-02a` (local backend) — it drops the
 state file without touching the cluster.
@@ -139,38 +155,53 @@ the flap until the ceded Iris is deployed everywhere.
 
 ### Backend bootstrap (one-time, provisioned)
 
-The shared backend is a GCS bucket + a passphrase secrets provider, both in `hai-gcp-models`:
+The shared backend is a GCS bucket + a GCP KMS secrets provider, both in `hai-gcp-models`:
 
 - **State bucket** `gs://marin-iac-state` (us-central1, uniform bucket-level access, versioned).
-- **Secrets provider: a passphrase**, stored in Secret Manager as `pulumi-iac-passphrase` and
-  fetched at startup. Marin keeps no secrets in the IaC config, so the lighter passphrase provider
-  is used instead of a KMS key. (Trade-off: a passphrase is symmetric — read access to the secret
-  grants both encrypt and decrypt — so it does not express the CI-decrypt-only / operator-encrypt
-  split a `gcpkms://` provider would. Switchable later via `pulumi stack change-secrets-provider`.)
-  Each stack's `encryptionsalt` (derived from the passphrase, safe to commit) lands in its
-  committed `Pulumi.<stack>.yaml` at `stack init`.
+- **Secrets provider: a GCP KMS key**,
+`gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`.
+Unlike a passphrase, KMS access is asymmetric: CI holds only
+`roles/cloudkms.cryptoKeyDecrypter` (can decrypt to compute a preview diff, cannot write new
+secrets), operators hold `roles/cloudkms.cryptoKeyEncrypterDecrypter` (can `pulumi up`) — see
+`spec.md §9`. No `PULUMI_CONFIG_PASSPHRASE` is set against this backend; decryption is
+authorized by each caller's own GCP credentials (`gcloud auth application-default login`
+locally, WIF in CI), so IAM on the key is the only access control. Each stack's
+`secretsprovider` URI is recorded in its committed `Pulumi.<stack>.yaml` at `stack init`.
 
 Re-provisioning from scratch (already done once):
 
 ```bash
+gcloud kms keyrings create marin-iac-keyring --project=hai-gcp-models --location=us-central1
+gcloud kms keys create marin-iac-key --project=hai-gcp-models --location=us-central1 \
+  --keyring=marin-iac-keyring --purpose=encryption
 gcloud storage buckets create gs://marin-iac-state --project=hai-gcp-models \
   --location=us-central1 --uniform-bucket-level-access --public-access-prevention
 gsutil versioning set on gs://marin-iac-state
-python3 -c "import secrets,sys; sys.stdout.write(secrets.token_urlsafe(32))" \
-  | gcloud secrets create pulumi-iac-passphrase --project=hai-gcp-models \
-      --replication-policy=automatic --data-file=-
 ```
+
+Creating the key only grants **admin** over it (rotate/destroy/set IAM policy); it does not
+grant encrypt/decrypt. `roles/cloudkms.admin` alone cannot run `pulumi stack init`/`up` — you'll
+hit `PermissionDenied: cloudkms.cryptoKeyVersions.useToEncrypt`. Each operator needs the
+encrypt/decrypt role granted explicitly, on the key:
+
+```bash
+gcloud kms keys add-iam-policy-binding marin-iac-key \
+  --keyring=marin-iac-keyring --location=us-central1 --project=hai-gcp-models \
+  --member="user:<operator email>" \
+  --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
+```
+
+CI's service account gets the narrower `roles/cloudkms.cryptoKeyDecrypter` instead (§9 above).
 
 **The adoption run itself** (per cluster, one-time):
 
 ```bash
 pulumi login gs://marin-iac-state
-# passphrase from Secret Manager (never echo it); every operator/CI runs this line
-export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
-  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
-pulumi stack init cw-us-east-02a                # or: pulumi stack select cw-us-east-02a
-export KUBECONFIG=~/.kube/coreweave-iris-gpu
-export PULUMI_K8S_ENABLE_PATCH_FORCE=true      # take ownership from the (now-retired) `iris` manager
+pulumi stack init cw-us-west-04a \
+  --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
+#    (on later runs, just: pulumi stack select cw-us-east-02a — the secretsprovider is already
+#    recorded in the committed Pulumi.<stack>.yaml)
+export KUBECONFIG=~/.kube/coreweave-iris
 
 pulumi config set marin-iac:import true
 pulumi preview          # gate: every resource `import` + no-op/update; ANY NodePool replace/delete → STOP
@@ -187,8 +218,8 @@ NodePools so an accidental `pulumi destroy`/rename can't deprovision the reserve
 nodes. Then normal ops are plain `pulumi preview`/`up` with the flag off; state lives in GCS.
 
 > **Keep local recon off the production stack.** Do recon under a throwaway stack name (e.g.
-> `cw-us-east-02a-recon` on `--local`) so the production `cw-us-east-02a` stack config keeps the
-> `encryptionsalt` from the shared Secret-Manager passphrase — not a local throwaway one.
+> `cw-us-east-02a-recon` on `--local`) so the production `cw-us-east-02a` stack config keeps its
+> `secretsprovider: gcpkms://…` pointer — not a local passphrase.
 
 > **Do not** `pulumi up` **against a live cluster until the cede is deployed.** Recon (dry-run) is
 > always fine; the real adoption is ordered. See `spec.md §4`.

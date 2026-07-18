@@ -3,7 +3,48 @@
 # multi-host canary runs.
 
 # This cluster's identity. Used for token minting and for authenticating to peers.
-name: ci-coreweave
+name: cw-us-west-04a
+
+# Infrastructure-as-code provisioning (see infra/iac). Iris carries this as an opaque
+# dict; iac.config owns the typed schema. NodePools derive from scale_groups,
+# namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
+# from kubernetes_provider.kueue.cluster_queue — none of those are repeated here.
+#
+# Unlike the other CoreWeave clusters, this one runs no cert-manager/Traefik today (a
+# CI-only cluster with no public ingress surface) — the ingress block below is net-new,
+# not an adoption of something live; TraefikAddon creates it fresh.
+provisioning:
+  provider: coreweave
+  coreweave:
+    region: US-WEST-04A
+    cluster: { name: marin, zone: US-WEST-04A }
+    kueue:
+      flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
+    ingress:
+      ingress_class: traefik
+      acme_email: ops@oa.dev
+      cluster_issuers: [letsencrypt-http01-staging, letsencrypt-http01-prod]
+      # Flipped from the default staging issuer once the staging cert validated (2026-07-17).
+      active_cluster_issuer: letsencrypt-http01-prod
+    rbac: { service_account: iris-controller }
+    object_storage:
+      buckets:
+        - { name: marin-us-west-04a, region: US-WEST-04A }
+
+# Request auth. Identity is by network location: in-cluster peers (RFC1918 pods/nodes,
+# loopback for kubectl port-forward) are trusted as admin. A non-empty trusted_cidrs makes
+# the controller enforcing — an off-cluster request arrives through Traefik with an
+# appended X-Forwarded-For, never matches a CIDR, and must present a bearer.
+#
+# `signing_key` signs this controller's worker and /proxy tokens. The controller pod has
+# no GCP credentials, so `iris cluster up` resolves the Secret Manager reference in the
+# operator's shell and projects it as IRIS_SIGNING_KEY through the iris-controller-env
+# Secret, which task pods do not mount. Rotate with `iris cluster init-keys --rotate`.
+auth:
+  signing_key:
+    - env:IRIS_SIGNING_KEY
+    - gcp-secret://projects/748532799086/secrets/iris-cw-us-west-04a-signing-key/versions/1
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 
 platform:
   label_prefix: iris-ci
@@ -12,10 +53,14 @@ platform:
     namespace: iris-ci
     kubeconfig_path: ~/.kube/coreweave-iris
     kube_context: marin_US-WEST-04A
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    # CoreWeave AI Object Storage: LOTA is the in-cluster cache, cwobject.com the
+    # endpoint an operator's own machine reaches. Bare endpoints only; buckets use
+    # virtual-hosted addressing (http://<bucket>.cwlota.com), detected from these domains.
+    object_storage_endpoint: http://cwlota.com
+    external_object_storage_endpoint: https://cwobject.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/state/ci
+  remote_state_dir: s3://marin-us-west-04a/iris/cw-us-west-04a/state
 
 kubernetes_provider:
   namespace: iris-ci
@@ -45,7 +90,7 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    MARIN_PREFIX: s3://marin-na/marin
+    MARIN_PREFIX: s3://marin-us-west-04a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
     # back to the host ethernet PF that carries the node IP. The exact PF name

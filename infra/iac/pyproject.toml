@@ -13,7 +13,9 @@ dependencies = [
     "pulumi-gcp>=9,<10",
     "pulumi-docker-build>=0.0.8,<1",
     "pulumi-cloudflare>=6,<7",
-    "marin-iris",
+    # [controller] for iris.cluster.platforms.k8s.service.CloudK8sService, used by
+    # scripts/verify_no_drift.py to list NodePools/Nodes without reinventing kubectl+JSON.
+    "marin-iris[controller]",
     "marin-rigging",
 ]
 

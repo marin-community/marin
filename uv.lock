@@ -4906,7 +4906,7 @@ name = "marin-iac"
 version = "0.0.0"
 source = { editable = "infra/iac" }
 dependencies = [
-    { name = "marin-iris" },
+    { name = "marin-iris", extra = ["controller"] },
     { name = "marin-rigging" },
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
@@ -4917,7 +4917,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-iris", editable = "lib/iris" },
+    { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pulumi", specifier = ">=3.140,<4" },
     { name = "pulumi-cloudflare", specifier = ">=6,<7" },

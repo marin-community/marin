@@ -1,12 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CoreweaveCluster — the CKS cluster object plus the reserved NodePools.
+"""CoreweaveCluster — the reserved NodePools for an existing CKS cluster.
 
-Minimal cut: this renders only the NodePools (as `compute.coreweave.com/v1alpha1 NodePool`
-custom resources, exactly as Iris does today) and assumes the CKS cluster + kubeconfig
-already exist. Creating/adopting the CKS cluster object itself (via the bridged CoreWeave
-Terraform provider) and exporting its kubeconfig is the next slice — see the TODO below.
+Renders only the NodePools (as `compute.coreweave.com/v1alpha1 NodePool` custom resources,
+exactly as Iris does today) and assumes the CKS cluster + kubeconfig already exist.
+
+The CKS cluster object itself (`coreweave_cks_cluster` + VPC) is deliberately NOT managed by
+Pulumi — not a TODO, a decision. Real create/adopt would need the bridged CoreWeave Terraform
+provider (`pulumi package add terraform-provider coreweave/coreweave`), which design.md's Open
+Questions flagged as unproven at our fleet sizes; we have not bridged it, and have no CoreWeave
+API credentials wired in to do so. `CksClusterSpec` stays documented, in-tree config (`args.cluster`,
+exported below) describing a cluster provisioned out of band (console / CoreWeave TF directly) —
+see gaps.md row 3.
 """
 
 from dataclasses import dataclass
@@ -71,9 +77,6 @@ class CoreweaveCluster(pulumi.ComponentResource):
     ) -> None:
         super().__init__("marin:coreweave:CoreweaveCluster", name, None, opts)
 
-        # TODO(iac): create or import the CKS cluster object (coreweave_cks_cluster) and VPC
-        # via the bridged CoreWeave TF provider, and export its kubeconfig for the k8s
-        # provider. Until then the cluster + kubeconfig are assumed to already exist.
         for nodepool in args.nodepools:
             manifest = _nodepool_manifest(nodepool)
             # Node-based pools cede the live count to CoreWeave's autoscaler; rack-based pools
@@ -93,4 +96,6 @@ class CoreweaveCluster(pulumi.ComponentResource):
                     import_=nodepool.name if args.adopt else None,
                 ),
             )
-        self.register_outputs({})
+        # Not Pulumi-managed (see module docstring) — exported for visibility only, so
+        # `pulumi stack output` still names the CKS cluster this stack's NodePools live on.
+        self.register_outputs({"cluster_name": args.cluster.name, "cluster_zone": args.cluster.zone})

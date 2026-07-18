@@ -96,11 +96,13 @@ RESOURCE_FLAVOR_NODE_LABELS = {CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND}
 # occupying the topology to free room. Quota stays non-binding precisely so this
 # stays TAS-driven and does not fight the autoscaler.
 NON_BINDING_QUOTA = {
-    "cpu": "1000000000",  # cores
+    # Use "1G" not "1000000000" because the Kubernetes API server canonicalizes to 1G
+    # and always returns that, which causes a perpetual, cosmetic `pulumi preview` diff
+    "cpu": "1G",  # cores
     "memory": "1Pi",
     "ephemeral-storage": "1Pi",
-    "nvidia.com/gpu": "1000000000",
-    "rdma/ib": "1000000000",
+    "nvidia.com/gpu": "1G",
+    "rdma/ib": "1G",
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 

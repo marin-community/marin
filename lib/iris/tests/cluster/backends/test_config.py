@@ -752,7 +752,7 @@ scale_groups:
             iris_root / "config" / "marin.yaml",
             iris_root / "config" / "marin-dev.yaml",
             iris_root / "config" / "examples" / "coreweave.yaml",
-            iris_root / "config" / "ci-coreweave.yaml",
+            iris_root / "config" / "cw-us-west-04a.yaml",
             iris_root / "config" / "ci-test.yaml",
         ]
 

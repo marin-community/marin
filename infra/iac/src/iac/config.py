@@ -18,6 +18,7 @@ import enum
 from enum import StrEnum
 
 from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.network_manifests import DEFAULT_CLUSTER_ISSUER
 from pydantic import BaseModel, Field
 from rigging.config_discovery import resolve_cluster_config
 
@@ -74,6 +75,11 @@ class IngressSpec(BaseModel):
     ingress_class: str = "traefik"
     acme_email: str
     cluster_issuers: list[str]
+    # Which of cluster_issuers annotates the federation Ingress right now
+    # (cert-manager.io/cluster-issuer). install_cw_network.py defaults a fresh install to
+    # staging to avoid Let's Encrypt rate limits while DNS/allowlist are shaken out; flip to
+    # prod here once that cert validates (matches the script's --cluster-issuer flag).
+    active_cluster_issuer: str = DEFAULT_CLUSTER_ISSUER
     # Sources allowed through the federation ingress ipAllowList. A Pulumi input to the
     # (deferred) federation-ingress component; constant default covers every CW cluster.
     federation_allow_sources: list[str] = Field(default_factory=lambda: list(MARIN_FEDERATION_EGRESS_SOURCES))

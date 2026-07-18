@@ -102,6 +102,10 @@ class IrisRbac(pulumi.ComponentResource):
             metadata={"name": args.namespace},
             opts=child_opts(args.namespace),
         )
+        # Exposed so other addons that create objects in this namespace (e.g. TraefikAddon's
+        # federation Middleware/Ingress) can depend_on it — Pulumi has no ordering guarantee
+        # between sibling ComponentResources otherwise, and a fresh cluster has no namespace yet.
+        self.namespace = namespace
         service_account = k8s.core.v1.ServiceAccount(
             "service-account",
             metadata={"name": args.spec.service_account, "namespace": args.namespace},

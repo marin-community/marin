@@ -662,7 +662,7 @@ iris --controller-url=http://localhost:10000 ...
 |--------------|-----------|---------|-------------|
 | `cw-us-east-02a` | `iris` | `iris-controller-svc` | `cw-us-east-02a.yaml` |
 | `cw-rno2a` | `iris` | `iris-controller-svc` | `cw-rno2a.yaml` |
-| `ci-coreweave` | `iris-ci` | `iris-ci-controller-svc` | `ci-coreweave.yaml` (CI only) |
+| `cw-us-west-04a` | `iris-ci` | `iris-ci-controller-svc` | `cw-us-west-04a.yaml` (CI only) |
 
 ### GPU Configs
 
