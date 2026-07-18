@@ -52,6 +52,11 @@ export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # is TE's own documented JAX workaround for handle_mem relocation.
 export XLA_FLAGS="--xla_gpu_enable_command_buffer= ${XLA_FLAGS:-}"
 export NVTE_EP_HANDLE_CACHE_SIZE=-1
+# Shared compile cache: retries below (and warm reruns) skip the ~15-min cold
+# compile, isolating the intermittent first-execution CUBIN-load bug
+# (B200MFU-036: no known flag mitigation; within-allocation passes are
+# stochastic, so in-job sequential retries are the play).
+export JAX_COMPILATION_CACHE_DIR=${JAX_COMPILATION_CACHE_DIR:-/tmp/jax-compile-cache}
 
 # uv's cached marin-levanter wheel goes stale when new source files are added
 # without a version bump — shadow it with the bundled tree (stale-import
@@ -59,5 +64,18 @@ export NVTE_EP_HANDLE_CACHE_SIZE=-1
 export PYTHONPATH="$REPO_ROOT/lib/levanter/src${PYTHONPATH:+:$PYTHONPATH}"
 python -c "import levanter.grug._moe.ep_nccl as m; print('ep_nccl from', m.__file__)"
 
-exec python -m iris.runtime.multigpu --nproc 4 -- \
-  python "$REPO_ROOT/experiments/grug/moe/standalone/grug_moe_mfu.py" "${BENCH_ARGS[@]}"
+# Sequential in-job attempts against the intermittent CUBIN-load failure
+# (B200MFU-036): every task loops in lockstep (gang-wide abort -> every task's
+# attempt N fails -> all re-rendezvous at jax distributed init for N+1).
+ATTEMPTS=${NCCLEP_BENCH_ATTEMPTS:-1}
+rc=0
+for attempt in $(seq 1 "$ATTEMPTS"); do
+  echo "[bench attempt $attempt/$ATTEMPTS]"
+  rc=0
+  python -m iris.runtime.multigpu --nproc 4 -- \
+    python "$REPO_ROOT/experiments/grug/moe/standalone/grug_moe_mfu.py" "${BENCH_ARGS[@]}" && break
+  rc=$?
+  echo "[bench attempt $attempt failed rc=$rc]"
+  sleep 15
+done
+exit "$rc"
