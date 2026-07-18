@@ -48,7 +48,7 @@ class Accelerator(StrEnum):
     GPU = "gpu"
 
 
-def qwen3_inference(
+def qwen3_inference_config(
     *,
     backend: BrokeredVllmBackend,
     worker_resources: ResourceConfig,
@@ -70,7 +70,7 @@ def qwen3_inference(
     )
 
 
-QWEN3_TPU_INFERENCE = qwen3_inference(
+QWEN3_TPU_INFERENCE = qwen3_inference_config(
     backend=TpuVllmBackend(),
     worker_resources=ResourceConfig.with_tpu(
         ["v5litepod-4", "v4-8", "v5p-8", "v6e-4"],
@@ -86,7 +86,7 @@ QWEN3_TPU_EVAL_RESULTS = brokered_eval_suite(
     version=QWEN3_EVAL_VERSION,
 )
 
-QWEN3_GPU_INFERENCE = qwen3_inference(
+QWEN3_GPU_INFERENCE = qwen3_inference_config(
     backend=GpuVllmBackend(),
     worker_resources=ResourceConfig.with_gpu(
         "H100",

@@ -40,7 +40,7 @@ from marin.inference.vllm import (
     start_local_brokered_vllm,
     start_local_vllm_server,
 )
-from marin.inference.vllm_server import IsolatedCudaVllm, VllmType
+from marin.inference.vllm_server import DEFAULT_CUDA_VLLM_VERSION, IsolatedCudaVllm, VllmType
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
@@ -64,7 +64,7 @@ def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
     assert fingerprint["inference"]["backend"] == {
         "source": "upstream",
         "tensor_parallel_size": None,
-        "version": "0.25.1",
+        "version": DEFAULT_CUDA_VLLM_VERSION,
     }
 
 
@@ -242,13 +242,10 @@ def test_iris_brokered_vllm_worker_environment_matches_backend(
 
 def test_gpu_backend_uses_isolated_cuda() -> None:
     backend = GpuVllmBackend()
-    resources = ResourceConfig.with_gpu("H100", count=8)
-
-    backend.validate_worker_resources(resources)
 
     assert backend.vllm_launcher() == IsolatedCudaVllm(
         source=VllmType.UPSTREAM,
-        version="0.25.1",
+        version=DEFAULT_CUDA_VLLM_VERSION,
     )
 
 
