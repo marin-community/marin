@@ -48,7 +48,7 @@ def _teardown_wandb_service_bounded(timeout: float) -> None:
     ends in a bare ``subprocess.wait()`` (wandb 0.26.0 exposes no timeout for either).
     When the service wedges on a stuck upload those joins never return, which on a
     multi-slice run holds the primary slice past the JAX distributed shutdown-barrier
-    deadline and SIGABRTs the whole job (issues 6907, 7372).
+    deadline and SIGABRTs the whole job.
 
     We run the public ``wandb.teardown()`` on a daemon watchdog thread and wait up to
     ``timeout``. ``teardown()`` unregisters wandb's own atexit hook before it blocks, so
@@ -374,7 +374,7 @@ class WandbConfig(TrackerConfig):
     """Maximum seconds to wait for the wandb-core service to tear down at interpreter exit
     before abandoning it. wandb's own service-teardown atexit hook is unbounded, which can
     hold a slice past the JAX distributed shutdown-barrier deadline and SIGABRT a
-    multi-slice job (issues 6907, 7372). Kept well under that deadline."""
+    multi-slice job. Kept well under that deadline."""
 
     def init(self, run_id: Optional[str]) -> Tracker:
         if run_id is not None and self.id is not None and run_id != self.id:

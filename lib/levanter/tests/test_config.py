@@ -134,8 +134,8 @@ def test_partition_spec_codec_roundtrips(spec):
 
 def test_config_with_partition_spec_dumps_and_reloads():
     """log_configuration dumps configs to YAML via draccus; a PartitionSpec field
-    used to raise "No parser for object P(...)" and drop the whole config artifact
-    (issues 6907/7372). The registered codec makes it dump and round-trip cleanly."""
+    used to raise "No parser for object P(...)" and drop the whole config artifact.
+    The registered codec makes it dump and round-trip cleanly."""
 
     @dataclasses.dataclass
     class Config:
