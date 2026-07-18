@@ -131,13 +131,34 @@ def main() -> None:
         print(f"EVALCHEMY_S3_SETUP_ERROR out_path={out_path} err={e!r} "
               "(scores still harvestable from EVALCHEMY_RESULT log lines)", flush=True)
         out_fs = None
+    # LOCAL (uncommitted): some evalchemy chat_benchmarks import deps missing from the image venv
+    # (HumanEvalPlus needs `fire`) → their registration throws → "Task not found". Install on demand
+    # (pod has egress). Non-fatal: a still-missing dep just skips that benchmark (loop is non-fatal).
+    for _dep in ("fire",):
+        try:
+            __import__(_dep)
+        except Exception:  # noqa: BLE001
+            for installer in (["uv", "pip", "install", "--python", sys.executable, _dep],
+                              [sys.executable, "-m", "pip", "install", _dep]):
+                try:
+                    subprocess.run(installer, check=True)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
     for task in tasks:
         with tempfile.TemporaryDirectory() as local_out:
             # sys.executable is the evalchemy image's interpreter, so ``-m eval.eval`` resolves the
             # fork + lm-eval baked into its venv.
             cmd = build_command(config, task, local_out, sys.executable)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
-            subprocess.run(cmd, check=True)
+            # LOCAL (uncommitted): NON-FATAL per benchmark — one broken task (e.g. a chat_benchmark
+            # whose module fails to import a missing dep) must NOT abort the whole suite. Log + skip;
+            # the working benchmarks still score + upload. (Was check=True → a single failure killed all.)
+            rc = subprocess.run(cmd).returncode
+            if rc != 0:
+                print(f"EVALCHEMY_RESULT task={task['name']} STATUS=SUBPROCESS_FAILED rc={rc} "
+                      "(skipped — non-fatal; remaining tasks continue)", flush=True)
+                continue
             # LOCAL (uncommitted): parse the results JSON and PRINT the aggregate metrics to stdout so
             # they land in the durable finelog. out_path is often pod-local /tmp (lost when the pod
             # tears down) and evalchemy prints no results table — without this the scores are
