@@ -4,6 +4,8 @@
 import contextlib
 import functools
 import json
+import logging
+import time
 import warnings
 from dataclasses import fields
 from typing import Any, Callable, Optional, TypeVar
@@ -22,9 +24,12 @@ from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
+from rigging.timing import ExponentialBackoff
 
 from levanter.utils.mesh import create_mesh_from_axis_specs
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
+
+logger = logging.getLogger(__name__)
 
 X = TypeVar("X")
 T = TypeVar("T", bound=PyTree)
@@ -181,6 +186,93 @@ def barrier_sync(timeout: float = 200):
 
     _sync_counter += 1
     client.wait_at_barrier(f"levanter_barrier_sync_{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+
+
+_DATA_READY_PREFIX = "levanter/data_ready"
+_MAX_LOGGED_LAGGARDS = 32
+
+
+def data_loading_barrier(
+    step: int,
+    *,
+    timeout: float,
+    previous_step: int | None = None,
+    warn_interval: float = 30.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Block until every process has loaded its batch for ``step``, then return.
+
+    Call this between fetching a batch and the collective train step. It gates entry to the
+    step on all processes being ready, so a process whose data loader stalls (e.g. a slow
+    GCS read) delays its peers host-side instead of stalling them inside the on-device
+    collective, where the wait is fatal on timeout and takes down the whole job. Processes
+    still missing after ``warn_interval`` seconds are named in a log line by process 0; if
+    any are still missing after ``timeout`` seconds, raises ``TimeoutError`` naming them.
+
+    Callers must invoke this on the same ``step`` on every process, or a process that skips
+    it will strand the others until they time out.
+
+    Args:
+        step: The training step whose batch must be ready. Namespaces the coordination keys.
+        timeout: Maximum seconds to wait for all processes before raising.
+        previous_step: The step passed on the prior call, whose keys the leader deletes to
+            bound coordination-store growth. None on the first call. Safe because a train
+            step is a global collective, so every process cleared ``previous_step`` before
+            any process reaches this one.
+        warn_interval: How often (seconds) process 0 logs the still-missing processes.
+        sleep: Injection seam for the inter-poll delay; the clock advances only through it,
+            so tests pass a no-op to run the loop without a real wait.
+    """
+    num_processes = jax.process_count()
+    if num_processes == 1:
+        return
+
+    client = jax_distributed.global_state.client
+    if client is None:
+        raise RuntimeError("data_loading_barrier requires jax distributed client to be initialized")
+
+    process_id = jax.process_index()
+    is_leader = process_id == 0
+
+    if is_leader and previous_step is not None:
+        client.key_value_delete(f"{_DATA_READY_PREFIX}/{previous_step}/")
+
+    prefix = f"{_DATA_READY_PREFIX}/{step}"
+    client.key_value_set(f"{prefix}/{process_id}", "1")
+
+    backoff = ExponentialBackoff(initial=0.05, maximum=min(warn_interval, 5.0))
+    ready: set[int] = set()
+    next_warn = warn_interval
+    elapsed = 0.0
+
+    while True:
+        ready |= {int(key.rsplit("/", 1)[1]) for key, _ in client.key_value_dir_get(f"{prefix}/")}
+        if len(ready) >= num_processes:
+            return
+
+        missing = sorted(set(range(num_processes)) - ready)
+        if elapsed >= timeout:
+            raise TimeoutError(
+                f"data_loading_barrier timed out after {timeout:.0f}s at step {step}: "
+                f"{len(missing)}/{num_processes} processes never signalled data-ready. "
+                f"Missing (first {_MAX_LOGGED_LAGGARDS}): {missing[:_MAX_LOGGED_LAGGARDS]}"
+            )
+
+        interval = backoff.next_interval()
+        sleep(interval)
+        elapsed += interval
+
+        if is_leader and elapsed >= next_warn:
+            logger.warning(
+                "data_loading_barrier: %.0fs waiting on %d/%d processes to load step %d. Missing (first %d): %s",
+                elapsed,
+                len(missing),
+                num_processes,
+                step,
+                _MAX_LOGGED_LAGGARDS,
+                missing[:_MAX_LOGGED_LAGGARDS],
+            )
+            next_warn += warn_interval
 
 
 # from https://stackoverflow.com/questions/2166818/how-to-check-if-an-object-is-an-instance-of-a-namedtuple

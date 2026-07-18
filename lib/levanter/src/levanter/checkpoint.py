@@ -506,6 +506,15 @@ class Checkpointer:
                     [record.path for record in self._temporary_checkpoints],
                 )
 
+    @property
+    def last_save_step(self) -> int:
+        """The step of the most recent checkpoint save, or 0 if none has been saved.
+
+        The save decision is broadcast from process 0, so this value is identical on every
+        process — safe to drive a collective-arming decision off of.
+        """
+        return self._last_save_step
+
     def load_checkpoint(
         self,
         state: M,

@@ -72,7 +72,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import data_loading_barrier, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
@@ -281,6 +281,9 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        # Set when default hooks install the checkpointer; drives the data-loading barrier's
+        # post-checkpoint arming window. None when the trainer runs without a checkpointer.
+        self._checkpointer: Optional[levanter.checkpoint.Checkpointer] = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -523,6 +526,10 @@ class Trainer:
         iter_data = iter(train_loader)
         is_first_step = True
 
+        barrier_config = self.config.data_loading_barrier
+        run_start_step = int(state.step)
+        last_barrier_step: Optional[int] = None
+
         while int(state.step) < self.num_train_steps:
             with capture_time() as loading_time:
                 try:
@@ -537,6 +544,11 @@ class Trainer:
                     loading_time(),
                 )
 
+            step = int(state.step)
+            if barrier_config.enabled and self._data_loading_barrier_active(step, run_start_step):
+                data_loading_barrier(step, timeout=barrier_config.timeout, previous_step=last_barrier_step)
+                last_barrier_step = step
+
             info = self.train_step(state, example)
             state = info.state
 
@@ -547,6 +559,11 @@ class Trainer:
             levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
 
             yield info
+
+    def _data_loading_barrier_active(self, step: int, run_start_step: int) -> bool:
+        """Whether the data-loading barrier should gate ``step`` (see [_barrier_active][])."""
+        last_save_step = self._checkpointer.last_save_step if self._checkpointer is not None else 0
+        return _barrier_active(step, run_start_step, last_save_step, self.config.data_loading_barrier.active_steps)
 
     def train(self, state: S, train_loader: Iterable[X]) -> StepInfo[S]:
         """
@@ -583,6 +600,7 @@ class Trainer:
         )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
+        self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
             checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
@@ -796,6 +814,47 @@ def _initialize_global_tracker(config, run_id):
     levanter.tracker.set_global_tracker(tracker)
 
 
+@dataclass(frozen=True)
+class DataLoadingBarrierConfig:
+    """Gates entry to the train step on all processes having their batch loaded.
+
+    A train step is a cross-host collective: every process must feed its data shard and enter
+    together. When one process's data loader stalls (typically a transient GCS slowdown), the
+    processes that already have their batch enter the on-device collective and block on the
+    straggler — a wait that is fatal on timeout and tears the whole job down with an opaque
+    coordination-service shutdown. This barrier moves that wait host-side, where a slow loader
+    merely delays its peers, names the laggards in the logs, and fails (if ever) with a
+    ``TimeoutError`` that names the stuck processes.
+
+    To keep steady-state cost at zero, the barrier runs only in the windows where the prefetch
+    buffer is cold and a peer is most likely to fall behind: the first ``active_steps`` of the
+    run (empty buffer at start/resume) and the ``active_steps`` after each checkpoint save (the
+    async upload contends with data reads for GCS bandwidth). It is a no-op on single-process
+    jobs regardless of ``enabled``.
+    """
+
+    enabled: bool = True
+    timeout: float = 300.0
+    """Seconds to wait for all processes at the barrier before raising ``TimeoutError``."""
+    active_steps: int = 10
+    """How many steps to keep the barrier active after the run starts and after each checkpoint
+    save. A run whose checkpoint upload spans more than this many steps may want a larger value."""
+
+
+def _barrier_active(step: int, run_start_step: int, last_save_step: int, active_steps: int) -> bool:
+    """Whether the data-loading barrier should gate ``step``.
+
+    True in the two cold-buffer windows: the first ``active_steps`` of the run (empty prefetch
+    buffer at start/resume) and the ``active_steps`` after a checkpoint save (the async upload
+    contends with data reads for GCS bandwidth). A pure function of globally-consistent inputs —
+    ``step``, the resumed start step, and the checkpointer's last save step — so every process
+    arms identically and none is stranded waiting at the barrier for a peer that never arrives.
+    """
+    if step < run_start_step + active_steps:
+        return True
+    return 0 < step - last_save_step <= active_steps
+
+
 @dataclass
 class TrainerConfig:
     seed: int = 0  # random seed
@@ -852,6 +911,8 @@ class TrainerConfig:
     num_train_steps: int = 400_000  # number of training steps
     steps_per_eval: int = 1_000  # how often to evaluate
     max_eval_batches: Optional[int] = None  # max number of batches to evaluate on. None means all batches
+
+    data_loading_barrier: DataLoadingBarrierConfig = field(default_factory=DataLoadingBarrierConfig)
 
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
