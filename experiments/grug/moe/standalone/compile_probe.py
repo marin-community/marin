@@ -43,7 +43,7 @@ _BATCH_AXES = ("replica_dcn", "data", "expert")
 def _parse():
     p = argparse.ArgumentParser()
     p.add_argument("--fp8", action="store_true")
-    p.add_argument("--fp8-recipe", default="per_tensor", choices=["per_tensor", "mxfp8"])
+    p.add_argument("--fp8-recipe", default="auto", choices=["auto", "per_tensor", "mxfp8"])
     p.add_argument("--no-fp8-wire", action="store_true")
     p.add_argument("--no-fp8-dense", action="store_true")
     p.add_argument("--no-fp8-grouped", action="store_true")
@@ -86,8 +86,8 @@ def main():
         raise ValueError(f"--num-gpus={a.num_gpus} but jax sees {jax.device_count()} devices")
     fp8 = None
     if a.fp8:
-        # mxfp8 keeps EP collectives bf16 (MXFP8-000b); wire=True is rejected by config validation.
-        wire = False if a.fp8_recipe == "mxfp8" else not a.no_fp8_wire
+        # wire=None resolves with the recipe at model init (per_tensor: fp8 wire, mxfp8: bf16).
+        wire = False if a.no_fp8_wire else None
         fp8 = GrugFp8Config(
             wire=wire,
             dense=not a.no_fp8_dense,

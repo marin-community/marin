@@ -11,15 +11,20 @@ validation. Kernel-facing behavior is validated on GB200 by
 ``standalone/test_mxfp8_op_gpu.py``.
 """
 
+import importlib
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from experiments.grug.moe import mxfp8
-from experiments.grug.moe.model import GrugFp8Config
+from experiments.grug.moe.model import GrugFp8Config, resolve_fp8_config
 
-from mxfp8_grouped.quantize import sf_wgrad_col_layout, sfa_row_gather_indices  # noqa: E402  (path via mxfp8 import)
+# mxfp8_grouped only becomes importable after the mxfp8 import extends sys.path.
+_quantize = importlib.import_module("mxfp8_grouped.quantize")
+sf_wgrad_col_layout = _quantize.sf_wgrad_col_layout
+sfa_row_gather_indices = _quantize.sfa_row_gather_indices
 
 GROUP_CASES = [
     [3, 0, 511, 256, 30],  # ragged, zero-token expert, unaligned sizes
@@ -154,9 +159,29 @@ def test_op_rejects_non_blackwell_devices():
 def test_fp8_config_recipe_validation():
     cfg = GrugFp8Config(recipe="mxfp8", wire=False)
     assert cfg.grouped and cfg.dense
+    # wire=None resolves per recipe, so a bare mxfp8 config is valid...
+    assert GrugFp8Config(recipe="mxfp8").wire is None
+    # ...but explicitly requesting fp8 wire with mxfp8 is rejected.
     with pytest.raises(ValueError, match="wire=False"):
-        GrugFp8Config(recipe="mxfp8")
+        GrugFp8Config(recipe="mxfp8", wire=True)
     with pytest.raises(ValueError, match="grouped=True"):
         GrugFp8Config(recipe="mxfp8", wire=False, grouped=False)
     with pytest.raises(ValueError, match="recipe"):
         GrugFp8Config(recipe="blockwise")
+
+
+def test_resolve_fp8_config_explicit_recipes():
+    # Explicit recipes resolve without probing the device arch.
+    per_tensor = resolve_fp8_config(GrugFp8Config(recipe="per_tensor"))
+    assert per_tensor.recipe == "per_tensor" and per_tensor.wire is True
+    mx = resolve_fp8_config(GrugFp8Config(recipe="mxfp8"))
+    assert mx.recipe == "mxfp8" and mx.wire is False
+    # Explicit wire passes through.
+    assert resolve_fp8_config(GrugFp8Config(recipe="per_tensor", wire=False)).wire is False
+
+
+def test_resolve_fp8_config_auto_requires_gpu():
+    if jax.devices()[0].platform == "gpu":
+        pytest.skip("GPU host: auto-resolution is exercised by the GPU ladder")
+    with pytest.raises(RuntimeError, match="recipe='auto'"):
+        resolve_fp8_config(GrugFp8Config())

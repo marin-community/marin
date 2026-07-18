@@ -153,18 +153,25 @@ class GrugFp8Config:
     ragged_all_to_all MoE backend; other configurations raise on the first
     forward pass.
 
-    ``recipe`` picks the grouped-GEMM quantization recipe:
+    ``recipe`` picks the grouped-GEMM quantization recipe. The default
+    ``"auto"`` resolves against the local GPU architecture at model init
+    (see [resolve_fp8_config][]), following the same convention as
+    ``ragged_dot(implementation="auto")``:
 
-    - ``"per_tensor"``: delayed per-tensor scaling
-      ([haliax.quantization.Fp8RaggedDotOp][], Hopper/sm90-only Mosaic wgmma
-      kernels).
-    - ``"mxfp8"``: Blackwell (sm100-only) MXFP8 block scaling on the fused
+    - ``"per_tensor"`` (sm90/Hopper): delayed per-tensor scaling
+      ([haliax.quantization.Fp8RaggedDotOp][], Mosaic wgmma kernels).
+    - ``"mxfp8"`` (sm100+/Blackwell): MXFP8 block scaling on the fused
       cudnn-frontend grouped kernels — stateless, whole expert MLP as one op
       (see ``experiments.grug.moe.mxfp8.MxFp8MoeMlpOp``). Requires
-      ``wire=False`` (the MXFP8 phase keeps EP collectives bf16 per
-      MXFP8-000b) and ``grouped=True``. ``mxfp8_producer`` selects the
-      dual-orientation activation quantizer (``"auto"`` probes the CuTe
-      kernel per node and falls back to XLA).
+      ``grouped=True``. ``mxfp8_producer`` selects the dual-orientation
+      activation quantizer (``"auto"`` probes the CuTe kernel per node and
+      falls back to XLA).
+
+    ``wire`` controls whether the EP dispatch/combine collectives carry FP8
+    over the wire with per-token scaling. The default ``None`` resolves with
+    the recipe: FP8 wire for ``"per_tensor"`` (the Hopper win), bf16
+    collectives for ``"mxfp8"`` (MXFP8-000b decision; explicit ``wire=True``
+    with mxfp8 is rejected).
 
     Unless ``dense`` is disabled, the dense GEMMs — attention q/k/v/o and the
     shared-expert MLP — also run as FP8 cuBLASLt matmuls with delayed
@@ -174,10 +181,10 @@ class GrugFp8Config:
     in full precision.
     """
 
-    wire: bool = True
+    wire: bool | None = None
     dense: bool = True
     grouped: bool = True
-    recipe: Literal["per_tensor", "mxfp8"] = "per_tensor"
+    recipe: Literal["auto", "per_tensor", "mxfp8"] = "auto"
     mxfp8_producer: Literal["auto", "cute", "xla"] = "auto"
     # Save the fwd-orientation MXFP8 weight copies across the remat recompute
     # (weights change once per step; full remat otherwise re-quantizes them in
@@ -187,16 +194,49 @@ class GrugFp8Config:
     amax_history_length: int = 1024
 
     def __post_init__(self) -> None:
-        if self.recipe not in ("per_tensor", "mxfp8"):
-            raise ValueError(f"recipe must be 'per_tensor' or 'mxfp8', got {self.recipe!r}")
+        if self.recipe not in ("auto", "per_tensor", "mxfp8"):
+            raise ValueError(f"recipe must be 'auto', 'per_tensor', or 'mxfp8', got {self.recipe!r}")
         if self.recipe == "mxfp8":
             if self.wire:
                 raise ValueError(
-                    "recipe='mxfp8' requires wire=False: the MXFP8 phase keeps EP collectives bf16 "
-                    "(MXFP8-000b decision; re-test FP8 wire separately)"
+                    "recipe='mxfp8' requires wire=False (or None): the MXFP8 phase keeps EP collectives "
+                    "bf16 (MXFP8-000b decision; re-test FP8 wire separately)"
                 )
             if not self.grouped:
                 raise ValueError("recipe='mxfp8' requires grouped=True (the recipe only changes the grouped GEMMs)")
+
+
+def _gpu_compute_capability_major() -> int:
+    device = jax.devices()[0]
+    compute_capability = getattr(device, "compute_capability", None)
+    if device.platform != "gpu" or compute_capability is None:
+        raise RuntimeError(
+            f"fp8 recipe='auto' needs a GPU backend to resolve the architecture; got {device.platform!r} "
+            f"device {device.device_kind!r}. Pass an explicit recipe or fp8=None."
+        )
+    return int(float(compute_capability))
+
+
+def resolve_fp8_config(cfg: GrugFp8Config) -> GrugFp8Config:
+    """Resolve ``recipe="auto"`` / ``wire=None`` against the local GPU architecture.
+
+    Runs on the accelerator task at model init — the launch dispatcher builds
+    configs on CPU, where no probe is possible. sm100+ selects the stateless
+    MXFP8 block-scaling recipe, sm90 the delayed per-tensor recipe; explicit
+    values pass through. ``dataclasses.replace`` re-runs config validation on
+    the resolved combination.
+    """
+    recipe = cfg.recipe
+    if recipe == "auto":
+        major = _gpu_compute_capability_major()
+        if major >= 10:
+            recipe = "mxfp8"
+        elif major == 9:
+            recipe = "per_tensor"
+        else:
+            raise RuntimeError(f"fp8 grouped GEMMs need Hopper (sm90) or Blackwell (sm100+); got sm{major}x")
+    wire = cfg.wire if cfg.wire is not None else recipe == "per_tensor"
+    return dataclasses.replace(cfg, recipe=recipe, wire=wire)
 
 
 @dataclass(frozen=True)
@@ -800,13 +840,14 @@ class MoEMLP(eqx.Module):
 
         ragged_dot_ops = None
         expert_mlp_op = None
-        if cfg.fp8 is not None and cfg.fp8.grouped:
-            if cfg.fp8.recipe == "mxfp8":
-                expert_mlp_op = MxFp8MoeMlpOp(producer=cfg.fp8.mxfp8_producer)
+        fp8 = resolve_fp8_config(cfg.fp8) if cfg.fp8 is not None else None
+        if fp8 is not None and fp8.grouped:
+            if fp8.recipe == "mxfp8":
+                expert_mlp_op = MxFp8MoeMlpOp(producer=fp8.mxfp8_producer)
             else:
                 ragged_dot_ops = MoeRaggedDotOps(
-                    w13=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
-                    w2=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
+                    w13=Fp8RaggedDotOp.init(fp8.amax_history_length),
+                    w2=Fp8RaggedDotOp.init(fp8.amax_history_length),
                 )
 
         d, e = cfg.hidden_dim, cfg.num_experts
@@ -823,7 +864,7 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
                 ragged_dot_ops=ragged_dot_ops,
-                fp8_wire=cfg.fp8.wire if cfg.fp8 is not None else False,
+                fp8_wire=fp8.wire if fp8 is not None else False,
                 expert_mlp_op=expert_mlp_op,
             ),
             cfg=cfg,
@@ -1047,7 +1088,9 @@ class Transformer(eqx.Module):
             long_mask = long_mask.with_fa4_bounds(long_lower_bounds, valid)
 
         save_names: tuple[str, ...] = MOE_REMAT_SAVE_NAMES if cfg.remat_mode == "save_moe" else ()
-        if cfg.fp8 is not None and cfg.fp8.recipe == "mxfp8" and cfg.fp8.mxfp8_save_qweights:
+        if cfg.fp8 is not None and cfg.fp8.mxfp8_save_qweights:
+            # Only the mxfp8 expert op tags this name, so saving it under other
+            # (resolved) recipes is a harmless no-op — no arch probe needed here.
             save_names = (*save_names, MXFP8_QWEIGHT_CHECKPOINT_NAME)
         remat_policy = jax.checkpoint_policies.save_only_these_names(*save_names) if save_names else None
 
@@ -1265,4 +1308,5 @@ __all__ = [
     "Transformer",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",
+    "resolve_fp8_config",
 ]

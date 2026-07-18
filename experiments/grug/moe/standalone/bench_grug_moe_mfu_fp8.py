@@ -77,9 +77,10 @@ def _parse():
     p.add_argument("--no-fp8-grouped", action="store_true", help="with --fp8: keep expert GEMMs bf16 (dense-only arm)")
     p.add_argument(
         "--fp8-recipe",
-        default="per_tensor",
-        choices=["per_tensor", "mxfp8"],
-        help="grouped-GEMM recipe: per_tensor (Hopper Fp8RaggedDotOp) or mxfp8 (Blackwell fused kernels)",
+        default="auto",
+        choices=["auto", "per_tensor", "mxfp8"],
+        help="grouped-GEMM recipe: auto (resolve from GPU arch), per_tensor (Hopper Fp8RaggedDotOp), "
+        "or mxfp8 (Blackwell fused kernels)",
     )
     p.add_argument("--mxfp8-producer", default="auto", choices=["auto", "cute", "xla"])
     p.add_argument(
@@ -130,8 +131,8 @@ def main():
     inter = a.hidden_dim // 2
     fp8 = None
     if a.fp8:
-        # mxfp8 keeps EP collectives bf16 (MXFP8-000b); wire=True is rejected by config validation.
-        wire = False if a.fp8_recipe == "mxfp8" else not a.no_fp8_wire
+        # wire=None resolves with the recipe at model init (per_tensor: fp8 wire, mxfp8: bf16).
+        wire = False if a.no_fp8_wire else None
         fp8 = GrugFp8Config(
             wire=wire,
             dense=not a.no_fp8_dense,

@@ -110,7 +110,7 @@ def _require_sm100() -> None:
         raise RuntimeError(
             "GrugFp8Config recipe='mxfp8' requires a Blackwell (sm100) GPU for the fused "
             f"block-scaled grouped kernels; got {dev!r} with compute_capability={cc!r}. "
-            "Use recipe='per_tensor' (Hopper) or fp8=None instead."
+            "Use recipe='auto' (resolves per_tensor on Hopper) or fp8=None instead."
         )
 
 

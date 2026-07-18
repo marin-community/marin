@@ -30,10 +30,11 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         collectives are not re-run during recompute
     SCALE_SCAN_LAYERS   1 stacks all blocks into one lax.scan body (one compiled
                         layer subgraph instead of num_layers of them); default off
-    SCALE_FP8           "" (off, default) | per_tensor | mxfp8. Enables the fp8
-                        expert-GEMM path (``GrugFp8Config``); mxfp8 keeps the EP
-                        collectives bf16 (MXFP8-000b) and requires sm100 + the
-                        grouped fused kernels. Mirrors the MFU-bench fp8 defaults.
+    SCALE_FP8           "" (off, default) | auto | per_tensor | mxfp8. Enables
+                        the fp8 expert-GEMM path (``GrugFp8Config``); auto
+                        resolves the recipe from the GPU arch on the train task
+                        (sm100+ mxfp8, sm90 per_tensor). Wire fp8 follows the
+                        recipe (per_tensor on, mxfp8 bf16 per MXFP8-000b).
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -113,17 +114,19 @@ _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, p
 def _build_fp8_config() -> GrugFp8Config | None:
     """SCALE_FP8 -> ``GrugFp8Config`` mirroring the MFU bench's fp8 defaults.
 
-    ``mxfp8`` keeps the EP collectives in bf16 (wire fp8 is rejected by config
-    validation for that recipe, per MXFP8-000b); ``per_tensor`` enables wire fp8.
+    Recipe and wire stay unresolved here — this runs on the CPU dispatcher; the
+    train task resolves them against its GPU arch at model init
+    (``resolve_fp8_config``).
     """
     recipe = os.environ.get("SCALE_FP8", "")
     if not recipe:
         return None
+    if recipe not in ("auto", "per_tensor", "mxfp8"):
+        raise ValueError(f"SCALE_FP8 must be '', 'auto', 'per_tensor', or 'mxfp8'; got {recipe!r}")
     return GrugFp8Config(
-        wire=recipe != "mxfp8",
         dense=True,
         grouped=True,
-        recipe=cast(Literal["per_tensor", "mxfp8"], recipe),
+        recipe=cast(Literal["auto", "per_tensor", "mxfp8"], recipe),
         mxfp8_producer="auto",
     )
 

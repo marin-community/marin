@@ -1306,3 +1306,37 @@ author: mcwitt
   then EP8 if the allocation is cold) via the fray path.
 - Standing results unaffected: baseline64 313,666 tok/s / 20.21%
   GB200-MFU; 128-GPU baseline 609,310 / 19.63%; smoke mxfp8 +15.5%.
+
+### 2026-07-18 14:15 - MXFP8-008: Hopper-cruft audit + arch-agnostic fp8 recipe (recipe="auto")
+- Hypothesis (from mcwitt): the branch may carry Hopper workarounds the
+  Blackwell path no longer needs (e.g. the fused cast-transpose kernel that
+  works around sm90 wgmma's no-transpose-on-read for 1-byte operands).
+- Audit result: the Blackwell op path is already clean. `MxFp8MoeMlpOp`
+  (mxfp8.py + vendored mxfp8_fused CuTeDSL kernels) never touches
+  fp8_cast_transpose / ragged_dot_mgpu / fp8_ragged; its dual-orientation
+  activation quantize is an MXFP8 *recipe* requirement (E8M0 scale blocks
+  must lie along the contracting dim of each GEMM orientation), not a layout
+  workaround. e5m2/wgmma grep hits inside mxfp8_fused/ are vendored upstream
+  dtype-support tables, not code paths. Nothing vendored is dead: every
+  module in mxfp8_fused/ and mxfp8_grouped/ is consumed by the op, the GPU
+  test ladder, or the MXFP8-001..004 benches the logbook links.
+- Interface change (per mcwitt's direction): fp8 recipe selection is now
+  architecture-agnostic, following the `ragged_dot(implementation="auto")`
+  convention. `GrugFp8Config.recipe` defaults to `"auto"`, resolved once at
+  model init on the accelerator task by `resolve_fp8_config` (sm100+ ->
+  mxfp8 fused kernels, sm90 -> per_tensor Fp8RaggedDotOp; both impls stay
+  functional). `wire` is now `bool | None`, `None` following the resolved
+  recipe (per_tensor -> fp8 wire, mxfp8 -> bf16 collectives per MXFP8-000b);
+  explicit `wire=True` + mxfp8 still rejected. The CPU dispatcher ships
+  configs unresolved (no device probe off-accelerator). `SCALE_FP8` and the
+  bench/probe `--fp8-recipe` accept `auto` (now the bench/probe default);
+  unknown values fail fast.
+- Remat-policy site no longer needs the recipe: `mxfp8_save_qweights` gates
+  the save-name alone (only the mxfp8 op tags it; a saved-but-never-tagged
+  name is a no-op under other recipes).
+- Command: `JAX_PLATFORMS=cpu pytest experiments/grug/moe/test_mxfp8.py -q`
+  -> 33 passed (incl. new resolve_fp8_config cases); dispatcher dry-build of
+  SCALE_FP8=auto/mxfp8/bogus OK; `./infra/pre-commit.py --files <changed>` OK.
+- Scope note: a first pass deleted the Hopper stack outright; mcwitt
+  clarified the Hopper impl must stay functional — reverted before commit,
+  no history impact.
