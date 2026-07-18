@@ -278,11 +278,15 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     opt_name = os.environ.get("SCALE_OPTIMIZER", "muonh").lower()
     optimizer: OptimizerConfig
     if opt_name in ("muonh", "grug_moe_muonh"):
-        optimizer = (
-            dataclasses.replace(heuristic, learning_rate=float(lr_override), adam_lr=float(lr_override))
-            if lr_override
-            else heuristic
-        )
+        if lr_override:
+            # SCALE_LR sets the muon peak; scale adam_lr by the same factor so the two LR groups keep
+            # the heuristic's muonh_ratio (muon = 13/3 * adam) instead of collapsing to one value.
+            factor = float(lr_override) / heuristic.learning_rate
+            optimizer = dataclasses.replace(
+                heuristic, learning_rate=float(lr_override), adam_lr=heuristic.adam_lr * factor
+            )
+        else:
+            optimizer = heuristic
     elif opt_name in ("adamh", "grug_moe_adamh"):
         lr = float(lr_override) if lr_override else heuristic.adam_lr
         optimizer = GrugMoeAdamHConfig(learning_rate=lr, adam_lr=lr, **schedule)
