@@ -213,6 +213,29 @@ pulumi config rm marin-iac:import               # import_ is ONE-SHOT — see be
 Once adopted, the resource is in state; leaving the flag on makes the *next* `up` try to import an
 already-managed resource and error. Flow is strictly: set true → `up` once → set false.
 
+> **`cw-us-west-04a` has no live Traefik/cert-manager to adopt** (see the cluster's
+> `provisioning.coreweave.ingress` comment in `lib/iris/config/cw-us-west-04a.yaml`) — the
+> `TraefikAddon` resources are net-new there, not a pre-existing object with an ID to import.
+> `marin-iac:import` is a single program-wide flag (`__main__.py`'s `adopt`), so the blanket
+> `pulumi up` above would try to `import_` a Helm release/ClusterIssuer/Ingress that was never
+> created and fail. For this cluster, scope the import pass to the three components that do
+> pre-exist and leave `traefik` out of it:
+>
+> ```bash
+> pulumi config set marin-iac:import true
+> pulumi preview --target 'urn:pulumi:cw-us-west-04a::marin-iac::marin:coreweave:CoreweaveCluster::cluster' \
+>                 --target 'urn:pulumi:cw-us-west-04a::marin-iac::marin:coreweave:IrisRbac::rbac' \
+>                 --target 'urn:pulumi:cw-us-west-04a::marin-iac::marin:coreweave:KueueAddon::kueue'
+> pulumi up --target 'urn:pulumi:cw-us-west-04a::marin-iac::marin:coreweave:CoreweaveCluster::cluster' \
+>           --target 'urn:pulumi:cw-us-west-04a::marin-iac::marin:coreweave:IrisRbac::rbac' \
+>           --target 'urn:pulumi:cw-us-west-04a::marin-iac::marin:coreweave:KueueAddon::kueue'
+> pulumi config rm marin-iac:import
+> pulumi up               # normal run, adopt=false now — creates TraefikAddon's stack fresh
+> ```
+>
+> A cluster whose Traefik/cert-manager genuinely does pre-exist (the common case for the other
+> CoreWeave clusters) uses the untargeted flow above unmodified.
+
 **After adoption:** protect the fleet — add `protect=true` (or `retainOnDelete=true`) to the
 NodePools so an accidental `pulumi destroy`/rename can't deprovision the reserved bare-metal
 nodes. Then normal ops are plain `pulumi preview`/`up` with the flag off; state lives in GCS.
