@@ -5,9 +5,16 @@ follows this recipe exactly; only the single variable under test changes. Everyt
 specified comes from the **May Recipe heuristic** (`MoeHeuristic` in `heuristic.py`), which
 `build_scale_model` already sources automatically.
 
-**Branch:** run from `b200_mla` (or `grug/embedding-gather-shard-map`) — these carry the
-`SCALE_DATA=datakit` toggle and the heuristic-config/LR sourcing (commits `039a1b74a7`,
-`f33d239fcf`). No launcher changes are needed.
+**Branch:** run from **`grug/moe-ablations`** — the harness branch. It carries the datakit
+toggle + heuristic config/LR sourcing, the paloma/uncheatable eval wiring, the MLA defaults,
+and the `SCALE_LR` muon+adam fix.
+
+**Established defaults for these ablations:**
+- Layers **12 (d1024) / 24 (d2048)** (override heuristic 11 / 21); 128 experts top-4; GQA **2 KV heads**; seq 4096.
+- **Sliding window off** — all layers global (`SCALE_SLIDING_WINDOW=4096`).
+- **MLA:** attention gate **off**, **qk_mult 1.0** (not 1.3), **latent-dim corrections on**; heads = hidden/128 (`SCALE_MLA_HEAD_MULT=1`), qk 192.
+- **Evals on** every 1000 steps (paloma + uncheatable); **s3 checkpoints**.
+- **`SCALE_LR`** scales muon **and** adam by the same factor (keeps the 13/3 MuonH ratio).
 
 ## Fixed parameters (both sizes)
 
@@ -31,24 +38,24 @@ Step counts:
 
 `build_scale_model` bases the config on `MoeHeuristic().build_model_config(hidden_dim,
 seq_len=4096)` (layers/heads/intermediate/`initializer_std = 0.5/√hidden`) and overrides
-only the routed-expert count, layer count, and backend knobs. Layer count is the heuristic
-formula `round(d / (64 + log2(d)·4 − 9))` — **passed explicitly** because the launcher's
-`SCALE_NUM_LAYERS` default is 48, not the heuristic value.
+only the routed-expert count, layer count, and backend knobs. Layer count is set to
+**12 (d1024) / 24 (d2048)** — overriding both the launcher default (48) and the heuristic
+(11 / 21) — via `SCALE_NUM_LAYERS`.
 
 | | d1024 | d2048 |
 |---|---|---|
-| Layers | **11** | **21** |
+| Layers | **12** | **24** |
 | Heads / KV | 8 / **2** | 16 / **2** |
 | head_dim | 128 | 128 |
 | Routed intermediate | 512 | 1024 |
 | Shared-expert intermediate | 1024 | 2048 |
 | Experts / top-k | 128 / 4 | 128 / 4 |
-| Sliding window | 2048 | 2048 |
+| Sliding window | **off (global)** | **off (global)** |
 | initializer_std | 0.0156 | 0.0110 |
-| qk_mult | 1.3 | 1.3 |
-| Active params (excl. embed/lm_head) | ~140M | ~1.02B |
-| Total params (all 128 experts) | ~2.29B | ~17.4B |
-| Training FLOPs (`3·fpt·tokens`, excl. lm_head, seq 4096) | ~6.8e18 | ~4.05e20 |
+| qk_mult (GQA) | 1.3 | 1.3 |
+| Active params (excl. embed/lm_head) | ~153M | ~1.17B |
+| Total params (all 128 experts) | ~2.49B | ~19.9B |
+| Training FLOPs (`3·fpt·tokens`, excl. lm_head, seq 4096) | ~7.4e18 | ~4.6e20 |
 
 > Heuristic default is 256 experts; these ablations use **128** (matches the recent e128
 > convention). Set via `SCALE_NUM_EXPERTS=128` (launcher default on this branch is 64).
@@ -72,7 +79,9 @@ formula `round(d / (64 + log2(d)·4 − 9))` — **passed explicitly** because t
 `MoeHeuristic(min_lr_ratio=0.05, max_learning_rate=SCALE_MAX_LR).build_optimizer_config(...)`:
 peak LR / β / ε set from (tokens, batch, hidden_dim), **warmup 0.01, linear decay to 0.05×
 peak, no grad clipping** — exactly the requested schedule, no override needed. `SCALE_LR`
-overrides the peak if ever wanted; `SCALE_MAX_LR` caps it (default 0.05).
+overrides the **muon** peak and **scales `adam_lr` by the same factor**, so the two MuonH LR
+groups keep the heuristic's `muon = 13/3 × adam` ratio (do not collapse to one value);
+`SCALE_MAX_LR` caps the heuristic peak (default 0.05).
 
 ## Dataset: datakit 2-phase mix
 
@@ -112,8 +121,8 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
   --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --job-name <RID>-coord \
   -e SCALE_GPUS_PER_NODE 4 -e SCALE_GPU_TYPE GB200 -e SCALE_GPU_REPLICAS 1 \
   -e SCALE_EXPERT_AXIS 1 -e SCALE_REPLICA_AXIS 1 \
-  -e SCALE_HIDDEN_DIM 1024 -e SCALE_NUM_LAYERS 11 -e SCALE_NUM_EXPERTS 128 -e SCALE_NUM_KV_HEADS 2 -e SCALE_TOP_K 4 \
-  -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 256 -e SCALE_STEPS 4768 \
+  -e SCALE_HIDDEN_DIM 1024 -e SCALE_NUM_LAYERS 12 -e SCALE_NUM_EXPERTS 128 -e SCALE_NUM_KV_HEADS 2 -e SCALE_TOP_K 4 \
+  -e SCALE_SEQ_LEN 4096 -e SCALE_BATCH 256 -e SCALE_STEPS 4768 -e SCALE_SLIDING_WINDOW 4096 \
   -e SCALE_OPTIMIZER muonh -e SCALE_DATA datakit -e SCALE_EVAL 1 \
   -e SCALE_ATTN_IMPL gpu_fa4_cute -e SCALE_MOE_IMPL sonic_cute -e SCALE_SCAN_LAYERS 1 \
   -e SCALE_MUON_DIST_NONEXPERT 1 -e SCALE_MUON_INTRA_RACK 1 -e SCALE_MUON_PAD_NONEXPERT 1 -e SCALE_MUON_SYRK 1 \
@@ -122,8 +131,8 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
   -e RUN_ID <RID> -- python -m experiments.grug.moe.launch_cw_scale
 
 # d2048 ablation: 16 B200, bs1024, 50B tokens (11921 steps)
-#   change: SCALE_GPU_REPLICAS 4, SCALE_HIDDEN_DIM 2048, SCALE_NUM_LAYERS 21,
-#           SCALE_BATCH 1024, SCALE_STEPS 11921
+#   change: SCALE_GPU_REPLICAS 4, SCALE_HIDDEN_DIM 2048, SCALE_NUM_LAYERS 24,
+#           SCALE_BATCH 1024, SCALE_STEPS 11921  (SCALE_SLIDING_WINDOW 4096 unchanged)
 ```
 
 Batch divisibility: d1024 256/(4 shards)=64; d2048 1024/(16 shards)=64. Both integer.
