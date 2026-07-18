@@ -138,7 +138,11 @@ def build_scale_model() -> GrugModelConfig:
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
+        # Routed-expert MLP width; default keeps the heuristic value (hidden/2 at hidden=5120).
+        intermediate_dim=env_int("SCALE_INTERMEDIATE", base.intermediate_dim),
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
+        # Attention sliding-window span; default keeps the heuristic value (2048).
+        sliding_window=env_int("SCALE_SLIDING_WINDOW", base.sliding_window),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
