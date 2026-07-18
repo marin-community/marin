@@ -445,3 +445,23 @@ NCCL_EP working on B200-class GPUs at **64 GPUs with EP≥8** at the reference
   chunk inputs stack. Peak EP memory becomes a single chunk's working set,
   which is the decoupling the chunking was for. Re-smoking EP4, then b1024
   with in-job attempts (CUBIN stochastic).
+- Smoke4 (checkpointed chunks): step-0 loss bit-identical, final 11.558445 vs
+  11.558435 pre-checkpoint (Δ9e-6, remat reorders accumulation), MFU 9.9 %.
+- **GOAL MET — b1024 production config trains chunked**
+  (`/mwittmann/ncclep-64g-ep8-b1024-ck8k-r5`, attempt 1/5, all 20 steps):
+  d5120 L48 e64 top4 **b1024 seq4096** EP8 data8×expert8, C=8192 (K=8),
+  mem fraction 0.85 — **steady median 18.03 % MFU, 16.64 s/step,
+  252 k tok/s, final loss 8.744996** vs a2a_cute b1024 19.1 % / 15.7 s /
+  266 k / 8.74628. Loss parity (nccl_ep slightly lower, consistent with
+  no-drop vs a2a's cf-1.0 drops, same as the b512 pair). The 1.1 pp MFU gap
+  matches the untuned b512 gap; chunking itself costs nothing measurable —
+  nccl_ep b1024-chunked (18.0 %) ≥ nccl_ep b512-unchunked (16.7–17.1 %) and
+  ≈ a2a b512 (18.1 %).
+- Updated derisk picture for production sizes: (1) chunked dispatch + chunk
+  remat makes EP memory O(one chunk) — batch/seqlen scaling is unbounded on
+  the EP side (the TE staging + no-drop capacity walls are gone); (2) the
+  remaining b1024-scale blocker is the pre-existing intermittent CUBIN-load
+  bug (B200MFU-036, environmental, also hits a2a/ring; in-job attempts +
+  compile cache absorb it — r5 passed on the first try); (3) numerics are a
+  pure token partition (bit-identical pre-remat, 1e-5-band with remat).
+- Decision: NCCLEP-007 complete; promote to #7331.
