@@ -413,31 +413,40 @@ def _newtonschulz_4d_distributed(
         orig_4d = PartitionSpec(None, "expert", "data", "model")
 
     expert_shards = int(mesh.shape["expert"]) if "expert" in mesh.shape else 1
-    if expert_shards > 1 and expert_count % expert_shards == 0:
+    data_shards = int(mesh.shape["data"]) if "data" in mesh.shape else 1
+    if expert_shards > 1 and expert_count % expert_shards == 0 and data_shards > 1 and layers % data_shards == 0:
         # Expert-parallel stack: the E dim is sharded over "expert", and merging (L, E)
         # cannot preserve that sharding — XLA lowers the merge+reshard as full all-gathers
         # of the LE stack (150 GiB+ replicated buffers at d5120/L48/E128, the MXFP8-007c
-        # OOM). Instead keep E pinned on "expert" and distribute L over the remaining
-        # batch axes with a single 4D->4D reshard: each chip then holds whole [d, last]
-        # matrices for its (L-shard, E-shard) block and runs NS locally.
-        l_axes_pool = [(n, s) for n, s in mesh_shape_items if n not in ("expert", "model")]
-        best_l_axes: tuple[str, ...] = ()
-        best_l = 1
-        for mask in range(1, 1 << len(l_axes_pool)):
-            subset = [l_axes_pool[i] for i in range(len(l_axes_pool)) if mask & (1 << i)]
-            prod = 1
-            for _, s in subset:
-                prod *= s
-            if layers % prod == 0 and prod > best_l:
-                best_l_axes = tuple(n for n, _ in subset)
-                best_l = prod
-        l_entry = None if not best_l_axes else (best_l_axes[0] if len(best_l_axes) == 1 else best_l_axes)
-        target_4d_spec = PartitionSpec(l_entry, "expert", None, None)
+        # OOM); a 4D->4D `reshard` triggers the same involuntary-full-remat fallback.
+        # Instead redistribute with explicit collectives inside a shard_map: keep E pinned
+        # on "expert", all-gather the matrix dim that was sharded over "data", take this
+        # program's L-slice (L distributed over "data"; replica_dcn stays replicated, so
+        # each DP replica redundantly orthogonalizes — same trade as SCALE_MUON_INTRA_RACK),
+        # run NS on whole [d, last] matrices, then invert (all-gather L, re-slice the
+        # matrix dim). Peak per-GPU transient is 2x the E-shard's L-full block in bf16.
+        sharded_mat_axis = 3 if is_w_down_leaf else 2  # the matrix dim carrying "data"
+        l_per = layers // data_shards
+
+        def _ep_block_ns(blk: jax.Array) -> jax.Array:
+            i = jax.lax.axis_index("data")
+            full = jax.lax.all_gather(blk, "data", axis=sharded_mat_axis, tiled=True)
+            mine = jax.lax.dynamic_slice_in_dim(full, i * l_per, l_per, axis=0)
+            local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+            done = jax.vmap(jax.vmap(local_ns))(mine)
+            full_l = jax.lax.all_gather(done, "data", axis=0, tiled=True)
+            width = blk.shape[sharded_mat_axis]
+            return jax.lax.dynamic_slice_in_dim(full_l, i * width, width, axis=sharded_mat_axis)
+
         x_bf16 = x.astype(jnp.bfloat16)
-        x_distributed = reshard(x_bf16, target_4d_spec)
-        local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
-        updated = jax.vmap(jax.vmap(local_ns))(x_distributed)
-        return reshard(updated, orig_4d).astype(x.dtype)
+        updated = jax.shard_map(
+            _ep_block_ns,
+            mesh=mesh,
+            in_specs=orig_4d,
+            out_specs=orig_4d,
+            check_vma=False,
+        )(x_bf16)
+        return updated.astype(x.dtype)
 
     # Largest subset of batch mesh axes whose product divides ``merged``; NS replicates
     # across any axes that don't divide it rather than silently skipping orthogonalization.
