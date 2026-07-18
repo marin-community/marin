@@ -198,6 +198,22 @@ def _grug_scale_with_muon(
                 # No-op the Newton-Schulz orthogonalization (momentum-only update): skips
                 # the all-gather/reshard transient. Not real Muon; for memory/fit probes.
                 return x
+            if os.environ.get("SCALE_MUON_PER_HEAD_KV") == "1" and (
+                "w_uk" in jax.tree_util.keystr(path) or "w_uv" in jax.tree_util.keystr(path)
+            ):
+                # Per-head Muon for the MLA kv-latent -> k_nope / v up-projections. The trailing axis
+                # is n_heads * head_dim (128), so split it and orthogonalize each head's (ckv, 128)
+                # block independently (replicated NS, vmapped over heads and any scan-layer axis)
+                # instead of the full (ckv, n*128) matrix. Handles 2D (unscanned) and 3D (scanned) x.
+                hd = 128
+                lead = x.shape[:-1]  # (..., ckv) plus a leading layer axis under scan
+                n = x.shape[-1] // hd
+                xr = jnp.moveaxis(x.reshape(*lead, n, hd), -2, -3)  # (..., n, ckv, hd)
+                flat = xr.reshape(-1, xr.shape[-2], hd)
+                ns = jax.vmap(
+                    lambda m: _zeropower_via_newtonschulz_replicated(m, steps, muon_eps, coefficient_type, None)
+                )(flat).reshape(xr.shape)
+                return jnp.moveaxis(ns, -3, -2).reshape(*lead, x.shape[-1])
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
                     x,
