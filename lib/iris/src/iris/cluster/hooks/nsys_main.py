@@ -207,8 +207,8 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     Returns the child's exit code, with a signal death normalized to the conventional
     ``128 + signum``. ``Popen.wait`` reports those as a negative code, which ``sys.exit``
     would turn into a wrapping status (``-15`` becomes 241, not 143) and hide the
-    termination behind a bogus application failure. ``iris.runtime.multigpu`` normalizes
-    the same way for the same reason.
+    termination behind a bogus application failure. ``iris.cluster.hooks.multigpu_main``
+    normalizes the same way for the same reason.
     """
     proc = subprocess.Popen([*nsys_argv, *command])
 

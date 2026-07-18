@@ -45,7 +45,8 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
-from iris.cluster.hooks import MultiGpuHook, TaskHook
+from iris.cluster.hooks import TaskHook
+from iris.cluster.hooks.multigpu import build_multigpu_hook
 from iris.cluster.hooks.nsys import NsysHook
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
@@ -58,7 +59,6 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
-    get_gpu_count,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
@@ -452,21 +452,6 @@ class LocalClientConfig:
     """
 
     max_workers: int = 4
-
-
-def build_multigpu_hook(resources: ResourceSpec, processes_per_task: int) -> MultiGpuHook:
-    """Build the multi-process GPU supervisor hook for *processes_per_task* processes.
-
-    Requires a GPU device whose count is divisible by ``processes_per_task``; each of the
-    N children is pinned to a contiguous group of ``gpu_count // N`` GPUs.
-    """
-    device = resources.device
-    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
-    if gpu_count <= 0:
-        raise ValueError("processes_per_task > 1 requires a GPU device")
-    if gpu_count % processes_per_task != 0:
-        raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
-    return MultiGpuHook(nproc=processes_per_task, devices_per_proc=gpu_count // processes_per_task)
 
 
 def collect_hooks(

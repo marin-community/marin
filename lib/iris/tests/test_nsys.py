@@ -126,7 +126,7 @@ def test_collect_hooks_orders_nsys_outside_the_multigpu_supervisor() -> None:
     command = ["python", "train.py"]
     for hook in collect_hooks(env, _gpu_resources(8), processes_per_task=8):
         command = hook.wrap(command)
-    assert command.index("iris.cluster.hooks.nsys_main") < command.index("iris.runtime.multigpu")
+    assert command.index("iris.cluster.hooks.nsys_main") < command.index("iris.cluster.hooks.multigpu_main")
 
 
 def test_hook_omits_output_uri_when_unset() -> None:
