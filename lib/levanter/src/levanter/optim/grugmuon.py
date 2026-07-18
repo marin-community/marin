@@ -299,6 +299,40 @@ def _match_update_sharding():
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _newtonschulz_batched_syrk(X: jax.Array, steps: int, eps: float, coefficient_type: CoefficientType) -> jax.Array:
+    """Batched Newton-Schulz using the QuACK SM100 symmetric GEMM for the two symmetric products.
+
+    ``X`` is a device-local stack ``[batch, m, k]`` (call inside a shard_map). Same math as the
+    vmapped :func:`_zeropower_via_newtonschulz_local`, but ``X@X^T`` and ``A@A`` go through the
+    in-kernel-mirror symmetric GEMM (~half the matmul FLOPs, ~1.7x vs dense on each symmetric
+    product; ~1.19x on the full NS end-to-end since B@X stays dense). Gated at the call sites by
+    ``SCALE_MUON_SYRK=1``. QuACK is Blackwell-only, so it is imported lazily.
+    """
+    from levanter.grug._moe.quack_symmetric_cute import quack_symmetric_gemm  # noqa: PLC0415
+
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    X = X / (jnp.linalg.norm(X, axis=(-2, -1), keepdims=True) + eps)
+
+    transpose = X.shape[-2] > X.shape[-1]
+    if transpose:
+        X = jnp.swapaxes(X, -1, -2)
+
+    for i in range(_effective_ns_steps(steps)):
+        a, b, c = coeffs[i % len(coeffs)]
+        # Both symmetric products go through the static-persistent symmetric GEMM (bit-exact on the
+        # non-square gram X@X^T and the square A@A, where A is symmetric so A@A == A@A^T). Only B@X
+        # (non-symmetric) stays a dense batched matmul.
+        A = quack_symmetric_gemm(X)  # X @ X^T
+        B = b * A + c * quack_symmetric_gemm(A)  # A @ A^T = A @ A (A symmetric)
+        X = a * X + jnp.matmul(B, X)
+
+    if transpose:
+        X = jnp.swapaxes(X, -1, -2)
+    return X.astype(orig_dtype)
+
+
 def _zeropower_via_newtonschulz_local(
     X: jax.Array,
     steps: int = 5,
@@ -405,8 +439,18 @@ def _newtonschulz_4d_distributed(
     x_bf16 = x.astype(jnp.bfloat16)
     x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
     x_distributed = reshard(x_flat, target_3d_spec)
-    local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
-    updated_distributed = jax.vmap(local_ns)(x_distributed)
+    if os.environ.get("SCALE_MUON_SYRK") == "1":
+        # Run the batched NS with QuACK's in-kernel-mirror symmetric GEMM per device shard.
+        updated_distributed = jax.shard_map(
+            lambda stack: _newtonschulz_batched_syrk(stack, steps, eps, coefficient_type),
+            mesh=mesh,
+            in_specs=target_3d_spec,
+            out_specs=target_3d_spec,
+            check_vma=False,
+        )(x_distributed)
+    else:
+        local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, eps, coefficient_type)
+        updated_distributed = jax.vmap(local_ns)(x_distributed)
     updated_flat = reshard(updated_distributed, intermediate_3d_spec)
     updated_bf16 = jax.lax.reshape(updated_flat, (layers, expert_count, d, last), out_sharding=orig_4d_spec)
     return updated_bf16.astype(x.dtype)
