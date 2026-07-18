@@ -56,7 +56,7 @@ import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
+from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -281,6 +281,7 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        self._checkpointer: Optional[Checkpointer] = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -380,6 +381,17 @@ class Trainer:
 
     def __exit__(self, *args):
         problems = []
+
+        # Block on any in-flight async checkpoint serialization before tearing down the tracker
+        # and mesh. A run that has returned must have durably written its final checkpoint, and
+        # letting the background commit thread finish here also avoids it logging into the
+        # already-closed tracker/stdout during teardown.
+        if self._checkpointer is not None:
+            try:
+                self._checkpointer.wait_until_finished()
+            except Exception as e:
+                problems.append(e)
+
         for cmanager in reversed(self._cmanagers):
             try:
                 cmanager.__exit__(*args)
@@ -583,6 +595,7 @@ class Trainer:
         )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
+        self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
             checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
