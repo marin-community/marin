@@ -17,6 +17,7 @@ Examples:
 import argparse
 from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 from fray.types import ANY_REGION, ResourceConfig
 from marin.execution.lazy import lower
@@ -104,10 +105,12 @@ QWEN3_GPU_EVAL_RESULTS = brokered_eval_suite(
     version=QWEN3_EVAL_VERSION,
 )
 
-QWEN3_EVALS_BY_ACCELERATOR = {
-    Accelerator.TPU: QWEN3_TPU_EVAL_RESULTS,
-    Accelerator.GPU: QWEN3_GPU_EVAL_RESULTS,
-}
+QWEN3_EVALS_BY_ACCELERATOR = MappingProxyType(
+    {
+        Accelerator.TPU: QWEN3_TPU_EVAL_RESULTS,
+        Accelerator.GPU: QWEN3_GPU_EVAL_RESULTS,
+    }
+)
 
 
 def _parse_accelerator() -> Accelerator:

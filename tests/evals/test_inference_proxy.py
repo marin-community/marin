@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 import socket
 import threading
 from collections.abc import Iterator
@@ -55,8 +56,16 @@ BROKER_LEASE_TIMEOUT_SECONDS = 300.0
 
 def test_brokered_gpu_eval_lowers_with_symbolic_worker_resources() -> None:
     step = lower(QWEN3_GPU_EVAL_RESULTS)
+    fingerprint = json.loads(step.fingerprint_payload)
 
-    assert step.name == "evals/qwen3-0.6b-gpu/suite"
+    # Artifact lowering replaces runtime resources with a symbolic value. Backend validation must
+    # remain at the serving boundary, where the concrete ResourceConfig is available.
+    assert fingerprint["inference"]["worker_resources"] == "<worker_resources>"
+    assert fingerprint["inference"]["backend"] == {
+        "source": "upstream",
+        "tensor_parallel_size": None,
+        "version": "0.25.1",
+    }
 
 
 @dataclass
@@ -231,38 +240,17 @@ def test_iris_brokered_vllm_worker_environment_matches_backend(
     assert worker_request.environment.env_vars.get("VLLM_TARGET_DEVICE") == expected_target_device
 
 
-def test_gpu_brokered_vllm_uses_isolated_cuda_and_all_requested_gpus(monkeypatch) -> None:
-    captured = SimpleNamespace()
+def test_gpu_backend_uses_isolated_cuda_and_all_requested_gpus() -> None:
+    backend = GpuVllmBackend()
+    resources = ResourceConfig.with_gpu("H100", count=8)
 
-    class _FakeVllmEnvironment:
-        server_url = "http://127.0.0.1:8000/v1"
-        model_id = "gpt2"
+    backend.validate_worker_resources(resources)
 
-        def __init__(self, model, **kwargs) -> None:
-            captured.model = model
-            captured.kwargs = kwargs
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> None:
-            pass
-
-    monkeypatch.setattr(vllm_module, "VllmEnvironment", _FakeVllmEnvironment)
-    config = BrokeredVllmSystemConfig(
-        model="gpt2",
-        backend=GpuVllmBackend(),
-        worker_resources=ResourceConfig.with_gpu("H100", count=8),
-    )
-
-    with start_local_vllm_server(config) as model:
-        assert model.endpoint.model == "gpt2"
-
-    assert captured.kwargs["launcher"] == IsolatedCudaVllm(
+    assert backend.vllm_launcher() == IsolatedCudaVllm(
         source=VllmType.UPSTREAM,
         version="0.25.1",
     )
-    assert captured.kwargs["extra_args"] == ["--tensor-parallel-size", "8"]
+    assert backend.server_args(resources) == ["--tensor-parallel-size", "8"]
 
 
 @pytest.mark.parametrize(
