@@ -232,7 +232,10 @@ def test_resolve_serving_plan_picks_the_worker_extras_the_backend_needs(override
 
 def test_gpu_plan_defaults_to_upstream_launcher():
     plan = _plan(gpu="H100x8")
-    assert plan.backend.launcher == IsolatedCudaVllm(source=VllmType.UPSTREAM, version="0.25.1")
+    assert plan.backend.launcher == IsolatedCudaVllm(
+        source=VllmType.UPSTREAM,
+        version=DEFAULT_CUDA_VLLM_VERSION,
+    )
 
 
 def test_gpu_plan_marin_fork_selects_fork_launcher():
