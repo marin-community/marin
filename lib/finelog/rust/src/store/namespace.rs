@@ -1172,7 +1172,11 @@ impl Namespace {
             if force_compact_l0 {
                 ns.force_compact_l0()?;
             }
-            while !ns.stopped.load(Ordering::SeqCst) && ns.compaction_step()? {}
+            while !ns.stopped.load(Ordering::SeqCst) {
+                if !ns.compaction_step()? {
+                    break;
+                }
+            }
             Ok(())
         })
         .await
@@ -1412,9 +1416,7 @@ fn adopt_local_segments(
     // `REMOTE` / `BOTH` durable archive.
     let max_catalog_seq = catalog_rows
         .iter()
-        .filter(|r| {
-            r.location != SegmentLocation::Local || local_files.contains_key(&r.path)
-        })
+        .filter(|r| r.location != SegmentLocation::Local || local_files.contains_key(&r.path))
         .map(|r| r.max_seq)
         .max();
     for row in &catalog_rows {
@@ -1834,7 +1836,9 @@ mod tests {
     fn write_seg(dir: &Path, level: i32, first_seq: i64, n: i64) -> PathBuf {
         let arrow = schema_to_arrow(&worker_schema());
         let batch = stamp_seq_and_build(&aligned(n), first_seq, &arrow);
-        write_segment_to_dir(dir, level, first_seq, &batch).unwrap().0
+        write_segment_to_dir(dir, level, first_seq, &batch)
+            .unwrap()
+            .0
     }
 
     /// A `LOCAL` catalog `SegmentRow` for `path`. Key bounds are re-read from the
@@ -1910,7 +1914,9 @@ mod tests {
 
         // A stale LOCAL row [100..200] whose parquet was never written to disk.
         let gone = ns_dir.join("seg_L0_00000000000000000100.parquet");
-        catalog.upsert_segment(&seg_row(&gone, 0, 100, 200)).unwrap();
+        catalog
+            .upsert_segment(&seg_row(&gone, 0, 100, 200))
+            .unwrap();
 
         // A real on-disk orphan [1..2], lower seq than the stale row, no catalog
         // row. It must be recovered, not skipped as covered.
