@@ -1041,3 +1041,38 @@ author: mcwitt
 - Next action: harvest mxfp8 arm delta; rerun dump arm with
   JAX_ENABLE_COMPILATION_CACHE=false for the instruction census; decision
   point after census: sharding-annotation fix vs scan-over-blocks port.
+
+### 2026-07-17 22:35 - MXFP8-006 census lands: arena = MoE dispatch/combine across unrolled layers; scan port in validation
+- probe2nk (cache-off dump, bf16 B128 ring-EP8 d5120/L48) instruction-keyed
+  census of the 792.47 GiB arena (footprint by shape, defining ops):
+  - bf16[524288,5120] x336 (1680 GiB): input_scatter_fusion x96 (2/layer,
+    fwd+bwd MoE combine scatter at FULL GLOBAL token width) +
+    loop_broadcast_fusion.remat variants x86 — full-batch materialization.
+  - bf16[262144,5120] x336 (840 GiB): pallas_call x240 (5/layer dispatch/
+    sort kernels at topk-expanded width 65536 local tokens x top4) +
+    concatenates.
+  - Attention appears only at per-GPU shapes (bf16[16,4096,40,128] x888,
+    555 GiB class) — NOT the driver. Neither is MuonH (0 optimizer shapes
+    in the top classes).
+  - Verdict: the arena is the ring-MoE dispatch/combine + rematerialized
+    broadcast buffers of ALL 48 unrolled layers kept concurrently live by
+    the scheduler. Explains B-linearity (340 GiB at B64) and EP1's
+    581 GiB (dispatch buffers exist under pure DP too).
+- Scan port (e8e105d4e + train-state fix): use_array_stacked_blocks
+  behind a config flag; Bool[L] mask schedule + precomputed FA4 bounds via
+  jnp.where; traced disable_rope; 4D expert stacks; optimizer masks route
+  stacked norm gains->adam, 4D->muonh; grugmuon adopted from
+  mcwitt/moe-standalone-ep tip (distributed 4D NS). CPU checks green
+  (unrolled regression, stacked init/initial_state).
+- probe2ns/2nt failures during validation: (a) train.py iterated
+  params.blocks (fixed, stacked-aware qb-betas); (b) autotuning OOM'd
+  allocating 75.00 GiB = bf16[48,64,5120,2560] — _newtonschulz_4d_distributed's
+  (L,E) merge reshape drops expert sharding onto P(None,"data","model"),
+  which REPLICATES on the 2-node probe mesh (data=1). Probe-mesh
+  degeneracy, not a production blocker (data=8 keeps it 8-way sharded at
+  ~9.4 GiB/chip). probe2nu re-running with SCALE_MUON_NO_NS=1 (grugmuon's
+  own memory-probe knob) to measure the scan model's fwd/bwd arena.
+- Jobs: /mwittmann/mxfp8-006-probe2n{k,s,t,u}.
+- Next action: probe2nu memory analysis -> if arena collapses under the
+  138 GiB pool, relaunch the ladder in scan mode (32 GPUs, data=4 keeps
+  4D NS sharded); then loss-parity smoke unrolled-vs-scan at d2560.
