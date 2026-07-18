@@ -67,6 +67,7 @@ from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
 from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct_values, value_at_step
 from levanter.tracker import TrackerConfig, capture_time
+from levanter.tracker.telltale import TelltaleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
@@ -287,10 +288,9 @@ class Trainer:
             self.tracker = levanter.tracker.current_tracker()
         except RuntimeError:
             # No global tracker set, create one
-            if isinstance(config.tracker, Sequence):
-                self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
-            else:
-                self.tracker = config.tracker.init(self.run_id)
+            self.tracker = levanter.tracker.CompositeTracker(
+                [c.init(self.run_id) for c in _compose_with_telltale(config.tracker)]
+            )
 
         if add_default_hooks:
             self._add_default_hooks()
@@ -783,12 +783,22 @@ class Trainer:
         return fn(*args, **kwargs)
 
 
-def _initialize_global_tracker(config, run_id):
-    if isinstance(config, Sequence):
-        tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in config])
-    else:
-        tracker = config.init(run_id)
+def _compose_with_telltale(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:
+    """The configured tracker(s) plus the always-on telltale mirror.
 
+    The telltale tracker publishes training metrics onto the process's telltale
+    page, which the iris runtime forwards to finelog so a run's series outlive
+    the job and drive dashboards. It is process-local and cheap, so it rides on
+    every run unless the config already names one.
+    """
+    configs = list(config) if isinstance(config, Sequence) else [config]
+    if not any(isinstance(c, TelltaleConfig) for c in configs):
+        configs = [*configs, TelltaleConfig()]
+    return configs
+
+
+def _initialize_global_tracker(config, run_id):
+    tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in _compose_with_telltale(config)])
     levanter.tracker.set_global_tracker(tracker)
 
 
