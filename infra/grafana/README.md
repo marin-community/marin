@@ -110,7 +110,7 @@ and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` c
 and shares `infra/iac`'s state backend.
 
 ```bash
-uv sync --all-packages                                    # once: iac + Pulumi providers on the venv
+uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])
 gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
 
 cd infra/grafana
