@@ -1255,3 +1255,24 @@ author: mcwitt
   comparison: all three arms share trainer/data/optimizer machinery, so
   C-vs-B isolates mxfp8 kernels and B-vs-A isolates ring-EP8+NO_NS vs
   EP1+sonic_cute+NS.
+
+### 2026-07-18 11:50 - MXFP8-007c: CUBIN fault is EP>=8-correlated (per #7331); fresh-cache falsified; treatment descales to EP4
+- Fray-path bf16 arm attempts: tf-bf16 (shared S3 compile cache) and
+  tg-bf16 (FRESH cache namespace compilation-cache-mx7282-fresh1) both
+  died on the same "Failed to load in-memory CUBIN" at jit_train_step —
+  launch path AND cache-poisoning both falsified as causes. tg-bf16-r2
+  wedged (log stale 1000s+, autokilled by the driver).
+- The #7331 logbook already characterizes this: **the EP>=8 CUBIN-load
+  failure (B200MFU-035) is intermittent with no known workaround, and
+  EP16/32/64 arms all fail (B200MFU-033)**. The baseline is EP1 ->
+  immune; every failed treatment arm today is EP8 ring -> exposed. That
+  single fact explains the baseline/treatment asymmetry that drove the
+  (falsified) scheduling-class and cache theories.
+- Score for EP8 at 16 nodes today: 0/7 (4 CUBIN-class, 3 clique wedges —
+  plausibly the same fault surfacing on the root rank).
+- Decision: treatment arms descale to **EP4** (E_local=32), both arms,
+  driver v6 (mx7201-th-*, 3 attempts per arm). EP4 was #7331's most
+  reliable ring config (ring_cute EP4 20.83% was their best bf16 EP
+  result). The bf16-vs-mxfp8 delta stays internally consistent; EP8 is
+  now a documented deployment risk owned by B200MFU-035/#7331 rather
+  than a blocker for this comparison.
