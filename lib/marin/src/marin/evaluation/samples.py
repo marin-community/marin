@@ -164,7 +164,10 @@ def _is_multiple_choice(arguments, responses) -> bool:
 
 
 def _choice_labels(doc, count: int) -> list[str]:
-    labels = doc.get("choices", {}).get("label") if isinstance(doc, dict) else None
+    # arc-style docs carry {"choices": {"label": [...], "text": [...]}}; other tasks (mmlu,
+    # hellaswag) store choices as a plain list, which gets the A/B/C default.
+    choices = doc.get("choices") if isinstance(doc, dict) else None
+    labels = choices.get("label") if isinstance(choices, dict) else None
     if isinstance(labels, list) and len(labels) == count and all(isinstance(label, str) for label in labels):
         return labels
     return [chr(ord("A") + i) for i in range(count)]
