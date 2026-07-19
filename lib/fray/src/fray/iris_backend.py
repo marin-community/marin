@@ -155,9 +155,9 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
 def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
     """Prepend the multigpu supervisor so each task runs ``processes_per_task`` GPU processes.
 
-    iris is a dumb scheduler and no longer injects this; fray composes it into the command
-    (``python -m iris.runtime.multigpu --nproc N --devices-per-proc D -- <cmd>``) so the
-    fray ``processes_per_task`` API keeps working. Requires a GPU device divisible by N.
+    iris runs the entrypoint verbatim, so fray composes the supervisor into the command
+    (``python -m iris.runtime.multigpu --nproc N --devices-per-proc D -- <cmd>``). Requires a
+    GPU device whose count is divisible by ``processes_per_task``.
     """
     device = resources.device
     gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0

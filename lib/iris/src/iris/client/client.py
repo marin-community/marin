@@ -673,8 +673,8 @@ class IrisClient:
         replicas = adjust_tpu_replicas(resources.device, replicas)
 
         # iris is a dumb scheduler: it runs the entrypoint verbatim. Multi-process GPU
-        # execution and profiling are composed into the command by the caller (e.g.
-        # `python -m iris.runtime.multigpu --nproc N -- <cmd>`), not injected here.
+        # execution and profiling are composed into the command by the caller
+        # (e.g. `python -m iris.runtime.multigpu --nproc N -- <cmd>`).
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
