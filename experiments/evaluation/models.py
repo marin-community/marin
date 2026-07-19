@@ -31,6 +31,10 @@ SNOWBALL_VLLM_ARGS = (
     "--model-loader-extra-config",
     '{"distributed":true}',
 )
+# A plain concatenation template: the marin tokenizer defines none (base-flavored model), and
+# messages-based evals (math500) need the chat endpoint to accept requests -- for a base model the
+# faithful rendering of a message list is its raw text.
+SNOWBALL_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\n\n{%- endfor -%}"
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,9 @@ class EvalModelConfig:
     """Host-memory request for the serve child, overriding the ``ServeSpec`` default. Large
     object-store exports need it: weight streaming stages shards through host buffers, so the
     pod's memory limit must cover the full weight volume or the kernel OOM-kills the server."""
+    chat_template: str | None = None
+    """A jinja chat template served in place of the tokenizer's own (``ServeSpec.chat_template_content``),
+    for models whose tokenizer ships none."""
 
 
 MODELS: dict[str, EvalModelConfig] = {
@@ -67,13 +74,13 @@ MODELS: dict[str, EvalModelConfig] = {
         name="qwen3.5-9b",
         location="Qwen/Qwen3.5-9B",
         hbm_gb=24,
-        apply_chat_template=False,
+        apply_chat_template=True,
     ),
     "qwen3-8b": EvalModelConfig(
         name="qwen3-8b",
         location="Qwen/Qwen3-8B",
         hbm_gb=21,
-        apply_chat_template=False,
+        apply_chat_template=True,
     ),
     "llama3.1-8b-instruct": EvalModelConfig(
         name="llama3.1-8b-instruct",
@@ -91,13 +98,15 @@ MODELS: dict[str, EvalModelConfig] = {
         name="qwen3-1.7b",
         location="Qwen/Qwen3-1.7B",
         hbm_gb=5,
-        apply_chat_template=False,
+        apply_chat_template=True,
     ),
     "snowball": EvalModelConfig(
         name="snowball",
         location=SNOWBALL_EXPORT,
         hbm_gb=175,
-        apply_chat_template=False,
+        # The concat chat template renders messages as raw text, so the chat route degrades to a
+        # plain completion for this base-flavored model (messages-based evals need the route).
+        apply_chat_template=True,
         gpu_only=True,
         vllm_extra_args=SNOWBALL_VLLM_ARGS,
         tensor_parallel_size=1,
@@ -107,5 +116,6 @@ MODELS: dict[str, EvalModelConfig] = {
         # ~134GB of bf16 shards stream from object storage through host buffers on load; the
         # serve pod owns the whole 8xH100 node, so a generous limit costs nothing.
         serve_memory="512g",
+        chat_template=SNOWBALL_CHAT_TEMPLATE,
     ),
 }

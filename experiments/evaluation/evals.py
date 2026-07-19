@@ -63,6 +63,15 @@ EVALS: dict[str, EvalSuiteConfig] = {
         tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
         max_gen_toks=512,
     ),
+    # Evalchemy's chat-native MATH500 benchmark (boxed-answer extraction over the HuggingFaceH4
+    # MATH-500 split). A messages-based task: it runs through the chat route, so every model needs
+    # a server-side chat template (snowball serves one via its vLLM args).
+    "math500": EvalSuiteConfig(
+        name="math500",
+        mechanism=EvalMechanism.EVALCHEMY,
+        tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", generation=True),),
+        max_gen_toks=8192,
+    ),
     "humaneval": EvalSuiteConfig(
         name="humaneval",
         mechanism=EvalMechanism.EVALCHEMY,
@@ -110,6 +119,7 @@ CORE_EVALS: tuple[str, ...] = (
     "piqa",
     "openbookqa",
     "humaneval",
+    "math500",
 )
 
 # Named suite groups selectable by name on the CLI (``--evals smoke``).

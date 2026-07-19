@@ -18,6 +18,8 @@ from __future__ import annotations
 # length-normalized score is the conventional headline.
 PRIMARY_METRIC_PRIORITY = (
     "exact_match",
+    # Evalchemy's chat-native benchmarks (MATH500) report ``accuracy``.
+    "accuracy",
     "acc_norm",
     "acc",
     "pass@1",

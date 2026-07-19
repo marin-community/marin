@@ -249,6 +249,7 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             tensor_parallel_size=model.tensor_parallel_size,
             region=accel.region,
             vllm_extra_args=model.vllm_extra_args,
+            chat_template_content=model.chat_template,
         )
     else:
         spec = ServeSpec(
@@ -260,6 +261,7 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
             tensor_parallel_size=model.tensor_parallel_size,
             region=accel.region,
             vllm_extra_args=model.vllm_extra_args,
+            chat_template_content=model.chat_template,
         )
     if model.serve_memory is not None:
         spec = replace(spec, serve_memory=model.serve_memory)

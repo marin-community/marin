@@ -96,6 +96,10 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         task["name"],
         "--gen_kwargs",
         f"max_gen_toks={config['max_gen_toks']}",
+        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
+        # gen_kwargs; lm-eval-native tasks ignore it.
+        "--max_tokens",
+        str(config["max_gen_toks"]),
         "--output_path",
         output_path,
         # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;
