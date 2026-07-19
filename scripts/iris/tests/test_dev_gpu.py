@@ -29,7 +29,7 @@ def test_state_round_trip():
         job_id="/matt/dev-gpu-matt",
         gpu_count=8,
         gpu_variant="H100",
-        priority=Priority.PRODUCTION,
+        priority=Priority.BATCH,
         target=CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg"),
         pod=PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task"),
     )
