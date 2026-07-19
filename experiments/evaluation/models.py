@@ -14,27 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from experiments.evals.evalchemy.serve_and_eval import ServeBackend
+from marin.inference.serving_backend import CONCAT_CHAT_TEMPLATE
 
-# Snowball is the June 67B-A2B Grug MoE export; serving it needs the marin vLLM fork's data-parallel +
-# expert-parallel path (the GPU serve path always uses the fork). The tokenizer is an HF id because the
-# eval client cannot load a tokenizer from the s3:// export.
-SNOWBALL_EXPORT = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/"
-SNOWBALL_TOKENIZER = "marin-community/marin-tokenizer"
-SNOWBALL_CLUSTER = "cw-us-east-02a"
-# Data-parallel + expert-parallel sharding for the 256-expert MoE, with tensor_parallel_size=1. The
-# per-head TP heuristic cannot infer this, so it is passed verbatim (see ServeSpec.vllm_extra_args).
-SNOWBALL_VLLM_ARGS = (
-    "--data-parallel-size",
-    "8",
-    "--enable-expert-parallel",
-    "--model-loader-extra-config",
-    '{"distributed":true}',
-)
-# A plain concatenation template: the marin tokenizer defines none (base-flavored model), and
-# messages-based evals (math500) need the chat endpoint to accept requests -- for a base model the
-# faithful rendering of a message list is its raw text.
-SNOWBALL_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\n\n{%- endfor -%}"
+from experiments.evals.evalchemy.serve_and_eval import ServeBackend
 
 
 @dataclass(frozen=True)
@@ -69,6 +51,36 @@ class EvalModelConfig:
     for models whose tokenizer ships none."""
 
 
+def _snowball(name: str, location: str, chat_template: str | None = None) -> EvalModelConfig:
+    """A Grug 67B-A2B export served on a CoreWeave 8xH100 node via the marin vLLM fork.
+
+    Data-parallel + expert-parallel sharding for the 256-expert MoE with ``tensor_parallel_size=1``
+    (the per-head TP heuristic cannot infer this). The tokenizer is an HF id because the eval client
+    cannot load a tokenizer from the s3:// export; ~134GB of bf16 shards stream from object storage
+    through host buffers on load, so the serve child gets a generous memory limit (it owns the node).
+    """
+    return EvalModelConfig(
+        name=name,
+        location=location,
+        hbm_gb=175,
+        apply_chat_template=True,
+        gpu_only=True,
+        vllm_extra_args=(
+            "--data-parallel-size",
+            "8",
+            "--enable-expert-parallel",
+            "--model-loader-extra-config",
+            '{"distributed":true}',
+        ),
+        tensor_parallel_size=1,
+        tokenizer="marin-community/marin-tokenizer",
+        fixed_gpu=("H100", 8),
+        target_cluster="cw-us-east-02a",
+        serve_memory="512g",
+        chat_template=chat_template,
+    )
+
+
 MODELS: dict[str, EvalModelConfig] = {
     "qwen3.5-9b": EvalModelConfig(
         name="qwen3.5-9b",
@@ -100,22 +112,19 @@ MODELS: dict[str, EvalModelConfig] = {
         hbm_gb=5,
         apply_chat_template=True,
     ),
-    "snowball": EvalModelConfig(
-        name="snowball",
-        location=SNOWBALL_EXPORT,
-        hbm_gb=175,
-        # The concat chat template renders messages as raw text, so the chat route degrades to a
-        # plain completion for this base-flavored model (messages-based evals need the route).
-        apply_chat_template=True,
-        gpu_only=True,
-        vllm_extra_args=SNOWBALL_VLLM_ARGS,
-        tensor_parallel_size=1,
-        tokenizer=SNOWBALL_TOKENIZER,
-        fixed_gpu=("H100", 8),
-        target_cluster=SNOWBALL_CLUSTER,
-        # ~134GB of bf16 shards stream from object storage through host buffers on load; the
-        # serve pod owns the whole 8xH100 node, so a generous limit costs nothing.
-        serve_memory="512g",
-        chat_template=SNOWBALL_CHAT_TEMPLATE,
+    # The June pretrain cooldown export (the input to the SFT stages). Its tokenizer ships no chat
+    # template and the delphi chat protocol is established by the SFT
+    # (experiments/june_tpu_67b_a2b/moe/sft_67b_a2b_2stage.py), so messages-based evals serve the
+    # concat template: a message list rendered as the raw text a base model expects.
+    "snowball": _snowball(
+        "snowball",
+        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/781bc3291c81ce28/",
+        chat_template=CONCAT_CHAT_TEMPLATE,
+    ),
+    # The stage-2 (thinking) SFT of the same checkpoint. Its export ships a chat_template.jinja that
+    # vLLM loads from the model directory, so no template override.
+    "snowball-sft": _snowball(
+        "snowball-sft",
+        "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/",
     ),
 }
