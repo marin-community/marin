@@ -842,3 +842,16 @@ out-of-regime. NEXT: refit the harm term on E2 (+ transect/a2 shape), validate k
   NOT 10B.
 - budget10b readout (f26) also landed (tier C; provisional zmacro pending HF re-run).
 - NEXT: transect (100B) readout = production-scale harm; refit H(e,budget,size); validate kernel+harm.
+
+## 2026-07-19 CHARACTERIZED the scale-aware harm term (harm_term_fit.json)
+From twobucket axes (humaneval, code w=0.2 fixed content):
+**H(e,B,d) = 1.459e-3 · softplus(e−2)² · (B/10e9)^(−0.73) · (d/512)^1.68**
+- epoch shape (10B,d512): rise ~0 to e≈8, then +0.40(e16)/+1.29(e32); softplus² fit RMSE 0.05.
+- budget exponent −0.73: e4→e16 harm 0.688(2.5B)/0.384(10B)/0.092(40B).
+- size exponent +1.68 (hidden-dim): e2→e32 harm 0.408(d256)/1.304(d512), 3.2×.
+- **100B prediction (falsifiable, transect validates)**: harm ~0.19× the 10B harm; web e4→e16
+  should be ~0.028 bpb (E2 10B was 0.148). code e16 harm ~0.054 bpb at 100B vs 0.286 at 10B.
+**COMPLETE FORM (the campaign answer)**: surrogate = KERNEL(content h=V·w); epoching = bolt-on
+scale-aware harm term H(e,B,d) above. Has the swoosh property (flat ≤~8 ep, rise after) AND
+scale-dependence (a pure H(e) would err ~5× across budgets — the key correction). Pending:
+transect 100B validates the budget extrapolation; then validate combined kernel+H on held-out.
