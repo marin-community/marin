@@ -35,6 +35,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         resolves the recipe from the GPU arch on the train task
                         (sm100+ mxfp8, sm90 per_tensor). Wire fp8 follows the
                         recipe (per_tensor on, mxfp8 bf16 per MXFP8-000b).
+    SCALE_FP8_PRODUCER  auto (default) | cute | xla — mxfp8 dual-orientation
+                        activation quantizer. xla skips the per-node CuTe
+                        compile-probe subprocess (diagnostic for silent
+                        multi-node startup wedges).
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
@@ -123,11 +127,14 @@ def _build_fp8_config() -> GrugFp8Config | None:
         return None
     if recipe not in ("auto", "per_tensor", "mxfp8"):
         raise ValueError(f"SCALE_FP8 must be '', 'auto', 'per_tensor', or 'mxfp8'; got {recipe!r}")
+    producer = os.environ.get("SCALE_FP8_PRODUCER", "auto")
+    if producer not in ("auto", "cute", "xla"):
+        raise ValueError(f"SCALE_FP8_PRODUCER must be 'auto', 'cute', or 'xla'; got {producer!r}")
     return GrugFp8Config(
         dense=True,
         grouped=True,
         recipe=cast(Literal["auto", "per_tensor", "mxfp8"], recipe),
-        mxfp8_producer="auto",
+        mxfp8_producer=cast(Literal["auto", "cute", "xla"], producer),
     )
 
 
