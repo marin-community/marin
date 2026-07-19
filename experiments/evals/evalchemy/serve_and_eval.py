@@ -107,18 +107,16 @@ class ServeSpec:
     serve_memory: str = "64g"
     serve_disk: str = "100g"
     vllm_extra_args: tuple[str, ...] = ()
-    """Raw flags forwarded verbatim to ``vllm serve`` on the vLLM serve path (``VllmBackend.extra_args``).
-    Needed for models the portable defaults cannot serve; empty for the common single-model case. Recipes:
+    """Extra flags forwarded to ``vllm serve`` (``VllmBackend.extra_args``); empty for the common case.
+    Use it for models the portable defaults miss:
 
-    - 256-expert Grug MoE export: shard experts with data + expert parallelism (``--data-parallel-size N
-      --enable-expert-parallel --model-loader-extra-config '{"distributed":true}'``, with
-      ``tensor_parallel_size=1``), which the per-head TP heuristic cannot infer.
-    - Qwen gated-delta-net models (the ``qwen_gdn_linear_attn`` arch: ``Qwen/Qwen3.5-35B-A3B``,
-      ``Qwen/Qwen3-Next-80B-A3B``) on the GPU path: pass ``--gdn-prefill-backend triton``. Their default
-      FlashInfer GDN prefill kernel is JIT-compiled at warmup and needs ``nvcc``, which the
-      ``IsolatedCudaVllm`` serve env lacks (CoreWeave images ship CUDA libraries but no toolkit), so the
-      serve child otherwise dies at warmup with ``Could not find nvcc``. The triton GDN backend needs no
-      compiler."""
+    - 256-expert Grug MoE export: ``--data-parallel-size N --enable-expert-parallel
+      --model-loader-extra-config '{"distributed":true}'`` with ``tensor_parallel_size=1``; the per-head
+      TP heuristic cannot infer this.
+    - Qwen gated-delta-net models (``qwen_gdn_linear_attn``: ``Qwen/Qwen3.5-35B-A3B``,
+      ``Qwen/Qwen3-Next-80B-A3B``): ``--gdn-prefill-backend triton``. The GPU serve env runs without
+      ``nvcc``, so the default FlashInfer GDN prefill kernel — JIT-compiled at warmup — fails; triton
+      needs no compiler."""
     chat_template_content: str | None = None
     """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.

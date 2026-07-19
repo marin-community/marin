@@ -134,16 +134,15 @@ pin a run.
 
 ## Serving on GPU
 
-`ServeSpec` serves on TPU (`tpu_type`) or GPU (`gpu_type`, `gpu_count`). The GPU path provisions the
-Marin CUDA vLLM fork in an isolated `uvx` environment (`IsolatedCudaVllm`). CoreWeave runtime images
-ship CUDA libraries but no CUDA toolkit (`nvcc`), so an architecture that JIT-compiles a CUDA kernel at
-warmup fails on this env unless it is routed to a compiler-free backend.
+`ServeSpec` serves on TPU (`tpu_type`) or GPU (`gpu_type`, `gpu_count`). The GPU path runs the Marin
+CUDA vLLM fork in an isolated `uvx` environment (`IsolatedCudaVllm`), which runs without `nvcc` — the
+CoreWeave images ship CUDA libraries but no compiler. Set `vllm_extra_args` for models that would
+otherwise JIT-compile a kernel at warmup.
 
-Qwen gated-delta-net models — the `qwen_gdn_linear_attn` arch, `Qwen/Qwen3.5-35B-A3B` and
-`Qwen/Qwen3-Next-80B-A3B` — hit this. Their default FlashInfer GDN prefill kernel is JIT-compiled, so
-the serve child dies at warmup with a `Could not find nvcc` error and the endpoint never registers. Pass
-`--gdn-prefill-backend triton` through `vllm_extra_args` to use the triton GDN backend, which needs no
-compiler:
+Qwen gated-delta-net models (`qwen_gdn_linear_attn`: `Qwen/Qwen3.5-35B-A3B`, `Qwen/Qwen3-Next-80B-A3B`)
+are the current case. Their default FlashInfer GDN prefill kernel is JIT-compiled, so without a compiler
+the serve child dies at warmup (`Could not find nvcc`) and never registers its endpoint. Pass
+`--gdn-prefill-backend triton` to use the compiler-free triton backend:
 
 ```python
 EvalGroup(
@@ -158,8 +157,8 @@ EvalGroup(
 )
 ```
 
-Non-gated-delta-net models on the same GPU path (DeepSeek-V2-Lite, Qwen3-30B-A3B, and so on) serve with
-no extra flags. See `ServeSpec.vllm_extra_args` in `serve_and_eval.py` for the full list of recipes.
+Other GPU-served models (DeepSeek-V2-Lite, Qwen3-30B-A3B, …) need no extra flags. See
+`ServeSpec.vllm_extra_args` in `serve_and_eval.py` for the full list of recipes.
 
 ## Parameter reference
 
