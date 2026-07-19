@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-csv", type=Path, default=INPUT_CSV)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    parser.add_argument("--title", default="Smooth benchmark x deleted domain p-value matrix")
     return parser.parse_args()
 
 
@@ -206,7 +207,7 @@ def hover_text(data: MatrixData) -> pd.DataFrame:
     return hover.reindex(index=data.benchmark_order, columns=data.domain_order)
 
 
-def write_interactive_heatmap(data: MatrixData, output_dir: Path) -> Path:
+def write_interactive_heatmap(data: MatrixData, output_dir: Path, *, title: str) -> Path:
     z = pivot_values(data, "neg_log10_p_harm")
     text = hover_text(data)
     y_labels = [data.display_labels[b] for b in z.index]
@@ -284,7 +285,7 @@ def write_interactive_heatmap(data: MatrixData, output_dir: Path) -> Path:
     )
 
     fig.update_layout(
-        title="Smooth benchmark × deleted domain p-value matrix",
+        title=title,
         template="plotly_white",
         width=1500,
         height=max(1800, 18 * len(y_labels) + 340),
@@ -313,7 +314,7 @@ def write_interactive_heatmap(data: MatrixData, output_dir: Path) -> Path:
     return out
 
 
-def write_top_png(data: MatrixData, output_dir: Path, top_n: int = 70) -> Path:
+def write_top_png(data: MatrixData, output_dir: Path, *, title: str, top_n: int = 70) -> Path:
     top_benchmarks = (
         data.frame.groupby("benchmark_key")["neg_log10_p_harm"]
         .max()
@@ -331,11 +332,11 @@ def write_top_png(data: MatrixData, output_dir: Path, top_n: int = 70) -> Path:
     raw = pivot_values(subset, "p_harm")
     bonf = pivot_values(subset, "bonferroni_p_harm_by_benchmark")
 
-    fig, ax = plt.subplots(figsize=(15.5, max(10.0, 0.22 * len(top_benchmarks) + 3.0)), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(15.5, max(10.0, 0.22 * len(top_benchmarks) + 3.0)))
     image = ax.imshow(
         z.to_numpy(), aspect="auto", cmap="RdYlGn_r", vmin=0.0, vmax=max(8.0, np.nanquantile(z.to_numpy(), 0.995))
     )
-    ax.set_title("Top smooth benchmark × deleted domain p-values", fontsize=15, pad=14)
+    ax.set_title(title, fontsize=15, pad=14)
     ax.set_xlabel("Deleted domain")
     ax.set_ylabel("Smooth benchmark")
     ax.set_xticks(np.arange(len(z.columns)), labels=z.columns, rotation=60, ha="left", fontsize=7)
@@ -382,6 +383,7 @@ def write_top_png(data: MatrixData, output_dir: Path, top_n: int = 70) -> Path:
         "P-values use the pooled proportional reference, not a full heteroskedastic noise model.",
         fontsize=8,
     )
+    fig.tight_layout(rect=(0.0, 0.04, 1.0, 1.0))
     out = output_dir / "smooth_benchmark_deleted_domain_pvalue_matrix_top70.png"
     fig.savefig(out, dpi=220)
     plt.close(fig)
@@ -417,8 +419,8 @@ def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     data = prepare_matrix(args.input_csv)
-    html = write_interactive_heatmap(data, args.output_dir)
-    png = write_top_png(data, args.output_dir)
+    html = write_interactive_heatmap(data, args.output_dir, title=args.title)
+    png = write_top_png(data, args.output_dir, title=args.title)
     enriched_path, domain_summary_path = write_summaries(data, args.output_dir)
 
     print(f"Wrote {html}")
