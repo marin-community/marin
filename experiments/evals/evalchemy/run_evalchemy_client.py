@@ -63,9 +63,10 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         "tokenizer_backend=huggingface",
         "tokenized_requests=False",
         f"num_concurrent={config['num_concurrent']}",
-        # The TPU vLLM prompt-logprobs path intermittently 500s; retries recompute and normally
-        # succeed, so give each request more headroom than lm-eval's default 3.
-        "max_retries=5",
+        # The TPU vLLM prompt-logprobs path 500s in whole-batch bursts (every in-flight request at
+        # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
+        # fails the whole task, so give each request enough headroom to ride out a burst.
+        "max_retries=8",
     ]
     if max_length is not None:
         args.append(f"max_length={max_length}")
