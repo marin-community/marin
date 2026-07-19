@@ -746,3 +746,26 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
   f24 interactions): `grug/twobucket_monitor.md`. Launcher:
   `experiments/grug/moe/launch_mve_twobucket_h100.py` (dry-run: swarm parity + d256 parity +
   25-config asserts + warmup-peak checks at N ∈ {1194,4776,19104,47759}).
+
+## 2026-07-19 seed-panel readout — CLEAN (after eval-metric bug caught + fixed)
+
+- BUG (coordinator caught via skeptical review; the -4.59 mean was the tell): the first readout
+  (σ 0.1294/SNR 3.8/ceiling 0.964) was contaminated — 9 of 20 zmacro tasks emitted acc/ppl not
+  bpb (base lm-eval YAMLs lack bpb in metric_list; lambada lost its custom process_results). The
+  stuck tasks faked low variance + a -4.59 mean.
+- FIX (`_add_bpb_metric` injection + lambada builder in run_seedpanel_evals.py; verified emits
+  bpb under the cluster transformers-5.12 env). r6 jobs had already run the fixed code → collected
+  deterministic output instead of re-burning 10 H100 jobs. gpqa gated-skip hardened.
+- CLEAN readout (18/20 tasks; gpqa gated-excluded, lb_bbh >3σ scale-mismatch excluded):
+  **σ(zmacro) = 0.2127 z** (χ² CI [0.146,0.388]), signal 0.5103 → **SNR 2.40**, reliability 0.826
+  → **implied max Spearman 0.909**, mean z -0.35 (real small H100 offset). Consistent with the
+  11-task preliminary (0.217/2.67/0.927).
+- **TIER-B RESOLUTION (matters for claims)**: σ=0.213 z ≈ 42% of signal spread. Single-seed
+  variant/holdout deltas below ~√2·σ ≈ 0.30 z are within seed noise. Ceiling 0.909 ≫ achieved
+  holdout 0.72 → NOT ceiling-capped (headroom exists). BUT the **+0.035 kernel-vs-weights-LGBM
+  holdout margin is DIRECTIONAL, not decisive** — firmly resolving it needs multi-seed holdout
+  targets or larger N. Report v3 claim-tier update required: the R2 "beats incumbent" claim
+  softens from "passed" to "directional" at grug.
+- Contaminated original preserved as seedpanel_readout_CONTAMINATED_original.*; clean readout +
+  f25 uploaded to GCS. Standing worker rules held (no controller-cred extraction; no shared-venv
+  mutation this time).

@@ -1,0 +1,359 @@
+{
+ "source": "gs://marin-us-central2/evaluation/grug_logprob/swarm_fisher_dsp_d512_000000/<task>-<hash>/.executor_info",
+ "eval_capacity_factor": 8.0,
+ "batch_size": 8,
+ "max_cont_len": 256,
+ "tasks": {
+  "agieval_aqua_rat_0shot": {
+   "name": "agieval_aqua_rat",
+   "num_fewshot": 0,
+   "task_alias": "agieval_aqua_rat_0shot",
+   "task_kwargs": null
+  },
+  "agieval_lsat_ar_0shot": {
+   "name": "agieval_lsat_ar",
+   "num_fewshot": 0,
+   "task_alias": "agieval_lsat_ar_0shot",
+   "task_kwargs": null
+  },
+  "agieval_lsat_ar_3shot": {
+   "name": "agieval_lsat_ar",
+   "num_fewshot": 3,
+   "task_alias": "agieval_lsat_ar_3shot",
+   "task_kwargs": null
+  },
+  "agieval_lsat_lr_0shot": {
+   "name": "agieval_lsat_lr",
+   "num_fewshot": 0,
+   "task_alias": "agieval_lsat_lr_0shot",
+   "task_kwargs": null
+  },
+  "agieval_lsat_rc_0shot": {
+   "name": "agieval_lsat_rc",
+   "num_fewshot": 0,
+   "task_alias": "agieval_lsat_rc_0shot",
+   "task_kwargs": null
+  },
+  "agieval_sat_en_0shot": {
+   "name": "agieval_sat_en",
+   "num_fewshot": 0,
+   "task_alias": "agieval_sat_en_0shot",
+   "task_kwargs": null
+  },
+  "agieval_sat_math_0shot": {
+   "name": "agieval_sat_math",
+   "num_fewshot": 0,
+   "task_alias": "agieval_sat_math_0shot",
+   "task_kwargs": null
+  },
+  "arc_challenge_0shot": {
+   "name": "arc_challenge",
+   "num_fewshot": 0,
+   "task_alias": "arc_challenge_0shot",
+   "task_kwargs": null
+  },
+  "arc_easy_0shot": {
+   "name": "arc_easy",
+   "num_fewshot": 0,
+   "task_alias": "arc_easy_0shot",
+   "task_kwargs": null
+  },
+  "belebele_arabic": {
+   "name": "belebele_arb_Arab",
+   "num_fewshot": 0,
+   "task_alias": "belebele_arabic",
+   "task_kwargs": null
+  },
+  "belebele_bengali": {
+   "name": "belebele_ben_Beng",
+   "num_fewshot": 0,
+   "task_alias": "belebele_bengali",
+   "task_kwargs": null
+  },
+  "belebele_chinese_simplified": {
+   "name": "belebele_zho_Hans",
+   "num_fewshot": 0,
+   "task_alias": "belebele_chinese_simplified",
+   "task_kwargs": null
+  },
+  "belebele_french": {
+   "name": "belebele_fra_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_french",
+   "task_kwargs": null
+  },
+  "belebele_german": {
+   "name": "belebele_deu_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_german",
+   "task_kwargs": null
+  },
+  "belebele_hebrew": {
+   "name": "belebele_heb_Hebr",
+   "num_fewshot": 0,
+   "task_alias": "belebele_hebrew",
+   "task_kwargs": null
+  },
+  "belebele_hindi": {
+   "name": "belebele_hin_Deva",
+   "num_fewshot": 0,
+   "task_alias": "belebele_hindi",
+   "task_kwargs": null
+  },
+  "belebele_indonesian": {
+   "name": "belebele_ind_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_indonesian",
+   "task_kwargs": null
+  },
+  "belebele_japanese": {
+   "name": "belebele_jpn_Jpan",
+   "num_fewshot": 0,
+   "task_alias": "belebele_japanese",
+   "task_kwargs": null
+  },
+  "belebele_korean": {
+   "name": "belebele_kor_Hang",
+   "num_fewshot": 0,
+   "task_alias": "belebele_korean",
+   "task_kwargs": null
+  },
+  "belebele_portuguese": {
+   "name": "belebele_por_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_portuguese",
+   "task_kwargs": null
+  },
+  "belebele_russian": {
+   "name": "belebele_rus_Cyrl",
+   "num_fewshot": 0,
+   "task_alias": "belebele_russian",
+   "task_kwargs": null
+  },
+  "belebele_spanish": {
+   "name": "belebele_spa_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_spanish",
+   "task_kwargs": null
+  },
+  "belebele_swahili": {
+   "name": "belebele_swh_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_swahili",
+   "task_kwargs": null
+  },
+  "belebele_thai": {
+   "name": "belebele_tha_Thai",
+   "num_fewshot": 0,
+   "task_alias": "belebele_thai",
+   "task_kwargs": null
+  },
+  "belebele_turkish": {
+   "name": "belebele_tur_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_turkish",
+   "task_kwargs": null
+  },
+  "belebele_vietnamese": {
+   "name": "belebele_vie_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_vietnamese",
+   "task_kwargs": null
+  },
+  "belebele_yoruba": {
+   "name": "belebele_yor_Latn",
+   "num_fewshot": 0,
+   "task_alias": "belebele_yoruba",
+   "task_kwargs": null
+  },
+  "boolq_0shot": {
+   "name": "boolq",
+   "num_fewshot": 0,
+   "task_alias": "boolq_0shot",
+   "task_kwargs": null
+  },
+  "copa_0shot": {
+   "name": "copa",
+   "num_fewshot": 0,
+   "task_alias": "copa_0shot",
+   "task_kwargs": null
+  },
+  "csqa_0shot": {
+   "name": "commonsense_qa",
+   "num_fewshot": 0,
+   "task_alias": "csqa_0shot",
+   "task_kwargs": null
+  },
+  "gpqa_0shot": {
+   "name": "leaderboard_gpqa",
+   "num_fewshot": 0,
+   "task_alias": "gpqa_0shot",
+   "task_kwargs": null
+  },
+  "hellaswag_0shot": {
+   "name": "hellaswag",
+   "num_fewshot": 0,
+   "task_alias": "hellaswag_0shot",
+   "task_kwargs": null
+  },
+  "include_arabic": {
+   "name": "include_base_44_arabic",
+   "num_fewshot": 5,
+   "task_alias": "include_arabic",
+   "task_kwargs": null
+  },
+  "include_bengali": {
+   "name": "include_base_44_bengali",
+   "num_fewshot": 5,
+   "task_alias": "include_bengali",
+   "task_kwargs": null
+  },
+  "include_french": {
+   "name": "include_base_44_french",
+   "num_fewshot": 5,
+   "task_alias": "include_french",
+   "task_kwargs": null
+  },
+  "include_german": {
+   "name": "include_base_44_german",
+   "num_fewshot": 5,
+   "task_alias": "include_german",
+   "task_kwargs": null
+  },
+  "include_hebrew": {
+   "name": "include_base_44_hebrew",
+   "num_fewshot": 5,
+   "task_alias": "include_hebrew",
+   "task_kwargs": null
+  },
+  "include_hindi": {
+   "name": "include_base_44_hindi",
+   "num_fewshot": 5,
+   "task_alias": "include_hindi",
+   "task_kwargs": null
+  },
+  "include_japanese": {
+   "name": "include_base_44_japanese",
+   "num_fewshot": 5,
+   "task_alias": "include_japanese",
+   "task_kwargs": null
+  },
+  "include_korean": {
+   "name": "include_base_44_korean",
+   "num_fewshot": 5,
+   "task_alias": "include_korean",
+   "task_kwargs": null
+  },
+  "include_portuguese": {
+   "name": "include_base_44_portuguese",
+   "num_fewshot": 5,
+   "task_alias": "include_portuguese",
+   "task_kwargs": null
+  },
+  "include_russian": {
+   "name": "include_base_44_russian",
+   "num_fewshot": 5,
+   "task_alias": "include_russian",
+   "task_kwargs": null
+  },
+  "include_spanish": {
+   "name": "include_base_44_spanish",
+   "num_fewshot": 5,
+   "task_alias": "include_spanish",
+   "task_kwargs": null
+  },
+  "include_turkish": {
+   "name": "include_base_44_turkish",
+   "num_fewshot": 5,
+   "task_alias": "include_turkish",
+   "task_kwargs": null
+  },
+  "lambada_0shot": {
+   "builder": "lambada"
+  },
+  "lb_bbh_3shot": {
+   "name": "leaderboard_bbh",
+   "num_fewshot": 3,
+   "task_alias": "lb_bbh_3shot",
+   "task_kwargs": null
+  },
+  "logprob_gsm8k_5shot": {
+   "builder": "gsm8k"
+  },
+  "logprob_humaneval_10shot": {
+   "builder": "humaneval"
+  },
+  "medmcqa_0shot": {
+   "name": "medmcqa",
+   "num_fewshot": 0,
+   "task_alias": "medmcqa_0shot",
+   "task_kwargs": null
+  },
+  "medqa_0shot": {
+   "name": "medqa_4options",
+   "num_fewshot": 0,
+   "task_alias": "medqa_0shot",
+   "task_kwargs": null
+  },
+  "mmlu_pro_5shot": {
+   "name": "leaderboard_mmlu_pro",
+   "num_fewshot": 5,
+   "task_alias": "mmlu_pro_5shot",
+   "task_kwargs": null
+  },
+  "mmlu_sl_verb_0shot": {
+   "name": "mmlu_sl_verb",
+   "num_fewshot": 0,
+   "task_alias": "mmlu_sl_verb_0shot",
+   "task_kwargs": null
+  },
+  "mmlu_sl_verb_5shot": {
+   "name": "mmlu_sl_verb",
+   "num_fewshot": 5,
+   "task_alias": "mmlu_sl_verb_5shot",
+   "task_kwargs": null
+  },
+  "musr_0shot": {
+   "name": "leaderboard_musr",
+   "num_fewshot": 0,
+   "task_alias": "musr_0shot",
+   "task_kwargs": null
+  },
+  "openbookqa_0shot": {
+   "name": "openbookqa",
+   "num_fewshot": 0,
+   "task_alias": "openbookqa_0shot",
+   "task_kwargs": null
+  },
+  "piqa_0shot": {
+   "name": "piqa",
+   "num_fewshot": 0,
+   "task_alias": "piqa_0shot",
+   "task_kwargs": null
+  },
+  "sciq_0shot": {
+   "name": "sciq",
+   "num_fewshot": 0,
+   "task_alias": "sciq_0shot",
+   "task_kwargs": null
+  },
+  "truthfulqa_mc1_0shot": {
+   "name": "truthfulqa_mc1",
+   "num_fewshot": 0,
+   "task_alias": "truthfulqa_mc1_0shot",
+   "task_kwargs": null
+  },
+  "truthfulqa_mc2_0shot": {
+   "name": "truthfulqa_mc2",
+   "num_fewshot": 0,
+   "task_alias": "truthfulqa_mc2_0shot",
+   "task_kwargs": null
+  },
+  "winogrande_0shot": {
+   "name": "winogrande",
+   "num_fewshot": 0,
+   "task_alias": "winogrande_0shot",
+   "task_kwargs": null
+  }
+ }
+}
