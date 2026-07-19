@@ -11,7 +11,15 @@ const props = defineProps<{
 
 const PROMPT_KEY = 'marin-quick-serve:completion-prompt:v1'
 
-const prompt = ref(localStorage.getItem(PROMPT_KEY) ?? COMPLETION_EXAMPLES[0])
+function storedPrompt(): string {
+  try {
+    return localStorage.getItem(PROMPT_KEY) ?? COMPLETION_EXAMPLES[0]
+  } catch {
+    return COMPLETION_EXAMPLES[0]
+  }
+}
+
+const prompt = ref(storedPrompt())
 const output = ref('')
 const error = ref('')
 const busy = ref(false)

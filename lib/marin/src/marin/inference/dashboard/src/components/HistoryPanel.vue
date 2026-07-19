@@ -4,6 +4,8 @@ import type { Conversation } from '../lib/types'
 defineProps<{
   conversations: Conversation[]
   activeId: string
+  /** Below the md breakpoint the panel renders as an overlay drawer. */
+  mobileOpen: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +29,10 @@ function confirmClear() {
 </script>
 
 <template>
-  <aside class="hidden w-64 shrink-0 flex-col border-r border-surface-border bg-surface-raised md:flex">
+  <aside
+    class="w-64 shrink-0 flex-col border-r border-surface-border bg-surface-raised md:static md:z-auto md:flex md:shadow-none"
+    :class="mobileOpen ? 'absolute inset-y-0 left-0 z-20 flex shadow-xl' : 'hidden'"
+  >
     <div class="p-3">
       <button
         class="w-full rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-surface transition-colors hover:bg-accent-hover"
