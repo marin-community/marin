@@ -4747,6 +4747,7 @@ dependencies = [
 deploy = [
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
+    { name = "pulumi-command" },
     { name = "pulumi-docker-build" },
     { name = "pulumi-gcp" },
     { name = "pulumi-kubernetes" },
@@ -4758,6 +4759,7 @@ requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.140,<4" },
     { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
+    { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
     { name = "pulumi-kubernetes", marker = "extra == 'deploy'", specifier = ">=4.18,<5" },
@@ -7782,6 +7784,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a8/56/5d70fb964bfb7c9b3435d613e947e199d3e033873dedc709957e15a6fbe7/pulumi_cloudflare-6.15.0.tar.gz", hash = "sha256:0817c84de483e15fbf3538b3cd64bc8e13a276d45187f3d4126550c5c937e3f7", size = 1746001, upload-time = "2026-05-02T02:18:57.762Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/77/ad/3ba9fd4c56305347e2b647d78db293a1bf5cc33570dccbd02efd780ff5d0/pulumi_cloudflare-6.15.0-py3-none-any.whl", hash = "sha256:4b6bf8a8cd0e35c35479f1a6187bc15373b54965a1e3a986ec82208b457810c8", size = 2638416, upload-time = "2026-05-02T02:18:55.599Z" },
+]
+
+[[package]]
+name = "pulumi-command"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cf/56/b7f66c9d2e4536b24a5bbe4e743093c7cdd689343d86f020419f4897a88d/pulumi_command-1.2.1.tar.gz", hash = "sha256:cbc9281a6571701ac5db598dac0246a058875b62f28c40c7cc0fcdc36898918d", size = 33022, upload-time = "2026-03-04T00:23:25.84Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/ce/1e5f30f868ba0827ca3311b0b171b12606e30c05e864714764d8d943fef1/pulumi_command-1.2.1-py3-none-any.whl", hash = "sha256:c7e465338e4363f114ddff99ee249260c7770ef4451b970ab51f7e8a37c9b030", size = 36861, upload-time = "2026-03-04T00:23:24.571Z" },
 ]
 
 [[package]]

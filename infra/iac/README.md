@@ -16,6 +16,11 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 reserved federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice; its
 live adoption is operator-run — see `gaps.md`).
 
+Beyond cluster prerequisites, the `iac` package also carries the reusable *service*
+components other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run`
+(IAP-gated Cloud Run, used by `infra/grafana`) and `iac.iris` (always-on Iris service
+jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky`).
+
 ## What it reads
 
 Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):

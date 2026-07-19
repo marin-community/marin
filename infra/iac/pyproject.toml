@@ -24,6 +24,7 @@ deploy = [
     "pulumi-gcp>=9,<10",
     "pulumi-docker-build>=0.0.8,<1",
     "pulumi-cloudflare>=6,<7",
+    "pulumi-command>=1,<2",
 ]
 
 # marin-iris / marin-rigging resolve via the root workspace [tool.uv.sources]

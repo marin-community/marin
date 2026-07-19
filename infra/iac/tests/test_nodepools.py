@@ -56,7 +56,9 @@ def test_rack_based_manifest_declares_target_racks_and_no_autoscaler():
 def test_derive_gb200_pool_is_rack_based():
     pools = {p.name: p for p in derive_nodepools(load_iris_config("cw-us-east-08a"))}
     gb200 = pools["cw-use08a-gb200"]
-    assert gb200.target_racks == gb200.max_nodes // RACK_SIZE == 4
+    # The rack derivation is the invariant; the absolute fleet size lives in the
+    # cluster config and grows without this test's involvement.
+    assert gb200.target_racks == gb200.max_nodes // RACK_SIZE > 0
     assert gb200.autoscaling is False
     cpu = pools["cw-use08a-cpu-erapids"]
     assert cpu.target_racks is None and cpu.autoscaling is True

@@ -1,19 +1,25 @@
-name: "Pulumi Cloud Run deploy"
-description: "Roll an iac.gcp.cloud_run stack: GCP auth, Artifact Registry + Pulumi backend, then pulumi up."
+name: "Pulumi deploy"
+description: "Roll a service stack on the shared iac backend: GCP auth, Artifact Registry + Pulumi backend, then pulumi up."
 
 inputs:
   stack:
-    description: "Pulumi stack name (e.g. marin-grafana)."
+    description: "Pulumi stack name (e.g. marin-grafana, ducky-marin)."
     required: true
   work-dir:
     description: "Directory holding the Pulumi.yaml (e.g. infra/grafana)."
     required: true
   gcp-credentials:
-    description: "Service-account key JSON for the Cloud Run deploy account."
+    description: "Service-account key JSON for the deploy account."
     required: true
   gcp-project-id:
     description: "GCP project id."
     required: true
+  uv-sync-args:
+    description: "Arguments for the venv sync (services whose program imports more than iac widen this)."
+    default: "--package marin-iac --extra deploy --frozen"
+  config-map:
+    description: "Optional pulumi/actions config-map JSON applied before up (e.g. a deploy_generation override)."
+    default: ""
 
 runs:
   using: composite
@@ -42,15 +48,16 @@ runs:
 
     - name: Sync the iac venv
       shell: bash
-      run: uv sync --package marin-iac --extra deploy --frozen
+      run: uv sync ${{ inputs.uv-sync-args }}
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
-    - name: Roll the Cloud Run service
+    - name: Roll the service
       uses: pulumi/actions@v6
       with:
         command: up
         stack-name: ${{ inputs.stack }}
         work-dir: ${{ inputs.work-dir }}
         cloud-url: gs://marin-iac-state
+        config-map: ${{ inputs.config-map }}

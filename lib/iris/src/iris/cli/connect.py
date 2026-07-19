@@ -11,7 +11,7 @@ forming an import cycle.
 
 import logging
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +25,7 @@ from iris.client import IrisClient
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
 from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.factory import ProviderBundle
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -138,15 +139,21 @@ def open_controller_endpoint(
     controller_url: str | None = None,
     cluster_name: str | None = None,
 ) -> Iterator[ControllerEndpoint]:
-    """Resolve a reachable controller URL and keep its local resources alive."""
+    """Resolve a reachable controller URL and keep its local resources alive.
+
+    Click-free, so programmatic callers (harbor, deploy tooling) can use it from
+    any thread: raises ValueError on bad arguments and ConnectionError when the
+    controller is unreachable. Local resources (an SSH tunnel, a local cluster)
+    live until the context exits.
+    """
     if controller_url is not None and config_file is not None:
-        raise click.UsageError("Cannot specify both controller_url and config_file")
+        raise ValueError("Cannot specify both controller_url and config_file")
 
     if cluster_name and config_file is None and controller_url is None:
         try:
             config_file = resolve_cluster_config(cluster_name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
         except FileNotFoundError as exc:
-            raise click.ClickException(
+            raise ValueError(
                 f"Unknown cluster {cluster_name!r}. Run `iris cluster list` to see available clusters."
             ) from exc
 
@@ -154,24 +161,61 @@ def open_controller_endpoint(
     resolved_cluster_name = resolve_cluster_name(config, controller_url, cluster_name)
     credentials = client_credentials(config, resolved_cluster_name)
 
-    obj: dict[str, object] = {
-        "cluster_name": resolved_cluster_name,
-        "credentials": credentials,
-    }
-    ctx = click.Context(click.Command("iris-client"))
-    ctx.obj = obj
-    if config is not None:
-        obj["config"] = config
-        obj["config_file"] = str(config_file)
-    if controller_url is not None:
-        obj["controller_url"] = controller_url
+    with ExitStack() as stack:
+        if controller_url is not None:
+            url = controller_url
+        else:
+            url, _ = _connect_controller(
+                stack, config=config, config_file=str(config_file) if config_file is not None else None
+            )
+        yield ControllerEndpoint(url=url, credentials=credentials, config=config)
 
-    with ctx:
-        yield ControllerEndpoint(
-            url=require_controller_url(ctx),
-            credentials=credentials,
-            config=config,
+
+def _connect_controller(
+    stack: ExitStack,
+    *,
+    config: IrisClusterConfig | None,
+    config_file: str | None,
+) -> tuple[str, ProviderBundle | None]:
+    """Resolve the controller URL from a loaded config, registering cleanup on ``stack``.
+
+    IAP-fronted clusters return their public ingress URL directly. Otherwise a
+    local cluster is started and/or an SSH tunnel established, with teardown
+    pushed onto ``stack``. Returns the URL plus the provider bundle when one was
+    built (the CLI caches it on the click context for later subcommand use).
+    """
+    iap = iap_config(config)
+    if iap is not None:
+        if not iap.url:
+            raise ValueError("IAP auth config is missing the ingress 'url'")
+        return iap.url, None
+
+    if config:
+        bundle = provider_bundle(config)
+        if config.controller.controller_kind() == "local":
+            cluster = LocalCluster(config)
+            controller_address = cluster.start()
+            stack.callback(cluster.close)
+        else:
+            controller_address = config.controller_address()
+            if not controller_address:
+                controller_address = bundle.controller.discover_controller(config.controller)
+
+        try:
+            logger.info("Establishing tunnel to controller...")
+            url = stack.enter_context(bundle.controller.tunnel(address=controller_address))
+        except Exception as e:
+            raise ConnectionError(f"Could not connect to controller: {e}") from e
+        return url, bundle
+
+    if config_file:
+        raise ConnectionError(
+            f"Could not connect to controller (config: {config_file}). "
+            "Check that the controller is running and reachable."
         )
+    raise ValueError(
+        "No controller specified. Pass --cluster=<name> (see `iris cluster list`), --controller-url, or --config."
+    )
 
 
 def iris_client_for_ctx(
@@ -277,47 +321,18 @@ def require_controller_url(ctx: click.Context) -> str:
         return controller_url
 
     config = ctx.obj.get("config") if ctx.obj else None
-
-    # IAP-fronted clusters are reachable directly over HTTPS (gated by IAP at the
-    # ingress) — no SSH tunnel. The public URL comes from the auth config.
-    iap = iap_config(config)
-    if iap is not None:
-        if not iap.url:
-            raise click.ClickException("IAP auth config is missing the ingress 'url'")
-        ctx.obj["controller_url"] = iap.url
-        return iap.url
-
-    # Lazy tunnel establishment from config
-    if config:
-        bundle = provider_bundle(config)
-        ctx.obj["provider_bundle"] = bundle
-
-        if config.controller.controller_kind() == "local":
-            cluster = LocalCluster(config)
-            controller_address = cluster.start()
-            ctx.call_on_close(cluster.close)
-        else:
-            controller_address = config.controller_address()
-            if not controller_address:
-                controller_address = bundle.controller.discover_controller(config.controller)
-
-        # Establish tunnel and keep it alive for command duration
-        try:
-            logger.info("Establishing tunnel to controller...")
-            tunnel_cm = bundle.controller.tunnel(address=controller_address)
-            tunnel_url = tunnel_cm.__enter__()
-            ctx.obj["controller_url"] = tunnel_url
-            ctx.call_on_close(lambda: tunnel_cm.__exit__(None, None, None))
-            return tunnel_url
-        except Exception as e:
-            raise click.ClickException(f"Could not connect to controller: {e}") from e
-
     config_file = ctx.obj.get("config_file") if ctx.obj else None
-    if config_file:
-        raise click.ClickException(
-            f"Could not connect to controller (config: {config_file}). "
-            "Check that the controller is running and reachable."
-        )
-    raise click.ClickException(
-        "No controller specified. Pass --cluster=<name> (see `iris cluster list`), --controller-url, or --config."
-    )
+    stack = ExitStack()
+    try:
+        url, bundle = _connect_controller(stack, config=config, config_file=config_file)
+    except (ValueError, ConnectionError) as e:
+        stack.close()
+        raise click.ClickException(str(e)) from e
+    except BaseException:
+        stack.close()
+        raise
+    ctx.call_on_close(stack.close)
+    ctx.obj["controller_url"] = url
+    if bundle is not None:
+        ctx.obj["provider_bundle"] = bundle
+    return url
