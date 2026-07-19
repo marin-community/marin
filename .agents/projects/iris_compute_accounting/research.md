@@ -20,7 +20,7 @@ builds a dashboard."
 
 ## 1. Lifecycle / accounting data model
 
-**The authoritative per-attempt lifecycle is the controller DB, not finelog.**
+**The authoritative per-attempt lifecycle lives in the controller DB; finelog does not carry it.**
 `task_attempts_table` — `lib/iris/src/iris/cluster/controller/schema.py:423`:
 `task_id, attempt_id, worker_id, state (int TaskState), created_at_ms,
 started_at_ms, finished_at_ms, exit_code, error, attempt_uid, backend_id`.
@@ -55,7 +55,7 @@ controller DB — guarded at `service.py:2868` (`first token != "SELECT"` →
 (`schema.py:293`); `JobStatus.resources` (`ResourceSpecProto`, `job.proto:405`)
 carries `TpuDevice.count` / `GpuDevice.count`.
 
-**`iris.task_event` is NOT the lifecycle stream rjpower hypothesized.**
+**`iris.task_event` is a different thing from the lifecycle stream rjpower hypothesized.**
 `TaskEventRow` — `lib/iris/src/iris/cluster/worker/stats.py:169`:
 `task_id, attempt_id, ts, type (severity), reason, message, source, count`.
 Producer `TaskEventLog.observe` — `lib/iris/src/iris/cluster/backends/k8s/tasks.py:1905`
@@ -95,11 +95,26 @@ region, process_index, labels`. So MFU is queryable as
 Grafana already reads this namespace (`infra/grafana/dashboards/training.json`).
 
 **Gaps for "MFU per job":** (1) no user/owner column on `telltale` — the job
-namespace path encodes the user but it isn't split out; (2) forwarded from every
-`process_index`, so a rollup must pick process 0 or average (else double-count);
-(3) no chip count on the row (device-weighting needs the Iris job resource
-spec); (4) coverage is **Levanter-training only** — vLLM inference, Zephyr, raw
-JAX emit no `levanter_throughput_mfu`.
+namespace path encodes the user but it isn't split out; (2) on a multi-host job
+every worker forwards the same value, so a rollup must collapse replicas per step
+(else double-count); (3) no chip count on the row (device-weighting needs the
+Iris job resource spec); (4) coverage is **Levanter-training only** — vLLM
+inference, Zephyr, raw JAX emit no `levanter_throughput_mfu`.
+
+**Verified against live finelog (DuckDB over GCS parquet, 2026-07-19).** Real
+`telltale` schema: `seq, name, value, kind, ts, source, run, job_id, task_index,
+attempt, worker, region, process_index, labels, cluster`. `process_index` is
+**NULL** in the data (the earlier "pick process 0" plan would return nothing);
+the multislice smoke job had 2 workers forwarding identical MFU. `job_id` is the
+iris root path (`/runner/iris-run-job-...`), `run` is the wandb run
+(`canary-tpu-...`). MFU per job (collapse per step, then avg): canary-tpu run
+= 19.1% over 139 steps; multislice smoke = 4.5%. `iris.provisioning` spans ~4
+weeks durably; last-7d preemptions v6e-4/us-east1-d 471, v5p-8/us-east5-a 311.
+`iris.task.task_id` is the full path (`/eczech/...`), so `split_part(task_id,'/',2)`
+is the user; last-24h host-hours eczech 21.6, larry 12.4, michaelryan 4.7 — real
+usernames, so `user_id` is usable for Phase 1. `iris.task` still has no chip
+count and its `accelerator_util_pct` column is unpopulated, so host-hours cannot
+become chip-hours without the controller-side resource spec.
 
 **Hardware duty cycle.** GPU duty cycle exists via DCGM
 (`DCGM_FI_DEV_GPU_UTIL`) scraped into `iris.worker`
@@ -212,7 +227,7 @@ maintained lookup table.
    durably**. The data (per-attempt start/stop/state) is real but lives only in
    the controller DB behind a 7-day prune; `iris.task_event` is a same-named red
    herring (k8s scheduling verdicts, 1h retention). Building a durable
-   per-attempt accounting row is therefore the load-bearing new piece.
+   per-attempt accounting row is therefore the new piece the design turns on.
 2. **MFU per job is basically already done** — durable in `telltale`, Grafana
    already reads it — but only for Levanter training, with no user column and no
    chip weighting.
@@ -224,11 +239,11 @@ maintained lookup table.
 5. No `analyze_job_history.py` and no chip-hour / preemption-overhead script
    exists anywhere; the issue's reference to `scripts/iris/analyze_job_history.py`
    is aspirational. The nearest existing per-user resource math is
-   `budget.py::compute_user_spend` — a live scheduling gate, not accounting.
+   `budget.py::compute_user_spend` — a live scheduling gate that does no historical accounting.
 
 ## Peer-review findings (codex + fable + architect)
 
-A three-way review of the first draft surfaced two load-bearing defects,
+A three-way review of the first draft surfaced two central defects,
 verified against source:
 
 1. **Placement is destroyed at preemption, in the terminalization transaction.**
@@ -247,7 +262,7 @@ verified against source:
 2. **"Wasted chip-hours" as full preempted-attempt runtime is dishonest.**
    Levanter checkpoints and resumes, so most of a preempted attempt's runtime is
    retained — true waste ≈ (time since last checkpoint) + restart + recovery
-   idle, not computable without a checkpoint-cadence signal we don't emit.
+   idle, which needs a checkpoint-cadence signal we do not emit.
    Separately, user cancels land as `KILLED` rows with `started_at` stamped
    (`reconcile/task.py`, `reconcile/batches.py`), so the `attempt_counts`
    preemption predicate (built for retry-budgeting) counts a cancelled 10h ×
