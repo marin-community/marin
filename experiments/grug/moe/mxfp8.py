@@ -250,14 +250,20 @@ def _deinterleave_w13_grad(dw13i: jax.Array) -> jax.Array:
 
 
 # --------------------------------------------------------------------------- #
-# dual-orientation activation producers (CuTe kernel, XLA path for A/B)
+# dual-orientation activation producers (XLA default; CuTe kernel opt-in)
 # --------------------------------------------------------------------------- #
 
 
 def _resolve_producer(producer: str) -> str:
     if producer not in _PRODUCER_CHOICES:
         raise ValueError(f"producer must be one of {_PRODUCER_CHOICES}, got {producer!r}")
-    return "cute" if producer == "auto" else producer
+    # "auto" means the XLA producer for now: with producer="cute", 16-node
+    # training gangs deterministically fail executable load ("Failed to load
+    # in-memory CUBIN", CUDA_ERROR_INVALID_VALUE on every host, 3/3 gangs;
+    # jobs mx7201-ns64-mx{,2,3} vs mx4) even though the same op passes the
+    # single-node GPU ladder and 2-node smokes. Flip back to "cute" once that
+    # interaction is root-caused (MXFP8-010).
+    return "xla" if producer == "auto" else producer
 
 
 def _dual_quantize(t, row_idx, col_idx, block_perm, producer: str):
@@ -452,8 +458,8 @@ class MxFp8MoeMlpOp:
     """Stateless MXFP8 expert-MLP op (implements ``MoeExpertMlpOp``).
 
     ``producer`` selects the dual-orientation activation quantizer: ``"auto"``
-    means the CuTe kernel; ``"xla"`` keeps the corrected XLA path for A/B
-    comparison.
+    means the XLA path for now (see ``_resolve_producer``); ``"cute"`` opts
+    into the fused CuTe kernel.
     """
 
     producer: Literal["auto", "cute", "xla"] = "auto"

@@ -164,8 +164,8 @@ class GrugFp8Config:
       cudnn-frontend grouped kernels — stateless, whole expert MLP as one op
       (see ``experiments.grug.moe.mxfp8.MxFp8MoeMlpOp``). Requires
       ``grouped=True``. ``mxfp8_producer`` selects the dual-orientation
-      activation quantizer (``"auto"`` means the CuTe kernel; ``"xla"`` keeps
-      the reference path for A/B).
+      activation quantizer (``"auto"`` currently means the XLA path; the CuTe
+      kernel is opt-in pending a multi-node executable-load fix).
 
     ``wire`` controls whether the EP dispatch/combine collectives carry FP8
     over the wire with per-token scaling. The default ``None`` resolves with

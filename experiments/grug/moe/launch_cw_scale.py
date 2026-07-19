@@ -36,8 +36,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         (sm100+ mxfp8, sm90 per_tensor). Wire fp8 follows the
                         recipe (per_tensor on, mxfp8 bf16 per MXFP8-000b).
     SCALE_FP8_PRODUCER  auto (default) | cute | xla — mxfp8 dual-orientation
-                        activation quantizer; auto means the CuTe kernel, xla
-                        keeps the XLA path for A/B comparison.
+                        activation quantizer; auto currently means the XLA
+                        path (CuTe is opt-in pending a multi-node fix).
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
