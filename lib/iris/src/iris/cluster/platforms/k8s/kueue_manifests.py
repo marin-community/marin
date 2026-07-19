@@ -36,6 +36,24 @@ CW_CHART = f"{CW_REPO_NAME}/cks-kueue"
 RELEASE_DEFAULT = "kueue"
 OPERATOR_NS = "kueue-system"
 
+# Controller-manager feature gates for the cks-kueue chart. Helm replaces list values
+# wholesale, so this enumerates the full set the chart ships with, changing one entry:
+# TASBalancedPlacement stays OFF. That Alpha gate's balanced-placement scheduler divides
+# the pod-slice count by the number of selected topology domains and panics (integer
+# divide by zero) when that count is zero, crashing the controller-manager process — which
+# drops the admission-webhook endpoints and fail-closes every pod CREATE in the Iris
+# namespace. Iris requests explicit per-rack slice sizes for balanced multi-rack placement
+# (podset-slice-size, under TopologyAwareScheduling), so it never relies on this heuristic;
+# every other gate stays at the chart default.
+CKS_KUEUE_FEATURE_GATES = [
+    {"name": "VisibilityOnDemand", "enabled": True},
+    {"name": "LendingLimit", "enabled": True},
+    {"name": "ObjectRetentionPolicies", "enabled": True},
+    {"name": "TopologyAwareScheduling", "enabled": True},
+    {"name": "TASBalancedPlacement", "enabled": False},
+    {"name": "TASMultiLayerTopology", "enabled": True},
+]
+
 # Namespace(s) Iris submits gang pods into (the k8s provider namespace, default
 # "iris"). Kueue's admission webhooks are scoped to ONLY these — see
 # build_controller_manager_config for why a broad selector is dangerous.
@@ -177,10 +195,10 @@ def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> 
     apiVersion the CRD no longer serves (see module docstring); the Topology CRs
     are kubectl-applied after install instead.
 
-    NB: the chart already enables ``--feature-gates=TopologyAwareScheduling=true``
-    by default (its ``controllerManager.featureGates`` value is a *list*), so we
-    deliberately do NOT set ``featureGates`` — overriding it (especially as a map)
-    breaks the chart's ``kueue.featureGates`` template.
+    ``controllerManager.featureGates`` is CKS_KUEUE_FEATURE_GATES — the chart's own
+    list shape with the crash-prone TASBalancedPlacement gate turned off. The chart
+    takes this value as a *list*; overriding it as a map breaks the chart's
+    ``kueue.featureGates`` template.
     """
     config_yaml = yaml.safe_dump(
         build_controller_manager_config(pod_namespaces), default_flow_style=False, sort_keys=False
@@ -188,6 +206,7 @@ def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> 
     return {
         "kueue": {
             "enableKueueViz": False,
+            "controllerManager": {"featureGates": CKS_KUEUE_FEATURE_GATES},
             "managerConfig": {"controllerManagerConfigYaml": config_yaml},
         },
     }
