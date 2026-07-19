@@ -809,3 +809,21 @@ seed-0 pools as 4th at code points). Content h constant → KERNEL PREDICTS FLAT
 decider**: realized rise > 2·SE → form's harm term required (Δ calibrates b); flat → kernel + hard
 caps. Committed rule in epochrep_preregistration.json. Machinery re-validated to 1e-9 vs the
 transect + twobucket committed values. Launcher launch_mve_epochrep_h100.py.
+
+## 2026-07-19 E2 VERDICT — kernel-vs-form DECIDED (25σ): kernel + refitted harm term
+
+f27 + epochrep_readout. Pure-epoch axis at FIXED content (kernel predicts flat by construction).
+REALIZED humaneval bpb (mean ± seed SE):
+- CODE (c01q0@0.2, 4 seeds): e4 0.92 → e16 1.32 (Δ+0.391, 11σ) → **e32 2.19 (Δ+1.267, 25σ)**.
+- WEB (c26q1@0.2, 3 seeds): e4 1.47 → e16 1.62 (Δ+0.148, 8σ) → e24 1.65 (Δ+0.178, 6σ).
+Kernel-flat (0.693/0.737) REFUTED at 6–25σ. Seeds agree (SE 0.012–0.048), reproducible content-
+independent repetition harm — not seed noise. OOD baseline offset cancels in the within-arm Δ.
+
+**VERDICT (data-backed, 25σ): the content KERNEL cannot account for epoching (structurally flat,
+refuted). The functional-form HARM TERM is REQUIRED. Pick: kernel (content surrogate) + bolt-on
+harm term (epoching).** The harm has the expected swoosh property (near-flat ≤4 ep, severe rise past
+~16), now MEASURED. The committed in-regime-fit swoosh under-predicted magnitude ~100× (DP5 foretold
+this) → the harm term needs a FULL refit on E2: τ, exponent, per-GROUP b (code hurts ~7× more than
+web: b_code-e32≈7e-3 vs b_web≈1.7e-3). A single softplus²(e−2) with one b does NOT fit both arms.
+Reconciles with DP4 (in-regime null, harm negligible ≤4-8 ep) — both true: flat in-regime, severe
+out-of-regime. NEXT: refit the harm term on E2 (+ transect/a2 shape), validate kernel+harm combined.

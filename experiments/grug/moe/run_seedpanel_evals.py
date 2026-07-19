@@ -168,6 +168,11 @@ def main() -> None:
     parser.add_argument("--list-tasks", action="store_true", help="print resolved tasks and exit (no GPU needed)")
     parser.add_argument("--redo-tasks", default="", help="comma-separated aliases to recompute even if results exist")
     parser.add_argument(
+        "--only-tasks",
+        default="",
+        help="comma-separated aliases to run exclusively (default: all manifest tasks)",
+    )
+    parser.add_argument(
         "--model-dim",
         type=int,
         default=512,
@@ -177,6 +182,12 @@ def main() -> None:
     args = parser.parse_args()
 
     manifest, tasks = load_task_manifest()
+    only = {t for t in args.only_tasks.split(",") if t}
+    if only:
+        unknown = only - set(tasks)
+        if unknown:
+            raise SystemExit(f"--only-tasks unknown aliases: {sorted(unknown)} (valid: {sorted(tasks)})")
+        tasks = {alias: task for alias, task in tasks.items() if alias in only}
     logger.info(
         "resolved %d tasks (capacity %s, batch %s)", len(tasks), manifest["eval_capacity_factor"], manifest["batch_size"]
     )
