@@ -1456,3 +1456,10 @@ author: mcwitt
 - Next action: fold the fix into the production PR set; consider reporting
   the packaging conflict upstream (nvidia-cutlass-dsl metadata) and a uv
   feature request for loud file-clobber warnings.
+
+### 2026-07-19 10:55 - MXFP8-009 postscript: CuTe-producer op ladder green
+
+- `/mwittmann/mxfp8-cute-prod-g1` (GB200x1, producer=auto -> cute): contract
+  ok; dequant refs 7.4e-6..5.3e-5 (gate 1e-3); blackbox vs bf16 6.6-6.7e-2
+  (unchanged class vs 004c). ALL CHECKS PASSED — the in-op CuTe producer is
+  e2e-validated; 004c caveat closed.
