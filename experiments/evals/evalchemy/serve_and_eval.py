@@ -171,10 +171,8 @@ class ServeSpec:
     Must cover the whole eval suite the session runs against the endpoint; the launcher scales it
     with the number of evals in the group."""
     max_num_batched_tokens: int = EVAL_SERVE_MAX_NUM_BATCHED_TOKENS
-    """vLLM prefill budget per engine step. Eval traffic is prefill-bound (MCQ suites echo ~1.5k-token
-    prompts for one logprob), so the backend's conservative 512 leaves a TPU slice mostly idle; larger
-    values raise the TPU paged-attention kernel's VMEM scratch and overflow at compile, which fails the
-    serve child at startup rather than corrupting results."""
+    """vLLM prefill budget per engine step. The 512 default is conservative: 2048 boots on the current
+    TPU stack but prompt-logprobs traffic then kills the engine within minutes."""
     vllm_extra_args: tuple[str, ...] = ()
     """Extra flags forwarded to ``vllm serve`` (``VllmBackend.extra_args``); empty for the common case.
     Use it for models the portable defaults miss:

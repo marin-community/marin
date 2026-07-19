@@ -76,13 +76,13 @@ def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
     ``mean`` when a rollup spans differing metrics.
     """
     by_task: dict[str, list[_MetricScore]] = {}
-    for metric_key, metrics in (record.metrics or {}).items():
+    for task_key, metrics in (record.metrics or {}).items():
         picked = primary_metric(metrics)
         if picked is None:
             continue
         name, value = picked
-        subtask = metric_key.rsplit("/", 1)[-1]
-        by_task.setdefault(_task_of(metric_key), []).append(
+        subtask = task_key.rsplit("/", 1)[-1]
+        by_task.setdefault(_task_of(task_key), []).append(
             _MetricScore(subtask=subtask, value=value, metric=name, stderr=stderr_for(metrics, name))
         )
     result: dict[str, TaskScore] = {}

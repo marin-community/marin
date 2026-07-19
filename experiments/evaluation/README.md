@@ -20,8 +20,8 @@ Run through the module:
 uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke
 ```
 
-`launch` submits one run per suite and, unless `--no-wait`, waits for each object-store record and
-prints its metrics:
+`launch` submits one run per resolved eval key; a suite expands to its member evals. Unless
+`--no-wait`, it waits for each object-store record and prints its metrics:
 
 ```bash
 # See the resolved plan without submitting anything.
