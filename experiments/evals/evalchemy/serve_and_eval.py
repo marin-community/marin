@@ -43,7 +43,7 @@ import urllib.request
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from iris.client import Job, JobFailedError, iris_ctx
@@ -201,6 +201,9 @@ class ServedEndpoint:
     """Iris job path of the serve child behind the endpoint."""
     handle: Job
     """Live handle to the serve child, for liveness checks and log tails between evals."""
+    name: str
+    """Registry endpoint name the serve child registers; a restarted serve attempt re-registers it
+    at its new address, so resolving the name again finds the live server after a preemption."""
 
 
 @dataclass(frozen=True)
@@ -404,7 +407,14 @@ def serve_model(model: str, tokenizer: str, spec: ServeSpec) -> Iterator[ServedE
         # -- no controller proxy or capability token needed for a same-cluster consumer.
         base_url = client.resolve_endpoint(endpoint_name).rstrip("/") + "/v1"
         logger.info("Serve endpoint %s ready at %s", endpoint_name, base_url)
-        yield ServedEndpoint(base_url=base_url, model_id=model, tokenizer=tokenizer, job=serve_path, handle=serve_job)
+        yield ServedEndpoint(
+            base_url=base_url,
+            model_id=model,
+            tokenizer=tokenizer,
+            job=serve_path,
+            handle=serve_job,
+            name=endpoint_name,
+        )
     finally:
         with suppress(Exception):
             serve_job.terminate()
@@ -530,6 +540,37 @@ class EvalUnitOutcome:
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 15.0
 
 
+def _refresh_endpoint(endpoint: ServedEndpoint) -> ServedEndpoint | None:
+    """The endpoint at its currently registered address, or None when the serve is gone.
+
+    The serve slice is preemptible: a preempted attempt restarts on a new host and re-registers its
+    endpoint name at a new address. Resolving the name again (waiting out a mid-restart gap) keeps
+    later units pointed at the live server instead of the address captured at group start.
+    """
+    client = iris_ctx().client
+    if is_job_finished(endpoint.handle.state):
+        return None
+    try:
+        _wait_for_endpoint(client, endpoint.handle, endpoint.name)
+        base_url = client.resolve_endpoint(endpoint.name).rstrip("/") + "/v1"
+    except (RuntimeError, TimeoutError):
+        return None
+    if base_url == endpoint.base_url:
+        return endpoint
+    logger.info("serve endpoint %s moved %s -> %s (attempt restarted)", endpoint.name, endpoint.base_url, base_url)
+    return replace(endpoint, base_url=base_url)
+
+
+def _serve_death_outcome(unit: EvalUnit, endpoint: ServedEndpoint, serve_tail: tuple[str, ...]) -> EvalUnitOutcome:
+    dead = EvalPipelineError(
+        f"serve endpoint died before eval {unit.name!r} ran",
+        stage=PipelineStage.SERVE,
+        jobs={"serve": endpoint.job},
+        log_tails={"serve": serve_tail},
+    )
+    return EvalUnitOutcome(unit=unit, jobs=dict(dead.jobs), error=dead)
+
+
 def _endpoint_alive(endpoint: ServedEndpoint) -> bool:
     """Whether the served endpoint still answers: serve job running and ``/v1/models`` returning 200.
 
@@ -599,10 +640,32 @@ def run_eval_units(session: EvalSession, units: Sequence[EvalUnit]) -> Iterator[
         return
     with stack:
         pending = list(units)
+        restart_retried: set[str] = set()
         while pending:
             unit = pending.pop(0)
+            live = _refresh_endpoint(endpoint)
+            if live is None:
+                serve_tail = job_log_tail(endpoint.handle)
+                for rest in [unit, *pending]:
+                    yield _serve_death_outcome(rest, endpoint, serve_tail)
+                return
+            endpoint = live
             outcome = _run_one_unit(session, unit, endpoint)
-            if outcome.error is None or _endpoint_alive(endpoint):
+            if outcome.error is None:
+                yield outcome
+                continue
+            live = _refresh_endpoint(endpoint)
+            if live is not None and live.base_url != endpoint.base_url and unit.name not in restart_retried:
+                # The serve attempt restarted mid-unit (preemption) and came back elsewhere; the
+                # failure is the stale address, not the eval. Run the unit once more against the
+                # live server before believing any of its failures.
+                logger.info("unit %s: serve moved mid-run; retrying it against %s", unit.name, live.base_url)
+                restart_retried.add(unit.name)
+                endpoint = live
+                pending.insert(0, unit)
+                continue
+            if live is not None and _endpoint_alive(live):
+                endpoint = live
                 yield outcome
                 continue
             # The server died under this unit: re-stage its failure as a serve failure with the serve
@@ -617,13 +680,7 @@ def run_eval_units(session: EvalSession, units: Sequence[EvalUnit]) -> Iterator[
             failed.__cause__ = outcome.error
             yield EvalUnitOutcome(unit=unit, jobs=dict(failed.jobs), error=failed)
             for rest in pending:
-                dead = EvalPipelineError(
-                    f"serve endpoint died before eval {rest.name!r} ran",
-                    stage=PipelineStage.SERVE,
-                    jobs={"serve": endpoint.job},
-                    log_tails={"serve": serve_tail},
-                )
-                yield EvalUnitOutcome(unit=rest, jobs=dict(dead.jobs), error=dead)
+                yield _serve_death_outcome(rest, endpoint, serve_tail)
             return
 
 
