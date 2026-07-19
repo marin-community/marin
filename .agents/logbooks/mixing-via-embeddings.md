@@ -872,3 +872,23 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
   Pre-reg: a3 power law predicts e16 +0.071 bpb (present, ~12σ); if realized ~0 → harm collapses
   faster than the power law, kernel suffices at production under BOTH mechanisms. This disambiguates
   budget-vs-mechanism and settles whether the harm term is needed at production scale.
+
+## 2026-07-19 FORM SELECTED (CV-decisive on dense 10B code+web epoch axis): LINEAR-past-threshold
+- harm term H(e) = b·max(e−τ, 0). Content h fixed (kernel flat) → harm = realized − realized(e4 anchor).
+- Leave-one-epoch-out CV ranks (code CV-RMSE bpb): **linear 0.056** ≫ quad 0.246 > softplus² 0.260 >
+  pure_power 0.467 > log 0.503 > power_past_thr 0.713. Linear is the ONLY form whose worst held-out
+  fold stays within seed noise (max 1.9σ); all curved forms over-extrapolate e32 by 10–30σ. Robust
+  across 5 variants (SD/anchor/drop-e8/bounds).
+- τ_code = **8.85** (CI 6.8–10.9) — NOT the pre-registered [2,6]; harm onsets ~9 epochs then linear.
+  Forced by e16/e32 ratio 3.24 = (32−τ)/(16−τ) ⟹ τ=8.86; a quadratic would need τ=−4 (unphysical).
+- b_code ≈ 0.052–0.055, b_web ≈ 0.014, ratio ~3.8× → shared form / per-group amplitude. b carries the
+  B^−0.73·d^+1.68 scaling (a3/a4 confirm linear SHAPE is budget/size-invariant, amplitude scales).
+- Head-to-head #5: kernel+linear beats kernel-flat by **0.389 bpb pooled LOO-CV** (0.538 code) ≫ 0.038
+  seed floor → the term is REQUIRED wherever harm is present. Committed swoosh softplus²(τ=2) was wrong
+  in magnitude (~119× low), shape (linear not quadratic), AND onset (~9 not 2–6). Figure f30.
+- Caveat: web under-resolved at 10B (only e16/e24, near-saturating) → its exact τ/shape not identifiable;
+  code is the well-resolved anchor. Artifacts grug/harm_form_selection.{json,md,py}, report/figs3/f30.
+- **DECISION STATE**: SURROGATE=kernel; HARM TERM (where present)=b·max(e−τ,0), τ≈8.9(code),
+  b=b0·(B/10B)^−0.73·(d/512)^1.68. OPEN: does harm survive to 100B production scale? → running 100B
+  matched-mechanism test (e4 below τ = clean anchor; predicts e16 +0.072 / e32 +0.234 if power law holds,
+  ~0 if it vanishes). That is the last gate.
