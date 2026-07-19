@@ -27,7 +27,7 @@ import pulumi_command as command
 from google.protobuf import json_format
 from iris.cluster.types import ResourceSpec
 
-from iac.iris.spec import ALWAYS_ON_RETRIES, SPEC_ENV_VAR, ServiceSpec
+from iac.iris.spec import ALWAYS_ON_RETRIES, DEFAULT_READY_WAIT, SPEC_ENV_VAR, ServiceSpec
 
 CODE_HASH_ENV_VAR = "IRIS_SVC_CODE_HASH"
 DEPLOY_COMMAND = ".venv/bin/python -m iac.iris.deploy"
@@ -49,7 +49,7 @@ class IrisServiceArgs:
     env: dict[str, str] = field(default_factory=dict)
     secret_env: dict[str, str] = field(default_factory=dict)
     health_path: str = "/"
-    wait: int = 600
+    wait: int = DEFAULT_READY_WAIT
     deploy_generation: int = 0
     code_paths: tuple[str, ...] = ()
     """Redeploy-trigger scope: git-tracked files under these paths are content-hashed.

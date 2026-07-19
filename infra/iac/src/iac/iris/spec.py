@@ -27,6 +27,9 @@ ALWAYS_ON_RETRIES = 1_000_000
 # shell quoting.
 SPEC_ENV_VAR = "IRIS_SVC_SPEC"
 
+# Default bound on the post-submit readiness probe (shared with IrisServiceArgs).
+DEFAULT_READY_WAIT = 600
+
 
 @dataclasses.dataclass(frozen=True)
 class ServiceSpec:
@@ -68,7 +71,7 @@ class ServiceSpec:
     health_path: str = "/"
     """Readiness-probe path under the service's proxy URL."""
 
-    wait: int = 600
+    wait: int = DEFAULT_READY_WAIT
     """Readiness wait in seconds. Expiry warns and exits 0: the submit already
     happened and Iris's retry budgets converge once capacity frees, so a capacity
     stall is not a failed deploy."""

@@ -16,13 +16,11 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.types import JobName, ResourceSpec, tpu_device
-from iris.rpc import job_pb2
-
 from iac.iris.deploy import (
     check_bundle_includes,
     cli,
@@ -30,8 +28,10 @@ from iac.iris.deploy import (
     submit_service,
     terminate_service,
 )
-from iac.iris.service import _parse_outputs, code_hash, wire_spec
+from iac.iris.service import IrisServiceArgs, _parse_outputs, code_hash, wire_spec
 from iac.iris.spec import ALWAYS_ON_RETRIES, ServiceSpec
+from iris.cluster.types import JobName, ResourceSpec, tpu_device
+from iris.rpc import job_pb2
 
 # Mirrors IrisServiceArgs minus the component-only fields; keyword overrides per test.
 _SPEC_KWARGS = dict(
@@ -55,8 +55,12 @@ class TestSpec:
         spec = _spec(env={"A": "1"}, secret_env={"B": "env:B_SRC"}, deploy_generation=3)
         assert ServiceSpec.from_json(spec.to_json()) == spec
 
-    def test_to_json_is_deterministic(self):
-        assert _spec().to_json() == _spec().to_json()
+    def test_to_json_ignores_dict_insertion_order(self):
+        # The JSON is a Pulumi input: two programs building the same env in different
+        # orders must serialize identically or every deploy shows a phantom diff.
+        forward = _spec(env={"A": "1", "B": "2"}, secret_env={"X": "env:X", "Y": "env:Y"})
+        reversed_ = _spec(env={"B": "2", "A": "1"}, secret_env={"Y": "env:Y", "X": "env:X"})
+        assert forward.to_json() == reversed_.to_json()
 
     def test_unknown_field_rejected(self):
         raw = json.loads(_spec().to_json())
@@ -82,9 +86,7 @@ class TestSpec:
             _spec(**overrides).validate()
 
 
-def _args(resources: ResourceSpec):
-    from iac.iris.service import IrisServiceArgs
-
+def _args(resources: ResourceSpec) -> IrisServiceArgs:
     return IrisServiceArgs(**_SPEC_KWARGS | {"resources": resources})  # pyrefly: ignore
 
 
@@ -177,8 +179,6 @@ class TestTerminate:
 
 class TestBundleIncludes:
     def test_missing_build_output_fails(self, tmp_path):
-        import click
-
         with pytest.raises(click.ClickException, match="matches no files"):
             check_bundle_includes(tmp_path, ("dist/**/*",))
 

@@ -90,8 +90,9 @@ def resources_from_spec(spec: ServiceSpec) -> ResourceSpec:
 
 
 def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, str], policy: int) -> Job:
-    """Submit the always-on service job (see ducky's deploy for the retry rationale:
-    the three budgets together make preemptions and container deaths non-terminal)."""
+    """Submit the always-on service job. The three retry budgets together make
+    preemptions and container deaths non-terminal (see ALWAYS_ON_RETRIES in
+    :mod:`iac.iris.spec`)."""
     return client.submit(
         entrypoint=Entrypoint.from_command(*spec.entrypoint),
         name=spec.name,
