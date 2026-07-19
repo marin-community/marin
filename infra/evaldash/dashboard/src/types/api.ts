@@ -178,7 +178,7 @@ export interface LogsResponse {
   entries: LogEntry[]
 }
 
-// --- Per-sample browser (samples.py) ---
+// --- Per-sample browser (samples.py, mirroring marin.evaluation.samples.EvalSample) ---
 
 export interface SampleTasksResponse {
   available: boolean
@@ -186,16 +186,39 @@ export interface SampleTasksResponse {
   tasks: { task: string; files: number }[]
 }
 
+export type SampleKind = 'multiple_choice' | 'generation'
+
+export interface ChatMessage {
+  role: string
+  content: string
+}
+
+export interface SampleChoice {
+  label: string
+  text: string
+  loglikelihood: number | null
+  is_greedy: boolean | null
+}
+
+// One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
+// `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
+// `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
+// samples.
 export interface SampleRow {
-  doc_id: number | string | null
-  doc: unknown
-  target: unknown
-  arguments: unknown
-  responses: unknown
-  filtered_responses: unknown
-  metrics: Record<string, number | null>
-  primary_value: number | null
-  correct: boolean
+  task: string
+  doc_id: string
+  kind: SampleKind
+  prompt_text: string | null
+  prompt_messages: ChatMessage[] | null
+  choices: SampleChoice[] | null
+  model_choice: number | null
+  target_choice: number | null
+  output: string | null
+  extracted: string | null
+  target_text: string | null
+  metrics: Record<string, number>
+  correct: boolean | null
+  doc: string
 }
 
 export interface SamplesResponse {

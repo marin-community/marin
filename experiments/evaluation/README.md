@@ -59,6 +59,14 @@ uv run python -m experiments.evaluation.cli ingest --prefix gs://marin-eval-meta
 uv run python -m experiments.evaluation.cli runs --model qwen3-8b --status succeeded --limit 20
 ```
 
+`backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
+useful after a change to the contract in `marin.evaluation.samples` (the parquet files are
+regenerated in place; the source jsonl is untouched):
+
+```bash
+uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/runs
+```
+
 ## Records and the database
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
@@ -71,8 +79,9 @@ are diagnosable straight from the record (or the dashboard) without cluster acce
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.sample_export`) with the document, prompt arguments, model
-responses, and per-sample metric columns -- load them with pandas/duckdb to zoom into any run.
+parquet sibling (`marin.evaluation.samples`, the per-sample contract -- `EvalSample`, normalized from
+lm-eval's native row shape, with the parquet schema *being* the pydantic model) -- load them with
+pandas/duckdb, or read them back with `EvalSample.model_validate`, to zoom into any run.
 
 `marin.evaluation.results_db` is a rebuildable Postgres mirror (`eval_runs` + `eval_metrics`) keyed by
 `run_id`, with the full record kept in a `jsonb` column. `launch` upserts as runs finish; `ingest`

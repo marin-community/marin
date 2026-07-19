@@ -7,8 +7,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
-import { answerSummary } from '@/components/samples/detect'
-import type { SamplesResponse, SampleTasksResponse } from '@/types/api'
+import type { SampleRow, SamplesResponse, SampleTasksResponse } from '@/types/api'
 
 const props = defineProps<{ runId: string }>()
 const router = useRouter()
@@ -48,10 +47,19 @@ watch([selectedTask, correct], () => {
   if (selectedTask.value) refresh()
 })
 
-function toText(value: unknown): string {
-  if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
-  return JSON.stringify(value)
+/** A short "answer" summary for a row: the model's picked choice, or the extracted generation. */
+function answerSummary(row: SampleRow): string {
+  if (row.kind === 'multiple_choice') {
+    const choice = row.model_choice !== null ? (row.choices?.[row.model_choice] ?? null) : null
+    return choice ? `${choice.label}: ${choice.text.trim()}` : '—'
+  }
+  return row.extracted ?? ''
+}
+
+/** The row's primary-metric value, looked up by the page's primary metric name. */
+function primaryValue(row: SampleRow): number | null {
+  const metric = data.value?.primary_metric
+  return metric ? (row.metrics[metric] ?? null) : null
 }
 
 function truncate(text: string, n = 140): string {
@@ -152,9 +160,9 @@ function openViewer(rowIndex: number) {
                     :class="row.correct
                       ? 'bg-status-success-bg text-status-success border-status-success-border'
                       : 'bg-status-danger-bg text-status-danger border-status-danger-border'"
-                  >{{ row.primary_value ?? (row.correct ? '✓' : '✗') }}</span>
+                  >{{ primaryValue(row) ?? (row.correct ? '✓' : '✗') }}</span>
                 </td>
-                <td class="px-2 py-1.5 font-mono max-w-[24ch] truncate">{{ truncate(toText(row.target), 60) }}</td>
+                <td class="px-2 py-1.5 font-mono max-w-[24ch] truncate">{{ truncate(row.target_text ?? '', 60) }}</td>
                 <td class="px-2 py-1.5 font-mono max-w-[40ch] truncate">{{ truncate(answerSummary(row)) }}</td>
               </tr>
             </tbody>

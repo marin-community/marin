@@ -1,20 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read lm-eval per-sample parquet exports for a run's results directory.
+"""Read per-sample contract parquet exports for a run's results directory.
 
-``marin.evaluation.sample_export`` writes one ``samples_<task>_<timestamp>.parquet`` per (sub)task
-under a run's ``results_path``, each row a single evaluated question with its ``doc``/``target``/
-``arguments``/``responses``/``filtered_responses`` (JSON strings) and per-sample metric columns
-(``acc``, ``exact_match``, ...). This module discovers those files with fsspec (so ``gs://`` and
-``s3://`` both work with the credentials the server already configures) and serves paginated,
+``marin.evaluation.samples`` writes one ``samples_<task>_<timestamp>.parquet`` per (sub)task under a
+run's ``results_path``, each row an :class:`~marin.evaluation.samples.EvalSample`. This module
+discovers those files with fsspec (so ``gs://`` and ``s3://`` both work with the credentials the
+server already configures), validates each row back into the contract model, and serves paginated,
 correctness-filtered rows for the sample browser. Loaded tables are cached briefly so paging does not
 re-read object storage on every request.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -23,16 +21,11 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fsspec.core import url_to_fs
-from metrics import primary_metric_column
+from marin.evaluation.samples import SAMPLES_PREFIX, SAMPLES_SUFFIX, EvalSample, primary_metric
 
 logger = logging.getLogger(__name__)
 
-SAMPLES_PREFIX = "samples_"
-SAMPLES_SUFFIX = ".parquet"
-# Non-metric columns written by sample_export; every other numeric column is a per-sample metric.
-STRUCTURAL_COLUMNS = frozenset({"task", "doc_id", "doc", "target", "arguments", "responses", "filtered_responses"})
 TABLE_CACHE_TTL = 120.0
-CORRECT_THRESHOLD = 1.0
 
 
 @dataclass
@@ -93,35 +86,8 @@ def list_sample_tasks(results_path: str | None) -> dict:
     return {"available": True, "error": None, "tasks": tasks}
 
 
-def _parse_json_cell(value) -> object:
-    """Parse a JSON-string sample cell; leave a non-JSON string (e.g. a bare target) as-is."""
-    if not isinstance(value, str):
-        return value
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, ValueError):
-        return value
-
-
-def _is_correct(row: dict, primary: str | None) -> bool:
-    if primary is None:
-        return False
-    value = row.get(primary)
-    return value is not None and float(value) >= CORRECT_THRESHOLD
-
-
-def _sample_row(row: dict, metric_columns: list[str], primary: str | None) -> dict:
-    return {
-        "doc_id": row.get("doc_id"),
-        "doc": _parse_json_cell(row.get("doc")),
-        "target": _parse_json_cell(row.get("target")),
-        "arguments": _parse_json_cell(row.get("arguments")),
-        "responses": _parse_json_cell(row.get("responses")),
-        "filtered_responses": _parse_json_cell(row.get("filtered_responses")),
-        "metrics": {column: row.get(column) for column in metric_columns},
-        "primary_value": row.get(primary) if primary else None,
-        "correct": _is_correct(row, primary),
-    }
+def _correct(sample: EvalSample) -> bool:
+    return bool(sample.correct)
 
 
 def fetch_samples(results_path: str | None, task: str, *, offset: int, limit: int, correct: str) -> dict:
@@ -160,19 +126,20 @@ def fetch_samples(results_path: str | None, task: str, *, offset: int, limit: in
             "counts": empty_counts,
         }
 
-    metric_columns = [column for column in table.column_names if column not in STRUCTURAL_COLUMNS]
-    primary = primary_metric_column(metric_columns)
-    all_rows = table.to_pylist()
-    n_correct = sum(1 for row in all_rows if _is_correct(row, primary))
-    counts = {"all": len(all_rows), "correct": n_correct, "incorrect": len(all_rows) - n_correct}
+    all_samples = [EvalSample.model_validate(row) for row in table.to_pylist()]
+    metric_columns = sorted({name for sample in all_samples for name in sample.metrics})
+    picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
+    primary = picked[0] if picked is not None else None
+    n_correct = sum(1 for sample in all_samples if _correct(sample))
+    counts = {"all": len(all_samples), "correct": n_correct, "incorrect": len(all_samples) - n_correct}
     if correct == "correct":
-        rows = [row for row in all_rows if _is_correct(row, primary)]
+        samples = [sample for sample in all_samples if _correct(sample)]
     elif correct == "incorrect":
-        rows = [row for row in all_rows if not _is_correct(row, primary)]
+        samples = [sample for sample in all_samples if not _correct(sample)]
     else:
-        rows = all_rows
-    total = len(rows)
-    page = rows[offset : offset + limit]
+        samples = all_samples
+    total = len(samples)
+    page = samples[offset : offset + limit]
     return {
         "available": True,
         "error": None,
@@ -183,5 +150,5 @@ def fetch_samples(results_path: str | None, task: str, *, offset: int, limit: in
         "offset": offset,
         "limit": limit,
         "counts": counts,
-        "rows": [_sample_row(row, metric_columns, primary) for row in page],
+        "rows": [sample.model_dump() for sample in page],
     }

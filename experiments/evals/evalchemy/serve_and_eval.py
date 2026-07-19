@@ -623,10 +623,10 @@ def _run_one_unit(session: EvalSession, unit: EvalUnit, endpoint: ServedEndpoint
         return EvalUnitOutcome(unit=unit, jobs=dict(exc.jobs), error=exc)
     try:
         _verify_durable_artifacts(unit.out_path)
-        # Lazy: pyarrow is only needed for this post-processing step.
-        from marin.evaluation.sample_export import export_sample_parquets  # noqa: PLC0415
+        # Lazy: pyarrow/pydantic are only needed for this post-processing step.
+        from marin.evaluation.samples import export_lm_eval_samples  # noqa: PLC0415
 
-        parquets = export_sample_parquets(unit.out_path)
+        parquets = export_lm_eval_samples(unit.out_path)
     except Exception as exc:
         error = EvalPipelineError(str(exc), stage=PipelineStage.ARTIFACTS, jobs=dict(jobs), log_tails={})
         error.__cause__ = exc

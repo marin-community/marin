@@ -3,9 +3,10 @@
 
 """Command-line entry point for the eval launcher.
 
-``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Three commands:
+``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Four commands:
 ``launch`` submits runs (and, by default, waits and mirrors results to Postgres); ``ingest`` rebuilds
-the Postgres index from object-store records; ``runs`` queries it.
+the Postgres index from object-store records; ``runs`` queries it; ``backfill-samples`` rewrites every
+run's per-sample parquet exports from its kept ``samples_*.jsonl`` sources.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from marin.evaluation.results_db import (
     resolve_db_config,
     upsert_record,
 )
+from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
@@ -150,6 +152,24 @@ def ingest(prefixes: tuple[str, ...]) -> None:
         for record in records:
             upsert_record(engine, record)
         click.echo(f"ingested {len(records)} record(s) from {prefix}")
+
+
+@cli.command("backfill-samples")
+@click.option(
+    "--prefix",
+    "prefixes",
+    multiple=True,
+    default=(DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX),
+    show_default=True,
+    help="Object-store prefix(es) to scan for records; repeatable.",
+)
+def backfill_samples(prefixes: tuple[str, ...]) -> None:
+    """Rewrite every run's per-sample parquets from its kept ``samples_*.jsonl`` sources."""
+    configure_coreweave_s3()
+    for prefix in prefixes:
+        for record in list_records(prefix):
+            written = export_lm_eval_samples(record.results_path)
+            click.echo(f"{record.run_id}  {len(written)} parquet(s)  {record.results_path}")
 
 
 @cli.command()

@@ -41,15 +41,18 @@ RUN pip install --no-cache-dir \
     google-cloud-compute \
     "httpx>=0.28.1,<1" \
     pyarrow \
+    pydantic \
     && rm -rf /build
 
-# The eval record + DB-index modules, copied with their package skeleton (both __init__
-# files are header-only) so their `marin.evaluation.*` imports resolve without installing
-# the marin distribution. They are import-light: stdlib+fsspec / sqlalchemy+connector.
+# The eval record + DB-index + per-sample contract modules, copied with their package skeleton
+# (both __init__ files are header-only) so their `marin.evaluation.*` imports resolve without
+# installing the marin distribution. They are import-light: stdlib+fsspec / sqlalchemy+connector /
+# pyarrow+pydantic.
 COPY lib/marin/src/marin/__init__.py /app/marin/__init__.py
 COPY lib/marin/src/marin/evaluation/__init__.py /app/marin/evaluation/__init__.py
 COPY lib/marin/src/marin/evaluation/records.py /app/marin/evaluation/records.py
 COPY lib/marin/src/marin/evaluation/results_db.py /app/marin/evaluation/results_db.py
+COPY lib/marin/src/marin/evaluation/samples.py /app/marin/evaluation/samples.py
 # The server plus its flat top-level modules: metric selection, VM discovery, the iris/finelog
 # cluster gateway, and the per-sample parquet reader.
 COPY infra/evaldash/src/ /app/

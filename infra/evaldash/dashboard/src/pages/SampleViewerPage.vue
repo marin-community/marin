@@ -10,7 +10,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { useSamplePager, type SampleFilter } from '@/composables/useSamplePager'
-import { detectSample } from '@/components/samples/detect'
 import type { SampleRow, SampleTasksResponse } from '@/types/api'
 import McqSample from '@/components/samples/McqSample.vue'
 import GenerativeSample from '@/components/samples/GenerativeSample.vue'
@@ -70,9 +69,6 @@ watch(
 )
 
 const row = computed<SampleRow | null>(() => sampleAt(index.value))
-const detected = computed(() => (row.value ? detectSample(row.value) : null))
-const mcqSample = computed(() => (detected.value?.kind === 'mcq' ? detected.value : null))
-const generativeSample = computed(() => (detected.value?.kind === 'generative' ? detected.value : null))
 
 const positionLabel = computed(() => (total.value === 0 ? '0 of 0' : `${index.value + 1} of ${total.value}`))
 
@@ -101,14 +97,8 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
-function metricEntries(row: SampleRow): [string, number | null][] {
+function metricEntries(row: SampleRow): [string, number][] {
   return Object.entries(row.metrics)
-}
-
-function toText(value: unknown): string {
-  if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
-  return JSON.stringify(value, null, 2)
 }
 </script>
 
@@ -170,9 +160,8 @@ function toText(value: unknown): string {
           >{{ name }} {{ value ?? '—' }}</span>
         </div>
 
-        <McqSample v-if="mcqSample" :sample="mcqSample" />
-        <GenerativeSample v-else-if="generativeSample" :sample="generativeSample" :row="row" />
-        <pre v-else class="rounded border border-surface-border bg-surface-sunken p-3 text-[12px] font-mono overflow-auto whitespace-pre-wrap">{{ toText(row) }}</pre>
+        <McqSample v-if="row.kind === 'multiple_choice'" :sample="row" />
+        <GenerativeSample v-else :sample="row" />
       </template>
     </div>
   </div>

@@ -3,7 +3,7 @@
  * Renders a chat-formatted prompt (parsed from a JSON `[{role, content}, ...]` string) as a
  * sequence of role-labeled turn cards, left-border colored per role.
  */
-import type { ChatMessage } from '@/components/samples/detect'
+import type { ChatMessage } from '@/types/api'
 
 defineProps<{ messages: ChatMessage[] }>()
 
