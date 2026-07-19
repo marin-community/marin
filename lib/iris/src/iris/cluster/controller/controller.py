@@ -435,8 +435,10 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         # Periodic iris.task_state emitter: per-root-job task counts + wait ages
-        # aggregated from the controller DB. Constructing it starts its emitter
-        # thread, so it is built in start() (non-dry-run) and closed in stop().
+        # aggregated from the controller DB. Only cluster-view (k8s) controllers
+        # emit it — their rows must ride finelog federation, while a GCP
+        # controller's DB is directly queryable via ExecuteRawQuery. Construction
+        # starts the emitter thread, so it is built in start(), closed in stop().
         self._task_state_collector: TaskStateCollector | None = None
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
@@ -642,7 +644,8 @@ class Controller:
 
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
-            self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
+            if any(BackendCapability.CLUSTER_VIEW in b.capabilities for b in self._backends.values()):
+                self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
