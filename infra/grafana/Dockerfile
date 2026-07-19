@@ -9,6 +9,8 @@
 #
 # The Infinity plugin is installed at build time rather than through
 # GF_INSTALL_PLUGINS, so a cold start never depends on grafana.com being reachable.
+# The version is pinned: the provisioned alert rules evaluate through this plugin,
+# so an untested plugin build must never arrive as a side effect of an image build.
 FROM grafana/grafana:13.1.0-ubuntu
 
 USER root
@@ -17,7 +19,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install yesoreyeram-infinity-datasource
+RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install yesoreyeram-infinity-datasource 3.10.1
 
 # The bridge lives in its own venv; nothing else in the image is Python.
 #
@@ -52,6 +54,17 @@ USER grafana
 # service agent, so every request has already passed through IAP, which sets the
 # header itself. Anonymous stays enabled as a fallback: a request without the
 # header (a health check, a misconfig) degrades to read-only rather than 401.
+#
+# SMTP: the Google Workspace relay, STARTTLS on 587. The user doubles as the from
+# address; the password (a Workspace app password) arrives as GF_SMTP_PASSWORD from
+# Secret Manager. Until that secret holds a real credential, email notifications
+# fail while Slack still delivers.
+ENV GF_SMTP_ENABLED=true \
+    GF_SMTP_HOST=smtp-relay.gmail.com:587 \
+    GF_SMTP_FROM_ADDRESS=grafana@openathena.ai \
+    GF_SMTP_USER=grafana@openathena.ai \
+    GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
+
 ENV GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
     GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \

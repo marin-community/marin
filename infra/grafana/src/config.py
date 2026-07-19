@@ -61,6 +61,64 @@ CLUSTERS: tuple[ClusterTarget, ...] = (
 
 
 @dataclasses.dataclass(frozen=True)
+class K8sClusterTarget:
+    """A CoreWeave cluster whose k8s API server the bridge polls read-only."""
+
+    name: str  # iris cluster name, e.g. "cw-us-east-08a"
+    api_server: str  # public CKS API server URL
+
+
+# All requests authenticate with the single org-wide CW read-role token from the
+# CW_READ_TOKEN env var (Secret Manager: marin-grafana-cw-read-token).
+K8S_CLUSTERS: tuple[K8sClusterTarget, ...] = (
+    K8sClusterTarget("cw-us-east-02a", "https://208261-34513e48.k8s.us-east-02a.coreweave.com"),
+    K8sClusterTarget("cw-us-east-08a", "https://208261-d2cd61ed.k8s.us-east-08a.coreweave.com"),
+    K8sClusterTarget("cw-rno2a", "https://208261-6670debc.k8s.rno2a.coreweave.com"),
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class WatchedComponent:
+    """A control-plane Deployment the k8s source reports on and alerts over."""
+
+    namespace: str
+    deployment: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.namespace}/{self.deployment}"
+
+
+WATCHED_COMPONENTS: tuple[WatchedComponent, ...] = (
+    WatchedComponent("kueue-system", "kueue-controller-manager"),
+    WatchedComponent("iris", "iris-controller"),
+    WatchedComponent("traefik", "traefik"),
+    WatchedComponent("cert-manager", "cert-manager"),
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class WatchedWebhook:
+    """An admission-webhook Service whose ready-endpoint count the bridge watches."""
+
+    namespace: str
+    service: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.namespace}/{self.service}"
+
+
+WATCHED_WEBHOOKS: tuple[WatchedWebhook, ...] = (WatchedWebhook("kueue-system", "kueue-webhook-service"),)
+
+# Namespaces the pod-level scans (crashloops, pending) skip, by prefix. CoreWeave's
+# per-node daemons dominate the pod count on large clusters (thousands of pods,
+# ~20KB of JSON each) and are CoreWeave's to operate; the namespaces we own hold
+# on the order of a hundred pods.
+PROVIDER_NAMESPACE_PREFIXES: tuple[str, ...] = ("cw-", "kube-")
+
+
+@dataclasses.dataclass(frozen=True)
 class FerryTier:
     """One workflow file backing a ferry card. label captions a multi-tier strip."""
 
@@ -100,13 +158,18 @@ class BridgeConfig:
     # finelog result cache TTL, seconds.
     cache_ttl: float
     query_timeout_ms: int
-    # Cache TTLs for the live Iris and GitHub endpoints, seconds.
+    # Cache TTLs for the live Iris, GitHub, and k8s endpoints, seconds.
     iris_cache_ttl: float
     github_cache_ttl: float
-    # HTTP timeout for the controller RPC and GitHub calls, seconds.
+    k8s_cache_ttl: float
+    # HTTP timeout for the controller RPC, GitHub, and k8s API calls, seconds.
     http_timeout: float
     # GitHub token; lifts the REST rate limit and is required for the GraphQL build panel.
     github_token: str | None
+    # CW read-role bearer token for the k8s API servers. None does not fail the boot
+    # (that would take Grafana down with it); the k8s routes serve auth error rows
+    # and unreachable=1 alert rows instead.
+    cw_read_token: str | None
 
     @staticmethod
     def from_environment() -> "BridgeConfig":
@@ -117,6 +180,8 @@ class BridgeConfig:
             query_timeout_ms=int(os.environ.get("GRAFANA_BRIDGE_QUERY_TIMEOUT_MS", "20000")),
             iris_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_IRIS_CACHE_TTL", "15")),
             github_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_GITHUB_CACHE_TTL", "60")),
+            k8s_cache_ttl=float(os.environ.get("GRAFANA_BRIDGE_K8S_CACHE_TTL", "30")),
             http_timeout=float(os.environ.get("GRAFANA_BRIDGE_HTTP_TIMEOUT", "10")),
             github_token=os.environ.get("GITHUB_TOKEN") or None,
+            cw_read_token=os.environ.get("CW_READ_TOKEN") or None,
         )

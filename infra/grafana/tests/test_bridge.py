@@ -12,6 +12,7 @@ from cache import TtlCache
 from config import BridgeConfig, ClusterTarget
 from finelog.errors import QueryResultTooLargeError
 from github_source import GithubSource
+from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -30,8 +31,10 @@ def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
         query_timeout_ms=5000,
         iris_cache_ttl=15.0,
         github_cache_ttl=60.0,
+        k8s_cache_ttl=30.0,
         http_timeout=5.0,
         github_token=None,
+        cw_read_token=None,
     )
 
 
@@ -64,7 +67,7 @@ class FakeSource:
 
 def _client(source: FakeSource, cache_ttl: float = 20.0) -> TestClient:
     github = GithubSource(token=None, timeout=5.0)
-    return TestClient(create_app(bridge_config(cache_ttl), {"marin": source}, {}, github))
+    return TestClient(create_app(bridge_config(cache_ttl), {"marin": source}, {}, github, K8sFleet(())))
 
 
 def _get(client: TestClient, sql: str, **params):

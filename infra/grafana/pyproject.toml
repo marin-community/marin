@@ -26,7 +26,7 @@ dependencies = [
 grafana-bridge = "server:main"
 
 [dependency-groups]
-dev = ["pytest >= 8.4"]
+dev = ["pytest >= 8.4", "pyyaml >= 6"]
 
 [tool.uv]
 # if-necessary (not allow): take prereleases only for packages with no stable

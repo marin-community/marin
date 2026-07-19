@@ -1,12 +1,13 @@
 # grafana
 
 The Marin infra dashboard, as an IAP-gated Cloud Run service: Grafana plus a bridge
-that fronts three sources for its Infinity datasource — finelog SQL, the live Iris
-controller, and the GitHub API. One instance serves both clusters, reaching
-`finelog-marin` / `finelog-marin-dev` and each cluster's Iris controller on their
-internal IPs over Direct VPC egress. `marin` is the federation hub (the CoreWeave
-clusters forward their rows to it), so its finelog datasource sees the whole fleet;
-`marin-dev` sees only itself.
+that fronts four sources for its Infinity datasource — finelog SQL, the live Iris
+controller, the GitHub API, and the CoreWeave k8s API servers. One instance serves
+both GCE clusters, reaching `finelog-marin` / `finelog-marin-dev` and each cluster's
+Iris controller on their internal IPs over Direct VPC egress, and polls the public
+CKS API servers of the CW clusters read-only. `marin` is the federation hub (the
+CoreWeave clusters forward their rows to it), so its finelog datasource sees the
+whole fleet; `marin-dev` sees only itself.
 
 Dashboards and datasources are provisioned from the files in this directory.
 Grafana's SQLite is ephemeral on Cloud Run, so UI edits do not persist: change the
@@ -30,6 +31,10 @@ GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
+GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
+GET /k8s/kueue | events | health                  ... one response, `cluster` column
+GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
+     webhook_ready,degraded}                      numeric, >=1 row per cluster
 GET /health                                       bridge liveness
 ```
 
@@ -57,6 +62,30 @@ repos), classifies each (lane, day) cell server-side — health, overdue, and du
 and serves the result as a wide matrix: one row per day, a per-lane status code keyed by lane
 id, which the state-timeline panel renders as one row per lane over the trailing week.
 
+k8s: the bridge polls the three CoreWeave clusters' public CKS API servers with plain
+httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
+read-role bearer token from `CW_READ_TOKEN` — genuine read-only kubectl, no Secrets, no
+writes. Each response aggregates every cluster with a `cluster` column: watched
+control-plane components (a config constant: kueue-controller-manager, iris-controller,
+traefik, cert-manager) with ready/desired/restarts/waiting state, admission-webhook
+ready-endpoint counts from `discovery.k8s.io` EndpointSlices, backoff pods, pending and
+scheduling-gated pods, the unadmitted Kueue backlog per queue, and recent Warning
+events. The pod-level scans skip provider-managed namespaces (`cw-*`, `kube-*`):
+CoreWeave's per-node daemons are thousands of pods of someone else's infrastructure,
+while the namespaces we operate hold about a hundred. These are current-state reads —
+the bridge stores no history; trends come from the finelog-backed rows.
+
+The `/k8s/alerts/*` routes exist for Grafana's table-alert contract: string label
+columns plus exactly one numeric column, and always at least one row per cluster — an
+explicit zero when healthy — so an alert rule can never enter NoData. A cluster the
+bridge cannot read becomes labeled rows (its error class: auth, network, timeout, http)
+rather than an empty result: `unreachable` reports 1, the count-style routes report
+zero (the unreachable rule pages instead of fabricating counts), and `webhook_ready`
+reports 0 ready endpoints — which also fires the webhook rule, deliberately, since
+unknown admission state is the failure class it watches. A missing `CW_READ_TOKEN`
+reads as an auth failure on every cluster rather than failing the boot, which would
+take Grafana down with it.
+
 The controller and finelog IPs are resolved from GCE labels and refreshed after a
 connection failure. A dead controller or GitHub returns 5xx (not empty rows) and the
 failure is not cached, so a panel shows an error rather than blank data; `iris/.../health`
@@ -65,15 +94,16 @@ is the exception — it returns `reachable=false` so the panel can render the ou
 ## Layout
 
 ```
-src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub
+src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
 src/iris_source.py     live controller RPCs: jobs, workers, health, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
+src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
 src/discovery.py       GCE label -> internal IP
-src/config.py          cluster targets, ferry config, and bridge settings
+src/config.py          cluster targets, watched components, and bridge settings
 src/cache.py           TTL cache with in-flight coalescing
 src/errors.py          UpstreamError -> 5xx
-provisioning/          datasources (finelog, iris, github) + dashboard provider
+provisioning/          datasources (finelog, iris, github, k8s), dashboards, alerting
 dashboards/            dashboard JSON — reviewed like code
 Dockerfile             grafana:13.1.0-ubuntu + the bridge venv + the Infinity plugin
 entrypoint.sh          runs both; if either dies the container dies
@@ -86,7 +116,68 @@ plane, probes, 24h history, and the nightly regression matrix), `fleet.json` (ca
 worker health), `iris.json`
 (per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
 memory), `training.json` (levanter training metrics from the `telltale` namespace,
-grouped by run).
+grouped by run), `k8s.json` (current CW control-plane state from the k8s source).
+
+## Alerting
+
+Grafana unified alerting, provisioned entirely from the files under
+`provisioning/alerting/` — contact points, the notification policy tree, and the rules.
+File provisioning owns that tree: UI edits to alerting do not persist (ephemeral
+SQLite) and would be overwritten by the files anyway. Change the YAML and redeploy.
+
+The v1 catalog pages only on near-certain incidents: an unreachable cluster, a
+crash-looping watched component, an admission webhook with no ready endpoints, a
+degraded component, and a dead Iris controller. Workload-tier signals (gated pods,
+Kueue backlog, workload crashloops) are dashboard-only until their expected cases can
+be suppressed. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
+Slack); `severity=warning` routes to `ops-slack` (Slack only). Every rule sets
+`noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
+explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
+resolving.
+
+Alert state is ephemeral: Cloud Run's SQLite means a deploy resets pending (`for`)
+timers, notification dedup, and silences — worst case a re-notification after a deploy
+and a lost silence. Rule definitions are files, so nothing else is lost. Accepted for
+now (deploys are infrequent; `min=max=1` keeps a single evaluator); the hardening path
+if it ever matters is a small Cloud SQL Postgres for Grafana state.
+
+SMTP is the Google Workspace relay (`smtp-relay.gmail.com:587`, STARTTLS), sending as
+grafana@openathena.ai; `GF_SMTP_PASSWORD` comes from Secret Manager. Until a Workspace
+admin fills that secret with a real app password, email notifications fail while Slack
+still delivers. After changing contact points or their credentials, send a test
+notification to both receivers (Alerting → Contact points → Test) rather than trusting
+config presence.
+
+## Secrets and rotation
+
+All four secrets live in Secret Manager and reach the container as env vars via the
+`CloudRunService` `secrets` field; values never enter Pulumi or git.
+
+| Env var | Secret | Feeds |
+|---|---|---|
+| `GITHUB_TOKEN` | `marin-status-page-github-token` | ferry/build/nightly panels |
+| `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
+| `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | alert contact points |
+| `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts) |
+
+`CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
+(CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
+cluster in the org, no Secrets, no writes. Rotation is overlap-safe: mint a second
+read-role token in the CW console, `gcloud secrets versions add` it, redeploy, then
+revoke the old token. The same applies to the Slack webhook and SMTP password — add a
+version, redeploy, retire the old credential.
+
+Human setup, once, before the first deploy of this configuration (Cloud Run fails to
+start on a missing secret — create all three even if a value is a placeholder):
+
+1. CoreWeave console → API access → new token (e.g. `grafana-observer`) with only the
+   `read` role, then
+   `echo -n "<token>" | gcloud secrets create marin-grafana-cw-read-token --project=hai-gcp-models --data-file=-`
+2. Slack → incoming webhook for `#marin-eng`, then
+   `echo -n "https://hooks.slack.com/..." | gcloud secrets create marin-grafana-slack-webhook --project=hai-gcp-models --data-file=-`
+3. Workspace admin → app password for grafana@openathena.ai on the SMTP relay, then
+   `echo -n "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
+4. Send a test notification to both `ops-critical` receivers and confirm delivery.
 
 ## Develop
 

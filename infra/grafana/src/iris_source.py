@@ -139,7 +139,9 @@ class IrisSource:
         """One row: whether the controller /health answers, and the round-trip latency.
 
         Returns 200 with reachable=false on failure — reachability is the signal, so the
-        panel threshold renders it, rather than the endpoint erroring.
+        panel threshold renders it, rather than the endpoint erroring. ``up`` mirrors
+        ``reachable`` as 0/1 for the IrisControllerDown alert rule, which needs a
+        numeric column to threshold on.
         """
         base = self._base()
         started = time.monotonic()
@@ -147,10 +149,10 @@ class IrisSource:
             response = self._client.get(f"{base}/health")
             latency_ms = round((time.monotonic() - started) * 1000)
             reachable = response.status_code == 200
-            return [{"reachable": reachable, "latency_ms": latency_ms if reachable else None}]
+            return [{"reachable": reachable, "up": int(reachable), "latency_ms": latency_ms if reachable else None}]
         except httpx.TransportError as err:
             self._base_url = None
-            return [{"reachable": False, "latency_ms": None, "error": str(err)}]
+            return [{"reachable": False, "up": 0, "latency_ms": None, "error": str(err)}]
 
     def raw_query(self, sql: str) -> list[dict]:
         """Run an ad-hoc SELECT via ExecuteRawQuery, zipping columns to values."""

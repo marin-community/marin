@@ -747,6 +747,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -759,7 +760,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4" }]
+dev = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pyyaml", specifier = ">=6" },
+]
 
 [[package]]
 name = "marin-rigging"

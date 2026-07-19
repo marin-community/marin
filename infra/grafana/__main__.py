@@ -53,9 +53,16 @@ def main() -> None:
             cpu_always_allocated=True,
             # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
-            # The ferry/build panels call the GitHub API; the token lifts the REST rate limit
-            # and is required for the GraphQL build query. Value stays in Secret Manager.
-            secrets=(SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),),
+            # Values stay in Secret Manager; the component only grants the runtime service
+            # account access. GITHUB_TOKEN feeds the ferry/build panels; CW_READ_TOKEN is the
+            # CoreWeave read-role token behind the k8s source; SLACK_ALERTS_WEBHOOK and
+            # GF_SMTP_PASSWORD feed the provisioned alerting contact points.
+            secrets=(
+                SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),
+                SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
+                SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
+                SecretEnv(name="GF_SMTP_PASSWORD", secret="marin-grafana-smtp-credentials"),
+            ),
             iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
