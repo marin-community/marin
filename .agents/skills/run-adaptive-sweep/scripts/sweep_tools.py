@@ -123,7 +123,12 @@ def _hard_boundary(axis: Mapping[str, Any], coordinate: int, step: int) -> bool:
 
 
 def check_convergence(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Check strict one-step neighbor dominance on every resource rung."""
+    """Check strict one-step neighbor dominance by the best observed point on every rung.
+
+    A rung converges only when its best observed point is also a strict one-step
+    neighbor optimum: a locally-dominant point is never accepted while a better
+    objective is known anywhere else in that rung's grid.
+    """
     axes, shape = _axes(request)
     resources = _resource_levels(request)
     direction = request["objective"]["direction"]
@@ -135,6 +140,7 @@ def check_convergence(request: Mapping[str, Any]) -> dict[str, Any]:
     for rung, resource in enumerate(resources):
         rung_trials = {point: objective for (trial_rung, point), objective in completed.items() if trial_rung == rung}
         dominant_points = []
+        best = (min if direction == "minimize" else max)(rung_trials.values(), default=None)
         for point, objective in sorted(rung_trials.items()):
             dominates = True
             for axis_index, axis in enumerate(axes):
@@ -153,7 +159,7 @@ def check_convergence(request: Mapping[str, Any]) -> dict[str, Any]:
                         dominates = False
                     elif direction == "maximize" and objective < neighbor_objective:
                         dominates = False
-            if dominates:
+            if dominates and objective == best:
                 dominant_points.append({"point": _point_values(point, axes), "objective": objective})
         snapshots.append(
             {

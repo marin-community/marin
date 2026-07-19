@@ -112,8 +112,10 @@ job = one point.
      line. Track the no-progress start time in the DB so timeouts measure from last observed
      progress, not from the pass.
 2. **Converge-check.** `sweep_tools.py check-convergence` over all completed trials (strict one-step
-   neighbor dominance, one axis at a time; a missing neighbor passes only at the axis's hard domain
-   bound). Stop the whole sweep only when all 3 rungs pass.
+   neighbor dominance *by the best observed point*, one axis at a time; a missing neighbor passes only
+   at the axis's hard domain bound). A locally-dominant point never counts as converged while a better
+   objective is known anywhere else in that rung's grid — search continues until the best-known config
+   is itself neighbor-confirmed. Stop the whole sweep only when all 3 rungs pass.
 3. **Replan** (only when a new objective landed, a recovery timeout fired, or chips freed):
    - Cold/flat predictions → fill the lowest unresolved rung (8ep). NEVER seed a higher rung to burn chips.
    - With completed trials → `predict-objectives` (GBR, refit over EVERY completed objective; features
