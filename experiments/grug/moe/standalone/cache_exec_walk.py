@@ -120,9 +120,17 @@ def analyze_entry(path: str, extract_dir: str | None) -> None:
         raw = f.read()
     buf = decompress(raw)
     print(f"ENTRY {path}")
-    print(f"  raw={len(raw)} decompressed={len(buf)}")
+    print(f"  raw={len(raw)} decompressed={len(buf)} head={buf[:16].hex()}")
+    # jax cache entries prefix the serialized executable with a 4-byte
+    # big-endian compile time (compilation_cache.combine_executable_and_time).
     out: list = []
-    walk(buf, 0, len(buf), "", out)
+    for start in (4, 0, *range(1, 64)):
+        if _parse_fields(buf, start, len(buf)) is not None:
+            print(f"  proto_start_offset={start}")
+            walk(buf, start, len(buf), "", out)
+            break
+    else:
+        print("  NO VALID PROTO PARSE at offsets 0..63")
     seen_offsets = set()
     big = []
     for p, off, ln, sniff in sorted(out, key=lambda t: -t[2]):
