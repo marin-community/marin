@@ -1,20 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-task Nsight Systems launch wrapper.
+"""Nsight Systems launch wrapper — a runtime helper the caller composes into the command.
 
-``python -m iris.cluster.hooks.nsys_main --tasks SPEC [--output-uri URI] -- <argv>`` runs
-``<argv>`` under ``nsys profile`` when this task is selected, and execs ``<argv>`` unchanged
-otherwise. Without ``--output-uri`` the report goes to the cluster's temp bucket,
-resolved from the task env (see :func:`default_output_uri`). The submit-time half —
-``NsysHook`` and the install script — is the sibling :mod:`iris.cluster.hooks.nsys`.
+``python -m iris.runtime.nsys [--tasks SPEC] [--output-uri URI] -- <argv>`` runs ``<argv>``
+under ``nsys profile`` when this unit is selected, and execs ``<argv>`` unchanged
+otherwise. iris is a dumb scheduler and does not inject this; a GPU image (``iris-task-gpu``)
+bakes the ``nsys`` binary in, and the caller invokes the wrapper. Without ``--output-uri``
+the report goes to the cluster's temp bucket, resolved from the task env
+(see :func:`default_output_uri`).
 
-The wrapper sits outside the multi-process GPU supervisor, so ``<argv>`` is the
-supervisor (or the command itself at ``processes_per_task=1``) and one report covers
-every GPU rank the task runs — nsys traces child processes. A task therefore profiles
-all of its GPUs or none; the minimum granularity is one whole task/node.
+Composed *outside* the multigpu supervisor, ``<argv>`` is the supervisor and one report
+covers every GPU rank the task runs (node scope). Composed *inside* it as multigpu's
+``--wrap``, each child runs its own wrapper and writes its own report (process scope);
+:func:`selection_index` reads the child's ``IRIS_MULTIGPU_PROCESS_INDEX`` in that case.
 
-An unselected task execs and so costs nothing. A selected task cannot exec: the report
+An unselected unit execs and so costs nothing. A selected unit cannot exec: the report
 has to be uploaded once nsys has written it, and the task workdir is an emptyDir that
 is destroyed with the pod, so a report left on disk is simply lost. It therefore
 supervises the child and forwards signals.
@@ -51,7 +52,6 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from enum import StrEnum
-from glob import glob
 from pathlib import Path
 from types import FrameType
 from typing import NoReturn
@@ -60,7 +60,7 @@ from rigging.filesystem import StoragePath
 from rigging.filesystem.cluster_config import marin_temp_bucket
 
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.hooks.nsys import NSYS_INSTALL_DIR, nsys_bin_glob
+from iris.runtime.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 logger = logging.getLogger("iris.nsys")
 
@@ -88,15 +88,25 @@ class TaskSelector(StrEnum):
     ALL = "all"
 
 
-def task_index_from_env() -> int:
-    """Return this task's index within the job.
+def selection_index() -> int:
+    """The index ``--tasks`` selects on, from the task env.
+
+    Two scopes, one rule: when this process is a multigpu child (``iris.runtime.multigpu``
+    stamped ``IRIS_MULTIGPU_PROCESS_INDEX``), that global rank is the unit — one report
+    per selected *process*. Otherwise the whole task is the unit (its ``task_index``) —
+    one report per selected *task*, covering every rank the task runs. Which one applies
+    is set by *where* the wrapper is composed: inside the supervisor (per child, via its
+    ``--wrap``) or outside it.
 
     Raises:
         RuntimeError: If there is no iris task context to take an index from.
     """
+    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    if process_index is not None:
+        return int(process_index)
     info = get_job_info()
     if info is None:
-        raise RuntimeError("no iris job context (IRIS_TASK_ID unset); nsys task selection needs one")
+        raise RuntimeError("no iris job context (IRIS_TASK_ID unset); nsys selection needs one")
     return info.task_index
 
 
@@ -120,12 +130,12 @@ def default_output_uri() -> str:
     return marin_temp_bucket(_DEFAULT_OUTPUT_TTL_DAYS, prefix=prefix)
 
 
-def should_profile(tasks: str, task_index: int) -> bool:
-    """Whether *task_index* is selected by the ``--tasks`` spec.
+def should_profile(tasks: str, index: int) -> bool:
+    """Whether *index* (see :func:`selection_index`) is selected by the ``--tasks`` spec.
 
     Args:
-        tasks: A ``TaskSelector`` value, or a comma-separated list of task indices.
-        task_index: This task's index within the job.
+        tasks: A ``TaskSelector`` value, or a comma-separated list of indices.
+        index: This unit's index within the job.
 
     Raises:
         ValueError: If the spec is neither a selector nor a list of integers.
@@ -133,38 +143,30 @@ def should_profile(tasks: str, task_index: int) -> bool:
     if tasks == TaskSelector.ALL:
         return True
     if tasks == TaskSelector.FIRST:
-        return task_index == 0
+        return index == 0
     try:
         selected = {int(part) for part in tasks.split(",") if part.strip()}
     except ValueError as e:
         options = ", ".join(TaskSelector)
-        raise ValueError(f"--tasks must be one of ({options}) or a comma-separated task list, got {tasks!r}") from e
-    return task_index in selected
+        raise ValueError(f"--tasks must be one of ({options}) or a comma-separated list, got {tasks!r}") from e
+    return index in selected
 
 
 def workdir() -> Path:
-    """Return the task workdir, which roots both the nsys install and the reports."""
+    """Return the task workdir, which roots the reports before upload."""
     return Path(os.environ.get("IRIS_WORKDIR", "."))
 
 
-def resolve_nsys_bin(install_root: Path) -> str:
-    """Return the ``nsys`` binary to profile with.
-
-    Prefers ``nsys`` on ``PATH`` — a GPU image (``default_gpu_image``) bakes it in, so
-    no per-task install runs — and falls back to the copy the setup script extracts
-    under *install_root* on an image without it.
+def resolve_nsys_bin() -> str:
+    """Return the ``nsys`` binary from PATH — a GPU image (``default_gpu_image``) bakes it in.
 
     Raises:
-        RuntimeError: If neither the image nor the setup script provides one.
+        RuntimeError: If ``nsys`` is not on PATH (the job is not using a GPU image).
     """
     on_path = shutil.which("nsys")
-    if on_path:
-        return on_path
-    bin_glob = nsys_bin_glob(str(install_root))
-    matches = sorted(glob(bin_glob))
-    if not matches:
-        raise RuntimeError(f"no nsys on PATH and none at {bin_glob}; use a GPU image or let setup install it")
-    return matches[0]
+    if not on_path:
+        raise RuntimeError("no nsys on PATH; run on a GPU image (e.g. iris-task-gpu) that bakes it in")
+    return on_path
 
 
 def build_nsys_argv(nsys_bin: str, output_path: Path, trace: str, capture_range: bool) -> list[str]:
@@ -184,13 +186,13 @@ def build_nsys_argv(nsys_bin: str, output_path: Path, trace: str, capture_range:
     return argv
 
 
-def report_path(output_dir: Path, task_index: int) -> Path:
-    """Return this task's report path.
+def report_path(output_dir: Path, index: int) -> Path:
+    """Return this unit's report path.
 
-    Every task uploads into one directory, so the name carries identity: the task
-    index (the report holds every GPU rank the task runs) and the host it ran on.
+    Every unit uploads into one directory, so the name carries identity: the selection
+    index (a task, or a process under multigpu scope) and the host it ran on.
     """
-    return output_dir / f"task{task_index:05d}-{socket.gethostname()}"
+    return output_dir / f"r{index:05d}-{socket.gethostname()}"
 
 
 def upload_report(report: Path, output_uri: str) -> StoragePath:
@@ -214,7 +216,7 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     Returns the child's exit code, with a signal death normalized to the conventional
     ``128 + signum``. ``Popen.wait`` reports those as a negative code, which ``sys.exit``
     would turn into a wrapping status (``-15`` becomes 241, not 143) and hide the
-    termination behind a bogus application failure. ``iris.cluster.hooks.multigpu_main``
+    termination behind a bogus application failure. ``iris.runtime.multigpu``
     normalizes the same way for the same reason.
     """
     proc = subprocess.Popen([*nsys_argv, *command])
@@ -236,26 +238,26 @@ def run(tasks: str, trace: str, capture_range: bool, output_uri: str | None, arg
     nsys traces children. *output_uri* is where the report is uploaded; ``None`` resolves
     the cluster's temp bucket from the task env (see :func:`default_output_uri`).
 
-    An unselected task execs and never returns. A selected one supervises nsys so it
+    An unselected unit execs and never returns. A selected one supervises nsys so it
     can upload the report afterwards, then exits with the command's own status.
     """
     command = list(argv)
-    task_index = task_index_from_env()
-    if not should_profile(tasks, task_index):
-        logger.info("task %d not selected by --tasks=%s; running unprofiled", task_index, tasks)
+    index = selection_index()
+    if not should_profile(tasks, index):
+        logger.info("unit %d not selected by --tasks=%s; running unprofiled", index, tasks)
         os.execvp(command[0], command)
 
-    # Resolve the destination before profiling, so a bad/unresolvable target fails the
-    # task now rather than after the GPU work and the report are already produced.
+    # Resolve the destination before profiling, so a bad/unresolvable target fails now
+    # rather than after the GPU work and the report are already produced.
     destination_dir = output_uri or default_output_uri()
     output_dir = workdir() / NSYS_OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = report_path(output_dir, task_index)
-    nsys_bin = resolve_nsys_bin(workdir() / NSYS_INSTALL_DIR)
+    output_path = report_path(output_dir, index)
+    nsys_bin = resolve_nsys_bin()
     nsys_argv = build_nsys_argv(nsys_bin, output_path, trace, capture_range)
     # nsys stages its injection libraries in TMPDIR, and /tmp is mounted noexec.
     os.environ["TMPDIR"] = str(output_dir)
-    logger.info("task %d profiling to %s%s", task_index, output_path, _REPORT_SUFFIX)
+    logger.info("unit %d profiling to %s%s", index, output_path, _REPORT_SUFFIX)
 
     returncode = _supervise(nsys_argv, command)
 
@@ -263,12 +265,12 @@ def run(tasks: str, trace: str, capture_range: bool, output_uri: str | None, arg
     if not report.exists():
         # A crash before nsys wrote anything is the usual reason, so the command's own
         # failure stays the reported one. But a command that *succeeded* with no report
-        # must not pass as a successful profiling run: the task would be recorded green
+        # must not pass as a successful profiling run: the unit would be recorded green
         # and its workdir dropped, having produced the one artifact it was asked for.
-        logger.error("task %d wrote no report at %s (command exited %d)", task_index, report, returncode)
+        logger.error("unit %d wrote no report at %s (command exited %d)", index, report, returncode)
         sys.exit(returncode or _NO_REPORT_EXIT)
     destination = upload_report(report, destination_dir)
-    logger.info("task %d uploaded %s (%.1f MB)", task_index, destination, report.stat().st_size / 1e6)
+    logger.info("unit %d uploaded %s (%.1f MB)", index, destination, report.stat().st_size / 1e6)
     sys.exit(returncode)
 
 
@@ -276,13 +278,13 @@ def main(argv: list[str] | None = None) -> NoReturn:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     raw = list(sys.argv[1:] if argv is None else argv)
     if "--" not in raw:
-        raise SystemExit("usage: python -m iris.cluster.hooks.nsys_main --tasks SPEC [--output-uri URI] -- <command...>")
+        raise SystemExit("usage: python -m iris.runtime.nsys [--tasks SPEC] [--output-uri URI] -- <command...>")
     split = raw.index("--")
     own_args, command = raw[:split], raw[split + 1 :]
 
-    parser = argparse.ArgumentParser(prog="python -m iris.cluster.hooks.nsys_main")
-    parser.add_argument("--tasks", required=True, help="'first', 'all', or a comma-separated list of task indices")
-    parser.add_argument("--trace", required=True, help="nsys --trace value (e.g. cuda,nvtx,cublas)")
+    parser = argparse.ArgumentParser(prog="python -m iris.runtime.nsys")
+    parser.add_argument("--tasks", default="first", help="'first', 'all', or a comma-separated list of indices")
+    parser.add_argument("--trace", default="cuda,nvtx,cublas", help="nsys --trace value")
     parser.add_argument("--output-uri", default=None, help="report directory URI (default: the cluster temp bucket)")
     parser.add_argument(
         "--capture-range",
