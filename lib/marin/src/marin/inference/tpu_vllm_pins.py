@@ -16,7 +16,7 @@ pins from the workspace lock the in-checkout path uses.
 VLLM_FORK_URL = "https://github.com/marin-community/vllm.git"
 VLLM_FORK_REV = "afb26719464d5957e695bde478ae93a160b11d14"
 TPU_INFERENCE_FORK_URL = "https://github.com/marin-community/tpu-inference.git"
-TPU_INFERENCE_FORK_REV = "734d2842aa883c8f7bcff87a4b437a366f3adbc0"
+TPU_INFERENCE_FORK_REV = "235c5e2dc8f7aa7766ce63d145a3e50499539b3a"
 
 
 def vllm_fork_ref() -> str:
