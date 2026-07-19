@@ -1364,3 +1364,41 @@ author: mcwitt
   B (our stack, bf16) 330,897 tok/s / ≈21.3% (+5.5% tok/s — caveat: B runs
   SCALE_MUON_NO_NS, so B-vs-A conflates stack wins with skipped
   Newton-Schulz); C (mxfp8) pending — C-vs-B is the clean mxfp8 read.
+
+### 2026-07-19 02:20 - MXFP8-007c COMPLETE: three-way comparison landed — mxfp8 +27.8% over bf16, +34.8% over #7201 best
+- **C (mxfp8 arm, tq-mx) SUCCEEDED**: 422,832 tok/s steady ≈ 27.2% GB200-MFU
+  (2.5 PF convention), loss 7.935@49, 10.1 s/step, 50/50 steps, ckpt saved.
+  Same stack/flags as B except SCALE_FP8=mxfp8 SCALE_FP8_PRODUCER=xla.
+- Three-way at 64 GPUs (16 GB200 nodes, B1024, d5120/48L/E128 top-5, seq4096):
+
+  | arm | config | tok/s | GB200-MFU |
+  |---|---|---|---|
+  | A | #7201 best (EP1+sonic_cute, full MuonH) | 313,666 | 20.21% |
+  | B | our stack bf16 (ring EP4, scan, NO_NS) | 330,897 | ≈21.3% |
+  | C | B + mxfp8 fused kernels (xla producer) | 422,832 | ≈27.2% |
+
+  **C/B = 1.278** (isolated mxfp8 effect, apples-to-apples) — replicates the
+  8-GPU smoke ratio (1.155 there; better here, GEMM-heavier at EP4-local
+  E=32/shard). **C/A = 1.348** over the #7201 production best. `replicated`
+  (smoke + 64-GPU, distinct allocations).
+- Caveats: (1) B and C both run SCALE_MUON_NO_NS, so B-vs-A conflates stack
+  wins with skipped Newton-Schulz; C-vs-B is the clean mxfp8 read. (2) C's
+  final loss 7.935 vs B's 8.121 at step 49 — check whether the data order is
+  run-id-seeded before reading anything into per-run loss levels; smoke-scale
+  numerics parity (~2e-3 tracking) is the standing evidence. (3) 50-step
+  runs; steady tok/s variance <0.01%.
+- **NEW DEFECT + root cause (exploratory, 2 wedges + 1 clean A/B): the CuTe
+  producer compile-probe subprocess wedges multi-node startup.** tn-mx and
+  tp-mx (mxfp8_producer=auto) hung SILENTLY pre-compile (no rendezvous spam,
+  no errors; tp killed after 80+ min of nothing). tq-mx with
+  SCALE_FP8_PRODUCER=xla went submit→training in ~10 min. Suspect
+  `cute_producer_available()`'s per-process subprocess (jax init on GPUs the
+  parent already holds, 16 nodes) — needs a real fix before producer=auto is
+  usable at scale (probe on proc 0 only, or file-cache the probe verdict).
+  Knob landed as 1bad90b96.
+- Timeline note: attempts tn/tk/tl/tm were spread across an ~8h cluster
+  pod-creation outage (webhook 500s; probes wedged in ContainerCreating);
+  recovery detected 23:55 by an end-to-end 1-cpu probe job completing.
+- Driver lesson recorded: 900s log-staleness autokill fires mid-compile for
+  cold mxfp8 programs (tn killed wrongly); v13+ uses 2400s + rendezvous-spam
+  detection is still the only reliable deadlock tell.
