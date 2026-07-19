@@ -18,7 +18,7 @@ use crate::proto::finelog::stats::{
     OwnedQueryRequestView, OwnedRegisterTableRequestView, OwnedWriteRowsRequestView, QueryResponse,
     RegisterTableResponse, StatsService, WriteRowsResponse,
 };
-use crate::query::{make_ctx, run_query_over};
+use crate::query::{make_ctx, query_timeout, run_query_over, truncate_sql_for_log};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
@@ -160,10 +160,29 @@ impl StatsService for StatsServiceImpl {
         // DataFusion schedules its own CPU tasks; await sql()/collect() directly
         // (no spawn_blocking). Errors map by variant: parse/plan/schema/catalog
         // faults are client errors, IO/execution faults are server errors.
+        //
+        // Bound execution by the server-side wall-clock deadline: on elapse the
+        // query future is dropped (aborting the scan) and the caller gets a
+        // clean deadline_exceeded, so one pathological query can't run unbounded.
         let ctx = make_ctx();
-        let result = run_query_over(&ctx, providers, &sql)
-            .await
-            .map_err(map_query_error)?;
+        let query = run_query_over(&ctx, providers, &sql);
+        let result = match query_timeout() {
+            Some(deadline) => match tokio::time::timeout(deadline, query).await {
+                Ok(r) => r.map_err(map_query_error)?,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        deadline_ms = deadline.as_millis() as u64,
+                        sql = %truncate_sql_for_log(&sql),
+                        "query aborted: exceeded server-side deadline",
+                    );
+                    return Err(ConnectError::deadline_exceeded(format!(
+                        "query exceeded server-side deadline of {} ms",
+                        deadline.as_millis()
+                    )));
+                }
+            },
+            None => query.await.map_err(map_query_error)?,
+        };
 
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result

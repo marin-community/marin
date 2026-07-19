@@ -461,23 +461,29 @@ class RemoteClusterClient:
         self,
         *,
         query: controller_pb2.Controller.JobQuery,
+        limit: int | None = None,
         page_size: int = 500,
     ) -> list[job_pb2.JobStatus]:
-        """Fetch all jobs matching ``query`` by paging through ``ListJobs``.
+        """Fetch jobs matching ``query`` by paging through ``ListJobs``.
 
-        The server caps each page at ``MAX_LIST_JOBS_LIMIT`` and rejects deep
-        offsets (``MAX_LIST_JOBS_OFFSET``). Callers must supply a query that
-        narrows the result set with ``state_filter`` / ``name_filter`` /
-        ``parent_job_id``; otherwise the page walk will fail once it reaches
-        the offset cap.
+        ``limit`` caps the total number of jobs returned; paging stops as soon
+        as that many are collected (or the result set is exhausted). Because the
+        server defaults to sorting by submission date descending, a small
+        ``limit`` yields the most recent jobs without scanning the whole table.
+
+        ``limit=None`` walks every matching job. That requires a query narrow
+        enough to stay under ``MAX_LIST_JOBS_OFFSET`` (via ``state_filter`` /
+        ``name_filter`` / ``job_id_prefix`` / ``parent_job_id``); otherwise the
+        walk fails once it reaches the offset cap.
         """
         jobs: list[job_pb2.JobStatus] = []
         offset = query.offset or 0
-        while True:
+        while limit is None or len(jobs) < limit:
+            this_page = page_size if limit is None else min(page_size, limit - len(jobs))
             page_query = controller_pb2.Controller.JobQuery()
             page_query.CopyFrom(query)
             page_query.offset = offset
-            page_query.limit = page_size
+            page_query.limit = this_page
 
             def _call(q=page_query):
                 request = controller_pb2.Controller.ListJobsRequest(query=q)
@@ -486,8 +492,9 @@ class RemoteClusterClient:
             response = call_with_retry("list_jobs", _call)
             jobs.extend(response.jobs)
             if not response.has_more or not response.jobs:
-                return jobs
+                break
             offset += len(response.jobs)
+        return jobs
 
     def shutdown(self, wait: bool = True) -> None:
         del wait

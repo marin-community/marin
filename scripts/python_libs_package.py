@@ -11,10 +11,10 @@ dist/. Publication to PyPI is done by the release workflow
 `pypa/gh-action-pypi-publish` with OIDC trusted publishing -- this script
 never uploads anything and never needs a token.
 
-marin-finelog is NOT built here: it has its own release workflow
-(.github/workflows/finelog-release-wheels.yaml) that publishes the pure wheel
-together with its native (maturin) companion marin-finelog-server, mirroring
-marin-dupekit.
+marin-finelog and marin-dupekit are NOT built here: each has its own release
+workflow (finelog-release-wheels.yaml, dupekit-release-wheels.yaml) that
+publishes a pure-Python wheel together with its native (maturin) companion
+(marin-finelog-server, marin-dupekit-native).
 
 Four modes:
     nightly  -- version becomes <dev_base>.dev<YYYYMMDDhhmm> (UTC). <dev_base>
@@ -147,7 +147,7 @@ _SIBLING_ITEM_RE = re.compile(
 def _rewrite_sibling_pins(text: str, version: str) -> str:
     """Pin every sibling marin-* package in dependency list items to ==<version>."""
     return _SIBLING_ITEM_RE.sub(
-        lambda m: (f'{m.group("indent")}"{m.group("name")}{m.group("extras") or ""}=={version}"{m.group("tail")}'),
+        lambda m: f'{m.group("indent")}"{m.group("name")}{m.group("extras") or ""}=={version}"{m.group("tail")}',
         text,
     )
 

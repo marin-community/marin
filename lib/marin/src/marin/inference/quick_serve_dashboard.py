@@ -19,7 +19,7 @@ import importlib.resources
 import logging
 import socket
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 
@@ -52,6 +52,25 @@ _REQUEST_DROP_HEADERS = frozenset(
 # Response headers dropped so the framing matches the re-chunked StreamingResponse.
 # Content-Encoding is preserved because aiter_raw() yields the undecoded body.
 _RESPONSE_DROP_HEADERS = frozenset({"content-length", "connection", "keep-alive", "transfer-encoding"})
+
+
+def _forwardable_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Headers to forward upstream: drop hop-by-hop headers and a blank-token ``Authorization``.
+
+    lm-eval's ``local-completions`` client always sends ``Authorization: Bearer <key>`` with an empty
+    key when none is configured, i.e. the literal value ``"Bearer "``. That trailing-space value is an
+    illegal HTTP header that httpx refuses to send, which would 502 the whole request. The upstream
+    needs no auth, so a blank-token ``Authorization`` is dropped rather than forwarded; a real token
+    passes through unchanged.
+    """
+    forwardable: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() in _REQUEST_DROP_HEADERS:
+            continue
+        if key.lower() == "authorization" and not value.removeprefix("Bearer").strip():
+            continue
+        forwardable[key] = value
+    return forwardable
 
 
 @dataclass(frozen=True)
@@ -117,7 +136,7 @@ def build_dashboard_app(
     async def proxy(request: Request) -> Response:
         client = state["client"]
         body = await request.body()
-        fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _REQUEST_DROP_HEADERS}
+        fwd_headers = _forwardable_request_headers(request.headers)
         upstream_request = client.build_request(
             request.method,
             request.url.path,

@@ -57,13 +57,19 @@ iris cluster dashboard-proxy        # local proxy to remote controller (no tunne
 `iris cluster controller restart` restarts the controller only (seconds of downtime, workers unaffected).
 `iris cluster restart` tears down **everything** — controller + all workers. All jobs die. **Never run the full `iris cluster restart` without explicit user approval.**
 
-Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture baseline (`iris cluster status`) -> restart -> verify.
+Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
+
+`iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds fresh controller/worker/task images from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them (`:<hash>` and `:latest`), pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
 **Rollout state is recorded automatically.** Each `controller restart` writes a rollout record to `gs://…/<cluster>/state/rollout-record.json` — the image it deployed, the image it replaced, the pre-deploy checkpoint it took, and a phase (`pending` → `committed` for a forward deploy; `rollback_requested` → `rolled_back` for a revert). The rollback coordinates are captured as part of the deploy, so you never track them by hand. A forward restart also **health-checks the new controller and auto-rolls back** to the previous image + its pre-deploy checkpoint if the deploy fails to come up. (The *first* deploy after this landed has no prior record, so there is nothing to auto-roll back to — recover a failed first deploy by checking out known-good code and restarting forward, or use the on-VM procedure below.)
+
+**A failed SSH leg aborts the restart safely.** On a GCE cluster the restart drives the VM over `gcloud compute ssh --tunnel-through-iap`; if that SSH fails (it retries 3×), the CLI prints `Rollback restart failed: Command failed after 3 attempts: SSH exit code 255` and exits — but the running controller was never touched. Confirm with `iris cluster status`: the old version still healthy means nothing deployed and nothing needs rolling back; fix SSH and retry the restart.
+
+**GCE controller SSH auth is per-username, and agent/headless sessions may lack it.** `gcloud compute ssh` connects as your *local OS username*; `Permission denied (publickey)` right after the IAP tunnel opens means the VM refused that username+key pair, not that the tunnel failed. The controller VM does not necessarily honor every key visible in project/instance `ssh-keys` metadata for your username, so a key that "should" work from metadata inspection can still be refused — and adding new keys (metadata or OS Login) from an unattended session is exactly the kind of credential change an operator should approve first. If the restart's SSH leg is refused from your session, run the restart from a session that already has working SSH to the VM rather than minting access. Note this only gates GCE clusters (`marin`, `marin-dev`); CoreWeave controller restarts go through the Kubernetes API (kubeconfig at `~/.kube/coreweave-iris`, context pinned per cluster config) and need no SSH.
 
 ### Rolling back a controller deploy (migration-aware)
 
@@ -222,6 +228,15 @@ iris cluster vm status                          # scale groups with slice counts
 
 Priority bands: `PRIORITY_BAND_INTERACTIVE` (default), `PRIORITY_BAND_PRODUCTION` (can preempt interactive), `PRIORITY_BAND_BATCH` (preemptible). See [`docs/priority-bands.md`](docs/priority-bands.md) for the user-facing guide on when to pick each band.
 
+`get-scheduler-state`'s `running_buckets` is a **live DB projection** (tasks where
+`state=RUNNING AND current_worker_id IS NOT NULL`), not an independent in-memory set.
+It is self-consistent within a single call but **skews across separate RPC calls** on
+a busy cluster — a task can move workers between two calls seconds apart. Do not
+diagnose a "worker running a task the tasks-table doesn't show" by diffing
+`running_buckets` against a *separately-timed* `iris query`; that mismatch is snapshot
+skew, not a leak. To check for a genuine leak, use one atomic query (e.g. RUNNING
+tasks whose `current_worker_id` is absent from `workers`).
+
 ## SQL Queries
 
 The controller exposes its SQLite DB via RPC:
@@ -233,7 +248,7 @@ iris query "SELECT state, count(*) FROM tasks GROUP BY state" -f csv
 
 **Never modify the controller database** without explicit user approval — read-only queries only, even on offline checkpoints.
 
-State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 7=WORKER_FAILED, 8=UNSCHEDULABLE, 9=ASSIGNED (tasks only), 10=PREEMPTED (tasks only).
+State codes: 1=PENDING, 2=BUILDING, 3=RUNNING, 4=SUCCEEDED, 5=FAILED, 6=KILLED, 7=WORKER_FAILED, 8=UNSCHEDULABLE, 9=ASSIGNED (tasks only), 10=PREEMPTED (tasks only), 11=COSCHED_FAILED (tasks only — a coscheduled sibling bounced when its gang-mate went down; terminal, not charged preemption budget), 12=MISSING.
 
 ### Sharp edges
 
@@ -259,13 +274,26 @@ SELECT task_id, attempt_id, state, exit_code, error FROM task_attempts
 WHERE task_id LIKE '%<job_fragment>%' ORDER BY attempt_id;
 ```
 
-Controller audit events (`event=<kind> action=<action> entity=<id> ...`) are
-emitted as structured `logger.info` lines — query them through
-`iris process logs` with a substring filter, not via SQL. Example:
+Controller audit events (`event=<action> entity=<id> trigger=<trigger> <k=v ...>`)
+are emitted as structured `logger.info` lines — query them through
+`iris process logs` with its **built-in `--substring` filter**, not via SQL.
+
+**`process logs` has no `--since` flag** (its only options are `-t/--target`,
+`--level`, `-f/--follow`, `--max-lines`, `--substring`). Do **not** pipe the raw
+output through `grep` — an unrecognized `--since` is dropped and a post-hoc `grep`
+over the default window silently returns nothing. Filter server-side instead:
 
 ```bash
-iris process logs --since 24h | grep 'event=worker_failed'
+iris process logs --substring='event=worker_failed' --max-lines 200
+iris process logs --substring='<slice-or-worker-or-job-id>' --max-lines 40   # trace one entity's whole lifecycle
 ```
+
+Useful event names (the `action` passed to `log_event`): `worker_registered`,
+`worker_failing`, `worker_pruned`, `assignment_queued`, `task_preempted`,
+`task_unschedulable`, `task_timeout`, `job_submitted`, `slice_ready`,
+`slice_pruned`, `reconcile_rpc_failed`. `task_preempted` records
+`reason=Preempted by <preemptor-task-id>`, so substring-tracing a victim shows
+exactly which higher-priority job evicted it.
 
 Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"`.
 
@@ -342,13 +370,13 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
-- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — periodic CPU captures are py-spy **speedscope** JSON. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `source` so the dashboard's per-source list query prunes via parquet row-group min/max. Filter on `source` (a task path like `/user/job/.../<index>`, `/system/worker/<id>`, or `/system/controller`) and `type` (`cpu`/`memory`/`thread`). `format` is the blob encoding — the GCE/TPU worker's periodic CPU captures are py-spy **speedscope** JSON; the k8s backend's periodic captures are py-spy **thread dumps** (`type=thread`), since a hung collective samples no CPU but a thread dump pinpoints where every rank is blocked. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`). To find a hang, read the last periodic `thread` capture per `source` before the freeze.
 
 Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
 Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
 
-Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
+Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (periodic thread dumps of every running pod + on-demand all types), and by the controller for `/system/controller` self-captures. The k8s backend has no per-node worker daemon, so its `PeriodicProfiler` runs the equivalent 10-minute loop controller-side (`profile_poll_interval`), dumping each running pod's threads off the reconcile path.
 
 Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `finelog.config`):
 
@@ -432,14 +460,6 @@ subpath and does not reach the controller's finelog server.
 | Task retrying | `iris job summary /user/job` — per-task state and exit codes; `iris job logs /user/job` for the per-attempt errors. |
 | Task failed with exit 137 / suspected OOM | `iris job summary /user/job` — per-task peak memory + exit code. If most shards peak near the container memory limit, raise `--memory` on resubmit. |
 | Dashboard unreachable | Verify tunnel is alive. `curl -sf http://localhost:10000/health`. |
-
-## Known Bugs
-
-1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detect by joining `workers` against active tasks in `task_attempts`.
-
-2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
-
----
 
 ## GCP (TPU) Operations
 

@@ -26,6 +26,7 @@ import logging
 import re
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Self, TypeVar, cast
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import StoragePath, marin_prefix, prefix_join, url_to_fs
@@ -175,14 +176,45 @@ class ArtifactRecord(BaseModel):
 
 
 # The one canonical CalVer form (``YYYY.MM.DD`` with an optional ``.N`` for two immutable
-# revisions on the same day), shared by the lazy layer (``lazy._validate_version``) and
-# ``marin.publish``. Keep it here so callers agree on version identity without importing ``lazy``.
+# revisions on the same day). Kept here, beside ``validate_version``, so callers agree on version
+# identity without importing ``lazy``.
 CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 
 
 def is_mutable_version(version: str) -> bool:
     """A ``dev`` version is mutable: the drift check is skipped and it always rebuilds."""
     return version == "dev" or version.endswith("-dev")
+
+
+def validate_path_segment(label: str, value: str) -> None:
+    """A ``name``/``version`` is a single path segment: non-empty, no URL scheme, no ``..``, no
+    leading/trailing slash. A malformed one is a caller bug, not a silent malformed path."""
+    if not value:
+        raise ValueError(f"{label} must be non-empty")
+    if "://" in value or urlparse(value).scheme:
+        raise ValueError(f"{label} {value!r} must not contain a URL scheme")
+    if ".." in value:
+        raise ValueError(f"{label} {value!r} must not contain '..'")
+    if value.startswith("/") or value.endswith("/"):
+        raise ValueError(f"{label} {value!r} must not start or end with '/'")
+
+
+def validate_version(version: str) -> None:
+    """Validate an artifact version string, raising :class:`ValueError` if malformed.
+
+    A version is a path segment that is either a calendar version ``YYYY.MM.DD`` (optionally
+    ``YYYY.MM.DD.N``) or a mutable ``dev``/``<label>-dev``. ``v1``-style tags are rejected: an
+    artifact's version is the author's explicit statement of "when this recipe was frozen", not an
+    opaque label.
+    """
+    validate_path_segment("version", version)
+    if is_mutable_version(version):
+        return
+    if not CALVER_RE.match(version):
+        raise ValueError(
+            f"version {version!r} must be a calendar version YYYY.MM.DD (optionally YYYY.MM.DD.N) "
+            "or a mutable 'dev'/'<label>-dev'"
+        )
 
 
 def _resolved(output_path: str) -> str:

@@ -56,7 +56,7 @@ import levanter.utils.logging
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
+from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -67,6 +67,7 @@ from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
 from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct_values, value_at_step
 from levanter.tracker import TrackerConfig, capture_time
+from levanter.tracker.telltale import TelltaleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
@@ -280,6 +281,7 @@ class Trainer:
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        self._checkpointer: Optional[Checkpointer] = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -287,10 +289,9 @@ class Trainer:
             self.tracker = levanter.tracker.current_tracker()
         except RuntimeError:
             # No global tracker set, create one
-            if isinstance(config.tracker, Sequence):
-                self.tracker = levanter.tracker.CompositeTracker([c.init(self.run_id) for c in config.tracker])
-            else:
-                self.tracker = config.tracker.init(self.run_id)
+            self.tracker = levanter.tracker.CompositeTracker(
+                [c.init(self.run_id) for c in _compose_with_telltale(config.tracker)]
+            )
 
         if add_default_hooks:
             self._add_default_hooks()
@@ -380,6 +381,17 @@ class Trainer:
 
     def __exit__(self, *args):
         problems = []
+
+        # Block on any in-flight async checkpoint serialization before tearing down the tracker
+        # and mesh. A run that has returned must have durably written its final checkpoint, and
+        # letting the background commit thread finish here also avoids it logging into the
+        # already-closed tracker/stdout during teardown.
+        if self._checkpointer is not None:
+            try:
+                self._checkpointer.wait_until_finished()
+            except Exception as e:
+                problems.append(e)
+
         for cmanager in reversed(self._cmanagers):
             try:
                 cmanager.__exit__(*args)
@@ -582,7 +594,8 @@ class Trainer:
             levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
         )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
-        self._checkpointer = self.config.checkpointer.create(self.run_id)
+        checkpointer = self.config.checkpointer.create(self.run_id)
+        self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
             self._checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
@@ -788,12 +801,16 @@ class Trainer:
         return fn(*args, **kwargs)
 
 
-def _initialize_global_tracker(config, run_id):
-    if isinstance(config, Sequence):
-        tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in config])
-    else:
-        tracker = config.init(run_id)
+def _compose_with_telltale(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:
+    """The configured tracker(s), with a ``TelltaleConfig`` appended unless one is already present."""
+    configs = list(config) if isinstance(config, Sequence) else [config]
+    if not any(isinstance(c, TelltaleConfig) for c in configs):
+        configs = [*configs, TelltaleConfig()]
+    return configs
 
+
+def _initialize_global_tracker(config, run_id):
+    tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in _compose_with_telltale(config)])
     levanter.tracker.set_global_tracker(tracker)
 
 

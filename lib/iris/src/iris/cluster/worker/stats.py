@@ -4,7 +4,10 @@
 """Finelog stats schemas used by iris.
 
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
-  resource rows. Replace the controller's old in-memory history tables.
+  resource rows. Replace the controller's old in-memory history tables. On
+  Kubernetes clusters, which have no per-node worker daemon, the cluster backend
+  emits one ``iris.worker`` row per node (host utilization + GPU hardware), so
+  nodes surface as workers in the same dashboards.
 - ``iris.task_status`` — markdown status text pushed from inside a running
   task via ``RemoteClusterClient.report_task_status_text``.
 
@@ -29,6 +32,7 @@ from iris.rpc import job_pb2
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
 TASK_STATUS_NAMESPACE = "iris.task_status"
+TASK_EVENT_NAMESPACE = "iris.task_event"
 
 # Task status rows are only useful while a task is still running — once
 # the job ends the data is dead weight on the finelog server. Cap the
@@ -36,6 +40,15 @@ TASK_STATUS_NAMESPACE = "iris.task_status"
 # Worker / task stats keep the cluster-wide defaults so historical
 # resource-usage queries continue to work.
 TASK_STATUS_STORAGE_POLICY = StoragePolicy(
+    max_bytes=100 * 1024 * 1024,
+    max_age_seconds=3600,
+)
+
+# Scheduling/admission events are a diagnostic history read only while a job is
+# alive (and briefly after, to explain a failure). The producer already
+# deduplicates on the verdict so the row count per attempt is small; a short
+# retention keeps the timeline cheap on the finelog server.
+TASK_EVENT_STORAGE_POLICY = StoragePolicy(
     max_bytes=100 * 1024 * 1024,
     max_age_seconds=3600,
 )
@@ -99,6 +112,18 @@ class IrisWorkerStat:
     tpu_name: str
     gce_instance_name: str
     zone: str
+    # Aggregate GPU hardware readings across the host's accelerators, summed
+    # (HBM, power) or reduced (mean utilization, hottest temperature) across the
+    # devices. None on a host with no accelerator or whose device exporter did
+    # not answer. Populated for k8s nodes from the cluster's dcgm-exporter (a
+    # worker daemon leaves these unset — its accelerators report per-process
+    # usage through the in-task telltale exporter instead).
+    gpu_count: int | None = None
+    hbm_used_bytes: int | None = None
+    hbm_total_bytes: int | None = None
+    gpu_util_pct: float | None = None
+    gpu_temp_c: float | None = None
+    gpu_power_w: float | None = None
 
 
 @dataclass
@@ -139,6 +164,33 @@ class TaskStatusRow:
     ts: datetime
     status_text_detail_md: str
     status_text_summary_md: str
+
+
+@dataclass
+class TaskEventRow:
+    """One scheduling/admission event observed for a task attempt.
+
+    The "event log for every job": a backend appends a row each time the
+    diagnostic verdict for a not-yet-running attempt changes (Kueue admission
+    denial, image-pull failure, unschedulable), so the dashboard can render the
+    sequence of reasons behind a wait. Read newest-first, filtered by attempt.
+
+    Fields mirror a Kubernetes event so a future producer can relay real events
+    unchanged: ``type`` is the severity (``Warning``/``Normal``), ``reason`` the
+    short code, ``source`` the emitting layer (e.g. ``k8s/kueue``), ``count`` the
+    repeat multiplicity.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    task_id: str
+    attempt_id: int
+    ts: datetime
+    type: str
+    reason: str
+    message: str
+    source: str
+    count: int
 
 
 def build_worker_stat(

@@ -51,8 +51,6 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
-    SupervisedLmDatasetFormat,
-    SupervisedTextProcessor,
     TextLmDatasetFormat,
 )
 from levanter.models.lm_model import LmExample
@@ -331,7 +329,7 @@ class DatasetComponent(DatasetComponentBase):
     source: LmDatasetSourceConfigBase | None = None
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
-    pack: bool | int | Literal["pad"] | None = None
+    pack: bool | int | None = None
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -384,7 +382,7 @@ class HierarchicalMixtureDatasetComponent(DatasetComponentBase):
                 )
 
 
-def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
+def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
@@ -442,6 +440,26 @@ class LazyAsyncDataset(AsyncDataset[T_co]):
         return await dataset.getitem_async(index)
 
 
+def _resolve_pack_config(
+    pack: bool | int,
+    *,
+    packed_slice_strategy: Literal["left", "right", "raise"] = "left",
+) -> tuple[int, Literal["left", "right", "raise"]]:
+    """Resolve a ``pack`` value to ``(max_segments_per_example, slice_strategy)``.
+
+    A falsy value (``False``/``0``) selects one document per example, padded to
+    ``Pos``, with over-long documents raising instead of being silently truncated.
+    ``True`` packs up to 64 documents per example; an integer packs up to that many.
+    ``packed_slice_strategy`` applies only to the packing branches -- the
+    one-document-per-example case always raises.
+    """
+    if not pack:
+        return 1, "raise"
+    if pack is True:
+        return 64, packed_slice_strategy
+    return int(pack), packed_slice_strategy
+
+
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
@@ -478,6 +496,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -495,6 +514,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
+                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -547,6 +567,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
+                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -566,14 +587,13 @@ def dataset_for_component(
     pack = _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
-        if pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
         if pack:
-            max_segments = 64 if pack is True else int(pack)
+            max_segments, slice_strategy = _resolve_pack_config(pack)
             return PackedTokenDataset(
                 cache,
                 Pos,
                 max_segments_per_example=max_segments,
+                slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
             )
         return CausalLmDataset(
@@ -582,38 +602,15 @@ def dataset_for_component(
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,
         )
-    elif isinstance(fmt, SupervisedLmDatasetFormat):
-        loss_weights_key = SupervisedTextProcessor.loss_weights_key
-        if pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        if pack:
-            max_segments = 64 if pack is True else int(pack)
-            return PackedTokenDataset(
-                cache,
-                Pos,
-                max_segments_per_example=max_segments,
-                loss_weights_key=loss_weights_key,
-                block_cross_document_attention=block_cross_document_attention,
-            )
-        return CausalLmDataset(
-            TokenSeqDataset(cache, Pos.size, loss_weights_key=loss_weights_key),
-            Pos,
-            eos_id=eos_id,
-            block_cross_document_attention=block_cross_document_attention,
-        )
     elif isinstance(fmt, ChatLmDatasetFormat):
-        effective_pack = pack
-        if effective_pack == "pad":
-            raise NotImplementedError("Padding mode not yet implemented.")
-        max_segments = (
-            64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
-        )
-        mask_user_turns = fmt.mask_user_turns
+        # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
+        max_segments, slice_strategy = _resolve_pack_config(pack)
         return ChatDataset(
             cache,
             Pos,
             max_segments_per_example=max_segments,
-            mask_user_turns=mask_user_turns,
+            slice_strategy=slice_strategy,
+            mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
@@ -1296,8 +1293,19 @@ class LmDataConfig:
                 return name, cache, None
 
             if cache_exists:
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
-                return name, cache, None
+                try:
+                    cache = load_lm_dataset_cache(
+                        cache_path,
+                        component.format,
+                        self.the_tokenizer,
+                        self.enforce_eos,
+                    )
+                    return name, cache, None
+                except FileNotFoundError:
+                    logger.warning(
+                        "Cache dir at %s exists but is unloadable (likely a partial build); rebuilding it.",
+                        cache_path,
+                    )
             return name, None, (cache_path, shard_source, component.format)
 
         caches: dict[str, TreeCache[dict]] = {}

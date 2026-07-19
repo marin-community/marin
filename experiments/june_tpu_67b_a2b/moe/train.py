@@ -7,7 +7,9 @@ import dataclasses
 import functools
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -25,6 +27,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -70,6 +73,15 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     model_axis_size: int = 1
+
+    sft_weights_only_init: bool = False
+    """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
+    its own to auto-resume from, the trainer loads only the model weights (params +
+    ``pending_qb_betas``) from ``TrainerConfig.initialize_from`` and keeps the fresh
+    optimizer state and ``step=0`` -- i.e. a fresh LR schedule over the base weights,
+    not a full-state resume. False (default) keeps the byte-identical continued-pretrain
+    behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
+    step). Own-run checkpoints still take precedence, so preemption resumes normally."""
 
 
 @dataclass(frozen=True)
@@ -359,6 +371,35 @@ def initial_state(
     )
 
 
+def init_weights_only_from_checkpoint(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh | None,
+    load_ema: bool,
+    _load_fn: Callable[..., object] = load_checkpoint,
+) -> GrugTrainState:
+    """Load only model weights from an external checkpoint, resetting the optimizer.
+
+    This is the SFT/RL init (marin #650): the base checkpoint supplies ``params`` and the
+    ``pending_qb_betas`` router-bias state; the optimizer state and ``step`` stay at their
+    fresh values in ``state`` so training starts a new LR schedule from step 0 instead of
+    resuming the base run's optimizer/step.
+
+    ``load_ema`` mirrors the loaded weights into ``ema_params`` when the run tracks an EMA.
+    """
+    # Deserialize only the ``params`` subtree and the ``pending_qb_betas`` leaf, keyed by their
+    # GrugTrainState field names so they match the on-disk paths. allow_partial lets the base
+    # checkpoint's other leaves (opt_state / step / ema_params) go unread, so the base run's
+    # optimizer tree is never touched and stays fresh from ``state``.
+    exemplar: dict[str, object] = {"params": state.params, "pending_qb_betas": state.pending_qb_betas}
+    loaded = cast("dict[str, object]", _load_fn(exemplar, checkpoint_path, mesh=mesh, allow_partial=True))
+    updates: dict[str, object] = {"params": loaded["params"], "pending_qb_betas": loaded["pending_qb_betas"]}
+    if load_ema and state.ema_params is not None:
+        updates["ema_params"] = loaded["params"]
+    return dataclasses.replace(state, **updates)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -504,14 +545,34 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state = _init_state(model_key)
 
         checkpointer = trainer.checkpointer.create(run_id)
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-            initialize_from=trainer.initialize_from,
-        )
+        if config.trainer.sft_weights_only_init:
+            # SFT/RL: auto-resume from this run's own checkpoints if present (preemption),
+            # otherwise load only base weights (+ pending_qb_betas) and keep the fresh
+            # optimizer/step (marin #650). initialize_from is deliberately withheld here so
+            # the restore never does a full-state load; the weights-only init runs below.
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
+            if int(state.step) == 0 and trainer.initialize_from is not None:
+                state = init_weights_only_from_checkpoint(
+                    state,
+                    trainer.initialize_from,
+                    mesh=mesh,
+                    load_ema=config.trainer.ema_beta is not None,
+                )
+        else:
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+                initialize_from=trainer.initialize_from,
+            )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 

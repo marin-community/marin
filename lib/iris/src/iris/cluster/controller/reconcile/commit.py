@@ -56,6 +56,7 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
             "b_exit_code": d.exit_code,
             "b_started_at": d.started_at.epoch_ms() if d.started_at is not None else None,
             "b_finished_at": d.finished_at.epoch_ms() if d.finished_at is not None else None,
+            "b_status_message": d.status_message,
         }
         if d.state in ACTIVE_TASK_STATES:
             active_params.append(params)
@@ -70,6 +71,10 @@ def _flush_tasks(cur: Tx, deltas: list[TaskRowDelta]) -> None:
         "exit_code": func.coalesce(bindparam("b_exit_code"), tasks_table.c.exit_code),
         "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, bindparam("b_started_at")),
         "finished_at_ms": bindparam("b_finished_at"),
+        # None leaves the message unchanged; "" clears it (COALESCE treats only NULL as
+        # absent, so an empty-string bind writes through). The k8s provider sets it on
+        # every update, so it clears on RUNNING/terminal.
+        "status_message": func.coalesce(bindparam("b_status_message"), tasks_table.c.status_message),
     }
 
     if active_params:

@@ -24,7 +24,7 @@ fray_tpu_test = ["jax==0.10.1", "jaxlib==0.10.1", "libtpu==0.0.41", { include-gr
 dev = [{ include-group = "test" }]
 
 [tool.pytest.ini_options]
-addopts = "-m 'not slow and not tpu_ci' --import-mode=importlib"
+addopts = "-m 'not slow' --import-mode=importlib"
 pythonpath = ["src", "tests"]
 
 [tool.hatch.build.targets.wheel]

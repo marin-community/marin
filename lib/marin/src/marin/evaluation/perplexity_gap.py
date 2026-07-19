@@ -11,9 +11,8 @@ import wandb
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import add_prefixed_runtime_metric_scalars, compare_scored_outputs
-from levanter.analysis.perplexity_gap import write_report_files
-from levanter.data.text.datasets import DatasetComponent, HfDatasetSourceConfig, UrlDatasetSourceConfig
-from levanter.data.text.formats import SupervisedLmDatasetFormat, TextLmDatasetFormat
+from levanter.analysis.perplexity_gap import GapScoringDataset, write_report_files
+from levanter.data.text.datasets import HfDatasetSourceConfig, UrlDatasetSourceConfig
 from levanter.main.perplexity_gap import (
     GapFinderModelConfig as LevanterGapFinderModelConfig,
 )
@@ -263,7 +262,7 @@ def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
     ``summary.json``, ``token_counts.parquet``, and ``token_counts_summary.json``
     under ``config.output_path``.
     """
-    datasets = {name: _to_dataset_component(dataset) for name, dataset in config.datasets.items()}
+    datasets = {name: _to_gap_scoring_dataset(dataset) for name, dataset in config.datasets.items()}
 
     run_name = config.name.replace("/", "-")
     tags = ["model_perplexity_scores", *(config.wandb_tags or [])]
@@ -346,19 +345,14 @@ def _to_levanter_model_config(config: GapFinderModelConfig) -> LevanterGapFinder
     )
 
 
-def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
-    if config.input_key is None and config.target_key is None:
-        dataset_format = TextLmDatasetFormat(text_key=config.text_key)
-    elif config.input_key is not None and config.target_key is not None:
-        dataset_format = SupervisedLmDatasetFormat(input_key=config.input_key, target_key=config.target_key)
-    else:
-        raise ValueError("RawTextEvaluationDataset must set both input_key and target_key for supervised data.")
+def _to_gap_scoring_dataset(config: RawTextEvaluationDataset) -> GapScoringDataset:
+    if (config.input_key is None) != (config.target_key is None):
+        raise ValueError("RawTextEvaluationDataset must set both input_key and target_key for target-only scoring.")
     if config.hf_dataset_id is not None:
         source = HfDatasetSourceConfig(
             id=config.hf_dataset_id,
             name=config.hf_dataset_name,
             revision=config.hf_dataset_revision,
-            format=dataset_format,
             splits=[config.split],
         )
     else:
@@ -373,9 +367,15 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
         source = UrlDatasetSourceConfig(
             train_urls=[],
             validation_urls=validation_urls,  # type: ignore[arg-type]
-            format=dataset_format,
         )
-    return DatasetComponent(source=source, format=dataset_format, tags=list(config.tags), split=config.split)
+    return GapScoringDataset(
+        source=source,
+        split=config.split,
+        tags=tuple(config.tags),
+        text_key=config.text_key,
+        input_key=config.input_key,
+        target_key=config.target_key,
+    )
 
 
 def _validation_urls(input_path: str | InputName) -> list[str | InputName]:

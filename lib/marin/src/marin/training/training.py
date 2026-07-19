@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast
 
 from draccus.utils import DataclassInstance
-from fray.types import CpuConfig, ResourceConfig, TpuConfig
+from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig
@@ -381,6 +381,32 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
     logger.info("XLA sub-caches disabled (compilation cache is remote: %s)", cache_dir)
 
 
+# XLA disables the NCCL collective watchdog by default (-1). A positive value
+# makes XLA abort the communicators and raise TimeoutError once a collective is
+# stuck that long, so a hung collective becomes a process crash Iris can retry
+# instead of a silent mesh-wide hang.
+GPU_NCCL_TERMINATION_TIMEOUT_FLAG = "xla_gpu_nccl_termination_timeout_seconds"
+# Counts only time spent inside a collective, so it does not fire during compile
+# or data loading. Set above the longest legitimate collective (cross-rank skew on
+# a cold start, checkpoint/eval barriers). Override per run via XLA_FLAGS.
+DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT = 600
+
+
+def _add_gpu_collective_watchdog_env(env: dict[str, str]) -> None:
+    """Set the NCCL collective-watchdog timeout and NCCL_DEBUG in ``env`` (in place).
+
+    Defers to an explicit termination timeout already in ``XLA_FLAGS`` and to a
+    preset ``NCCL_DEBUG``.
+    """
+    xla_flags = env.get("XLA_FLAGS", "")
+    if GPU_NCCL_TERMINATION_TIMEOUT_FLAG not in xla_flags:
+        flag = f"--{GPU_NCCL_TERMINATION_TIMEOUT_FLAG}={DEFAULT_GPU_NCCL_TERMINATION_TIMEOUT}"
+        env["XLA_FLAGS"] = f"{xla_flags} {flag}".strip()
+
+    # WARN surfaces the abort and transport errors without INFO's per-collective volume.
+    env.setdefault("NCCL_DEBUG", "WARN")
+
+
 def resolve_training_env(
     base_env: dict[str, str] | None,
     resources: ResourceConfig,
@@ -403,6 +429,9 @@ def resolve_training_env(
         _check_for_wandb_key(env)
 
     env = add_run_env_variables(env)
+
+    if isinstance(resources.device, GpuConfig):
+        _add_gpu_collective_watchdog_env(env)
 
     if "JAX_COMPILATION_CACHE_DIR" not in env:
         env["JAX_COMPILATION_CACHE_DIR"] = _normalize_jax_compilation_cache_dir(

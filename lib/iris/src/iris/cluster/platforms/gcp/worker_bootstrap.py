@@ -29,6 +29,12 @@ _UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
 
 GHCR_MIRROR_REPO = "ghcr-mirror"
 
+# gVisor release the worker installs so the GVISOR container profile can run task
+# containers under `docker --runtime=runsc`. Pin explicitly; bump by checking
+# https://github.com/google/gvisor/releases (tag "release-YYYYMMDD.P" publishes
+# to the bare "YYYYMMDD.P" path under releases/release/).
+RUNSC_VERSION = "20260714.0"
+
 
 def zone_to_multi_region(zone: str) -> str | None:
     """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us').
@@ -175,6 +181,47 @@ fi
 
 # Ensure docker daemon is running
 sudo systemctl start docker || true
+
+# Install gVisor (runsc) and register it as a docker runtime so the GVISOR
+# container profile can launch task containers under `docker --runtime=runsc`.
+# The host dockerd (root) builds the sandbox — see lib/iris/docs/container-profiles.md.
+# Best-effort: a failed install leaves the worker usable for every other profile.
+if ! command -v runsc &> /dev/null; then
+    echo "[iris-init] Installing gVisor (runsc {{ runsc_version }})..."
+    RUNSC_ARCH="$(uname -m)"
+    RUNSC_BASE="https://storage.googleapis.com/gvisor/releases/release/{{ runsc_version }}/${RUNSC_ARCH}"
+    if sudo curl -fsSL "${RUNSC_BASE}/runsc" -o /usr/local/bin/runsc \
+        && sudo curl -fsSL "${RUNSC_BASE}/runsc.sha512" -o /tmp/runsc.sha512 \
+        && (cd /usr/local/bin && sudo sha512sum -c /tmp/runsc.sha512); then
+        sudo chmod 0755 /usr/local/bin/runsc
+        echo "[iris-init] runsc installed: $(runsc --version | head -1)"
+    else
+        echo "[iris-init] Warning: runsc install failed; GVISOR profile unavailable on this worker"
+        sudo rm -f /usr/local/bin/runsc
+    fi
+fi
+
+# Register the runsc runtime in daemon.json (merging, not clobbering) and reload
+# dockerd only when it is not already present, so re-runs cause no restart churn.
+if command -v runsc &> /dev/null && ! grep -q '"runsc"' /etc/docker/daemon.json 2>/dev/null; then
+    echo "[iris-init] Registering runsc docker runtime..."
+    sudo python3 - <<'RUNSC_DAEMON_EOF'
+import json, os
+path = "/etc/docker/daemon.json"
+cfg = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            cfg = json.load(f) or {}
+    except (ValueError, OSError):
+        cfg = {}
+cfg.setdefault("runtimes", {})["runsc"] = {"path": "/usr/local/bin/runsc"}
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+RUNSC_DAEMON_EOF
+    sudo systemctl restart docker
+    echo "[iris-init] runsc runtime registered"
+fi
 
 # gcloud ships as a snap on tpu-ubuntu2204-base; snapd mounts snaps
 # asynchronously during boot. Wait for seeding to finish here so `gcloud`
@@ -332,4 +379,5 @@ def build_worker_bootstrap_script(
         worker_config_json=worker_config_json,
         port_range=EPHEMERAL_PORT_RANGE,
         reserved_ports=RESERVED_HOST_PORTS,
+        runsc_version=RUNSC_VERSION,
     )

@@ -1,0 +1,121 @@
+{
+  "humaneval": {
+    "dataset": "openai/openai_humaneval",
+    "revision": "7dce6050a7d6d172f3cc5c32aa97f52fa1a2e544",
+    "cases": [
+      ["code-humaneval-01", 0],
+      ["code-humaneval-02", 25],
+      ["code-humaneval-03", 51],
+      ["code-humaneval-04", 77],
+      ["code-humaneval-05", 107],
+      ["code-humaneval-06", 136]
+    ]
+  },
+  "ifeval": {
+    "dataset": "google/IFEval",
+    "revision": "966cd89545d6b6acfd7638bc708b98261ca58e84",
+    "cases": [
+      ["instruction-ifeval-01", 0],
+      ["instruction-ifeval-02", 90],
+      ["instruction-ifeval-03", 180],
+      ["instruction-ifeval-04", 270],
+      ["instruction-ifeval-05", 361],
+      ["instruction-ifeval-06", 451]
+    ]
+  },
+  "mmlu": {
+    "dataset": "cais/mmlu",
+    "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+    "config": "all",
+    "cases": [
+      ["knowledge-mmlu-01", 0, []],
+      ["knowledge-mmlu-02", 11, []],
+      ["knowledge-mmlu-03", 25, []],
+      ["knowledge-mmlu-04", 41, []],
+      ["knowledge-mmlu-05", 52, [20, 21, 22, 23, 24]],
+      ["knowledge-mmlu-06", 81, [25, 26, 27, 28, 29]]
+    ]
+  },
+  "gsm8k": {
+    "dataset": "openai/gsm8k",
+    "revision": "740312add88f781978c0658806c59bc2815b9866",
+    "config": "main",
+    "fixed_cases": [
+      ["math-gsm8k-01", 0],
+      ["math-gsm8k-02", 1]
+    ],
+    "train_cases": [
+      ["math-gsm8k-03", 2, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]],
+      ["math-gsm8k-04", 3, [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]],
+      ["math-gsm8k-05", 4, [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]],
+      ["math-gsm8k-06", 5, [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]]
+    ]
+  },
+  "structeval": {
+    "dataset": "TIGER-Lab/StructEval",
+    "revision": "936be10548688c6d417cd435dd906158f19ba14b",
+    "cases": [
+      ["structured-structeval-01", 2],
+      ["structured-structeval-02", 125],
+      ["structured-structeval-03", 149],
+      ["structured-structeval-04", 240],
+      ["structured-structeval-05", 315],
+      ["structured-structeval-06", 325],
+      ["structured-structeval-07", 377],
+      ["structured-structeval-08", 394],
+      ["structured-structeval-09", 402],
+      ["structured-structeval-10", 415]
+    ]
+  },
+  "atlas": {
+    "dataset": "marin-community/mcp-atlas-easy",
+    "revision": "e16083f149d7d6de5b8524e139827466a8a9dd97",
+    "direct_cases": [
+      ["tool-atlas-01", 4],
+      ["tool-atlas-02", 5],
+      ["tool-atlas-03", 75],
+      ["tool-atlas-04", 127],
+      ["tool-atlas-05", 151],
+      ["tool-atlas-06", 168]
+    ],
+    "catalog_cases": [
+      ["tool-atlas-07", [0, 5, 6, 18, 20, 22, 23, 24, 26]],
+      ["tool-atlas-08", [110, 113, 114, 117, 120, 130, 134, 145, 151]]
+    ]
+  },
+  "mmmlu": {
+    "dataset": "openai/MMMLU",
+    "revision": "325a01dc3e173cac1578df94120499aaca2e2504",
+    "cases": [
+      ["specialized-mmmlu-01", "AR_XY", "abstract algebra", 31, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
+      ["specialized-mmmlu-02", "HI_IN", "computer security", 1502, [1471, 1472, 1473, 1474, 1475, 1476, 1477, 1478]],
+      ["specialized-mmmlu-03", "JA_JP", "anatomy", 131, [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111]],
+      ["specialized-mmmlu-04", "KO_KR", "astronomy", 266, [235, 236, 237, 238, 239, 240, 241, 242]],
+      ["specialized-mmmlu-05", "YO_NG", "professional medicine", 12196, [12165, 12166, 12167, 12168, 12169, 12170, 12171, 12172]],
+      ["specialized-mmmlu-06", "ZH_CN", "clinical knowledge", 518, [487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498]]
+    ]
+  },
+  "longbench": {
+    "dataset": "zai-org/LongBench-v2",
+    "revision": "2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9",
+    "file": "data.json",
+    "cases": [
+      ["specialized-longbench-02", 4],
+      ["long-longbench-06", 24],
+      ["long-longbench-07", 26],
+      ["long-longbench-08", 27],
+      ["long-longbench-09", 39],
+      ["knowledge-longbench-01", 40],
+      ["long-longbench-10", 43],
+      ["instruction-longbench-01", 47],
+      ["knowledge-longbench-02", 49],
+      ["long-longbench-11", 52],
+      ["long-longbench-01", 59],
+      ["long-longbench-02", 66],
+      ["long-longbench-03", 79],
+      ["specialized-longbench-01", 95],
+      ["long-longbench-04", 112],
+      ["long-longbench-05", 176]
+    ]
+  }
+}

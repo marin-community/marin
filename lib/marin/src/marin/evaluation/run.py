@@ -18,7 +18,6 @@ import draccus
 from rigging.filesystem import StoragePath
 
 from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evalchemy_evaluator import EvalchemyEvaluator
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.harbor_evaluator import HarborEvaluator
 from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
@@ -28,10 +27,11 @@ from marin.evaluation.utils import discover_hf_checkpoints
 
 logger = logging.getLogger(__name__)
 
+# New evals use Evalchemy over a served OpenAI URL. These two lm-eval backends remain for historical
+# data-mixing research launchers that require their smooth-metric and direct-Levanter paths.
 EVALUATORS = {
     "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
     "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
-    "evalchemy": EvalchemyEvaluator,
     "debug": SimpleEvaluator,
     "harbor": HarborEvaluator,
 }

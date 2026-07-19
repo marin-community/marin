@@ -161,8 +161,8 @@ def test_lm_eval_none_alias_patch_uses_requested_alias_fallback():
 
     _patch_lm_eval_none_alias_compat({"squad_completion": "squad_10shot"})
 
-    from lm_eval.evaluator import consolidate_results
-    from lm_eval.evaluator_utils import TaskOutput
+    from lm_eval.evaluator import consolidate_results  # noqa: PLC0415
+    from lm_eval.evaluator_utils import TaskOutput  # noqa: PLC0415
 
     task_output = TaskOutput(
         task=FakeTask(),
@@ -185,8 +185,8 @@ def test_lm_eval_task_name_alias_patch_uses_requested_alias_fallback():
 
     _patch_lm_eval_none_alias_compat({"squad_completion": "squad_10shot"})
 
-    from lm_eval import evaluator
-    from lm_eval.evaluator_utils import TaskOutput
+    from lm_eval import evaluator  # noqa: PLC0415
+    from lm_eval.evaluator_utils import TaskOutput  # noqa: PLC0415
 
     task_output = TaskOutput(
         task=FakeTask(),
@@ -203,7 +203,7 @@ def test_lm_eval_task_name_alias_patch_uses_requested_alias_fallback():
 def test_lm_eval_none_alias_patch_sanitizes_prepare_print_tasks():
     _patch_lm_eval_none_alias_compat({"jeopardy": "jeopardy_10shot"})
 
-    from lm_eval import evaluator
+    from lm_eval import evaluator  # noqa: PLC0415
 
     prepare_print_tasks = evaluator.evaluate.__wrapped__.__globals__["prepare_print_tasks"]
     task_agg, _group_agg = prepare_print_tasks({"jeopardy": object()}, {"jeopardy": {"alias": None}})
@@ -214,7 +214,7 @@ def test_lm_eval_none_alias_patch_sanitizes_prepare_print_tasks():
 def test_lm_eval_none_alias_patch_sanitizes_none_task_dict_key():
     _patch_lm_eval_none_alias_compat({"jeopardy": "jeopardy_10shot"})
 
-    from lm_eval import evaluator
+    from lm_eval import evaluator  # noqa: PLC0415
 
     task = type("FakeConfigurableTask", (), {"task_name": None})()
     prepare_print_tasks = evaluator.evaluate.__wrapped__.__globals__["prepare_print_tasks"]

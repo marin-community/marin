@@ -40,6 +40,26 @@ Use for work you are happy to have preempted by anyone else. Equivalent to
 
 BATCH jobs are the polite default when you don't strictly need a result soon.
 
+## How preemption is enforced
+
+The band a job runs at maps to a Kubernetes PriorityClass
+(`iris-{production,interactive,batch}`, values 1000/10/0) stamped on every pod. How
+that band turns into actual preemption depends on the backend:
+
+- **K8s GPU clusters (CoreWeave).** Every pod is admitted through Kueue. Kueue reads
+  the pod's PriorityClass as the Workload priority and, with the ClusterQueue's
+  `preemption.withinClusterQueue: LowerPriority` policy, evicts lower-priority
+  Workloads to admit a higher-priority one — including when Topology-Aware
+  Scheduling can't otherwise place it on full nodes. This is what lets a
+  higher-priority multi-host gang reclaim capacity from running `batch` gangs.
+  Preemption is whole-Workload (gang-aware): Kueue evicts a full lower-priority gang,
+  not a stray pod out of it.
+- **VM/TPU clusters.** There is no Kueue; the Iris controller's own scheduler ranks
+  pending tasks by band and reclaims slices directly.
+
+A preempted job surfaces as described in [`task-states.md`](task-states.md) and is
+requeued for retry.
+
 ## How band selection interacts with budgets
 
 Per-user budget tracking lives in

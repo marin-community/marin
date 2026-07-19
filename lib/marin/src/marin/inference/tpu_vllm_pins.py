@@ -14,7 +14,7 @@ pins from the workspace lock the in-checkout path uses.
 # Keep these equal to the ``[tool.uv.sources]`` git/rev for ``vllm`` and ``tpu-inference``
 # in the root pyproject; the sync test enforces it.
 VLLM_FORK_URL = "https://github.com/marin-community/vllm.git"
-VLLM_FORK_REV = "a0b205f2afd5b33d01703a4cd9b18453d5286f39"
+VLLM_FORK_REV = "afb26719464d5957e695bde478ae93a160b11d14"
 TPU_INFERENCE_FORK_URL = "https://github.com/marin-community/tpu-inference.git"
 TPU_INFERENCE_FORK_REV = "734d2842aa883c8f7bcff87a4b437a366f3adbc0"
 

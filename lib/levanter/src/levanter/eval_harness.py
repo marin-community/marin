@@ -62,14 +62,15 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
 
+# The pinned lm-eval fork reads attributes such as `transformers.AutoModelForVision2Seq` (removed in
+# transformers>=5) at import time, raising AttributeError rather than ImportError. Catch both so a
+# broken or absent fork degrades to "lm-eval unavailable" instead of crashing the run.
 try:
     from lm_eval import evaluator
     from lm_eval.api.instance import Instance
     from lm_eval.api.model import TemplateLM
     from lm_eval.models.utils import handle_stop_sequences, postprocess_generated_text
 except (ImportError, AttributeError):
-    # Optional dependency compatibility: some lm_eval/transformers combinations
-    # fail at import time inside lm_eval.models rather than raising ImportError.
     TemplateLM = object
     Instance = object
     evaluator = object
@@ -85,7 +86,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
@@ -263,9 +264,9 @@ class _LmEvalHarnessWorker:
             if self.mp is not None:
                 model = self.mp.cast_to_compute(model)
 
-            activations = model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
-            if isinstance(activations, tuple):
-                activations, _ = activations
+            activations, _ = split_activations(
+                model.activations(packed_example.tokens, attn_mask=packed_example.attn_mask)
+            )
 
             pred_embeddings = activations.astype(jnp.float32)
             pred_lm_head = model.get_lm_head().astype(jnp.float32)
@@ -434,7 +435,7 @@ def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
     return tokenizer.eos_token_id
 
 
-# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent
+# pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent or broken
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -774,7 +775,7 @@ class LevanterHarnessLM(TemplateLM):
             return None
 
         # Process stop sequences to ensure EOS is included
-        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent
+        # pyrefly: ignore[not-callable]  # handle_stop_sequences is None only when the optional lm_eval dep is absent or broken
         processed_until = handle_stop_sequences(until, eos=eos)
 
         if not processed_until:
@@ -962,7 +963,7 @@ class LevanterHarnessLM(TemplateLM):
                 text = self.tok_decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
-                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent
+                # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent or broken
                 text = postprocess_generated_text(
                     text,
                     gen_kwargs.get("until"),

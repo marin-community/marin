@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.biocollection import biocollection_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
@@ -35,8 +36,13 @@ from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.datakit.download.nemotron_code_v2_content import nemotron_code_v2_content_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
-from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
+from marin.datakit.download.nemotron_v2 import (
+    NEMOTRON_PRETRAINING_LEGAL_V1,
+    NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+    nemotron_v2_normalize_steps,
+)
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_normalize_steps
@@ -153,6 +159,11 @@ def all_sources() -> dict[str, DatakitSource]:
         ("institutional_books", institutional_books_normalize_steps, 203.63),
         ("massive_function_calling", massive_normalize_steps, 11.39),
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
+        (
+            "nemotron_code_v2/content",
+            nemotron_code_v2_content_normalize_steps,
+            120.254379519,
+        ),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("numinamath-1.5", numinamath_v1_5_normalize_steps, 0.40),
@@ -176,6 +187,18 @@ def all_sources() -> dict[str, DatakitSource]:
             "starcoder2/ir_python": 4.64,
             "starcoder2/ir_rust": 1.84,
             "starcoder2/kaggle": 1.38,
+        },
+    )
+
+    # TheBioCollection: two synthetic bio/chem streams from one HF repo, each
+    # staged and downloaded per-stream (see biocollection.py). Token counts are
+    # the exact Marin-tokenizer (Llama-3) totals from each stream's tokenized
+    # cache .stats.json.
+    biocollection = _rows_flat(
+        biocollection_normalize_steps,
+        {
+            "biocollection/free_text_stream": 33.186704843,
+            "biocollection/instruction_stream": 18.123700603,
         },
     )
 
@@ -326,6 +349,37 @@ def all_sources() -> dict[str, DatakitSource]:
             "nemotron_specialized_v1_1/unconditional_algorithmic": 0.19,
         },
     )
+    # v1.2 supersedes neither v1 nor v1.1 — it adds four new synthetic subsets
+    # (fact-seeking, moral scenarios, generative and multiple-choice questions).
+    # Its multiple_choice is a distinct, larger regeneration of the v1.1 subset
+    # of the same name, so both are carried.
+    nemotron_specialized_v1_2 = _rows_nemotron(
+        NEMOTRON_PRETRAINING_SPECIALIZED_V1_2,
+        "nemotron_specialized_v1_2",
+        {
+            "nemotron_specialized_v1_2/fact_seeking": 34.264249298,
+            "nemotron_specialized_v1_2/generative": 0.657347056,
+            "nemotron_specialized_v1_2/moral_scenarios": 0.014813270,
+            "nemotron_specialized_v1_2/multiple_choice": 6.826340523,
+        },
+    )
+    nemotron_legal = _rows_nemotron(
+        NEMOTRON_PRETRAINING_LEGAL_V1,
+        "nemotron_legal",
+        {
+            "nemotron_legal/california_code_of_regulations": 0.033064243,
+            "nemotron_legal/case_law_summary": 0.027076493,
+            "nemotron_legal/casehold": 3.839242351,
+            "nemotron_legal/definition_classification": 0.001354030,
+            "nemotron_legal/diversity_jurisdiction": 0.000837717,
+            "nemotron_legal/ecfr": 0.122605305,
+            "nemotron_legal/ecfr_qa": 0.549815436,
+            "nemotron_legal/function_of_decision": 0.023167261,
+            "nemotron_legal/globalcit": 0.007366386,
+            "nemotron_legal/legalbench_cuad_v2": 0.047987198,
+            "nemotron_legal/nycourts_judicial_ethics_opinions": 0.004178264,
+        },
+    )
 
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
@@ -349,6 +403,7 @@ def all_sources() -> dict[str, DatakitSource]:
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
         *starcoder2_extras,
+        *biocollection,
         *common_pile,
         *finepdfs,
         *nemotron_cc_v2,
@@ -359,6 +414,8 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *nemotron_specialized_v1_2,
+        *nemotron_legal,
         *safety_pretraining,
     )
 

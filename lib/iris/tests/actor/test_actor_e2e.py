@@ -4,8 +4,9 @@
 """End-to-end tests for actor server and client."""
 
 import pytest
-from iris.actor import ActorClient, ActorServer
+from iris.actor.client import ActorClient
 from iris.actor.resolver import FixedResolver
+from iris.actor.server import ActorServer
 
 
 class Calculator:

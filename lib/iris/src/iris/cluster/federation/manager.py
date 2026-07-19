@@ -19,6 +19,7 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 import logging
 import threading
 from collections.abc import Callable, Sequence
+from typing import TypeVar
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -43,9 +44,12 @@ from iris.cluster.federation.store import (
 )
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2
 
 logger = logging.getLogger(__name__)
+
+# Return type of a proxied on-demand RPC (a unary controller response).
+_T = TypeVar("_T")
 
 DEFAULT_HEARTBEAT_INTERVAL = Duration.from_seconds(30)
 DEFAULT_SYNC_INTERVAL = Duration.from_seconds(3)
@@ -284,37 +288,16 @@ class FederationManager:
 
     # -- on-demand proxy (parent side) ---------------------------------------
 
-    def proxy_profile(
-        self,
-        *,
-        peer_id: str,
-        request: job_pb2.ProfileTaskRequest,
-    ) -> job_pb2.ProfileTaskResponse:
-        """Forward a profile RPC for a federated task to its peer controller.
+    def proxy_to_peer(self, peer_id: str, call: Callable[[FederationPeer], _T]) -> _T:
+        """Forward an on-demand RPC for a federated task to its owning peer controller.
 
-        Job ids are cluster-invariant, so the request's target names the same task
-        on the peer — it is proxied verbatim to the peer's ``ProfileTask``. The peer
-        is authoritative: its answer — including a ``NOT_FOUND`` for a task it has
-        since moved or finished — propagates back.
+        Job ids are cluster-invariant, so a task's request names the same task on the
+        peer; ``call`` invokes the matching typed method on the peer connection (e.g.
+        ``lambda peer: peer.profile_task(request)``). The peer is authoritative — its
+        answer, including a ``NOT_FOUND`` for a task it has since moved or finished,
+        propagates back verbatim.
         """
-        peer = self._require_peer(peer_id)
-        return peer.profile_task(request)
-
-    def proxy_exec(
-        self,
-        *,
-        peer_id: str,
-        request: controller_pb2.Controller.ExecInContainerRequest,
-    ) -> controller_pb2.Controller.ExecInContainerResponse:
-        """Forward an exec RPC for a federated task to its peer controller.
-
-        Job ids are cluster-invariant, so the request's task id names the same task
-        on the peer — it is proxied verbatim to the peer's ``ExecInContainer``. The
-        peer is authoritative: its answer — including a ``NOT_FOUND`` — propagates
-        back.
-        """
-        peer = self._require_peer(peer_id)
-        return peer.exec_in_container(request)
+        return call(self._require_peer(peer_id))
 
     # -- background loops ----------------------------------------------------
 
@@ -380,9 +363,7 @@ class FederationManager:
             logger.warning("Cannot hand off %s: peer %s is not configured", spec.local_job_id, spec.peer_id)
             return
         try:
-            handoff = self._build_handoff_request(
-                spec.request, spec.local_job_id, spec.owner_principal, spec.submitting_user
-            )
+            handoff = self._build_handoff_request(spec)
             peer.launch_job(handoff)
         except ConnectError as exc:
             # The peer answers a rejected handoff the same way every time — a name
@@ -424,29 +405,22 @@ class FederationManager:
 
     # -- helpers -------------------------------------------------------------
 
-    def _build_handoff_request(
-        self,
-        request: controller_pb2.Controller.LaunchJobRequest,
-        local_job_id: JobName,
-        owner_principal: str,
-        submitting_user: str,
-    ) -> controller_pb2.Controller.LaunchJobRequest:
+    def _build_handoff_request(self, spec: HandoffSpec) -> controller_pb2.Controller.LaunchJobRequest:
         """The request delivered to the peer: the same cluster-invariant job name,
-        federation attribution, and the routing directives stripped (the peer matches
-        workers, not the parent's ``backend``/``cluster`` pins). Idempotency of a
-        re-drive is owned by the peer's federation-aware admission, which returns the
-        existing job for a re-drive from the same requester."""
+        federation attribution, and the routing directives stripped (the peer
+        matches workers, not the parent's ``backend``/``cluster`` pins)."""
         handoff = controller_pb2.Controller.LaunchJobRequest()
-        handoff.CopyFrom(request)
-        handoff.name = local_job_id.to_wire()
-        kept = [c for c in request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
+        handoff.CopyFrom(spec.request)
+        handoff.name = spec.local_job_id.to_wire()
+        kept = [c for c in spec.request.constraints if c.key not in (BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_KEY)]
         del handoff.constraints[:]
         handoff.constraints.extend(kept)
         handoff.federation.CopyFrom(
             controller_pb2.Controller.FederationHandoff(
                 requester_id=self._cluster_id,
-                owner_principal=owner_principal,
-                submitting_user=submitting_user,
+                owner_principal=spec.owner_principal,
+                submitting_user=spec.submitting_user,
+                handoff_nonce=spec.handoff_nonce,
             )
         )
         self._inline_blobs(handoff)

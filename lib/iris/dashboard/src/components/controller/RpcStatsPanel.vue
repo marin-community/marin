@@ -236,8 +236,10 @@ function currentSamples(method: string, tab: 'recent' | 'slow'): RpcCallSample[]
       <p class="text-xs text-text-muted mb-3">
         Per-method counters, latency percentiles, and an inline histogram on a log scale
         (3 buckets per octave, ≈1 ms → 60 s). Click a row to expand samples.
-        Request previews are redacted server-side for keys matching
-        <code class="font-mono">KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL</code>.
+        Request previews are redacted server-side for keys naming a secret, such as
+        <code class="font-mono">API_KEY</code>, <code class="font-mono">TOKEN</code>,
+        <code class="font-mono">SECRET</code>, <code class="font-mono">PASSWORD</code> or
+        <code class="font-mono">CREDENTIAL</code>.
       </p>
 
       <!-- Header -->

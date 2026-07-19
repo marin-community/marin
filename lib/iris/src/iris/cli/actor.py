@@ -8,8 +8,8 @@ import json
 import click
 from rigging.auth import GcpAccessTokenProvider, TokenProvider
 
-from iris.actor import ActorClient, ProxyResolver
-from iris.actor.resolver import ResolveResult
+from iris.actor.client import ActorClient
+from iris.actor.resolver import ProxyResolver, ResolveResult
 from iris.cli.connect import require_controller_url
 
 

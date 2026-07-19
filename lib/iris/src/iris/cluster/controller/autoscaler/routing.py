@@ -17,10 +17,12 @@ from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
     ConstraintIndex,
+    ConstraintOp,
     DeviceType,
     PlacementRequirements,
     availability_key,
     device_variant_constraint,
+    evaluate_constraint,
     extract_placement_requirements,
     get_device_type_enum,
     is_availability_key,
@@ -346,15 +348,93 @@ def _diagnose_locality(
     return "; ".join(parts)
 
 
+# Human-readable operator glyphs for _format_constraint (EXISTS/NOT_EXISTS/IN render as words).
+_OP_SYMBOLS = {
+    ConstraintOp.EQ: "==",
+    ConstraintOp.NE: "!=",
+    ConstraintOp.GT: ">",
+    ConstraintOp.GE: ">=",
+    ConstraintOp.LT: "<",
+    ConstraintOp.LE: "<=",
+}
+
+# Caps for the per-constraint coverage report: enough groups to see the conflict, not the fleet.
+_COVERAGE_MAX_SIGNATURES = 6
+_COVERAGE_MAX_EXAMPLES = 5
+
+
+def _format_constraint(c: Constraint) -> str:
+    """Render a constraint compactly for a diagnostic (``region==us-east5``,
+    ``availability:v5litepod-16 exists``), instead of the raw dataclass repr."""
+    if c.op == ConstraintOp.EXISTS:
+        return f"{c.key} exists"
+    if c.op == ConstraintOp.NOT_EXISTS:
+        return f"{c.key} absent"
+    if c.op == ConstraintOp.IN:
+        return f"{c.key} in {{{', '.join(str(v.value) for v in c.values)}}}"
+    return f"{c.key}{_OP_SYMBOLS[c.op]}{c.values[0].value}"
+
+
+def _constraint_coverage(
+    hard_constraints: Sequence[Constraint], group_attrs: Mapping[str, dict[str, AttributeValue]]
+) -> str:
+    """How each hard constraint fares across the fleet, and the groups that come closest.
+
+    Reports, per constraint, how many groups satisfy it on its own, then lists the groups that
+    fail the fewest constraints — each annotated with the specific ones it violates. This surfaces
+    a pairwise conflict: e.g. every group satisfies the availability constraint or the preemptible
+    constraint, but none satisfies both. Returns "" when there are no constraints or no groups.
+    """
+    if not hard_constraints or not group_attrs:
+        return ""
+
+    satisfied = [0] * len(hard_constraints)
+    # group name -> indices of the constraints it fails (its failure "signature").
+    failures: dict[str, tuple[int, ...]] = {}
+    for name, attrs in group_attrs.items():
+        failed = []
+        for i, c in enumerate(hard_constraints):
+            if evaluate_constraint(attrs.get(c.key), c):
+                satisfied[i] += 1
+            else:
+                failed.append(i)
+        failures[name] = tuple(failed)
+
+    total = len(group_attrs)
+    lines = [f"constraint coverage across {total} group(s):"]
+    lines += [f"  {_format_constraint(c)}: {satisfied[i]}/{total} satisfy" for i, c in enumerate(hard_constraints)]
+
+    # The caller only reaches here when no group matched all constraints, so every signature is
+    # non-empty; the closest groups fail the fewest.
+    fewest = min(len(sig) for sig in failures.values())
+    by_signature: dict[tuple[int, ...], list[str]] = defaultdict(list)
+    for name, sig in failures.items():
+        if len(sig) == fewest:
+            by_signature[sig].append(name)
+
+    lines.append(f"closest group(s) each fail {fewest} of {len(hard_constraints)} constraint(s):")
+    for sig, names in list(by_signature.items())[:_COVERAGE_MAX_SIGNATURES]:
+        failed_str = ", ".join(_format_constraint(hard_constraints[i]) for i in sig)
+        shown = sorted(names)
+        suffix = f", +{len(shown) - _COVERAGE_MAX_EXAMPLES} more" if len(shown) > _COVERAGE_MAX_EXAMPLES else ""
+        lines.append(f"  fail [{failed_str}]: {', '.join(shown[:_COVERAGE_MAX_EXAMPLES])}{suffix}")
+    return "\n".join(lines)
+
+
 def _diagnose(
     placement: PlacementRequirements,
     groups: Sequence[ScalingGroup],
+    *,
+    coverage: str | None = None,
 ) -> str:
     """Explain why no scaling group satisfies a placement requirement.
 
     Layered analysis (device → preemptible → zone → region) with zone/region
-    confusion heuristics and fuzzy-match hints. Returned string has no prefix;
-    callers prepend their own (e.g. "no_matching_group: ") when needed.
+    confusion heuristics and fuzzy-match hints. For a failure that is none of those
+    structured cases (e.g. a generic ``availability:<variant>`` constraint),
+    ``coverage`` — when given — replaces the bare list of group names. Returned
+    string has no prefix; callers prepend their own (e.g. "no_matching_group: ")
+    when needed.
     """
     device_type = placement.device_type or DeviceType.CPU
     device_matches = [g for g in groups if g.matches_device_requirement(device_type, placement.device_variants)]
@@ -399,6 +479,8 @@ def _diagnose(
             confused_with_other=_looks_like_zone,
         )
 
+    if coverage:
+        return f"no scaling group matches all constraints.\n{coverage}"
     available = ", ".join(g.name for g in groups)
     return f"no scaling group matches constraints (available: {available})"
 
@@ -483,7 +565,8 @@ def job_feasibility(
 
     if not matching:
         placement = extract_placement_requirements(constraints)
-        return GroupFeasibility(feasible=[], reason=_diagnose(placement, groups_list))
+        coverage = _constraint_coverage(hard_cs, group_attrs)
+        return GroupFeasibility(feasible=[], reason=_diagnose(placement, groups_list, coverage=coverage))
 
     if replicas is not None:
         compatible = [g for g in matching if g.num_vms > 0 and replicas % g.num_vms == 0]

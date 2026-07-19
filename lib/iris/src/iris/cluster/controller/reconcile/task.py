@@ -364,8 +364,13 @@ def apply_one_transition(
     # snapshot row when no overlay entry exists.
     prior_state = overlay_state if overlay_state is not None else task.state
 
-    # Fast path: task already in the reported state with no new data to apply.
-    has_new_data = update.error is not None or update.exit_code is not None
+    # Fast path: task already in the reported state with no new data to apply. A
+    # changed status_message counts as new data so a same-state BUILDING tick still
+    # emits a task delta — which persists the message AND appends a federation
+    # changelog row (commit._flush_tasks), so a stuck task's reason reaches the hub.
+    # An unchanged message stays a no-op, so the message does not churn the changelog.
+    message_changed = update.status_message is not None and update.status_message != (task.status_message or "")
+    has_new_data = update.error is not None or update.exit_code is not None or message_changed
     if update.new_state == prior_state and not has_new_data:
         return None
 
@@ -502,6 +507,7 @@ def apply_one_transition(
             started_at=started_at,
             finished_at=task_finished_at,
             container_id=update.container_id,
+            status_message=update.status_message,
         )
     )
 

@@ -1,0 +1,113 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""TPU smoke of the generic ``sft_step`` launcher, on the standing Marin cluster.
+
+Proves the launcher end-to-end on a preemptible TPU slice with a trimmed spec: tiny public
+Qwen3-0.6B (the Delphi target arch), a small chat dataset, a Qwen3 chat template carrying the
+``{% generation %}`` block, and a handful of train steps into one HF export. It exercises: graph
+resolves -> native ``transform_dataset_step`` tokenize/pack -> Levanter SFT (``initialize_from_hf``)
+runs a few steps -> HF export. It is not a real training run.
+
+Marked ``cluster`` so it never runs by default; the ``marin-cluster-smoke`` workflow runs it. The
+``iris_client`` fixture binds the ``marin`` controller as the current Fray client, so ``StepRunner``
+submits there. Launch it on demand with::
+
+    uv run pytest tests/cluster/sft/test_smoke_sft_tpu.py \
+      -m cluster -o addopts= --import-mode=importlib --timeout=0 -vv -s
+
+PYTEST_DONT_REWRITE: the step dispatches serialized remote functions that must not depend on pytest.
+"""
+from __future__ import annotations
+
+import dataclasses
+
+import pytest
+from iris.client import IrisClient
+from levanter.optim.config import AdamConfig
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.checkpoints import hf_to_levanter
+
+from experiments.sft.launcher import (
+    ConvertedCheckpointModel,
+    DatasetSpec,
+    HFModel,
+    SFTSpec,
+    resources_from_accelerator,
+    sft_step,
+)
+
+pytestmark = pytest.mark.cluster
+
+# Minimal Qwen3 chat template with the Levanter {% generation %} span wrapping the assistant turn
+# (header excluded, content + <|im_end|> included) — the completions-only supervised mask.
+QWEN3_SMOKE_CHAT_TEMPLATE = (
+    "{% for message in messages %}"
+    "<|im_start|>{{ message['role'] }}\n"
+    "{% if message['role'] == 'assistant' %}"
+    "{% generation %}{{ message['content'] }}<|im_end|>{% endgeneration %}\n"
+    "{% else %}{{ message['content'] }}<|im_end|>\n"
+    "{% endif %}"
+    "{% endfor %}"
+)
+
+_SMOKE_DATA = DatasetSpec(
+    slug="norobots",
+    hf_dataset_id="HuggingFaceH4/no_robots",  # ~10k rows, OpenAI `messages` (role/content)
+    revision="main",
+    adapter_kwargs=dict(conversation_column="messages"),  # role/content, user/assistant defaults
+    weight=1.0,
+)
+
+SMOKE_SPEC = SFTSpec(
+    name="checkpoints/smoke-sft-tpu-qwen3-0p6b",
+    version="2026.07.15-dev",  # -dev = always rebuild (no cache reuse)
+    # tiny public Qwen3, used verbatim -> initialize_from_hf; Qwen3 eos = <|endoftext|> + <|im_end|>.
+    model=HFModel("Qwen/Qwen3-0.6B", eos_token_ids=(151643, 151645)),
+    chat_template=QWEN3_SMOKE_CHAT_TEMPLATE,
+    datasets=[_SMOKE_DATA],
+    optimizer=AdamConfig(
+        learning_rate=1e-5,
+        beta1=0.9,
+        beta2=0.98,
+        epsilon=1e-8,
+        max_grad_norm=1.0,
+        weight_decay=0.0,
+        lr_schedule="cosine",
+        warmup=0.1,
+        min_lr_ratio=0.0,
+    ),
+    seq_len=1024,
+    batch_size=8,
+    num_train_steps=20,  # a handful of steps -> HF export at step 20
+    wandb_project="marin-sft-launcher-smoke",
+)
+
+SMOKE_ACCELERATOR = "v6e-4"
+
+
+def test_smoke_sft_tpu(iris_client: IrisClient, smoke_region: str) -> None:
+    # iris_client binds the marin controller as the current Fray client, so StepRunner submits there.
+    # smoke_region pins the slice to a region and binds the storage root to the same region, so the
+    # multi-step run (tokenize -> train -> export) shares its cache and reads/writes region-locally.
+    resources = dataclasses.replace(resources_from_accelerator(SMOKE_ACCELERATOR), regions=(smoke_region,))
+    StepRunner().run([lower(sft_step(SMOKE_SPEC, resources))])
+
+
+def test_smoke_sft_tpu_hf_to_levanter(iris_client: IrisClient, smoke_region: str) -> None:
+    """The same smoke run inited from a materialized HF->Levanter conversion instead of inline HF init.
+
+    The conversion (hf_to_levanter) resolves the arch from the HF config, so it is built inside the test
+    (not at import time) to keep the default deselected collection network-free. This is the native arm
+    of the numerical-equivalence gate: launch it and ``test_smoke_sft_tpu`` with the same seed/data and
+    compare the loss curves — a weights-only native init must match inline ``initialize_from_hf``.
+    """
+    conversion = hf_to_levanter("Qwen/Qwen3-0.6B", model_type="qwen3", hf_revision="main", version="2026.07.17-dev")
+    spec = dataclasses.replace(
+        SMOKE_SPEC,
+        name="checkpoints/smoke-sft-tpu-qwen3-0p6b-hf2lev",
+        model=ConvertedCheckpointModel(conversion=conversion, eos_token_ids=(151643, 151645)),
+    )
+    resources = dataclasses.replace(resources_from_accelerator(SMOKE_ACCELERATOR), regions=(smoke_region,))
+    StepRunner().run([lower(sft_step(spec, resources))])

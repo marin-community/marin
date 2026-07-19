@@ -42,5 +42,19 @@ function normalize(v: unknown): unknown {
   if (typeof v === 'bigint') return Number(v)
   if (v instanceof Uint8Array) return `<bytes ${v.byteLength}>`
   if (v instanceof Date) return v.toISOString()
+  // Nested columns (a native Map<Utf8,Utf8> `labels`, a struct, a list) arrive
+  // as arrow MapRow/StructRow/sub-Vector objects. DataTable renders cells as
+  // text, so flatten them to compact JSON — coercing any nested bigint the way
+  // scalar cells are — rather than handing it an arrow object it can't stringify.
+  if (typeof v === 'object') {
+    // A cell decoded as a JS Map (rather than an arrow MapRow) stringifies to
+    // "{}" unless entries are lifted out first.
+    const plain = v instanceof Map ? Object.fromEntries(v) : v
+    try {
+      return JSON.stringify(plain, (_key, val) => (typeof val === 'bigint' ? Number(val) : val))
+    } catch {
+      return String(v)
+    }
+  }
   return v
 }
