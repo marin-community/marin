@@ -184,9 +184,8 @@ def bind_serving_socket(host: str, port: int) -> socket.socket:
 
     Iris allocates the task's named port from a range (default 30000-40000)
     that workers exclude from kernel ephemeral assignment at VM bootstrap
-    (marin-community/marin#7392). Binding before the backend starts still
-    matters: it claims the port ahead of any listener the backend might open,
-    and covers workers bootstrapped before the reservation existed.
+    (marin-community/marin#7392). Binding before the backend starts claims
+    the port ahead of any listener the backend might open.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
