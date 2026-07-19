@@ -132,6 +132,35 @@ They adopt a checkpoint, build the suite, compile a report, and log results to W
 resolves the eval artifacts to a mutable version that rebuilds every run — pass a calendar version to
 pin a run.
 
+## Serving on GPU
+
+`ServeSpec` serves on TPU (`tpu_type`) or GPU (`gpu_type`, `gpu_count`). The GPU path provisions the
+Marin CUDA vLLM fork in an isolated `uvx` environment (`IsolatedCudaVllm`). CoreWeave runtime images
+ship CUDA libraries but no CUDA toolkit (`nvcc`), so an architecture that JIT-compiles a CUDA kernel at
+warmup fails on this env unless it is routed to a compiler-free backend.
+
+Qwen gated-delta-net models — the `qwen_gdn_linear_attn` arch, `Qwen/Qwen3.5-35B-A3B` and
+`Qwen/Qwen3-Next-80B-A3B` — hit this. Their default FlashInfer GDN prefill kernel is JIT-compiled, so
+the serve child dies at warmup with a `Could not find nvcc` error and the endpoint never registers. Pass
+`--gdn-prefill-backend triton` through `vllm_extra_args` to use the triton GDN backend, which needs no
+compiler:
+
+```python
+EvalGroup(
+    tasks=CORE_TASKS,
+    id="core",
+    serve=ServeSpec(
+        gpu_type="H100",
+        gpu_count=8,
+        tensor_parallel_size=8,
+        vllm_extra_args=("--gdn-prefill-backend", "triton"),
+    ),
+)
+```
+
+Non-gated-delta-net models on the same GPU path (DeepSeek-V2-Lite, Qwen3-30B-A3B, and so on) serve with
+no extra flags. See `ServeSpec.vllm_extra_args` in `serve_and_eval.py` for the full list of recipes.
+
 ## Parameter reference
 
 ### `EvalGroup`
