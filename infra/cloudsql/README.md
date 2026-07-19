@@ -51,18 +51,3 @@ gcloud sql users create evals --instance=marin-metadata --project=hai-gcp-models
 printf '%s' "$EVALS_PW" | gcloud secrets versions add cloudsql-evals-password \
   --project=hai-gcp-models --data-file=-
 ```
-
-## Consumers
-
-A consumer needs two grants on its runtime service account: `roles/cloudsql.client` on the
-project (to open a connector session) and `roles/secretmanager.secretAccessor` on the password
-secret (to read the value). `CloudRunService` grants both when passed `cloudsql_instances=` and
-a matching `SecretEnv` — the Grafana service does this in `infra/grafana/__main__.py`. To grant
-another (non-Cloud-Run) principal by hand:
-
-```bash
-gcloud projects add-iam-policy-binding hai-gcp-models \
-  --member="serviceAccount:<sa>@hai-gcp-models.iam.gserviceaccount.com" --role=roles/cloudsql.client
-gcloud secrets add-iam-policy-binding cloudsql-grafana-password --project=hai-gcp-models \
-  --member="serviceAccount:<sa>@hai-gcp-models.iam.gserviceaccount.com" --role=roles/secretmanager.secretAccessor
-```
