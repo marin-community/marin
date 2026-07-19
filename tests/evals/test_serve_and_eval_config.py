@@ -10,10 +10,11 @@ submission, serving, the eval itself) is exercised by the cluster smoke.
 """
 
 import json
+import os
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
-from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args
+from experiments.evals.evalchemy.run_evalchemy_client import build_command, build_model_args, has_scored_results
 from experiments.evals.evalchemy.serve_and_eval import (
     EvalchemyEvalConfig,
     ServedEndpoint,
@@ -81,6 +82,28 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
     assert model_args["num_concurrent"] == "16"
+
+
+def _write_results(local_out: str, results: dict) -> None:
+    """Write a results file in lm-eval's nested ``<task_dir>/<model>/results_<ts>.json`` layout."""
+    task_dir = os.path.join(local_out, "mmlu_5shot", "local-completions")
+    os.makedirs(task_dir, exist_ok=True)
+    with open(os.path.join(task_dir, "results_2026-07-19T00-00-00.json"), "w") as f:
+        json.dump({"results": results}, f)
+
+
+def test_has_scored_results_rejects_empty_results_dict(tmp_path):
+    # eval.eval exits 0 and still writes results_*.json with an empty "results" dict when every
+    # endpoint request fails (issue #7391); the client must treat that as an unscored task.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    _write_results(str(empty), {})
+    assert has_scored_results(str(empty)) is False
+
+    scored = tmp_path / "scored"
+    scored.mkdir()
+    _write_results(str(scored), {"mmlu": {"acc,none": 0.42}})
+    assert has_scored_results(str(scored)) is True
 
 
 def test_build_command_chat_route_toggles_model_and_endpoint():

@@ -22,6 +22,7 @@ injected ``FSSPEC_S3`` (endpoint + virtual-host addressing) is applied by fsspec
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import subprocess
@@ -31,6 +32,21 @@ import tempfile
 import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
+
+
+def has_scored_results(local_out: str) -> bool:
+    """True if ``eval.eval`` wrote a ``results_*.json`` with a non-empty ``results`` dict under ``local_out``.
+
+    When every endpoint request fails, lm-eval still writes ``results_<ts>.json`` with ``"results": {}``
+    and exits 0 (issue #7391), so a task's exit code and file presence cannot distinguish a scored run
+    from a total request failure. Treating an empty ``results`` dict as unscored lets the client fail the
+    task instead of uploading a metric-less artifact the orchestrator would mark ``succeeded``.
+    """
+    for path in glob.glob(os.path.join(local_out, "**", "results_*.json"), recursive=True):
+        with open(path) as results_file:
+            if json.load(results_file).get("results"):
+                return True
+    return False
 
 
 def build_model_args(config: dict) -> str:
@@ -105,6 +121,7 @@ def main() -> None:
             # does not discard another task's already-scored output.
             result = subprocess.run(cmd)
             produced = os.listdir(local_out)
+            scored = has_scored_results(local_out)
             if produced:
                 out_fs.put(local_out, dest, recursive=True)
                 print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
@@ -112,6 +129,8 @@ def main() -> None:
             failures.append(f"{task['name']}: eval.eval exited {result.returncode}")
         elif not produced:
             failures.append(f"{task['name']}: produced no artifacts")
+        elif not scored:
+            failures.append(f"{task['name']}: eval.eval wrote an empty results dict (every endpoint request failed?)")
     print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))
