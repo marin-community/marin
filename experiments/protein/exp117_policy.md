@@ -51,7 +51,9 @@ search:
       domain: {min: 0.025, max: 6.4}
     batch_size:
       # Joint search axis: smaller batches take more optimizer steps at fixed epochs; do not
-      # rescale LR or weight decay outside the grid.
+      # rescale LR or weight decay outside the grid. The low edge (64) may extend one step
+      # toward 32 if smaller batch keeps winning — best single point so far is bs64 and the
+      # best-of-batch envelope favors smaller.
       values: [64, 128, 256]
       scale: log2
       preferred_max_gap: 1.0
