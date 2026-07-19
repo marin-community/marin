@@ -135,6 +135,8 @@ def build_scale_model() -> GrugModelConfig:
         base,
         vocab_size=VOCAB_SIZE,
         head_dim=HEAD_DIM,
+        # GQA KV-head count; default keeps the heuristic value (num_heads / gqa_ratio). Must divide num_heads.
+        num_kv_heads=env_int("SCALE_NUM_KV_HEADS", base.num_kv_heads),
         num_layers=env_int("SCALE_NUM_LAYERS", 48),
         num_experts=env_int("SCALE_NUM_EXPERTS", 64),
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
@@ -143,6 +145,12 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         # Attention sliding-window span; default keeps the heuristic value (2048).
         sliding_window=env_int("SCALE_SLIDING_WINDOW", base.sliding_window),
+        # Long (global/full-causal) layer period: every Nth layer is global. 4 -> 1:3, 6 -> 1:5.
+        global_layer_period=env_int("SCALE_GLOBAL_EVERY", base.global_layer_period),
+        # Heterogeneous GQA: distinct KV-head counts on local (sliding) vs global (full) layers.
+        # Both must be set together and divide num_heads; unset -> uniform num_kv_heads.
+        local_kv_heads=(int(v) if (v := os.environ.get("SCALE_LOCAL_KV_HEADS")) else None),
+        global_kv_heads=(int(v) if (v := os.environ.get("SCALE_GLOBAL_KV_HEADS")) else None),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,

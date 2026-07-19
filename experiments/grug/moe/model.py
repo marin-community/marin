@@ -154,6 +154,17 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    global_layer_period: int = 4
+    """Long (full-causal/global) layers are every ``global_layer_period``-th layer
+    (the last in each group) plus the final layer; the rest use the sliding window.
+    Period 4 -> 1:3 global:local, period 6 -> 1:5. Also gates PKO/long-rope below."""
+    local_kv_heads: int | None = None
+    global_kv_heads: int | None = None
+    """Heterogeneous GQA: when both are set, sliding-window (local) layers use
+    ``local_kv_heads`` and full-causal (global) layers use ``global_kv_heads``, instead of
+    the uniform ``num_kv_heads``. Requires ``use_array_stacked_blocks`` and
+    ``num_layers % global_layer_period == 0``; the two layer types live in separate 3D
+    block stacks (see ``Transformer``). Both must divide ``num_heads``. None -> uniform."""
     disable_pko: bool = True
     """When True (default), the every-4th + last 'long' layers skip Partial
     Key Offset (no shift of the second half of K, no doc-start zeroing). Short
@@ -726,12 +737,13 @@ class Block(eqx.Module):
         return x, router_stats
 
 
-def _long_layer_schedule(num_layers: int) -> jax.Array:
-    """Bool[num_layers] mask marking the 'long' (full causal) layers: every 4th layer
-    plus the last one. Rides into the ``lax.scan`` body as a per-layer scan input so the
-    scan can pick the sliding-window vs full mask at runtime."""
+def _long_layer_schedule(num_layers: int, period: int) -> jax.Array:
+    """Bool[num_layers] mask marking the 'long' (full causal) layers: every
+    ``period``-th layer (the last in each group) plus the last one. Rides into the
+    ``lax.scan`` body as a per-layer scan input so the scan can pick the
+    sliding-window vs full mask at runtime."""
     idx = jnp.arange(num_layers)
-    return ((idx % 4) == 3) | (idx == num_layers - 1)
+    return ((idx % period) == period - 1) | (idx == num_layers - 1)
 
 
 class Transformer(eqx.Module):
@@ -743,6 +755,11 @@ class Transformer(eqx.Module):
     # (homogeneous lax.scan), selected by ``cfg.use_array_stacked_blocks``.
     blocks: tuple[Block, ...] | None
     stacked_blocks: ArrayStacked[Block] | None
+    # Populated instead of ``stacked_blocks`` when cfg has heterogeneous KV heads: the
+    # sliding-window (local) and full-causal (global) layers have different w_k/w_v shapes
+    # and so cannot share one homogeneous scan. Each is a plain 3D block stack.
+    stacked_blocks_local: ArrayStacked[Block] | None
+    stacked_blocks_global: ArrayStacked[Block] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -779,14 +796,30 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
 
-        blocks: tuple[Block, ...] | None
-        stacked_blocks: ArrayStacked[Block] | None
-        if cfg.use_array_stacked_blocks:
-            blocks = None
+        blocks: tuple[Block, ...] | None = None
+        stacked_blocks: ArrayStacked[Block] | None = None
+        stacked_blocks_local: ArrayStacked[Block] | None = None
+        stacked_blocks_global: ArrayStacked[Block] | None = None
+        if cfg.local_kv_heads is not None and cfg.global_kv_heads is not None:
+            if not cfg.use_array_stacked_blocks:
+                raise ValueError("heterogeneous KV heads require use_array_stacked_blocks=True")
+            if cfg.num_layers % cfg.global_layer_period != 0:
+                raise ValueError(
+                    f"heterogeneous KV heads require num_layers ({cfg.num_layers}) divisible by "
+                    f"global_layer_period ({cfg.global_layer_period})"
+                )
+            num_global = cfg.num_layers // cfg.global_layer_period
+            num_local = cfg.num_layers - num_global
+            local_cfg = dataclasses.replace(cfg, num_kv_heads=cfg.local_kv_heads)
+            global_cfg = dataclasses.replace(cfg, num_kv_heads=cfg.global_kv_heads)
+            stacked_blocks_local = ArrayStacked.init(num_local, Block)(local_cfg, key=jnp.stack(block_keys[:num_local]))
+            stacked_blocks_global = ArrayStacked.init(num_global, Block)(
+                global_cfg, key=jnp.stack(block_keys[num_local:])
+            )
+        elif cfg.use_array_stacked_blocks:
             stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
         else:
             blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
-            stacked_blocks = None
 
         return Transformer(
             token_embed=token_embed,
@@ -795,6 +828,8 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             blocks=blocks,
             stacked_blocks=stacked_blocks,
+            stacked_blocks_local=stacked_blocks_local,
+            stacked_blocks_global=stacked_blocks_global,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -833,12 +868,72 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
-        if self.blocks is not None:
+        if self.stacked_blocks_local is not None:
+            # Heterogeneous KV: local (sliding-window, local_kv_heads) and global (full-causal,
+            # global_kv_heads) layers have different w_k/w_v shapes, so they live in two separate 3D
+            # stacks and cannot share one homogeneous scan. Process in groups of `global_layer_period`,
+            # preserving interleaved order: an OUTER scan over groups (serializing expert gathers, one
+            # layer live) whose body runs the group's local layers via an INNER scan, then the single
+            # global layer. No lax.cond around the FA4 callback (it would pin to device 0).
+            assert self.stacked_blocks_global is not None
+            period = cfg.global_layer_period
+            num_groups = cfg.num_layers // period
+            locals_per_group = period - 1
+            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+            long_lower_bounds, valid = fa4_cute_segment_bounds(
+                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+            )
+            short_lower_bounds, _ = fa4_cute_segment_bounds(
+                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+            )
+            long_lower_bounds = _batch_reshard(long_lower_bounds)
+            short_lower_bounds = _batch_reshard(short_lower_bounds)
+            valid = _batch_reshard(valid)
+            local_mask = long_mask.with_fa4_bounds(short_lower_bounds, valid)
+            global_mask = long_mask.with_fa4_bounds(long_lower_bounds, valid)
+            global_disable_rope = cfg.disable_long_rope
+
+            def _local_body(carry_hidden, layer):
+                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, local_mask, False, False)
+
+            local_grouped = jax.tree.map(
+                lambda a: a.reshape(num_groups, locals_per_group, *a.shape[1:]),
+                self.stacked_blocks_local.stacked,
+            )
+
+            def _group_body(carry_hidden, group_inputs):
+                local_group, global_layer = group_inputs
+                carry_hidden, local_stats = jax.lax.scan(_local_body, carry_hidden, xs=local_group)
+                carry_hidden, global_stats = eqx.filter_checkpoint(global_layer, policy=remat_policy)(
+                    carry_hidden, global_mask, False, global_disable_rope
+                )
+                return carry_hidden, (local_stats, global_stats)
+
+            hidden, (local_stats, global_stats) = jax.lax.scan(
+                _group_body, hidden, xs=(local_grouped, self.stacked_blocks_global.stacked)
+            )
+
+            def _interleave(key: str) -> jax.Array:
+                merged = jnp.concatenate([local_stats[key], global_stats[key][:, None]], axis=1)
+                return merged.reshape(cfg.num_layers, *merged.shape[2:])
+
+            router_metrics = {
+                f"{k}_per_layer": _interleave(k)
+                for k in (
+                    "routing_entropy",
+                    "routing_counts",
+                    "load_balancing_loss",
+                    "router_z_loss",
+                    "qb_beta",
+                    "capacity_overflow",
+                )
+            }
+        elif self.blocks is not None:
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
                 is_last = i == num_blocks - 1
-                is_long = i % 4 == 3 or is_last
+                is_long = i % cfg.global_layer_period == cfg.global_layer_period - 1 or is_last
                 layer_mask = long_mask if is_long else short_mask
                 use_pko = is_long and not cfg.disable_pko
                 disable_rope = is_long and cfg.disable_long_rope
@@ -859,7 +954,7 @@ class Transformer(eqx.Module):
             # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
             # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
             # (scan requires disable_pko=True).
-            mask_schedule = _long_layer_schedule(cfg.num_layers)
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_layer_period)
             # Precompute the FA4 per-token metadata for both the full-causal (long) and
             # sliding-window (short) layers OUTSIDE the scan, then select per layer with a
             # jnp.where inside the body. This removes the lax.cond around the FA4 pure_callback:

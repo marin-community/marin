@@ -256,6 +256,24 @@ class GrugTrainState:
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
+    if model.stacked_blocks_local is not None:
+        # Heterogeneous-KV: layers live in two stacks. ``qb_betas`` is [num_layers, E] in interleaved
+        # group order (period-1 local blocks then 1 global block per group); reshape to
+        # [groups, period, E] and route the local/global slices back to their respective stacks.
+        cfg = model.config
+        num_groups = cfg.num_layers // cfg.global_layer_period
+        num_experts = qb_betas.shape[-1]
+        grouped = qb_betas.reshape(num_groups, cfg.global_layer_period, num_experts)
+
+        def _centered_bias(betas: jax.Array) -> jax.Array:
+            bias = -betas
+            return bias - jnp.mean(bias, axis=-1, keepdims=True)
+
+        local_bias = _centered_bias(grouped[:, : cfg.global_layer_period - 1, :].reshape(-1, num_experts))
+        global_bias = _centered_bias(grouped[:, cfg.global_layer_period - 1, :])
+        model = eqx.tree_at(lambda t: t.stacked_blocks_local.stacked.mlp.router_bias, model, local_bias)
+        model = eqx.tree_at(lambda t: t.stacked_blocks_global.stacked.mlp.router_bias, model, global_bias)
+        return model
     if model.blocks is None:
         # Scan mode: stacked_blocks.mlp.router_bias is [num_layers, num_experts]; set it in one
         # vectorized assignment (per-layer mean over experts, matching the unrolled path).
