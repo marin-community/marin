@@ -97,6 +97,7 @@ def connect_engine(instance: str, db: str, user: str, password: str) -> Engine:
     Uses the ``cloud-sql-python-connector`` + pg8000 creator pattern: every pooled connection is
     minted by the connector, which handles IAM-authenticated TLS to ``instance`` without a local proxy.
     """
+    # pyrefly: ignore[missing-import]  # the evaldb dependency group is not in the lint env
     from google.cloud.sql.connector import Connector  # noqa: PLC0415  # lazy: keep the DB stack optional
 
     connector = Connector()
@@ -117,8 +118,7 @@ def _secret_password(secret_id: str) -> str | None:
         response = client.access_secret_version(name=name)
     except Exception:
         logger.warning(
-            "could not read eval-db password secret %s from project %s",
-            secret_id,
+            "could not read the eval-db password secret (EVAL_DB_PASSWORD_SECRET) from project %s",
             SECRET_MANAGER_PROJECT,
             exc_info=True,
         )
