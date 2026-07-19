@@ -24,7 +24,9 @@ ConfigT = TypeVar("ConfigT")
 # not leak onto accelerator tasks.
 # SCALE_MUON_ forwards the distributed Newton-Schulz layout knobs read at trace time in
 # levanter.optim.grugmuon.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_")
+# TF_CPP_ forwards TSL logging controls (TF_CPP_VMODULE etc.) so XLA runtime
+# behavior on the train tasks can be traced from the submitter.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "CE_", "SCALE_MUON_", "TF_CPP_")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
