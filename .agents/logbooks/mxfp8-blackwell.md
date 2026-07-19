@@ -1463,3 +1463,26 @@ author: mcwitt
   ok; dequant refs 7.4e-6..5.3e-5 (gate 1e-3); blackbox vs bf16 6.6-6.7e-2
   (unchanged class vs 004c). ALL CHECKS PASSED — the in-op CuTe producer is
   e2e-validated; 004c caveat closed.
+
+### 2026-07-19 11:40 - MXFP8-009b: inline-PTX cvt re-justified on merit — native intrinsic bit-exact but ~12% slower
+
+- Hypothesis (mcwitt): with the wheel-shadowing root cause fixed, the 002c
+  inline-PTX e4m3 cvt may be a defunct-workaround artifact — revert to the
+  idiomatic DSL-native `.to(Float8E4M3FN)` unless it has a standing
+  justification.
+- Method: patched the quantizer store path to the native conversion; ran the
+  full 002c bit-exact suite + GPU op ladder (`mxfp8-nativecvt-g1`), then a
+  same-pod interleaved 2-round A/B native-vs-asm (`mxfp8-cvt-ab-g1`) to
+  remove the documented ~25% cross-job timing variance.
+- Result (`replicated` within-pod):
+  - Numerics: native is fully bit-exact (8/8 cases incl. adversarial
+    denormal/2^120 blocks, both rounds; 32/32 BIT-EXACT lines; op ladder
+    green, producer=cute).
+  - Perf: asm wins consistently — d2560 kernel 0.559/0.568 ms vs native
+    0.634/0.644 (~12%); 4-tensor producer total 2.113/2.135 vs 2.312/2.318
+    (~9%). The producer budget vs XLA is 2.09 ms: asm sits AT break-even,
+    native is clearly past it.
+- Decision: KEEP the inline asm, justification rewritten in-code to the
+  measured perf (not the defunct compile workaround); native patch reverted.
+  Commit d3-pending. Everything else from the misdiagnosis era already
+  removed in f4cac5066 (probe) / d064dc173 (lockfile).

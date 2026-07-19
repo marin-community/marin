@@ -77,14 +77,16 @@ def _group_max(v, offsets: tuple[int, ...]):
 def _cvt2_e4m3(hi, lo):
     """Pack two f32 into an e4m3x2 Int16 via inline PTX (``hi`` in the upper byte).
 
-    The DSL's native ``.to(Float8E4M3FN)`` lowers to the ``nvvm.cvt.packfloat``
-    intrinsic; the ``NVVM_ERROR_COMPILATION: unsupported operation`` failures
-    that motivated this bypass (jobs 002c-g2/g4-g7) were the cutlass-dsl
-    libs-base/libs-cu13 wheel-shadowing conflict (a base-variant compiler
-    lacks the op), since fixed in the lockfile — the intrinsic compiles fine
-    on a clean cu13 install. The inline asm is kept because its numerics are
-    validated: ``cvt.rn.satfinite`` is RTNE with saturation to +-448,
-    bit-identical to the XLA clip+convert for finite inputs.
+    The DSL-native ``frag.store(ssa.to(Float8E4M3FN))`` is bit-identical (the
+    full 002c suite incl. adversarial cases passes on it) but measured ~12%
+    slower on the d2560 kernel and ~9% on the 4-tensor producer total in a
+    same-pod interleaved A/B (job mxfp8-cvt-ab-g1, 2 rounds) — enough to
+    push the producer past its XLA break-even budget, so the explicit paired
+    cvt stays. ``cvt.rn.satfinite`` is RTNE with saturation to +-448,
+    bit-identical to the XLA clip+convert for finite inputs. (Historical:
+    this started as a workaround for NVVM compile failures that were really
+    the cutlass-dsl libs-base/cu13 wheel-shadowing conflict, fixed in the
+    lockfile; the intrinsic path compiles fine on a clean cu13 install.)
     """
     res = llvm.inline_asm(
         cutlass.Int16.mlir_type,
