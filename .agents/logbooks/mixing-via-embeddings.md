@@ -769,3 +769,22 @@ dsp_report.md, dsp_summary.json, dsp_cache/}` + GCS mirror.
 - Contaminated original preserved as seedpanel_readout_CONTAMINATED_original.*; clean readout +
   f25 uploaded to GCS. Standing worker rules held (no controller-cred extraction; no shared-venv
   mutation this time).
+
+## 2026-07-19 form-selection: natural epoch experiment on existing 800 runs (kernel vs form)
+
+Goal (rav): pick kernel OR functional form with confidence; must model epoching (swoosh). Method:
+data-first, every decision needs a data point. natural_epoch_experiment.py.
+- **DP1 zmacro**: at fixed content (Hellinger-matched pairs w/ real Δrepmass≤4-5), |Δzmacro|=0.30
+  =seed floor regardless of epoch gap. kernel-resid vs repmass +0.03. Epoching doesn't move zmacro
+  at fixed content in-regime.
+- **DP2 humaneval low-rep**: content-matched high vs low code-rep-gap differ LESS (corr −0.04);
+  content effect strong (code_share→humaneval −0.457, kernel captures). code-rep p90 only 0.755.
+- **DP3 humaneval high-rep tail (n=4, underpowered)**: code_rep>4 runs have +0.023 bpb kernel-missed
+  harm (~4× seed floor) — the ONLY existing signal for the form.
+- **DP4 COMPREHENSIVE**: all 37 bpb tasks, corr(kernel-resid, repmass) max +0.079 (boolq), mean
+  +0.021, 0/37 >0.1. humaneval −0.023.
+- **VERDICT (in-regime, data-backed)**: KERNEL sufficient universally up to the sampled epochs
+  (≤44); the functional form's epoch term is empirically inert in-regime. Form's only role =
+  guardrail for HIGH-repetition PROPOSALS. Open decisive test: twobucket-a2 (code ep→32) + transect
+  (→24) — does harm exceed seed noise in the high-ep regime? If yes → keep a bolt-on harm term/caps
+  for extrapolation; if no → kernel alone + hard epoch caps suffices.
