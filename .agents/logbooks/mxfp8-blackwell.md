@@ -1486,3 +1486,49 @@ author: mcwitt
   measured perf (not the defunct compile workaround); native patch reverted.
   Commit 3ddb2360b. Everything else from the misdiagnosis era already
   removed in f4cac5066 (probe) / d064dc173 (lockfile).
+
+### 2026-07-19 16:10 - MXFP8-010: NS-enabled 64-GPU pair COMPLETE — honest mxfp8 win 1.31x clean / 1.25x vs #7201 best; CuTe producer breaks 16-node executable load
+
+- Hypothesis (mcwitt): rerun the 007c comparison with Newton-Schulz enabled
+  (the NO_NS control was unrealistic) and matched configs.
+- Prep findings: (1) hparams-dump diff showed the 007c arms ALSO differed on
+  expert_axis (B=EP4 vs C=EP8) — the old C/B=1.278 was confounded; (2) the
+  shard_map 4D NS path (e2be05f4b) field-validated on a 2-node smoke pair
+  (both arms trained; only failure was a 2-node-only checkpoint host-RAM
+  OOM, exit 137 during final save — state/host is 8x the 64-GPU case);
+  (3) loss divergence between same-seed arms is pure numerics: data order
+  is seed-keyed (seed=0 both), nothing keys off run_id.
+- Command: jobs `/mwittmann/mx7201-ns64-{bf16,mx,mx2,mx3,mx4}`, drivers
+  tmp/ns64_driver.sh + retries. Config = 007c COMMON_ENV minus
+  SCALE_MUON_NO_NS, both arms ring EP8, 16xGB200x4, B1024, 50 steps.
+- Result (`exploratory`, single run per arm; GB200-MFU via tok/s ratio to
+  the 007c baseline anchor 313,666 = 20.21%):
+
+  | arm | config | tok/s | MFU | loss@49 |
+  |---|---|---|---|---|
+  | A | #7201 best (EP1 sonic, full MuonH) | 313,666 | 20.21% | — |
+  | B2 (bf16+NS) | bf16 + NS, ring EP8 | 299,894 | ~19.3% | 5.449 |
+  | C2 (mx+NS) | mxfp8 + NS, ring EP8, xla producer | **392,287** | **~25.3%** | 5.383 |
+
+  **C2/B2 = 1.308 (clean mxfp8 read, all else matched); C2/A = 1.251
+  (honest vs #7201 best, both full MuonH).** NS cost on the mx stack
+  (tq-mx vs mx4, only NS differs): 7.2%. B2 < A by 4.4% — the old "B beats
+  A" was the NO_NS+EP4 artifact.
+- **NEW DEFECT (replicated 3/3 vs 2/2): producer=cute deterministically
+  breaks 16-node executable load.** mx/mx2/mx3 (cute, via the new auto
+  default from f4cac5066) all died at jit_train_step load with "Failed to
+  load in-memory CUBIN (compiled for a different GPU?)" /
+  CUDA_ERROR_INVALID_VALUE on ALL 16 hosts — across different node sets
+  AND a fresh compilation cache (mx3), so neither node flake nor stale
+  cache. mx4 (identical but SCALE_FP8_PRODUCER=xla) trained clean, as did
+  bf16+NS and the 2-node cute smoke. Reframes at least part of
+  "B200MFU-036 CUBIN flake" as graph-content-dependent. Mechanism OPEN
+  (DSL kernels are runtime-registered FFI, not embedded in the XLA
+  executable — so the load failure path is not understood). Mitigation
+  shipped: producer auto -> xla (693124f9b); cute stays opt-in.
+- Interpretation: mxfp8 remains a large, now-honest win at production
+  config; the CuTe producer perf (002c 2.5x quantizer) is stranded until
+  the load defect is root-caused (candidate follow-up: XLA flag bisect
+  starting with --xla_gpu_enable_command_buffer=, HLO dump diff cute-vs-xla).
+- Next action: post corrected numbers to #7282/#7201; producer-load
+  root-cause as a separate work item.
