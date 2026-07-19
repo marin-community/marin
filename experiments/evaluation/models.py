@@ -56,6 +56,11 @@ class EvalModelConfig:
     tokenizer: str | None = None
     fixed_gpu: tuple[str, int] | None = None
     target_cluster: str | None = None
+    max_num_batched_tokens: int | None = None
+    """Per-step prefill token budget override for the served engine. The 512 default keeps TPU
+    compile within VMEM, but architectures with slow per-token prefill (qwen3.5's hybrid attention)
+    admit only ~2 concurrent requests under it, serializing prefill-bound eval traffic."""
+
     serve_memory: str | None = None
     """Host-memory request for the serve child, overriding the ``ServeSpec`` default. Large
     object-store exports need it: weight streaming stages shards through host buffers, so the
@@ -68,6 +73,7 @@ MODELS: dict[str, EvalModelConfig] = {
         location="Qwen/Qwen3.5-9B",
         hbm_gb=24,
         apply_chat_template=False,
+        max_num_batched_tokens=2048,
     ),
     "qwen3-8b": EvalModelConfig(
         name="qwen3-8b",
