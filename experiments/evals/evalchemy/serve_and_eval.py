@@ -538,6 +538,7 @@ class EvalUnitOutcome:
 
 # How long the between-units endpoint probe waits before declaring the served endpoint dead.
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 15.0
+_CHILD_WAIT_SLICE_SECONDS = 60.0
 
 
 def _refresh_endpoint(endpoint: ServedEndpoint) -> ServedEndpoint | None:
@@ -569,6 +570,23 @@ def _serve_death_outcome(unit: EvalUnit, endpoint: ServedEndpoint, serve_tail: t
         log_tails={"serve": serve_tail},
     )
     return EvalUnitOutcome(unit=unit, jobs=dict(dead.jobs), error=dead)
+
+
+def _endpoint_departed(endpoint: ServedEndpoint) -> bool:
+    """Whether the serve provably left the address a running eval child was configured with.
+
+    True when the serve job is finished or its endpoint name now resolves to a different address
+    (the attempt restarted after preemption). A transient resolve failure returns False: a
+    mid-restart registration gap resolves to the new address on a later poll.
+    """
+    client = iris_ctx().client
+    if is_job_finished(endpoint.handle.state):
+        return True
+    try:
+        base_url = client.resolve_endpoint(endpoint.name).rstrip("/") + "/v1"
+    except (RuntimeError, TimeoutError):
+        return False
+    return base_url != endpoint.base_url
 
 
 def _endpoint_alive(endpoint: ServedEndpoint) -> bool:
@@ -807,8 +825,32 @@ def _submit_eval_child(session: EvalSession, unit: EvalUnit, endpoint: ServedEnd
     logger.info("Submitted evalchemy client job %s for unit %s against %s", eval_job, unit.name, endpoint.model_id)
     eval_path = str(eval_job.job_id)
     try:
-        # wait(raise_on_failure=True) raises JobFailedError on any non-SUCCESS terminal state.
-        eval_job.wait(timeout=float("inf"))
+        # Wait in slices, watching the serve registration between them: lm-eval retries connection
+        # errors indefinitely, so a child pointed at a preempted serve address wedges rather than
+        # fails. When the serve provably left the child's address, kill the child so the caller's
+        # restart-retry reruns the unit against the live address immediately.
+        while True:
+            try:
+                # wait(raise_on_failure=True) raises JobFailedError on any non-SUCCESS terminal state.
+                eval_job.wait(timeout=_CHILD_WAIT_SLICE_SECONDS)
+                break
+            except TimeoutError:
+                pass
+            if _endpoint_departed(endpoint):
+                logger.info(
+                    "unit %s: serve endpoint %s left %s mid-eval; terminating child %s",
+                    unit.name,
+                    endpoint.name,
+                    endpoint.base_url,
+                    eval_path,
+                )
+                eval_job.terminate()
+                raise EvalPipelineError(
+                    f"evalchemy client job {eval_path} terminated: the serve endpoint left {endpoint.base_url}",
+                    stage=PipelineStage.EVAL,
+                    jobs={"eval": eval_path},
+                    log_tails={"eval": job_log_tail(eval_job)},
+                )
     except JobFailedError as exc:
         raise EvalPipelineError(
             f"evalchemy client job {eval_path} failed: {exc}",
