@@ -27,10 +27,10 @@ from iris.cluster.runtime.types import (
     MountKind,
     MountSpec,
 )
+from iris.cluster.stats.tables import IrisTaskStat, IrisWorkerStat
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.stats import IrisTaskStat, IrisWorkerStat
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine

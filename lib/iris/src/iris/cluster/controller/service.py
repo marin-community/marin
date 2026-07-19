@@ -82,11 +82,10 @@ from iris.cluster.log_keys import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
-    PROFILE_NAMESPACE,
-    IrisProfile,
     build_profile_row,
     profile_local_process,
 )
+from iris.cluster.stats.tables import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,

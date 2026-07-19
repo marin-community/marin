@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``iris.admission_probe`` finelog namespace: periodic dry-run canary pod applies.
+"""The ``iris.admission_probe`` emitter: periodic dry-run canary pod applies.
 
 A ``dryRun=All`` pod create traverses the cluster's full admission chain —
 mutating and validating webhooks, quota, policy — without persisting anything.
@@ -13,23 +13,16 @@ means the controller (or this emitter) is down.
 """
 
 import logging
-import threading
-from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
-from typing import ClassVar
 
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import KubectlError
-from iris.cluster.worker.stats import stats_timestamp
+from iris.cluster.stats.emitter import PeriodicEmitter
+from iris.cluster.stats.tables import IrisAdmissionProbe, ProbeOutcome, stats_timestamp
 
 logger = logging.getLogger(__name__)
-
-# finelog namespace for ``IrisAdmissionProbe`` rows.
-ADMISSION_PROBE_NAMESPACE = "iris.admission_probe"
 
 # Probe cadence. One dry-run apply per minute is invisible load on the API
 # server and bounds detection latency for an admission outage to ~a minute.
@@ -46,34 +39,6 @@ CANARY_POD_NAME = "iris-admission-probe"
 
 # Never pulled — admission is evaluated on the manifest alone.
 _CANARY_IMAGE = "registry.k8s.io/pause:3.9"
-
-
-class ProbeOutcome(StrEnum):
-    """How one dry-run canary apply ended."""
-
-    OK = "ok"
-    FAILED = "failed"
-
-
-@dataclass
-class IrisAdmissionProbe:
-    """One dry-run canary apply outcome. Doubles as the finelog table schema.
-
-    ``outcome`` and ``error_class`` are stored as strings (finelog columns are
-    primitive); ``outcome`` always holds a :class:`ProbeOutcome` value and
-    ``error_class`` a :func:`classify_probe_failure` bucket (``""`` on ok).
-    """
-
-    # Alert queries scan for failures in a window; clustering parquet by outcome
-    # lets row-group min/max skip the all-ok bulk of the table.
-    key_column: ClassVar[str] = "outcome"
-
-    outcome: str
-    ts: datetime
-    namespace: str
-    error_class: str
-    latency_ms: int
-    message: str  # truncated failure detail, "" on ok
 
 
 def canary_pod_manifest(namespace: str) -> dict:
@@ -130,11 +95,12 @@ def classify_probe_failure(exc: Exception) -> str:
 
 
 class AdmissionProber:
-    """Background thread that dry-run-applies a canary pod and emits ``iris.admission_probe`` rows.
+    """Periodic emitter of ``iris.admission_probe`` rows.
 
-    Runs off the reconcile path on its own thread, one probe per
-    ``poll_interval``. A failed probe (or a failed row write) logs and the next
-    interval retries; nothing propagates to the backend.
+    Dry-run-applies a canary pod once per ``poll_interval`` on its own
+    :class:`PeriodicEmitter` thread, off the reconcile path. A failed probe
+    emits a ``failed`` row and the next interval retries; nothing propagates to
+    the backend.
     """
 
     def __init__(
@@ -146,20 +112,7 @@ class AdmissionProber:
     ) -> None:
         self._kubectl = kubectl
         self._table = table
-        self._poll_interval = poll_interval
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="admission-prober")
-        self._thread.start()
-
-    def _run(self) -> None:
-        # Wait first: the first probe lands one interval after the backend comes
-        # up, and a test-sized interval keeps the thread quiet while probe_once
-        # is driven directly.
-        while not self._stop.wait(timeout=self._poll_interval):
-            try:
-                self.probe_once()
-            except Exception:
-                logger.warning("admission probe cycle failed", exc_info=True)
+        self._emitter = PeriodicEmitter(self.probe_once, interval=poll_interval, name="admission-prober")
 
     def probe_once(self) -> None:
         manifest = canary_pod_manifest(self._kubectl.namespace)
@@ -192,5 +145,4 @@ class AdmissionProber:
         self._table.write([row])
 
     def close(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=5)
+        self._emitter.close()

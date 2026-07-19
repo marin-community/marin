@@ -435,8 +435,9 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         # Periodic iris.task_state emitter: per-root-job task counts + wait ages
-        # aggregated from the controller DB, run on its own thread in start().
-        self._task_state_collector = TaskStateCollector(self._db, log_stack.task_state_table)
+        # aggregated from the controller DB. Constructing it starts its emitter
+        # thread, so it is built in start() (non-dry-run) and closed in stop().
+        self._task_state_collector: TaskStateCollector | None = None
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker
@@ -512,7 +513,6 @@ class Controller:
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._checkpoint_thread: ManagedThread | None = None
-        self._task_state_thread: ManagedThread | None = None
 
         # Throttles the execution-timeout deadline scan in the reconcile phase.
         # The reconcile phase runs frequently (poll cadence); the timeout query
@@ -642,7 +642,7 @@ class Controller:
 
         if not self._config.dry_run:
             self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
-            self._task_state_thread = self._threads.spawn(self._task_state_collector.run, name="task-state-stats")
+            self._task_state_collector = TaskStateCollector(self._db, self._log_stack.task_state_table)
 
         # Create and start uvicorn server via spawn_server, which bridges the
         # ManagedThread stop_event to server.should_exit automatically.
@@ -733,9 +733,8 @@ class Controller:
         if self._checkpoint_thread:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
-        if self._task_state_thread:
-            self._task_state_thread.stop()
-            self._task_state_thread.join(timeout=join_timeout)
+        if self._task_state_collector is not None:
+            self._task_state_collector.close()
         self._federation.stop()
 
         self._threads.stop()

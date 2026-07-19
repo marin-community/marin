@@ -22,13 +22,21 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.profile import (
-    PROFILE_NAMESPACE,
-    IrisProfile,
-    ProfileTrigger,
     build_profile_row,
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_STATS_NAMESPACE,
+    WORKER_STATS_NAMESPACE,
+    IrisProfile,
+    IrisTaskStat,
+    IrisWorkerStat,
+    ProfileTrigger,
+    WorkerStatus,
+    build_worker_stat,
+)
 from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
@@ -45,14 +53,6 @@ from iris.cluster.worker.env_probe import (
 )
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.stats import (
-    TASK_STATS_NAMESPACE,
-    WORKER_STATS_NAMESPACE,
-    IrisTaskStat,
-    IrisWorkerStat,
-    WorkerStatus,
-    build_worker_stat,
-)
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container

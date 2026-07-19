@@ -23,17 +23,21 @@ from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_polic
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
-from iris.cluster.backends.k8s.admission_probe import ADMISSION_PROBE_NAMESPACE, IrisAdmissionProbe
-from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
-from iris.cluster.controller.task_state_stats import TASK_STATE_NAMESPACE, IrisTaskState
 from iris.cluster.platforms.types import resolve_external_host
-from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
-from iris.cluster.worker.stats import (
+from iris.cluster.stats.tables import (
+    ADMISSION_PROBE_NAMESPACE,
+    PROFILE_NAMESPACE,
+    PROVISIONING_NAMESPACE,
     TASK_EVENT_NAMESPACE,
     TASK_EVENT_STORAGE_POLICY,
+    TASK_STATE_NAMESPACE,
     TASK_STATS_NAMESPACE,
     WORKER_STATS_NAMESPACE,
+    IrisAdmissionProbe,
+    IrisProfile,
+    IrisProvisioning,
     IrisTaskStat,
+    IrisTaskState,
     IrisWorkerStat,
     TaskEventRow,
 )

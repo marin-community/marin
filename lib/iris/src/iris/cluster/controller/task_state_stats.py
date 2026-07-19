@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The ``iris.task_state`` finelog namespace: periodic per-root-job task-state rows.
+"""The ``iris.task_state`` emitter: periodic per-root-job task-state rows.
 
 Every :data:`TASK_STATE_INTERVAL` the controller aggregates its local tasks per
 root job — counts by state, plus how long the oldest PENDING task has waited for
@@ -11,65 +11,19 @@ rollup row (``root_job_id=""``). The rollup row is written even when the cluster
 is idle, so silence in the table means the controller (or this emitter) is down.
 """
 
-import logging
-import threading
-from dataclasses import dataclass
-from datetime import datetime
-from typing import ClassVar
-
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
 from iris.cluster.controller import reads
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.task_state import DISPATCHED_TASK_STATES
+from iris.cluster.stats.emitter import PeriodicEmitter
+from iris.cluster.stats.tables import CLUSTER_ROLLUP_ROOT_JOB, IrisTaskState
 from iris.rpc import job_pb2
-
-logger = logging.getLogger(__name__)
-
-# finelog namespace for ``IrisTaskState`` rows.
-TASK_STATE_NAMESPACE = "iris.task_state"
 
 # Emission cadence. Coarser than the control tick: these rows feed fleet
 # dashboards and stuck-task alerting, where 30s resolution is plenty.
 TASK_STATE_INTERVAL = 30.0
-
-# ``root_job_id`` of the per-cluster rollup row (the sum over every root job).
-CLUSTER_ROLLUP_ROOT_JOB = ""
-
-
-@dataclass
-class IrisTaskState:
-    """One task-state aggregate per root job per tick. Doubles as the finelog table schema.
-
-    ``oldest_pending_age_ms`` measures the oldest PENDING task from its last
-    requeue (or submission for a first attempt); ``oldest_building_age_ms``
-    measures the oldest ASSIGNED-or-BUILDING task from its current attempt's
-    creation — time since dispatch without reaching RUNNING, the "tasks stuck
-    in BUILDING" alert quantity. Both are 0 when no task is in those states.
-    Terminal counts cover only root jobs still carrying an active task; a fully
-    finished job stops producing rows.
-    """
-
-    # Fleet queries slice one root job's history at a time; clustering parquet by
-    # root_job_id lets row-group min/max prune the scan.
-    key_column: ClassVar[str] = "root_job_id"
-
-    root_job_id: str  # wire job id, or "" for the per-cluster rollup row
-    ts: datetime
-    pending: int
-    assigned: int
-    building: int
-    running: int
-    succeeded: int
-    failed: int
-    killed: int
-    worker_failed: int
-    unschedulable: int
-    preempted: int
-    cosched_failed: int
-    oldest_pending_age_ms: int
-    oldest_building_age_ms: int
 
 
 def build_task_state_rows(
@@ -154,24 +108,15 @@ def build_task_state_rows(
 class TaskStateCollector:
     """Periodic emitter of ``iris.task_state`` rows from the controller DB.
 
-    Runs on its own controller thread, off the control tick: each cycle takes a
-    read snapshot, aggregates active tasks per root job, and writes the rows.
-    A failed cycle logs and skips — the emitter never propagates into the
-    controller.
+    Each cycle takes a read snapshot, aggregates active tasks per root job, and
+    writes the rows. Runs on its own :class:`PeriodicEmitter` thread, off the
+    control tick.
     """
 
     def __init__(self, db: ControllerDB, table: Table, *, interval: float = TASK_STATE_INTERVAL) -> None:
         self._db = db
         self._table = table
-        self._interval = interval
-
-    def run(self, stop_event: threading.Event) -> None:
-        while not stop_event.is_set():
-            try:
-                self.collect_once()
-            except Exception:
-                logger.warning("task-state collect cycle failed", exc_info=True)
-            stop_event.wait(timeout=self._interval)
+        self._emitter = PeriodicEmitter(self.collect_once, interval=interval, name="task-state-stats")
 
     def collect_once(self, now: Timestamp | None = None) -> None:
         if now is None:
@@ -180,3 +125,6 @@ class TaskStateCollector:
             active = reads.active_task_rollup_by_root_job(tx)
             terminal = reads.terminal_task_counts_by_root_job(tx, sorted({r.root_job_id for r in active}))
         self._table.write(build_task_state_rows(active, terminal, now))
+
+    def close(self) -> None:
+        self._emitter.close()

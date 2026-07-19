@@ -8,7 +8,8 @@ import pytest
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
-from iris.cluster.controller.task_state_stats import CLUSTER_ROLLUP_ROOT_JOB, TaskStateCollector
+from iris.cluster.controller.task_state_stats import TaskStateCollector
+from iris.cluster.stats.tables import CLUSTER_ROLLUP_ROOT_JOB
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
@@ -94,7 +95,11 @@ def seed_attempt(
 
 def collect(db: ControllerDB) -> list:
     table = FakeStatsTable()
-    TaskStateCollector(db, table).collect_once(NOW)
+    collector = TaskStateCollector(db, table, interval=3600)
+    try:
+        collector.collect_once(NOW)
+    finally:
+        collector.close()
     (rows,) = table.writes
     return rows
 

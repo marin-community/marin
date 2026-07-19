@@ -8,10 +8,10 @@ import pytest
 from iris.cluster.backends.k8s.admission_probe import (
     PROBE_MESSAGE_MAX_LEN,
     AdmissionProber,
-    ProbeOutcome,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import KubectlError
+from iris.cluster.stats.tables import ProbeOutcome
 from iris.test_util import FakeStatsTable
 
 
