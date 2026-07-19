@@ -79,8 +79,14 @@ def _eval_child_priority():
 ENDPOINT_READY_TIMEOUT_SECONDS = 2400
 _ENDPOINT_POLL_SECONDS = 10.0
 # The served model self-stops after this wall-clock lifetime, a backstop in case the parent dies
-# before it can tear the child down.
-SERVE_TIMEOUT_HOURS = 4.0
+# before it can tear the child down. It MUST exceed the slowest real eval's wall-clock: normal
+# teardown is parent-driven (the parent kills the serve the moment the eval client finishes), so
+# this only bites on the rare parent-death. 4.0h was too short — it was killing LIVE servers
+# mid-eval on slow multi-seed runs (AIME 10-seed on thinking/large models is ~50-80min/seed ≈
+# 8-13h), which the client then scored as connection-refused MISSES → degenerate 0.0-tail results
+# (35b/80b AIME, 67B tier2). 24.0h matches quick_serve's own default and comfortably covers the
+# fleet's slowest evals while still reaping a genuinely orphaned 8-GPU server within a day.
+SERVE_TIMEOUT_HOURS = 24.0
 # lm-eval's local-completions client concurrency (parallel in-flight requests to the endpoint).
 DEFAULT_NUM_CONCURRENT = 16
 # Credentials the child jobs need (HF model/dataset downloads, wandb logging); the parent propagates
