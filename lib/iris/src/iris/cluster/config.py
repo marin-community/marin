@@ -43,6 +43,7 @@ from iris.cluster.types import (
     WellKnownAttribute,
     parse_memory_string,
 )
+from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -407,10 +408,9 @@ class WorkerConfig(_Config):
     docker_image: str = ""
     host: str = "0.0.0.0"
     port: int = 10001
-    # Task named-port allocation range (end exclusive). Must stay below the
-    # kernel ephemeral floor (EPHEMERAL_PORT_RANGE in runtime/docker.py) so
-    # co-tenant outbound sockets can never squat an allocated port (#7392).
-    port_range: str = "12000-14000"
+    # Task named-port allocation range (end exclusive); see
+    # DEFAULT_TASK_PORT_RANGE for why it sits below the ephemeral floor.
+    port_range: str = f"{DEFAULT_TASK_PORT_RANGE[0]}-{DEFAULT_TASK_PORT_RANGE[1]}"
     worker_id: str = ""  # auto-generated if empty
     controller_address: str = ""
     cache_dir: str = "/dev/shm/iris"
