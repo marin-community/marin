@@ -213,6 +213,10 @@ cd infra/grafana
 pulumi login gs://marin-iac-state
 export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
   --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
+# The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
+# reads this token from the environment.
+export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+  --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
 pulumi stack select marin-grafana                         # first time: pulumi stack init marin-grafana
 
 # Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member. Editing this
