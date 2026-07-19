@@ -81,9 +81,11 @@ The mirror repos and their cleanup policies are Infrastructure-as-Code: the
 [`lib/iris/config/marin.yaml`](../config/marin.yaml) declares each repo (name,
 Docker upstream, multi-regions), and `infra/iac/src/iac/gcp/registries.py`
 (`GcpArtifactRegistries`) turns it into `google_artifact_registry_repository`
-resources with `mode=REMOTE_REPOSITORY` and the age/keep cleanup policies. Both
-`ghcr-mirror` and `docker-mirror` are declared there, so a stack bring-up
-provisions them together:
+resources with `mode=REMOTE_REPOSITORY` and the cleanup policies. `ghcr-mirror`
+uses the default 30d-delete / keep-16 (sized for the versioned iris image
+stream); `docker-mirror` overrides it with a plain 7-day TTL, since base-image
+packages hold too few versions for a keep floor to leave anything deletable.
+Both repos are declared there, so a stack bring-up provisions them together:
 
 ```bash
 # Recon against the live repos (imports, never plans a destructive create):

@@ -132,9 +132,12 @@ class GcpArtifactRegistryCleanupPolicy(BaseModel):
     keep_count: int | None = None
 
 
-# Bound each pull-through cache: drop versions not pulled in 30 days, but always keep the 16
-# newest so a routine pull never re-fetches a still-current image from the upstream. Applied to
-# every mirror repo unless a spec overrides cleanup_policies.
+# Default for mirrors of versioned image streams (the iris images on ghcr): drop versions cached
+# more than 30 days ago (older_than counts from caching time; an evicted version is re-fetched on
+# the next pull), keeping the 16 newest versions of each package so the current release train
+# stays warm. Repos caching a few mutable base tags override cleanup_policies with a plain short
+# TTL instead — with so few versions per package, a keep floor would protect them all
+# indefinitely (see docker-mirror in marin.yaml).
 DEFAULT_MIRROR_CLEANUP_POLICIES = [
     GcpArtifactRegistryCleanupPolicy(id="delete-older-than-30d", action="DELETE", older_than="2592000s"),
     GcpArtifactRegistryCleanupPolicy(id="keep-latest", action="KEEP", keep_count=16),

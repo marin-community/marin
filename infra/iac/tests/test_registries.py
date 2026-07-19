@@ -61,6 +61,17 @@ def test_registry_mirrors_route_to_provisioned_repos() -> None:
                 assert provisioned.get((repo, location)) == expected, (cluster, upstream_host, target)
 
 
+def test_docker_mirror_overrides_keep_floor_with_short_ttl() -> None:
+    """Base-image packages carry few versions each, so the default keep-16 floor would
+    protect them all indefinitely; docker-mirror instead evicts on a plain 7-day TTL."""
+    gcp = load_provisioning("marin").gcp
+    assert gcp is not None
+    by_name = {r.name: r for r in gcp.registries}
+    (policy,) = by_name["docker-mirror"].cleanup_policies
+    assert policy.action == "DELETE" and policy.older_than == "604800s"
+    assert by_name["ghcr-mirror"].cleanup_policies == DEFAULT_MIRROR_CLEANUP_POLICIES
+
+
 def test_default_cleanup_policies_applied_when_unspecified() -> None:
     spec = GcpRemoteRepositorySpec(name="docker-mirror", docker_upstream=DOCKER_HUB_UPSTREAM, locations=["us"])
     delete, keep = spec.cleanup_policies
