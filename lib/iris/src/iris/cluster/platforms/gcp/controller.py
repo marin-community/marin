@@ -4,7 +4,7 @@
 """GcpControllerProvider — controller lifecycle + connectivity for GCP.
 
 Implements the ControllerProvider protocol: discover, start, restart, stop,
-stop_all, tunnel, resolve_image.
+stop_all, tunnel, resolve_image, debug_report.
 """
 
 import logging
@@ -115,6 +115,9 @@ class GcpControllerProvider:
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return self.worker_provider.resolve_image(image, zone)
+
+    def debug_report(self) -> None:
+        pass
 
     def shutdown(self) -> None:
         self.worker_provider.shutdown()

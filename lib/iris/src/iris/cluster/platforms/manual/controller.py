@@ -80,5 +80,8 @@ class ManualControllerProvider:
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
 
+    def debug_report(self) -> None:
+        pass
+
     def shutdown(self) -> None:
         self.worker_provider.shutdown()

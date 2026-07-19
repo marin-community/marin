@@ -645,7 +645,7 @@ def run_iris_job(
     """Core job submission logic.
 
     Args:
-        controller_url: Controller URL (resolved by the parent context).
+        controller_url: Controller URL (from parent context tunnel).
         dashboard_url: Public dashboard origin (e.g. https://iris.oa.dev). When
             set, a clickable job URL is logged on submit.
         terminate_on_exit: If True, terminate the job on any non-normal exit
@@ -1008,7 +1008,7 @@ Examples:
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
-    help="Terminate the job on Ctrl+C (default: terminate). Losing connectivity never kills the job.",
+    help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
 )
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context
@@ -1088,39 +1088,48 @@ def run(
 
     env_vars_dict = load_env_vars(env_vars)
 
-    exit_code = run_iris_job(
-        command=command,
-        env_vars=env_vars_dict,
-        controller_url=controller_url,
-        tpu=tpu,
-        gpu=gpu,
-        cpu=cpu,
-        memory=memory,
-        disk=disk,
-        wait=not no_wait,
-        job_name=job_name,
-        user=user,
-        replicas=replicas,
-        processes_per_task=processes_per_task,
-        max_retries=max_retries,
-        timeout=timeout,
-        extras=list(extra),
-        setup_scripts=[] if no_sync else None,
-        sync_packages=list(sync_package),
-        terminate_on_exit=terminate_on_exit,
-        regions=region or None,
-        zone=zone,
-        target_cluster=target_cluster,
-        reserve=reserve or None,
-        priority=priority,
-        preemptible=preemptible,
-        task_image=task_image,
-        container_profile=container_profile,
-        profile_hook=profile_hook,
-        credentials=ctx.obj.get("credentials"),
-        submit_argv=submit_argv,
-        dashboard_url=dashboard_url or None,
-    )
+    try:
+        exit_code = run_iris_job(
+            command=command,
+            env_vars=env_vars_dict,
+            controller_url=controller_url,
+            tpu=tpu,
+            gpu=gpu,
+            cpu=cpu,
+            memory=memory,
+            disk=disk,
+            wait=not no_wait,
+            job_name=job_name,
+            user=user,
+            replicas=replicas,
+            processes_per_task=processes_per_task,
+            max_retries=max_retries,
+            timeout=timeout,
+            extras=list(extra),
+            setup_scripts=[] if no_sync else None,
+            sync_packages=list(sync_package),
+            terminate_on_exit=terminate_on_exit,
+            regions=region or None,
+            zone=zone,
+            target_cluster=target_cluster,
+            reserve=reserve or None,
+            priority=priority,
+            preemptible=preemptible,
+            task_image=task_image,
+            container_profile=container_profile,
+            profile_hook=profile_hook,
+            credentials=ctx.obj.get("credentials"),
+            submit_argv=submit_argv,
+            dashboard_url=dashboard_url or None,
+        )
+    except Exception:
+        bundle = ctx.obj.get("provider_bundle")
+        if bundle is not None:
+            try:
+                bundle.controller.debug_report()
+            except Exception:
+                logger.debug("Controller post-mortem failed", exc_info=True)
+        raise
 
     sys.exit(exit_code)
 

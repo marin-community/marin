@@ -211,10 +211,10 @@ class IrisEnvironment(BaseEnvironment):
             raise
 
     def _start_sync(self) -> None:
-        # Resolve the controller URL (IAP ingress, configured address, or a
-        # local cluster the endpoint then owns). The endpoint carries no click
-        # context, so it survives the start()/stop() hop across
-        # asyncio.to_thread workers; _stop_sync closes it once the sandbox is done.
+        # Resolve the controller URL and open any tunnel it needs. The endpoint
+        # owns that tunnel and carries no click context, so it survives the
+        # start()/stop() hop across asyncio.to_thread workers; _stop_sync closes
+        # it once the sandbox is done.
         self._endpoint = connect_controller(cluster_name=self._cluster, controller_url=self._controller_url)
         url = self._endpoint.url
         credentials = self._endpoint.credentials
@@ -289,7 +289,7 @@ class IrisEnvironment(BaseEnvironment):
         if self._iris is not None:
             self._iris.shutdown()
             self._iris = None
-        # Close the endpoint last: it may own a local cluster the client above runs against.
+        # Close the tunnel last: the client above reaches the controller through it.
         if self._endpoint is not None:
             self._endpoint.close()
             self._endpoint = None

@@ -12,9 +12,8 @@ How the controller is reached depends on the cluster. **IAP-fronted clusters
 (marin, marin-dev) are reached directly over their IAP HTTPS URL — there is no
 SSH tunnel**; `require_controller_url` returns the IAP URL and every request is
 authenticated at the edge (see [Authentication](#authentication-headless--ci) and
-`docs/iap-gclb.md`). Non-IAP clusters must be reachable directly at their
-configured controller address; otherwise open your own SSH tunnel or
-`kubectl port-forward` and pass `--controller-url`.
+`docs/iap-gclb.md`). Non-IAP clusters open an SSH tunnel to the controller VM
+automatically.
 
 Use `iris cluster list` to see named clusters. Use `--config` when you mean a custom or pinned file path.
 
@@ -49,7 +48,7 @@ model behind this.
 
 ```bash
 iris cluster start|stop|restart|status
-iris cluster dashboard              # print controller URL, block
+iris cluster dashboard              # open tunnel, print URL, block
 iris cluster dashboard-proxy        # local proxy to remote controller (no tunnel needed)
 ```
 
@@ -472,7 +471,7 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
   --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
 
 # Then: iris --controller-url=http://localhost:10000 ...
-# Preferred: iris --cluster=marin ... connects straight to the IAP ingress (no tunnel)
+# Or preferred named-cluster auto-tunnel: iris --cluster=marin ...
 # Exact-file form for custom or pinned configs: iris --config=lib/iris/config/marin.yaml ...
 ```
 

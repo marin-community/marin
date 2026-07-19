@@ -748,14 +748,14 @@ def cluster_create_slice(ctx, scale_group_name: str):
         raise click.ClickException(f"Unknown scale group '{scale_group_name}'. Available: {available}")
 
     # Verify the controller is reachable before creating the slice. The
-    # returned URL may be a client-facing ingress (IAP); workers need the
-    # cluster-internal address instead, resolved below.
+    # returned URL may be a tunnel endpoint that's only reachable from the CLI
+    # host; workers need the cluster-internal address instead, resolved below.
     require_controller_url(ctx)
-    bundle = provider_bundle(config)
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     # Resolve the address workers will connect to. Prefer an explicit value in
     # defaults.worker.controller_address, then discover it via the provider
-    # (e.g., GCE label lookup). Never pass the client-facing URL here.
+    # (e.g., GCE label lookup). Never pass the CLI-local tunnel URL here.
     worker_controller_address = config.controller_address()
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
@@ -806,7 +806,7 @@ def cluster_delete_slice(ctx, slice_id: str):
     if config.controller.controller_kind() == "local":
         raise click.ClickException("delete-slice is not supported for local clusters")
 
-    bundle = provider_bundle(config)
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
@@ -861,15 +861,15 @@ def cluster_status_cmd(ctx):
 @cluster.command("dashboard")
 @click.pass_context
 def cluster_dashboard(ctx):
-    """Print the dashboard URL and block.
+    """Print dashboard URL and keep tunnel open.
 
-    Blocks until Ctrl+C, keeping any local cluster the URL resolution started alive.
+    Uses the tunnel established by the iris group. Blocks until Ctrl+C.
     """
     controller_url = require_controller_url(ctx)
     stop = threading.Event()
 
     def on_signal(sig, frame):
-        click.echo("\nClosing...")
+        click.echo("\nClosing tunnel...")
         stop.set()
 
     signal.signal(signal.SIGINT, on_signal)
@@ -877,7 +877,7 @@ def cluster_dashboard(ctx):
 
     click.echo(f"\nDashboard:      {controller_url}")
     click.echo(f"Controller RPC: {controller_url}")
-    click.echo("\nPress Ctrl+C to exit.")
+    click.echo("\nPress Ctrl+C to close tunnel.")
     stop.wait()
 
 
@@ -1410,7 +1410,7 @@ def worker_restart(
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for worker-restart")
-    bundle = provider_bundle(config)
+    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
     if not isinstance(bundle.workers, GcpWorkerProvider):
         raise click.ClickException("worker-restart is only supported on GCP clusters")
 
