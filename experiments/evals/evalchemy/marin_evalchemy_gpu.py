@@ -53,9 +53,11 @@ from experiments.evals.evalchemy.serve_and_eval import (
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 CLUSTER = "cw-us-east-02a"
-# :evalchemy-gpu (already built, PR #18) — CPU-only eval client; python at /opt/eval/evalchemy/.venv.
+# :evalchemy-gpu (built via evalchemy infra/docker/build_evalchemy_gpu_kaniko.sh, PR #18) — CPU-only eval
+# client; python at /opt/eval/evalchemy/.venv. Pinned to evalchemy main HEAD 676fb85f which carries #28
+# (per-sample records now persist for lm-eval-native tasks under --log_samples → offline rescore, e.g. drop).
 EVAL_IMAGE = os.environ.get(
-    "EVAL_IMAGE", "ghcr.io/open-thoughts/openthoughts-agent:evalchemy-gpu-73c19cf"
+    "EVAL_IMAGE", "ghcr.io/open-thoughts/openthoughts-agent:evalchemy-gpu-676fb85f"
 )
 EVAL_PYTHON = os.environ.get("EVAL_PYTHON", "/opt/eval/evalchemy/.venv/bin/python")
 
