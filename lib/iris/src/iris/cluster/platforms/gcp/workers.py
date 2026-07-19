@@ -49,6 +49,8 @@ from iris.cluster.platforms.gcp.service import (
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
 from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
+    docker_hub_repo_path,
+    rewrite_docker_hub_to_ar_remote,
     rewrite_ghcr_to_ar_remote,
     zone_to_multi_region,
 )
@@ -262,6 +264,7 @@ class GcpWorkerProvider:
         gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
+        self._docker_hub_mirror_repo = gcp_config.docker_hub_mirror_repo
         self._label_prefix = label_prefix
         self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
@@ -290,18 +293,27 @@ class GcpWorkerProvider:
         return self._ssh_config
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
-        """Rewrite ``ghcr.io/`` images to the AR remote repo for *zone*'s continent.
+        """Rewrite public-registry images to the AR pull-through cache for *zone*'s continent.
 
-        Non-GHCR images pass through unchanged.
+        ``ghcr.io/`` images route through the ghcr-mirror remote repo; Docker Hub
+        images (bare names like ``ubuntu:24.04`` and ``docker.io/...``) route
+        through the configured ``docker_hub_mirror_repo`` when one is set. Both
+        keep pulls on-continent and dodge upstream rate limits. Images that name
+        another registry (gcr.io, Artifact Registry, a private host) — and Docker
+        Hub images when no mirror repo is configured — pass through unchanged.
         """
-        if not image.startswith("ghcr.io/"):
+        is_ghcr = image.startswith("ghcr.io/")
+        mirror_docker_hub = bool(self._docker_hub_mirror_repo) and docker_hub_repo_path(image) is not None
+        if not is_ghcr and not mirror_docker_hub:
             return image
         if not zone:
-            raise ValueError("zone is required for GHCR→AR image rewriting on GCP")
+            raise ValueError("zone is required for public-image→AR rewriting on GCP")
         multi_region = zone_to_multi_region(zone)
         if not multi_region:
             return image
-        return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
+        if is_ghcr:
+            return rewrite_ghcr_to_ar_remote(image, multi_region, self._project_id)
+        return rewrite_docker_hub_to_ar_remote(image, multi_region, self._project_id, self._docker_hub_mirror_repo)
 
     def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
         """Try to delete a GCE VM that may have been partially created."""

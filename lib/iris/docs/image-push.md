@@ -35,11 +35,28 @@ Developer → docker push → ghcr.io/marin-community/iris-worker:v1
    - `asia-*` / `me-*` zones → **not supported** (raises error; provision AR remote repo first)
    - Non-GCP (CoreWeave) → pulls directly from `ghcr.io`
 
+### Docker Hub task images
+
+The same pull-through mechanism caches Docker Hub base images used as task images
+(e.g. harbor sandbox images like `ubuntu:24.04`). A separate AR remote repo,
+`docker-mirror`, proxies `registry-1.docker.io`. The worker's image resolver
+rewrites Docker Hub references to it — bare names (`ubuntu:24.04` →
+`library/ubuntu:24.04`, applying Docker's implicit `library/` namespace),
+namespaced names (`bitnami/redis:latest`), and explicit `docker.io/...` — using
+the same zone → continent mapping. References that name another registry
+(`gcr.io`, Artifact Registry, `ghcr.io`, a private host) pass through unchanged.
+
+This rewrite is opt-in per cluster via `platform.gcp.docker_hub_mirror_repo`
+(the repo name, e.g. `docker-mirror`; empty disables it and images pull straight
+from Docker Hub). It is enabled on the `marin` cluster. The named repo must exist
+and be enabled in each zone's multi-region, or those pulls fail.
+
 ### Cost
 
 - Multi-region → same-continent region egress is **free** per
   [AR pricing](https://cloud.google.com/artifact-registry/pricing).
-- GHCR → AR cache miss incurs internet egress, but only on the first pull per image/tag.
+- GHCR/Docker Hub → AR cache miss incurs internet egress, but only on the first
+  pull per image/tag.
 
 ## Authentication
 
@@ -112,6 +129,24 @@ gcloud artifacts repositories set-cleanup-policies ghcr-mirror \
   --policy=/tmp/cleanup-policy.json --no-dry-run
 ```
 
+### Create the Docker Hub mirror repos (one-time)
+
+```bash
+# US multi-region
+gcloud artifacts repositories create docker-mirror \
+  --project=hai-gcp-models \
+  --repository-format=docker \
+  --location=us \
+  --mode=remote-repository \
+  --remote-docker-repo=DOCKER-HUB \
+  --description="Remote proxy for Docker Hub (US multi-region)"
+
+# Europe multi-region — repeat with --location=europe
+```
+
+Apply the same cleanup policies as above. Then set
+`platform.gcp.docker_hub_mirror_repo: docker-mirror` on the cluster config.
+
 ### Verify
 
 ```bash
@@ -120,13 +155,16 @@ gcloud artifacts repositories list --project=hai-gcp-models --filter="mode=REMOT
 
 # Test pull-through
 docker pull us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:latest
+docker pull us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04
 ```
 
 ## Code
 
-- **Rewrite logic**: `lib/iris/src/iris/providers/bootstrap.py`
-  - `zone_to_multi_region()`: maps GCP zone → continent (`us`, `europe`, `asia`)
+- **Rewrite logic**: `lib/iris/src/iris/cluster/platforms/gcp/worker_bootstrap.py`
+  - `zone_to_multi_region()`: maps GCP zone → continent (`us`, `europe`)
   - `rewrite_ghcr_to_ar_remote()`: rewrites `ghcr.io/...` → `{continent}-docker.pkg.dev/.../ghcr-mirror/...`
+  - `docker_hub_repo_path()` / `rewrite_docker_hub_to_ar_remote()`: rewrite Docker Hub references → `{continent}-docker.pkg.dev/.../docker-mirror/...`
+- **Task image resolver**: `GcpWorkerProvider.resolve_image()` applies both rewrites for the worker's zone
 - **Autoscaler**: `_per_group_bootstrap_config()` rewrites the worker image per scale group
 - **Controller bootstrap**: `build_controller_bootstrap_script_from_config()` rewrites the controller image
 - **Bootstrap scripts**: Already detect `-docker.pkg.dev/` and configure `gcloud auth` automatically
