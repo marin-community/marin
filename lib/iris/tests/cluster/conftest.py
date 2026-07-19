@@ -35,17 +35,6 @@ from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import make_test_entrypoint
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
-
-class FakeStatsTable:
-    """Records every Table.write call so tests can assert on emitted rows."""
-
-    def __init__(self) -> None:
-        self.writes: list[list[object]] = []
-
-    def write(self, rows) -> None:
-        self.writes.append(list(rows))
-
-
 # ---------------------------------------------------------------------------
 # Constraint builders
 # ---------------------------------------------------------------------------

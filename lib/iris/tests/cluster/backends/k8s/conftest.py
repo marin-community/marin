@@ -16,8 +16,7 @@ from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
-
-from tests.cluster.conftest import FakeStatsTable
+from iris.test_util import FakeStatsTable
 
 
 @pytest.fixture

@@ -12,8 +12,7 @@ from iris.cluster.backends.k8s.admission_probe import (
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import KubectlError
-
-from tests.cluster.conftest import FakeStatsTable
+from iris.test_util import FakeStatsTable
 
 
 @pytest.fixture

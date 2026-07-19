@@ -37,10 +37,8 @@ from iris.cluster.runtime.profile import ProfileTrigger
 from iris.cluster.types import JobName
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
-from iris.test_util import wait_for_condition
+from iris.test_util import FakeStatsTable, wait_for_condition
 from rigging.timing import Duration
-
-from tests.cluster.conftest import FakeStatsTable
 
 from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 

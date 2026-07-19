@@ -6,8 +6,7 @@
 from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.worker.stats import IrisWorkerStat, WorkerStatus
-
-from tests.cluster.conftest import FakeStatsTable
+from iris.test_util import FakeStatsTable
 
 from .conftest import make_batch, make_kueue_provider
 

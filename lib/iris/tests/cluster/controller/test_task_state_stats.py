@@ -11,10 +11,9 @@ from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.controller.task_state_stats import CLUSTER_ROLLUP_ROOT_JOB, TaskStateCollector
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+from iris.test_util import FakeStatsTable
 from rigging.timing import Timestamp
 from sqlalchemy import update
-
-from tests.cluster.conftest import FakeStatsTable
 
 NOW_MS = 1_700_000_000_000
 NOW = Timestamp.from_ms(NOW_MS)

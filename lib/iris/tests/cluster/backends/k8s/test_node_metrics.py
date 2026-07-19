@@ -22,8 +22,7 @@ from iris.cluster.backends.k8s.node_metrics import (
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.worker.stats import IrisWorkerStat, WorkerStatus
-
-from tests.cluster.conftest import FakeStatsTable
+from iris.test_util import FakeStatsTable
 
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
