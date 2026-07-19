@@ -157,6 +157,7 @@ class DelphiSwarmTrainingConfig:
     output_path: str
     run_spec: DelphiSwarmRunSpec
     validation_configs: dict[str, DatasetComponent] | None
+    wandb_tags: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -448,8 +449,7 @@ def run_delphi_swarm_training(config: DelphiSwarmTrainingConfig) -> None:
                 project="marin",
                 tags=[
                     "issue-6611",
-                    "delphi-3e18-augmented-swarm",
-                    "fit-panel",
+                    *config.wandb_tags,
                     "completed-adamh",
                     f"panel_source={run_spec.panel_source}",
                     f"source_run={run_spec.source_run_name}",
@@ -594,6 +594,7 @@ def build_launch_artifacts(
                 output_path=this_output_path(),
                 run_spec=run_spec,
                 validation_configs=validation_configs,
+                wandb_tags=("delphi-3e18-augmented-swarm", "fit-panel", "two-phase"),
             ),
         )
         training_steps.append(training_step)

@@ -42,6 +42,7 @@ TRAIN_FILTER = {
     ]
 }
 EVAL_FILTER = {"config.checkpoint_path": {"$regex": "_3e18-"}}
+FIT_SWARM_TAG = "delphi-3e18-augmented-swarm"
 RUN_SUFFIX_RE = re.compile(r"-[0-9a-f]{6,8}$")
 FIT_OVERLAP_TOLERANCE = 1e-10
 
@@ -700,7 +701,7 @@ def write_report(path: Path, summary: Mapping[str, object], fit_panel: Path, obs
         "",
         "Selection requires both the exact `FLOPs=3.0e+18` tag and `_3e18` in the training run name. "
         "This excludes unrelated isoflop studies, inherited-tag TPP=10/20 runs with larger token budgets, "
-        "writeback-only runs, and the newly launched 280-row fit swarm.",
+        f"writeback-only runs, and runs tagged `{FIT_SWARM_TAG}` from the 280-row fit swarm.",
         "",
         "## Gaps",
         "",
@@ -721,7 +722,7 @@ def main() -> None:
     api = wandb.Api(timeout=args.wandb_timeout)
 
     training_metadata = api.runs(TRAIN_PROJECT, filters=TRAIN_FILTER, per_page=1000, lazy=True)
-    training_ids = sorted(run.id for run in training_metadata)
+    training_ids = sorted(run.id for run in training_metadata if FIT_SWARM_TAG not in (run.tags or []))
     if not training_ids:
         raise ValueError("No Delphi 3e18 training runs matched the audited W&B filter")
     eval_rows, eval_by_training = collect_eval_attempts(api, set(training_ids), args.batch_size)
