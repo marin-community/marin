@@ -55,12 +55,13 @@ USER grafana
 # header itself. Anonymous stays enabled as a fallback: a request without the
 # header (a health check, a misconfig) degrades to read-only rather than 401.
 #
-# SMTP: the Google Workspace relay, STARTTLS on 587. The user doubles as the from
-# address; the password (a Workspace app password) arrives as GF_SMTP_PASSWORD from
-# Secret Manager. Without a valid credential there, email notification delivery
-# fails while Slack still delivers.
-ENV GF_SMTP_ENABLED=true \
-    GF_SMTP_HOST=smtp-relay.gmail.com:587 \
+# SMTP: plain Gmail submission (smtp.gmail.com:587, STARTTLS), authenticated as
+# grafana@openathena.ai with an app password (GF_SMTP_PASSWORD from Secret Manager).
+# The app sends mail itself — no Workspace relay, so deliverability rests on the
+# sending account alone. GF_SMTP_ENABLED is deliberately absent here: the deploy sets
+# it only when the credentials secret exists, so an image without credentials runs
+# with SMTP off and alerts reach Slack only.
+ENV GF_SMTP_HOST=smtp.gmail.com:587 \
     GF_SMTP_FROM_ADDRESS=grafana@openathena.ai \
     GF_SMTP_USER=grafana@openathena.ai \
     GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS

@@ -141,15 +141,18 @@ and a lost silence. Rule definitions are files, so nothing else is lost. Accepte
 now (deploys are infrequent; `min=max=1` keeps a single evaluator); the hardening path
 if it ever matters is a small Cloud SQL Postgres for Grafana state.
 
-SMTP is the Google Workspace relay (`smtp-relay.gmail.com:587`, STARTTLS), sending as
-grafana@openathena.ai; `GF_SMTP_PASSWORD` comes from Secret Manager. Without a valid
-app password in that secret, email delivery fails while Slack still delivers. After
-changing contact points or their credentials, send a test notification to both
-receivers (Alerting → Contact points → Test) rather than trusting config presence.
+Email is optional. SMTP is plain Gmail submission (`smtp.gmail.com:587`, STARTTLS),
+sending as grafana@openathena.ai with an app password from Secret Manager; the app
+sends mail itself, so deliverability (SPF, spam filtering) rests on the sending
+account. The deploy enables SMTP only when the `marin-grafana-smtp-credentials`
+secret exists — without it the service still deploys, the email receiver fails
+silently, and critical alerts reach Slack only. After changing contact points or
+their credentials, send a test notification to both receivers (Alerting → Contact
+points → Test) rather than trusting config presence.
 
 ## Secrets and rotation
 
-All four secrets live in Secret Manager and reach the container as env vars via the
+All secrets live in Secret Manager and reach the container as env vars via the
 `CloudRunService` `secrets` field; values never enter Pulumi or git.
 
 | Env var | Secret | Feeds |
@@ -157,7 +160,11 @@ All four secrets live in Secret Manager and reach the container as env vars via 
 | `GITHUB_TOKEN` | `marin-status-page-github-token` | ferry/build/nightly panels |
 | `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
 | `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | alert contact points |
-| `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts) |
+| `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts, optional) |
+
+The first three must exist before a deploy — Cloud Run fails to start a revision
+that references a missing secret. `GF_SMTP_PASSWORD` is optional: `__main__.py`
+probes for the secret and only wires it (and enables SMTP) when it exists.
 
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
@@ -166,15 +173,14 @@ read-role token in the CW console, `gcloud secrets versions add` it, redeploy, t
 revoke the old token. The same applies to the Slack webhook and SMTP password — add a
 version, redeploy, retire the old credential.
 
-Creating the secrets (Cloud Run fails to start on a missing secret, so each must
-exist even if its value is a placeholder):
+Creating the secrets:
 
 1. CoreWeave console → API access → new token (e.g. `grafana-observer`) with only the
    `read` role, then
    `echo -n "<token>" | gcloud secrets create marin-grafana-cw-read-token --project=hai-gcp-models --data-file=-`
 2. Slack → incoming webhook for `#marin-eng`, then
    `echo -n "https://hooks.slack.com/..." | gcloud secrets create marin-grafana-slack-webhook --project=hai-gcp-models --data-file=-`
-3. Workspace admin → app password for grafana@openathena.ai on the SMTP relay, then
+3. (optional, enables email) Gmail app password for grafana@openathena.ai, then
    `echo -n "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
 4. Send a test notification to both `ops-critical` receivers and confirm delivery.
 

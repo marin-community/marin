@@ -33,6 +33,20 @@ SERVICE = "marin-grafana"
 # is the image build context.
 BUILD_CONTEXT = os.path.dirname(os.path.abspath(__file__))
 
+# Email delivery is optional: the deploy wires Grafana's SMTP password only when this
+# secret exists, so a project without it still deploys — critical alerts then reach
+# Slack only.
+SMTP_SECRET = "marin-grafana-smtp-credentials"
+
+
+def smtp_secret_exists(provider: gcp.Provider) -> bool:
+    found = gcp.secretmanager.get_secrets(
+        project=PROJECT,
+        filter=f"name:{SMTP_SECRET}",
+        opts=pulumi.InvokeOptions(provider=provider),
+    )
+    return any(secret.secret_id == SMTP_SECRET for secret in found.secrets)
+
 
 def main() -> None:
     config = pulumi.Config()
@@ -41,6 +55,21 @@ def main() -> None:
     viewers = config.get_object("viewers") or []
 
     provider = gcp.Provider("gcp", project=PROJECT)
+
+    # Values stay in Secret Manager; the component only grants the runtime service
+    # account access. GITHUB_TOKEN feeds the ferry/build panels; CW_READ_TOKEN is the
+    # CoreWeave read-role token behind the k8s source; SLACK_ALERTS_WEBHOOK and
+    # GF_SMTP_PASSWORD feed the provisioned alerting contact points.
+    secrets = [
+        SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),
+        SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
+        SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
+    ]
+    env = {}
+    if smtp_secret_exists(provider):
+        secrets.append(SecretEnv(name="GF_SMTP_PASSWORD", secret=SMTP_SECRET))
+        env["GF_SMTP_ENABLED"] = "true"
+
     service = CloudRunService(
         "grafana",
         CloudRunServiceArgs(
@@ -53,16 +82,8 @@ def main() -> None:
             cpu_always_allocated=True,
             # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
-            # Values stay in Secret Manager; the component only grants the runtime service
-            # account access. GITHUB_TOKEN feeds the ferry/build panels; CW_READ_TOKEN is the
-            # CoreWeave read-role token behind the k8s source; SLACK_ALERTS_WEBHOOK and
-            # GF_SMTP_PASSWORD feed the provisioned alerting contact points.
-            secrets=(
-                SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),
-                SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
-                SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
-                SecretEnv(name="GF_SMTP_PASSWORD", secret="marin-grafana-smtp-credentials"),
-            ),
+            env=env,
+            secrets=tuple(secrets),
             iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
