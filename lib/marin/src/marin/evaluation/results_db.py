@@ -43,7 +43,7 @@ DEFAULT_DB_INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
 DEFAULT_DB_NAME = "evals"
 DEFAULT_DB_USER = "evals"
 DEFAULT_DB_PASSWORD_SECRET = "cloudsql-evals-password"
-SECRET_MANAGER_PROJECT = "hai-gcp-models"
+GCP_PROJECT = "hai-gcp-models"
 
 metadata = MetaData()
 
@@ -113,13 +113,13 @@ def _secret_password(secret_id: str) -> str | None:
     from google.cloud import secretmanager  # noqa: PLC0415  # lazy: keep the DB stack optional
 
     client = secretmanager.SecretManagerServiceClient()
-    name = f"projects/{SECRET_MANAGER_PROJECT}/secrets/{secret_id}/versions/latest"
+    name = f"projects/{GCP_PROJECT}/secrets/{secret_id}/versions/latest"
     try:
         response = client.access_secret_version(name=name)
     except Exception:
         logger.warning(
             "could not read the eval-db password secret (EVAL_DB_PASSWORD_SECRET) from project %s",
-            SECRET_MANAGER_PROJECT,
+            GCP_PROJECT,
             exc_info=True,
         )
         return None

@@ -42,9 +42,10 @@ ENV UV_RETRIES=5
 # marin-community/evalchemy, pinned to the exact sha so the :evalchemy-tpu-<gitsha> image stays
 # immutable/reproducible. The pin carries the fork's pretrain-merge and unsafe-code-forwarding
 # fixes (--log_samples emits samples_*.jsonl for lm-eval-native tasks; --confirm_run_unsafe_code
-# reaches lm-eval).
+# reaches lm-eval) plus the greedy-seed drop (chat benchmarks pass a per-request seed that the
+# JAX/TPU vLLM backend rejects; inert under greedy decoding, so it is stripped -- evalchemy#34).
 ARG EVALCHEMY_REPO=https://github.com/marin-community/evalchemy.git
-ARG EVALCHEMY_COMMIT=405603c655b6d203d6c5c604e088abb1740ea39b
+ARG EVALCHEMY_COMMIT=293005e012d0c654726d66727198277fc9465d2d
 
 WORKDIR /opt/eval
 
