@@ -11,12 +11,11 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import httpx
 import yaml
-from config import ClusterTarget, K8sClusterTarget
-from conftest import bridge_config
+from config import ClusterTarget
+from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from github_source import GithubSource
-from k8s_source import K8sFleet, K8sSource
+from k8s_source import K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -65,21 +64,6 @@ def test_every_rule_alerts_on_nodata_and_error():
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
 
 
-def _healthy_k8s_source() -> K8sSource:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/pods") or "workloads" in request.url.path or "endpointslices" in request.url.path:
-            return httpx.Response(200, json={"items": [], "metadata": {}})
-        if "/deployments/" in request.url.path:
-            return httpx.Response(
-                200, json={"spec": {"replicas": 1, "selector": {"matchLabels": {}}}, "status": {"readyReplicas": 1}}
-            )
-        return httpx.Response(200, json={})
-
-    source = K8sSource(K8sClusterTarget("cw-a", "https://api.example"), token="t", timeout=5.0)
-    source._client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.example")
-    return source
-
-
 class _FakeIris:
     def __init__(self, name: str) -> None:
         self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
@@ -91,7 +75,7 @@ class _FakeIris:
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
-    fleet = K8sFleet([_healthy_k8s_source()])
+    fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
     client = TestClient(create_app(bridge_config(), {}, iris_sources, GithubSource(token=None, timeout=5.0), fleet))
 
     base_paths = _datasources()

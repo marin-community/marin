@@ -125,11 +125,11 @@ Grafana unified alerting, provisioned entirely from the files under
 File provisioning owns that tree: UI edits to alerting do not persist (ephemeral
 SQLite) and would be overwritten by the files anyway. Change the YAML and redeploy.
 
-The v1 catalog pages only on near-certain incidents: an unreachable cluster, a
+Rules page only on near-certain incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
 degraded component, and a dead Iris controller. Workload-tier signals (gated pods,
-Kueue backlog, workload crashloops) are dashboard-only until their expected cases can
-be suppressed. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
+Kueue backlog, workload crashloops) are dashboard-only — they have expected benign
+causes, so paging on them would be noise. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
 Slack); `severity=warning` routes to `ops-slack` (Slack only). Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than

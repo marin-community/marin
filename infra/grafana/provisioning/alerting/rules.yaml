@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The v1 alert catalog: only conditions that are near-certainly an incident. The
+# Alert rules cover only conditions that are near-certainly an incident. The
 # k8s rules read the bridge's /k8s/alerts/* endpoints, which return string label
 # columns plus exactly one numeric column and always at least one row per cluster
 # (explicit zeros when healthy) — so a rule's NoData state is unreachable by
 # construction, and every rule still sets noDataState/execErrState to Alerting so
 # a broken datasource pages with the rule's own labels rather than going quiet.
 #
-# Workload-tier noise (gated pods, kueue backlog, workload crashloops) stays
-# dashboard-only: observe first, promote to rules once the expected cases can be
-# suppressed.
+# Workload-tier signals (gated pods, kueue backlog, workload crashloops) are
+# dashboard-only: they have expected benign causes (capacity pressure, user
+# error), so paging on them would be noise.
 apiVersion: 1
 
 groups:
