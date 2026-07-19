@@ -4,20 +4,29 @@
 
 """Weekly Iris compute-accounting report.
 
-Reads durable finelog namespaces and emits, per ISO week, three tables that run
-today with no controller change:
+Reads durable finelog namespaces and emits, per ISO week, with no controller
+change:
 
-- MFU per job (``telltale.levanter_throughput_mfu``)
+- TPU chip-hours by user, split preemptible vs reserved (``iris.task``)
+- chip-hours by capacity type and generation (``iris.task``)
 - preemption events by pool/zone (``iris.provisioning``)
-- active host-hours by user (``iris.task``; ``task_id`` carries the user)
+- MFU per job (``telltale.levanter_throughput_mfu``)
+
+Placement (capacity type, generation, slice size, zone) is parsed from the
+``iris.task`` ``worker_id`` string (e.g.
+``marin-tpu-v5p-preemptible-32-us-east5-a-...-worker-1``), which is durable in
+finelog — so a preempted attempt's placement is not lost the way the controller
+DB's worker row is. The per-host chip count is a slice's chips divided by its
+live hosts.
 
 Publishes the markdown as a secret gist and posts a compact summary to Discord,
 following ``scripts/ops/egress_report.py``. ``--dry-run`` prints the markdown and
 posts nothing.
 
-Design: ``.agents/projects/iris_compute_accounting/``. Chip-hours and the
-preemptible split need the ``iris.accounting`` namespace (Phase 2); host-hours is
-the finelog-only stand-in until then.
+Design: ``.agents/projects/iris_compute_accounting/``. Attributing chip-hours to
+the specific attempts that ended in preemption (waste vs. consumption) needs a
+per-attempt terminal cause, which iris.task lacks; that is the remaining
+follow-up.
 
 Compute (the ``*_by_*`` functions) is separated from I/O so it is unit-tested by
 registering synthetic DuckDB tables named ``telltale`` / ``provisioning`` /
@@ -53,10 +62,6 @@ NAMESPACES = ("telltale", "iris.provisioning", "iris.task")
 # whose mtime is >= window.start. The slack absorbs compaction lag.
 SEGMENT_LOOKBACK_HOURS = 72.0
 
-# OS usernames that are shared launch accounts rather than a person. Host-hours
-# under these are not attributable in Phase 1.
-SHARED_USERS = frozenset({"root", "ubuntu", "app", "runner", "local_admin"})
-
 MFU_METRIC = "levanter_throughput_mfu"
 
 TOP_JOBS = 20
@@ -80,19 +85,32 @@ class PoolPreemptions:
 
 
 @dataclass(frozen=True)
-class UserHostHours:
+class UserChipHours:
     user: str
-    host_hours: float
-    tasks: int
+    preemptible: float
+    reserved: float
+
+    @property
+    def total(self) -> float:
+        return self.preemptible + self.reserved
+
+
+@dataclass(frozen=True)
+class CapacityGenChipHours:
+    capacity: str  # "preemptible" | "reserved"
+    generation: str  # "v4" | "v5p" | "v5e" | "v6e" | ...
+    chip_hours: float
 
 
 @dataclass(frozen=True)
 class WeeklyReport:
     iso_week: str
     window: TimeWindow
+    chip_hours: list[UserChipHours]
+    by_capacity_gen: list[CapacityGenChipHours]
+    chip_hour_coverage: float
     mfu: list[JobMfu]
     preemptions: list[PoolPreemptions]
-    host_hours: list[UserHostHours]
 
 
 # --------------------------------------------------------------------------- #
@@ -156,39 +174,91 @@ def preemptions_by_pool(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> l
     return [PoolPreemptions(v, z, n) for v, z, n in rows]
 
 
-def host_hours_by_user(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> list[UserHostHours]:
-    """Active host-hours per user from iris.task.
+# A marin TPU worker_id encodes placement: marin-tpu-<gen>-<capacity>-<chips>-<zone>-...-worker-<n>.
+# capacity, generation, and slice chip count are parsed from it; the per-host
+# chip count is the slice's chips divided by its live hosts (SPMD, so every host
+# of a slice emits iris.task rows). ondemand is folded into reserved.
+_PARSE_WORKER = (
+    "regexp_extract(worker_id, '^marin-tpu-([a-z0-9]+)-(reserved|preemptible|ondemand)-([0-9]+)-', "
+    "['generation', 'cap', 'chips'])"
+)
 
-    ``task_id`` is ``/user/job/...``; active time per (task, attempt, worker) is
-    its ``ts`` span. This is host-hours, not chip-hours (no device count in
-    iris.task) — Phase 2's iris.accounting supplies chip-hours.
+# CTE that resolves per (task, attempt, worker): user, capacity, generation, and
+# chip-hours = host active-seconds * (slice chips / live hosts in slice) / 3600.
+# Bind the window twice (chips CTE + the caller's SELECT reuse the same view).
+_CHIP_HOURS_CTE = f"""
+WITH parsed AS (
+  SELECT split_part(task_id, '/', 2) AS user,
+         {_PARSE_WORKER} AS p,
+         regexp_replace(worker_id, '-worker-[0-9]+$', '') AS slice_id,
+         worker_id, ts
+  FROM task
+  WHERE worker_id LIKE 'marin-tpu-%' AND ts >= ? AND ts < ?),
+host AS (
+  SELECT user,
+         CASE WHEN p.cap = 'preemptible' THEN 'preemptible' ELSE 'reserved' END AS capacity,
+         p.generation AS generation, slice_id, CAST(p.chips AS BIGINT) AS slice_chips, worker_id,
+         date_diff('second', min(ts), max(ts)) AS active_s
+  FROM parsed WHERE p.cap <> '' GROUP BY 1, 2, 3, 4, 5, 6),
+chip AS (
+  SELECT user, capacity, generation,
+         active_s * slice_chips / count(*) OVER (PARTITION BY slice_id) / 3600.0 AS chip_hours
+  FROM host)
+"""
+
+
+def chip_hours_by_user(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> list[UserChipHours]:
+    """TPU chip-hours per user, split preemptible vs reserved, from iris.task.
+
+    Placement comes from the worker_id string (see ``_CHIP_HOURS_CTE``); no
+    controller state is consulted, so a preempted attempt's placement is not lost.
     """
     rows = con.execute(
-        """
-        WITH attempt AS (
-          SELECT split_part(task_id, '/', 2) AS user, task_id, attempt_id, worker_id,
-                 date_diff('second', min(ts), max(ts)) AS active_s
-          FROM task
-          WHERE ts >= ? AND ts < ?
-          GROUP BY 1, 2, 3, 4)
-        SELECT user, round(sum(active_s) / 3600.0, 1), count(DISTINCT task_id)
-        FROM attempt GROUP BY user ORDER BY sum(active_s) DESC
+        _CHIP_HOURS_CTE
+        + """
+        SELECT user,
+               coalesce(sum(chip_hours) FILTER (WHERE capacity = 'preemptible'), 0),
+               coalesce(sum(chip_hours) FILTER (WHERE capacity = 'reserved'), 0)
+        FROM chip GROUP BY user ORDER BY sum(chip_hours) DESC
         """,
         [window.start, window.end],
     ).fetchall()
-    return [UserHostHours(u, h, t) for u, h, t in rows]
+    return [UserChipHours(u, round(p, 1), round(r, 1)) for u, p, r in rows]
 
 
-def attribution_coverage(host_hours: list[UserHostHours]) -> float:
-    """Share of host-hours attributed to a non-shared username (0..1).
+def chip_hours_by_capacity_gen(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> list[CapacityGenChipHours]:
+    """TPU chip-hours by capacity type and generation."""
+    rows = con.execute(
+        _CHIP_HOURS_CTE
+        + """
+        SELECT capacity, generation, round(sum(chip_hours), 1)
+        FROM chip GROUP BY 1, 2 ORDER BY sum(chip_hours) DESC
+        """,
+        [window.start, window.end],
+    ).fetchall()
+    return [CapacityGenChipHours(c, g, h) for c, g, h in rows]
 
-    The Phase-1 signal for whether per-user attribution is worth building on.
+
+def chip_hour_coverage(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> float:
+    """Share of active worker-seconds on a parseable marin-tpu worker (0..1).
+
+    The rest (GPU/CoreWeave, CPU, non-standard names) has no chip-hour attribution
+    yet; reporting coverage keeps the chip-hour totals honest.
     """
-    total = sum(u.host_hours for u in host_hours)
-    if total <= 0:
-        return 0.0
-    attributed = sum(u.host_hours for u in host_hours if u.user not in SHARED_USERS)
-    return attributed / total
+    row = con.execute(
+        """
+        WITH attempt AS (
+          SELECT worker_id, task_id, attempt_id, date_diff('second', min(ts), max(ts)) AS active_s
+          FROM task WHERE worker_id IS NOT NULL AND ts >= ? AND ts < ?
+          GROUP BY 1, 2, 3)
+        SELECT coalesce(sum(active_s) FILTER (WHERE worker_id LIKE 'marin-tpu-%'), 0),
+               coalesce(sum(active_s), 0)
+        FROM attempt
+        """,
+        [window.start, window.end],
+    ).fetchone()
+    tpu_s, total_s = row if row else (0, 0)
+    return tpu_s / total_s if total_s else 0.0
 
 
 def build_report(con: duckdb.DuckDBPyConnection, iso_week: str) -> WeeklyReport:
@@ -196,9 +266,11 @@ def build_report(con: duckdb.DuckDBPyConnection, iso_week: str) -> WeeklyReport:
     return WeeklyReport(
         iso_week=iso_week,
         window=window,
+        chip_hours=chip_hours_by_user(con, window),
+        by_capacity_gen=chip_hours_by_capacity_gen(con, window),
+        chip_hour_coverage=chip_hour_coverage(con, window),
         mfu=mfu_per_job(con, window),
         preemptions=preemptions_by_pool(con, window),
-        host_hours=host_hours_by_user(con, window),
     )
 
 
@@ -215,19 +287,29 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def render_markdown(report: WeeklyReport) -> str:
-    cov = attribution_coverage(report.host_hours)
     total_preempt = sum(p.preemptions for p in report.preemptions)
+    total_preemptible = sum(u.preemptible for u in report.chip_hours)
+    total_reserved = sum(u.reserved for u in report.chip_hours)
     out = [
         f"# Iris compute — {report.iso_week}",
         f"_{report.window.start:%Y-%m-%d} → {report.window.end:%Y-%m-%d} UTC. "
-        "Host-hours are a finelog-only stand-in for chip-hours until iris.accounting (Phase 2)._",
+        "TPU chip-hours from iris.task worker placement; "
+        f"{report.chip_hour_coverage:.0%} of active worker-time is on parseable TPU workers._",
         "",
-        "## Host-hours by user",
-        f"Attribution coverage (non-shared usernames): {cov:.0%}.",
+        "## Chip-hours by user",
+        f"Total: {total_preemptible:,.0f} preemptible + {total_reserved:,.0f} reserved chip-hours.",
         "",
         _table(
-            ["user", "host-hours", "tasks"],
-            [[u.user, f"{u.host_hours:.1f}", str(u.tasks)] for u in report.host_hours[:TOP_JOBS]],
+            ["user", "preemptible", "reserved", "total"],
+            [
+                [u.user, f"{u.preemptible:,.0f}", f"{u.reserved:,.0f}", f"{u.total:,.0f}"]
+                for u in report.chip_hours[:TOP_JOBS]
+            ],
+        ),
+        "## Chip-hours by capacity and generation",
+        _table(
+            ["capacity", "generation", "chip-hours"],
+            [[c.capacity, c.generation, f"{c.chip_hours:,.0f}"] for c in report.by_capacity_gen],
         ),
         "## Preemption events by pool",
         f"Total preemptions this week: {total_preempt}.",
@@ -246,15 +328,15 @@ def render_markdown(report: WeeklyReport) -> str:
 
 
 def compose_discord_summary(report: WeeklyReport, gist_url: str) -> str:
-    cov = attribution_coverage(report.host_hours)
     total_preempt = sum(p.preemptions for p in report.preemptions)
-    top = report.host_hours[0] if report.host_hours else None
-    top_s = f"{top.user} ({top.host_hours:.0f}h)" if top else "—"
+    total_preemptible = sum(u.preemptible for u in report.chip_hours)
+    total_reserved = sum(u.reserved for u in report.chip_hours)
+    top = report.chip_hours[0] if report.chip_hours else None
+    top_s = f"{top.user} ({top.total:,.0f} chip-h)" if top else "—"
     return (
         f"**Iris compute — {report.iso_week}**\n"
-        f"Top user by host-hours: {top_s}. "
-        f"Preemption events: {total_preempt}. "
-        f"Attribution coverage: {cov:.0%}.\n"
+        f"{total_preemptible:,.0f} preemptible + {total_reserved:,.0f} reserved chip-hours. "
+        f"Top user: {top_s}. Preemption events: {total_preempt}.\n"
         f"Full report: {gist_url}"
     )
 
@@ -292,9 +374,7 @@ def create_gist(markdown: str, description: str) -> str:
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
         f.write(markdown)
         tmp = f.name
-    url = subprocess.check_output(
-        ["gh", "gist", "create", "--desc", description, tmp], text=True
-    ).strip()
+    url = subprocess.check_output(["gh", "gist", "create", "--desc", description, tmp], text=True).strip()
     Path(tmp).unlink(missing_ok=True)
     return url
 
