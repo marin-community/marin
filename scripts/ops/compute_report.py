@@ -44,6 +44,7 @@ import click
 import duckdb
 from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import load_config
+from rigging.filesystem.storage_path import prefix_join
 
 from scripts.ops.cross_region import (
     TimeWindow,
@@ -53,9 +54,29 @@ from scripts.ops.cross_region import (
 )
 from scripts.ops.discord import post
 
-# Namespaces the Phase-1 report reads. iris.task is high volume (multi-GB/week);
-# the others are small.
-NAMESPACES = ("telltale", "iris.provisioning", "iris.task")
+# Namespaces the report reads. iris.task is high volume (multi-GB/week); the
+# others are small. Each maps to (duckdb view name, empty-view DDL) — the empty
+# DDL declares the columns the rollups reference so a window with no segments
+# yields empty results instead of a missing-column error.
+_VIEW_FOR = {
+    "telltale": (
+        "telltale",
+        "SELECT CAST(NULL AS VARCHAR) AS name, CAST(NULL AS DOUBLE) AS value, "
+        "CAST(NULL AS TIMESTAMPTZ) AS ts, CAST(NULL AS VARCHAR) AS job_id, "
+        "CAST(NULL AS VARCHAR) AS run WHERE false",
+    ),
+    "iris.provisioning": (
+        "provisioning",
+        "SELECT CAST(NULL AS VARCHAR) AS outcome, CAST(NULL AS TIMESTAMPTZ) AS ts, "
+        "CAST(NULL AS VARCHAR) AS accelerator_variant, CAST(NULL AS VARCHAR) AS zone WHERE false",
+    ),
+    "iris.task": (
+        "task",
+        "SELECT CAST(NULL AS VARCHAR) AS task_id, CAST(NULL AS BIGINT) AS attempt_id, "
+        "CAST(NULL AS VARCHAR) AS worker_id, CAST(NULL AS TIMESTAMPTZ) AS ts WHERE false",
+    ),
+}
+NAMESPACES = tuple(_VIEW_FOR)
 
 # Extra mtime slack when selecting segments: a finelog segment's mtime is its
 # ship/compaction time, so any row with ts in the window lives in a segment
@@ -64,7 +85,8 @@ SEGMENT_LOOKBACK_HOURS = 72.0
 
 MFU_METRIC = "levanter_throughput_mfu"
 
-TOP_JOBS = 20
+# Max rows shown per table in the rendered report (users, pools, jobs).
+TOP_ROWS = 20
 
 log = logging.getLogger(__name__)
 
@@ -112,14 +134,26 @@ class WeeklyReport:
     mfu: list[JobMfu]
     preemptions: list[PoolPreemptions]
 
+    @property
+    def total_preemptible(self) -> float:
+        return sum(u.preemptible for u in self.chip_hours)
+
+    @property
+    def total_reserved(self) -> float:
+        return sum(u.reserved for u in self.chip_hours)
+
+    @property
+    def total_preemptions(self) -> int:
+        return sum(p.preemptions for p in self.preemptions)
+
 
 # --------------------------------------------------------------------------- #
 # ISO-week windowing
 # --------------------------------------------------------------------------- #
 def iso_week_window(iso_week: str) -> TimeWindow:
     """[Monday 00:00, next Monday 00:00) UTC for an ISO week like ``2026-W29``."""
-    year_s, week_s = iso_week.upper().split("-W")
-    monday = dt.date.fromisocalendar(int(year_s), int(week_s), 1)
+    year_str, week_str = iso_week.upper().split("-W")
+    monday = dt.date.fromisocalendar(int(year_str), int(week_str), 1)
     start = dt.datetime.combine(monday, dt.time.min, tzinfo=dt.UTC)
     return TimeWindow(start=start, end=start + dt.timedelta(days=7))
 
@@ -198,11 +232,11 @@ host AS (
   SELECT user,
          CASE WHEN p.cap = 'preemptible' THEN 'preemptible' ELSE 'reserved' END AS capacity,
          p.generation AS generation, slice_id, CAST(p.chips AS BIGINT) AS slice_chips, worker_id,
-         date_diff('second', min(ts), max(ts)) AS active_s
+         date_diff('second', min(ts), max(ts)) AS active_seconds
   FROM parsed WHERE p.cap <> '' GROUP BY 1, 2, 3, 4, 5, 6),
 chip AS (
   SELECT user, capacity, generation,
-         active_s * slice_chips / count(*) OVER (PARTITION BY slice_id) / 3600.0 AS chip_hours
+         active_seconds * slice_chips / count(*) OVER (PARTITION BY slice_id) / 3600.0 AS chip_hours
   FROM host)
 """
 
@@ -248,17 +282,17 @@ def chip_hour_coverage(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> fl
     row = con.execute(
         """
         WITH attempt AS (
-          SELECT worker_id, task_id, attempt_id, date_diff('second', min(ts), max(ts)) AS active_s
+          SELECT worker_id, task_id, attempt_id, date_diff('second', min(ts), max(ts)) AS active_seconds
           FROM task WHERE worker_id IS NOT NULL AND ts >= ? AND ts < ?
           GROUP BY 1, 2, 3)
-        SELECT coalesce(sum(active_s) FILTER (WHERE worker_id LIKE 'marin-tpu-%'), 0),
-               coalesce(sum(active_s), 0)
+        SELECT coalesce(sum(active_seconds) FILTER (WHERE worker_id LIKE 'marin-tpu-%'), 0),
+               coalesce(sum(active_seconds), 0)
         FROM attempt
         """,
         [window.start, window.end],
     ).fetchone()
-    tpu_s, total_s = row if row else (0, 0)
-    return tpu_s / total_s if total_s else 0.0
+    tpu_seconds, total_seconds = row if row else (0, 0)
+    return tpu_seconds / total_seconds if total_seconds else 0.0
 
 
 def build_report(con: duckdb.DuckDBPyConnection, iso_week: str) -> WeeklyReport:
@@ -287,9 +321,6 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def render_markdown(report: WeeklyReport) -> str:
-    total_preempt = sum(p.preemptions for p in report.preemptions)
-    total_preemptible = sum(u.preemptible for u in report.chip_hours)
-    total_reserved = sum(u.reserved for u in report.chip_hours)
     out = [
         f"# Iris compute — {report.iso_week}",
         f"_{report.window.start:%Y-%m-%d} → {report.window.end:%Y-%m-%d} UTC. "
@@ -297,13 +328,13 @@ def render_markdown(report: WeeklyReport) -> str:
         f"{report.chip_hour_coverage:.0%} of active worker-time is on parseable TPU workers._",
         "",
         "## Chip-hours by user",
-        f"Total: {total_preemptible:,.0f} preemptible + {total_reserved:,.0f} reserved chip-hours.",
+        f"Total: {report.total_preemptible:,.0f} preemptible + {report.total_reserved:,.0f} reserved chip-hours.",
         "",
         _table(
             ["user", "preemptible", "reserved", "total"],
             [
                 [u.user, f"{u.preemptible:,.0f}", f"{u.reserved:,.0f}", f"{u.total:,.0f}"]
-                for u in report.chip_hours[:TOP_JOBS]
+                for u in report.chip_hours[:TOP_ROWS]
             ],
         ),
         "## Chip-hours by capacity and generation",
@@ -312,31 +343,28 @@ def render_markdown(report: WeeklyReport) -> str:
             [[c.capacity, c.generation, f"{c.chip_hours:,.0f}"] for c in report.by_capacity_gen],
         ),
         "## Preemption events by pool",
-        f"Total preemptions this week: {total_preempt}.",
+        f"Total preemptions this week: {report.total_preemptions}.",
         "",
         _table(
             ["accelerator", "zone", "preemptions"],
-            [[p.accelerator_variant, p.zone, str(p.preemptions)] for p in report.preemptions[:TOP_JOBS]],
+            [[p.accelerator_variant, p.zone, str(p.preemptions)] for p in report.preemptions[:TOP_ROWS]],
         ),
         "## MFU per job (Levanter training)",
         _table(
             ["job", "run", "mean MFU %", "steps"],
-            [[m.job_id, m.run, f"{m.mean_mfu:.1f}", str(m.steps)] for m in report.mfu[:TOP_JOBS]],
+            [[m.job_id, m.run, f"{m.mean_mfu:.1f}", str(m.steps)] for m in report.mfu[:TOP_ROWS]],
         ),
     ]
     return "\n".join(out)
 
 
 def compose_discord_summary(report: WeeklyReport, gist_url: str) -> str:
-    total_preempt = sum(p.preemptions for p in report.preemptions)
-    total_preemptible = sum(u.preemptible for u in report.chip_hours)
-    total_reserved = sum(u.reserved for u in report.chip_hours)
     top = report.chip_hours[0] if report.chip_hours else None
-    top_s = f"{top.user} ({top.total:,.0f} chip-h)" if top else "—"
+    top_str = f"{top.user} ({top.total:,.0f} chip-h)" if top else "—"
     return (
         f"**Iris compute — {report.iso_week}**\n"
-        f"{total_preemptible:,.0f} preemptible + {total_reserved:,.0f} reserved chip-hours. "
-        f"Top user: {top_s}. Preemption events: {total_preempt}.\n"
+        f"{report.total_preemptible:,.0f} preemptible + {report.total_reserved:,.0f} reserved chip-hours. "
+        f"Top user: {top_str}. Preemption events: {report.total_preemptions}.\n"
         f"Full report: {gist_url}"
     )
 
@@ -353,17 +381,19 @@ def load_finelog_views(
     """Fetch each namespace's segments in the window and register a DuckDB view.
 
     View names are the namespace with dots dropped: ``iris.provisioning`` →
-    ``provisioning``, ``iris.task`` → ``task``, ``telltale`` → ``telltale``.
+    ``provisioning``, ``iris.task`` → ``task``, ``telltale`` → ``telltale``. When a
+    namespace has no segments in the window (e.g. telltale before it existed), an
+    empty view with the columns the rollups reference is registered so the
+    queries return nothing instead of failing on a missing column.
     """
-    view_for = {"telltale": "telltale", "iris.provisioning": "provisioning", "iris.task": "task"}
     for ns in NAMESPACES:
-        ns_dir = f"{remote_log_dir.rstrip('/')}/{ns}"
+        view, empty_ddl = _VIEW_FOR[ns]
+        ns_dir = prefix_join(remote_log_dir, ns)
         entries = choose_log_objects(ns_dir, window, SEGMENT_LOOKBACK_HOURS)
         paths = download_log_objects(ns_dir, entries, cache_dir / ns)
         good = validate_parquet_files(paths)
-        view = view_for[ns]
         if not good:
-            con.execute(f"CREATE VIEW {view} AS SELECT * FROM (SELECT NULL) WHERE false")
+            con.execute(f"CREATE TABLE {view} AS {empty_ddl}")
             log.warning("no readable segments for %s in window", ns)
             continue
         path_list = ", ".join(f"'{p}'" for p in good)

@@ -14,6 +14,7 @@ import duckdb
 import pytest
 
 from scripts.ops.compute_report import (
+    _VIEW_FOR,
     build_report,
     chip_hour_coverage,
     chip_hours_by_capacity_gen,
@@ -125,6 +126,21 @@ def test_chip_hour_coverage_excludes_non_tpu(con):
     _run_hour(con, "/alice/job/t0", _wid("v5p", "preemptible", 8, 0))  # 1h tpu
     _run_hour(con, "/dave/job/t0", "coreweave-h100-node-7")  # 1h non-parseable
     assert chip_hour_coverage(con, iso_week_window(WEEK)) == pytest.approx(0.5)
+
+
+def test_empty_namespaces_do_not_crash():
+    # The empty-view DDLs (used when a namespace has no segments in the window)
+    # must declare the columns the rollups reference so queries return empty.
+    c = duckdb.connect()
+    for _ns, (view, empty_ddl) in _VIEW_FOR.items():
+        c.execute(f"CREATE TABLE {view} AS {empty_ddl}")
+    report = build_report(c, WEEK)
+    assert report.chip_hours == []
+    assert report.by_capacity_gen == []
+    assert report.mfu == []
+    assert report.preemptions == []
+    assert report.chip_hour_coverage == 0.0
+    assert "# Iris compute — 2026-W29" in render_markdown(report)
 
 
 def test_render_markdown_has_sections(con):
