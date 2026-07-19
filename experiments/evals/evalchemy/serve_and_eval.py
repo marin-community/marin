@@ -157,6 +157,13 @@ class EvalchemyEvalConfig:
     """HF tokenizer id the eval client loads to build prompts; defaults to ``model``. Set it when
     ``model`` is a path the eval image cannot load a tokenizer from (e.g. a ``gs://`` checkpoint)."""
     max_gen_toks: int = 2048
+    extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    """Extra ``--gen_kwargs`` (``key=value``) folded into every lm-eval request. lm-eval spreads
+    unknown gen_kwargs straight into the SamplingParams / OpenAI request body, so this is the
+    threadable knob for served-model generation params. Set ``{"skip_special_tokens": "false"}`` to
+    PRESERVE a thinking model's special-token delimiters (e.g. Delphi ``<|start_think|>``/
+    ``<|end_think|>``) — vLLM's ``skip_special_tokens=True`` default STRIPS them from returned text.
+    Empty by default (byte-identical to the prior ``max_gen_toks``-only behavior)."""
     apply_chat_template: bool = False
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
@@ -394,6 +401,7 @@ def _client_config_json(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) -
             "out_path": config.out_path,
             "apply_chat_template": config.apply_chat_template,
             "max_gen_toks": config.max_gen_toks,
+            "extra_gen_kwargs": config.extra_gen_kwargs,
             "max_eval_instances": config.max_eval_instances,
             "num_concurrent": config.num_concurrent,
         }

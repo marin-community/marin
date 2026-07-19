@@ -57,6 +57,18 @@ def build_model_args(config: dict) -> str:
     )
 
 
+def _gen_kwargs_arg(config: dict) -> str:
+    """lm-eval ``--gen_kwargs`` string: ``max_gen_toks`` plus any operator-supplied
+    ``extra_gen_kwargs`` (``key=value``). lm-eval spreads unknown gen_kwargs straight into the
+    served request / SamplingParams, so e.g. ``skip_special_tokens=false`` threads through to
+    PRESERVE a thinking model's special-token delimiters (vLLM strips them by default). Empty
+    ``extra_gen_kwargs`` → ``"max_gen_toks=N"`` (byte-identical to prior behavior)."""
+    parts = [f"max_gen_toks={config['max_gen_toks']}"]
+    for key, value in (config.get("extra_gen_kwargs") or {}).items():
+        parts.append(f"{key}={value}")
+    return ",".join(parts)
+
+
 def build_command(config: dict, task: dict, output_path: str, python: str) -> list[str]:
     """The ``eval.eval`` argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
 
@@ -75,7 +87,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str) -> li
         "--tasks",
         task["name"],
         "--gen_kwargs",
-        f"max_gen_toks={config['max_gen_toks']}",
+        _gen_kwargs_arg(config),
         "--output_path",
         output_path,
         "--log_samples",
