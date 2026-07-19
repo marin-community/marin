@@ -179,8 +179,8 @@ harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8
 # temporary and must be replaced by the landed fork main SHA.
 # https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...afb26719464d5957e695bde478ae93a160b11d14
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "afb26719464d5957e695bde478ae93a160b11d14" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...734d2842aa883c8f7bcff87a4b437a366f3adbc0
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "734d2842aa883c8f7bcff87a4b437a366f3adbc0" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
