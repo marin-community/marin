@@ -1,0 +1,309 @@
+{
+  "experiment": "mathgen2_tau_universality_and_curvature",
+  "issue": "#7067 (mixing-via-embeddings); math-generality follow-up locking the two open caveats (rav directive 2026-07-19)",
+  "branch": "rav/mixing-via-embeddings",
+  "date_utc": "2026-07-19",
+  "launcher": "experiments/grug/moe/launch_mve_mathgen2_h100.py",
+  "parent_experiment": "mathgen_generality_third_bucket (mathgen_preregistration.json sha 910100a5...)",
+  "why": "The math-generality axis-1 (seed 0, e in {4,8,16,32}, 10B) showed decisive linear-past-threshold harm (harm(e32)=+1.92 bpb, 21 sigma_pair; b_math=0.091; tau_math=10.83) BUT left TWO caveats open: (1) tau-universality -- tau_math=10.83 is single-seed and HIGHER than code tau=8.85; is tau UNIVERSAL or PER-BUCKET? (2) curvature -- math's e32/e16 ratio R=4.09 admits a PHYSICAL ratio-matching quadratic (tau_quad=0.36), and the single-seed e8 point cannot exclude mild curvature. This follow-up adds 4 seed replicates at the ratio points (e16,e32 x seeds {1,2}) to pool a 3-seed tau CI, and 2 dense low/mid points (e6 sub-threshold, e12 just-above-onset, seed 1) to discriminate LINEAR from mildly-CURVED.",
+  "design_note": "Reuses launch_mve_mathgen_h100.py EXACTLY: bucket c02q0 (math) @ FIXED w=0.2 both phases + c05q0 (web) @ 0.8 (never epochs); content h=V.w CONSTANT across runs (frozen content kernel FLAT); real epochs via max_train_batches (target_budget OFF); 10B = 4776 steps, boundary 3776; d512 swarm + gpu_fa4_cute; gsm8k bpb readout. Only the epoch grid points and the seeds differ. n = round(w*boundary/e) = round(755.2/e) -- the SAME rule as the axis (e4/e8/e16/e32 -> 189/94/47/24). ANCHOR for harm is the axis-1 seed-0 e4 checkpoint (rav_mve_mathgen_e4); content is frozen so a single shared e4 anchor is valid, and the pair SE already carries the anchor's seed noise.",
+  "constants": {
+    "steps": 4776,
+    "batch_size": 512,
+    "seq_len": 4096,
+    "phase_boundary_step": 3776,
+    "mixture_block_size": 32768,
+    "experiment_budget_tokens": 10015997952,
+    "target_budget_tokens": null,
+    "epoching_mechanism": "max_train_batches (REAL subset-repeat; budgets OFF) -- == mathgen axis-1 / twobucket-a2 / epochrep / harm100b",
+    "seeds": [
+      1,
+      2
+    ],
+    "model_d512": "swarm d512/6L/4H/1KV/64exp + gpu_fa4_cute (== mathgen axis-1)",
+    "optimizer": "SWARM_OPTIMIZER fractional schedule (warmup peak 0.100*N; asserted at launch for N=4776)",
+    "hardware": "cw-rno2a H100x8 one node/run, cuda_async allocator, CW-mirror data, DEFAULT (interactive) priority -- queues behind, never preempts, the non-preemptible 100B gate",
+    "in_training_validation": false,
+    "wandb_group": "rav_mve_mathgen2",
+    "checkpoint_prefix": "s3://marin-us-east-02a/marin/users/rav/grug/rav_mve_mathgen2_<point>/dev/"
+  },
+  "arm": {
+    "math": {
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "sliced_total_tokens": 17679692037,
+      "partner_total_tokens": 876859363557,
+      "readout_task_primary": "logprob_gsm8k_5shot",
+      "readout_task_secondary": "agieval_sat_math_0shot"
+    }
+  },
+  "seed_floor": {
+    "sigma_gsm8k_bpb": 0.0632730409150703,
+    "pair_sqrt2_sigma": 0.08948159259468018,
+    "form_required_2sqrt2_sigma": 0.17896318518936036,
+    "source": "10-seed panel rav_mve_seedpanel_h100 (gsm8k bpb per-run SD ddof=1); seedpanel_readout per_task"
+  },
+  "axis1_seed0_reference": {
+    "realized_harm_e8": 0.098994,
+    "realized_harm_e16": 0.468905,
+    "realized_harm_e32": 1.91877,
+    "fitted_linear_b_exact": 0.090617,
+    "fitted_linear_tau_exact": 10.8254,
+    "fitted_linear_tau_ci68_axis1": [
+      9.6,
+      12.0
+    ],
+    "code_tau": 8.85,
+    "code_b": 0.052,
+    "web_b": 0.014
+  },
+  "predictions": {
+    "linear_form": {
+      "form": "H(e) = b * max(e - tau, 0)",
+      "b": 0.091,
+      "tau": 10.83,
+      "harm_e6": 0.0,
+      "harm_e12": 0.10647,
+      "harm_e16": 0.47047,
+      "harm_e32": 1.92647,
+      "note": "committed axis-1 linear form (b=0.091, tau=10.83). harm(e6)=0 (sub-threshold); harm(e12)=0.106; harm(e16)=0.470; harm(e32)=1.926."
+    },
+    "quadratic_ratio_matched": {
+      "form": "H(e) = b_quad * (e - tau_quad)^2  (for e > tau_quad)",
+      "tau_quad": 0.3578136169992508,
+      "b_quad": 0.0019164167186575284,
+      "R_e32_over_e16": 4.09202290442627,
+      "anchored_on": "axis-1 seed-0 realized harm(e16)=0.468905, harm(e32)=1.918770 (reproduces both by construction)",
+      "harm_e6": 0.061008,
+      "harm_e12": 0.259752,
+      "harm_e16": 0.468905,
+      "harm_e32": 1.91877,
+      "note": "the physical ratio-matching quadratic the single-seed e8 could not exclude. Materially >0 at the dense points: harm(e6)=0.061, harm(e12)=0.260."
+    },
+    "discriminator_gaps": {
+      "e6_linear_vs_quad": 0.061008,
+      "e6_gap_in_pairSE": 0.682,
+      "e12_linear_vs_quad": 0.153282,
+      "e12_gap_in_pairSE": 1.713,
+      "note": "e6: linear 0.000 vs quadratic 0.061 (gap 0.061 = 0.68 pairSE) -- soft single-seed discriminator. e12: linear 0.106 vs quadratic 0.260 (gap 0.154 = 1.72 pairSE) -- the stronger dense discriminator. Power mainly comes from the tighter linear line the 3-seed e16/e32 fit gives (b, tau CI shrink), against which e6+e12 residuals are tested."
+    }
+  },
+  "decision_rule": {
+    "i_tau_universality": "Pool axis-1 seed-0 + axis-2 seeds {1,2} at e16 and e32 (3 seeds each). harm(e)=mean_bpb(e over 3 seeds) - bpb(e4 seed-0 anchor). Monte-Carlo propagate bpb(e4)~N(.,sigma), bpb(e16|e32)~N(., sigma/sqrt(3)); tau=(32-16R)/(1-R), R=harm(e32)/harm(e16) -> pooled 3-seed tau_math CI. If the CI EXCLUDES code tau=8.85 -> tau is PER-BUCKET (model needs a per-bucket tau). If it INCLUDES 8.85 -> tau plausibly UNIVERSAL.",
+    "ii_curvature": "Realized harm(e6) vs the 2sqrt(2)sigma floor (0.179): harm(e6) < 0.179 (~0) -> LINEAR confirmed (hinge/threshold real); harm(e6) >> 0.179 -> mild CURVATURE (early onset). e12 corroborates: on the linear line (0.106) -> LINEAR; near the quadratic (0.260) -> curved. Point estimates over the tighter 3-seed linear line sharpen the residual test even where each dense point is single-seed.",
+    "verdict": "Two independent locks. (1) tau UNIVERSAL iff the pooled 3-seed tau_math CI includes 8.85; PER-BUCKET iff it excludes it. (2) form LINEAR iff harm(e6)~0 (< floor) and harm(e12) on the linear line; mildly CURVED iff e6/e12 track the ratio-matching quadratic."
+  },
+  "readout_plan": {
+    "eval": "post-hoc eval_logprob (run_seedpanel_evals.py --only-tasks logprob_gsm8k_5shot,agieval_sat_math_0shot) on the 6 final checkpoints (step 4775); jobs rav-mve-mathgen2-eval-<point>, H100x1, LMEVAL overlay via uv run --with (== harm100b/mathgen axis-1).",
+    "collect": "collect_seedpanel_evals.py --runs rav_mve_mathgen2_{e16s1,e16s2,e32s1,e32s2,e6s1,e12s1} --out-name mathgen2_eval_results_combined.json; also re-read axis-1 rav_mve_mathgen_{e4,e16,e32} for the pool + anchor.",
+    "readout": "extend mathgen_readout.py -> f32: pool 3-seed e16/e32 -> tau CI (test vs 8.85); fit b; overlay linear vs ratio-matching quadratic; place e6/e12 dense points with the two committed predictions + 2sqrt(2)sigma band; stamp the tau-universality + curvature verdicts.",
+    "figure": "f32_mathgen2_tau_curvature.png"
+  },
+  "runs": [
+    {
+      "point": "e16s1",
+      "run_id": "rav_mve_mathgen2_e16s1",
+      "job_name": "rav-mve-mathgen2-e16s1",
+      "arm": "math",
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "e_target": 16.0,
+      "seed": 1,
+      "steps": 4776,
+      "phase_boundary_step": 3776,
+      "slice_batches": 47,
+      "is_control": false,
+      "role": "tau-universality: 2nd seed at the lower ratio point (pool w/ axis-1 seed 0)",
+      "epochs": {
+        "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+        "code_slice_tokens": 98566144,
+        "code_slice_frac_of_bucket": 0.005575105256003391,
+        "sliced": {
+          "phase0": 16.06808510638298,
+          "phase1": 4.25531914893617,
+          "total": 20.32340425531915
+        },
+        "partner": {
+          "phase0": 0.007224735259599233,
+          "phase1": 0.0019133303123938644,
+          "total": 0.009138065571993098
+        }
+      },
+      "linear_hinge_e_minus_tau_code": 7.15,
+      "pred_harm_linear": 0.47047,
+      "pred_harm_quadratic_ratio_matched": 0.468905
+    },
+    {
+      "point": "e16s2",
+      "run_id": "rav_mve_mathgen2_e16s2",
+      "job_name": "rav-mve-mathgen2-e16s2",
+      "arm": "math",
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "e_target": 16.0,
+      "seed": 2,
+      "steps": 4776,
+      "phase_boundary_step": 3776,
+      "slice_batches": 47,
+      "is_control": false,
+      "role": "tau-universality: 3rd seed at the lower ratio point",
+      "epochs": {
+        "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+        "code_slice_tokens": 98566144,
+        "code_slice_frac_of_bucket": 0.005575105256003391,
+        "sliced": {
+          "phase0": 16.06808510638298,
+          "phase1": 4.25531914893617,
+          "total": 20.32340425531915
+        },
+        "partner": {
+          "phase0": 0.007224735259599233,
+          "phase1": 0.0019133303123938644,
+          "total": 0.009138065571993098
+        }
+      },
+      "linear_hinge_e_minus_tau_code": 7.15,
+      "pred_harm_linear": 0.47047,
+      "pred_harm_quadratic_ratio_matched": 0.468905
+    },
+    {
+      "point": "e32s1",
+      "run_id": "rav_mve_mathgen2_e32s1",
+      "job_name": "rav-mve-mathgen2-e32s1",
+      "arm": "math",
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "e_target": 32.0,
+      "seed": 1,
+      "steps": 4776,
+      "phase_boundary_step": 3776,
+      "slice_batches": 24,
+      "is_control": false,
+      "role": "tau-universality: 2nd seed at the upper ratio point (amplifier)",
+      "epochs": {
+        "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+        "code_slice_tokens": 50331648,
+        "code_slice_frac_of_bucket": 0.0028468622583847102,
+        "sliced": {
+          "phase0": 31.46666666666667,
+          "phase1": 8.333333333333334,
+          "total": 39.800000000000004
+        },
+        "partner": {
+          "phase0": 0.007224735259599233,
+          "phase1": 0.0019133303123938644,
+          "total": 0.009138065571993098
+        }
+      },
+      "linear_hinge_e_minus_tau_code": 23.15,
+      "pred_harm_linear": 1.92647,
+      "pred_harm_quadratic_ratio_matched": 1.91877
+    },
+    {
+      "point": "e32s2",
+      "run_id": "rav_mve_mathgen2_e32s2",
+      "job_name": "rav-mve-mathgen2-e32s2",
+      "arm": "math",
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "e_target": 32.0,
+      "seed": 2,
+      "steps": 4776,
+      "phase_boundary_step": 3776,
+      "slice_batches": 24,
+      "is_control": false,
+      "role": "tau-universality: 3rd seed at the upper ratio point (amplifier)",
+      "epochs": {
+        "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+        "code_slice_tokens": 50331648,
+        "code_slice_frac_of_bucket": 0.0028468622583847102,
+        "sliced": {
+          "phase0": 31.46666666666667,
+          "phase1": 8.333333333333334,
+          "total": 39.800000000000004
+        },
+        "partner": {
+          "phase0": 0.007224735259599233,
+          "phase1": 0.0019133303123938644,
+          "total": 0.009138065571993098
+        }
+      },
+      "linear_hinge_e_minus_tau_code": 23.15,
+      "pred_harm_linear": 1.92647,
+      "pred_harm_quadratic_ratio_matched": 1.91877
+    },
+    {
+      "point": "e6s1",
+      "run_id": "rav_mve_mathgen2_e6s1",
+      "job_name": "rav-mve-mathgen2-e6s1",
+      "arm": "math",
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "e_target": 6.0,
+      "seed": 1,
+      "steps": 4776,
+      "phase_boundary_step": 3776,
+      "slice_batches": 126,
+      "is_control": false,
+      "role": "curvature: SUB-threshold (e<tau~10.8); linear predicts ~0, ratio-quadratic predicts >0",
+      "epochs": {
+        "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+        "code_slice_tokens": 264241152,
+        "code_slice_frac_of_bucket": 0.01494602685651973,
+        "sliced": {
+          "phase0": 5.993650793650794,
+          "phase1": 1.5873015873015872,
+          "total": 7.580952380952381
+        },
+        "partner": {
+          "phase0": 0.007224735259599233,
+          "phase1": 0.0019133303123938644,
+          "total": 0.009138065571993098
+        }
+      },
+      "linear_hinge_e_minus_tau_code": 0.0,
+      "pred_harm_linear": 0.0,
+      "pred_harm_quadratic_ratio_matched": 0.061008
+    },
+    {
+      "point": "e12s1",
+      "run_id": "rav_mve_mathgen2_e12s1",
+      "job_name": "rav-mve-mathgen2-e12s1",
+      "arm": "math",
+      "sliced_bucket": "c02q0",
+      "partner_bucket": "c05q0",
+      "w_target": 0.2,
+      "e_target": 12.0,
+      "seed": 1,
+      "steps": 4776,
+      "phase_boundary_step": 3776,
+      "slice_batches": 63,
+      "is_control": false,
+      "role": "curvature: just ABOVE onset; linear predicts b*(12-tau)~0.106, quadratic ~0.260",
+      "epochs": {
+        "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+        "code_slice_tokens": 132120576,
+        "code_slice_frac_of_bucket": 0.007473013428259865,
+        "sliced": {
+          "phase0": 11.987301587301587,
+          "phase1": 3.1746031746031744,
+          "total": 15.161904761904761
+        },
+        "partner": {
+          "phase0": 0.007224735259599233,
+          "phase1": 0.0019133303123938644,
+          "total": 0.009138065571993098
+        }
+      },
+      "linear_hinge_e_minus_tau_code": 3.1500000000000004,
+      "pred_harm_linear": 0.10647,
+      "pred_harm_quadratic_ratio_matched": 0.259752
+    }
+  ]
+}

@@ -1,0 +1,187 @@
+{
+ "experiment": "harm100b_budget_transfer",
+ "issue": "#7067 (mixing-via-embeddings); DECISIVE budget-transfer-of-harm test (rav directive 2026-07-19)",
+ "branch": "rav/mixing-via-embeddings",
+ "date_utc": "2026-07-19",
+ "launcher": "experiments/grug/moe/launch_mve_harm100b_h100.py",
+ "builder": "experiments/datakit/mixture_features/harm100b_design.py",
+ "why": "Removes the budget-vs-mechanism confound between the 10B real-subset-repeat harm (twobucket-a2/E2: code e32 +1.267 bpb / 162 sigma) and the 100B simulated-epoching no-harm (transect: kernel residual flat). Runs the SAME max_train_batches real subset-repeat mechanism as twobucket-a2/a3/E2, at 100B budget, so BUDGET is the only change from the 10B harm. Decides whether the epoch-harm term is needed at production scale -- the crux of the kernel-vs-form question.",
+ "constants": {
+  "steps": 47759,
+  "batch_size": 512,
+  "seq_len": 4096,
+  "phase_boundary_step": 38144,
+  "mixture_block_size": 32768,
+  "experiment_budget_tokens": 100157882368,
+  "target_budget_tokens": null,
+  "epoching_mechanism": "max_train_batches (REAL subset-repeat; budgets OFF)",
+  "seed": 1,
+  "model_d512": "swarm d512/6L/4H/1KV/64exp + gpu_fa4_cute (== seed panel / transect / twobucket / epochrep)",
+  "optimizer": "SWARM_OPTIMIZER fractional schedule (warmup peak 0.100*N; asserted at launch for N=47759)",
+  "hardware": "cw-rno2a H100x8 one node/run, cuda_async allocator, CW-mirror data",
+  "in_training_validation": false,
+  "wandb_group": "rav_mve_harm100b",
+  "checkpoint_prefix": "s3://marin-us-east-02a/marin/users/rav/grug/rav_mve_harm100b_<point>/dev/"
+ },
+ "arm": {
+  "code": {
+   "sliced_bucket": "c01q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "epochs": [
+    4.0,
+    16.0,
+    32.0
+   ],
+   "control_epoch": 4.0,
+   "sliced_total_tokens": 152613743170,
+   "partner_total_tokens": 876859363557,
+   "readout_task": "logprob_humaneval_10shot",
+   "note": "identical buckets/weights/mechanism to twobucket-a2/a3/E2 code arm; only the budget (47759 steps = 100B) and seed (1) differ -- so the 10B code arm is the matched-mechanism reference"
+  }
+ },
+ "slicing_mechanism": {
+  "used": "LmDataConfig.max_train_batches={c01q0: n} -- slice-after-shuffle of the SAME cache (target_budget OFF)",
+  "why": "real epochs via the mixture restart-wrap; content h=V.w is UNCHANGED by slicing (the frozen content kernel is FLAT across epochs at fixed w by construction). This is the SAME mechanism as twobucket-a2/a3/E2; it differs from the transect, which epochs via target_budget (simulated). Exact token control at 2.097M granularity, zero data movement.",
+  "phase0_epoch_label": "e = w * phase_boundary_step / n (the label, apples-to-apples with the 10B references)"
+ },
+ "predictions": {
+  "a3_powerlaw": {
+   "hypothesis": "HARM PERSISTS at 100B (small): the a3 budget x epoch power law B^-0.73 holds.",
+   "model": "rise(100B) = rise(10B) * (100B/10B)^(-0.73)",
+   "base_rise_10B": {
+    "e16": 0.3838,
+    "e32": 1.2686
+   },
+   "budget_ratio": 9.9998,
+   "exponent": -0.73,
+   "pred_rise_e16_vs_e4": 0.07147,
+   "pred_rise_e32_vs_e4": 0.23623,
+   "headline": "e16 ~ 0.071 bpb, e32 ~ 0.245 bpb -> harm term has (marginal) value at production"
+  },
+  "transect_vanishes": {
+   "hypothesis": "HARM VANISHES at 100B even under real subset-repeat: the 10B harm is a small-budget artifact.",
+   "pred_rise_e16_vs_e4": 0.0,
+   "pred_rise_e32_vs_e4": 0.0,
+   "bound": "|rise| < 2*sqrt(2)*sigma = 0.01598 bpb",
+   "headline": "kernel SUFFICES at production; the epoch-harm term is NOT needed"
+  }
+ },
+ "seed_floor": {
+  "sigma_humaneval_bpb": 0.00565,
+  "pair_sqrt2_sigma": 0.00799,
+  "form_required_2sqrt2_sigma": 0.01598,
+  "source": "10-seed panel rav_mve_seedpanel_h100 (humaneval bpb), via transect readout"
+ },
+ "decision_rule": {
+  "estimand": "realized e4->e16 humaneval bpb rise (single seed per point; SE of the pair = sqrt(2)*sigma = 0.008 bpb, so 2*SE = 0.016 bpb).",
+  "HARM_PERSISTS": "rise > 0.016 (2*sqrt(2)*sigma) AND ~0.07 -> the a3 power law holds; epoch harm PERSISTS at 100B under matched mechanism -> the harm term has (marginal) value at production.",
+  "HARM_VANISHES": "rise < 0.016 (~0, within the form-required floor) -> harm VANISHES at 100B even under real subset-repeat -> KERNEL SUFFICES at production scale, the harm term is NOT needed (the 10B harm is a proxy artifact of small budget).",
+  "amplifier": "code-e32 is the amplifier: predicted +0.245 bpb if the a3 power law holds, ~0 if harm vanishes."
+ },
+ "readout_plan": {
+  "eval": "post-hoc eval_logprob (same frozen harness as seedpanel/twobucket/epochrep/transect) on the 3 final checkpoints (step 47758); humaneval bpb.",
+  "aggregate": "realized humaneval bpb per epoch; e4->e16 and e4->e32 rises.",
+  "test": "rise vs the two committed predictions (a3 0.071/0.245 vs transect ~0) and vs the 0.008 pair floor / 0.016 form-required floor -> verdict.",
+  "figure": "f29_harm_budget_transfer.png: e4->e16 (and e4->e32) rise at 10B vs 100B under the SAME max_train_batches mechanism, with the a3 power-law curve and the transect-vanishes line, and the 2*sqrt(2)*sigma band.",
+  "companions": "10B matched-mechanism reference = twobucket-a2 / E2 code arm (same buckets/weights/mechanism); the transect is the 100B simulated-epoching companion."
+ },
+ "runs": [
+  {
+   "point": "e4",
+   "run_id": "rav_mve_harm100b_e4",
+   "job_name": "rav-mve-harm100b-e4",
+   "arm": "code",
+   "sliced_bucket": "c01q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 4.0,
+   "seed": 1,
+   "steps": 47759,
+   "phase_boundary_step": 38144,
+   "slice_batches": 1907,
+   "is_control": true,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 3999268864,
+    "code_slice_frac_of_bucket": 0.026205168557756436,
+    "sliced": {
+     "phase0": 4.000419507079182,
+     "phase1": 1.0083901415836392,
+     "total": 5.0088096486628215
+    },
+    "partner": {
+     "phase0": 0.07298207143595156,
+     "phase1": 0.018396670953667007,
+     "total": 0.09137874238961859
+    }
+   },
+   "pred_a3_powerlaw_rise_vs_e4": 0.0,
+   "pred_transect_vanishes_rise_vs_e4": 0.0
+  },
+  {
+   "point": "e16",
+   "run_id": "rav_mve_harm100b_e16",
+   "job_name": "rav-mve-harm100b-e16",
+   "arm": "code",
+   "sliced_bucket": "c01q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 16.0,
+   "seed": 1,
+   "steps": 47759,
+   "phase_boundary_step": 38144,
+   "slice_batches": 477,
+   "is_control": false,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 1000341504,
+    "code_slice_frac_of_bucket": 0.006554727531226964,
+    "sliced": {
+     "phase0": 15.99329140461216,
+     "phase1": 4.031446540880503,
+     "total": 20.024737945492664
+    },
+    "partner": {
+     "phase0": 0.07298207143595156,
+     "phase1": 0.018396670953667007,
+     "total": 0.09137874238961859
+    }
+   },
+   "pred_a3_powerlaw_rise_vs_e4": 0.071468,
+   "pred_transect_vanishes_rise_vs_e4": 0.0
+  },
+  {
+   "point": "e32",
+   "run_id": "rav_mve_harm100b_e32",
+   "job_name": "rav-mve-harm100b-e32",
+   "arm": "code",
+   "sliced_bucket": "c01q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 32.0,
+   "seed": 1,
+   "steps": 47759,
+   "phase_boundary_step": 38144,
+   "slice_batches": 238,
+   "is_control": false,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 499122176,
+    "code_slice_frac_of_bucket": 0.003270492982037772,
+    "sliced": {
+     "phase0": 32.05378151260504,
+     "phase1": 8.079831932773109,
+     "total": 40.13361344537815
+    },
+    "partner": {
+     "phase0": 0.07298207143595156,
+     "phase1": 0.018396670953667007,
+     "total": 0.09137874238961859
+    }
+   },
+   "pred_a3_powerlaw_rise_vs_e4": 0.236228,
+   "pred_transect_vanishes_rise_vs_e4": 0.0
+  }
+ ]
+}

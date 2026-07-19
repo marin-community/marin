@@ -921,3 +921,20 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
 - Generator: scratch/mixture_features/report/build_report.py (regenerable). Headline held-out number
   cited: Spearman 0.720 on the 40-run sacred test set (p<1e-4), ≈79% of the 0.909 noise ceiling.
 - v2 pending: append f29 (100B production verdict) + f32 (τ-universality) when the two runs land.
+
+## 2026-07-19 τ/curvature follow-up (mathgen2, 3-seed + dense e6/e12): BOTH caveats resolved
+- **τ-universality → PER-BUCKET.** Pooled 3-seed (s0,1,2) MC: τ_math = 11.66, CI68 [10.79,12.50],
+  CI95 [9.91,13.28]; posterior mass < 8.85 = 0.1%. CI EXCLUDES code's τ=8.85 at 68% AND 95%. Seed
+  replication decisive: seed-0's e16 harm (0.469) was the high outlier; pooling drops e16 harm to
+  0.400, raising τ 10.83→11.66 and excluding 8.85 MORE cleanly than axis-1 did.
+  → the harm term needs a **PER-BUCKET τⱼ** (math onset genuinely later than code) ⇒ per-bucket
+  calibration data. Model equation sharpens to ŷ = kernel(h=V·w) + Σⱼ bⱼ·max(eⱼ − τⱼ, 0).
+- **Curvature → LINEAR.** harm(e6)=+0.026 (below 0.179 floor, ≈ linear-0, vs quad 0.061); harm(e12)
+  =+0.152 (closer to committed linear 0.106 [0.5σ] than quad 0.260 [1.2σ]). The ratio-matching
+  physical quadratic (τ_quad=0.36) that single-seed e8 couldn't exclude is now REJECTED at dense pts.
+- Pooled 3-seed harm: e6 +0.026 (0.3σ) / e12 +0.152 (1.7σ) / e16 +0.400 (5.5σ) / e32 +1.872 (25.6σ).
+  b_math=0.092 (code-like+). Empirical 3-seed SD (0.091 e16, 0.058 e32) brackets panel σ=0.0633 (floor
+  validated). Artifacts grug/mathgen2_readout.{json,md}, report/figs3/f32.
+- **NET: linear-past-threshold FORM generalizes across code/math/web; THRESHOLD τ is per-bucket
+  (τ_code≈8.85, τ_math≈11.7), amplitude b per-bucket (math>code>web) with B^−0.73·d^+1.68 scaling.**
+  Remaining open: does the term survive to 100B production (gate running, ~06:00Z).
