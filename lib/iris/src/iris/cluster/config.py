@@ -192,13 +192,19 @@ class _OneofConfig(_Config):
 class GcpPlatformConfig(_Config):
     project_id: str = ""
     zones: list[str] = Field(default_factory=list)  # all zones, for list_all_slices
-    # AR remote repo (in project_id) that pull-through-caches Docker Hub, e.g.
-    # "docker-mirror". When set, workers rewrite Docker Hub task images — bare
-    # names like ``ubuntu:24.04`` and ``docker.io/...`` — to this regional cache
-    # so pulls stay on-continent and dodge Docker Hub rate limits. Empty disables
-    # the rewrite (images pull straight from Docker Hub). The named repo must
-    # exist and be enabled in each zone's multi-region or those pulls fail.
-    docker_hub_mirror_repo: str = ""
+    # Pull-through cache routing: upstream registry → zone prefix (the zone's
+    # leading dash-separated segment) → mirror repo prefix the image path is
+    # appended to. Docker Hub references (bare names like ``ubuntu:24.04`` and
+    # ``docker.io/...``) match the ``docker.io`` key. Example:
+    #   registry_mirrors:
+    #     ghcr.io:
+    #       us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    #       europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+    # Workers rewrite matching images so pulls stay on-continent and dodge
+    # upstream rate limits; unlisted registries and zone prefixes pull straight
+    # from upstream. Every named repo must exist and be enabled or pulls fail
+    # (provisioned by infra/iac from provisioning.gcp.registries).
+    registry_mirrors: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class ManualPlatformConfig(_Config):

@@ -44,11 +44,17 @@ platform:
   label_prefix: marin
   gcp:
     project_id: hai-gcp-models
-    # Pull-through cache the fleet's Docker Hub task images (e.g. harbor sandbox
-    # images like ubuntu:24.04) through the regional docker-mirror AR remote repo
-    # instead of hitting Docker Hub directly. The us/europe docker-mirror repos
-    # must be enabled in hai-gcp-models for this to resolve.
-    docker_hub_mirror_repo: docker-mirror
+    # Route public-image pulls (ghcr worker/controller/task images, harbor
+    # sandbox base images like ubuntu:24.04) through the same-continent AR
+    # remote repos declared in provisioning.gcp.registries above: upstream
+    # registry → zone prefix → mirror repo prefix.
+    registry_mirrors:
+      ghcr.io:
+        us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+        europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+      docker.io:
+        us: us-docker.pkg.dev/hai-gcp-models/docker-mirror
+        europe: europe-docker.pkg.dev/hai-gcp-models/docker-mirror
 
 defaults:
   ssh:

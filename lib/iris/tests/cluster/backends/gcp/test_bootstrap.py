@@ -12,9 +12,8 @@ from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
     docker_hub_repo_path,
     render_template,
-    rewrite_docker_hub_to_ar_remote,
-    rewrite_ghcr_to_ar_remote,
-    zone_to_multi_region,
+    rewrite_image_to_mirror,
+    upstream_registry,
 )
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
@@ -63,58 +62,36 @@ def test_render_template_preserves_shell_variables() -> None:
     assert rendered == "echo ${PATH} and x"
 
 
-@pytest.mark.parametrize(
-    "zone, expected",
-    [
-        ("us-central1-a", "us"),
-        ("us-west4-b", "us"),
-        ("europe-west4-b", "europe"),
-    ],
-)
-def test_zone_to_multi_region(zone: str, expected: str) -> None:
-    assert zone_to_multi_region(zone) == expected
-
-
-def test_zone_to_multi_region_unknown_prefix() -> None:
-    assert zone_to_multi_region("southamerica-east1-a") is None
-
-
-@pytest.mark.parametrize("zone", ["asia-east1-a", "me-west1-a"])
-def test_zone_to_multi_region_unsupported_raises(zone: str) -> None:
-    with pytest.raises(ValueError, match="no AR remote repo provisioned"):
-        zone_to_multi_region(zone)
+# registry_mirrors map mirroring the shape committed in config/marin.yaml.
+_MIRRORS = {
+    "ghcr.io": {
+        "us": "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror",
+        "europe": "europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror",
+    },
+    "docker.io": {
+        "us": "us-docker.pkg.dev/hai-gcp-models/docker-mirror",
+        "europe": "europe-docker.pkg.dev/hai-gcp-models/docker-mirror",
+    },
+}
 
 
 @pytest.mark.parametrize(
-    "image_tag, multi_region, project, expected",
+    "image_tag, expected",
     [
-        (
-            "ghcr.io/marin-community/iris-worker:v1",
-            "us",
-            "hai-gcp-models",
-            "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1",
-        ),
-        (
-            "ghcr.io/marin-community/iris-controller:latest",
-            "europe",
-            "hai-gcp-models",
-            "europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest",
-        ),
-        (
-            "ghcr.io/myorg/myimage:abc123",
-            "us",
-            "my-project",
-            "us-docker.pkg.dev/my-project/ghcr-mirror/myorg/myimage:abc123",
-        ),
+        # Docker Hub aliases all collapse to the canonical docker.io key.
+        ("ubuntu:24.04", "docker.io"),
+        ("bitnami/redis:latest", "docker.io"),
+        ("docker.io/library/python:3.12", "docker.io"),
+        ("index.docker.io/tensorflow/tensorflow:latest", "docker.io"),
+        ("registry-1.docker.io/library/nginx:stable", "docker.io"),
+        # Everything else keys on its literal host.
+        ("ghcr.io/marin-community/iris-worker:v1", "ghcr.io"),
+        ("gcr.io/proj/img:v1", "gcr.io"),
+        ("localhost:5000/img:dev", "localhost:5000"),
     ],
 )
-def test_rewrite_ghcr_to_ar_remote(image_tag: str, multi_region: str, project: str, expected: str) -> None:
-    assert rewrite_ghcr_to_ar_remote(image_tag, multi_region, project) == expected
-
-
-def test_rewrite_ghcr_to_ar_remote_non_ghcr_passthrough() -> None:
-    assert rewrite_ghcr_to_ar_remote("ubuntu:22.04", "us", "proj") == "ubuntu:22.04"
-    assert rewrite_ghcr_to_ar_remote("gcr.io/proj/img:v1", "us", "proj") == "gcr.io/proj/img:v1"
+def test_upstream_registry(image_tag: str, expected: str) -> None:
+    assert upstream_registry(image_tag) == expected
 
 
 @pytest.mark.parametrize(
@@ -141,104 +118,98 @@ def test_docker_hub_repo_path(image_tag: str, expected: str | None) -> None:
 
 
 @pytest.mark.parametrize(
-    "image_tag, multi_region, project, expected",
+    "image_tag, zone, expected",
     [
         (
+            "ghcr.io/marin-community/iris-worker:v1",
+            "us-central1-a",
+            "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1",
+        ),
+        (
+            "ghcr.io/marin-community/iris-controller:latest",
+            "europe-west4-b",
+            "europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-controller:latest",
+        ),
+        (
             "ubuntu:24.04",
-            "us",
-            "hai-gcp-models",
+            "us-central1-a",
             "us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04",
         ),
         (
             "bitnami/redis:latest",
-            "europe",
-            "hai-gcp-models",
+            "europe-west4-b",
             "europe-docker.pkg.dev/hai-gcp-models/docker-mirror/bitnami/redis:latest",
         ),
         (
             "docker.io/library/python:3.12",
-            "us",
-            "my-project",
-            "us-docker.pkg.dev/my-project/docker-mirror/library/python:3.12",
+            "us-west4-b",
+            "us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/python:3.12",
         ),
     ],
 )
-def test_rewrite_docker_hub_to_ar_remote(image_tag: str, multi_region: str, project: str, expected: str) -> None:
-    assert rewrite_docker_hub_to_ar_remote(image_tag, multi_region, project, "docker-mirror") == expected
+def test_rewrite_image_to_mirror(image_tag: str, zone: str, expected: str) -> None:
+    assert rewrite_image_to_mirror(image_tag, zone, _MIRRORS) == expected
 
 
-def test_rewrite_docker_hub_to_ar_remote_other_registry_passthrough() -> None:
-    assert rewrite_docker_hub_to_ar_remote("gcr.io/proj/img:v1", "us", "proj", "docker-mirror") == "gcr.io/proj/img:v1"
-    assert rewrite_docker_hub_to_ar_remote("ghcr.io/org/img:v1", "us", "proj", "docker-mirror") == "ghcr.io/org/img:v1"
+def test_rewrite_image_to_mirror_unlisted_registry_passthrough() -> None:
+    assert rewrite_image_to_mirror("gcr.io/proj/img:v1", "us-central1-a", _MIRRORS) == "gcr.io/proj/img:v1"
+    # An already-rewritten reference keys on the AR host, which is unlisted, so
+    # a second pass is a no-op instead of stacking mirror prefixes.
+    mirrored = rewrite_image_to_mirror("ubuntu:24.04", "us-central1-a", _MIRRORS)
+    assert rewrite_image_to_mirror(mirrored, "us-central1-a", _MIRRORS) == mirrored
 
 
-def test_rewrite_ghcr_to_ar_remote_custom_mirror_repo() -> None:
-    result = rewrite_ghcr_to_ar_remote("ghcr.io/org/image:v1", "us", "proj", mirror_repo="custom-mirror")
-    assert result == "us-docker.pkg.dev/proj/custom-mirror/org/image:v1"
+def test_rewrite_image_to_mirror_unlisted_zone_prefix_passthrough() -> None:
+    assert rewrite_image_to_mirror("ubuntu:24.04", "asia-east1-a", _MIRRORS) == "ubuntu:24.04"
+    assert rewrite_image_to_mirror("ghcr.io/org/img:v1", "me-west1-a", _MIRRORS) == "ghcr.io/org/img:v1"
 
 
 # --- GcpWorkerProvider.resolve_image() tests ---
 
 
-def _make_gcp_worker_provider(project_id: str = "my-proj", docker_hub_mirror_repo: str = ""):
+def _make_gcp_worker_provider(registry_mirrors: dict[str, dict[str, str]] | None = None):
     """Build a GcpWorkerProvider backed by InMemoryGcpService for testing."""
 
-    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id=project_id)
-    gcp_config = GcpPlatformConfig(project_id=project_id, docker_hub_mirror_repo=docker_hub_mirror_repo)
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="my-proj")
+    gcp_config = GcpPlatformConfig(project_id="my-proj", registry_mirrors=registry_mirrors or {})
     return GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
 
-def test_gcp_provider_resolve_image_rewrites_ghcr() -> None:
-    """GcpWorkerProvider.resolve_image() rewrites GHCR images for the correct continent."""
-    provider = _make_gcp_worker_provider()
+def test_gcp_provider_resolve_image_routes_by_registry_mirrors() -> None:
+    """resolve_image() rewrites each mirrored upstream for the zone's continent."""
+    provider = _make_gcp_worker_provider(_MIRRORS)
 
     assert provider.resolve_image("ghcr.io/org/img:v1", zone="us-central1-a") == (
-        "us-docker.pkg.dev/my-proj/ghcr-mirror/org/img:v1"
+        "us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/org/img:v1"
     )
     assert provider.resolve_image("ghcr.io/org/img:v1", zone="europe-west4-b") == (
-        "europe-docker.pkg.dev/my-proj/ghcr-mirror/org/img:v1"
+        "europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/org/img:v1"
     )
-
-
-def test_gcp_provider_resolve_image_passthrough_non_ghcr() -> None:
-    """Without a docker_hub_mirror_repo, Docker Hub images pull straight from Docker Hub."""
-    provider = _make_gcp_worker_provider()
-
-    assert provider.resolve_image("docker.io/library/ubuntu:latest", zone="us-central1-a") == (
-        "docker.io/library/ubuntu:latest"
-    )
-    assert provider.resolve_image("ubuntu:24.04", zone="us-central1-a") == "ubuntu:24.04"
-
-
-def test_gcp_provider_resolve_image_requires_zone_for_ghcr() -> None:
-    """GcpWorkerProvider.resolve_image() raises when zone is missing for GHCR images."""
-    provider = _make_gcp_worker_provider()
-
-    with pytest.raises(ValueError, match="zone is required"):
-        provider.resolve_image("ghcr.io/org/img:v1")
-
-
-def test_gcp_provider_resolve_image_rewrites_docker_hub_when_configured() -> None:
-    """With docker_hub_mirror_repo set, Docker Hub images route through the regional AR cache."""
-    provider = _make_gcp_worker_provider(docker_hub_mirror_repo="docker-mirror")
-
     assert provider.resolve_image("ubuntu:24.04", zone="us-central1-a") == (
-        "us-docker.pkg.dev/my-proj/docker-mirror/library/ubuntu:24.04"
+        "us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04"
     )
     assert provider.resolve_image("bitnami/redis:latest", zone="europe-west4-b") == (
-        "europe-docker.pkg.dev/my-proj/docker-mirror/bitnami/redis:latest"
+        "europe-docker.pkg.dev/hai-gcp-models/docker-mirror/bitnami/redis:latest"
     )
-    # ghcr still routes through ghcr-mirror even when the Docker Hub mirror is on.
-    assert provider.resolve_image("ghcr.io/org/img:v1", zone="us-central1-a") == (
-        "us-docker.pkg.dev/my-proj/ghcr-mirror/org/img:v1"
-    )
-    # Other registries (incl. Artifact Registry) still pass through untouched.
+    # Other registries (incl. Artifact Registry) pass through untouched.
     assert provider.resolve_image("gcr.io/proj/img:v1", zone="us-central1-a") == "gcr.io/proj/img:v1"
 
 
-def test_gcp_provider_resolve_image_requires_zone_for_docker_hub_when_configured() -> None:
-    """A configured Docker Hub mirror needs a zone to pick the continent, like GHCR."""
-    provider = _make_gcp_worker_provider(docker_hub_mirror_repo="docker-mirror")
+def test_gcp_provider_resolve_image_passthrough_without_mirrors() -> None:
+    """With no registry_mirrors configured, every image pulls straight from its upstream."""
+    provider = _make_gcp_worker_provider()
 
+    assert provider.resolve_image("ghcr.io/org/img:v1", zone="us-central1-a") == "ghcr.io/org/img:v1"
+    assert provider.resolve_image("ubuntu:24.04", zone="us-central1-a") == "ubuntu:24.04"
+    # Unmirrored images need no zone at all.
+    assert provider.resolve_image("ghcr.io/org/img:v1") == "ghcr.io/org/img:v1"
+
+
+def test_gcp_provider_resolve_image_requires_zone_for_mirrored_upstream() -> None:
+    """A mirrored upstream needs a zone to pick the continent."""
+    provider = _make_gcp_worker_provider(_MIRRORS)
+
+    with pytest.raises(ValueError, match="zone is required"):
+        provider.resolve_image("ghcr.io/org/img:v1")
     with pytest.raises(ValueError, match="zone is required"):
         provider.resolve_image("ubuntu:24.04")

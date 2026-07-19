@@ -13,6 +13,7 @@ from iac.config import (
     DEFAULT_MIRROR_CLEANUP_POLICIES,
     DOCKER_HUB_UPSTREAM,
     GcpRemoteRepositorySpec,
+    load_iris_config,
     load_provisioning,
 )
 from iac.gcp.registries import (
@@ -33,6 +34,31 @@ def test_marin_provisioning_declares_both_mirrors() -> None:
     assert by_name["docker-mirror"].docker_upstream == DOCKER_HUB_UPSTREAM
     assert by_name["ghcr-mirror"].locations == ["us", "europe"]
     assert by_name["docker-mirror"].locations == ["us", "europe"]
+
+
+def test_registry_mirrors_route_to_provisioned_repos() -> None:
+    """Every runtime mirror target in the GCP cluster configs is a repo this IaC provisions.
+
+    platform.gcp.registry_mirrors routes worker image pulls; provisioning.gcp.registries
+    (marin.yaml) declares the repos. A mirror entry naming an undeclared repo or location,
+    or routing a registry to a repo that proxies a different upstream, would 404 at pull.
+    """
+    provisioning = load_provisioning("marin").gcp
+    assert provisioning is not None
+    provisioned = {(r.name, loc): r.docker_upstream for r in provisioning.registries for loc in r.locations}
+
+    for cluster in ("marin", "marin-dev", "ci-gcp-smoke"):
+        gcp = load_iris_config(cluster).platform.gcp
+        assert gcp is not None and gcp.registry_mirrors, f"{cluster} routes no registries through the mirrors"
+        for upstream_host, zone_map in gcp.registry_mirrors.items():
+            for zone_prefix, target in zone_map.items():
+                location, _, remainder = target.partition("-docker.pkg.dev/")
+                project, _, repo = remainder.partition("/")
+                assert project == "hai-gcp-models", target
+                # AR multi-region caches serve their own continent's zones.
+                assert zone_prefix == location, target
+                expected = DOCKER_HUB_UPSTREAM if upstream_host == "docker.io" else f"https://{upstream_host}"
+                assert provisioned.get((repo, location)) == expected, (cluster, upstream_host, target)
 
 
 def test_default_cleanup_policies_applied_when_unspecified() -> None:

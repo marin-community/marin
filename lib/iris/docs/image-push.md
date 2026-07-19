@@ -28,28 +28,29 @@ Developer → docker push → ghcr.io/marin-community/iris-worker:v1
 2. **Pull**: When a GCP VM pulls from `us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/...`,
    the AR remote repo transparently fetches from `ghcr.io` on first access and caches it.
 3. **Rewrite**: The autoscaler, controller bootstrap, and worker task image resolver
-   automatically rewrite GHCR image tags to the appropriate AR remote repo based on
-   the VM's zone → continent mapping:
-   - `us-*` zones → `us-docker.pkg.dev`
-   - `europe-*` zones → `europe-docker.pkg.dev`
-   - `asia-*` / `me-*` zones → **not supported** (raises error; provision AR remote repo first)
+   rewrite image tags per the cluster's `platform.gcp.registry_mirrors` map
+   (upstream registry → zone prefix → mirror repo prefix). On `marin`,
+   `marin-dev`, and `ci-gcp-smoke`:
+   - `ghcr.io/...` in `us-*` zones → `us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/...`
+   - `ghcr.io/...` in `europe-*` zones → `europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror/...`
+   - Zone prefixes absent from the map (`asia-*`, `me-*`, …) → pull directly from upstream
    - Non-GCP (CoreWeave) → pulls directly from `ghcr.io`
 
 ### Docker Hub task images
 
 The same pull-through mechanism caches Docker Hub base images used as task images
 (e.g. harbor sandbox images like `ubuntu:24.04`). A separate AR remote repo,
-`docker-mirror`, proxies `registry-1.docker.io`. The worker's image resolver
-rewrites Docker Hub references to it — bare names (`ubuntu:24.04` →
-`library/ubuntu:24.04`, applying Docker's implicit `library/` namespace),
-namespaced names (`bitnami/redis:latest`), and explicit `docker.io/...` — using
-the same zone → continent mapping. References that name another registry
-(`gcr.io`, Artifact Registry, `ghcr.io`, a private host) pass through unchanged.
+`docker-mirror`, proxies `registry-1.docker.io`, routed by the `docker.io` key of
+`registry_mirrors`. The worker's image resolver rewrites Docker Hub references to
+it — bare names (`ubuntu:24.04` → `library/ubuntu:24.04`, applying Docker's
+implicit `library/` namespace), namespaced names (`bitnami/redis:latest`), and
+explicit `docker.io/...` / `index.docker.io/...`. References that name a registry
+absent from the map (`gcr.io`, Artifact Registry, a private host) pass through
+unchanged.
 
-This rewrite is opt-in per cluster via `platform.gcp.docker_hub_mirror_repo`
-(the repo name, e.g. `docker-mirror`; empty disables it and images pull straight
-from Docker Hub). It is enabled on the `marin` cluster. The named repo must exist
-and be enabled in each zone's multi-region, or those pulls fail.
+Every named repo must exist and be enabled in each mapped multi-region, or those
+pulls fail. A cluster with no `registry_mirrors` pulls everything straight from
+upstream.
 
 ### Cost
 
@@ -101,8 +102,9 @@ gcloud artifacts repositories create docker-mirror \
   --mode=remote-repository --remote-docker-repo=DOCKER-HUB
 ```
 
-Then enable the rewrite on the cluster by setting
-`platform.gcp.docker_hub_mirror_repo: docker-mirror` (already set on `marin`).
+Then route the cluster's pulls through it by adding the repo to
+`platform.gcp.registry_mirrors` (already set on `marin`, `marin-dev`, and
+`ci-gcp-smoke`).
 
 ### Verify
 
@@ -118,10 +120,10 @@ docker pull us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04
 ## Code
 
 - **Rewrite logic**: `lib/iris/src/iris/cluster/platforms/gcp/worker_bootstrap.py`
-  - `zone_to_multi_region()`: maps GCP zone → continent (`us`, `europe`)
-  - `rewrite_ghcr_to_ar_remote()`: rewrites `ghcr.io/...` → `{continent}-docker.pkg.dev/.../ghcr-mirror/...`
-  - `docker_hub_repo_path()` / `rewrite_docker_hub_to_ar_remote()`: rewrite Docker Hub references → `{continent}-docker.pkg.dev/.../docker-mirror/...`
-- **Task image resolver**: `GcpWorkerProvider.resolve_image()` applies both rewrites for the worker's zone
+  - `upstream_registry()`: canonical registry key for an image reference (Docker Hub aliases collapse to `docker.io`)
+  - `docker_hub_repo_path()`: Docker Hub repository path with the implicit `library/` namespace applied
+  - `rewrite_image_to_mirror()`: applies the `registry_mirrors` map for a zone
+- **Task image resolver**: `GcpWorkerProvider.resolve_image()` applies the map for the worker's zone
 - **Autoscaler**: `_per_group_bootstrap_config()` rewrites the worker image per scale group
 - **Controller bootstrap**: `build_controller_bootstrap_script_from_config()` rewrites the controller image
 - **Bootstrap scripts**: Already detect `-docker.pkg.dev/` and configure `gcloud auth` automatically
