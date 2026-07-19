@@ -855,3 +855,20 @@ From twobucket axes (humaneval, code w=0.2 fixed content):
 scale-aware harm term H(e,B,d) above. Has the swoosh property (flat ≤~8 ep, rise after) AND
 scale-dependence (a pure H(e) would err ~5× across budgets — the key correction). Pending:
 transect 100B validates the budget extrapolation; then validate combined kernel+H on held-out.
+
+## 2026-07-19 CRITICAL: transect 100B shows NO harm — but mechanism confound found (skeptical check)
+- Transect (100B) realized humaneval: web e4→e16 rise +0.0085 bpb (1.5σ), code c4→c16 −0.007
+  (NEGATIVE); kernel-residual DECLINES both arms (−3.7σ/−4.85σ). NO repetition harm at 100B.
+- **Mechanism check (don't accept blindly)**: production swarm + transect use SIMULATED epoching
+  (target_budget=10.4T); twobucket-a2/E2 use max_train_batches (real subset-repeat). Different
+  slice mechanisms → the 10B-harm vs 100B-no-harm is confounded by budget AND mechanism.
+- **BUT convergent**: the a3 arm (matched max_train_batches mechanism, 2.5B/10B/40B) shows harm ∝
+  B^−0.73 — already declining with budget; extrapolates to ~0.07 bpb at 100B-e16. Transect
+  (production mechanism, 100B) shows ~0. Both say harm is small-to-gone at production scale.
+- **The transect uses the PRODUCTION mechanism (simulated epoching) → for the production 100B
+  surrogate, kernel appears to SUFFICE (no harm term).** The harm is a small-budget / real-subset-
+  repeat phenomenon.
+- DECISIVE TEST launching: max_train_batches (matched to a2/a3) at 100B, code c01q0@0.2, e16+e32.
+  Pre-reg: a3 power law predicts e16 +0.071 bpb (present, ~12σ); if realized ~0 → harm collapses
+  faster than the power law, kernel suffices at production under BOTH mechanisms. This disambiguates
+  budget-vs-mechanism and settles whether the harm term is needed at production scale.
