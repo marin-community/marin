@@ -1,0 +1,69 @@
+name: "Ops - Compute Report"
+
+# Weekly Iris compute-accounting report. Reads durable finelog namespaces from
+# GCS (telltale, iris.provisioning, iris.task), renders per-user host-hours,
+# preemption events, and MFU per job, publishes a secret gist, and posts a
+# summary to Discord. Chip-hours + the preemptible split arrive with the
+# iris.accounting namespace (see .agents/projects/iris_compute_accounting/).
+
+on:
+  schedule:
+    - cron: '0 15 * * 1'  # Mondays 15:00 UTC, after the storage report at 14:00
+  workflow_dispatch:
+    inputs:
+      iso_week:
+        description: 'ISO week YYYY-Www (default: previous complete week)'
+        type: string
+        required: false
+      dry_run:
+        description: 'Print only, do not gist or post'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ops-compute-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Sync uv environment
+        run: uv sync
+
+      - name: Run compute report
+        env:
+          DISCORD_WEBHOOK_INTERNAL_DISCUSS: ${{ secrets.DISCORD_WEBHOOK_INTERNAL_DISCUSS }}
+          GH_TOKEN: ${{ secrets.GIST_PAT }}
+        run: |
+          uv run python scripts/ops/compute_report.py \
+            ${{ inputs.iso_week && format('--iso-week {0}', inputs.iso_week) || '' }} \
+            ${{ inputs.dry_run && '--dry-run' || '--no-dry-run' }}
