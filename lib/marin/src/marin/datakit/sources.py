@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import cache
 
 from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.biocollection import biocollection_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
@@ -186,6 +187,18 @@ def all_sources() -> dict[str, DatakitSource]:
             "starcoder2/ir_python": 4.64,
             "starcoder2/ir_rust": 1.84,
             "starcoder2/kaggle": 1.38,
+        },
+    )
+
+    # TheBioCollection: two synthetic bio/chem streams from one HF repo, each
+    # staged and downloaded per-stream (see biocollection.py). Token counts are
+    # the exact Marin-tokenizer (Llama-3) totals from each stream's tokenized
+    # cache .stats.json.
+    biocollection = _rows_flat(
+        biocollection_normalize_steps,
+        {
+            "biocollection/free_text_stream": 33.186704843,
+            "biocollection/instruction_stream": 18.123700603,
         },
     )
 
@@ -390,6 +403,7 @@ def all_sources() -> dict[str, DatakitSource]:
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
         *starcoder2_extras,
+        *biocollection,
         *common_pile,
         *finepdfs,
         *nemotron_cc_v2,

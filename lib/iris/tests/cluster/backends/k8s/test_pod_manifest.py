@@ -723,6 +723,17 @@ def test_docker_access_pod_manifest_raises():
         _build_pod_manifest(req, pod_config())
 
 
+def test_gvisor_profile_sets_runtime_class_and_benign_context():
+    """GVISOR sets the pod runtimeClassName and a non-privileged securityContext."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_GVISOR
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["runtimeClassName"] == "gvisor"
+    ctx = manifest["spec"]["containers"][0]["securityContext"]
+    assert "privileged" not in ctx
+    assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
+
+
 # ---------------------------------------------------------------------------
 # Service account
 # ---------------------------------------------------------------------------

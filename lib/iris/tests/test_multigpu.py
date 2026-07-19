@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.runtime.multigpu in-task GPU process supervisor and the
+"""Tests for the iris.cluster.hooks.multigpu_main in-task GPU process supervisor and the
 client-side entrypoint wrapping that drives it. None of this imports jax."""
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ import sys
 import textwrap
 
 import pytest
-from iris.client.client import _wrap_entrypoint_for_multiprocess
-from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
-from iris.runtime import multigpu
-from iris.runtime.multigpu import run
+from iris.cluster.hooks import multigpu_main
+from iris.cluster.hooks.multigpu import build_multigpu_hook
+from iris.cluster.hooks.multigpu_main import run
+from iris.cluster.types import ResourceSpec, gpu_device
 from rigging.timing import Duration
 
 
@@ -46,7 +46,7 @@ def test_run_terminates_peers_when_one_fails() -> None:
 def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
     # the supervisor SIGKILLs it after the grace period and still returns 3.
-    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
+    monkeypatch.setattr(multigpu_main, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
     code = (
         "import os,sys,signal,time\n"
         "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
@@ -71,7 +71,7 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
         started.append(proc)
         return proc
 
-    monkeypatch.setattr(multigpu.subprocess, "Popen", flaky_popen)
+    monkeypatch.setattr(multigpu_main.subprocess, "Popen", flaky_popen)
     with pytest.raises(OSError, match="simulated spawn failure"):
         run(nproc=3, devices_per_proc=1, child_argv=_py("import time; time.sleep(30)"))
     assert len(started) == 1
@@ -87,7 +87,7 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     supervisor_src = textwrap.dedent(
         """
         import sys
-        from iris.runtime.multigpu import run
+        from iris.cluster.hooks.multigpu_main import run
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
         sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
@@ -119,14 +119,12 @@ def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_wrap_entrypoint_one_process_per_gpu() -> None:
-    wrapped = _wrap_entrypoint_for_multiprocess(
-        Entrypoint.from_command("python", "train.py", "--steps", "10"), _gpu_resources(8), processes_per_task=8
-    )
-    assert wrapped.command == [
+def test_multigpu_hook_one_process_per_gpu() -> None:
+    wrapped = build_multigpu_hook(_gpu_resources(8), processes_per_task=8).wrap(["python", "train.py", "--steps", "10"])
+    assert wrapped == [
         "python",
         "-m",
-        "iris.runtime.multigpu",
+        "iris.cluster.hooks.multigpu_main",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -139,14 +137,12 @@ def test_wrap_entrypoint_one_process_per_gpu() -> None:
     ]
 
 
-def test_wrap_entrypoint_groups_devices_when_fewer_processes() -> None:
-    wrapped = _wrap_entrypoint_for_multiprocess(
-        Entrypoint.from_command("python", "train.py"), _gpu_resources(8), processes_per_task=4
-    )
-    assert wrapped.command[:8] == [
+def test_multigpu_hook_groups_devices_when_fewer_processes() -> None:
+    wrapped = build_multigpu_hook(_gpu_resources(8), processes_per_task=4).wrap(["python", "train.py"])
+    assert wrapped[:8] == [
         "python",
         "-m",
-        "iris.runtime.multigpu",
+        "iris.cluster.hooks.multigpu_main",
         "--nproc",
         "4",
         "--devices-per-proc",
@@ -155,13 +151,12 @@ def test_wrap_entrypoint_groups_devices_when_fewer_processes() -> None:
     ]
 
 
-def test_wrap_entrypoint_requires_gpu() -> None:
+def test_multigpu_hook_requires_gpu() -> None:
     cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
     with pytest.raises(ValueError, match="requires a GPU device"):
-        _wrap_entrypoint_for_multiprocess(Entrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
+        build_multigpu_hook(cpu_only, processes_per_task=2)
 
 
-def test_wrap_entrypoint_requires_divisible_gpu_count() -> None:
-    entry = Entrypoint.from_command("python", "x.py")
+def test_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
-        _wrap_entrypoint_for_multiprocess(entry, _gpu_resources(8), processes_per_task=3)
+        build_multigpu_hook(_gpu_resources(8), processes_per_task=3)

@@ -39,6 +39,8 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.hooks import TaskHook
+from iris.cluster.hooks.nsys import build_profile_hook, profile_cli_options
 from iris.cluster.platforms.k8s.coreweave_topology import (
     COSCHEDULE_NVLINK_DOMAIN_SLICED,
     NVL72_GPUS_PER_NODE,
@@ -634,6 +636,7 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
+    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -749,6 +752,7 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         container_profile=profile,
+        profile_hook=profile_hook,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -776,6 +780,7 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -794,7 +799,11 @@ def _submit_and_wait_job(
         name=job_name,
         resources=resources,
         environment=EnvironmentSpec(
-            env_vars=env_vars, extras=extras or [], setup_scripts=setup_scripts, sync_packages=sync_packages or []
+            env_vars=env_vars,
+            extras=extras or [],
+            setup_scripts=setup_scripts,
+            sync_packages=sync_packages or [],
+            profile=profile_hook,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
@@ -995,6 +1004,7 @@ Examples:
         "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
     ),
 )
+@profile_cli_options
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
@@ -1029,6 +1039,11 @@ def run(
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
+    profile: str | None,
+    profile_output: str | None,
+    profile_tasks: str,
+    profile_trace: str,
+    profile_capture_range: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -1044,6 +1059,19 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    if profile and no_sync:
+        raise click.UsageError("--profile installs its profiler during setup; it cannot be combined with --no-sync.")
+    if profile_output and not profile:
+        raise click.UsageError("--profile-output has no effect without --profile.")
+    # The nsys hook owns its --profile* flags and how to build itself from them.
+    profile_hook: TaskHook | None = build_profile_hook(
+        profile,
+        output_uri=profile_output,
+        tasks=profile_tasks,
+        trace=profile_trace,
+        capture_range=profile_capture_range,
+    )
 
     submit_argv = redact_submit_argv(list(sys.argv))
 
@@ -1089,6 +1117,7 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
+            profile_hook=profile_hook,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

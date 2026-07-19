@@ -36,9 +36,15 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # venv and the isolated uvx vLLM envs. Kept single so they cannot drift — cloudpickle needs the
 # worker venv to match the launching CLI, and the uvx env to match the venv. Marin pins 3.12.
 WORKER_PYTHON_VERSION = "3.12"
+# Stock CUDA vLLM used by GPU serving. It runs in an isolated uv-tool environment, so it does not
+# participate in Marin's workspace dependency resolution.
+DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
+TPU_VLLM_WORKER_EXTRAS = ("tpu", "vllm")
 # Pinned Run:ai model streamer for the fork's distributed s3:// checkpoint loader. The upstream
 # vllm[runai] extra bundles this; the git fork does not, so MARIN_FORK adds it explicitly.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.0"
+_CUDA_TORCH_BACKEND = "cu130"
+_FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 
 
 class VllmLauncher(Protocol):
@@ -76,22 +82,10 @@ class VllmType(StrEnum):
 
 @dataclass(frozen=True)
 class IsolatedCudaVllm:
-    """Run CUDA vLLM from a throwaway uv-managed environment via ``uvx``.
+    """Provide an isolated CUDA vLLM command and environment.
 
-    One launcher, two sources (see :class:`VllmType`):
-
-    - ``UPSTREAM`` — stock ``vllm[runai]==<version>`` on the cu128 torch backend. Serves any
-      architecture upstream vLLM knows; this is the ``marin-serve --gpu`` default.
-    - ``MARIN_FORK`` — Marin's vLLM fork (pinned by ``tool.uv.sources.vllm`` via
-      :func:`~marin.inference.tpu_vllm_pins.vllm_fork_ref`), needed to serve Marin-custom
-      architectures upstream cannot load (e.g. ``grug_moe``). Built with ``VLLM_USE_PRECOMPILED``
-      on the cu130 backend, with the Run:ai streamer added and virtual-hosted S3 addressing set
-      for the CoreWeave object store.
-
-    GPU serving pins CUDA vLLM here instead of the workspace lockfile: vLLM is only ever a
-    ``vllm serve`` subprocess, so ``uvx`` provisions it — and its torch/CUDA wheel tree — in a
-    cached, isolated env that never enters Marin's resolution. Bumping upstream is just the
-    version string; bumping the fork is a one-line ``tool.uv.sources.vllm`` edit.
+    Upstream serves standard vLLM architectures. The Marin fork additionally serves Marin-specific
+    architectures and streams checkpoints from the CoreWeave object store.
     """
 
     source: VllmType = VllmType.UPSTREAM
@@ -107,9 +101,9 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         if self.source is VllmType.MARIN_FORK:
-            from_spec, torch_backend, extra = vllm_fork_ref(), "cu130", ["--with", _RUNAI_STREAMER_REQUIREMENT]
+            from_spec, extra = vllm_fork_ref(), ["--with", _RUNAI_STREAMER_REQUIREMENT]
         else:
-            from_spec, torch_backend, extra = f"vllm[runai]=={self.version}", "cu128", []
+            from_spec, extra = f"vllm[runai]=={self.version}", []
         return [
             "uvx",
             "--from",
@@ -118,18 +112,22 @@ class IsolatedCudaVllm:
             "--python",
             self.python_version,
             "--torch-backend",
-            torch_backend,
+            _CUDA_TORCH_BACKEND,
             "vllm",
         ]
 
     def env(self) -> dict[str, str]:
+        # CoreWeave runtime images provide CUDA libraries but not nvcc. FlashInfer may otherwise
+        # JIT-compile its sampling kernel; vLLM's native/Triton sampler needs no CUDA toolkit.
+        environment = {_FLASHINFER_SAMPLER_ENV_VAR: "0"}
         if self.source is VllmType.MARIN_FORK:
-            return {
-                "VLLM_USE_PRECOMPILED": "1",
-                "VLLM_USE_FLASHINFER_SAMPLER": "0",
-                "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
-            }
-        return {}
+            environment.update(
+                {
+                    "VLLM_USE_PRECOMPILED": "1",
+                    "AWS_CONFIG_FILE": _write_virtual_hosted_s3_config(),
+                }
+            )
+        return environment
 
 
 def _write_virtual_hosted_s3_config() -> str:

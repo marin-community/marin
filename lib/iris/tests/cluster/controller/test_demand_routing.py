@@ -16,6 +16,7 @@ from iris.cluster.constraints import (
     PlacementRequirements,
     WellKnownAttribute,
     availability_constraint,
+    preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
@@ -1335,6 +1336,34 @@ class TestCheckRoutingFeasibility:
         result = autoscaler.job_feasibility(constraints)
         assert result is not None
         assert "looks like a region" in result
+
+    def test_infeasible_availability_conflicts_with_preemptible(self):
+        """A preemptible-vs-availability conflict is rejected, and the reason enumerates the
+        constraints instead of the bare group list.
+
+        Reproduces a ``--reserve=v5litepod-16`` driver auto-tagged non-preemptible: the only
+        v5litepod-16 group is preemptible, so no group satisfies both constraints. This is the
+        non-structured (availability) case that reaches the coverage breakdown rather than the
+        device/zone/region diagnostics.
+        """
+        v5e = make_scale_group_config(
+            name="v5e-spot", accelerator_variant="v5litepod-16", capacity_type=CapacityType.PREEMPTIBLE
+        )
+        reserved = make_scale_group_config(
+            name="v5p-reserved", accelerator_variant="v5p-8", capacity_type=CapacityType.RESERVED
+        )
+        autoscaler = self._make_autoscaler(
+            {
+                v5e.name: ScalingGroup(v5e, make_mock_platform()),
+                reserved.name: ScalingGroup(reserved, make_mock_platform()),
+            }
+        )
+        constraints = [preemptible_constraint(False), availability_constraint("v5litepod-16")]
+        result = autoscaler.job_feasibility(constraints)
+        assert result is not None
+        # The availability key only appears when the coverage breakdown ran; the old fallback
+        # listed group names instead.
+        assert "availability:v5litepod-16" in result
 
     def test_soft_constraint_does_not_reject(self):
         """Soft constraints that don't match any group should not cause rejection."""

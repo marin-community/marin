@@ -1,12 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce the June 67B A2B BF16 export and verify its persisted digest.
+"""Reproduce the Snowball BF16 export and verify its persisted digest.
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
 Run from the repository root:
-    uv run pytest tests/cluster/vllm/test_june_67b_a2b_hf_bf16_export.py \
+    uv run pytest tests/cluster/vllm/test_snowball_hf_bf16_export.py \
       -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
@@ -32,8 +32,8 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-from tests.cluster.vllm.june_67b_a2b import (
-    JUNE_67B_A2B,
+from tests.cluster.vllm.snowball import SNOWBALL
+from tests.cluster.vllm.snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
     decode_vendored_config,
@@ -120,7 +120,7 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
         )
         export_model = _to_main_model(params, main_config)
 
-        with tempfile.TemporaryDirectory(prefix="june-67b-bf16-export-") as export_dir_str:
+        with tempfile.TemporaryDirectory(prefix="snowball-bf16-export-") as export_dir_str:
             export_dir = Path(export_dir_str)
             converter.save_pretrained(
                 export_model,
@@ -129,14 +129,14 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
             )
             _assert_vllm_bf16(export_dir)
             actual_sha256 = _tree_sha256(export_dir)
-            assert actual_sha256 == JUNE_67B_A2B.export_sha256, actual_sha256
+            assert actual_sha256 == SNOWBALL.export_sha256, actual_sha256
 
 
-def test_h100_node_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient, run_test_job) -> None:
+def test_snowball_checkpoint_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient, run_test_job) -> None:
     run_test_job(
         marin_gpu_client,
         JobRequest(
-            name=f"june-67b-bf16-export-{uuid.uuid4().hex[:8]}",
+            name=f"snowball-bf16-export-{uuid.uuid4().hex[:8]}",
             entrypoint=Entrypoint.from_callable(assert_checkpoint_reproduces_bf16_export),
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="512g", disk="256g"),
             environment=create_environment(extras=["gpu"], sync_packages=["marin-levanter"]),

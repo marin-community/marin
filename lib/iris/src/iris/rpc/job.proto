@@ -613,6 +613,12 @@ enum ContainerProfile {
   CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
   CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
+  // Runs the whole container under the gVisor runtime (docker --runtime=runsc /
+  // k8s runtimeClassName=gvisor). In-container root gets the docker default cap
+  // set (setuid/apt work) while the intercepted guest kernel isolates the host,
+  // so it is NOT elevated — safe to grant without admin. Requires runsc installed
+  // on the worker/node; incompatible with TPU/GPU passthrough.
+  CONTAINER_PROFILE_GVISOR = 5;
 }
 
 // ============================================================================

@@ -58,7 +58,8 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.select.outputs.matrix) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Source-build legs (setup: rust) carry a larger timeout than the wheel default.
+    timeout-minutes: ${{ matrix.timeout || 15 }}
     steps:
       - uses: actions/checkout@v5
 
@@ -66,6 +67,25 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+
+      # Rust source build (legs the selector tagged `setup: rust`): the tested code
+      # depends on a native crate whose Rust this PR changed, so build the extension
+      # from source rather than install the prebuilt wheel.
+      - name: Install Rust toolchain
+        if: matrix.setup == 'rust'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - name: Cache cargo build
+        if: matrix.setup == 'rust'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: |
+            lib/dupekit/rust
+            lib/finelog/rust
+      # rust_mode.py dev repoints the native packages at their local rust/ trees; the
+      # leg's `uv run` (no --frozen) then re-resolves and builds them from source.
+      - name: Switch native packages to source build
+        if: matrix.setup == 'rust'
+        run: python3 scripts/rust_mode.py dev
 
       - env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -77,6 +97,7 @@ jobs:
         run: |
           status=0
           uv run \
+            --python 3.12 \
             --package ${{ matrix.package }} \
             ${{ matrix.extras }} \
             --group test \

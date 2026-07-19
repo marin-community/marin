@@ -1481,6 +1481,19 @@ class ControllerServiceImpl:
                 "profile with an in-pod runtime, or submit to a docker-worker cluster.",
             )
 
+        # gVisor runs the container under the runsc runtime, which cannot pass an
+        # accelerator through to the guest. Reject a GPU/TPU task up front rather
+        # than let it start under a runtime that can't see the device.
+        if resolve_container_profile(
+            request.container_profile
+        ) == job_pb2.CONTAINER_PROFILE_GVISOR and request.resources.device.WhichOneof("device") in ("gpu", "tpu"):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "Container profile gvisor is CPU-only: the runsc runtime cannot pass a GPU or TPU "
+                "through to the sandboxed guest. Use the default or privileged profile for "
+                "accelerator tasks.",
+            )
+
         # Cap the number of non-terminal tasks a single user may hold at once.
         # A burst of eval submissions once materialized enough tasks to OOM the
         # controller (#6411); reject up front any submission that would push the

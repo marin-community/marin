@@ -4656,12 +4656,14 @@ dev = [
     { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "huggingface-hub" },
     { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -4678,12 +4680,14 @@ dev = [
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 test = [
     { name = "huggingface-hub" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -4908,6 +4912,10 @@ source = { editable = "infra/iac" }
 dependencies = [
     { name = "marin-iris", extra = ["controller"] },
     { name = "marin-rigging" },
+]
+
+[package.optional-dependencies]
+deploy = [
     { name = "pulumi" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-docker-build" },
@@ -4919,12 +4927,13 @@ dependencies = [
 requires-dist = [
     { name = "marin-iris", extras = ["controller"], editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pulumi", specifier = ">=3.140,<4" },
-    { name = "pulumi-cloudflare", specifier = ">=6,<7" },
-    { name = "pulumi-docker-build", specifier = ">=0.0.8,<1" },
-    { name = "pulumi-gcp", specifier = ">=9,<10" },
-    { name = "pulumi-kubernetes", specifier = ">=4.18,<5" },
+    { name = "pulumi", marker = "extra == 'deploy'", specifier = ">=3.140,<4" },
+    { name = "pulumi-cloudflare", marker = "extra == 'deploy'", specifier = ">=6,<7" },
+    { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
+    { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
+    { name = "pulumi-kubernetes", marker = "extra == 'deploy'", specifier = ">=4.18,<5" },
 ]
+provides-extras = ["deploy"]
 
 [[package]]
 name = "marin-iris"
@@ -5077,6 +5086,7 @@ dependencies = [
     { name = "filelock" },
     { name = "fsspec", extra = ["http"] },
     { name = "gcsfs" },
+    { name = "gitpython" },
     { name = "humanfriendly" },
     { name = "immutabledict" },
     { name = "jax" },
@@ -5201,6 +5211,7 @@ requires-dist = [
     { name = "flash-attn-4", extras = ["cu13"], marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=4.0.0b16,<4.1" },
     { name = "fsspec", extras = ["http"], specifier = ">=2024.2,<2027" },
     { name = "gcsfs", specifier = ">=2024.2,<2027" },
+    { name = "gitpython", specifier = ">=3.1.50" },
     { name = "google-api-python-client", marker = "extra == 'gcp'", specifier = ">=2.175.0" },
     { name = "google-auth", marker = "extra == 'gcp'" },
     { name = "google-cloud-storage", marker = "extra == 'gcp'" },

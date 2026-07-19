@@ -30,6 +30,8 @@ test = [
     "pyarrow>=23.0.0",
     "pytest>=8.3.2",
     "pytest-timeout",
+    # unified-unit runs pytest with `-n auto`; finelog's test group carries xdist too.
+    "pytest-xdist",
 ]
 dev = [
     { include-group = "test" },

@@ -4,15 +4,15 @@
 import contextlib
 import logging
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import cast
+from typing import Protocol, cast
 
 import requests
 from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import ActorConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.types import ActorConfig, Entrypoint, GpuConfig, JobRequest, ResourceConfig, TpuConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
 from rigging.log_setup import configure_logging
 
@@ -20,7 +20,15 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.broker import InferenceBroker
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import InferenceRequestProvider, InferenceResponseProvider, OpenAIEndpoint, RunningModel
-from marin.inference.vllm_server import VllmEnvironment
+from marin.inference.vllm_server import (
+    DEFAULT_CUDA_VLLM_VERSION,
+    TPU_VLLM_WORKER_EXTRAS,
+    IsolatedCudaVllm,
+    VllmEnvironment,
+    VllmLauncher,
+    VllmType,
+    WorkspaceVllm,
+)
 from marin.inference.worker import (
     InferenceWorker,
     run_inference_worker,
@@ -41,15 +49,87 @@ DEFAULT_BROKERED_PROXY_START_TIMEOUT = timedelta(seconds=10)
 DEFAULT_BROKERED_MAX_IN_FLIGHT_PER_WORKER = 16
 
 
+class BrokeredVllmBackend(Protocol):
+    """Accelerator-specific vLLM worker configuration."""
+
+    def validate_worker_resources(self, resources: ResourceConfig) -> None: ...
+
+    def worker_environment_extras(self) -> tuple[str, ...]: ...
+
+    def vllm_launcher(self) -> VllmLauncher: ...
+
+    def server_args(self, resources: ResourceConfig | None, /) -> list[str]: ...
+
+
+@dataclass(frozen=True)
+class TpuVllmBackend:
+    """Run the workspace TPU-vLLM stack in brokered workers."""
+
+    def validate_worker_resources(self, resources: ResourceConfig) -> None:
+        if not isinstance(resources.device, TpuConfig):
+            raise ValueError("TpuVllmBackend requires TPU worker_resources.")
+
+    def worker_environment_extras(self) -> tuple[str, ...]:
+        return TPU_VLLM_WORKER_EXTRAS
+
+    def vllm_launcher(self) -> VllmLauncher:
+        return WorkspaceVllm()
+
+    def server_args(self, _resources: ResourceConfig | None, /) -> list[str]:
+        return []
+
+
+@dataclass(frozen=True)
+class GpuVllmBackend:
+    """Serve brokered requests with CUDA vLLM on one GPU node.
+
+    ``tensor_parallel_size`` defaults to every GPU requested by the worker resources.
+    """
+
+    source: VllmType = VllmType.UPSTREAM
+    version: str | None = DEFAULT_CUDA_VLLM_VERSION
+    tensor_parallel_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.source is VllmType.UPSTREAM and not self.version:
+            raise ValueError("GpuVllmBackend with the upstream source requires a vLLM version.")
+        if self.tensor_parallel_size is not None and self.tensor_parallel_size <= 0:
+            raise ValueError("GpuVllmBackend.tensor_parallel_size must be positive.")
+
+    def validate_worker_resources(self, resources: ResourceConfig) -> None:
+        if not isinstance(resources.device, GpuConfig):
+            raise ValueError("GpuVllmBackend requires GPU worker_resources.")
+        if resources.replicas != 1:
+            raise ValueError("GpuVllmBackend supports one CoreWeave node per brokered worker.")
+        if self.tensor_parallel_size is not None and self.tensor_parallel_size > resources.device.count:
+            raise ValueError("GpuVllmBackend.tensor_parallel_size cannot exceed the number of requested worker GPUs.")
+
+    def worker_environment_extras(self) -> tuple[str, ...]:
+        # IsolatedCudaVllm provisions CUDA vLLM; the worker only needs base Marin.
+        return ()
+
+    def vllm_launcher(self) -> VllmLauncher:
+        return IsolatedCudaVllm(source=self.source, version=self.version)
+
+    def server_args(self, resources: ResourceConfig | None, /) -> list[str]:
+        tensor_parallel_size = self.tensor_parallel_size
+        if tensor_parallel_size is None and resources is not None:
+            assert isinstance(resources.device, GpuConfig)
+            tensor_parallel_size = resources.device.count
+        if tensor_parallel_size is None:
+            return []
+        return ["--tensor-parallel-size", str(tensor_parallel_size)]
+
+
 @dataclass(frozen=True)
 class VllmServerConfig:
     # Local port for `vllm serve` inside each worker process.
     port: int = 8000
-    # vLLM TPU startup can include model download and compile work.
+    # vLLM startup can include model download and compile work.
     timeout_seconds: int = 1800
     # Default vLLM maximum sequence length, including prompt and generated tokens.
     max_model_len: int = 4096
-    # Keep prefill modest on v5p-8 while still exercising vLLM's internal batching.
+    # Keep prefill modest while still exercising vLLM's internal batching.
     max_num_batched_tokens: int = 1024
 
 
@@ -87,24 +167,23 @@ class InferenceWorkerConfig:
 class BrokeredVllmSystemConfig:
     model: str
     tokenizer: str | None = None
+    backend: BrokeredVllmBackend = field(default_factory=TpuVllmBackend)
     # Recovery timeout for work fetched by a worker but not answered.
     request_lease_timeout_seconds: float = DEFAULT_BROKERED_REQUEST_LEASE_TIMEOUT.total_seconds()
     server: VllmServerConfig = field(default_factory=VllmServerConfig)
     proxy: VllmProxyConfig = field(default_factory=VllmProxyConfig)
     workers: InferenceWorkerConfig = field(default_factory=InferenceWorkerConfig)
-    # Required when running worker jobs through Iris; ignored by local mode.
+    # Required in Iris mode. GPU local mode also uses it to infer tensor parallelism.
     worker_resources: ResourceConfig | None = None
-    # Broker is CPU-only; TPU work happens in worker jobs.
+    # Broker is CPU-only; accelerator work happens in worker jobs.
     broker_resources: ResourceConfig = field(
         default_factory=lambda: ResourceConfig.with_cpu(cpu=2, ram="8g", disk="20g")
     )
-    # Worker jobs need the generic TPU stack plus the TPU-vLLM runtime stack; the CPU parent only needs base Marin.
-    worker_environment_extras: tuple[str, ...] = ("tpu", "vllm")
-    # TPU/vLLM-specific env vars stay explicit at the entrypoint.
-    worker_env_vars: Mapping[str, str] = field(default_factory=dict)
+    # Accelerator/vLLM-specific env vars stay explicit at the entrypoint.
+    worker_env_vars: tuple[tuple[str, str], ...] = ()
     # Actor startup waits on Iris endpoint registration.
     broker_ready_timeout_seconds: float = 900.0
-    # Applied to broker actor and TPU worker child jobs.
+    # Applied to the broker actor and accelerator worker child jobs.
     priority: int = 0
 
     def __post_init__(self) -> None:
@@ -140,6 +219,7 @@ def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runni
 
     if config.worker_resources is None:
         raise ValueError("worker_resources must be set for Iris brokered vLLM mode.")
+    config.backend.validate_worker_resources(config.worker_resources)
 
     client = current_client()
     job_info = get_job_info()
@@ -162,7 +242,7 @@ def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runni
         broker_handle = broker_group.wait_ready(count=1, timeout=config.broker_ready_timeout_seconds)[0]
         request_provider = cast(InferenceRequestProvider, broker_handle)
         response_provider = cast(InferenceResponseProvider, broker_handle)
-        worker_extras = list(config.worker_environment_extras)
+        worker_extras = list(config.backend.worker_environment_extras())
         worker_environment = create_environment(
             extras=worker_extras,
             env_vars=env_vars_for_dependency_groups(
@@ -195,6 +275,8 @@ def start_iris_brokered_vllm(config: BrokeredVllmSystemConfig) -> Iterator[Runni
 
 @contextlib.contextmanager
 def start_local_vllm_server(config: BrokeredVllmSystemConfig) -> Iterator[RunningModel]:
+    if config.worker_resources is not None:
+        config.backend.validate_worker_resources(config.worker_resources)
     server_config = config.server
     vllm_model = ModelConfig(
         name="brokered-vllm",
@@ -212,7 +294,11 @@ def start_local_vllm_server(config: BrokeredVllmSystemConfig) -> Iterator[Runnin
         server_config.max_num_batched_tokens,
     )
     with VllmEnvironment(
-        model=vllm_model, port=server_config.port, timeout_seconds=server_config.timeout_seconds
+        model=vllm_model,
+        port=server_config.port,
+        timeout_seconds=server_config.timeout_seconds,
+        extra_args=config.backend.server_args(config.worker_resources),
+        launcher=config.backend.vllm_launcher(),
     ) as env:
         if env.model_id is None:
             raise RuntimeError("Expected vLLM server to expose a model id.")

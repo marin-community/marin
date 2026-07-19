@@ -593,6 +593,7 @@ impl Namespace {
         {
             let mut inner = self.inner.lock().unwrap();
             inner.local_segments.push_back(seg);
+            debug_assert_unique_paths(&inner.local_segments);
             inner.buffers.commit_flush();
         }
         Ok(())
@@ -709,9 +710,29 @@ impl Namespace {
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
-        let output_path = swap.added.path.clone();
-        let output_bytes = swap.added.size_bytes;
-        let output_rows = swap.added.row_count;
+        let merged_inputs = swap.removed.len();
+        let input_arrow_bytes = swap.input_arrow_bytes;
+        // A missing head input produces no output — the swap only names the stale
+        // reference to drop. Route it through `evict_segment`, which is
+        // location-aware (a BOTH segment collapses to REMOTE, preserving its
+        // durable archive; a LOCAL-only row is removed) and tolerates the already
+        // absent file. This unwedges compaction without deleting a segment that
+        // still has a remote copy.
+        let Some(added) = swap.added.clone() else {
+            for path in &swap.removed {
+                self.evict_segment(path);
+            }
+            tracing::warn!(
+                namespace = %self.name,
+                dropped = ?swap.removed,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "dropped stale segment reference with no local file; compaction resumed"
+            );
+            return Ok(());
+        };
+        let output_path = added.path.clone();
+        let output_bytes = added.size_bytes;
+        let output_rows = added.row_count;
         // A bump is a rename; a merge decodes its inputs into RAM. The
         // distinction is the whole memory story, so name it — along with the
         // decoded size the ceiling actually bounds, and how much of the planned
@@ -721,8 +742,6 @@ impl Namespace {
         } else {
             "merge"
         };
-        let merged_inputs = swap.removed.len();
-        let input_arrow_bytes = swap.input_arrow_bytes;
         self.commit_swap(swap)?;
         tracing::info!(
             namespace = %self.name,
@@ -809,7 +828,14 @@ impl Namespace {
         }
         let removed_set: std::collections::HashSet<&str> =
             swap.removed.iter().map(|s| s.as_str()).collect();
-        let added_row = segment_to_row(&self.name, &swap.added);
+        // A drop (missing head input) never reaches `commit_swap` — `run_one_job`
+        // routes it through `evict_segment`. Every committed swap therefore
+        // replaces its inputs with a real output segment.
+        let added = swap
+            .added
+            .as_ref()
+            .expect("commit_swap requires an output segment; drops are handled by run_one_job");
+        let added_row = segment_to_row(&self.name, added);
         {
             let mut inner = self.inner.lock().unwrap();
             let mut new_segments: VecDeque<LocalSegment> =
@@ -818,7 +844,7 @@ impl Namespace {
             for s in inner.local_segments.drain(..) {
                 if removed_set.contains(s.path.as_str()) {
                     if !inserted {
-                        new_segments.push_back(swap.added.clone());
+                        new_segments.push_back(added.clone());
                         inserted = true;
                     }
                 } else {
@@ -826,9 +852,10 @@ impl Namespace {
                 }
             }
             if !inserted {
-                new_segments.push_back(swap.added.clone());
+                new_segments.push_back(added.clone());
             }
             inner.local_segments = new_segments;
+            debug_assert_unique_paths(&inner.local_segments);
             // Atomic catalog splice. Propagate on failure: the
             // deque now points at paths that exist on disk (the renamed bump
             // target / the already-written merged output), so a propagated error
@@ -1132,13 +1159,24 @@ impl Namespace {
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || -> Result<(), StatsError> {
             ns.flush_once()?;
-            // An optional forced L0->L1 merge, then the planner-drain loop ALWAYS
-            // runs unconditionally, so a forced compaction that leaves >= 32 L1
-            // segments still promotes L1->L2 in the same maintenance call.
+            // An optional forced L0->L1 merge, then the planner-drain loop runs so
+            // a forced compaction that leaves >= 32 L1 segments still promotes
+            // L1->L2 in the same maintenance call. The drain checks the stop latch
+            // between jobs: a stop signalled mid-backlog (a re-register replacing
+            // this engine, or shutdown) then ends the drain promptly so
+            // `stop_and_join` JOINS this task inside its timeout. Otherwise a long
+            // drain outlives the timeout, the task is aborted, and its detached
+            // blocking compaction keeps unlinking inputs while the replacement
+            // engine adopts the same dir — the race that plants a phantom segment
+            // (#7361).
             if force_compact_l0 {
                 ns.force_compact_l0()?;
             }
-            while ns.compaction_step()? {}
+            while !ns.stopped.load(Ordering::SeqCst) {
+                if !ns.compaction_step()? {
+                    break;
+                }
+            }
             Ok(())
         })
         .await
@@ -1290,6 +1328,27 @@ fn basename(path: &str) -> String {
         .to_string()
 }
 
+/// Debug-only deque invariant: no two entries share a path.
+///
+/// A same-path duplicate is a phantom reference — two entries for one seq range,
+/// one of whose file a prior compaction already unlinked (#7361). It surfaces
+/// duplicate rows in a query and wedges compaction when the planner picks the
+/// dead entry. Compiled out of release builds; a cheap guard that trips tests
+/// the instant any deque mutation reintroduces a duplicate.
+fn debug_assert_unique_paths(segments: &VecDeque<LocalSegment>) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let mut seen = std::collections::HashSet::with_capacity(segments.len());
+    for s in segments {
+        debug_assert!(
+            seen.insert(s.path.as_str()),
+            "duplicate local-segment deque path: {}",
+            s.path
+        );
+    }
+}
+
 /// Build the catalog `SegmentRow` mirroring `seg` (key bounds stringified at the
 /// catalog boundary).
 fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
@@ -1317,8 +1376,17 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
 ///   row whose file vanished collapses to `REMOTE` (durable archive survives).
 ///   A `REMOTE`-only row stays in the catalog but NEVER enters the deque (queries
 ///   don't see archived data; stats exclude it).
-/// - **Pass 2** walks local files not seen in pass 1 — genuine fresh-from-disk
-///   segments — and adopts them as `LOCAL`.
+/// - **Pass 2** walks local files not seen in pass 1 — files with no catalog row
+///   — and adopts them as `LOCAL`, EXCEPT one whose seq range the catalog already
+///   covers. A file with no catalog row is either genuinely-new flushed data
+///   whose catalog upsert had not yet run (adopt it: crash recovery) or a
+///   compaction input the catalog has already superseded — its row replaced by
+///   the merge output — but whose unlink has not yet run. Adopting the latter
+///   resurrects a phantom segment whose file is about to vanish: a dangling
+///   deque reference that wedges compaction (#7361). Monotonic seq allocation
+///   separates the two — a genuine flush orphan always sits strictly ABOVE the
+///   cataloged high-water seq, a superseded input at or below it — so pass 2
+///   skips any file whose `min_seq` is not past every catalog row's `max_seq`.
 ///
 /// The deque is sorted by `min_seq` so iteration matches the planner's
 /// oldest-first expectation. Catalog REMOTE rows are left untouched.
@@ -1338,6 +1406,19 @@ fn adopt_local_segments(
 
     // Pass 1: catalog rows.
     let catalog_rows = catalog.list_segments(namespace).unwrap_or_default();
+    // Highest seq the catalog still ACCOUNTS FOR after reconciliation: a local
+    // file past it is genuinely new (an uncataloged flush); a file at or below it
+    // whose row is gone is a compaction input the catalog already superseded (the
+    // pass-2 skip). A `LOCAL` row whose file vanished is dropped by pass 1 below —
+    // its data is lost — so it must not extend the cutoff, or a lower-seq on-disk
+    // file it does not actually cover would be misread as superseded and skipped.
+    // Every other row's range stays covered: adopted to the deque, or kept as a
+    // `REMOTE` / `BOTH` durable archive.
+    let max_catalog_seq = catalog_rows
+        .iter()
+        .filter(|r| r.location != SegmentLocation::Local || local_files.contains_key(&r.path))
+        .map(|r| r.max_seq)
+        .max();
     for row in &catalog_rows {
         seen.insert(row.path.clone());
         let Some(local_path) = local_files.get(&row.path) else {
@@ -1388,6 +1469,26 @@ fn adopt_local_segments(
         let Some(meta) = read_segment_footer(path, key_column) else {
             continue;
         };
+        // A file with no catalog row whose seq range the catalog already covers
+        // is a compaction input whose row the merge output replaced but whose
+        // unlink has not yet run (a concurrent adopt caught the post-splice /
+        // pre-unlink window). Adopting it would resurrect a phantom segment whose
+        // file is about to vanish, wedging compaction (#7361). A genuine
+        // uncataloged flush always sits strictly above the cataloged high-water
+        // seq, so this only skips the superseded case.
+        if let Some(max_seq) = max_catalog_seq {
+            if meta.min_seq <= max_seq {
+                tracing::warn!(
+                    namespace,
+                    path = %path_str,
+                    file_min_seq = meta.min_seq,
+                    file_max_seq = meta.max_seq,
+                    max_catalog_seq = max_seq,
+                    "skipping orphan segment file already covered by the catalog (superseded compaction input mid-unlink)"
+                );
+                continue;
+            }
+        }
         let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
         let created_at_ms = std::fs::metadata(path)
             .and_then(|m| m.modified())
@@ -1410,7 +1511,9 @@ fn adopt_local_segments(
     }
 
     segs.sort_by_key(|s| s.min_seq);
-    segs.into()
+    let deque: VecDeque<LocalSegment> = segs.into();
+    debug_assert_unique_paths(&deque);
+    deque
 }
 
 /// Spawn the per-namespace flush task.
@@ -1728,6 +1831,107 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Write a `seg_L{level}_{first_seq}.parquet` of `n` worker rows to `dir` and
+    /// return its path. Used to stage the on-disk state adoption reconciles.
+    fn write_seg(dir: &Path, level: i32, first_seq: i64, n: i64) -> PathBuf {
+        let arrow = schema_to_arrow(&worker_schema());
+        let batch = stamp_seq_and_build(&aligned(n), first_seq, &arrow);
+        write_segment_to_dir(dir, level, first_seq, &batch)
+            .unwrap()
+            .0
+    }
+
+    /// A `LOCAL` catalog `SegmentRow` for `path`. Key bounds are re-read from the
+    /// file footer during adoption, so they are left `None` here.
+    fn seg_row(path: &Path, level: i32, min_seq: i64, max_seq: i64) -> SegmentRow {
+        SegmentRow {
+            namespace: "iris.task".to_string(),
+            path: path.to_string_lossy().into_owned(),
+            level,
+            min_seq,
+            max_seq,
+            row_count: max_seq - min_seq + 1,
+            byte_size: 1,
+            created_at_ms: 1,
+            min_key_value: None,
+            max_key_value: None,
+            location: SegmentLocation::Local,
+        }
+    }
+
+    #[test]
+    fn adopt_skips_superseded_compaction_input_still_on_disk() {
+        // Regression for #7361. A compaction had committed its catalog splice —
+        // `replace_segments` swapped the L0 input rows for the merged L1 output —
+        // but had not yet unlinked the input files when adoption ran (a
+        // re-register replacing the engine, or a crash, caught the post-splice /
+        // pre-unlink window). Pass 2 must not resurrect those inputs as phantom
+        // segments whose files are about to vanish, while still adopting a genuine
+        // uncataloged flush orphan.
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.task");
+        std::fs::create_dir_all(&ns_dir).unwrap();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // The committed merge output L1 [1..4]: on disk AND in the catalog.
+        let l1 = write_seg(&ns_dir, 1, 1, 4);
+        catalog.upsert_segment(&seg_row(&l1, 1, 1, 4)).unwrap();
+
+        // A superseded L0 input [1..2]: still on disk, its catalog row already
+        // gone. Its seq range is covered by the L1 output — the phantom.
+        let l0_input = write_seg(&ns_dir, 0, 1, 2);
+
+        // A genuine fresh flush orphan [5..6]: file written, catalog upsert not
+        // yet run. It sits above the cataloged high-water seq (4) — adopt it.
+        let l0_new = write_seg(&ns_dir, 0, 5, 2);
+
+        let deque = adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task");
+        let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
+
+        assert!(has(&l1), "the merge output is adopted");
+        assert!(
+            has(&l0_new),
+            "a genuine flush orphan above the cataloged high-water seq is adopted"
+        );
+        assert!(
+            !has(&l0_input),
+            "the superseded compaction input must NOT be resurrected as a phantom"
+        );
+        assert_eq!(deque.len(), 2, "only the output and the genuine orphan");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn adopt_recovers_low_orphan_under_a_stale_high_catalog_row() {
+        // The coverage cutoff must come only from rows whose data survives pass 1.
+        // A stale LOCAL catalog row whose file is gone is dropped (its data lost),
+        // so it must not extend the cutoff and mask a lower-seq on-disk file that
+        // it never actually covered — that file is a recoverable orphan.
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.task");
+        std::fs::create_dir_all(&ns_dir).unwrap();
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // A stale LOCAL row [100..200] whose parquet was never written to disk.
+        let gone = ns_dir.join("seg_L0_00000000000000000100.parquet");
+        catalog
+            .upsert_segment(&seg_row(&gone, 0, 100, 200))
+            .unwrap();
+
+        // A real on-disk orphan [1..2], lower seq than the stale row, no catalog
+        // row. It must be recovered, not skipped as covered.
+        let orphan = write_seg(&ns_dir, 0, 1, 2);
+
+        let deque = adopt_local_segments(&ns_dir, Some("timestamp_ms"), &catalog, "iris.task");
+        let has = |p: &Path| deque.iter().any(|s| s.path == p.to_string_lossy());
+        assert!(
+            has(&orphan),
+            "a low-seq orphan is recovered even under a stale high catalog row"
+        );
+        assert_eq!(deque.len(), 1, "only the recovered orphan");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn flush_coalesces_multiple_appends_into_few_segments() {
         let dir = tempdir();
@@ -1847,6 +2051,63 @@ mod tests {
         ns.run_maintenance(true).await.unwrap();
 
         assert_eq!(ns.backfill_missing_sidecars(10), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn maintenance_drops_dangling_segment_reference_instead_of_wedging() {
+        // Regression for the `iris.task` compaction wedge. A merge that consumed
+        // and unlinked a segment can leave its deque/catalog reference behind (a
+        // duplicate entry the splice missed). The planner then hands back a job
+        // whose head input file is gone; the old recovery tried to promote it by
+        // rename, which failed on the absent source every `check_interval` and
+        // wedged the namespace's compaction for good (14k L0 files and growing in
+        // production). Maintenance must instead DROP the dangling reference and
+        // keep compacting.
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+
+        // Three L0 segments (seq 1, 2, 3), each its own flush.
+        write_one(&ns).await;
+        write_one(&ns).await;
+        write_one(&ns).await;
+        let before = discover_segments(&ns_dir);
+        assert_eq!(before.len(), 3, "three L0 segments on disk");
+
+        // Delete the lowest-min_seq file while its deque + catalog rows survive —
+        // the dangling reference an already-consumed-and-unlinked input leaves,
+        // and the head of the next planned run.
+        let head = before.iter().min().unwrap().clone();
+        std::fs::remove_file(&head).unwrap();
+
+        // Before the fix this returned Err (rename of the absent head failed) and
+        // every later tick replanned the identical doomed job.
+        ns.run_maintenance(true)
+            .await
+            .expect("a dangling reference must not wedge maintenance");
+
+        // The stale reference is gone from the catalog, and the two intact rows
+        // survive (compacted forward, none lost).
+        let rows = ns.catalog.list_segments("iris.worker").unwrap();
+        let head_str = head.to_string_lossy().to_string();
+        assert!(
+            rows.iter().all(|r| r.path != head_str),
+            "the dangling reference was dropped from the catalog"
+        );
+        let total_rows: i64 = rows.iter().map(|r| r.row_count).sum();
+        assert_eq!(total_rows, 2, "the two intact segments' rows survive");
+
+        // Compaction is live again: a further tick runs without error.
+        ns.run_maintenance(true)
+            .await
+            .expect("compaction stays live after the drop");
         std::fs::remove_dir_all(&dir).ok();
     }
 

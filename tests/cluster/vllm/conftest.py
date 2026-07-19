@@ -1,22 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""vLLM-specific options for the June 67B e2es.
+"""vLLM-specific options for the Snowball e2es.
 
 The ``marin_gpu_client`` fixture these tests use lives in the shared
 ``tests/cluster/conftest.py``; this module only adds the attention-backend option
-and registers the shared checkpoint helper for by-value pickling.
+and registers remote-job helpers for by-value pickling.
 """
 
 import cloudpickle
 import pytest
 
-from tests.cluster.vllm import backend_parity, june_67b_a2b
+from tests.cluster.vllm import backend_parity, snowball, snowball_checkpoint
 
 VLLM_ATTENTION_BACKENDS = ("FLASH_ATTN", "TRITON_ATTN")
 
 # Iris serializes the direct test callable by value; register its shared test helpers too.
-cloudpickle.register_pickle_by_value(june_67b_a2b)
+cloudpickle.register_pickle_by_value(snowball)
+cloudpickle.register_pickle_by_value(snowball_checkpoint)
 cloudpickle.register_pickle_by_value(backend_parity)
 
 
@@ -25,7 +26,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--vllm-attention-backend",
         choices=VLLM_ATTENTION_BACKENDS,
         default="FLASH_ATTN",
-        help="Attention backend for the June 67B vLLM e2e.",
+        help="Attention backend for the Snowball vLLM e2e.",
     )
 
 

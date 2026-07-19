@@ -19,14 +19,14 @@ that address straight over the same-cluster VPC -- no controller proxy or capabi
 auto-cleans child jobs when the parent ends, so leaving the ``with`` block (or the parent exiting)
 tears the server down; the context manager also stops it eagerly for promptness.
 
-The two children take different entrypoints for a reason. The serve child runs in the marin image,
-whose synced venv can deserialize a cloudpickled callable, so it uses ``Entrypoint.from_callable``.
-The eval child runs in the ``:evalchemy-tpu`` image, whose default interpreter is a bare python with
-no cloudpickle -- only ``/opt/openthoughts/.venv`` carries ``eval``/``lm_eval``/``fsspec`` -- so it
-runs :mod:`experiments.evals.evalchemy.run_evalchemy_client` as a plain *command* under that
-interpreter, with its config passed as JSON in an env var.
+The two children take different entrypoints. The serve child runs in the marin image, whose synced
+venv can deserialize a cloudpickled callable, so it uses ``Entrypoint.from_callable``. The eval child
+runs in the ``:evalchemy-tpu`` image, whose default interpreter is a bare python with no cloudpickle
+-- only ``/opt/openthoughts/.venv`` carries ``eval``/``lm_eval``/``fsspec`` -- so it runs
+:mod:`experiments.evals.evalchemy.run_evalchemy_client` as a plain command under that interpreter,
+with its config passed as JSON in an env var.
 
-Top-level imports are kept light on purpose: the serve child's ``VllmBackend``/``LevanterBackend``
+Top-level imports are kept light: the serve child's ``VllmBackend``/``LevanterBackend``
 construction (which pulls levanter + vLLM) happens lazily inside :func:`_serve_for_eval`, so the CPU
 parent that references it for cloudpickling never imports the serving stack.
 """
@@ -40,7 +40,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from iris.client import iris_ctx
@@ -137,7 +137,11 @@ class EvalchemyEvalConfig:
     model: str
     """HF repo id or object-store (``gs://``) path of the model to serve and eval."""
     tasks: tuple[EvalTaskConfig, ...]
-    out_path: str
+    out_path: str | None = None
+    """Object-store destination for the eval child's ``results_*.json`` tree, read back by
+    :class:`~marin.evaluation.eval_result.EvalchemyResult`. Resolved by
+    :func:`_resolve_durable_out_path`: an object-store path is used verbatim; ``None`` or a pod-local
+    path is routed under the cluster's ``marin_prefix()`` so results survive pod teardown."""
     serve: ServeSpec = field(default_factory=ServeSpec)
     tokenizer: str | None = None
     """HF tokenizer id the eval client loads to build prompts; defaults to ``model``. Set it when
@@ -379,11 +383,53 @@ def _client_config_json(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) -
 # --------------------------------------------------------------------------------------------------
 
 
+def _resolve_durable_out_path(out_path: str | None, run_id: str) -> str:
+    """Resolve the object-store destination for the eval child's artifacts.
+
+    An object-store path (contains ``://``) is returned verbatim. Anything else -- ``None`` or a
+    pod-local path, which is garbage-collected when the eval pod ends -- is routed under the active
+    cluster's ``marin_prefix()``, keyed by ``run_id``. ``marin_prefix()`` resolves the region-local
+    store, so no bucket is hardcoded.
+    """
+    if out_path and "://" in out_path:
+        return out_path.rstrip("/")
+    from rigging.filesystem import marin_prefix, prefix_join  # noqa: PLC0415  # lazy: keep rigging out of the parent
+
+    durable = prefix_join(marin_prefix(), f"eval/evalchemy/{run_id}")
+    if out_path:
+        logger.warning(
+            "out_path %r is not an object-store path; routing eval artifacts to durable storage %r.",
+            out_path,
+            durable,
+        )
+    return durable
+
+
+def _verify_durable_artifacts(out_path: str) -> None:
+    """Raise if no ``results_*.json`` reached ``out_path``.
+
+    Runs in the parent (marin image, which carries rigging + s3fs) after the eval child finishes, so a
+    succeeded child cannot report success over an empty prefix.
+    """
+    from rigging.filesystem import url_to_fs  # noqa: PLC0415  # lazy: keep rigging out of the CPU parent's import
+
+    fs, path = url_to_fs(out_path)
+    objects = fs.find(path)
+    results = [p for p in objects if p.rsplit("/", 1)[-1].startswith("results_") and p.endswith(".json")]
+    logger.info(
+        "Durable evalchemy artifacts under %s: %d object(s), %d results_*.json", out_path, len(objects), len(results)
+    )
+    if not results:
+        raise RuntimeError(f"no evalchemy results_*.json landed under {out_path!r}; eval artifacts were lost")
+
+
 def serve_and_eval(config: EvalchemyEvalConfig) -> None:
     """Parent entrypoint: serve the model, run evalchemy against its OpenAI URL, tear the server down.
 
     Runs as a CPU orchestrator job. Serving and eval are separate child jobs (different container
-    images), tied together by the served OpenAI URL and by Iris's parent/child auto-cleanup.
+    images), tied together by the served OpenAI URL and by Iris's parent/child auto-cleanup. The eval
+    child's artifacts are routed to durable object storage (:func:`_resolve_durable_out_path`) and
+    verified back before the parent returns.
     """
     if not config.tasks:
         raise ValueError("serve_and_eval requires at least one task")
@@ -395,8 +441,14 @@ def serve_and_eval(config: EvalchemyEvalConfig) -> None:
             f"model {config.model!r} is an object-store path the eval image cannot load a tokenizer "
             "from; set EvalchemyEvalConfig.tokenizer (EvalGroup.tokenizer) to the base model's HF id."
         )
+    run_id = uuid.uuid4().hex[:8]
+    durable_out_path = _resolve_durable_out_path(config.out_path, run_id)
+    config = replace(config, out_path=durable_out_path)
+    logger.info("evalchemy artifacts for this run route to durable storage %s", durable_out_path)
     with serve_model(config.model, config.tokenizer or config.model, config.serve) as endpoint:
         _submit_eval_child(config, endpoint)
+    # The eval child uploaded per task; confirm from the parent that the results landed.
+    _verify_durable_artifacts(durable_out_path)
 
 
 def _submit_eval_child(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) -> None:

@@ -45,6 +45,9 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
+from iris.cluster.hooks import TaskHook
+from iris.cluster.hooks.multigpu import build_multigpu_hook
+from iris.cluster.hooks.nsys import NsysHook
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -56,7 +59,6 @@ from iris.cluster.types import (
     ResourceSpec,
     TaskAttempt,
     adjust_tpu_replicas,
-    get_gpu_count,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2
@@ -452,42 +454,28 @@ class LocalClientConfig:
     max_workers: int = 4
 
 
-# Module path of the in-task GPU process supervisor (see iris/runtime/multigpu.py).
-_MULTIGPU_MODULE = "iris.runtime.multigpu"
+def collect_hooks(
+    environment: EnvironmentSpec | None, resources: ResourceSpec, processes_per_task: int
+) -> list[TaskHook]:
+    """Build the ordered task hooks for this job, outer-wrapper last.
 
+    Order is the nesting: the multigpu supervisor goes first (inner), the profiler last
+    (outer), so a profiler traces every rank the supervisor spawns — one report per task.
 
-def _wrap_entrypoint_for_multiprocess(
-    entrypoint: Entrypoint, resources: ResourceSpec, processes_per_task: int
-) -> Entrypoint:
-    """Wrap an entrypoint so each task runs ``processes_per_task`` GPU processes.
-
-    Prepends ``python -m iris.runtime.multigpu --nproc N --devices-per-proc D --``
-    to the command. The supervisor spawns N children, each pinned to a contiguous
-    group of D of the task's GPUs. Requires a GPU device whose count is divisible
-    by ``processes_per_task``.
+    Profiling is best-effort: a request without a GPU (nsys profiles CUDA work) is logged
+    and left to run rather than rejected, and the output URI is whatever the caller asked
+    for — unset means the task picks its cluster's temp bucket.
     """
-    device = resources.device
-    gpu_count = get_gpu_count(device) if device is not None and device.HasField("gpu") else 0
-    if gpu_count <= 0:
-        raise ValueError("processes_per_task > 1 requires a GPU device")
-    if gpu_count % processes_per_task != 0:
-        raise ValueError(f"processes_per_task ({processes_per_task}) must divide the GPU count ({gpu_count})")
-    devices_per_proc = gpu_count // processes_per_task
-    wrapper = [
-        "python",
-        "-m",
-        _MULTIGPU_MODULE,
-        "--nproc",
-        str(processes_per_task),
-        "--devices-per-proc",
-        str(devices_per_proc),
-        "--",
-    ]
-    return Entrypoint(
-        command=[*wrapper, *entrypoint.command],
-        workdir_files=entrypoint.workdir_files,
-        workdir_file_refs=entrypoint.workdir_file_refs,
-    )
+    hooks: list[TaskHook] = []
+    if processes_per_task > 1:
+        hooks.append(build_multigpu_hook(resources, processes_per_task))
+    profile = environment.profile if environment is not None else None
+    if profile is not None:
+        device = resources.device
+        if isinstance(profile, NsysHook) and (device is None or not device.HasField("gpu")):
+            logger.error("nsys profiling targets CUDA work but this job requests no GPU device; the report may be empty")
+        hooks.append(profile)
+    return hooks
 
 
 class IrisClient:
@@ -717,8 +705,15 @@ class IrisClient:
 
         if processes_per_task < 1:
             raise ValueError(f"processes_per_task must be >= 1, got {processes_per_task}")
-        if processes_per_task > 1:
-            entrypoint = _wrap_entrypoint_for_multiprocess(entrypoint, resources, processes_per_task)
+        # Hooks wrap the command in order, later = outer: the multigpu supervisor first,
+        # then the profiler outside it, so a profiler traces every rank the supervisor
+        # spawns. collect_hooks owns that order; here it is a plain fold.
+        for hook in collect_hooks(environment, resources, processes_per_task):
+            entrypoint = Entrypoint(
+                command=hook.wrap(entrypoint.command),
+                workdir_files=entrypoint.workdir_files,
+                workdir_file_refs=entrypoint.workdir_file_refs,
+            )
 
         # Get parent job ID from context
         ctx = get_iris_ctx()
@@ -755,6 +750,11 @@ class IrisClient:
                     extras=environment.extras,
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
                     sync_packages=environment.sync_packages,
+                    # Carried whether or not the child owns its setup: the child's
+                    # entrypoint is already wrapped by the profiler, and dropping this here
+                    # would leave it wrapped with the profiler uninstalled (to_proto appends
+                    # the install to the inherited scripts too).
+                    profile=environment.profile,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)

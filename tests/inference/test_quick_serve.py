@@ -41,7 +41,7 @@ from marin.inference.serving_backend import (
 )
 from marin.inference.tpu_vllm_pins import vllm_fork_ref
 from marin.inference.vllm_server import (
-    WORKER_PYTHON_VERSION,
+    DEFAULT_CUDA_VLLM_VERSION,
     IsolatedCudaVllm,
     IsolatedTpuVllm,
     VllmType,
@@ -96,19 +96,9 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_isolated_cuda_vllm_upstream_command_and_env():
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version="0.25.0")
-    assert launcher.command() == [
-        "uvx",
-        "--from",
-        "vllm[runai]==0.25.0",
-        "--python",
-        WORKER_PYTHON_VERSION,
-        "--torch-backend",
-        "cu128",
-        "vllm",
-    ]
-    assert launcher.env() == {}
+def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
+    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    assert launcher.env() == {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 
 
 def test_isolated_cuda_vllm_marin_fork_command_and_env():
@@ -210,7 +200,7 @@ def _plan(**overrides):
         "in_checkout": True,
         "isolated_vllm": False,
         "task_image": None,
-        "cuda_vllm_version": "0.25.0",
+        "cuda_vllm_version": DEFAULT_CUDA_VLLM_VERSION,
         "vllm_source": VllmType.UPSTREAM,
         "vllm": VllmBackend(),
         "levanter": LevanterBackend(),
@@ -242,7 +232,10 @@ def test_resolve_serving_plan_picks_the_worker_extras_the_backend_needs(override
 
 def test_gpu_plan_defaults_to_upstream_launcher():
     plan = _plan(gpu="H100x8")
-    assert plan.backend.launcher == IsolatedCudaVllm(source=VllmType.UPSTREAM, version="0.25.0")
+    assert plan.backend.launcher == IsolatedCudaVllm(
+        source=VllmType.UPSTREAM,
+        version=DEFAULT_CUDA_VLLM_VERSION,
+    )
 
 
 def test_gpu_plan_marin_fork_selects_fork_launcher():

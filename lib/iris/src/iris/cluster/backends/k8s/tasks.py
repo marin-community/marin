@@ -898,6 +898,11 @@ def _build_pod_manifest(
         "volumes": volumes,
     }
 
+    # gVisor isolates the whole pod via a node RuntimeClass; the container
+    # securityContext stays at the DEFAULT posture (see _security_context).
+    if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
+        spec["runtimeClassName"] = "gvisor"
+
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         node_selector[managed_label] = "true"
