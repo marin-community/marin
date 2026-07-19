@@ -143,6 +143,30 @@ def _candidate_toolchain_files() -> list[str]:
     return sorted(found)
 
 
+def print_cutlass_tree_hashes():
+    """Hash every installed file of the cutlass DSL distribution.
+
+    ``nvidia-cutlass-dsl-libs-base`` and ``-libs-cu13`` ship 99 overlapping
+    paths with DIFFERENT contents; whichever wheel's copy wins the install
+    decides per-file which toolchain variant a venv actually runs. Emitted one
+    line per file (``TREEHASH <relpath> <sha256>``) so log-line truncation
+    cannot corrupt the record; classification against the wheel manifests
+    happens offline.
+    """
+    root = os.path.join(sysconfig.get_paths()["purelib"], "nvidia_cutlass_dsl")
+    if not os.path.isdir(root):
+        print("TREEHASH_MISSING", flush=True)
+        return
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=True):
+        if "__pycache__" in dirpath:
+            continue
+        for name in sorted(filenames):
+            p = os.path.join(dirpath, name)
+            rec = _sha256(p)
+            rel = os.path.relpath(p, root)
+            print(f"TREEHASH {rel} {rec.get('sha256', 'ERR')}", flush=True)
+
+
 def collect_env() -> dict:
     env = {
         "hostname": socket.gethostname(),
@@ -206,6 +230,7 @@ def main():
     print("=== nvvm node survey ===", flush=True)
     env = collect_env()
     print(json.dumps(env, indent=2), flush=True)
+    print_cutlass_tree_hashes()
 
     verdicts, loaded, raw = run_ladder()
     print("--- ladder output ---", flush=True)
