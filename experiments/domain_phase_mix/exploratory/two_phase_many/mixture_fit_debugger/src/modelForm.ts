@@ -334,6 +334,55 @@ function bucketFamilyGrpForm(detail: FitDetail, policyClass: PolicyClass): Model
   };
 }
 
+function hierarchicalPhaseReplayForm(detail: FitDetail, policyClass: PolicyClass): ModelForm {
+  const chips: FormulaChip[] = [];
+  for (const [label, symbol, keys] of [
+    ["power exponent", String.raw`a`, ["a"]],
+    ["late-epoch value", String.raw`\eta`, ["eta"]],
+    ["forgetting rate", String.raw`\lambda`, ["lambda"]],
+    ["replay onset", String.raw`\tau`, ["tau"]],
+    ["ridge", String.raw`\lambda_{L2}`, ["l2"]],
+    ["excess shrinkage", String.raw`\kappa_{\mathrm{res}}`, ["residual_shrink"]],
+    ["phase-shift cost", String.raw`\theta_{\mathrm{TV}}`, ["phase_shift_tv"]],
+  ] as const) {
+    if (policyClass === "single_phase" && ["late-epoch value", "forgetting rate", "phase-shift cost"].includes(label)) {
+      continue;
+    }
+    const chip = fittedChip(detail, label, symbol, ...keys);
+    if (chip) chips.push(chip);
+  }
+  const phaseTerm = policyClass === "two_phase" ? String.raw`+\theta_{\mathrm{TV}}\operatorname{TV}(w^{(0)},w^{(1)})` : "";
+  const layers: FormulaLayer[] = [
+    retainedExposureLayer(policyClass),
+    {
+      label: "02 / Hierarchical utility",
+      title: "Pooled family base with bucket excesses",
+      tex: String.raw`\begin{array}{c}S(z)=z^a,\quad X_C=\sum_{i\in C}x_i\\[2pt]U_C=a_C\sum_{i\in C}S(x_i)+\sum_{i\in C}\delta_iS(x_i)+A_CS(X_C),\quad \delta_i\ge 0\end{array}`,
+      explanation: "Related buckets share a base utility; strongly ridge-shrunk nonnegative excesses preserve genuine bucket differences, while family coverage gets one saturating channel.",
+    },
+    {
+      label: "03 / Replay ledgers",
+      title: "Aggregate and member-level family harm",
+      tex: String.raw`\begin{array}{c}P(z)=\operatorname{softplus}\!\left(\log(1+z)-\tau\right)^2\\[2pt]\bar P_C=|C|^{-1}\sum_{i\in C}P(x_i),\qquad H_C=B_CP(X_C)+R_C\bar P_C\end{array}`,
+      explanation: "Aggregate family replay and concentrated member replay are distinct nonnegative mechanisms with one shared, interpretable onset.",
+    },
+  ];
+  if (policyClass === "two_phase") {
+    layers.push({
+      label: "04 / Schedule",
+      title: "One global phase-transition cost",
+      tex: String.raw`\operatorname{TV}(w^{(0)},w^{(1)})=\frac12\left\lVert w^{(0)}-w^{(1)}\right\rVert_1,\qquad \theta_{\mathrm{TV}}\ge 0`,
+      explanation: "A single learned coefficient captures global transition cost without introducing domain-specific phase-interaction parameters.",
+    });
+  }
+  return {
+    topLevelTex: String.raw`\widehat Y_b(w)=b_0-\sum_{i\in I_{\mathrm{single}}}a_iS(x_i)-\sum_{C:\,|C|>1}U_C+\sum_CH_C${phaseTerm}`,
+    topLevelExplanation: "Hierarchical utility pools related buckets, while separate family and member replay ledgers correct frontier overoptimism with a small number of mechanistic channels.",
+    layers,
+    chips,
+  };
+}
+
 function powerSeparateHeadsGrpForm(
   detail: FitDetail,
   policyClass: PolicyClass,
@@ -550,6 +599,7 @@ export function modelForm(
   if (modelId === "separate_heads") return separateHeadsForm(detail, policyClass);
   if (modelId === "compact_retained_state") return compactRetainedForm(detail, policyClass);
   if (modelId === "bucket_family_grp") return bucketFamilyGrpForm(detail, policyClass);
+  if (modelId === "hierarchical_phase_bucket_replay") return hierarchicalPhaseReplayForm(detail, policyClass);
   if (modelId === "bucket_family_power_separate_heads") return powerSeparateHeadsGrpForm(detail, policyClass);
   if (modelId === "bucket_family_power_separate_heads_family_onset") {
     return powerSeparateHeadsGrpForm(detail, policyClass, true);

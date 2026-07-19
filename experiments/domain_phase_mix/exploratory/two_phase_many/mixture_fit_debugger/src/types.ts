@@ -8,6 +8,7 @@ export type ModelId =
   | "grp"
   | "compact_retained_state"
   | "bucket_family_grp"
+  | "hierarchical_phase_bucket_replay"
   | "bucket_family_power_separate_heads"
   | "bucket_family_power_separate_heads_family_onset"
   | "bucket_family_weibull_shared_onset"

@@ -34,6 +34,7 @@ import hashlib
 import json
 import math
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +52,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.domain_phase_mix import olmix_loglinear_fit as olmix_loglinear  # noqa: E402
+from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (  # noqa: E402
+    TARGET_BUDGET_DOLMA3_COMMON_CRAWL,
+    TOP_LEVEL_DOMAIN_TOKEN_COUNTS,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     analyze_original_separate_heads_policy_ablation_300m as separate_heads,
 )
@@ -59,6 +64,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     benchmark_grp_family_onset_phase_heads_20260714 as family_onset_grp,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
+    benchmark_hierarchical_coverage_grp_20260715 as hierarchical_grp,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many import (  # noqa: E402
     benchmark_nested_coverage_dsp as coverage_dsp,
@@ -109,6 +117,10 @@ ONE_PHASE_300M_DATA = SCRIPT_DIR / (
     "reference_outputs/one_phase_swarm_scores_export_300m_20260630/"
     "one_phase_augmented_fit_panel_uncheatable_table9_scores_300m.csv"
 )
+DELPHI_3E18_DATA = SCRIPT_DIR / (
+    "reference_outputs/delphi_augmented_swarm_3e18_20260714/delphi_augmented_swarm_3e18_wide.csv"
+)
+DELPHI_3E18_HELDOUTS = SCRIPT_DIR / ("reference_outputs/delphi_3e18_append_only_heldouts_20260714/heldout_current.csv")
 STARCODER_TARGET_COLUMN = "eval/paloma/dolma_100_programing_languages/bpb"
 STARCODER_DOMAINS = ["nemotron_full", "starcoder"]
 MODEL_IDS = (
@@ -121,11 +133,19 @@ MODEL_IDS = (
     "grp",
     "compact_retained_state",
     "bucket_family_grp",
+    "hierarchical_phase_bucket_replay",
     "bucket_family_power_separate_heads",
     "bucket_family_power_separate_heads_family_onset",
     "bucket_family_weibull_shared_onset",
     "bucket_family_weibull_family_replay",
 )
+HIDDEN_MODEL_IDS = {
+    "bucket_family_power_separate_heads_family_onset",
+    "bucket_family_weibull_shared_onset",
+    "bucket_family_weibull_family_replay",
+}
+VISIBLE_MODEL_IDS = tuple(model_id for model_id in MODEL_IDS if model_id not in HIDDEN_MODEL_IDS)
+DELPHI_3E18_MODEL_IDS = VISIBLE_MODEL_IDS
 BASELINE_MODEL_IDS = ("linear", "olmix_loglinear")
 RETAINED_GRP_MODEL_IDS = (
     "bucket_family_weibull_shared_onset",
@@ -135,10 +155,12 @@ NEW_MODEL_IDS = (
     *BASELINE_MODEL_IDS,
     "compact_retained_state",
     "bucket_family_grp",
+    "hierarchical_phase_bucket_replay",
     "bucket_family_power_separate_heads",
     "bucket_family_power_separate_heads_family_onset",
     *RETAINED_GRP_MODEL_IDS,
 )
+VISIBLE_NEW_MODEL_IDS = tuple(model_id for model_id in NEW_MODEL_IDS if model_id in VISIBLE_MODEL_IDS)
 LEGACY_MODEL_IDS = tuple(model_id for model_id in MODEL_IDS if model_id not in NEW_MODEL_IDS)
 SINGLE_PHASE = "single_phase"
 TWO_PHASE = "two_phase"
@@ -153,6 +175,7 @@ MODEL_LABELS = {
     "grp": "GRP (regularized)",
     "compact_retained_state": "Compact retained state",
     "bucket_family_grp": "Bucket-resolved family GRP",
+    "hierarchical_phase_bucket_replay": "Hierarchical phase replay",
     "bucket_family_power_separate_heads": "Power + separate heads",
     "bucket_family_power_separate_heads_family_onset": "Power + separate heads, family onset",
     "bucket_family_weibull_shared_onset": "Weibull GRP, shared onset",
@@ -168,6 +191,9 @@ MODEL_DESCRIPTIONS = {
     "grp": "Retained exposure, grouped response features, and explicit overexposure penalties.",
     "compact_retained_state": "Retained learning with a shared Weibull response and one literal replay-harm channel.",
     "bucket_family_grp": "Bucket-specific responses plus nonlinear family coverage and family repetition penalties.",
+    "hierarchical_phase_bucket_replay": (
+        "Family-pooled bucket utility, saturating family coverage, member replay harm, and one global phase-shift cost."
+    ),
     "bucket_family_power_separate_heads": (
         "Bucket and family power responses with independent early- and late-phase nonnegative amplitudes."
     ),
@@ -191,6 +217,7 @@ MODEL_FAMILIES = {
     "grp": ("grp", "GRP", "Original"),
     "compact_retained_state": ("grp", "GRP", "Compact retained state"),
     "bucket_family_grp": ("grp", "GRP", "Bucket-resolved family"),
+    "hierarchical_phase_bucket_replay": ("grp", "GRP", "Hierarchical phase replay"),
     "bucket_family_power_separate_heads": ("grp", "GRP", "Power + separate heads"),
     "bucket_family_power_separate_heads_family_onset": (
         "grp",
@@ -209,10 +236,12 @@ GRP_SHAPE_PARAMS = legacy_exporter.GRP_SHAPE_PARAMS
 COMPACT_L2_GRID = (0.1, 1.0)
 BUCKET_FAMILY_L2_GRID = (0.0, 0.01, 0.1, 1.0, 3.0)
 BUCKET_FAMILY_SHAPE_COUNT = 24
+HIERARCHICAL_PHASE_REPLAY_SHAPE_COUNT = 12
+HIERARCHICAL_PHASE_REPLAY_TOP_SHAPES = 3
 POWER_HEADS_SHAPE_COUNT = 16
 RETAINED_GRP_L2_GRID = retained_grp.L2_GRID
 RETAINED_GRP_SHAPE_COUNT = 32
-CACHE_VERSION = "mixture-fit-observatory-v7-baselines"
+CACHE_VERSION = "mixture-fit-observatory-v8-delphi-3e18"
 MODEL_CACHE_VERSIONS = {model_id: "v1" for model_id in MODEL_IDS}
 MODEL_CACHE_VERSIONS["bucket_family_power_separate_heads_family_onset"] = "v2"
 LOWER_TAIL_FRACTION = 0.15
@@ -230,6 +259,10 @@ class FittedResult:
 
 class Predictable(Protocol):
     def predict(self, weights: np.ndarray) -> np.ndarray: ...
+
+
+def is_dolma39_dataset(dataset: pooled.Dataset) -> bool:
+    return dataset.name.startswith(("300m_", "delphi_3e18_"))
 
 
 class UngroupedGRP:
@@ -512,7 +545,7 @@ def select_compact_l2(dataset: pooled.Dataset, policy_class: str) -> tuple[float
 
 
 def family_partition(dataset: pooled.Dataset) -> tuple[tuple[str, ...], tuple[np.ndarray, ...], np.ndarray]:
-    if dataset.name.startswith("300m_"):
+    if is_dolma39_dataset(dataset):
         family_map = legacy_exporter.grp_packet(dataset).family_map
         names = tuple(sorted(family_map))
         members = tuple(np.asarray(family_map[name], dtype=int) for name in names)
@@ -600,6 +633,65 @@ def select_bucket_hyperparameters(
     if best is None:
         raise RuntimeError(f"No bucket-family hyperparameter candidates for {dataset.name}")
     return best[4], best[2], rows
+
+
+def hierarchical_phase_replay_shape_candidates(policy_class: str) -> tuple[family_grp.Shape, ...]:
+    candidates = list(
+        family_grp.shape_candidates(
+            family_grp.Variant.BUCKET_RESOLVED,
+            HIERARCHICAL_PHASE_REPLAY_SHAPE_COUNT,
+        )
+    )
+    if policy_class == SINGLE_PHASE:
+        candidates = [replace(shape, late_multiplier=1.0, forgetting_rate=0.0) for shape in candidates]
+    return tuple(dict.fromkeys(candidates))
+
+
+def select_hierarchical_phase_replay_config(
+    dataset: pooled.Dataset,
+    policy_class: str,
+) -> tuple[hierarchical_grp.Config, dict[str, Any]]:
+    structured = family_dataset(dataset)
+    shapes = hierarchical_phase_replay_shape_candidates(policy_class)
+    splits = folds(dataset, hierarchical_grp.SCREEN_SEED)
+    _baseline, _baseline_prediction, baseline_rows = hierarchical_grp.score_configs(
+        structured,
+        hierarchical_grp.baseline_configs(shapes),
+        splits,
+    )
+    best_by_shape: dict[int, float] = {}
+    for row in baseline_rows:
+        shape_index = int(row["shape_index"])
+        best_by_shape[shape_index] = min(best_by_shape.get(shape_index, float("inf")), float(row["rmse"]))
+    shape_indices = [
+        shape_index
+        for shape_index, _rmse in sorted(best_by_shape.items(), key=lambda item: item[1])[
+            :HIERARCHICAL_PHASE_REPLAY_TOP_SHAPES
+        ]
+    ]
+    config, _prediction, candidate_rows = hierarchical_grp.score_configs(
+        structured,
+        hierarchical_grp.structural_configs(
+            hierarchical_grp.Variant.HIERARCHICAL_PHASE_BUCKET_REPLAY,
+            shapes,
+            shape_indices,
+        ),
+        splits,
+    )
+    return config, {
+        "baselineShapeScreen": baseline_rows,
+        "candidateSweep": candidate_rows,
+        "screenSeed": hierarchical_grp.SCREEN_SEED,
+        "topShapeIndices": shape_indices,
+    }
+
+
+def hierarchical_phase_replay_fit(
+    dataset: pooled.Dataset,
+    indices: np.ndarray,
+    config: hierarchical_grp.Config,
+) -> hierarchical_grp.Model:
+    return hierarchical_grp.fit_model(family_dataset(dataset), config, indices)
 
 
 def power_heads_variant(policy_class: str) -> phase_head_grp.Variant:
@@ -1026,7 +1118,7 @@ def target_budget(dataset: pooled.Dataset, alpha0: float, known_budget: float | 
 
 
 def folds(dataset: pooled.Dataset, seed: int) -> list[tuple[np.ndarray, np.ndarray]]:
-    if dataset.name.startswith("300m_"):
+    if is_dolma39_dataset(dataset):
         return pooled.dataset_folds(dataset, seed, n_splits=5)
     splitter = KFold(n_splits=5, shuffle=True, random_state=seed)
     return [(train, test) for train, test in splitter.split(np.arange(dataset.n))]
@@ -1344,6 +1436,30 @@ def fit_one_model(
             return bucket_fit(dataset, train, shape, l2).predict(dataset.weights[test])
 
         full_prediction = full_model.predict(dataset.weights)
+    elif model_id == "hierarchical_phase_bucket_replay":
+        config, sweep = select_hierarchical_phase_replay_config(dataset, policy_class)
+        tuning = {
+            **sweep,
+            "l2": config.l2,
+            "residualShrink": config.residual_shrink,
+            "shapeParameters": {
+                "exponent": config.shape.exponent,
+                "lateMultiplier": config.shape.late_multiplier,
+                "forgettingRate": config.shape.forgetting_rate,
+                "penaltyThreshold": config.shape.penalty_threshold,
+            },
+            "shapeProtocol": (
+                "Fit-panel CV first screens shared shapes with Bucket-resolved family GRP, then jointly selects "
+                "ridge and shrinkage of bucket excesses for the hierarchical phase-replay form. Every reported "
+                "OOF fold refits only the nonnegative linear head."
+            ),
+        }
+        full_model = hierarchical_phase_replay_fit(dataset, all_indices, config)
+
+        def fold_predict(train: np.ndarray, test: np.ndarray) -> np.ndarray:
+            return hierarchical_phase_replay_fit(dataset, train, config).predict(dataset.weights[test])
+
+        full_prediction = full_model.predict(dataset.weights)
     elif model_id == "bucket_family_power_separate_heads":
         shape, l2, sweep = select_power_heads_hyperparameters(dataset, policy_class)
         tuning = {
@@ -1432,8 +1548,8 @@ def fit_one_model(
             return retained_grp_fit(dataset, train, variant, shape, l2).predict(dataset.weights[test])
 
         full_prediction = full_model.predict(dataset.weights)
-    elif dataset.name.startswith("300m_"):
-        if policy_class == TWO_PHASE:
+    elif is_dolma39_dataset(dataset):
+        if policy_class == TWO_PHASE and dataset.name.startswith("300m_"):
             if legacy_model_summary is None:
                 raise ValueError("Two-phase 300M GRP requires the legacy selected-L2 summary")
             l2 = float(legacy_model_summary["l2"])
@@ -2037,6 +2153,113 @@ def bucket_family_parameters(model: BucketFamilyGRP) -> list[dict[str, Any]]:
     return records
 
 
+def hierarchical_phase_replay_parameters(model: hierarchical_grp.Model) -> list[dict[str, Any]]:
+    config = model.config
+    shape = config.shape
+    records = [
+        parameter(
+            "intercept",
+            "b_0",
+            model.intercept,
+            "Loss level after centering hierarchical family-response features.",
+            unit="BPB",
+        ),
+        parameter("a", "a", shape.exponent, "Shared diminishing-returns exponent for bucket and family coverage."),
+        parameter("eta", "eta", shape.late_multiplier, "Phase-1 epoch value relative to one retained phase-0 epoch."),
+        parameter("lambda", "lambda", shape.forgetting_rate, "Shared phase-0 forgetting rate."),
+        parameter(
+            "tau",
+            "tau",
+            shape.penalty_threshold,
+            "Shared log-exposure onset for aggregate-family and member-level replay harm.",
+            transformed_value=float(np.expm1(shape.penalty_threshold)),
+            transformed_label="Replay penalty-onset exposure",
+            unit="retained epochs",
+        ),
+        parameter("l2", "lambda_L2", config.l2, "Ridge shrinkage jointly selected with the shared response shape."),
+        parameter(
+            "residual_shrink",
+            "kappa_res",
+            config.residual_shrink,
+            "Additional ridge multiplier on bucket-specific excess utility above its pooled family base.",
+        ),
+    ]
+    feature_names = hierarchical_grp.build_design(model.dataset, config).names
+    for name, coefficient in zip(feature_names, model.coefficients, strict=True):
+        if name == "phase_shift_tv":
+            records.append(
+                parameter(
+                    name,
+                    "theta_TV",
+                    coefficient,
+                    "Global BPB cost of changing the mixture between phases.",
+                    unit="BPB / TV",
+                )
+            )
+            continue
+        kind, identity = name.split(":", maxsplit=1)
+        if kind == "singleton_signal":
+            records.append(
+                parameter(
+                    name,
+                    "a_i",
+                    coefficient,
+                    "BPB reduction from this singleton bucket's retained-exposure response.",
+                    scope="domain",
+                    domain_id=identity,
+                    unit="BPB",
+                )
+            )
+            continue
+        if kind == "bucket_excess_signal":
+            records.append(
+                parameter(
+                    name,
+                    "delta_i",
+                    coefficient,
+                    "Nonnegative bucket utility in excess of the shared family base.",
+                    scope="domain",
+                    domain_id=identity,
+                    unit="BPB",
+                )
+            )
+            continue
+        label = family_label(identity)
+        group_fields = {
+            "pooled_base_signal": (
+                "a_C",
+                "Shared BPB reduction per member-response unit for this family.",
+            ),
+            "family_coverage_signal": (
+                "A_C",
+                "Additional BPB reduction from saturating coverage of this family as a whole.",
+            ),
+            "family_overexposure": (
+                "B_C",
+                "Replay-harm coefficient on this family's aggregate retained exposure.",
+            ),
+            "family_member_replay": (
+                "R_C",
+                "Replay-harm coefficient on the mean member-level overexposure within this family.",
+            ),
+        }
+        if kind not in group_fields:
+            raise ValueError(f"Unknown hierarchical phase-replay feature {name!r}")
+        symbol, role = group_fields[kind]
+        records.append(
+            parameter(
+                name,
+                symbol,
+                coefficient,
+                role,
+                scope="group",
+                group_label=label,
+                unit="BPB",
+            )
+        )
+    return records
+
+
 def power_heads_parameters(
     model: PowerSeparateHeadsGRP | PowerSeparateHeadsFamilyOnsetGRP,
     policy_class: str,
@@ -2305,13 +2528,15 @@ def parameter_records(
         return compact_parameters(model, dataset, float(tuning["l2"]))
     if model_id == "bucket_family_grp":
         return bucket_family_parameters(model)
+    if model_id == "hierarchical_phase_bucket_replay":
+        return hierarchical_phase_replay_parameters(model)
     if model_id == "bucket_family_power_separate_heads":
         return power_heads_parameters(model, policy_class)
     if model_id == "bucket_family_power_separate_heads_family_onset":
         return power_heads_family_onset_parameters(model, policy_class)
     if model_id in RETAINED_GRP_MODEL_IDS:
         return retained_family_parameters(model)
-    if dataset.name.startswith("300m_"):
+    if is_dolma39_dataset(dataset):
         return grp_300m_parameters(model, dataset, float(tuning["l2"]))
     if dataset.name.startswith("starcoder"):
         return starcoder_grp_parameters(model, tuning["shapeParameters"], dataset)
@@ -2356,6 +2581,25 @@ def model_caveats(dataset: pooled.Dataset, model_id: str, policy_class: str) -> 
             caveats.append(
                 "Each StarCoder corpus is a singleton family, so the family-coverage channel vanishes and the model "
                 "reduces to bucket power responses plus one replay penalty per corpus."
+            )
+    if model_id == "hierarchical_phase_bucket_replay":
+        caveats.append(
+            "Family pooling is soft rather than a quality-order constraint: each multi-member family shares a base "
+            "utility, while CV-selected ridge shrinkage controls nonnegative bucket-specific excesses."
+        )
+        caveats.append(
+            "The historical 3e18 archive was used only to evaluate transfer after the form and hyperparameters were "
+            "selected on the fit panel; it is not part of this fit or its tuning loss."
+        )
+        if policy_class == TWO_PHASE:
+            caveats.append(
+                "One learned nonnegative phase-TV coefficient captures a global cost of schedule change; it cannot "
+                "represent domain-specific phase-order interactions."
+            )
+        if dataset.name.startswith("starcoder"):
+            caveats.append(
+                "Both StarCoder corpora are singleton families, so hierarchical pooling and nonlinear family-coverage "
+                "channels vanish; this view is a deliberate structural ablation of the full model."
             )
     if model_id == "bucket_family_power_separate_heads":
         caveats.append(
@@ -2986,6 +3230,8 @@ def cached_swarm_fit(
         model_dependencies.append(Path(compact_retained.__file__))
     elif model_id == "bucket_family_grp":
         model_dependencies.extend([Path(family_grp.__file__), BUCKET_FAMILY_MODEL])
+    elif model_id == "hierarchical_phase_bucket_replay":
+        model_dependencies.extend([Path(family_grp.__file__), Path(hierarchical_grp.__file__)])
     elif model_id in {
         "bucket_family_power_separate_heads",
         "bucket_family_power_separate_heads_family_onset",
@@ -2997,26 +3243,30 @@ def cached_swarm_fit(
         model_dependencies.extend([Path(family_grp.__file__), Path(retained_grp.__file__)])
     elif model_id == "olmix_loglinear":
         model_dependencies.append(Path(olmix_loglinear.__file__))
+    fingerprint_payload: dict[str, Any] = {
+        "swarm": swarm_id,
+        "target": target_id,
+        "policy": policy_class,
+        "model": model_id,
+        "seeds": list(seeds),
+    }
+    if swarm_id == "delphi_3e18":
+        # Selection grids and fit dispatch live in this module. Tie Delphi's
+        # tuning cache to the Observatory version so logic changes cannot reuse
+        # hyperparameters from an older implementation.
+        fingerprint_payload["fitLogicVersion"] = CACHE_VERSION
+        fingerprint_payload["exposureCoefficients"] = {
+            "c0": hashlib.sha256(np.asarray(fit_dataset.c0, dtype="<f8").tobytes()).hexdigest(),
+            "c1": hashlib.sha256(np.asarray(fit_dataset.c1, dtype="<f8").tobytes()).hexdigest(),
+        }
     fingerprint = file_fingerprint(
         [*source_paths, *model_dependencies],
-        {
-            "swarm": swarm_id,
-            "target": target_id,
-            "policy": policy_class,
-            "model": model_id,
-            "seeds": list(seeds),
-        },
+        fingerprint_payload,
         version=MODEL_CACHE_VERSIONS[model_id],
     )
     path = cache_path(swarm_id, target_id, policy_class, model_id)
     if path.exists():
         cached = json.loads(path.read_text())
-        if cached.get("modelCacheVersion") is None and model_id not in BASELINE_MODEL_IDS:
-            cached["modelCacheVersion"] = MODEL_CACHE_VERSIONS[model_id]
-            cached["fingerprint"] = fingerprint
-            path.write_text(json.dumps(cached, separators=(",", ":"), allow_nan=False) + "\n")
-            print(f"migrated cache hit: {swarm_id}/{target_id}/{policy_class}/{model_id}", flush=True)
-            return cached
         if (
             cached.get("modelCacheVersion") == MODEL_CACHE_VERSIONS[model_id]
             and cached.get("fingerprint") == fingerprint
@@ -3088,7 +3338,7 @@ def build_generic_swarm(
             fit_dataset = dataset
             fit_row_indices = np.arange(dataset.n)
         policy_fit_counts[policy_class] = fit_dataset.n
-        for model_id in MODEL_IDS:
+        for model_id in VISIBLE_MODEL_IDS:
             result = cached_swarm_fit(
                 swarm_id,
                 target_id,
@@ -3353,7 +3603,7 @@ def build_300m_swarm(legacy: dict[str, Any]) -> dict[str, Any]:
             },
             SINGLE_PHASE: {},
         }
-        for model_id in NEW_MODEL_IDS:
+        for model_id in VISIBLE_NEW_MODEL_IDS:
             result = cached_swarm_fit(
                 "300m",
                 target_id,
@@ -3377,7 +3627,7 @@ def build_300m_swarm(legacy: dict[str, Any]) -> dict[str, Any]:
                 (0, 1, 2),
             )
             fits[target_id][TWO_PHASE][model_id] = result["fitDetail"]
-        for model_id in MODEL_IDS:
+        for model_id in VISIBLE_MODEL_IDS:
             result = cached_swarm_fit(
                 "300m",
                 target_id,
@@ -3423,6 +3673,303 @@ def build_300m_swarm(legacy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def load_delphi_3e18_fit_dataset(target_id: str) -> pooled.Dataset:
+    target_column = {
+        "uncheatable": "uncheatable_bpb",
+        "table9": "table9_macro_bpb",
+    }[target_id]
+    frame = pd.read_csv(DELPHI_3E18_DATA)
+    reference = pooled.load_300m_dataset(target_id)
+    domains = list(reference.domain_names)
+    phase0 = frame[[f"phase_0_{domain}" for domain in domains]].to_numpy(dtype=float)
+    phase1 = frame[[f"phase_1_{domain}" for domain in domains]].to_numpy(dtype=float)
+    if len(frame) != 280 or not np.allclose(phase0.sum(axis=1), 1.0) or not np.allclose(phase1.sum(axis=1), 1.0):
+        raise ValueError("The Delphi 3e18 fit swarm must contain 280 normalized two-phase policies")
+    realized_budgets = frame["realized_train_tokens"].to_numpy(dtype=float)
+    phase0_fractions = frame["phase_0_fraction"].to_numpy(dtype=float)
+    if np.ptp(realized_budgets) != 0.0 or np.ptp(phase0_fractions) != 0.0:
+        raise ValueError("The Delphi 3e18 fit swarm does not share one token budget and phase split")
+    new_alpha0 = float(phase0_fractions[0])
+    new_alpha1 = 1.0 - new_alpha0
+    token_counts = np.asarray([TOP_LEVEL_DOMAIN_TOKEN_COUNTS[domain] for domain in domains], dtype=float)
+    # Both swarms materialize the same simulated-epoch subsets; only the realized phase boundary changes.
+    c0 = new_alpha0 * TARGET_BUDGET_DOLMA3_COMMON_CRAWL / token_counts
+    c1 = new_alpha1 * TARGET_BUDGET_DOLMA3_COMMON_CRAWL / token_counts
+    target = frame[target_column].to_numpy(dtype=float)
+    if not np.isfinite(target).all():
+        raise ValueError(f"The Delphi 3e18 fit swarm has incomplete {target_column}")
+    return pooled.Dataset(
+        name=f"delphi_3e18_{target_id}",
+        frame=frame,
+        y=target,
+        weights=np.stack([phase0, phase1], axis=1),
+        c0=c0,
+        c1=c1,
+        domain_names=domains,
+    )
+
+
+def load_delphi_3e18_heldouts(reference: pooled.Dataset) -> tuple[pd.DataFrame, np.ndarray]:
+    frame = pd.read_csv(DELPHI_3E18_HELDOUTS)
+    complete = (frame["training_state"] == "finished") & (frame["checkpoint_declared_complete"] == 1)
+    frame = frame.loc[complete].reset_index(drop=True)
+    domains = list(reference.domain_names)
+
+    def parse_weights(value: str) -> list[float]:
+        weights = json.loads(value)
+        return [float(weights[domain]) for domain in domains]
+
+    phase0 = np.asarray([parse_weights(value) for value in frame["phase_0_weights_json"]], dtype=float)
+    phase1 = np.asarray([parse_weights(value) for value in frame["phase_1_weights_json"]], dtype=float)
+    weights = np.stack([phase0, phase1], axis=1)
+    if len(frame) != 364 or not np.allclose(weights.sum(axis=2), 1.0):
+        raise ValueError(f"Expected 364 completed normalized 3e18 heldouts, found {len(frame)}")
+    if not np.isfinite(frame[["uncheatable_bpb", "table9_macro_bpb"]].to_numpy(dtype=float)).all():
+        raise ValueError("Every completed 3e18 heldout must have both headline metrics")
+    heldout_alpha0 = frame["phase_0_fraction"].to_numpy(dtype=float)
+    fit_alpha0, _fit_alpha1 = phase_fractions(reference)
+    mismatched_split = ~np.isclose(heldout_alpha0, fit_alpha0, atol=1e-12)
+    if (frame.loc[mismatched_split, "policy_class"] != "single_phase_tied").any():
+        raise ValueError("A phase-varying heldout uses a different phase split from the fit swarm")
+    return frame, weights
+
+
+def delphi_3e18_evaluation_dataset(
+    fit_dataset: pooled.Dataset,
+    heldout_frame: pd.DataFrame,
+    heldout_weights: np.ndarray,
+    target_id: str,
+) -> pooled.Dataset:
+    target_column = {
+        "uncheatable": "uncheatable_bpb",
+        "table9": "table9_macro_bpb",
+    }[target_id]
+    frame = pd.concat([fit_dataset.frame, heldout_frame], ignore_index=True, sort=False)
+    target = np.concatenate(
+        [
+            np.asarray(fit_dataset.y, dtype=float),
+            heldout_frame[target_column].to_numpy(dtype=float),
+        ]
+    )
+    return pooled.Dataset(
+        name=f"delphi_3e18_all_{target_id}",
+        frame=frame,
+        y=target,
+        weights=np.concatenate([fit_dataset.weights, heldout_weights], axis=0),
+        c0=np.asarray(fit_dataset.c0, dtype=float),
+        c1=np.asarray(fit_dataset.c1, dtype=float),
+        domain_names=list(fit_dataset.domain_names),
+    )
+
+
+def delphi_3e18_rows(
+    fit_uncheatable: pooled.Dataset,
+    fit_table9: pooled.Dataset,
+    heldout_frame: pd.DataFrame,
+    heldout_weights: np.ndarray,
+) -> list[dict[str, Any]]:
+    alpha0, alpha1 = phase_fractions(fit_uncheatable)
+    natural = natural_weights(fit_uncheatable, alpha0)
+    rows = row_records(fit_uncheatable, "uncheatable", natural, alpha0, alpha1, (TWO_PHASE,))
+    for index, row in enumerate(rows):
+        row["id"] = f"fit:delphi_3e18:{index}"
+        row["observed"]["table9"] = float(fit_table9.y[index])
+        row["sourceExperiment"] = "delphi_3e18_augmented_swarm_20260714"
+        row["wandbUrl"] = str(fit_uncheatable.frame.iloc[index]["training_wandb_url"])
+        row["diagnostics"]["nearestFitId"] = row["id"]
+
+    heldout_dataset = pooled.Dataset(
+        name="delphi_3e18_heldouts",
+        frame=heldout_frame,
+        y=heldout_frame["uncheatable_bpb"].to_numpy(dtype=float),
+        weights=heldout_weights,
+        c0=np.asarray(fit_uncheatable.c0, dtype=float),
+        c1=np.asarray(fit_uncheatable.c1, dtype=float),
+        domain_names=list(fit_uncheatable.domain_names),
+    )
+    heldout_rows = row_records(heldout_dataset, "uncheatable", natural, alpha0, alpha1, POLICY_CLASSES)
+    for index, row in enumerate(heldout_rows):
+        source = heldout_frame.iloc[index]
+        policy_class = SINGLE_PHASE if source["policy_class"] == "single_phase_tied" else TWO_PHASE
+        exact_coordinate = source["fit_panel_overlap"] == "exact_coordinate"
+        distances = np.abs(fit_uncheatable.weights - heldout_weights[index][None, :, :]).sum(axis=(1, 2))
+        nearest = int(np.argmin(distances))
+        row["id"] = f"heldout:delphi_3e18:{source['wandb_run_id']}"
+        row["split"] = "heldout"
+        row["policyFamily"] = policy_class
+        row["phaseFamily"] = policy_class
+        row["policyClasses"] = [policy_class]
+        row["fitPolicies"] = []
+        row["phaseStructure"] = "phase-tied weights" if policy_class == SINGLE_PHASE else "two independent phase weights"
+        row["panel"] = str(source["training_series"])
+        row["method"] = f"{source['objective']} validation; {source['fit_panel_overlap']}"
+        row["sourceExperiment"] = str(source["training_series"])
+        row["wandbUrl"] = str(source["wandb_url"])
+        row["interventionType"] = str(source["objective"])
+        row["isSharedAlias"] = bool(exact_coordinate)
+        row["pairedRow"] = str(source["fit_panel_run_name"]) if exact_coordinate else None
+        row["candidateTarget"] = str(source["objective"])
+        row["observed"] = {
+            "uncheatable": float(source["uncheatable_bpb"]),
+            "table9": float(source["table9_macro_bpb"]),
+        }
+        row["diagnostics"]["nearestFitId"] = rows[nearest]["id"]
+        row["diagnostics"]["supportDistance"] = float(distances[nearest])
+    return [*rows, *heldout_rows]
+
+
+def delphi_3e18_baselines(rows: list[dict[str, Any]], target_id: str) -> list[dict[str, str]]:
+    def observed(row: Mapping[str, Any]) -> float:
+        return float(row["observed"][target_id])
+
+    fit_rows = [row for row in rows if row["split"] == "fit"]
+    disjoint = [row for row in rows if row["split"] == "heldout" and not row["isSharedAlias"]]
+    options: list[dict[str, str]] = []
+    for run_name, label in (
+        ("baseline_proportional", "Fit-panel proportional policy"),
+        ("baseline_unimax", "Fit-panel UniMax-8 policy"),
+    ):
+        matches = [row for row in fit_rows if row["name"] == run_name]
+        if len(matches) == 1:
+            options.append({"id": matches[0]["id"], "label": label})
+    options.append({"id": min(fit_rows, key=observed)["id"], "label": "Empirical fit-panel frontier"})
+    for policy_class, label in (
+        (SINGLE_PHASE, "Heldout one-phase frontier"),
+        (TWO_PHASE, "Heldout two-phase frontier"),
+    ):
+        candidates = [row for row in disjoint if row["phaseFamily"] == policy_class]
+        options.append({"id": min(candidates, key=observed)["id"], "label": label})
+    return options
+
+
+def delphi_3e18_noise_reference(heldout_frame: pd.DataFrame, target_column: str) -> dict[str, float | int]:
+    repeats = heldout_frame[heldout_frame["training_series"] == "delphi_3e18_baseline_noise_panel_20260703"][
+        target_column
+    ].to_numpy(dtype=float)
+    if len(repeats) != 10:
+        raise ValueError(f"Expected 10 proportional repeats for {target_column}, found {len(repeats)}")
+    standard_deviation = float(np.std(repeats, ddof=1))
+    return {
+        "n": len(repeats),
+        "mean": float(np.mean(repeats)),
+        "standardDeviation": standard_deviation,
+        "differenceStandardDeviation": math.sqrt(2.0) * standard_deviation,
+    }
+
+
+def build_delphi_3e18_swarm() -> dict[str, Any]:
+    fit_datasets = {target_id: load_delphi_3e18_fit_dataset(target_id) for target_id in ("uncheatable", "table9")}
+    fit_uncheatable = fit_datasets["uncheatable"]
+    fit_table9 = fit_datasets["table9"]
+    if fit_uncheatable.frame["run_name"].tolist() != fit_table9.frame["run_name"].tolist():
+        raise ValueError("The two Delphi 3e18 target exports have different fit-row order")
+    heldout_frame, heldout_weights = load_delphi_3e18_heldouts(fit_uncheatable)
+    rows = delphi_3e18_rows(fit_uncheatable, fit_table9, heldout_frame, heldout_weights)
+    alpha0, alpha1 = phase_fractions(fit_uncheatable)
+    domains, _natural, budget = domain_records(fit_uncheatable, alpha0)
+    predictions: dict[str, Any] = {}
+    diagnostics: dict[str, Any] = {}
+    fits: dict[str, Any] = {}
+    evaluation_datasets: dict[str, pooled.Dataset] = {}
+    seeds = (0, 1, 2)
+    for target_id, fit_dataset in fit_datasets.items():
+        evaluation_dataset = delphi_3e18_evaluation_dataset(
+            fit_dataset,
+            heldout_frame,
+            heldout_weights,
+            target_id,
+        )
+        evaluation_datasets[target_id] = evaluation_dataset
+        predictions[target_id] = {TWO_PHASE: {}}
+        diagnostics[target_id] = {TWO_PHASE: {}}
+        fits[target_id] = {TWO_PHASE: {}}
+        for model_id in DELPHI_3E18_MODEL_IDS:
+            result = cached_swarm_fit(
+                "delphi_3e18",
+                target_id,
+                fit_dataset,
+                evaluation_dataset,
+                np.arange(fit_dataset.n),
+                TWO_PHASE,
+                model_id,
+                [DELPHI_3E18_DATA, DELPHI_3E18_HELDOUTS],
+                seeds=seeds,
+            )
+            prediction = np.asarray(result["prediction"], dtype=float)
+            predictions[target_id][TWO_PHASE][model_id] = {
+                "prediction": result["prediction"],
+                "fullFitPrediction": result["fullFitPrediction"],
+            }
+            diagnostics[target_id][TWO_PHASE][model_id] = legacy_two_phase_diagnostics(
+                fit_dataset,
+                evaluation_dataset,
+                rows,
+                prediction,
+                seeds,
+            )
+            fits[target_id][TWO_PHASE][model_id] = result["fitDetail"]
+    disjoint_count = sum(row["split"] == "heldout" and not row["isSharedAlias"] for row in rows)
+    exact_count = sum(row["split"] == "heldout" and row["isSharedAlias"] for row in rows)
+    return {
+        "id": "delphi_3e18",
+        "label": "Delphi 3e18 augmented swarm",
+        "description": (
+            "The matched 280-row Dolma 3 + Dolmino fit panel retrained at 3e18 FLOPs, with every completed "
+            "historical 3e18 validation checkpoint projected as heldout evidence."
+        ),
+        "dataset": {
+            "label": "Delphi 3e18 augmented swarm",
+            "fitDesignCount": fit_uncheatable.n,
+            "rawFitObservationCount": fit_uncheatable.n,
+            "heldoutCount": disjoint_count,
+            "sharedAliasCount": exact_count,
+            "noiseReferenceCount": 10,
+            "supplementalCandidateCount": disjoint_count,
+            "phaseFractions": [alpha0, alpha1],
+            "targetBudget": float(budget),
+            "oofSeeds": list(seeds),
+            "fitProtocol": (
+                "Three-seed, five-fold panel-stratified OOF on 280 fit designs; full fit projected onto "
+                f"{disjoint_count} coordinate-disjoint heldouts."
+            ),
+            "policyClasses": [TWO_PHASE],
+            "policyFitCounts": {TWO_PHASE: fit_uncheatable.n},
+        },
+        "domains": domains,
+        "targets": {
+            "uncheatable": {
+                "id": "uncheatable",
+                "label": "Uncheatable eval BPB",
+                "metricColumn": "eval/uncheatable_eval/bpb",
+                "lowerIsBetter": True,
+                "noiseReference": delphi_3e18_noise_reference(heldout_frame, "uncheatable_bpb"),
+                "noiseLabel": "Ten independent proportional-training repeats at the same 3e18 configuration.",
+            },
+            "table9": {
+                "id": "table9",
+                "label": "OLMoBaseEval Table-9 macro BPB",
+                "metricColumn": "olmo_base_easy/table9_51_component_macro_bpb",
+                "lowerIsBetter": True,
+                "noiseReference": delphi_3e18_noise_reference(heldout_frame, "table9_macro_bpb"),
+                "noiseLabel": "Ten independent proportional-training repeats at the same 3e18 configuration.",
+            },
+        },
+        "rows": rows,
+        "predictions": predictions,
+        "diagnostics": diagnostics,
+        "baselines": {target_id: delphi_3e18_baselines(rows, target_id) for target_id in evaluation_datasets},
+        "fits": fits,
+        "nikeSwoosh": {target_id: {TWO_PHASE: {}} for target_id in evaluation_datasets},
+        "provenance": {
+            "sources": [
+                str(DELPHI_3E18_DATA.relative_to(REPO_ROOT)),
+                str(DELPHI_3E18_HELDOUTS.relative_to(REPO_ROOT)),
+            ],
+            "exporter": str(Path(__file__).relative_to(REPO_ROOT)),
+        },
+    }
+
+
 def model_catalog() -> dict[str, Any]:
     return {
         model_id: {
@@ -3433,7 +3980,7 @@ def model_catalog() -> dict[str, Any]:
             "familyLabel": MODEL_FAMILIES[model_id][1],
             "variantLabel": MODEL_FAMILIES[model_id][2],
         }
-        for model_id in MODEL_IDS
+        for model_id in VISIBLE_MODEL_IDS
     }
 
 
@@ -3445,6 +3992,7 @@ def write_bundle(output_json: Path) -> dict[str, Any]:
     production_metadata = json.loads(PRODUCTION_MODEL.read_text())["metrics"]
     swarms = {
         "300m": build_300m_swarm(legacy),
+        "delphi_3e18": build_delphi_3e18_swarm(),
         "starcoder_cosine": build_generic_swarm(
             swarm_id="starcoder_cosine",
             label="StarCoder 50/50 cosine surface",
