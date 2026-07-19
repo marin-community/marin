@@ -34,8 +34,9 @@ not yet modeled anywhere.
 | 11 | DNS: `iris-cw-<cluster>.oa.dev` CNAME → Traefik LB FQDN | manual (Cloudflare) | gap | out of scope now; bridged Cloudflare provider later, or stay manual |
 | 12 | finelog server Deployment (in-cluster) | `finelog deploy up <cluster>` | IaC-next (planned) | `FinelogServer` component (a later CoreWeave slice; needs the finelog signing key) |
 | 13 | Iris runtime objects: ConfigMap, `iris-task-env` Secret, LocalQueue, PriorityClasses, controller Deployment + Service, state PVC | `start_controller()` | **Iris (by design)** | stays in Iris (spec §4) |
+| 14 | AR pull-through caches: `ghcr-mirror` (ghcr.io), `docker-mirror` (Docker Hub), each in `us` + `europe`, plus 30d-delete / keep-16 cleanup | manual console / `gcloud artifacts` | **IaC-landed** (GCP arm) | `GcpArtifactRegistries` ✅ ([gcp/registries.py](../../../infra/iac/src/iac/gcp/registries.py)); declared in `provisioning.gcp.registries`, consumed by `GcpWorkerProvider.resolve_image` (see [image-push.md](../../../lib/iris/docs/image-push.md)) |
 
-Rows 1–2, 10 are done. Rows 3–7 are the sequenced CoreWeave follow-ups already in the design;
+Rows 1–2, 10, 14 are done. Rows 3–7 are the sequenced CoreWeave follow-ups already in the design;
 row 12 is a planned CoreWeave slice. Rows 8–11 are the newly-surfaced gaps this analysis adds;
 rows 8–10 are the ones rjpower called out. Row 13 is deliberately *not* IaC.
 

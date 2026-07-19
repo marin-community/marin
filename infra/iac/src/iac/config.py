@@ -16,6 +16,7 @@ Namespace derives from `kubernetes_provider.namespace`, the Kueue ClusterQueue n
 
 import enum
 from enum import StrEnum
+from typing import Literal
 
 from iris.cluster.config import IrisClusterConfig, load_config
 from pydantic import BaseModel, Field
@@ -118,11 +119,57 @@ class GcpAddressSpec(BaseModel):
     description: str | None = None
 
 
+class GcpArtifactRegistryCleanupPolicy(BaseModel):
+    """One cleanup policy on an Artifact Registry repository (cleanup_policies[])."""
+
+    id: str
+    action: Literal["DELETE", "KEEP"]
+    # DELETE: prune versions whose age exceeds this Go duration string (e.g. "2592000s" = 30d).
+    older_than: str | None = None
+    # DELETE: which tag states the condition matches ("ANY", "TAGGED", "UNTAGGED").
+    tag_state: str = "ANY"
+    # KEEP: retain the most-recent N versions regardless of age.
+    keep_count: int | None = None
+
+
+# Bound each pull-through cache: drop versions not pulled in 30 days, but always keep the 16
+# newest so a routine pull never re-fetches a still-current image from the upstream. Applied to
+# every mirror repo unless a spec overrides cleanup_policies. Mirrors the policy documented in
+# lib/iris/docs/image-push.md; that doc's gcloud recipe is the manual equivalent of this arm.
+DEFAULT_MIRROR_CLEANUP_POLICIES = [
+    GcpArtifactRegistryCleanupPolicy(id="delete-older-than-30d", action="DELETE", older_than="2592000s"),
+    GcpArtifactRegistryCleanupPolicy(id="keep-latest", action="KEEP", keep_count=16),
+]
+
+# Sentinel `docker_upstream` value selecting GCP's predefined Docker Hub upstream rather than a
+# custom registry URL. Matches the `DOCKER-HUB` keyword of `gcloud ... --remote-docker-repo`.
+DOCKER_HUB_UPSTREAM = "DOCKER_HUB"
+
+
+class GcpRemoteRepositorySpec(BaseModel):
+    """A Docker Artifact Registry remote repository (pull-through cache) across multi-regions.
+
+    ``docker_upstream`` selects the upstream: the sentinel ``"DOCKER_HUB"`` uses GCP's predefined
+    Docker Hub public repository; any other value is a custom registry URL (e.g. ``"https://ghcr.io"``).
+    The repo is created once per entry in ``locations`` (``us``, ``europe``, …) so a worker pulls
+    from its own continent. See lib/iris/docs/image-push.md for how workers rewrite image tags to it.
+    """
+
+    name: str  # repository_id, e.g. "docker-mirror"
+    docker_upstream: str  # "DOCKER_HUB" or a URL like "https://ghcr.io"
+    locations: list[str] = Field(default_factory=list)  # multi-regions, e.g. ["us", "europe"]
+    description: str = ""
+    cleanup_policies: list[GcpArtifactRegistryCleanupPolicy] = Field(
+        default_factory=lambda: list(DEFAULT_MIRROR_CLEANUP_POLICIES)
+    )
+
+
 class GcpProvisioning(BaseModel):
-    """GCP-arm provisioning: the project and its reserved static IP addresses (GcpStaticAddresses)."""
+    """GCP-arm provisioning: the project, reserved static IPs, and Artifact Registry mirrors."""
 
     project: str
     addresses: list[GcpAddressSpec] = Field(default_factory=list)
+    registries: list[GcpRemoteRepositorySpec] = Field(default_factory=list)
 
 
 class ProvisioningConfig(BaseModel):

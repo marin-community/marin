@@ -75,77 +75,34 @@ In CI (GitHub Actions), use the automatic `GITHUB_TOKEN` secret instead — see
 
 ## Infrastructure Setup
 
-### Create AR remote repos (one-time)
+The mirror repos and their cleanup policies are Infrastructure-as-Code: the
+`registries:` block of the `provisioning:` section in
+[`lib/iris/config/marin.yaml`](../config/marin.yaml) declares each repo (name,
+Docker upstream, multi-regions), and `infra/iac/src/iac/gcp/registries.py`
+(`GcpArtifactRegistries`) turns it into `google_artifact_registry_repository`
+resources with `mode=REMOTE_REPOSITORY` and the age/keep cleanup policies. Both
+`ghcr-mirror` and `docker-mirror` are declared there, so a stack bring-up
+provisions them together:
 
 ```bash
-# US multi-region
-gcloud artifacts repositories create ghcr-mirror \
-  --project=hai-gcp-models \
-  --repository-format=docker \
-  --location=us \
-  --mode=remote-repository \
-  --remote-docker-repo=https://ghcr.io \
-  --description="Remote proxy for ghcr.io (US multi-region)"
-
-# Europe multi-region
-gcloud artifacts repositories create ghcr-mirror \
-  --project=hai-gcp-models \
-  --repository-format=docker \
-  --location=europe \
-  --mode=remote-repository \
-  --remote-docker-repo=https://ghcr.io \
-  --description="Remote proxy for ghcr.io (Europe multi-region)"
+# Recon against the live repos (imports, never plans a destructive create):
+cd infra/iac && pulumi stack select marin
+pulumi config set marin-iac:import true && pulumi preview   # adopt existing repos
+# Steady state:
+pulumi config set marin-iac:import false && pulumi up
 ```
 
-### Cleanup policies
-
-```json
-[
-  {
-    "name": "delete-older-than-30d",
-    "action": {"type": "Delete"},
-    "condition": {
-      "tagState": "any",
-      "olderThan": "2592000s"
-    }
-  },
-  {
-    "name": "keep-latest",
-    "action": {"type": "Keep"},
-    "mostRecentVersions": {
-      "keepCount": 16
-    }
-  }
-]
-```
+New mirrors are added by editing the `registries:` block, not by hand. The
+gcloud equivalent of one repo (for reference / a one-off outside the stack) is:
 
 ```bash
-gcloud artifacts repositories set-cleanup-policies ghcr-mirror \
-  --project=hai-gcp-models --location=us \
-  --policy=/tmp/cleanup-policy.json --no-dry-run
-
-gcloud artifacts repositories set-cleanup-policies ghcr-mirror \
-  --project=hai-gcp-models --location=europe \
-  --policy=/tmp/cleanup-policy.json --no-dry-run
-```
-
-### Create the Docker Hub mirror repos (one-time)
-
-```bash
-# US multi-region
 gcloud artifacts repositories create docker-mirror \
-  --project=hai-gcp-models \
-  --repository-format=docker \
-  --location=us \
-  --mode=remote-repository \
-  --remote-docker-repo=DOCKER-HUB \
-  --description="Remote proxy for Docker Hub (US multi-region)"
-
-# Europe multi-region — repeat with --location=europe
+  --project=hai-gcp-models --repository-format=docker --location=us \
+  --mode=remote-repository --remote-docker-repo=DOCKER-HUB
 ```
 
-Apply the same cleanup policies as above. Then set
-`platform.gcp.docker_hub_mirror_repo: docker-mirror` on the cluster config.
+Then enable the rewrite on the cluster by setting
+`platform.gcp.docker_hub_mirror_repo: docker-mirror` (already set on `marin`).
 
 ### Verify
 
