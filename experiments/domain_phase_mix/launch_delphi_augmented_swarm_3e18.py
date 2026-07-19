@@ -91,6 +91,7 @@ DEFAULT_ANALYSIS_OUTPUT_PATH = (
 )
 LABEL = "adamh_scaling_v6"
 SEQ_LEN_DELPHI = 4096
+MIXTURE_BLOCK_SIZE = 2048
 SIMULATED_EPOCH_TARGET_BUDGET = TARGET_BUDGET_DOLMA3_COMMON_CRAWL
 DEFAULT_TPU_REGION = "us-east5"
 DEFAULT_TPU_ZONE = "us-east5-a"
@@ -411,13 +412,17 @@ def _build_mixture_data(run_spec: DelphiSwarmRunSpec):
     weight_config = WeightConfig(run_id=run_spec.run_id, phase_weights=run_spec.phase_weights)
     weights_list = []
     for phase in PHASE_SCHEDULE.phases:
-        start_step = phase.get_start_step_aligned(run_spec.train_steps, run_spec.batch_size, 2048)
+        start_step = phase.get_start_step_aligned(
+            run_spec.train_steps,
+            run_spec.batch_size,
+            MIXTURE_BLOCK_SIZE,
+        )
         weights_list.append((start_step, weight_config.get_weights_for_phase(phase.name)))
     data = lm_varying_mixture_data_config(
         components=runtime_components,
         weights_list=weights_list,
         shuffle=True,
-        mixture_block_size=2048,
+        mixture_block_size=MIXTURE_BLOCK_SIZE,
     )
     return replace(
         data,
