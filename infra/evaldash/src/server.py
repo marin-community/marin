@@ -127,18 +127,25 @@ def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
     subtasks. A plain task keeps its single primary value. ``metric`` is the shared metric name, or
     ``mean`` when a rollup spans differing metrics.
     """
-    by_task: dict[str, list[tuple[float, str, float | None]]] = {}
+    by_task: dict[str, list[tuple[str, float, str, float | None]]] = {}
     for metric_key, metrics in (record.metrics or {}).items():
         picked = primary_metric(metrics)
         if picked is None:
             continue
         name, value = picked
-        by_task.setdefault(_task_of(metric_key), []).append((value, name, stderr_for(metrics, name)))
+        subtask = metric_key.rsplit("/", 1)[-1]
+        by_task.setdefault(_task_of(metric_key), []).append((subtask, value, name, stderr_for(metrics, name)))
     result: dict[str, TaskScore] = {}
     for task, entries in by_task.items():
-        mean = sum(value for value, _, _ in entries) / len(entries)
-        labels = {name for _, name, _ in entries}
-        stderr = _combined_stderr([stderr for _, _, stderr in entries])
+        # lm-eval writes a group's doc-weighted aggregate as a subtask whose name prefixes every
+        # other subtask (``mmlu_5shot/mmlu`` beside ``mmlu_5shot/mmlu_anatomy``); score from that
+        # row alone rather than re-averaging it with the per-subject rows it already summarizes.
+        aggregates = [e for e in entries if all(other.startswith(e[0]) for other, _, _, _ in entries)]
+        if len(aggregates) == 1 and len(entries) > 1:
+            entries = aggregates
+        mean = sum(value for _, value, _, _ in entries) / len(entries)
+        labels = {name for _, _, name, _ in entries}
+        stderr = _combined_stderr([stderr for _, _, _, stderr in entries])
         result[task] = TaskScore(mean, next(iter(labels)) if len(labels) == 1 else "mean", stderr)
     return result
 
@@ -170,26 +177,32 @@ def record_to_row(record: EvalRunRecord) -> dict:
     }
 
 
-def _record_tasks(record: EvalRunRecord, scores: dict[str, TaskScore]) -> set[str]:
-    """The matrix columns a record touches: its scored tasks, else its requested tasks.
+def record_score(record: EvalRunRecord) -> TaskScore | None:
+    """One record's headline score: its per-task primaries rolled up by unweighted mean.
 
-    A succeeded run reports its scored tasks; a failed/infra_failed run has no metrics, so its
-    requested ``evaluation.tasks`` name the columns whose cells its failure should occupy.
+    Records here carry a single top-level task, so this is normally that task's primary metric;
+    a multi-task eval averages its tasks with the stderrs combined. None when nothing scored.
     """
-    if scores:
-        return set(scores)
-    return {task.name for task in record.evaluation.tasks}
+    per_task = primary_metrics_by_task(record) if record.metrics else {}
+    if not per_task:
+        return None
+    entries = list(per_task.values())
+    mean = sum(score.value for score in entries) / len(entries)
+    labels = {score.metric for score in entries}
+    metric = labels.pop() if len(labels) == 1 else "mean"
+    return TaskScore(value=mean, metric=metric, stderr=_combined_stderr([score.stderr for score in entries]))
 
 
 def build_matrix(records: list[EvalRunRecord]) -> dict:
-    """Pivot runs into a ``model x task`` matrix plus a per-model leaderboard.
+    """Pivot runs into a ``model x eval`` matrix plus a per-model leaderboard.
 
-    Each cell shows the latest succeeded run's rolled-up primary metric (with stderr) for that
-    ``(model, task)`` -- group-task subtasks averaged into their parent task. When no run for a cell
-    ever succeeded, the cell carries the latest run's failure status instead, still linking to that
-    run so a failure is visible and clickable rather than silently dropped. The leaderboard scores
-    each model by the unweighted mean of its succeeded cells and reports coverage over the full task
-    set, sorted best-first with unscored models last.
+    Columns are registry eval names (``record.evaluation.name``), so a failed run occupies the same
+    column its succeeded retry fills. Each cell shows the latest succeeded run's rolled-up primary
+    metric (with stderr) for that ``(model, eval)``; when no run for a cell ever succeeded, the cell
+    carries the latest run's failure status instead, still linking to that run so a failure is
+    visible and clickable rather than silently dropped. The leaderboard scores each model by the
+    unweighted mean of its succeeded cells and reports coverage over the full eval set, sorted
+    best-first with unscored models last.
     """
     succeeded: dict[tuple[str, str], dict] = {}
     latest_any: dict[tuple[str, str], dict] = {}
@@ -198,24 +211,27 @@ def build_matrix(records: list[EvalRunRecord]) -> dict:
         model = record.model.name
         created_at = record.created_at or ""
         status = record.status.value
-        scores = primary_metrics_by_task(record) if record.metrics else {}
-        for task in _record_tasks(record, scores):
-            tasks.add(task)
-            key = (model, task)
-            latest = latest_any.get(key)
-            if latest is None or created_at > latest["created_at"]:
-                latest_any[key] = {"run_id": record.run_id, "created_at": created_at, "status": status}
-            score = scores.get(task)
-            if score is not None:
-                current = succeeded.get(key)
-                if current is None or created_at > current["created_at"]:
-                    succeeded[key] = {
-                        "value": score.value,
-                        "stderr": score.stderr,
-                        "metric": score.metric,
-                        "run_id": record.run_id,
-                        "created_at": created_at,
-                    }
+        eval_name = record.evaluation.name
+        if eval_name.endswith("-smoke"):
+            # Smoke suites are capped-instance launcher validation runs; keep them out of the
+            # headline grid (they remain visible in the runs list and history).
+            continue
+        tasks.add(eval_name)
+        key = (model, eval_name)
+        latest = latest_any.get(key)
+        if latest is None or created_at > latest["created_at"]:
+            latest_any[key] = {"run_id": record.run_id, "created_at": created_at, "status": status}
+        score = record_score(record)
+        if score is not None:
+            current = succeeded.get(key)
+            if current is None or created_at > current["created_at"]:
+                succeeded[key] = {
+                    "value": score.value,
+                    "stderr": score.stderr,
+                    "metric": score.metric,
+                    "run_id": record.run_id,
+                    "created_at": created_at,
+                }
 
     rows_by_model: dict[str, dict] = {}
     for key, latest in latest_any.items():
@@ -345,17 +361,17 @@ class RecordStore:
         return build_meta(records)
 
     def history(self, model: str, task: str) -> list[dict]:
-        """Every run's headline score for one ``(model, task)`` over time, oldest first.
+        """Every run's headline score for one ``(model, eval)`` over time, oldest first.
 
-        One point per run that produced a primary metric for the task -- with its stderr, status, and
-        provenance for the score-over-time chart's tooltip.
+        ``task`` is a matrix column, i.e. a registry eval name. One point per run that produced a
+        primary metric -- with its stderr, status, and provenance for the score-over-time tooltip.
         """
         records, _by_id = self._snapshot()
         points = []
         for record in records:
-            if record.model.name != model or not record.metrics:
+            if record.model.name != model or record.evaluation.name != task:
                 continue
-            score = primary_metrics_by_task(record).get(task)
+            score = record_score(record)
             if score is None:
                 continue
             points.append(
