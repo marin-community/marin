@@ -37,6 +37,8 @@ jobs:
             target: controller
           - image: iris-task
             target: task
+          - image: iris-task-gpu
+            target: task-gpu
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

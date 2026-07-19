@@ -148,15 +148,22 @@ def workdir() -> Path:
 
 
 def resolve_nsys_bin(install_root: Path) -> str:
-    """Return the ``nsys`` binary the setup script extracted under *install_root*.
+    """Return the ``nsys`` binary to profile with.
+
+    Prefers ``nsys`` on ``PATH`` — a GPU image (``default_gpu_image``) bakes it in, so
+    no per-task install runs — and falls back to the copy the setup script extracts
+    under *install_root* on an image without it.
 
     Raises:
-        RuntimeError: If the setup script did not install one.
+        RuntimeError: If neither the image nor the setup script provides one.
     """
+    on_path = shutil.which("nsys")
+    if on_path:
+        return on_path
     bin_glob = nsys_bin_glob(str(install_root))
     matches = sorted(glob(bin_glob))
     if not matches:
-        raise RuntimeError(f"no nsys binary at {bin_glob}; was the nsight setup script run?")
+        raise RuntimeError(f"no nsys on PATH and none at {bin_glob}; use a GPU image or let setup install it")
     return matches[0]
 
 

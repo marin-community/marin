@@ -130,6 +130,7 @@ def make_task_backend(
             ),
             namespace=namespace,
             default_image=kp.default_image,
+            default_gpu_image=kp.default_gpu_image,
             logship_image=config.controller.image,
             service_account=kp.service_account or "",
             host_network=kp.host_network,

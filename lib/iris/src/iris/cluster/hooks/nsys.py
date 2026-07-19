@@ -71,6 +71,7 @@ def nsys_setup_script() -> str:
     nsys_home = f'"$IRIS_WORKDIR"/{NSYS_INSTALL_DIR}'
     bin_glob = nsys_bin_glob(f"$IRIS_WORKDIR/{NSYS_INSTALL_DIR}")
     return rf"""set -e
+if command -v nsys >/dev/null 2>&1; then echo 'nsight-systems present on PATH (GPU image); skipping install'; exit 0; fi
 _nsys_bin=$(ls {bin_glob} 2>/dev/null | head -1 || true)
 if [ -n "$_nsys_bin" ]; then echo 'nsight-systems already installed'; exit 0; fi
 case "$(uname -m)" in

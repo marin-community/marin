@@ -625,6 +625,10 @@ class KubernetesProviderConfig(_Config):
     kubeconfig: str = ""  # empty = in-cluster auth
     kube_context: str = ""  # kubeconfig context to bind to; empty = the file's current-context
     default_image: str = ""
+    # Image for GPU jobs (a device.gpu request), used unless a job overrides with
+    # --task-image. Empty falls back to default_image. Lets a cluster ship GPU
+    # tooling (nsys, CUDA) baked once rather than installed per task.
+    default_gpu_image: str = ""
     service_account: str = ""
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")

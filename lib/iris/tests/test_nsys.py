@@ -160,9 +160,17 @@ def test_report_path_carries_the_task_index() -> None:
     assert report_path(Path("/app/nsys"), 7).name.startswith("task00007-")
 
 
-def test_resolve_nsys_bin_reports_missing_install(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="was the nsight setup script run"):
+def test_resolve_nsys_bin_reports_missing_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No nsys on PATH (bare image) and none installed under the workdir.
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: None)
+    with pytest.raises(RuntimeError, match="no nsys on PATH"):
         resolve_nsys_bin(tmp_path / "nowhere")
+
+
+def test_resolve_nsys_bin_prefers_nsys_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A GPU image bakes nsys onto PATH, so no per-task install is consulted.
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: "/usr/local/bin/nsys")
+    assert resolve_nsys_bin(tmp_path / "unused") == "/usr/local/bin/nsys"
 
 
 def _install_fake_nsys(root: Path) -> Path:
@@ -173,8 +181,9 @@ def _install_fake_nsys(root: Path) -> Path:
     return target / "nsys"
 
 
-def test_resolve_nsys_bin_finds_the_extracted_binary(tmp_path: Path) -> None:
-    # The deb's target dir is arch-specific, so the wrapper resolves it by glob.
+def test_resolve_nsys_bin_finds_the_extracted_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # No baked nsys on PATH → fall back to the setup-script install (arch-specific glob).
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: None)
     nsys_bin = _install_fake_nsys(tmp_path)
     assert resolve_nsys_bin(tmp_path) == str(nsys_bin)
 
@@ -182,6 +191,7 @@ def test_resolve_nsys_bin_finds_the_extracted_binary(tmp_path: Path) -> None:
 def test_setup_script_and_wrapper_agree_on_the_install_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The setup script writes where the wrapper looks. They share nsys_bin_glob, but
     the script interpolates a shell $IRIS_WORKDIR while the wrapper resolves it first."""
+    monkeypatch.setattr("iris.cluster.hooks.nsys_main.shutil.which", lambda _: None)
     monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
     nsys_bin = _install_fake_nsys(tmp_path / NSYS_INSTALL_DIR)
     script_glob = nsys_bin_glob(f"$IRIS_WORKDIR/{NSYS_INSTALL_DIR}")

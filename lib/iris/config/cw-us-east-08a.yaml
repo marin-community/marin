@@ -119,6 +119,8 @@ auth:
 kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest
+  # GPU jobs get the GPU image (nsys baked in) automatically, no --task-image needed.
+  default_gpu_image: ghcr.io/marin-community/iris-task-gpu:latest
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
