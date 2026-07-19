@@ -1484,5 +1484,5 @@ author: mcwitt
     native is clearly past it.
 - Decision: KEEP the inline asm, justification rewritten in-code to the
   measured perf (not the defunct compile workaround); native patch reverted.
-  Commit d3-pending. Everything else from the misdiagnosis era already
+  Commit 3ddb2360b. Everything else from the misdiagnosis era already
   removed in f4cac5066 (probe) / d064dc173 (lockfile).
