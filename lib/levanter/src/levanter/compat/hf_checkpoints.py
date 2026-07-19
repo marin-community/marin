@@ -187,18 +187,16 @@ def _embed_chat_template_in_tokenizer_config(
     local_path: str,
     chat_template: str | None = None,
 ) -> None:
-    """Ensure the exported dir carries a chat_template that matches TRAINING, in BOTH places
-    downstream loaders read it from: ``tokenizer_config.json['chat_template']`` and the split-out
-    ``chat_template.jinja`` file (newer ``transformers.save_pretrained`` writes the latter and can
-    leave the config field empty / stale — the save-time footgun). When ``chat_template`` is given
-    it is authoritative (e.g. the SFT chat template, which differs from a base tokenizer's default);
-    otherwise the tokenizer's own ``chat_template`` is used. No-op when neither is available.
+    """Write the chat template to both places loaders read it from: the ``chat_template`` field
+    of ``tokenizer_config.json`` and the ``chat_template.jinja`` file (newer
+    ``transformers.save_pretrained`` writes only the latter). An explicit ``chat_template``
+    argument overrides the tokenizer's own template. No-op when neither is set.
     """
     template = chat_template if chat_template is not None else getattr(tokenizer, "chat_template", None)
     if template is None:
         return
 
-    # 1) Keep the split-out chat_template.jinja byte-consistent with the authoritative template.
+    # Write chat_template.jinja when overriding; otherwise only update an existing file.
     jinja_path = os.path.join(local_path, "chat_template.jinja")
     if chat_template is not None or os.path.exists(jinja_path):
         try:
@@ -209,7 +207,6 @@ def _embed_chat_template_in_tokenizer_config(
         except OSError as e:  # noqa: BLE001
             logger.warning("Could not write chat_template.jinja at %s: %s", jinja_path, e)
 
-    # 2) Embed into tokenizer_config.json.
     config_path = os.path.join(local_path, "tokenizer_config.json")
     if not os.path.exists(config_path):
         logger.warning("Tokenizer config missing at %s; cannot embed chat_template", config_path)
@@ -233,8 +230,8 @@ def _save_tokenizer_pretrained(
 ) -> None:
     hf_tokenizer = _coerce_to_hf_tokenizer(tokenizer)
     if chat_template is not None:
-        # Set BEFORE save_pretrained so transformers writes the training template (not the
-        # tokenizer's baked-in default) into both tokenizer_config.json and chat_template.jinja.
+        # Set before save_pretrained so it writes this template to tokenizer_config.json
+        # and chat_template.jinja.
         hf_tokenizer.chat_template = chat_template
     hf_tokenizer.save_pretrained(local_path)
     _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path, chat_template=chat_template)
@@ -1080,6 +1077,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         This is useful when using custom architectures, as it will allow the model to be loaded without the custom
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
+        :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+        (written to both tokenizer_config.json and chat_template.jinja)
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
@@ -1346,13 +1345,11 @@ def save_hf_checkpoint_callback(
     If hf_repo is provided, this will upload the checkpoint to the huggingface hub, passing
     any additional kwargs to the huggingface_hub.upload_folder function.
 
-    :param chat_template: if given, the exported tokenizer carries THIS chat template (in both
-    tokenizer_config.json and chat_template.jinja) instead of the tokenizer's baked-in default —
-    use it to preserve the SFT/training chat template on the exported repo.
-
     :param base_path: the base path to save the checkpoint to. `/step-<step>` will be appended to this. base_path
     may be a GCS bucket path, in which case the checkpoint will be uploaded to GCS after being written to a tmp
     :param upload_to_hf:
+    :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+    (written to both tokenizer_config.json and chat_template.jinja)
     :param hf_upload_kwargs:
     :return:
     """
