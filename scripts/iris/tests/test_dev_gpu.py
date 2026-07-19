@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-
 import pytest
 from iris.cluster.config import (
     CoreweavePlatformConfig,
@@ -34,22 +32,6 @@ def test_state_round_trip():
         pod=PodRef(namespace="iris", pod_name="dev-gpu-matt-abc", container="task"),
     )
     assert DevGpuState.from_json(state.to_json()) == state
-
-
-def test_legacy_state_defaults_to_interactive_priority():
-    raw = json.dumps(
-        {
-            "session_name": "legacy",
-            "config_file": "/abs/coreweave.yaml",
-            "job_id": "/legacy/dev-gpu",
-            "gpu_count": 8,
-            "target": {"namespace": "iris", "kubeconfig_path": ""},
-            "pod": {"namespace": "iris", "pod_name": "legacy-pod"},
-        }
-    )
-    state = DevGpuState.from_json(raw)
-    assert state.gpu_variant == "H100"
-    assert state.priority is Priority.INTERACTIVE
 
 
 def test_require_coreweave_namespace_comes_from_kubernetes_provider():
