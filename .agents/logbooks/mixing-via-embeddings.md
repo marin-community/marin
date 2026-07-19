@@ -909,3 +909,15 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
 - FOLLOW-UP launching: math c02q0 seeds{1,2}@e16,e32 (τ_math CI) + e6 (sub-threshold) + e12 (near-onset)
   → resolve τ-universality (is τ one number or per-bucket?) and linear-vs-mild-curvature. τ-universality
   is a real MODEL-SPEC question (per-bucket τ ⇒ per-bucket calibration data) worth a data point.
+
+## 2026-07-19 Single-page report v1 → GCS
+- Self-contained HTML (19 embedded figures, 5.8MB) summarizing the current best approach:
+  the model spec (kernel + linear-past-threshold harm term), 5 evaluation sections (surrogate
+  accuracy/calibration, controls+noise floor, interpretability, epoch-harm form selection,
+  scale-dependence), and an Open Questions & Planned Experiments section (100B gate f29 + math
+  τ/curvature f32 in flight; web-densify, combined-model held-out, basis sensitivity, production
+  mechanism as roadmap).
+- Uploaded: gs://marin-eu-west4/user/rav/projects/mixing_via_embeddings/reports/mve_current_best_approach_2026-07-19.html
+- Generator: scratch/mixture_features/report/build_report.py (regenerable). Headline held-out number
+  cited: Spearman 0.720 on the 40-run sacred test set (p<1e-4), ≈79% of the 0.909 noise ceiling.
+- v2 pending: append f29 (100B production verdict) + f32 (τ-universality) when the two runs land.
