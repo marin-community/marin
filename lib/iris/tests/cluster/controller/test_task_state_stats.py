@@ -114,7 +114,8 @@ def test_counts_ages_and_rollup_per_root_job(db):
     with db.transaction() as tx:
         seed_job(tx, job_a, submitted_at_ms=NOW_MS - 500_000)
         seed_job(tx, job_b, submitted_at_ms=NOW_MS - 100_000)
-        # job-a: two PENDING (oldest 500s), one BUILDING dispatched 200s ago, one SUCCEEDED.
+        # job-a: two PENDING (oldest 500s), one BUILDING dispatched 200s ago,
+        # and one SUCCEEDED that must not perturb the counts.
         seed_task(tx, job_a, 0, job_pb2.TASK_STATE_PENDING, submitted_at_ms=NOW_MS - 500_000)
         seed_task(tx, job_a, 1, job_pb2.TASK_STATE_PENDING, submitted_at_ms=NOW_MS - 100_000)
         building = seed_task(tx, job_a, 2, job_pb2.TASK_STATE_BUILDING, submitted_at_ms=NOW_MS - 500_000)
@@ -127,7 +128,7 @@ def test_counts_ages_and_rollup_per_root_job(db):
     assert set(rows) == {"/u/job-a", "/u/job-b", CLUSTER_ROLLUP_ROOT_JOB}
 
     row_a = rows["/u/job-a"]
-    assert (row_a.pending, row_a.building, row_a.succeeded) == (2, 1, 1)
+    assert (row_a.pending, row_a.building, row_a.running) == (2, 1, 0)
     assert row_a.oldest_pending_age_ms == 500_000
     assert row_a.oldest_building_age_ms == 200_000
 
@@ -137,7 +138,7 @@ def test_counts_ages_and_rollup_per_root_job(db):
     assert row_b.oldest_building_age_ms == 0
 
     rollup = rows[CLUSTER_ROLLUP_ROOT_JOB]
-    assert (rollup.pending, rollup.building, rollup.running, rollup.succeeded) == (2, 1, 1, 1)
+    assert (rollup.pending, rollup.building, rollup.running) == (2, 1, 1)
     assert rollup.oldest_pending_age_ms == 500_000
     assert rollup.oldest_building_age_ms == 200_000
 

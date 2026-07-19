@@ -3,12 +3,13 @@
 
 """The ``iris.task_state`` emitter: periodic per-root-job task-state rows.
 
-Every :data:`TASK_STATE_INTERVAL` the controller aggregates its local tasks per
-root job — counts by state, plus how long the oldest PENDING task has waited for
-dispatch and how long the oldest dispatched task has sat without reaching
-RUNNING — and appends one row per root job with active tasks, plus one cluster
-rollup row (``root_job_id=""``). The rollup row is written even when the cluster
-is idle, so silence in the table means the controller (or this emitter) is down.
+Every :data:`TASK_STATE_INTERVAL` the controller aggregates its waiting/running
+local tasks per root job — counts by state, plus how long the oldest PENDING
+task has waited for dispatch and how long the oldest dispatched task has sat
+without reaching RUNNING — and appends one row per root job with active tasks,
+plus one cluster rollup row (``root_job_id=""``). The rollup row is written even
+when the cluster is idle, so silence in the table means the controller (or this
+emitter) is down.
 """
 
 from finelog.client.log_client import Table
@@ -28,15 +29,13 @@ TASK_STATE_INTERVAL = 30.0
 
 def build_task_state_rows(
     active_rows: list[reads.ActiveTaskRollupRow],
-    terminal_rows: list[reads.TerminalTaskCountRow],
     now: Timestamp,
 ) -> list[IrisTaskState]:
-    """Fold the two DB aggregates into per-root-job rows plus the cluster rollup.
+    """Fold the active-task aggregate into per-root-job rows plus the cluster rollup.
 
     ``active_rows`` carries (root_job_id, state, count, oldest anchor ms) for
-    waiting/running tasks; ``terminal_rows`` carries terminal-state counts for
-    the same root jobs. The rollup row sums every column and takes the fleet-wide
-    oldest anchors, and is emitted even when both inputs are empty.
+    waiting/running tasks. The rollup row sums every column and takes the
+    fleet-wide oldest anchors, and is emitted even when the input is empty.
     """
     now_ms = now.epoch_ms()
     ts = now.as_naive_utc()
@@ -56,8 +55,6 @@ def build_task_state_rows(
             dispatched_anchor[row.root_job_id] = (
                 row.oldest_anchor_ms if prev is None else min(prev, row.oldest_anchor_ms)
             )
-    for trow in terminal_rows:
-        counts.setdefault(trow.root_job_id, {})[trow.state] = trow.count
 
     def age_ms(anchor: int | None) -> int:
         if anchor is None:
@@ -74,13 +71,6 @@ def build_task_state_rows(
             assigned=by_state.get(job_pb2.TASK_STATE_ASSIGNED, 0),
             building=by_state.get(job_pb2.TASK_STATE_BUILDING, 0),
             running=by_state.get(job_pb2.TASK_STATE_RUNNING, 0),
-            succeeded=by_state.get(job_pb2.TASK_STATE_SUCCEEDED, 0),
-            failed=by_state.get(job_pb2.TASK_STATE_FAILED, 0),
-            killed=by_state.get(job_pb2.TASK_STATE_KILLED, 0),
-            worker_failed=by_state.get(job_pb2.TASK_STATE_WORKER_FAILED, 0),
-            unschedulable=by_state.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0),
-            preempted=by_state.get(job_pb2.TASK_STATE_PREEMPTED, 0),
-            cosched_failed=by_state.get(job_pb2.TASK_STATE_COSCHED_FAILED, 0),
             oldest_pending_age_ms=age_ms(pending_ms),
             oldest_building_age_ms=age_ms(dispatched_ms),
         )
@@ -123,8 +113,7 @@ class TaskStateCollector:
             now = Timestamp.now()
         with self._db.read_snapshot() as tx:
             active = reads.active_task_rollup_by_root_job(tx)
-            terminal = reads.terminal_task_counts_by_root_job(tx, sorted({r.root_job_id for r in active}))
-        self._table.write(build_task_state_rows(active, terminal, now))
+        self._table.write(build_task_state_rows(active, now))
 
     def close(self) -> None:
         self._emitter.close()

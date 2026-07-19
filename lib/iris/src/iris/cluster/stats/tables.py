@@ -303,15 +303,15 @@ CLUSTER_ROLLUP_ROOT_JOB = ""
 
 @dataclass
 class IrisTaskState:
-    """One task-state aggregate per root job per tick.
+    """One aggregate of a root job's waiting/running tasks per tick.
 
     ``oldest_pending_age_ms`` measures the oldest PENDING task from its last
     requeue (or submission for a first attempt); ``oldest_building_age_ms``
     measures the oldest ASSIGNED-or-BUILDING task from its current attempt's
     creation — time since dispatch without reaching RUNNING, the "tasks stuck
     in BUILDING" alert quantity. Both are 0 when no task is in those states.
-    Terminal counts cover only root jobs still carrying an active task; a fully
-    finished job stops producing rows.
+    A fully finished root job stops producing rows; terminal history stays
+    queryable in the controller DB rather than being re-emitted every tick.
     """
 
     # Fleet queries slice one root job's history at a time; clustering parquet by
@@ -324,13 +324,6 @@ class IrisTaskState:
     assigned: int
     building: int
     running: int
-    succeeded: int
-    failed: int
-    killed: int
-    worker_failed: int
-    unschedulable: int
-    preempted: int
-    cosched_failed: int
     oldest_pending_age_ms: int
     oldest_building_age_ms: int
 

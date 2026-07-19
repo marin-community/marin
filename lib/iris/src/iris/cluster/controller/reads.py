@@ -69,7 +69,6 @@ from iris.cluster.federation.store import FederationDirection, HandoffState
 from iris.cluster.types import (
     LOCAL_CLUSTER,
     TERMINAL_JOB_STATES,
-    TERMINAL_TASK_STATES,
     AttemptUid,
     EndpointAccess,
     JobName,
@@ -474,15 +473,6 @@ class ActiveTaskRollupRow:
     oldest_anchor_ms: int | None
 
 
-@dataclass(frozen=True, slots=True)
-class TerminalTaskCountRow:
-    """One (root job, terminal state) count over local tasks."""
-
-    root_job_id: str
-    state: int
-    count: int
-
-
 # Every state the task-state rollup counts: PENDING plus ASSIGNED/BUILDING/RUNNING.
 # PENDING and dispatched rows also carry a wait anchor; RUNNING rows are counted only.
 _ROLLUP_ACTIVE_STATES = (job_pb2.TASK_STATE_PENDING, *sorted(ACTIVE_TASK_STATES))
@@ -517,16 +507,6 @@ _ACTIVE_TASK_ROLLUP_STMT = (
     .group_by(jobs_table.c.root_job_id, local_tasks.c.state)
 )
 
-_TERMINAL_TASK_COUNTS_STMT = (
-    select(jobs_table.c.root_job_id, local_tasks.c.state, func.count().label("cnt"))
-    .select_from(local_tasks.join(jobs_table, local_tasks.c.job_id == jobs_table.c.job_id))
-    .where(
-        jobs_table.c.root_job_id.in_(bindparam("root_job_ids", expanding=True)),
-        local_tasks.c.state.in_(bindparam("terminal_states", expanding=True)),
-    )
-    .group_by(jobs_table.c.root_job_id, local_tasks.c.state)
-)
-
 
 def active_task_rollup_by_root_job(tx: Tx) -> list[ActiveTaskRollupRow]:
     """Aggregate waiting/running local tasks per (root job, state) with wait anchors.
@@ -543,19 +523,6 @@ def active_task_rollup_by_root_job(tx: Tx) -> list[ActiveTaskRollupRow]:
             oldest_anchor_ms=int(row.oldest_anchor_ms) if row.oldest_anchor_ms is not None else None,
         )
         for row in rows
-    ]
-
-
-def terminal_task_counts_by_root_job(tx: Tx, root_job_ids: Sequence[str]) -> list[TerminalTaskCountRow]:
-    """Count terminal-state local tasks per (root job, state) for the given root jobs."""
-    if not root_job_ids:
-        return []
-    rows = tx.execute(
-        _TERMINAL_TASK_COUNTS_STMT,
-        {"root_job_ids": list(root_job_ids), "terminal_states": sorted(TERMINAL_TASK_STATES)},
-    ).all()
-    return [
-        TerminalTaskCountRow(root_job_id=str(row.root_job_id), state=int(row.state), count=int(row.cnt)) for row in rows
     ]
 
 
