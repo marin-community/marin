@@ -170,13 +170,17 @@
    "name": "boolq",
    "num_fewshot": 0,
    "task_alias": "boolq_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "aps/super_glue"
+   }
   },
   "copa_0shot": {
    "name": "copa",
    "num_fewshot": 0,
    "task_alias": "copa_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "aps/super_glue"
+   }
   },
   "csqa_0shot": {
    "name": "commonsense_qa",
@@ -287,7 +291,9 @@
    "name": "medmcqa",
    "num_fewshot": 0,
    "task_alias": "medmcqa_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "openlifescienceai/medmcqa"
+   }
   },
   "medqa_0shot": {
    "name": "medqa_4options",
@@ -323,7 +329,9 @@
    "name": "openbookqa",
    "num_fewshot": 0,
    "task_alias": "openbookqa_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "allenai/openbookqa"
+   }
   },
   "piqa_0shot": {
    "name": "piqa",
@@ -335,25 +343,33 @@
    "name": "sciq",
    "num_fewshot": 0,
    "task_alias": "sciq_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "allenai/sciq"
+   }
   },
   "truthfulqa_mc1_0shot": {
    "name": "truthfulqa_mc1",
    "num_fewshot": 0,
    "task_alias": "truthfulqa_mc1_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "truthfulqa/truthful_qa"
+   }
   },
   "truthfulqa_mc2_0shot": {
    "name": "truthfulqa_mc2",
    "num_fewshot": 0,
    "task_alias": "truthfulqa_mc2_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "truthfulqa/truthful_qa"
+   }
   },
   "winogrande_0shot": {
    "name": "winogrande",
    "num_fewshot": 0,
    "task_alias": "winogrande_0shot",
-   "task_kwargs": null
+   "task_kwargs": {
+    "dataset_path": "allenai/winogrande"
+   }
   }
  }
 }

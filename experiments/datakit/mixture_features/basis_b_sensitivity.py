@@ -754,10 +754,7 @@ def make_figure(r: dict) -> None:
     e = r["exploratory_holdout_pred_agreement"]["kernelB_vs_kernelA_frozen"]
     n_robust = sum(1 for row in r["verdict_table"] if row["verdict"] == "robust")
     k, h, lo = r["kernel_oof"], r["hist_ridge_oof"], r["lodo_cluster_median"]
-    swtxt = (
-        f"swoosh tau A{sw['A']['tau']:.1f}->B{sw['B']['tau']:.1f} "
-        f"b A{sw['A']['b']:.4f}->B{sw['B']['b']:.4f}"
-    )
+    swtxt = f"swoosh tau A{sw['A']['tau']:.1f}->B{sw['B']['tau']:.1f} " f"b A{sw['A']['b']:.4f}->B{sw['B']['b']:.4f}"
     lines = [
         ("Basis B = flat k-means K=1000 (seed 1) on the SAME luxical space", INK, 10),
         (f"AMI(A,B assignments) = {ami['ami']:.3f}  on {ami['n_docs']:,} held-out docs", ORANGE, 10),
@@ -820,11 +817,13 @@ def write_report_md(r: dict) -> str:
     A(
         f"**AMI(A,B) = {ami['ami']:.3f}** on {ami['n_docs']:,} held-out (seed-2) docs "
         f"(homogeneity {ami['homogeneity_b_given_a']:.3f}, completeness {ami['completeness_b_given_a']:.3f}; "
-        f"A occupies {ami['n_unique_a_k1000']} K=1000 cells, B {ami['n_unique_b_k1000']}).\n")
+        f"A occupies {ami['n_unique_a_k1000']} K=1000 cells, B {ami['n_unique_b_k1000']}).\n"
+    )
     A(
         "Everything else is held fixed: embedder, target `zmacro_english_20` (frozen train z-stats), "
         "folds RepeatedKFold(5,3,seed 0), 20k-docs/bucket seed-0 sampling, and the (basis-independent) "
-        "epoch features. A is recomputed with identical code so every row is paired.\n")
+        "epoch features. A is recomputed with identical code so every row is paired.\n"
+    )
 
     A("## Verdict table\n")
     A("| conclusion | A | B | moved/robust | detail |")
@@ -838,27 +837,32 @@ def write_report_md(r: dict) -> str:
     A(
         f"- kernel OOF: A {k['A_perfold_mean']:.4f} (published 0.8147, crosscheck delta "
         f"{k['A_crosscheck_vs_published_delta']:+.4f}) vs B {k['B_perfold_mean']:.4f}; paired delta "
-        f"{k['delta_B_minus_A']:+.4f}, B wins {k['paired_wins_B']}/15, Wilcoxon p={k['wilcoxon_p']:.3f}")
+        f"{k['delta_B_minus_A']:+.4f}, B wins {k['paired_wins_B']}/15, Wilcoxon p={k['wilcoxon_p']:.3f}"
+    )
     A(
         f"- hist-ridge OOF: A {h['A_perfold_mean']:.4f} (published 0.7396) vs B {h['B_perfold_mean']:.4f}; "
-        f"paired delta {h['delta_B_minus_A']:+.4f}, p={h['wilcoxon_p']:.3f}")
+        f"paired delta {h['delta_B_minus_A']:+.4f}, p={h['wilcoxon_p']:.3f}"
+    )
     lo = r["lodo_cluster_median"]
     A(
         f"- LODO-by-cluster median: A {lo['A']:.4f} (published 0.682) vs B {lo['B']:.4f} "
-        f"({lo['n_groups']['A']}/{lo['n_groups']['B']} clusters)")
+        f"({lo['n_groups']['A']}/{lo['n_groups']['B']} clusters)"
+    )
     s = r["selection_top5_clusters"]
     A(f"- selection top-5 clusters: A {{{','.join(s['A'])}}} vs B {{{','.join(s['B'])}}}, Jaccard {s['jaccard']:.2f}")
     sw = r["swoosh"]
     A(
         f"- swoosh g1 fit (harm on content residuals): tau A {sw['A']['tau']:.1f} / B {sw['B']['tau']:.1f} "
         f"(published 5.5); b A {sw['A']['b']:.4g} / B {sw['B']['b']:.4g} (published "
-        f"{sw['ref_A_published']['b']:.4g}); both harm-positive")
+        f"{sw['ref_A_published']['b']:.4g}); both harm-positive"
+    )
     e = r["exploratory_holdout_pred_agreement"]
     A(
         f"- [EXPLORATORY] holdout predictions-vs-predictions (features only, NO labels): kernel_B vs "
         f"kernel_A frozen Spearman {e['kernelB_vs_kernelA_frozen']['spearman']:.3f} / Pearson "
         f"{e['kernelB_vs_kernelA_frozen']['pearson']:.3f}; sanity kernel_A-recomputed vs frozen "
-        f"{e['kernelA_recomputed_vs_frozen_sanity']['spearman']:.3f}")
+        f"{e['kernelA_recomputed_vs_frozen_sanity']['spearman']:.3f}"
+    )
     A("")
     n_robust = sum(1 for row in r["verdict_table"] if row["verdict"] == "robust")
     A(f"## Read\n\n**{n_robust}/{len(r['verdict_table'])} conclusions are basis-robust.**")

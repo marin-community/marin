@@ -800,3 +800,12 @@ data-first, every decision needs a data point. natural_epoch_experiment.py.
 - Decision converging (data-backed): SURROGATE = kernel (in-regime universal winner DP4). EPOCHING
   = a bolt-on harm term is needed for high-rep PROPOSALS, but must be calibrated on high-rep
   experimental data, not the sweep. Pending: a2/transect realized high-ep residual vs seed noise.
+
+## 2026-07-19 E2 epochrep LAUNCHED — the decisive seed-replicated kernel-vs-form test
+18 runs on cw-rno2a H100x8 (ETA ~17:40Z), pre-registered (sha 4a1092f7…). Pure-epoch axis at
+FIXED content (code c01q0@0.2 e∈{4,16,32} + web c26q1@0.2 e∈{4,16,24}, seeds 1-3; twobucket a2
+seed-0 pools as 4th at code points). Content h constant → KERNEL PREDICTS FLAT (code 0.6930, web
+0.7372, spread 3e-15). Swoosh predicts code-e32 +0.0106 bpb (> 2·SE≈0.006). **code-e32 is the
+decider**: realized rise > 2·SE → form's harm term required (Δ calibrates b); flat → kernel + hard
+caps. Committed rule in epochrep_preregistration.json. Machinery re-validated to 1e-9 vs the
+transect + twobucket committed values. Launcher launch_mve_epochrep_h100.py.

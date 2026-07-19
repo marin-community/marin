@@ -1,0 +1,979 @@
+{
+ "arms": {
+  "code": {
+   "control_epoch": 4.0,
+   "epochs": [
+    4.0,
+    16.0,
+    32.0
+   ],
+   "group": "code_adjacent",
+   "partner_bucket": "c05q0",
+   "readout_task": "logprob_humaneval_10shot",
+   "seed_pooling": "code arm at e in {4,16,32} is a 1:1 replica of twobucket factorial points ctr/a2_e16/a2_e32 (seed 0); the factorial's seed-0 runs there pool as a 4th seed -> 4-seed SE at each code point",
+   "sliced_bucket": "c01q0",
+   "total_tokens": 152613743170,
+   "w_target": 0.2
+  },
+  "web": {
+   "control_epoch": 4.0,
+   "epochs": [
+    4.0,
+    16.0,
+    24.0
+   ],
+   "group": "web_text",
+   "partner_bucket": "c05q0",
+   "readout_task": "logprob_humaneval_10shot",
+   "seed_pooling": "no existing seed-0 web slice -> 3-seed SE at each web point",
+   "sliced_bucket": "c26q1",
+   "total_tokens": 111826691448,
+   "w_target": 0.2
+  }
+ },
+ "branch": "rav/mixing-via-embeddings",
+ "constants": {
+  "batch_size": 512,
+  "checkpoint_prefix": "s3://marin-us-east-02a/marin/users/rav/grug/rav_mve_epochrep_<point>/dev/",
+  "experiment_budget_tokens": 10015997952,
+  "hardware": "cw-rno2a H100x8 one node/run, cuda_async allocator, CW-mirror data",
+  "in_training_validation": false,
+  "mixture_block_size": 32768,
+  "model_d512": "swarm d512/6L/4H/1KV/64exp + gpu_fa4_cute (== seed panel/transect/twobucket)",
+  "optimizer": "SWARM_OPTIMIZER fractional schedule (warmup peak 0.100*N verified at N=4776)",
+  "phase_boundary_step": 3776,
+  "seeds": [
+   1,
+   2,
+   3
+  ],
+  "seq_len": 4096,
+  "steps": 4776,
+  "wandb_group": "rav_mve_epochrep"
+ },
+ "cost": {
+  "assumed_s_per_step_d512": 1.7,
+  "est_total_h100x8_node_hours": 40.6,
+  "n_runs": 18
+ },
+ "date_utc": "2026-07-19",
+ "decision_rule": {
+  "HARM_CONFIRMED": "Delta > 2*SE AND Delta > 0 (worse) -> the functional form's harm term is REQUIRED for high-rep proposals, and Delta calibrates b.",
+  "NO_HARM": "Delta within 2*SE of 0 -> kernel + hard epoch caps suffice; no harm term needed.",
+  "SE": "SE = sample_sd(seed bpb) / sqrt(n_seed); pooled control+treatment where applicable.",
+  "estimand": "per arm: Delta = mean_humaneval_bpb(e_high) - mean_humaneval_bpb(e=4), with 3-4-seed SE (code pools twobucket seed 0 -> 4 seeds; web 3 seeds). e_high in {16, 32} (code), {16, 24} (web).",
+  "kernel_residual": "per point: realized_humaneval_bpb - pred_kernel_humaneval (the flat content prediction) = the repetition effect isolated from content."
+ },
+ "experiment": "epochrep_seed_replicated",
+ "issue": "#7067 (mixing-via-embeddings); DECISIVE kernel-vs-form seed-replicated epoch-harm test (rav directive 2026-07-19)",
+ "launcher": "experiments/grug/moe/launch_mve_epochrep_h100.py",
+ "points": [
+  {
+   "arm": "code",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.002597156191618231,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": true,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e4",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6930362076202932,
+   "pred_swoosh_zmacro": 2.215340493361334,
+   "slice_batches": 189,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "ctr",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0006458536561167029,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e16",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953714432567298,
+   "pred_swoosh_zmacro": 2.2801855077343793,
+   "slice_batches": 47,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e16",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 32.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.00032979761163406105,
+    "code_slice_tokens": 50331648,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e32",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.7036506797141032,
+   "pred_swoosh_zmacro": 2.6115682004536804,
+   "slice_batches": 24,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e32",
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0035444286410307533,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "web_text",
+   "is_control": true,
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e4",
+   "pred_kernel_humaneval": 0.7372024893573087,
+   "pred_kernel_zmacro": 1.96576123358659,
+   "pred_swoosh_humaneval": 0.7372563400046765,
+   "pred_swoosh_zmacro": 1.965784663274827,
+   "slice_batches": 189,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0008814187625843672,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e16",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7395915756411164,
+   "pred_swoosh_zmacro": 2.030629677647901,
+   "slice_batches": 47,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 24.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0005813613114918167,
+    "code_slice_tokens": 65011712,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 24.361290322580647,
+     "phase1": 6.451612903225806,
+     "total": 30.812903225806455
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e24",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7433085172520956,
+   "pred_swoosh_zmacro": 2.173215464456859,
+   "slice_batches": 31,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  }
+ ],
+ "predictions_note": {
+  "kernel": "frozen Hellinger kernel ridge K=1000 (gamma 1.2475417504102333, alpha 0.1), dual on all 800 train runs; CONSTANT across epochs at fixed w by construction; validated by reproducing the transect prereg's 16+16 committed values AND the twobucket ctr/a2 code values to 1e-9",
+  "kernel_flat_check": {
+   "code": {
+    "max_abs_spread_across_epochs": 0.0,
+    "pred_kernel_humaneval_constant": 0.6929823569729253
+   },
+   "web": {
+    "max_abs_spread_across_epochs": 3.219646771412954e-15,
+    "pred_kernel_humaneval_constant": 0.7372024893573087
+   }
+  },
+  "swoosh": "kernel + transect-committed b_g1 head (humaneval tau=2.0 b=5.872124766140496e-05; zmacro tau=5.5 b=0.002902417147546668; per-phase epochs, group 'all' so the epoching bucket's mass drives the rise); predicted humaneval bpb RISES with epochs",
+  "swoosh_predicted_rise_humaneval": {
+   "code": {
+    "delta_e16_vs_e4": 0.002335,
+    "delta_e32_vs_e4": 0.010614
+   },
+   "web": {
+    "delta_e16_vs_e4": 0.002335,
+    "delta_e24_vs_e4": 0.006052
+   }
+  }
+ },
+ "readout_plan": {
+  "aggregate": "mean +/- SE humaneval bpb per (arm, epoch) over seeds",
+  "eval": "post-hoc eval_logprob on the 18 final checkpoints (step 4775) + the 3 pooled twobucket code twins; humaneval bpb (perplexity per byte = 2^bpb reported alongside)",
+  "figure": "f27_epoch_harm_calibration.png: humaneval bpb vs epochs per arm with seed error bars, the flat kernel prediction line, and the swoosh predicted curve overlaid",
+  "test": "Delta vs 2*SE per arm and epoch (the decision_rule)"
+ },
+ "runs": [
+  {
+   "arm": "code",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.002597156191618231,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": true,
+   "job_name": "rav-mve-epochrep-code-e4-s1",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e4_s1",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6930362076202932,
+   "pred_swoosh_zmacro": 2.215340493361334,
+   "run_id": "rav_mve_epochrep_code_e4_s1",
+   "seed": 1,
+   "slice_batches": 189,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "ctr",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.002597156191618231,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": true,
+   "job_name": "rav-mve-epochrep-code-e4-s2",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e4_s2",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6930362076202932,
+   "pred_swoosh_zmacro": 2.215340493361334,
+   "run_id": "rav_mve_epochrep_code_e4_s2",
+   "seed": 2,
+   "slice_batches": 189,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "ctr",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.002597156191618231,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": true,
+   "job_name": "rav-mve-epochrep-code-e4-s3",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e4_s3",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6930362076202932,
+   "pred_swoosh_zmacro": 2.215340493361334,
+   "run_id": "rav_mve_epochrep_code_e4_s3",
+   "seed": 3,
+   "slice_batches": 189,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "ctr",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0006458536561167029,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-code-e16-s1",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e16_s1",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953714432567298,
+   "pred_swoosh_zmacro": 2.2801855077343793,
+   "run_id": "rav_mve_epochrep_code_e16_s1",
+   "seed": 1,
+   "slice_batches": 47,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e16",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0006458536561167029,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-code-e16-s2",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e16_s2",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953714432567298,
+   "pred_swoosh_zmacro": 2.2801855077343793,
+   "run_id": "rav_mve_epochrep_code_e16_s2",
+   "seed": 2,
+   "slice_batches": 47,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e16",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0006458536561167029,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-code-e16-s3",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e16_s3",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.6953714432567298,
+   "pred_swoosh_zmacro": 2.2801855077343793,
+   "run_id": "rav_mve_epochrep_code_e16_s3",
+   "seed": 3,
+   "slice_batches": 47,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e16",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 32.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.00032979761163406105,
+    "code_slice_tokens": 50331648,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-code-e32-s1",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e32_s1",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.7036506797141032,
+   "pred_swoosh_zmacro": 2.6115682004536804,
+   "run_id": "rav_mve_epochrep_code_e32_s1",
+   "seed": 1,
+   "slice_batches": 24,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e32",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 32.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.00032979761163406105,
+    "code_slice_tokens": 50331648,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-code-e32-s2",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e32_s2",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.7036506797141032,
+   "pred_swoosh_zmacro": 2.6115682004536804,
+   "run_id": "rav_mve_epochrep_code_e32_s2",
+   "seed": 2,
+   "slice_batches": 24,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e32",
+   "w_target": 0.2
+  },
+  {
+   "arm": "code",
+   "e_target": 32.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.00032979761163406105,
+    "code_slice_tokens": 50331648,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    }
+   },
+   "group": "code_adjacent",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-code-e32-s3",
+   "nearest_train_hellinger": 0.44149898723554215,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "code_e32_s3",
+   "pred_kernel_humaneval": 0.6929823569729253,
+   "pred_kernel_zmacro": 2.2153170636730968,
+   "pred_swoosh_humaneval": 0.7036506797141032,
+   "pred_swoosh_zmacro": 2.6115682004536804,
+   "run_id": "rav_mve_epochrep_code_e32_s3",
+   "seed": 3,
+   "slice_batches": 24,
+   "sliced_bucket": "c01q0",
+   "steps": 4776,
+   "twobucket_twin": "a2_e32",
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0035444286410307533,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "web_text",
+   "is_control": true,
+   "job_name": "rav-mve-epochrep-web-e4-s1",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e4_s1",
+   "pred_kernel_humaneval": 0.7372024893573087,
+   "pred_kernel_zmacro": 1.96576123358659,
+   "pred_swoosh_humaneval": 0.7372563400046765,
+   "pred_swoosh_zmacro": 1.965784663274827,
+   "run_id": "rav_mve_epochrep_web_e4_s1",
+   "seed": 1,
+   "slice_batches": 189,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0035444286410307533,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "web_text",
+   "is_control": true,
+   "job_name": "rav-mve-epochrep-web-e4-s2",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e4_s2",
+   "pred_kernel_humaneval": 0.7372024893573087,
+   "pred_kernel_zmacro": 1.96576123358659,
+   "pred_swoosh_humaneval": 0.7372563400046765,
+   "pred_swoosh_zmacro": 1.965784663274827,
+   "run_id": "rav_mve_epochrep_web_e4_s2",
+   "seed": 2,
+   "slice_batches": 189,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 4.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0035444286410307533,
+    "code_slice_tokens": 396361728,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    }
+   },
+   "group": "web_text",
+   "is_control": true,
+   "job_name": "rav-mve-epochrep-web-e4-s3",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e4_s3",
+   "pred_kernel_humaneval": 0.7372024893573087,
+   "pred_kernel_zmacro": 1.96576123358659,
+   "pred_swoosh_humaneval": 0.7372563400046765,
+   "pred_swoosh_zmacro": 1.965784663274827,
+   "run_id": "rav_mve_epochrep_web_e4_s3",
+   "seed": 3,
+   "slice_batches": 189,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0008814187625843672,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-web-e16-s1",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e16_s1",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7395915756411164,
+   "pred_swoosh_zmacro": 2.030629677647901,
+   "run_id": "rav_mve_epochrep_web_e16_s1",
+   "seed": 1,
+   "slice_batches": 47,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0008814187625843672,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-web-e16-s2",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e16_s2",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7395915756411164,
+   "pred_swoosh_zmacro": 2.030629677647901,
+   "run_id": "rav_mve_epochrep_web_e16_s2",
+   "seed": 2,
+   "slice_batches": 47,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 16.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0008814187625843672,
+    "code_slice_tokens": 98566144,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-web-e16-s3",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e16_s3",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7395915756411164,
+   "pred_swoosh_zmacro": 2.030629677647901,
+   "run_id": "rav_mve_epochrep_web_e16_s3",
+   "seed": 3,
+   "slice_batches": 47,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 24.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0005813613114918167,
+    "code_slice_tokens": 65011712,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 24.361290322580647,
+     "phase1": 6.451612903225806,
+     "total": 30.812903225806455
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-web-e24-s1",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e24_s1",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7433085172520956,
+   "pred_swoosh_zmacro": 2.173215464456859,
+   "run_id": "rav_mve_epochrep_web_e24_s1",
+   "seed": 1,
+   "slice_batches": 31,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 24.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0005813613114918167,
+    "code_slice_tokens": 65011712,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 24.361290322580647,
+     "phase1": 6.451612903225806,
+     "total": 30.812903225806455
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-web-e24-s2",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e24_s2",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7433085172520956,
+   "pred_swoosh_zmacro": 2.173215464456859,
+   "run_id": "rav_mve_epochrep_web_e24_s2",
+   "seed": 2,
+   "slice_batches": 31,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  },
+  {
+   "arm": "web",
+   "e_target": 24.0,
+   "epochs": {
+    "code_slice_frac_of_bucket": 0.0005813613114918167,
+    "code_slice_tokens": 65011712,
+    "convention": "real: sliced e = w * phase_batches / n_slice_batches; partner over full cache",
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938642,
+     "total": 0.009138065571993098
+    },
+    "sliced": {
+     "phase0": 24.361290322580647,
+     "phase1": 6.451612903225806,
+     "total": 30.812903225806455
+    }
+   },
+   "group": "web_text",
+   "is_control": false,
+   "job_name": "rav-mve-epochrep-web-e24-s3",
+   "nearest_train_hellinger": 0.47861329037811273,
+   "partner_bucket": "c05q0",
+   "phase_boundary_step": 3776,
+   "point": "web_e24_s3",
+   "pred_kernel_humaneval": 0.7372024893573119,
+   "pred_kernel_zmacro": 1.9657612335866184,
+   "pred_swoosh_humaneval": 0.7433085172520956,
+   "pred_swoosh_zmacro": 2.173215464456859,
+   "run_id": "rav_mve_epochrep_web_e24_s3",
+   "seed": 3,
+   "slice_batches": 31,
+   "sliced_bucket": "c26q1",
+   "steps": 4776,
+   "twobucket_twin": null,
+   "w_target": 0.2
+  }
+ ],
+ "slicing_mechanism": {
+  "used": "LmDataConfig.max_train_batches={sliced_bucket: n} - slice-after-shuffle of the SAME cache",
+  "why": "identical estimand (T' = n*512*4096 tokens, real epochs via mixture restart-wrap), exact token control at 2.097M granularity, zero data movement; block shuffle permutes io-blocks globally so a prefix slice is a content-fair subsample. Content h=V.w is UNCHANGED by slicing -> kernel is flat."
+ },
+ "why": "DP4: in-regime the kernel misses NO repetition harm (0/37 tasks corr>0.1). DP3: only signal is n=4 high-code-rep runs, kernel-residual +0.023 bpb humaneval, ~4x the 0.006 bpb seed floor - underpowered. DP5: the in-regime-fitted swoosh UNDER-predicts that hint 2.6x, so the harm term cannot be calibrated from the observational sweep; it needs controlled high-rep data WITH seed error bars. Single-seed twobucket-a2 + transect show the SHAPE but cannot separate a ~0.02 bpb rise from sigma~0.006 bpb seed noise. This experiment supplies the replication."
+}
