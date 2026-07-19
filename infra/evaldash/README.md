@@ -1,27 +1,23 @@
 # evaldash
 
-The Marin eval-results dashboard, as an IAP-gated Cloud Run service: a leaderboard and a
-browsable run log over every eval run. Eval runs write one canonical JSON record per run to
-an object-store prefix — `gs://marin-eval-metadata/runs/<run_id>/record.json` for GCP runs,
+A leaderboard and browsable run log over every Marin eval run.
+
+Eval runs write one canonical JSON record per run to an object-store prefix —
+`gs://marin-eval-metadata/runs/<run_id>/record.json` for GCP runs,
 `s3://marin-us-east-02a/marin/eval-metadata/runs/...` (CoreWeave object storage) for CW GPU
-runs — and a CloudSQL Postgres (`hai-gcp-models:us-central1:marin-metadata`, database
-`evals`) holds indexed rows. The service scans every prefix in `RECORDS_PREFIXES` on a loop
-(CW credentials come from Secret Manager; endpoint/addressing via
-`rigging.filesystem.s3_compat`), upserts records into Postgres, and serves a Vue SPA plus a
-small JSON API. The SPA has four views: leaderboard (per-model mean score + a colour-scaled
-model x task heatmap with model-comparison bars and score-over-time charts, group-task
-subtasks rolled up), runs (filterable table), run detail (metrics, live iris job/attempt
-status, live finelog logs, a per-sample browser, and group siblings), and status (per-prefix
-ingest probes). Served at https://evaldash.oa.dev (and the run.app URL).
+runs. A background loop scans every prefix in `RECORDS_PREFIXES` (CW credentials come from
+Secret Manager; endpoint/addressing via `rigging.filesystem.s3_compat`) and upserts records
+into a Cloud SQL Postgres index (`hai-gcp-models:us-central1:marin-metadata`, database
+`evals`). A Starlette app serves a JSON API over that index and the built Vue SPA. Served at
+https://evaldash.oa.dev.
 
-## Serving without the database
+The SPA has four views: leaderboard (per-model mean score, a colour-scaled model x task
+heatmap with model-comparison bars and score-over-time charts, group-task subtasks rolled
+up), runs (filterable table), run detail (metrics, live iris job/attempt status, live
+finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest
+probes).
 
-The record bucket is the source of truth; Postgres is an index. The server picks a backing
-store at boot: Postgres when it is reachable, otherwise an in-memory store built from the
-same GCS records. Either way the ingest loop keeps an in-memory snapshot current, so the
-leaderboard, run detail, and filter metadata are served from GCS even when the database is
-down — the header shows a `GCS cache` badge in that mode. The run list is served from the
-indexed Postgres tables when the database is up.
+IAP is the only access gate; there is no application auth.
 
 ## API
 
@@ -54,13 +50,6 @@ the service's Direct VPC egress (resolved from a GCE instance filter with the ru
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-## Auth
-
-IAP is the only gate — there is no application auth. Cloud Run is invokable solely by the
-IAP service agent, and people are admitted through IAP's `httpsResourceAccessor` role
-(`marin-evaldash:viewers`). The OAuth consent screen is project-level and shared across the
-project's IAP services.
-
 ## Layout
 
 ```
@@ -75,22 +64,15 @@ __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.clo
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-The runtime image copies `records.py` and `results_db.py` from
-`lib/marin/src/marin/evaluation/`, plus this directory's `src/*.py` server modules, as flat
-top-level modules, so the Docker build context is the repo root (all COPY paths are
-repo-root-relative; the repo-root `.dockerignore` applies).
-
 ## Develop
-
-Run the server against a local directory of records — no database, no GCS needed:
 
 ```bash
 # Build the SPA (served from dashboard/dist)
 npm --prefix infra/evaldash/dashboard install
 npm --prefix infra/evaldash/dashboard run build
 
-# Point at a local records tree laid out as <run_id>/record.json; with no EVAL_DB_* set,
-# resolve_db_config() returns None and the server uses the in-memory GCS store.
+# EVAL_DB_* defaults to the shared hai-gcp-models:us-central1:marin-metadata/evals instance;
+# EVAL_DB_PASSWORD comes from the cloudsql-evals-password secret when unset.
 RECORDS_PREFIXES=/path/to/records \
 EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
 PORT=8080 \
@@ -104,44 +86,8 @@ PYTHONPATH=lib/marin/src \
 
 ## Deploy
 
-Pulumi owns the deploy: the runtime service account and its `cloudsql.client` /
-`storage.objectViewer` grants, the Artifact Registry repo and image, the Cloud Run service,
-and the IAP wiring. The service and its image build come from the reusable
-`iac.gcp.cloud_run.CloudRunService` component (`infra/iac`); this directory is its own Pulumi
-project on the shared repo venv, sharing `infra/iac`'s state backend.
-
-```bash
-uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers (pulumi lives behind marin-iac[deploy])
-gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
-
-cd infra/evaldash
-pulumi login gs://marin-iac-state
-export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
-  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
-pulumi stack select marin-evaldash                        # first time: pulumi stack init marin-evaldash
-
-# Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member.
-pulumi config set --path 'viewers[0]' you@example.com
-
-pulumi preview                                            # plan; then, once it looks right:
-pulumi up
-```
-
-`pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact Registry,
-and rolls the service to that digest. `min` and `max` instances are both 1: the ingest loop
-runs between requests (so CPU is always allocated), and a single instance keeps one ingest
-cadence.
-
-### Prerequisites the deploy assumes
-
-- `cloudsql-evals-password` Secret Manager secret holds the `evals` DB user's password
-  (mounted as `EVAL_DB_PASSWORD`). Create it once:
-  ```bash
-  echo -n "<db-password>" | gcloud secrets create cloudsql-evals-password \
-    --project=hai-gcp-models --data-file=-
-  ```
-- The CloudSQL instance `hai-gcp-models:us-central1:marin-metadata` exists with database
-  `evals` and user `evals` (owned by `infra/cloudsql`).
-- The `gs://marin-eval-metadata` bucket exists and the runtime SA can read it.
-- `CloudRunServiceArgs.cloudsql_instances` is available in `infra/iac` — it attaches the
-  CloudSQL instance to the service so the connector can dial it.
+Deployment is handled via Pulumi (`iac.gcp.cloud_run.CloudRunService`); this directory is its
+own Pulumi project (stack `marin-evaldash`), sharing `infra/iac`'s state backend. It depends
+on the `hai-gcp-models:us-central1:marin-metadata` Cloud SQL instance and the
+`cloudsql-evals-password` secret from `infra/cloudsql` — see that project's README for
+provisioning them.

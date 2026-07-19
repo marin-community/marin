@@ -97,8 +97,7 @@ def connect_engine(instance: str, db: str, user: str, password: str) -> Engine:
     Uses the ``cloud-sql-python-connector`` + pg8000 creator pattern: every pooled connection is
     minted by the connector, which handles IAM-authenticated TLS to ``instance`` without a local proxy.
     """
-    # pyrefly: ignore[missing-import]  # the evaldb dependency group is not in the lint env
-    from google.cloud.sql.connector import Connector  # noqa: PLC0415  # lazy: keep the DB stack optional
+    from google.cloud.sql.connector import Connector  # noqa: PLC0415  # lazy: keep import weight down
 
     connector = Connector()
 
@@ -110,7 +109,7 @@ def connect_engine(instance: str, db: str, user: str, password: str) -> Engine:
 
 def _secret_password(secret_id: str) -> str | None:
     """Fetch the latest version of ``secret_id`` from Secret Manager, or None if it cannot be read."""
-    from google.cloud import secretmanager  # noqa: PLC0415  # lazy: keep the DB stack optional
+    from google.cloud import secretmanager  # noqa: PLC0415  # lazy: keep import weight down
 
     client = secretmanager.SecretManagerServiceClient()
     name = f"projects/{GCP_PROJECT}/secrets/{secret_id}/versions/latest"
@@ -131,8 +130,9 @@ def resolve_db_config() -> DbConfig | None:
 
     Reads ``EVAL_DB_INSTANCE``/``EVAL_DB_NAME``/``EVAL_DB_USER`` (with defaults). The password comes
     from ``EVAL_DB_PASSWORD`` if set, otherwise the latest version of the ``EVAL_DB_PASSWORD_SECRET``
-    secret in Secret Manager. Returns None when neither yields a password so callers can degrade to
-    "DB unavailable" instead of failing.
+    secret in Secret Manager. Returns None when neither yields a password; it is the caller's choice
+    whether that is fatal (the dashboard requires the DB and fails to start) or something to work
+    around (the CLI's ``launch`` command still submits and runs evals without mirroring to Postgres).
     """
     instance = os.environ.get("EVAL_DB_INSTANCE", DEFAULT_DB_INSTANCE)
     db = os.environ.get("EVAL_DB_NAME", DEFAULT_DB_NAME)
@@ -171,7 +171,7 @@ def run_row(record: EvalRunRecord) -> dict:
         "git_sha": record.provenance.git_sha,
         "image_digest": record.provenance.evalchemy_image,
         "error": record.error,
-        "record": record.to_json(),
+        "record": record.model_dump(mode="json", by_alias=True),
     }
 
 

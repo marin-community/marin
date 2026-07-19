@@ -139,7 +139,7 @@ async function copyPath() {
       </div>
 
       <!-- Samples (succeeded runs) -->
-      <SamplesPanel v-if="data.status === 'succeeded'" :run-id="data.run_id" />
+      <SamplesPanel v-if="data.status === 'succeeded'" :key="props.runId" :run-id="data.run_id" />
 
       <!-- Results path -->
       <div>
@@ -166,10 +166,10 @@ async function copyPath() {
       </div>
 
       <!-- Live iris job + attempt status for every role -->
-      <JobsPanel :run-id="data.run_id" />
+      <JobsPanel :key="props.runId" :run-id="data.run_id" />
 
       <!-- Live finelog logs (collapsed), with the recorded log tails as fallback -->
-      <LogsPanel :run-id="data.run_id" :roles="jobRoles" :log-tails="data.log_tails ?? {}" />
+      <LogsPanel :key="props.runId" :run-id="data.run_id" :roles="jobRoles" :log-tails="data.log_tails ?? {}" />
     </div>
   </section>
 </template>

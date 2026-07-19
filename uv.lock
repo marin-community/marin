@@ -4157,12 +4157,14 @@ source = { editable = "lib/marin" }
 dependencies = [
     { name = "backports-zstd" },
     { name = "braceexpand" },
+    { name = "cloud-sql-python-connector" },
     { name = "datasets" },
     { name = "draccus" },
     { name = "fasttext-wheel" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-api-python-client" },
+    { name = "google-cloud-secret-manager" },
     { name = "google-cloud-storage" },
     { name = "jax" },
     { name = "jaxopt" },
@@ -4177,12 +4179,14 @@ dependencies = [
     { name = "numpy" },
     { name = "openai" },
     { name = "pandas" },
+    { name = "pg8000" },
     { name = "plotly" },
     { name = "pyarrow" },
     { name = "regex" },
     { name = "requests" },
     { name = "resiliparse" },
     { name = "s3fs" },
+    { name = "sqlalchemy" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "transformers" },
@@ -4293,12 +4297,6 @@ docs = [
     { name = "mkdocstrings-python" },
     { name = "pymdown-extensions" },
 ]
-evaldb = [
-    { name = "cloud-sql-python-connector" },
-    { name = "google-cloud-secret-manager" },
-    { name = "pg8000" },
-    { name = "sqlalchemy" },
-]
 lint = [
     { name = "black" },
     { name = "click" },
@@ -4324,6 +4322,7 @@ test = [
 requires-dist = [
     { name = "backports-zstd", marker = "python_full_version < '3.14'", specifier = ">=1.0.0" },
     { name = "braceexpand" },
+    { name = "cloud-sql-python-connector" },
     { name = "datasets", specifier = "<5.0.0" },
     { name = "draccus", specifier = ">=0.11.6" },
     { name = "faiss-cpu", marker = "extra == 'datakit'" },
@@ -4332,6 +4331,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2025.3.0" },
     { name = "gcsfs" },
     { name = "google-api-python-client", specifier = ">=2.175.0" },
+    { name = "google-cloud-secret-manager" },
     { name = "google-cloud-storage" },
     { name = "google-vizier", extras = ["jax"], marker = "extra == 'vizier'" },
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=0d0dbe8904ed984137a0dfa764583f1508cf3274" },
@@ -4363,6 +4363,7 @@ requires-dist = [
     { name = "nvidia-nccl-cu13", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = ">=2.28.3" },
     { name = "openai" },
     { name = "pandas", specifier = ">=2.0" },
+    { name = "pg8000" },
     { name = "plotly" },
     { name = "prime", marker = "extra == 'rl'" },
     { name = "pyarrow", specifier = ">=23.0.0" },
@@ -4373,6 +4374,7 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "scikit-learn", marker = "extra == 'datakit'" },
     { name = "scipy", marker = "extra == 'datakit'" },
+    { name = "sqlalchemy", specifier = ">=2" },
     { name = "sympy", marker = "extra == 'math'" },
     { name = "sympy", marker = "extra == 'rl'", specifier = ">=1.12.1,<1.14" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'gpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "marin-core", extra = "gpu" } },
@@ -4438,12 +4440,6 @@ docs = [
     { name = "mkdocstrings", specifier = ">=0.24.0" },
     { name = "mkdocstrings-python", specifier = ">=1.7.0" },
     { name = "pymdown-extensions", specifier = ">=10.0.0" },
-]
-evaldb = [
-    { name = "cloud-sql-python-connector" },
-    { name = "google-cloud-secret-manager" },
-    { name = "pg8000" },
-    { name = "sqlalchemy", specifier = ">=2" },
 ]
 lint = [
     { name = "black", specifier = ">=26.3.1" },

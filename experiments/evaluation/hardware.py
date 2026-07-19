@@ -135,6 +135,12 @@ def _parse_override(override: str) -> AcceleratorChoice:
         )
     # A non-GPU override must be a valid TPU slice name (raises ValueError otherwise).
     get_tpu_topology(text)
+    if text not in SERVABLE_TPU_SLICES:
+        raise ValueError(
+            f"accelerator override {text!r} is a multi-host TPU slice; iris runs one task per VM for a "
+            "multi-host TPU job, so serving would start independent servers fighting over one endpoint "
+            f"name. Use a single-host slice: {', '.join(SERVABLE_TPU_SLICES)}"
+        )
     return AcceleratorChoice(platform=Platform.TPU, tpu_type=text, region=TPU_FAMILY_REGION[tpu_family(text)])
 
 

@@ -8,19 +8,16 @@ self-describing account of what model was evaluated on what hardware, whether it
 per-task metrics it produced. The record is the source of truth; the Postgres mirror
 (:mod:`marin.evaluation.results_db`) is a queryable index built from it.
 
-This module is import-light on purpose -- stdlib plus fsspec only, no marin/levanter/iris imports --
-so it can be vendored verbatim into a standalone dashboard image that only reads records back.
+This module is import-light on purpose -- stdlib plus fsspec and pydantic only, no marin/levanter/iris
+imports -- so it can be vendored verbatim into a standalone dashboard image that only reads records back.
 """
 
-from __future__ import annotations
-
-import json
 import logging
-from dataclasses import dataclass
 from enum import StrEnum
 
 import fsspec
 from fsspec.core import url_to_fs
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -45,58 +42,66 @@ class RunStatus(StrEnum):
     INFRA_FAILED = "infra_failed"
 
 
-@dataclass(frozen=True)
-class ModelRef:
+class ModelRef(BaseModel):
     """The evaluated model's identity: registry name, weight location, and serving backend."""
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     location: str
     backend: str
 
 
-@dataclass(frozen=True)
-class EvalTaskRef:
+class EvalTaskRef(BaseModel):
     """One lm-eval task and its shot count."""
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     num_fewshot: int
 
 
-@dataclass(frozen=True)
-class EvalRef:
+class EvalRef(BaseModel):
     """The eval suite that was run: its name, mechanism, and constituent tasks."""
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     mechanism: str
     tasks: tuple[EvalTaskRef, ...]
 
 
-@dataclass(frozen=True)
-class HardwareRef:
+class HardwareRef(BaseModel):
     """The slice the model was served on. ``region_or_cluster`` is the GCP region or CW cluster name."""
+
+    model_config = ConfigDict(frozen=True)
 
     platform: str
     accelerator: str
     region_or_cluster: str | None
 
 
-@dataclass(frozen=True)
-class Provenance:
+class Provenance(BaseModel):
     """Where the run came from: launch-time git SHA, eval container digest, and launch host."""
+
+    model_config = ConfigDict(frozen=True)
 
     git_sha: str
     evalchemy_image: str
     launch_host: str
 
 
-@dataclass(frozen=True)
-class EvalRunRecord:
+class EvalRunRecord(BaseModel):
     """The full account of one eval run, serialized to ``record.json``.
 
     ``metrics`` is ``{task: {metric: value}}`` as produced by
     :meth:`~marin.evaluation.eval_result.EvalchemyResult.task_metrics`; it is empty when the run did
-    not reach the metric-reading stage (an infra failure).
+    not reach the metric-reading stage (an infra failure). The ``evaluation`` field serializes as
+    ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
+    by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
     """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     run_id: str
     group_id: str
@@ -106,93 +111,19 @@ class EvalRunRecord:
     created_at: str
     user: str
     model: ModelRef
-    evaluation: EvalRef
+    evaluation: EvalRef = Field(alias="eval")
     hardware: HardwareRef
     status: RunStatus
     error: str | None
     results_path: str
     metrics: dict[str, dict[str, float]]
-    provenance: Provenance
     jobs: dict[str, str]
     """Pipeline role (``orchestrator``/``serve``/``eval``) to iris job path, for every job the run
     submitted before finishing; a failure before a role's submission simply omits that role."""
     log_tails: dict[str, tuple[str, ...]]
     """For failed runs, the last log lines of the child job(s) behind the failure, keyed like
     ``jobs`` -- enough to diagnose most failures without cluster access. Empty on success."""
-
-    def to_json(self) -> dict:
-        """The canonical ``record.json`` structure as a JSON-serializable dict."""
-        return {
-            "run_id": self.run_id,
-            "group_id": self.group_id,
-            "created_at": self.created_at,
-            "user": self.user,
-            "model": {
-                "name": self.model.name,
-                "location": self.model.location,
-                "backend": self.model.backend,
-            },
-            "eval": {
-                "name": self.evaluation.name,
-                "mechanism": self.evaluation.mechanism,
-                "tasks": [{"name": t.name, "num_fewshot": t.num_fewshot} for t in self.evaluation.tasks],
-            },
-            "hardware": {
-                "platform": self.hardware.platform,
-                "accelerator": self.hardware.accelerator,
-                "region_or_cluster": self.hardware.region_or_cluster,
-            },
-            "status": self.status.value,
-            "error": self.error,
-            "results_path": self.results_path,
-            "metrics": {task: dict(metrics) for task, metrics in self.metrics.items()},
-            "jobs": dict(self.jobs),
-            "log_tails": {role: list(lines) for role, lines in self.log_tails.items()},
-            "provenance": {
-                "git_sha": self.provenance.git_sha,
-                "evalchemy_image": self.provenance.evalchemy_image,
-                "launch_host": self.provenance.launch_host,
-            },
-        }
-
-    @classmethod
-    def from_json(cls, data: dict) -> EvalRunRecord:
-        """Reconstruct a record from the ``record.json`` structure produced by :meth:`to_json`."""
-        return cls(
-            run_id=data["run_id"],
-            group_id=data["group_id"],
-            created_at=data["created_at"],
-            user=data["user"],
-            model=ModelRef(
-                name=data["model"]["name"],
-                location=data["model"]["location"],
-                backend=data["model"]["backend"],
-            ),
-            evaluation=EvalRef(
-                name=data["eval"]["name"],
-                mechanism=data["eval"]["mechanism"],
-                tasks=tuple(EvalTaskRef(name=t["name"], num_fewshot=t["num_fewshot"]) for t in data["eval"]["tasks"]),
-            ),
-            hardware=HardwareRef(
-                platform=data["hardware"]["platform"],
-                accelerator=data["hardware"]["accelerator"],
-                region_or_cluster=data["hardware"]["region_or_cluster"],
-            ),
-            status=RunStatus(data["status"]),
-            error=data["error"],
-            results_path=data["results_path"],
-            metrics={
-                task: {metric: float(value) for metric, value in metrics.items()}
-                for task, metrics in data["metrics"].items()
-            },
-            jobs=dict(data["jobs"]),
-            log_tails={role: tuple(lines) for role, lines in data["log_tails"].items()},
-            provenance=Provenance(
-                git_sha=data["provenance"]["git_sha"],
-                evalchemy_image=data["provenance"]["evalchemy_image"],
-                launch_host=data["provenance"]["launch_host"],
-            ),
-        )
+    provenance: Provenance
 
 
 def record_path(prefix: str, run_id: str) -> str:
@@ -204,14 +135,14 @@ def write_record(record: EvalRunRecord, prefix: str) -> str:
     """Write ``record.json`` under ``{prefix}/{run_id}/`` and return its full path."""
     path = record_path(prefix, record.run_id)
     with fsspec.open(path, "w") as handle:
-        handle.write(json.dumps(record.to_json(), indent=2))
+        handle.write(record.model_dump_json(indent=2, by_alias=True))
     return path
 
 
 def read_record(path: str) -> EvalRunRecord:
     """Read one ``record.json`` back into an :class:`EvalRunRecord`."""
     with fsspec.open(path, "r") as handle:
-        return EvalRunRecord.from_json(json.load(handle))
+        return EvalRunRecord.model_validate_json(handle.read())
 
 
 def list_records(prefix: str) -> list[EvalRunRecord]:

@@ -13,6 +13,7 @@ dependencies = [
     # zstd codec on Python < 3.14; required for reading/writing zstd via fsspec.
     "backports-zstd>=1.0.0; python_version < '3.14'",
     "braceexpand",
+    "cloud-sql-python-connector",
     "datasets<5.0.0",
     "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
@@ -22,6 +23,7 @@ dependencies = [
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
+    "google-cloud-secret-manager",
     "google-cloud-storage",
     "marin-haliax",
     "jax>=0.9.2,<0.11",
@@ -33,12 +35,14 @@ dependencies = [
     "numpy",
     "openai",
     "pandas>=2.0",
+    "pg8000",
     "plotly",
     "pyarrow>=23.0.0",
     "regex",
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
+    "sqlalchemy>=2",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
@@ -83,15 +87,6 @@ docs = [
 ]
 
 math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
-
-# Postgres mirror for eval-run records (marin.evaluation.results_db): SQLAlchemy Core over a Cloud SQL
-# instance reached through the Python connector + pg8000, with the password read from Secret Manager.
-evaldb = [
-    "sqlalchemy>=2",
-    "pg8000",
-    "cloud-sql-python-connector",
-    "google-cloud-secret-manager",
-]
 
 dev = [
     { include-group = "test" },

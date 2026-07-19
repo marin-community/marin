@@ -9,9 +9,10 @@ and indexed into CloudSQL Postgres.
 
 A background task ingests the GCS records on startup and every ``EVALDASH_INGEST_INTERVAL``
 seconds (default 300), upserting each into Postgres. Reads are served through a
-``RecordStore``: Postgres-backed when the DB is reachable at boot, otherwise an in-memory
-store built from the same GCS records so the dashboard works with no database. Either way
-the ingest loop refreshes the in-memory snapshot the matrix/meta/detail views read from.
+``RecordStore``, backed by Postgres: the service fails to start if no DB is configured. Each
+ingest pass also refreshes an in-memory snapshot the matrix/meta/history views read from,
+since ``results_db`` exposes no aggregate query for them; a prefix whose listing fails keeps
+its last successfully-listed records in that snapshot rather than dropping out of it.
 
 ``/api/status`` reports each prefix's last-probe health, the active store, and the ingest
 cadence; ``POST /api/refresh`` runs one ingest pass immediately, serialised with the loop.
@@ -56,7 +57,6 @@ from marin.evaluation.results_db import (
     eval_runs,
     fetch_runs,
     resolve_db_config,
-    run_row,
     upsert_record,
 )
 from metrics import primary_metric, stderr_for
@@ -150,19 +150,6 @@ def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
         stderr = _combined_stderr([stderr for _, _, _, stderr in entries])
         result[task] = TaskScore(mean, next(iter(labels)) if len(labels) == 1 else "mean", stderr)
     return result
-
-
-def record_to_row(record: EvalRunRecord) -> dict:
-    """Flatten a record to the ``/api/runs`` row shape: the ``eval_runs`` columns
-    (:func:`~marin.evaluation.results_db.run_row`) plus a ``tasks`` list and the ``jobs`` map,
-    with ``created_at`` as the record's ISO string. Matches what the Postgres ``fetch_runs``
-    (enriched from the cached record) returns so the two stores expose one shape."""
-    row = run_row(record)
-    del row["record"]
-    row["created_at"] = record.created_at
-    row["tasks"] = [task.name for task in record.evaluation.tasks]
-    row["jobs"] = dict(record.jobs)
-    return row
 
 
 def record_score(record: EvalRunRecord) -> TaskScore | None:
@@ -287,25 +274,29 @@ def _group_sibling(record: EvalRunRecord) -> dict:
 
 @dataclass(frozen=True)
 class StoreInfo:
-    """Which store serves reads and, for Postgres, the instance/database behind it."""
+    """The store backing reads: always Postgres, plus its instance/database."""
 
     backend: str
-    instance: str | None
-    database: str | None
+    instance: str
+    database: str
 
 
 class RecordStore:
-    """In-memory snapshot of eval records plus the read views the API serves.
+    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
 
-    Subclasses provide ``refresh`` (how a fresh record list is absorbed) and ``fetch_runs``
-    (the filtered run list). ``get_record``, ``matrix``, and ``meta`` read the snapshot the
-    ingest loop replaces wholesale each cycle. The lock guards the snapshot swap against the
-    ingest worker thread.
+    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
+    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
+    prefix failed to list this cycle) still resolves. ``matrix``, ``meta``, and ``history`` read an
+    in-memory snapshot instead, since ``results_db`` exposes no aggregate query for them; the lock
+    guards its swap against the ingest worker thread.
     """
 
-    backend = "memory"
+    backend = "postgres"
 
-    def __init__(self) -> None:
+    def __init__(self, engine: Engine, instance: str, database: str) -> None:
+        self._engine = engine
+        self._instance = instance
+        self._database = database
         self._records: list[EvalRunRecord] = []
         self._by_id: dict[str, EvalRunRecord] = {}
         self._lock = threading.Lock()
@@ -320,8 +311,20 @@ class RecordStore:
         with self._lock:
             return self._records, self._by_id
 
+    def store_info(self) -> StoreInfo:
+        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
+
+    def get_record(self, run_id: str) -> dict | None:
+        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).first()
+        return row[0] if row is not None else None
+
     def refresh(self, records: list[EvalRunRecord]) -> None:
-        raise NotImplementedError
+        self._set_snapshot(records)
+        for record in records:
+            upsert_record(self._engine, record)
+        logger.info("postgres store upserted %d records", len(records))
 
     def fetch_runs(
         self,
@@ -333,12 +336,16 @@ class RecordStore:
         group: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
-        raise NotImplementedError
-
-    def get_record(self, run_id: str) -> dict | None:
+        rows = fetch_runs(
+            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
+        )
+        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
         _records, by_id = self._snapshot()
-        record = by_id.get(run_id)
-        return record.to_json() if record is not None else None
+        for row in rows:
+            record = by_id.get(row.get("run_id"))
+            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
+            row["jobs"] = dict(record.jobs) if record else {}
+        return rows
 
     def matrix(self) -> dict:
         records, _by_id = self._snapshot()
@@ -377,111 +384,6 @@ class RecordStore:
         return points
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
-        """Sibling runs sharing ``group_id`` (excluding ``exclude_run_id``), newest first.
-
-        Served from the in-memory snapshot; the Postgres store overrides this with a durable query.
-        """
-        records, _by_id = self._snapshot()
-        siblings = [
-            _group_sibling(record)
-            for record in records
-            if record.group_id == group_id and record.run_id != exclude_run_id
-        ]
-        siblings.sort(key=lambda sibling: sibling["created_at"] or "", reverse=True)
-        return siblings
-
-    def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=None, database=None)
-
-
-class MemoryRecordStore(RecordStore):
-    """Serves every view from the GCS record snapshot; used when Postgres is unreachable."""
-
-    backend = "memory"
-
-    def refresh(self, records: list[EvalRunRecord]) -> None:
-        self._set_snapshot(records)
-        logger.info("memory store refreshed: %d records", len(records))
-
-    def fetch_runs(
-        self,
-        *,
-        model: str | None = None,
-        eval_name: str | None = None,
-        user: str | None = None,
-        status: str | None = None,
-        group: str | None = None,
-        limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[dict]:
-        records, _by_id = self._snapshot()
-        rows = [record_to_row(record) for record in records]
-        rows = [
-            row
-            for row in rows
-            if (model is None or row["model_name"] == model)
-            and (eval_name is None or row["eval_name"] == eval_name)
-            and (user is None or row["user_name"] == user)
-            and (status is None or row["status"] == status)
-            and (group is None or row["group_id"] == group)
-        ]
-        rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
-        return rows[:limit]
-
-
-class PgRecordStore(RecordStore):
-    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
-
-    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
-    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
-    prefix failed to list this cycle) still resolves. ``matrix`` and ``meta`` read the in-memory
-    snapshot, since ``results_db`` exposes no aggregate query for them.
-    """
-
-    backend = "postgres"
-
-    def __init__(self, engine: Engine, instance: str, database: str) -> None:
-        super().__init__()
-        self._engine = engine
-        self._instance = instance
-        self._database = database
-
-    def store_info(self) -> StoreInfo:
-        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
-
-    def get_record(self, run_id: str) -> dict | None:
-        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
-        with self._engine.begin() as conn:
-            row = conn.execute(stmt).first()
-        return row[0] if row is not None else None
-
-    def refresh(self, records: list[EvalRunRecord]) -> None:
-        self._set_snapshot(records)
-        for record in records:
-            upsert_record(self._engine, record)
-        logger.info("postgres store upserted %d records", len(records))
-
-    def fetch_runs(
-        self,
-        *,
-        model: str | None = None,
-        eval_name: str | None = None,
-        user: str | None = None,
-        status: str | None = None,
-        group: str | None = None,
-        limit: int = DEFAULT_RUNS_LIMIT,
-    ) -> list[dict]:
-        rows = fetch_runs(
-            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
-        )
-        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
-        _records, by_id = self._snapshot()
-        for row in rows:
-            record = by_id.get(row.get("run_id"))
-            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
-            row["jobs"] = dict(record.jobs) if record else {}
-        return rows
-
-    def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         stmt = (
             sqlalchemy.select(
                 eval_runs.c.run_id,
@@ -501,21 +403,21 @@ class PgRecordStore(RecordStore):
 
 
 def create_store() -> RecordStore:
-    """Pick the store at boot: Postgres when reachable, else the in-memory GCS store."""
+    """Connect to the configured eval DB and build its store; the DB is required to start.
+
+    Raises if ``EVAL_DB_*`` resolves no password or the instance is unreachable -- the dashboard
+    has no reads without Postgres, so it must fail fast at boot rather than serve degraded.
+    """
     config = resolve_db_config()
     if config is None:
-        logger.warning("no eval DB configured (EVAL_DB_*); serving from the GCS record cache")
-        return MemoryRecordStore()
-    try:
-        engine = connect_engine(config.instance, config.db, config.user, config.password)
-        ensure_schema(engine)
-    except Exception:
-        # Intentional fallback: a DB that is down at boot must not stop the dashboard, which
-        # can serve entirely from the GCS records.
-        logger.exception("eval DB unreachable at boot; serving from the GCS record cache")
-        return MemoryRecordStore()
-    logger.info("connected to eval DB %s/%s; serving from postgres", config.instance, config.db)
-    return PgRecordStore(engine, instance=config.instance, database=config.db)
+        raise RuntimeError(
+            "eval DB unavailable: set EVAL_DB_PASSWORD or grant Secret Manager access to "
+            "EVAL_DB_PASSWORD_SECRET (see marin.evaluation.results_db.resolve_db_config)"
+        )
+    engine = connect_engine(config.instance, config.db, config.user, config.password)
+    ensure_schema(engine)
+    logger.info("connected to eval DB %s/%s", config.instance, config.db)
+    return RecordStore(engine, instance=config.instance, database=config.db)
 
 
 # --------------------------------------------------------------------------------------
@@ -545,10 +447,13 @@ class PrefixProbe:
 class Ingestor:
     """Runs the periodic ingest and tracks per-prefix probe health.
 
-    Each pass probes every prefix, then refreshes the store from the union of what was found.
-    ``run_once`` holds ``_lock`` for the whole pass, so the background loop and a manual
-    ``/api/refresh`` never ingest concurrently — whichever arrives second waits for the first
-    to finish, then runs its own pass.
+    Each pass probes every prefix, then refreshes the store from the union of what was found. A
+    prefix whose listing fails this pass contributes its last successfully-listed records instead
+    of nothing, so a transient outage on one prefix (missing CW keys, a GCS blip) cannot make runs
+    from that prefix disappear from the store's in-memory snapshot -- only a failure on the very
+    first pass, before any prefix has ever listed successfully, leaves it empty. ``run_once`` holds
+    ``_lock`` for the whole pass, so the background loop and a manual ``/api/refresh`` never ingest
+    concurrently — whichever arrives second waits for the first to finish, then runs its own pass.
     """
 
     def __init__(self, store: RecordStore, prefixes: tuple[str, ...], interval: float) -> None:
@@ -557,6 +462,7 @@ class Ingestor:
         self.interval = interval
         self._lock = asyncio.Lock()
         self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
+        self._last_good: dict[str, list[EvalRunRecord]] = {prefix: [] for prefix in prefixes}
         self.last_pass_time: str | None = None
 
     async def run_once(self) -> None:
@@ -569,14 +475,18 @@ class Ingestor:
                 try:
                     found = await asyncio.to_thread(list_records, prefix)
                 except Exception as exc:
-                    # One unreachable store (missing CW keys, transient outage) must not hide the rest.
+                    # One unreachable store (missing CW keys, transient outage) must not hide the
+                    # rest, and must not drop this prefix's previously-ingested runs from the
+                    # snapshot -- carry its last-good listing forward instead.
                     probe.error = f"{type(exc).__name__}: {exc}"
-                    logger.exception("ingest: listing %s failed; skipping this cycle", prefix)
+                    logger.exception("ingest: listing %s failed; keeping last-good records this pass", prefix)
+                    records.extend(self._last_good[prefix])
                     continue
                 probe.last_success_time = probe.last_probe_time
                 probe.record_count = len(found)
                 probe.error = None
                 logger.info("ingest: %d records from %s", len(found), prefix)
+                self._last_good[prefix] = found
                 records.extend(found)
             await asyncio.to_thread(self._store.refresh, records)
             self.last_pass_time = _utcnow_iso()

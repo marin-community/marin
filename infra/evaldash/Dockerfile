@@ -52,11 +52,7 @@ COPY lib/marin/src/marin/evaluation/records.py /app/marin/evaluation/records.py
 COPY lib/marin/src/marin/evaluation/results_db.py /app/marin/evaluation/results_db.py
 # The server plus its flat top-level modules: metric selection, VM discovery, the iris/finelog
 # cluster gateway, and the per-sample parquet reader.
-COPY infra/evaldash/src/server.py /app/server.py
-COPY infra/evaldash/src/metrics.py /app/metrics.py
-COPY infra/evaldash/src/discovery.py /app/discovery.py
-COPY infra/evaldash/src/cluster.py /app/cluster.py
-COPY infra/evaldash/src/samples.py /app/samples.py
+COPY infra/evaldash/src/ /app/
 COPY --from=dashboard /build/dist /app/dist
 
 # Cloud Run injects PORT and routes to it; the server reads it (default 8080).
