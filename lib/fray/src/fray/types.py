@@ -402,6 +402,7 @@ class ResourceConfig:
     # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
+    pool: str | None = None
     replicas: int = 1
     device_alternatives: Sequence[str] | None = None
     image: str | None = None

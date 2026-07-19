@@ -19,6 +19,7 @@ from fray.iris_backend import (
 )
 from fray.types import (
     ANY_REGION,
+    ActorConfig,
     CpuConfig,
     Entrypoint,
     GpuConfig,
@@ -94,6 +95,14 @@ class TestConvertConstraints:
 
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
+
+    def test_pool_produces_eq_constraint(self):
+        resources = ResourceConfig(pool="cpu-genoa")
+        constraints = convert_constraints(resources)
+        pool_constraints = [c for c in constraints if c.key == "pool"]
+        assert len(pool_constraints) == 1
+        assert pool_constraints[0].op == ConstraintOp.EQ
+        assert pool_constraints[0].values[0].value == "cpu-genoa"
 
 
 class TestConvertConstraintsDeviceAlternatives:
@@ -211,6 +220,25 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] is None
+
+    def test_create_actor_group_scales_failure_budget_across_replicas(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="dummy",
+            count=8,
+            actor_config=ActorConfig(max_task_retries=3),
+        )
+
+        kwargs = fake_iris.submit.call_args.kwargs
+        assert kwargs["max_retries_failure"] == 3
+        assert kwargs["max_task_failures"] == 24
 
     def test_submit_job_passes_task_image_to_iris(self):
         """resources.image on a top-level job request reaches iris.submit()."""

@@ -27,6 +27,7 @@ from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
     Constraint,
+    ConstraintOp,
     any_region_constraint,
     device_variant_constraint,
     preemptible_constraint,
@@ -127,6 +128,8 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
+    if resources.pool:
+        constraints.append(Constraint.create(key="pool", op=ConstraintOp.EQ, value=resources.pool))
     if resources.device_alternatives:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]
@@ -691,10 +694,10 @@ class FrayIrisClient:
         if actor_config.max_task_retries is not None:
             retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
             # max_task_failures is a cumulative job-level budget: a job fails once the
-            # running total of hard task failures exceeds it. Mirror the per-task retry
-            # count so an actor group tolerates that many failures across its replicas
-            # rather than dying on the first crash.
-            retry_kwargs["max_task_failures"] = actor_config.max_task_retries
+            # running total of hard task failures exceeds it. Scale the per-task retry
+            # count across replicas so one task can use its retry allowance without
+            # terminating the whole actor group.
+            retry_kwargs["max_task_failures"] = actor_config.max_task_retries * count
 
         job = self._iris.submit(
             entrypoint=entrypoint,

@@ -111,21 +111,26 @@ aws s3 ls s3://marin-us-east-02a/marin/datakit/ | grep sample
 
 ## Common Crawl focus crawl
 
-[`focus_crawl.py`](focus_crawl.py) streams the 4,573 WARC files in
-`CC-SUPPLEMENTAL-2026-22`, decodes each HTML response using its BOM, HTTP
-charset, HTML metadata, or detected encoding, and extracts text with
-[`XenonMolecule/jusText`](https://github.com/XenonMolecule/jusText/tree/1652a1497b36c4b9941c609ffa1714eeefedc70b).
-The step pins commit `1652a1497b36c4b9941c609ffa1714eeefedc70b` and the
+[`focus_crawl.py`](focus_crawl.py) uses each WARC's CDX sidecar to fetch the
+bounded byte ranges for indexed HTML responses in the 4,573 WARC files in
+`CC-SUPPLEMENTAL-2026-22`. It decodes each response using its BOM, HTTP charset,
+HTML metadata, or detected encoding, and extracts text with
+[`XenonMolecule/jusText`](https://github.com/XenonMolecule/jusText/tree/20d27c00ebfbe927f86281933da687d3e636cba3).
+The step pins commit `20d27c00ebfbe927f86281933da687d3e636cba3` and the
 bundled `sklearn` model with the English stoplist in its hash attributes. It
 writes normalized Parquet to `outputs/main/`; each row includes the content
 hash, text, URL, WARC record ID, WARC filename, WARC date, content type, and
 decoded charset.
 
+The production layout uses 66 Genoa worker pods with eight isolated 1-CPU map
+tasks per pod, for 528 concurrent WARC shards without exceeding Kubernetes pod
+density or reserved-capacity limits.
+
 Submit the extraction on Iris with:
 
 ```bash
 uv run iris --cluster=marin job run --target-cluster cw-us-east-02a \
-    --priority batch --cpu 2 --memory 8GB --enable-extra-resources \
+    --priority interactive --cpu 2 --memory 8GB --enable-extra-resources \
     --sync-package marin-core --extra dedup \
     -- python -c 'from experiments.datakit.focus_crawl import main; main()'
 ```

@@ -11,14 +11,19 @@ path so remote callables remain importable::
 """
 
 import codecs
+import gzip
+import http.client
+import json
 import logging
 import re
-from collections.abc import Iterator
+import tempfile
+import unicodedata
+import warnings
+from collections.abc import Iterator, Mapping
 from email.message import Message
 from functools import cache, partial
-from typing import BinaryIO
+from typing import BinaryIO, NamedTuple
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
@@ -34,7 +39,7 @@ from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
-from zephyr.runners import InlineRunner
+from zephyr.runners import SubprocessRunner
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +52,25 @@ FOCUS_INDEX_PARQUET = (
 FOCUS_WARC_FILE_COUNT = 4_573
 COMMON_CRAWL_BASE_URL = "https://data.commoncrawl.org"
 JUSTEXT_REPOSITORY = "https://github.com/XenonMolecule/jusText"
-JUSTEXT_COMMIT = "1652a1497b36c4b9941c609ffa1714eeefedc70b"
+JUSTEXT_COMMIT = "20d27c00ebfbe927f86281933da687d3e636cba3"
 JUSTEXT_MODEL = "sklearn"
 JUSTEXT_STOPLIST = "English"
 
 _USER_AGENT = "marin-focus-crawl-ingress/1.0"
-_RETRY_STATUS = (429, 500, 502, 503, 504)
+_RETRY_STATUS = (403, 429, 500, 502, 503, 504)
+_RETRY_TOTAL = 10
+_RETRY_BACKOFF_FACTOR = 2.0
+_RETRY_BACKOFF_JITTER = 10.0
 _REQUEST_TIMEOUT = (30, 300)
+_DOWNLOAD_CHUNK_BYTES = 1 << 20
+_MAX_DOWNLOAD_STALLS = 8
+_CONTENT_RANGE = re.compile(r"bytes (\d+)-(\d+)/(\d+)")
+_RANGE_COALESCE_GAP_BYTES = 1 << 20
 _HTML_MIME_TYPES = frozenset({"text/html", "application/xhtml+xml"})
+_SKIPPED_RECORD_IDS = frozenset({"<urn:uuid:88562b9a-a0da-40be-a939-330f53017c9d>"})
 _LONG_WHITESPACE = re.compile(r"\s{" + str(DEFAULT_MAX_WHITESPACE_RUN_CHARS + 1) + r",}")
+_INVALID_XML_CHARACTERS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+_NUMERIC_CHARACTER_REFERENCE = re.compile(r"&#(x[0-9a-f]+|[0-9]+);?", re.IGNORECASE)
 _OUTPUT_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string(), nullable=False),
@@ -76,23 +91,41 @@ _BOM_ENCODINGS = (
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
-_DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="4g")
-_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="10g")
-_MAX_WORKERS = 256
+_WORKER_POOL = "cpu-genoa"
+_DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="4g", pool=_WORKER_POOL)
+_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g", disk="10g", pool=_WORKER_POOL)
+_MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="8g", disk="1g")
+_MAX_WORKERS = 66
+_HEARTBEAT_TIMEOUT = 15 * 60
+
+
+class _WarcRange(NamedTuple):
+    start: int
+    stop: int
 
 
 @cache
 def _session() -> requests.Session:
-    return build_retrying_session(status_forcelist=_RETRY_STATUS)
+    return build_retrying_session(
+        total=_RETRY_TOTAL,
+        backoff_factor=_RETRY_BACKOFF_FACTOR,
+        backoff_jitter=_RETRY_BACKOFF_JITTER,
+        status_forcelist=_RETRY_STATUS,
+    )
 
 
 def focus_crawl_warc_paths(index_parquet: str, expected_files: int) -> list[str]:
     """Return the focus crawl's WARC file keys from its columnar URL index."""
     warc_files: set[str] = set()
-    with fsspec.open(index_parquet, "rb") as stream:
-        parquet = pq.ParquetFile(stream)
-        for batch in parquet.iter_batches(columns=["warc_filename"]):
-            warc_files.update(path for path in batch.column(0).to_pylist() if path)
+    with _session().get(index_parquet, stream=True, timeout=_REQUEST_TIMEOUT) as response:
+        response.raise_for_status()
+        with tempfile.TemporaryFile(prefix="focus-crawl-index-", suffix=".parquet") as stream:
+            for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
+                stream.write(chunk)
+            stream.seek(0)
+            parquet = pq.ParquetFile(stream)
+            for batch in parquet.iter_batches(columns=["warc_filename"]):
+                warc_files.update(path for path in batch.column(0).to_pylist() if path)
 
     paths = sorted(warc_files)
     if len(paths) != expected_files:
@@ -132,21 +165,71 @@ def _stoplist() -> frozenset[str]:
 def _model() -> object:
     import justext  # noqa: PLC0415
 
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`sklearn\.utils\.parallel\.delayed` should be used.*",
+        category=UserWarning,
+        module=r"sklearn\.utils\.parallel",
+    )
     model = justext.get_model()
     if model is None:
         raise RuntimeError("The pinned jusText sklearn model could not be loaded")
+    model.model.set_params(n_jobs=1)
     return model
 
 
 def _clean_text(html: str) -> str:
     import justext  # noqa: PLC0415
 
-    paragraphs = justext.justext(html, _stoplist(), model=_model())
+    try:
+        paragraphs = justext.justext(html, _stoplist(), model=_model())
+    except ValueError as error:
+        if not str(error).startswith("invalid literal for int() with base 10"):
+            raise
+        normalized_html, replacements = _normalize_compatibility_digits(html)
+        if not replacements:
+            raise
+        counters.pipeline.update_counter("focus_crawl/normalized_compatibility_digit", replacements)
+        paragraphs = justext.justext(normalized_html, _stoplist(), model=_model())
     text = "\n\n".join(paragraph.text for paragraph in paragraphs if not paragraph.is_boilerplate)
     compacted = _LONG_WHITESPACE.sub(lambda match: match.group(0)[:DEFAULT_MAX_WHITESPACE_RUN_CHARS], text)
     if len(compacted) != len(text):
         counters.pipeline.update_counter("focus_crawl/compacted_whitespace", 1)
     return compacted.strip()
+
+
+def _normalize_compatibility_digits(text: str) -> tuple[str, int]:
+    replacements = 0
+    normalized: list[str] = []
+    for character in text:
+        if character.isdigit() and not character.isdecimal():
+            normalized.append(str(unicodedata.digit(character)))
+            replacements += 1
+        else:
+            normalized.append(character)
+    return "".join(normalized), replacements
+
+
+def _sanitize_html(html: str) -> tuple[str, int, int]:
+    sanitized, xml_replacements = _INVALID_XML_CHARACTERS.subn("", html)
+    digit_replacements = 0
+
+    def strip_invalid_reference(match: re.Match[str]) -> str:
+        nonlocal digit_replacements, xml_replacements
+        value = match.group(1)
+        codepoint = int(value[1:], 16) if value.lower().startswith("x") else int(value)
+        if codepoint > 0x10FFFF:
+            return match.group(0)
+        character = chr(codepoint)
+        if _INVALID_XML_CHARACTERS.fullmatch(character):
+            xml_replacements += 1
+            return ""
+        if character.isdigit() and not character.isdecimal():
+            digit_replacements += 1
+            return str(unicodedata.digit(character))
+        return match.group(0)
+
+    return _NUMERIC_CHARACTER_REFERENCE.sub(strip_invalid_reference, sanitized), xml_replacements, digit_replacements
 
 
 def iter_warc_text_records(stream: BinaryIO, warc_filename: str) -> Iterator[dict[str, str]]:
@@ -173,16 +256,32 @@ def iter_warc_text_records(stream: BinaryIO, warc_filename: str) -> Iterator[dic
             counters.pipeline.update_counter("focus_crawl/non_html_response", 1)
             continue
 
-        payload = record.content_stream().read()
-        html, encoding = _html_text(payload, http_content_type)
         source_id = record.rec_headers.get_header("WARC-Record-ID") or ""
         url = record.rec_headers.get_header("WARC-Target-URI") or ""
+        if source_id in _SKIPPED_RECORD_IDS:
+            logger.warning("Skipping excluded WARC record: %s %s", source_id, url)
+            counters.pipeline.update_counter("focus_crawl/skipped_record", 1)
+            continue
+
+        payload = record.content_stream().read()
+        html, encoding = _html_text(payload, http_content_type)
         if "\ufffd" in html:
             logger.warning("Skipping WARC record with replacement characters: %s %s", source_id, url)
             counters.pipeline.update_counter("focus_crawl/replacement_character", 1)
             continue
 
-        text = _clean_text(html)
+        sanitized_html, xml_replacements, digit_replacements = _sanitize_html(html)
+        if xml_replacements:
+            counters.pipeline.update_counter("focus_crawl/xml_invalid_character", xml_replacements)
+        if digit_replacements:
+            counters.pipeline.update_counter("focus_crawl/normalized_compatibility_digit", digit_replacements)
+
+        try:
+            text = _clean_text(sanitized_html)
+        except AssertionError:
+            logger.warning("Skipping WARC record after jusText assertion: %s %s", source_id, url)
+            counters.pipeline.update_counter("focus_crawl/justext_assertion", 1)
+            continue
         if not text:
             counters.pipeline.update_counter("focus_crawl/empty_extraction", 1)
             continue
@@ -202,13 +301,112 @@ def iter_warc_text_records(stream: BinaryIO, warc_filename: str) -> Iterator[dic
         }
 
 
-def download_warc_text_records(warc_filename: str, base_url: str) -> Iterator[dict[str, str]]:
-    """Stream one Common Crawl WARC file and yield its extracted text records."""
-    url = f"{base_url.rstrip('/')}/{warc_filename.lstrip('/')}"
-    logger.info("Extracting %s", url)
+def _cdx_path(warc_filename: str) -> str:
+    prefix, separator, filename = warc_filename.rpartition("/warc/")
+    if not separator or not filename.endswith(".warc.gz"):
+        raise ValueError(f"Unexpected Common Crawl WARC path: {warc_filename}")
+    return f"{prefix}/cdx/warc/{filename.removesuffix('.warc.gz')}.cdx.gz"
+
+
+def _is_html_cdx_record(record: Mapping[str, object]) -> bool:
+    status = str(record.get("status", ""))
+    mime_types = {str(record.get(field, "")).partition(";")[0].strip().lower() for field in ("mime", "mime-detected")}
+    return status.startswith("2") and bool(mime_types & _HTML_MIME_TYPES)
+
+
+def _coalesced_html_ranges(stream: BinaryIO) -> list[_WarcRange]:
+    ranges: list[_WarcRange] = []
+    with gzip.open(stream, "rt", encoding="utf-8") as cdx:
+        for line in cdx:
+            fields = line.split(" ", 2)
+            if len(fields) != 3:
+                raise ValueError(f"Malformed CDX line: {line[:200]}")
+            record = json.loads(fields[2])
+            if not _is_html_cdx_record(record):
+                continue
+            start = int(record["offset"])
+            selected = _WarcRange(start, start + int(record["length"]))
+            if ranges and selected.start - ranges[-1].stop <= _RANGE_COALESCE_GAP_BYTES:
+                ranges[-1] = _WarcRange(ranges[-1].start, max(ranges[-1].stop, selected.stop))
+            else:
+                ranges.append(selected)
+    return ranges
+
+
+def _warc_html_ranges(warc_filename: str, base_url: str) -> list[_WarcRange]:
+    url = f"{base_url.rstrip('/')}/{_cdx_path(warc_filename).lstrip('/')}"
     with _session().get(url, headers={"user-agent": _USER_AGENT}, stream=True, timeout=_REQUEST_TIMEOUT) as response:
         response.raise_for_status()
-        yield from iter_warc_text_records(response.raw, warc_filename)
+        return _coalesced_html_ranges(response.raw)
+
+
+def _download_range(url: str, selected: _WarcRange, destination: BinaryIO) -> None:
+    expected_bytes = selected.stop - selected.start
+    stalls = 0
+    while destination.tell() < expected_bytes:
+        written = destination.tell()
+        request_start = selected.start + written
+        headers = {
+            "Range": f"bytes={request_start}-{selected.stop - 1}",
+            "user-agent": _USER_AGENT,
+        }
+
+        error: Exception | None = None
+        try:
+            with _session().get(url, headers=headers, stream=True, timeout=_REQUEST_TIMEOUT) as response:
+                response.raise_for_status()
+                content_range = response.headers.get("Content-Range", "")
+                match = _CONTENT_RANGE.fullmatch(content_range)
+                if response.status_code != http.client.PARTIAL_CONTENT or match is None:
+                    raise RuntimeError(
+                        f"WARC range {request_start}-{selected.stop - 1} did not return a valid partial response"
+                    )
+                response_start, response_stop, _ = (int(value) for value in match.groups())
+                if response_start != request_start or response_stop != selected.stop - 1:
+                    raise RuntimeError(
+                        f"WARC range requested {request_start}-{selected.stop - 1}, "
+                        f"received {response_start}-{response_stop}"
+                    )
+
+                for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
+                    if chunk:
+                        destination.write(chunk)
+        except (requests.exceptions.RequestException, http.client.IncompleteRead) as exc:
+            error = exc
+
+        if destination.tell() > written:
+            stalls = 0
+        else:
+            stalls += 1
+        if stalls > _MAX_DOWNLOAD_STALLS:
+            raise RuntimeError(
+                f"WARC range download stalled at {destination.tell()}/{expected_bytes} bytes after {stalls} attempts"
+            ) from error
+        if destination.tell() > expected_bytes:
+            raise RuntimeError(f"WARC range download exceeded expected size {expected_bytes}")
+        if error is not None:
+            logger.warning(
+                "WARC range download interrupted at %d/%d bytes; resuming: %s",
+                destination.tell(),
+                expected_bytes,
+                error,
+            )
+
+    destination.seek(0)
+
+
+def download_warc_text_records(warc_filename: str, base_url: str) -> Iterator[dict[str, str]]:
+    """Download one Common Crawl WARC's HTML ranges and yield extracted text records."""
+    url = f"{base_url.rstrip('/')}/{warc_filename.lstrip('/')}"
+    ranges = _warc_html_ranges(warc_filename, base_url)
+    transferred_bytes = sum(selected.stop - selected.start for selected in ranges)
+    counters.pipeline.update_counter("focus_crawl/range_requests", len(ranges))
+    counters.pipeline.update_counter("focus_crawl/range_bytes", transferred_bytes)
+    logger.info("Extracting %s via %d ranges (%d bytes)", url, len(ranges), transferred_bytes)
+    for selected in ranges:
+        with tempfile.TemporaryFile(prefix="focus-crawl-", suffix=".warc.gz", dir=".") as warc_file:
+            _download_range(url, selected, warc_file)
+            yield from iter_warc_text_records(warc_file, warc_filename)
 
 
 def extract_warc_paths(
@@ -217,6 +415,7 @@ def extract_warc_paths(
     *,
     base_url: str,
     worker_resources: ResourceConfig,
+    task_resources: ResourceConfig,
     max_workers: int,
 ) -> NormalizedData:
     """Extract WARC paths into the normalized Parquet layout used by Datakit."""
@@ -234,7 +433,9 @@ def extract_warc_paths(
         name="focus-crawl-justext",
         resources=worker_resources,
         max_workers=min(max_workers, len(warc_paths)),
-        stage_runner_factory=InlineRunner,
+        stage_runner_factory=SubprocessRunner,
+        map_task_resources=task_resources,
+        heartbeat_timeout=_HEARTBEAT_TIMEOUT,
     ).execute(pipeline)
     return NormalizedData(main_output_dir=output_dir, dup_output_dir="", counters=dict(outcome.counters))
 
@@ -246,6 +447,7 @@ def extract_focus_crawl(output_path: str) -> NormalizedData:
         paths,
         base_url=COMMON_CRAWL_BASE_URL,
         worker_resources=_WORKER_RESOURCES,
+        task_resources=_MAP_TASK_RESOURCES,
         max_workers=_MAX_WORKERS,
     )
 
@@ -262,7 +464,10 @@ def focus_crawl_step() -> StepSpec:
             "justext_commit": JUSTEXT_COMMIT,
             "justext_model": JUSTEXT_MODEL,
             "justext_stoplist": JUSTEXT_STOPLIST,
-            "schema_version": 1,
+            "skipped_record_ids": sorted(_SKIPPED_RECORD_IDS),
+            "range_coalesce_gap_bytes": _RANGE_COALESCE_GAP_BYTES,
+            "worker_pool": _WORKER_POOL,
+            "schema_version": 3,
         },
         fn=remote(
             extract_focus_crawl,

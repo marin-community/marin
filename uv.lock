@@ -3916,7 +3916,7 @@ wheels = [
 [[package]]
 name = "justext"
 version = "4.2.0"
-source = { git = "https://github.com/XenonMolecule/jusText?rev=1652a1497b36c4b9941c609ffa1714eeefedc70b#1652a1497b36c4b9941c609ffa1714eeefedc70b" }
+source = { git = "https://github.com/XenonMolecule/jusText?rev=20d27c00ebfbe927f86281933da687d3e636cba3#20d27c00ebfbe927f86281933da687d3e636cba3" }
 dependencies = [
     { name = "joblib" },
     { name = "lxml" },
@@ -4686,7 +4686,7 @@ requires-dist = [
     { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.10.1" },
     { name = "jaxlib", marker = "extra == 'vllm'", specifier = "==0.10.1" },
     { name = "jaxopt", specifier = ">=0.8.3" },
-    { name = "justext", extras = ["encoding"], marker = "extra == 'datakit'", git = "https://github.com/XenonMolecule/jusText?rev=1652a1497b36c4b9941c609ffa1714eeefedc70b" },
+    { name = "justext", extras = ["encoding"], marker = "extra == 'datakit'", git = "https://github.com/XenonMolecule/jusText?rev=20d27c00ebfbe927f86281933da687d3e636cba3" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.41" },
     { name = "libtpu", marker = "extra == 'vllm'", specifier = "==0.0.41" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
