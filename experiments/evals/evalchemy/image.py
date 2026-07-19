@@ -14,12 +14,12 @@ tracked in #7270. Both the composable eval path (``serve_and_eval``) and the sta
 
 import os
 
-# The :evalchemy-tpu image (FROM ghcr.io/open-thoughts/openthoughts-agent:tpu + the evalchemy fork +
-# lm-eval v0.4.12 + graders). Referenced by immutable digest; overridable via env so the launcher can
-# be pointed at a fresh build without a code edit.
+# The evalchemy-tpu image (FROM ghcr.io/open-thoughts/openthoughts-agent:tpu + the evalchemy fork +
+# lm-eval v0.4.12 + graders), published under the fork's org. Referenced by immutable digest;
+# overridable via env so the launcher can be pointed at a fresh build without a code edit.
 EVALCHEMY_IMAGE = os.environ.get(
     "EVALCHEMY_TPU_IMAGE",
-    "ghcr.io/open-thoughts/openthoughts-agent@sha256:defdfcced0c130867a434a7e08f4eee6affcf9cf39cd23d94f40b88ca57c200c",
+    "ghcr.io/marin-community/evalchemy-tpu@sha256:1b134caeb2ab7967905d5de93dcafd88aba24c62f12d78089b32a9ef61819f7b",
 )
 
 # evalchemy/lm-eval are installed into the image's OWN venv (docker/evalchemy-tpu/Dockerfile:

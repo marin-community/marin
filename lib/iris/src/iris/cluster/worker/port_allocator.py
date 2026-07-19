@@ -9,11 +9,16 @@ import threading
 
 logger = logging.getLogger(__name__)
 
+# Default task named-port range (end exclusive). Must stay below the kernel
+# ephemeral floor (EPHEMERAL_PORT_RANGE in runtime/docker.py) so co-tenant
+# outbound sockets can never squat an allocated port (#7392).
+DEFAULT_TASK_PORT_RANGE: tuple[int, int] = (12000, 14000)
+
 
 class PortAllocator:
-    """Allocate ephemeral ports for tasks."""
+    """Allocate task named ports from a range below the kernel ephemeral floor."""
 
-    def __init__(self, port_range: tuple[int, int] = (30000, 40000)):
+    def __init__(self, port_range: tuple[int, int] = DEFAULT_TASK_PORT_RANGE):
         self._range = port_range
         self._allocated: set[int] = set()
         self._lock = threading.Lock()

@@ -22,55 +22,68 @@ injected ``FSSPEC_S3`` (endpoint + virtual-host addressing) is applied by fsspec
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import urllib.request
 
 import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 
 
-def has_scored_results(local_out: str) -> bool:
-    """True if ``eval.eval`` wrote a ``results_*.json`` with a non-empty ``results`` dict under ``local_out``.
+def served_max_length(base_url: str) -> int | None:
+    """The served model's context length, from the OpenAI ``/models`` card (vLLM reports ``max_model_len``).
 
-    When every endpoint request fails, lm-eval still writes ``results_<ts>.json`` with ``"results": {}``
-    and exits 0 (issue #7391), so a task's exit code and file presence cannot distinguish a scored run
-    from a total request failure. Treating an empty ``results`` dict as unscored lets the client fail the
-    task instead of uploading a metric-less artifact the orchestrator would mark ``succeeded``.
+    lm-eval's API model cannot see the server's context window and assumes 2048 tokens by default,
+    left-truncating longer prompts -- which silently drops few-shot examples on tasks like 25-shot
+    arc_challenge. Returns None when the server does not report a length (the lm-eval default stands).
     """
-    for path in glob.glob(os.path.join(local_out, "**", "results_*.json"), recursive=True):
-        with open(path) as results_file:
-            if json.load(results_file).get("results"):
-                return True
-    return False
+    try:
+        with urllib.request.urlopen(f"{base_url.rstrip('/')}/models", timeout=30) as resp:
+            payload = json.load(resp)
+    except Exception as exc:
+        print(f"could not read {base_url}/models for max_model_len: {exc}", flush=True)
+        return None
+    for entry in payload.get("data", []):
+        if entry.get("max_model_len"):
+            return int(entry["max_model_len"])
+    return None
 
 
-def build_model_args(config: dict) -> str:
+def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> str:
     """lm-eval ``--model_args`` for the served OpenAI endpoint (comma-joined ``key=value`` list)."""
-    endpoint_path = "chat/completions" if config["apply_chat_template"] else "completions"
-    return ",".join(
-        [
-            f"model={config['model_id']}",
-            f"base_url={config['base_url'].rstrip('/')}/{endpoint_path}",
-            f"tokenizer={config['tokenizer']}",
-            "tokenizer_backend=huggingface",
-            "tokenized_requests=False",
-            f"num_concurrent={config['num_concurrent']}",
-        ]
-    )
+    endpoint_path = "chat/completions" if use_chat else "completions"
+    args = [
+        f"model={config['model_id']}",
+        f"base_url={config['base_url'].rstrip('/')}/{endpoint_path}",
+        f"tokenizer={config['tokenizer']}",
+        "tokenizer_backend=huggingface",
+        "tokenized_requests=False",
+        f"num_concurrent={config['num_concurrent']}",
+        # The TPU vLLM prompt-logprobs path 500s in whole-batch bursts (every in-flight request at
+        # once); one request exhausting its retries mid-burst closes lm-eval's shared session and
+        # fails the whole task, so give each request enough headroom to ride out a burst.
+        "max_retries=8",
+    ]
+    if max_length is not None:
+        args.append(f"max_length={max_length}")
+    return ",".join(args)
 
 
-def build_command(config: dict, task: dict, output_path: str, python: str) -> list[str]:
+def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
     """The ``eval.eval`` argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
-    single global override). Chat vs completion route follows ``apply_chat_template``.
+    single global override). The chat route applies only to generation tasks of a chat-template model:
+    loglikelihood (MCQ) tasks always go through the completions API, since chat endpoints cannot echo
+    prompt logprobs (lm-eval rejects them with "Loglikelihood is not supported for chat completions").
     """
-    model = "local-chat-completions" if config["apply_chat_template"] else "local-completions"
+    # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
+    use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
+    model = "local-chat-completions" if use_chat else "local-completions"
     cmd = [
         python,
         "-m",
@@ -78,23 +91,49 @@ def build_command(config: dict, task: dict, output_path: str, python: str) -> li
         "--model",
         model,
         "--model_args",
-        build_model_args(config),
+        build_model_args(config, use_chat, max_length),
         "--tasks",
         task["name"],
         "--gen_kwargs",
         f"max_gen_toks={config['max_gen_toks']}",
+        # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
+        # gen_kwargs; lm-eval-native tasks ignore it.
+        "--max_tokens",
+        str(config["max_gen_toks"]),
         "--output_path",
         output_path,
+        # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;
+        # the parent converts each to parquet for drill-down analysis.
+        "--log_samples",
         "--verbosity",
         "INFO",
     ]
     if task["num_fewshot"]:
         cmd += ["--num_fewshot", str(task["num_fewshot"])]
+    if task["unsafe_code"]:
+        # code_eval tasks execute model-generated code; lm-eval refuses them without this opt-in.
+        cmd.append("--confirm_run_unsafe_code")
     if config["max_eval_instances"] is not None:
         cmd += ["--limit", str(config["max_eval_instances"])]
-    if config["apply_chat_template"]:
+    if use_chat:
         cmd.append("--apply_chat_template")
     return cmd
+
+
+def scored_results(local_out: str) -> bool:
+    """Whether any ``results_*.json`` under ``local_out`` holds a non-empty ``results`` payload.
+
+    lm-eval exits 0 and writes an empty ``results`` dict when every request to the endpoint failed
+    (e.g. the server crashed mid-task), so exit code and file presence alone cannot vouch for a task.
+    """
+    for dirpath, _, filenames in os.walk(local_out):
+        for filename in filenames:
+            if not (filename.startswith("results_") and filename.endswith(".json")):
+                continue
+            with open(os.path.join(dirpath, filename)) as handle:
+                if json.load(handle).get("results"):
+                    return True
+    return False
 
 
 def main() -> None:
@@ -109,19 +148,21 @@ def main() -> None:
     # applied by fsspec, so url_to_fs needs no extra config. out_path is region-local (the eval child
     # is pinned to the serve region), so no cross-region copy.
     out_fs, _ = fsspec.core.url_to_fs(out_path)
+    max_length = served_max_length(config["base_url"])
+    print(f"served max_model_len: {max_length}", flush=True)
     failures: list[str] = []
     for task in tasks:
         dest = f"{out_path}/{task['dir']}"
         with tempfile.TemporaryDirectory() as local_out:
             # sys.executable is the evalchemy image's interpreter, so ``-m eval.eval`` resolves the
             # fork + lm-eval baked into its venv.
-            cmd = build_command(config, task, local_out, sys.executable)
+            cmd = build_command(config, task, local_out, sys.executable, max_length)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             # Upload whatever the task produced before reacting to its exit code, so one task's failure
             # does not discard another task's already-scored output.
             result = subprocess.run(cmd)
             produced = os.listdir(local_out)
-            scored = has_scored_results(local_out)
+            scored = scored_results(local_out)
             if produced:
                 out_fs.put(local_out, dest, recursive=True)
                 print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
@@ -130,7 +171,7 @@ def main() -> None:
         elif not produced:
             failures.append(f"{task['name']}: produced no artifacts")
         elif not scored:
-            failures.append(f"{task['name']}: eval.eval wrote an empty results dict (every endpoint request failed?)")
+            failures.append(f"{task['name']}: results are empty (every request to the endpoint failed?)")
     print(f"evalchemy client wrote results for {len(tasks)} task(s) to {out_path}", flush=True)
     if failures:
         raise SystemExit("evalchemy task failures: " + "; ".join(failures))

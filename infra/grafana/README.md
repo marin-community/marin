@@ -9,9 +9,11 @@ CKS API servers of the CW clusters read-only. `marin` is the federation hub (the
 CoreWeave clusters forward their rows to it), so its finelog datasource sees the
 whole fleet; `marin-dev` sees only itself.
 
-Dashboards and datasources are provisioned from the files in this directory.
-Grafana's SQLite is ephemeral on Cloud Run, so UI edits do not persist: change the
-JSON under `dashboards/` and redeploy.
+Dashboards and datasources are provisioned from the files in this directory. Grafana's
+state — users, stars, preferences, alert state, and UI-created dashboards — lives in the
+shared `marin-metadata` Postgres (`infra/cloudsql`), so UI edits persist across redeploys.
+The provisioned dashboards under `dashboards/` are still code: change the JSON and redeploy
+to update them.
 
 ## Why Cloud Run and not an Iris job
 
@@ -122,8 +124,9 @@ grouped by run), `k8s.json` (current CW control-plane state from the k8s source)
 
 Grafana unified alerting, provisioned entirely from the files under
 `provisioning/alerting/` — contact points, the notification policy tree, and the rules.
-File provisioning owns that tree: UI edits to alerting do not persist (ephemeral
-SQLite) and would be overwritten by the files anyway. Change the YAML and redeploy.
+File provisioning owns that tree: UI edits to provisioned alerting resources are
+rejected by Grafana and would be overwritten by the files anyway. Change the YAML and
+redeploy.
 
 Rules page only on near-certain incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
@@ -135,11 +138,9 @@ Slack); `severity=warning` routes to `ops-slack` (Slack only). Every rule sets
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
 resolving.
 
-Alert state is ephemeral: Cloud Run's SQLite means a deploy resets pending (`for`)
-timers, notification dedup, and silences — worst case a re-notification after a deploy
-and a lost silence. Rule definitions are files, so nothing else is lost. Accepted for
-now (deploys are infrequent; `min=max=1` keeps a single evaluator); the hardening path
-if it ever matters is a small Cloud SQL Postgres for Grafana state.
+Alert state — pending (`for`) timers, notification dedup, silences — lives in the
+shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it
+survives redeploys. `min=max=1` keeps a single alert evaluator.
 
 Email is optional. SMTP is plain Gmail submission (`smtp.gmail.com:587`, STARTTLS),
 sending as grafana@openathena.ai with an app password from Secret Manager; the app
@@ -158,11 +159,12 @@ All secrets live in Secret Manager and reach the container as env vars via the
 | Env var | Secret | Feeds |
 |---|---|---|
 | `GITHUB_TOKEN` | `marin-status-page-github-token` | ferry/build/nightly panels |
+| `GF_DATABASE_PASSWORD` | `cloudsql-grafana-password` | Grafana's Postgres state (see Deploy) |
 | `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
 | `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | alert contact points |
 | `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts, optional) |
 
-The first three must exist before a deploy — Cloud Run fails to start a revision
+All but the last must exist before a deploy — Cloud Run fails to start a revision
 that references a missing secret. `GF_SMTP_PASSWORD` is optional: `__main__.py`
 probes for the secret and only wires it (and enables SMTP) when it exists.
 
@@ -228,10 +230,20 @@ pulumi up
 ```
 
 `pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
-Registry, and rolls the service to that digest. `min` and `max` instances are both 1:
-Grafana's SQLite is per-instance and ephemeral, so more than one instance means divergent
-alert state and dashboard versions, while zero means no alert rules evaluate and first
-paint is a cold start.
+Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one
+warm instance serves this internal dashboard, min 1 keeps alert evaluation warm and first
+paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
+evaluators.
+
+Grafana's state is the `grafana` database on the shared `marin-metadata` Cloud SQL Postgres
+(`infra/cloudsql`). `__main__.py` reads the instance connection name from a
+`pulumi.StackReference` to the `marin-cloudsql` stack, mounts the Cloud SQL connector socket
+under `/cloudsql`, and hands the socket directory to `entrypoint.sh` as
+`DATABASE_SOCKET_DIR`, which composes `GF_DATABASE_URL` from it (Grafana's host:port
+settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes from the
+`cloudsql-grafana-password` secret. Prerequisite: bring up the `marin-cloudsql` stack and
+create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
+`pulumi up` here, or Grafana fails to reach its database.
 
 IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
 project-level and shared across the project's IAP services, so nothing per-service needs

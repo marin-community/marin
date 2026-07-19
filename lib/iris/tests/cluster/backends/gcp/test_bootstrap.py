@@ -49,6 +49,29 @@ def test_bootstrap_renders_versioned_runsc_url() -> None:
         assert re.match(r"https://storage\.googleapis\.com/gvisor/releases/release/\d{8}\.\d+/", url), url
 
 
+def test_bootstrap_keeps_task_port_range_below_ephemeral_floor() -> None:
+    """Task named ports must be excluded from kernel ephemeral assignment: a
+    task binds its allocated port only after container setup, and an outbound
+    socket handed that port in the window kills the task with EADDRINUSE
+    (#7392). The default range sits below the ephemeral floor, and the
+    reservation list pins it as defense-in-depth."""
+    script = build_worker_bootstrap_script(_worker_config())
+    assert 'sysctl -w net.ipv4.ip_local_port_range="14000 65535"' in script
+    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482,12000-13999"' in script
+
+
+def test_bootstrap_reserves_configured_task_port_range() -> None:
+    """A cluster overriding port_range into the ephemeral span is still
+    protected by the reservation (end bound exclusive, like PortAllocator)."""
+    script = build_worker_bootstrap_script(_worker_config(port_range="20000-25000"))
+    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482,20000-24999"' in script
+
+
+def test_bootstrap_rejects_malformed_task_port_range() -> None:
+    with pytest.raises(ValueError):
+        build_worker_bootstrap_script(_worker_config(port_range="all-of-them"))
+
+
 def test_render_template_preserves_docker_templates() -> None:
     template = 'docker ps --format "{{.Names}} {{.Status}}" and {{ value }}'
     rendered = render_template(template, value="x")

@@ -1,0 +1,13 @@
+name: marin-evaldash
+runtime:
+  name: python
+  # Pin the shared repo venv (which has the `iac` helper package and the Pulumi GCP/Docker
+  # providers via marin-iac). Without this, Pulumi's Auto toolchain would pick up this
+  # directory's own `.venv` if one existed, which has no Pulumi SDK.
+  options:
+    virtualenv: ../../.venv
+description: The Marin eval-results dashboard as an IAP-gated Cloud Run service.
+# State backend and secrets provider come from the operator/CI environment, shared with
+# infra/iac (see README.md):
+#   pulumi login gs://marin-iac-state
+#   PULUMI_CONFIG_PASSPHRASE from Secret Manager (pulumi-iac-passphrase)
