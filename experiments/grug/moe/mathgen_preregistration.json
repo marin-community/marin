@@ -1,0 +1,270 @@
+{
+ "experiment": "mathgen_generality_third_bucket",
+ "issue": "#7067 (mixing-via-embeddings); GENERALITY test of the linear-past-threshold harm form (rav directive 2026-07-19)",
+ "branch": "rav/mixing-via-embeddings",
+ "date_utc": "2026-07-19",
+ "launcher": "experiments/grug/moe/launch_mve_mathgen_h100.py",
+ "builder": "experiments/datakit/mixture_features/mathgen_design.py",
+ "why": "Decision criterion #4 (generality). The campaign selected the harm term H(e)=b*max(e-tau,0) (LINEAR past threshold), tau_code~8.85, via leave-one-epoch-out CV on the dense 10B CODE axis; WEB corroborates a smaller amplitude but is under-resolved (only e16/e24). Confirming the linear shape + threshold on a THIRD independent bucket type (MATH: different content, different eval) tests whether tau~9 and linearity are code-specific or general. Same mechanism/budget/seed as the code axis the form was fit on.",
+ "math_bucket_evidence": {
+  "method": "grug_validation_batch3.cluster_delta_groups: each cluster's K=1000 token-composition profile (token-weighted mean of its quality buckets) matched to the 39 named dolma3/dolmino reference domains by Bhattacharyya affinity sum(sqrt(p*q))",
+  "chosen_cluster": "c02",
+  "chosen_bucket": "c02q0",
+  "quality_tier_rationale": "q0 matches the code arm c01q0 tier logic: the web fasttext quality scorer scores code AND math content low, so the real math content lands in quality tier 0",
+  "c02_math_top3_reference_affinity": {
+   "dolmino_synth_math": 0.8371,
+   "dolmino_synth_thinking": 0.7677,
+   "dolma3_finemath_3plus": 0.7637
+  },
+  "c01_code_top3_reference_affinity": {
+   "dolma3_stack_edu": 0.8357,
+   "dolmino_stack_edu_fim": 0.8292,
+   "dolmino_synth_code": 0.6951
+  },
+  "n_clusters_with_top1_core_math_reference": 1,
+  "verdict": "c02 is the ONLY cluster whose top-1 reference is a core math domain (dolmino_synth_math / dolma3_finemath_3plus); it is as cleanly math as c01 is code. Content (synth_math / finemath / synth_thinking) is distinct from code (c01 -> stack_edu) and from web (c05 -> synth_instruction) -> a genuine THIRD, independent bucket type."
+ },
+ "constants": {
+  "steps": 4776,
+  "batch_size": 512,
+  "seq_len": 4096,
+  "phase_boundary_step": 3776,
+  "mixture_block_size": 32768,
+  "experiment_budget_tokens": 10015997952,
+  "target_budget_tokens": null,
+  "epoching_mechanism": "max_train_batches (REAL subset-repeat; budgets OFF) -- == twobucket-a2/E2/epochrep/harm100b",
+  "seed": 0,
+  "model_d512": "swarm d512/6L/4H/1KV/64exp + gpu_fa4_cute (== seed panel / transect / twobucket / epochrep / harm100b)",
+  "optimizer": "SWARM_OPTIMIZER fractional schedule (warmup peak 0.100*N; asserted at launch for N=4776)",
+  "hardware": "cw-rno2a H100x8 one node/run, cuda_async allocator, CW-mirror data",
+  "in_training_validation": false,
+  "wandb_group": "rav_mve_mathgen",
+  "checkpoint_prefix": "s3://marin-us-east-02a/marin/users/rav/grug/rav_mve_mathgen_<point>/dev/"
+ },
+ "arm": {
+  "math": {
+   "sliced_bucket": "c02q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "epochs": [
+    4.0,
+    8.0,
+    16.0,
+    32.0
+   ],
+   "control_epoch": 4.0,
+   "sliced_total_tokens": 17679692037,
+   "partner_total_tokens": 876859363557,
+   "readout_task_primary": "logprob_gsm8k_5shot",
+   "readout_task_secondary": "agieval_sat_math_0shot",
+   "note": "identical buckets-structure/weights/mechanism/budget/seed to the twobucket-a2 code arm; only the epoching bucket (c02q0 math instead of c01q0 code) differs -- so the code axis is the matched-mechanism reference and the fit's home ground"
+  }
+ },
+ "epoch_grid": {
+  "e4": {
+   "n": 189,
+   "e0": 3.9958,
+   "role": "flat anchor (below tau~9)"
+  },
+  "e8": {
+   "n": 94,
+   "e0": 8.034,
+   "role": "straddles tau (nominal 8 < tau~8.85 -> linear predicts ~0)"
+  },
+  "e16": {
+   "n": 47,
+   "e0": 16.0681,
+   "role": "linear-vs-curved extrapolation (lower point of the ratio)"
+  },
+  "e32": {
+   "n": 24,
+   "e0": 31.4667,
+   "role": "amplifier (upper point of the ratio)"
+  },
+  "matches_twobucket_a2_code_grid": true
+ },
+ "code_fit_reference": {
+  "form": "H(e) = b * max(e - tau, 0)  (LINEAR past threshold)",
+  "tau_code": 8.85,
+  "tau_code_ci95": [
+   6.8,
+   10.9
+  ],
+  "b_code": 0.053,
+  "code_axis_realized_harm_e4_anchored": {
+   "4": 0.0,
+   "8": 0.0548,
+   "16": 0.3912,
+   "32": 1.2673
+  },
+  "code_ratio_e32_over_e16": 3.24,
+  "source": "harm_form_selection.json / .md (LOO-CV decisive: linear 0.056 vs next-best 0.246 bpb)"
+ },
+ "predictions": {
+  "linear_generalizes": {
+   "hypothesis": "IF the linear-past-threshold form + threshold generalize to math, harm(e) = b_math * max(e - tau_math, 0) with tau_math ~ tau_code ~ 8.85 and b_math unknown (fit from the e16, e32 points).",
+   "harm_e4_vs_e4": 0.0,
+   "harm_e8_vs_e4": "~0 (nominal e8=8 < tau~8.85 -> below threshold, flat)",
+   "harm_e16_vs_e4": "b_math * 7.15  (= b_math * (16 - 8.85))",
+   "harm_e32_vs_e4": "b_math * 23.15  (= b_math * (32 - 8.85))",
+   "ratio_e32_over_e16": 3.238,
+   "falsifiers": "(1) realized harm(e32)/harm(e16) ~ 3.24 (linear at tau~8.85); (2) realized harm(e8) ~ 0 (a no-threshold power form would predict harm(e8) >> 0); (3) a quadratic b*(e-tau)^2 fit to (e16,e32) at ratio 3.24 needs tau=-4 (unphysical) and over-predicts e8 -- so the e8 point + the recovered tau separate linear from curved."
+  },
+  "amplitude_expectation": {
+   "note": "b_math is unknown a priori. Two bracketing analogs: code b~0.053 (harm e32~1.27) and web b~0.014 (harm e16~0.15). The shape test has good power only if b_math is code-magnitude; if math is web-magnitude the harm may sit near the gsm8k floor (see decision_rule.power_caveat).",
+   "code_analog_harm_e32": 1.2673,
+   "web_analog_harm_e16": 0.1483
+  }
+ },
+ "seed_floor": {
+  "sigma_gsm8k_bpb": 0.0633,
+  "pair_sqrt2_sigma": 0.0895,
+  "form_required_2sqrt2_sigma": 0.179,
+  "source": "10-seed panel rav_mve_seedpanel_h100 (gsm8k bpb per-run SD ddof=1); seedpanel_readout per_task",
+  "note": "gsm8k seed floor (0.0633) is 11x humaneval's (0.0057) because gsm8k continues natural-language reasoning (higher entropy). This is the MEASURED value; it supersedes the directive's optimistic 0.006-0.02 assumption."
+ },
+ "decision_rule": {
+  "i_harm_present": "realized gsm8k-bpb(e32) - gsm8k-bpb(e4) > 2*sqrt(2)*sigma_gsm8k = 0.179 bpb (single seed per point; SE of the pair = sqrt(2)*sigma = 0.0895).",
+  "ii_linear_not_curved": "fit tau_math from the realized e16/e32 harm ratio R via (32-tau)/(16-tau)=R -> tau=(32-16R)/(1-R); LINEAR iff realized harm(e8) falls on the line H(e8)=b_math*max(8-tau,0) (~0 for tau>8) rather than on a quadratic, AND the recovered tau is physical (>0). A quadratic b*(e-tau)^2 reproducing ratio 3.24 requires tau=-4 (unphysical) and over-predicts e8.",
+  "iii_tau_physical_consistent": "tau_math in [5,12] -> consistent with code tau~9 (onset is a general property); tau_math far outside [5,12] -> math onset differs from code (report the divergence).",
+  "verdict": "linear-past-threshold GENERALIZES to math IFF (i) harm present AND (ii) e16/e32/e8 consistent with linear (not quadratic) AND (iii) tau_math physical & ~code. If harm present but shape curved / tau unphysical -> the shape is code-specific. If no harm at e32 (< floor) -> math does not epoch-harm detectably at this budget/task (weaker generality; report as such, like web at 10B).",
+  "power_caveat": "With sigma_gsm8k=0.0633, harm(e32) must exceed ~0.18 bpb to register. A code-magnitude harm (~1.27 at e32; ~0.39 at e16) is ~14 / ~4.4 sigma_pair -> the shape (e16/e32 ratio) is well-resolved. A web-magnitude harm (~0.15-0.18) sits near the floor -> we could detect 'harm present at e32' only marginally and the shape would stay unresolved (as web did at 10B)."
+ },
+ "readout_plan": {
+  "eval": "post-hoc eval_logprob (same frozen harness as seedpanel/twobucket/epochrep/harm100b) on the 4 final checkpoints (step 4775); primary logprob_gsm8k_5shot bpb, secondary agieval_sat_math_0shot bpb. Run --only-tasks logprob_gsm8k_5shot,agieval_sat_math_0shot.",
+  "aggregate": "e4-anchored realized harm harm(e)=bpb(e)-bpb(e4) for e in {8,16,32}, both tasks.",
+  "test": "criterion i/ii/iii above -> generality verdict. Fit b_math and tau_math from (e16,e32); check e8 on the line; compare tau_math to tau_code=8.85; overlay the code + web harm curves.",
+  "figure": "f31_mathgen_generality.png: math harm(e) points (+-2*sqrt(2)*sigma) with the fitted linear-past-threshold form, the code and web harm curves overlaid, tau_math vs tau_code annotated.",
+  "companions": "code axis = twobucket-a2 (fit home); web arm = epochrep c26q1 (second bucket); this = third."
+ },
+ "runs": [
+  {
+   "point": "e4",
+   "run_id": "rav_mve_mathgen_e4",
+   "job_name": "rav-mve-mathgen-e4",
+   "arm": "math",
+   "sliced_bucket": "c02q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 4.0,
+   "seed": 0,
+   "steps": 4776,
+   "phase_boundary_step": 3776,
+   "slice_batches": 189,
+   "is_control": true,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 396361728,
+    "code_slice_frac_of_bucket": 0.022419040284779593,
+    "sliced": {
+     "phase0": 3.995767195767196,
+     "phase1": 1.0582010582010581,
+     "total": 5.053968253968254
+    },
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938644,
+     "total": 0.009138065571993098
+    }
+   },
+   "linear_hinge_e_minus_tau_code": 0.0,
+   "pred_shape": "flat (below tau)"
+  },
+  {
+   "point": "e8",
+   "run_id": "rav_mve_mathgen_e8",
+   "job_name": "rav-mve-mathgen-e8",
+   "arm": "math",
+   "sliced_bucket": "c02q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 8.0,
+   "seed": 0,
+   "steps": 4776,
+   "phase_boundary_step": 3776,
+   "slice_batches": 94,
+   "is_control": false,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 197132288,
+    "code_slice_frac_of_bucket": 0.011150210512006781,
+    "sliced": {
+     "phase0": 8.03404255319149,
+     "phase1": 2.127659574468085,
+     "total": 10.161702127659575
+    },
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938644,
+     "total": 0.009138065571993098
+    }
+   },
+   "linear_hinge_e_minus_tau_code": 0.0,
+   "pred_shape": "flat (below tau)"
+  },
+  {
+   "point": "e16",
+   "run_id": "rav_mve_mathgen_e16",
+   "job_name": "rav-mve-mathgen-e16",
+   "arm": "math",
+   "sliced_bucket": "c02q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 16.0,
+   "seed": 0,
+   "steps": 4776,
+   "phase_boundary_step": 3776,
+   "slice_batches": 47,
+   "is_control": false,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 98566144,
+    "code_slice_frac_of_bucket": 0.005575105256003391,
+    "sliced": {
+     "phase0": 16.06808510638298,
+     "phase1": 4.25531914893617,
+     "total": 20.32340425531915
+    },
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938644,
+     "total": 0.009138065571993098
+    }
+   },
+   "linear_hinge_e_minus_tau_code": 7.15,
+   "pred_shape": "linear: b_math * 7.15"
+  },
+  {
+   "point": "e32",
+   "run_id": "rav_mve_mathgen_e32",
+   "job_name": "rav-mve-mathgen-e32",
+   "arm": "math",
+   "sliced_bucket": "c02q0",
+   "partner_bucket": "c05q0",
+   "w_target": 0.2,
+   "e_target": 32.0,
+   "seed": 0,
+   "steps": 4776,
+   "phase_boundary_step": 3776,
+   "slice_batches": 24,
+   "is_control": false,
+   "epochs": {
+    "convention": "real: sliced e = w * phase_steps / n_slice_batches; partner over full cache",
+    "code_slice_tokens": 50331648,
+    "code_slice_frac_of_bucket": 0.0028468622583847102,
+    "sliced": {
+     "phase0": 31.46666666666667,
+     "phase1": 8.333333333333334,
+     "total": 39.800000000000004
+    },
+    "partner": {
+     "phase0": 0.007224735259599233,
+     "phase1": 0.0019133303123938644,
+     "total": 0.009138065571993098
+    }
+   },
+   "linear_hinge_e_minus_tau_code": 23.15,
+   "pred_shape": "linear: b_math * 23.15"
+  }
+ ]
+}

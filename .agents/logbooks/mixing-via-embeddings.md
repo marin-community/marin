@@ -892,3 +892,20 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
   b=b0·(B/10B)^−0.73·(d/512)^1.68. OPEN: does harm survive to 100B production scale? → running 100B
   matched-mechanism test (e4 below τ = clean anchor; predicts e16 +0.072 / e32 +0.234 if power law holds,
   ~0 if it vanishes). That is the last gate.
+
+## 2026-07-19 GENERALITY (criterion #4): linear-past-threshold form GENERALIZES to a 3rd bucket (math)
+- Math bucket c02q0 (top-1 ref dolmino_synth_math 0.837, as cleanly math as c01 is code), eval gsm8k
+  bpb, seed floor σ=0.0633 (11× humaneval; 2√2σ floor 0.179). Single seed, e4 anchor (kernel flat).
+- Per-epoch harm (gsm8k bpb vs e4): e8 +0.099 (1.1σ, n.s., below floor); e16 **+0.469 (5.2σ)**; e32
+  **+1.919 (21.4σ)**. HARM PRESENT decisively — the STRONG-generality outcome, not web's near-floor case.
+- **VERDICT GENERALIZES**: linear-past-threshold form is NOT code-specific. b_math=0.0906
+  (CI 0.085–0.096) → **math > code > web** (0.091 > 0.052 > 0.014); math hurts ≥ code per epoch.
+- τ_math = 10.83 (MC-bootstrap CI68 9.6–12.0) — physical, in [5,12], BUT ~2 epochs LATER than code
+  τ=8.85 → possible PER-BUCKET onset (open: universal vs per-bucket τ). e32/e16 ratio 4.09 (code 3.24).
+- Two honest caveats (NOT the inconclusive/web failure mode — signal is 21σ): (1) τ_math>τ_code needs
+  seed replication; (2) e8 can't exclude MILD curvature at single seed — math's high ratio makes a
+  physical quadratic (τ_quad=0.36) viable, unlike code (τ_quad=−4 unphysical). Artifacts
+  grug/mathgen_readout.{json,md}, report/figs3/f31.
+- FOLLOW-UP launching: math c02q0 seeds{1,2}@e16,e32 (τ_math CI) + e6 (sub-threshold) + e12 (near-onset)
+  → resolve τ-universality (is τ one number or per-bucket?) and linear-vs-mild-curvature. τ-universality
+  is a real MODEL-SPEC question (per-bucket τ ⇒ per-bucket calibration data) worth a data point.
