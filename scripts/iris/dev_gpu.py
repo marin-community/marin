@@ -14,7 +14,9 @@ import time
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 
 import click
 from iris.client import IrisClient, JobAlreadyExists
@@ -38,6 +40,21 @@ HOLDER_COMMAND = (
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_gpu_iris"
 TASK_CONTAINER = "task"
 DEFAULT_GPU_VARIANT = "H100"
+
+
+class Priority(StrEnum):
+    PRODUCTION = "production"
+    INTERACTIVE = "interactive"
+    BATCH = "batch"
+
+
+PRIORITY_BANDS = MappingProxyType(
+    {
+        Priority.PRODUCTION: job_pb2.PRIORITY_BAND_PRODUCTION,
+        Priority.INTERACTIVE: job_pb2.PRIORITY_BAND_INTERACTIVE,
+        Priority.BATCH: job_pb2.PRIORITY_BAND_BATCH,
+    }
+)
 
 # GPUs on one whole node of a given variant, used as the default --gpu-count so a dev
 # session grabs exactly one node. An H100 node is an 8-GPU DGX box; a GB200 node is a
@@ -89,6 +106,7 @@ class DevGpuState:
     job_id: str
     gpu_count: int
     gpu_variant: str
+    priority: Priority
     target: CoreweaveTarget
     pod: PodRef
 
@@ -106,6 +124,7 @@ class DevGpuState:
             # Sessions allocated before the variant was configurable were all H100;
             # default so they still load for status/connect/release after an upgrade.
             gpu_variant=data.get("gpu_variant", DEFAULT_GPU_VARIANT),
+            priority=Priority(data.get("priority", Priority.INTERACTIVE)),
             target=CoreweaveTarget(**data["target"]),
             pod=PodRef(**data["pod"]),
         )
@@ -119,8 +138,7 @@ def require_coreweave_platform(config: IrisClusterConfig) -> CoreweaveTarget:
     """
     if config.platform.platform_kind() != "coreweave":
         raise click.ClickException(
-            "dev_gpu requires a CoreWeave/Kubernetes-backed cluster. "
-            "For GCP TPU clusters use scripts/iris/dev_tpu.py."
+            "dev_gpu requires a CoreWeave/Kubernetes-backed cluster. For GCP TPU clusters use scripts/iris/dev_tpu.py."
         )
     # Namespace must come from kubernetes_provider: that is where Iris actually
     # creates and lists task pods (defaulting to "iris" when unset).
@@ -296,6 +314,13 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
     "smaller values may not schedule.",
 )
 @click.option(
+    "--priority",
+    type=click.Choice([priority.value for priority in Priority]),
+    default=Priority.INTERACTIVE.value,
+    show_default=True,
+    help="Iris scheduling priority for the holder job.",
+)
+@click.option(
     "--cpu",
     type=click.FloatRange(min=0, min_open=True),
     default=DEFAULT_CPU,
@@ -318,7 +343,15 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
 @click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
 @click.pass_context
 def allocate(
-    ctx, gpu_variant: str, gpu_count: int | None, cpu: float, memory: str, disk: str, timeout: int, pod_timeout: int
+    ctx,
+    gpu_variant: str,
+    gpu_count: int | None,
+    priority: str,
+    cpu: float,
+    memory: str,
+    disk: str,
+    timeout: int,
+    pod_timeout: int,
 ) -> None:
     """Allocate a dev GPU pod and hold it until Ctrl-C."""
     if not ctx.obj.config_file:
@@ -328,6 +361,7 @@ def allocate(
     # key of GPUS_PER_NODE, so a bare --gpu-count defaults to that variant's whole node.
     if gpu_count is None:
         gpu_count = GPUS_PER_NODE[gpu_variant]
+    resolved_priority = Priority(priority)
 
     session_name = ctx.obj.session_name
     state_file = state_path(ctx.obj.state_dir, session_name)
@@ -346,6 +380,7 @@ def allocate(
                 entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),
                 name=f"dev-gpu-{session_name}",
                 resources=resources,
+                priority_band=PRIORITY_BANDS[resolved_priority],
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
@@ -359,6 +394,7 @@ def allocate(
                 job_id=str(job.job_id),
                 gpu_count=gpu_count,
                 gpu_variant=gpu_variant,
+                priority=resolved_priority,
                 target=target,
                 pod=pod,
             )
@@ -367,6 +403,7 @@ def allocate(
             print(f"Session: {session_name}")
             print(f"Job: {job.job_id}")
             print(f"GPUs: {gpu_count} x {gpu_variant}")
+            print(f"Priority: {resolved_priority.value}")
             print(f"Pod: {pod.pod_name} (namespace={pod.namespace})")
             print("\nAllocation is active. Press Ctrl-C to release.")
 
@@ -430,6 +467,7 @@ def status(ctx) -> None:
     print(f"Job: {state.job_id}")
     print(f"Config: {state.config_file}")
     print(f"GPUs: {state.gpu_count} x {state.gpu_variant}")
+    print(f"Priority: {state.priority.value}")
     print(f"Pod: {state.pod.pod_name} (namespace={state.pod.namespace})")
 
 
