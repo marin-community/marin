@@ -93,6 +93,10 @@ class CloudRunServiceArgs:
     # Each grant is its own resource, so re-running with a changed list updates only the
     # added/removed grants — never the service.
     iap_members: tuple[str, ...] = ()
+    # Cloud SQL connection names (project:region:instance) to attach. When non-empty the
+    # service mounts the connector socket at /cloudsql and the runtime service account gets
+    # roles/cloudsql.client on the project.
+    cloudsql_instances: tuple[str, ...] = ()
 
 
 IAM_MEMBER_PREFIXES = ("user:", "group:", "domain:", "serviceAccount:")
@@ -163,6 +167,14 @@ class CloudRunService(pulumi.ComponentResource):
                 member=member,
                 opts=child,
             )
+        if args.cloudsql_instances:
+            gcp.projects.IAMMember(
+                "sa-cloudsql-client",
+                project=args.project,
+                role="roles/cloudsql.client",
+                member=member,
+                opts=child,
+            )
         for secret_env in args.secrets:
             gcp.secretmanager.SecretIamMember(
                 f"secret-{_member_slug(secret_env.secret)}",
@@ -199,6 +211,26 @@ class CloudRunService(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self, provider=gcp_provider, depends_on=[repo]),
         )
 
+        # Cloud SQL connector: a "cloudsql" volume exposes the auth-proxy sockets under
+        # /cloudsql, one per attached connection name. Empty when no instances are attached.
+        cloudsql_volumes = (
+            [
+                gcp.cloudrunv2.ServiceTemplateVolumeArgs(
+                    name="cloudsql",
+                    cloud_sql_instance=gcp.cloudrunv2.ServiceTemplateVolumeCloudSqlInstanceArgs(
+                        instances=list(args.cloudsql_instances),
+                    ),
+                )
+            ]
+            if args.cloudsql_instances
+            else []
+        )
+        cloudsql_volume_mounts = (
+            [gcp.cloudrunv2.ServiceTemplateContainerVolumeMountArgs(name="cloudsql", mount_path="/cloudsql")]
+            if args.cloudsql_instances
+            else []
+        )
+
         service = gcp.cloudrunv2.Service(
             "service",
             name=args.service_name,
@@ -223,6 +255,7 @@ class CloudRunService(pulumi.ComponentResource):
                         )
                     ],
                 ),
+                volumes=cloudsql_volumes,
                 containers=[
                     gcp.cloudrunv2.ServiceTemplateContainerArgs(
                         image=image.ref,
@@ -248,6 +281,7 @@ class CloudRunService(pulumi.ComponentResource):
                             cpu_idle=not args.cpu_always_allocated,
                             startup_cpu_boost=args.cpu_always_allocated,
                         ),
+                        volume_mounts=cloudsql_volume_mounts,
                     )
                 ],
             ),

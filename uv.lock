@@ -562,6 +562,15 @@ wheels = [
 ]
 
 [[package]]
+name = "asn1crypto"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/cf/d547feed25b5244fcb9392e288ff9fdc3280b10260362fc45d37a798a6ee/asn1crypto-1.5.1.tar.gz", hash = "sha256:13ae38502be632115abf8a24cbe5f4da52e3b5231990aff31123c805306ccb9c", size = 121080, upload-time = "2022-03-15T14:46:52.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl", hash = "sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67", size = 105045, upload-time = "2022-03-15T14:46:51.055Z" },
+]
+
+[[package]]
 name = "astor"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1111,6 +1120,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl", hash = "sha256:981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6", size = 108274, upload-time = "2025-11-15T20:45:41.139Z" },
+]
+
+[[package]]
+name = "cloud-sql-python-connector"
+version = "1.20.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "aiohttp" },
+    { name = "cryptography" },
+    { name = "dnspython" },
+    { name = "google-auth" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/f6/cd4b630fca8f165db508795bc354f14e7155444a25a204b3da356134c3e8/cloud_sql_python_connector-1.20.4.tar.gz", hash = "sha256:fe2dbee747543ad2c720760c53064f0ef42ed04218981e1f7231362a88b3cf44", size = 44205, upload-time = "2026-06-26T23:04:12.62Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/38/10a95226732a3d81ebcd157e5cb750b9d52a534e017dd177cc2321aea895/cloud_sql_python_connector-1.20.4-py3-none-any.whl", hash = "sha256:4c1cd8b573d5e9b93a6f390ccf772fa431afdcc32025b1577e2bafa89756a9f6", size = 50099, upload-time = "2026-06-26T23:04:11.098Z" },
 ]
 
 [[package]]
@@ -4438,6 +4464,12 @@ docs = [
     { name = "mkdocstrings-python" },
     { name = "pymdown-extensions" },
 ]
+evaldb = [
+    { name = "cloud-sql-python-connector" },
+    { name = "google-cloud-secret-manager" },
+    { name = "pg8000" },
+    { name = "sqlalchemy" },
+]
 lint = [
     { name = "black" },
     { name = "click" },
@@ -4577,6 +4609,12 @@ docs = [
     { name = "mkdocstrings", specifier = ">=0.24.0" },
     { name = "mkdocstrings-python", specifier = ">=1.7.0" },
     { name = "pymdown-extensions", specifier = ">=10.0.0" },
+]
+evaldb = [
+    { name = "cloud-sql-python-connector" },
+    { name = "google-cloud-secret-manager" },
+    { name = "pg8000" },
+    { name = "sqlalchemy", specifier = ">=2" },
 ]
 lint = [
     { name = "black", specifier = ">=26.3.1" },
@@ -7679,6 +7717,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pg8000"
+version = "1.31.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "scramp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/9a/077ab21e700051e03d8c5232b6bcb9a1a4d4b6242c9a0226df2cfa306414/pg8000-1.31.5.tar.gz", hash = "sha256:46ebb03be52b7a77c03c725c79da2ca281d6e8f59577ca66b17c9009618cae78", size = 118933, upload-time = "2025-09-14T09:16:49.748Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/07/5fd183858dff4d24840f07fc845f213cd371a19958558607ba22035dadd7/pg8000-1.31.5-py3-none-any.whl", hash = "sha256:0af2c1926b153307639868d2ee5cef6cd3a7d07448e12736989b10e1d491e201", size = 57816, upload-time = "2025-09-14T09:16:47.798Z" },
+]
+
+[[package]]
 name = "pillow"
 version = "12.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -9644,6 +9695,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/90/b8/4f0f5cf0c5ea4d7548424e6533e6b17d164f34a6e2fb2e43ffebb6697b06/scipy-1.17.0-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:cacbaddd91fcffde703934897c5cd2c7cb0371fac195d383f4e1f1c5d3f3bd04", size = 37438061, upload-time = "2026-01-10T21:28:19.684Z" },
     { url = "https://files.pythonhosted.org/packages/f9/cc/2bd59140ed3b2fa2882fb15da0a9cb1b5a6443d67cfd0d98d4cec83a57ec/scipy-1.17.0-cp313-cp313t-win_amd64.whl", hash = "sha256:edce1a1cf66298cccdc48a1bdf8fb10a3bf58e8b58d6c3883dd1530e103f87c0", size = 36328593, upload-time = "2026-01-10T21:28:28.007Z" },
     { url = "https://files.pythonhosted.org/packages/13/1b/c87cc44a0d2c7aaf0f003aef2904c3d097b422a96c7e7c07f5efd9073c1b/scipy-1.17.0-cp313-cp313t-win_arm64.whl", hash = "sha256:30509da9dbec1c2ed8f168b8d8aa853bc6723fede1dbc23c7d43a56f5ab72a67", size = 24625083, upload-time = "2026-01-10T21:28:35.188Z" },
+]
+
+[[package]]
+name = "scramp"
+version = "1.4.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asn1crypto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/0c/a7a7f217b83cb7439abe2189e0a65b648a81f1b72d6cd2a80161b74c1bae/scramp-1.4.12.tar.gz", hash = "sha256:94b38decf26005b835050d06541a5aefb9914497f4de789c6d82a0abc4b934de", size = 19179, upload-time = "2026-07-05T10:30:54.791Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/9c/23bbbe3202c61e5b03708967014c51ea69972ddfbcd73fa2c5c0211f16a7/scramp-1.4.12-py3-none-any.whl", hash = "sha256:6adb2828c5d64bd7785a6878eed30f66ce0fae60bf5fc07c26ce1f521db3ec3e", size = 14361, upload-time = "2026-07-05T10:30:53.177Z" },
 ]
 
 [[package]]

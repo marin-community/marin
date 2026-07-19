@@ -1,0 +1,847 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Eval-results dashboard server (Starlette + uvicorn).
+
+Serves a bundled Vue SPA plus a small JSON API over the eval run records. Records are
+the canonical per-run JSON written to ``gs://marin-eval-metadata/runs/<run_id>/record.json``
+and indexed into CloudSQL Postgres.
+
+A background task ingests the GCS records on startup and every ``EVALDASH_INGEST_INTERVAL``
+seconds (default 300), upserting each into Postgres. Reads are served through a
+``RecordStore``: Postgres-backed when the DB is reachable at boot, otherwise an in-memory
+store built from the same GCS records so the dashboard works with no database. Either way
+the ingest loop refreshes the in-memory snapshot the matrix/meta/detail views read from.
+
+``/api/status`` reports each prefix's last-probe health, the active store, and the ingest
+cadence; ``POST /api/refresh`` runs one ingest pass immediately, serialised with the loop.
+
+Per-run drill-in endpoints read beyond the record: ``/api/runs/{id}/jobs`` and ``.../logs`` fetch
+live iris job/attempt status and finelog log lines over Direct VPC egress, ``.../samples`` pages the
+per-question parquet exports, and ``.../group`` plus ``/api/history`` serve a run's group siblings and
+a model-by-task score-over-time series.
+
+Cloud Run sits behind IAP, which is the only gate; there is no application auth. IAP stamps
+the caller into ``X-Goog-Authenticated-User-Email`` (``accounts.google.com:<email>``), which
+``/api/meta`` echoes as ``current_user``.
+
+``records`` and ``results_db`` are copied flat into the image (see the Dockerfile) from
+``lib/marin/src/marin/evaluation/``.
+"""
+
+import asyncio
+import contextlib
+import logging
+import math
+import os
+import threading
+from collections.abc import AsyncIterator
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+import samples
+import sqlalchemy
+import uvicorn
+from cluster import ClusterGateway
+from marin.evaluation.records import (
+    CW_RECORDS_PREFIX,
+    DEFAULT_RECORDS_PREFIX,
+    EvalRunRecord,
+    list_records,
+)
+from marin.evaluation.results_db import (
+    connect_engine,
+    ensure_schema,
+    eval_runs,
+    resolve_db_config,
+    upsert_record,
+)
+from metrics import primary_metric, stderr_for
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from sqlalchemy.engine import Engine
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
+
+logger = logging.getLogger(__name__)
+
+RECORDS_PREFIXES = tuple(
+    part.strip()
+    for part in os.environ.get("RECORDS_PREFIXES", f"{DEFAULT_RECORDS_PREFIX},{CW_RECORDS_PREFIX}").split(",")
+    if part.strip()
+)
+INGEST_INTERVAL_SECONDS = int(os.environ.get("EVALDASH_INGEST_INTERVAL", "300"))
+DEFAULT_RUNS_LIMIT = 200
+MAX_RUNS_LIMIT = 1000
+DEFAULT_LOG_TAIL = 200
+MAX_LOG_TAIL = 5000
+DEFAULT_SAMPLE_LIMIT = 50
+MAX_SAMPLE_LIMIT = 500
+
+IAP_USER_HEADER = "x-goog-authenticated-user-email"
+IAP_USER_PREFIX = "accounts.google.com:"
+
+
+# --------------------------------------------------------------------------------------
+# Pure views over a list of records
+# --------------------------------------------------------------------------------------
+
+
+def _task_of(metric_key: str) -> str:
+    """The task a metrics key belongs to: the prefix before ``/`` for a group subtask, else the key."""
+    return metric_key.split("/", 1)[0]
+
+
+def _combined_stderr(stderrs: list[float | None]) -> float | None:
+    """Standard error of an unweighted mean of independent means: ``sqrt(sum se^2)/n``.
+
+    None when any component stderr is missing, since the aggregate is then unknown.
+    """
+    values: list[float] = []
+    for stderr in stderrs:
+        if stderr is None:
+            return None
+        values.append(stderr)
+    if not values:
+        return None
+    return math.sqrt(sum(value * value for value in values)) / len(values)
+
+
+@dataclass(frozen=True)
+class TaskScore:
+    """One task's headline score for a record: the value, its metric label, and paired stderr."""
+
+    value: float
+    metric: str
+    stderr: float | None
+
+
+def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
+    """One record's headline metric per task as ``{task: TaskScore}``.
+
+    A group task writes namespaced ``prefix/subtask`` keys; those roll up to ``prefix`` by the
+    unweighted mean of each subtask's primary metric, with the aggregate stderr combined across
+    subtasks. A plain task keeps its single primary value. ``metric`` is the shared metric name, or
+    ``mean`` when a rollup spans differing metrics.
+    """
+    by_task: dict[str, list[tuple[float, str, float | None]]] = {}
+    for metric_key, metrics in (record.metrics or {}).items():
+        picked = primary_metric(metrics)
+        if picked is None:
+            continue
+        name, value = picked
+        by_task.setdefault(_task_of(metric_key), []).append((value, name, stderr_for(metrics, name)))
+    result: dict[str, TaskScore] = {}
+    for task, entries in by_task.items():
+        mean = sum(value for value, _, _ in entries) / len(entries)
+        labels = {name for _, name, _ in entries}
+        stderr = _combined_stderr([stderr for _, _, stderr in entries])
+        result[task] = TaskScore(mean, next(iter(labels)) if len(labels) == 1 else "mean", stderr)
+    return result
+
+
+def record_to_row(record: EvalRunRecord) -> dict:
+    """Flatten a record to the ``/api/runs`` row shape: the ``eval_runs`` columns plus a ``tasks``
+    list and the ``jobs`` map. Kept identical to what the Postgres ``fetch_runs`` (enriched from the
+    cached record) returns so the two stores expose one shape to the dashboard."""
+    return {
+        "run_id": record.run_id,
+        "group_id": record.group_id,
+        "created_at": record.created_at,
+        "user_name": record.user,
+        "model_name": record.model.name,
+        "model_location": record.model.location,
+        "eval_name": record.evaluation.name,
+        "mechanism": record.evaluation.mechanism,
+        "backend": record.model.backend,
+        "platform": record.hardware.platform,
+        "accelerator": record.hardware.accelerator,
+        "region": record.hardware.region_or_cluster,
+        "status": record.status.value,
+        "results_path": record.results_path,
+        "git_sha": record.provenance.git_sha,
+        "image_digest": record.provenance.evalchemy_image,
+        "error": record.error,
+        "tasks": [task.name for task in record.evaluation.tasks],
+        "jobs": dict(record.jobs),
+    }
+
+
+def _record_tasks(record: EvalRunRecord, scores: dict[str, TaskScore]) -> set[str]:
+    """The matrix columns a record touches: its scored tasks, else its requested tasks.
+
+    A succeeded run reports its scored tasks; a failed/infra_failed run has no metrics, so its
+    requested ``evaluation.tasks`` name the columns whose cells its failure should occupy.
+    """
+    if scores:
+        return set(scores)
+    return {task.name for task in record.evaluation.tasks}
+
+
+def build_matrix(records: list[EvalRunRecord]) -> dict:
+    """Pivot runs into a ``model x task`` matrix plus a per-model leaderboard.
+
+    Each cell shows the latest succeeded run's rolled-up primary metric (with stderr) for that
+    ``(model, task)`` -- group-task subtasks averaged into their parent task. When no run for a cell
+    ever succeeded, the cell carries the latest run's failure status instead, still linking to that
+    run so a failure is visible and clickable rather than silently dropped. The leaderboard scores
+    each model by the unweighted mean of its succeeded cells and reports coverage over the full task
+    set, sorted best-first with unscored models last.
+    """
+    succeeded: dict[tuple[str, str], dict] = {}
+    latest_any: dict[tuple[str, str], dict] = {}
+    tasks: set[str] = set()
+    for record in records:
+        model = record.model.name
+        created_at = record.created_at or ""
+        status = record.status.value
+        scores = primary_metrics_by_task(record) if record.metrics else {}
+        for task in _record_tasks(record, scores):
+            tasks.add(task)
+            key = (model, task)
+            latest = latest_any.get(key)
+            if latest is None or created_at > latest["created_at"]:
+                latest_any[key] = {"run_id": record.run_id, "created_at": created_at, "status": status}
+            score = scores.get(task)
+            if score is not None:
+                current = succeeded.get(key)
+                if current is None or created_at > current["created_at"]:
+                    succeeded[key] = {
+                        "value": score.value,
+                        "stderr": score.stderr,
+                        "metric": score.metric,
+                        "run_id": record.run_id,
+                        "created_at": created_at,
+                    }
+
+    rows_by_model: dict[str, dict] = {}
+    for key, latest in latest_any.items():
+        model, task = key
+        win = succeeded.get(key)
+        if win is not None:
+            cell = {
+                "status": "succeeded",
+                "value": win["value"],
+                "stderr": win["stderr"],
+                "metric": win["metric"],
+                "run_id": win["run_id"],
+                "created_at": win["created_at"],
+            }
+        else:
+            cell = {
+                "status": latest["status"],
+                "value": None,
+                "stderr": None,
+                "metric": None,
+                "run_id": latest["run_id"],
+                "created_at": latest["created_at"],
+            }
+        rows_by_model.setdefault(model, {})[task] = cell
+
+    task_list = sorted(tasks)
+    rows = [{"model": model, "cells": rows_by_model[model]} for model in sorted(rows_by_model)]
+    leaderboard = []
+    for model, cells in rows_by_model.items():
+        scored = [cell for cell in cells.values() if cell["value"] is not None]
+        score = sum(cell["value"] for cell in scored) / len(scored) if scored else None
+        stderr = _combined_stderr([cell["stderr"] for cell in scored]) if scored else None
+        leaderboard.append(
+            {"model": model, "score": score, "stderr": stderr, "covered": len(scored), "total": len(task_list)}
+        )
+    leaderboard.sort(key=lambda entry: (entry["score"] is not None, entry["score"] or 0.0), reverse=True)
+    return {"tasks": task_list, "rows": rows, "leaderboard": leaderboard}
+
+
+def build_meta(records: list[EvalRunRecord]) -> dict:
+    """Distinct filter values (models, evals, users, statuses) across all records."""
+    return {
+        "models": sorted({r.model.name for r in records}),
+        "evals": sorted({r.evaluation.name for r in records}),
+        "users": sorted({r.user for r in records if r.user}),
+        "statuses": sorted({r.status.value for r in records}),
+    }
+
+
+def _group_sibling(record: EvalRunRecord) -> dict:
+    """The compact summary of a group sibling shown on a run's detail page."""
+    return {
+        "run_id": record.run_id,
+        "eval_name": record.evaluation.name,
+        "model_name": record.model.name,
+        "status": record.status.value,
+        "created_at": record.created_at,
+    }
+
+
+# --------------------------------------------------------------------------------------
+# Record stores
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StoreInfo:
+    """Which store serves reads and, for Postgres, the instance/database behind it."""
+
+    backend: str
+    instance: str | None
+    database: str | None
+
+
+class RecordStore:
+    """In-memory snapshot of eval records plus the read views the API serves.
+
+    Subclasses provide ``refresh`` (how a fresh record list is absorbed) and ``fetch_runs``
+    (the filtered run list). ``get_record``, ``matrix``, and ``meta`` read the snapshot the
+    ingest loop replaces wholesale each cycle. The lock guards the snapshot swap against the
+    ingest worker thread.
+    """
+
+    backend = "memory"
+
+    def __init__(self) -> None:
+        self._records: list[EvalRunRecord] = []
+        self._by_id: dict[str, EvalRunRecord] = {}
+        self._lock = threading.Lock()
+
+    def _set_snapshot(self, records: list[EvalRunRecord]) -> None:
+        by_id = {record.run_id: record for record in records}
+        with self._lock:
+            self._records = records
+            self._by_id = by_id
+
+    def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
+        with self._lock:
+            return self._records, self._by_id
+
+    def refresh(self, records: list[EvalRunRecord]) -> None:
+        raise NotImplementedError
+
+    def fetch_runs(
+        self,
+        *,
+        model: str | None = None,
+        eval_name: str | None = None,
+        user: str | None = None,
+        status: str | None = None,
+        group: str | None = None,
+        limit: int = DEFAULT_RUNS_LIMIT,
+    ) -> list[dict]:
+        raise NotImplementedError
+
+    def get_record(self, run_id: str) -> dict | None:
+        _records, by_id = self._snapshot()
+        record = by_id.get(run_id)
+        return record.to_json() if record is not None else None
+
+    def matrix(self) -> dict:
+        records, _by_id = self._snapshot()
+        return build_matrix(records)
+
+    def meta(self) -> dict:
+        records, _by_id = self._snapshot()
+        return build_meta(records)
+
+    def history(self, model: str, task: str) -> list[dict]:
+        """Every run's headline score for one ``(model, task)`` over time, oldest first.
+
+        One point per run that produced a primary metric for the task -- with its stderr, status, and
+        provenance for the score-over-time chart's tooltip.
+        """
+        records, _by_id = self._snapshot()
+        points = []
+        for record in records:
+            if record.model.name != model or not record.metrics:
+                continue
+            score = primary_metrics_by_task(record).get(task)
+            if score is None:
+                continue
+            points.append(
+                {
+                    "run_id": record.run_id,
+                    "created_at": record.created_at,
+                    "value": score.value,
+                    "stderr": score.stderr,
+                    "metric": score.metric,
+                    "status": record.status.value,
+                    "git_sha": record.provenance.git_sha,
+                }
+            )
+        points.sort(key=lambda point: point["created_at"] or "")
+        return points
+
+    def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
+        """Sibling runs sharing ``group_id`` (excluding ``exclude_run_id``), newest first.
+
+        Served from the in-memory snapshot; the Postgres store overrides this with a durable query.
+        """
+        records, _by_id = self._snapshot()
+        siblings = [
+            _group_sibling(record)
+            for record in records
+            if record.group_id == group_id and record.run_id != exclude_run_id
+        ]
+        siblings.sort(key=lambda sibling: sibling["created_at"] or "", reverse=True)
+        return siblings
+
+    def store_info(self) -> StoreInfo:
+        return StoreInfo(backend=self.backend, instance=None, database=None)
+
+
+class MemoryRecordStore(RecordStore):
+    """Serves every view from the GCS record snapshot; used when Postgres is unreachable."""
+
+    backend = "memory"
+
+    def refresh(self, records: list[EvalRunRecord]) -> None:
+        self._set_snapshot(records)
+        logger.info("memory store refreshed: %d records", len(records))
+
+    def fetch_runs(
+        self,
+        *,
+        model: str | None = None,
+        eval_name: str | None = None,
+        user: str | None = None,
+        status: str | None = None,
+        group: str | None = None,
+        limit: int = DEFAULT_RUNS_LIMIT,
+    ) -> list[dict]:
+        records, _by_id = self._snapshot()
+        rows = [record_to_row(record) for record in records]
+        rows = [
+            row
+            for row in rows
+            if (model is None or row["model_name"] == model)
+            and (eval_name is None or row["eval_name"] == eval_name)
+            and (user is None or row["user_name"] == user)
+            and (status is None or row["status"] == status)
+            and (group is None or row["group_id"] == group)
+        ]
+        rows.sort(key=lambda row: row["created_at"] or "", reverse=True)
+        return rows[:limit]
+
+
+class PgRecordStore(RecordStore):
+    """Serves the run list and run details from the indexed Postgres tables; upserts on refresh.
+
+    ``get_record`` reads the durable ``record`` jsonb from Postgres -- the same table the run list
+    is served from -- so a run indexed there but absent from the latest ingest snapshot (its source
+    prefix failed to list this cycle) still resolves. ``matrix`` and ``meta`` read the in-memory
+    snapshot, since ``results_db`` exposes no aggregate query for them.
+    """
+
+    backend = "postgres"
+
+    def __init__(self, engine: Engine, instance: str, database: str) -> None:
+        super().__init__()
+        self._engine = engine
+        self._instance = instance
+        self._database = database
+
+    def store_info(self) -> StoreInfo:
+        return StoreInfo(backend=self.backend, instance=self._instance, database=self._database)
+
+    def get_record(self, run_id: str) -> dict | None:
+        stmt = sqlalchemy.select(eval_runs.c.record).where(eval_runs.c.run_id == run_id)
+        with self._engine.begin() as conn:
+            row = conn.execute(stmt).first()
+        return row[0] if row is not None else None
+
+    def refresh(self, records: list[EvalRunRecord]) -> None:
+        self._set_snapshot(records)
+        for record in records:
+            upsert_record(self._engine, record)
+        logger.info("postgres store upserted %d records", len(records))
+
+    def fetch_runs(
+        self,
+        *,
+        model: str | None = None,
+        eval_name: str | None = None,
+        user: str | None = None,
+        status: str | None = None,
+        group: str | None = None,
+        limit: int = DEFAULT_RUNS_LIMIT,
+    ) -> list[dict]:
+        stmt = sqlalchemy.select(eval_runs).order_by(eval_runs.c.created_at.desc()).limit(limit)
+        for column, value in (
+            (eval_runs.c.model_name, model),
+            (eval_runs.c.eval_name, eval_name),
+            (eval_runs.c.user_name, user),
+            (eval_runs.c.status, status),
+            (eval_runs.c.group_id, group),
+        ):
+            if value is not None:
+                stmt = stmt.where(column == value)
+        with self._engine.begin() as conn:
+            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
+        # timestamptz comes back as datetime; the dashboard wants the record's ISO string. The
+        # task list and jobs map live in the record jsonb, so enrich each row from the cached record.
+        _records, by_id = self._snapshot()
+        for row in rows:
+            row["created_at"] = row["created_at"].isoformat()
+            record = by_id.get(row.get("run_id"))
+            row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
+            row["jobs"] = dict(record.jobs) if record else {}
+        return rows
+
+    def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
+        stmt = (
+            sqlalchemy.select(
+                eval_runs.c.run_id,
+                eval_runs.c.eval_name,
+                eval_runs.c.model_name,
+                eval_runs.c.status,
+                eval_runs.c.created_at,
+            )
+            .where(eval_runs.c.group_id == group_id, eval_runs.c.run_id != exclude_run_id)
+            .order_by(eval_runs.c.created_at.desc())
+        )
+        with self._engine.begin() as conn:
+            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
+        for row in rows:
+            row["created_at"] = row["created_at"].isoformat()
+        return rows
+
+
+def create_store() -> RecordStore:
+    """Pick the store at boot: Postgres when reachable, else the in-memory GCS store."""
+    config = resolve_db_config()
+    if config is None:
+        logger.warning("no eval DB configured (EVAL_DB_*); serving from the GCS record cache")
+        return MemoryRecordStore()
+    try:
+        engine = connect_engine(config.instance, config.db, config.user, config.password)
+        ensure_schema(engine)
+    except Exception:
+        # Intentional fallback: a DB that is down at boot must not stop the dashboard, which
+        # can serve entirely from the GCS records.
+        logger.exception("eval DB unreachable at boot; serving from the GCS record cache")
+        return MemoryRecordStore()
+    logger.info("connected to eval DB %s/%s; serving from postgres", config.instance, config.db)
+    return PgRecordStore(engine, instance=config.instance, database=config.db)
+
+
+# --------------------------------------------------------------------------------------
+# Background ingest
+# --------------------------------------------------------------------------------------
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+@dataclass
+class PrefixProbe:
+    """Health of the most recent listing of one records prefix.
+
+    ``error`` is None exactly when the last probe succeeded; ``last_success_time`` and
+    ``record_count`` retain their last good values across a subsequent failing probe.
+    """
+
+    prefix: str
+    last_probe_time: str | None = None
+    last_success_time: str | None = None
+    record_count: int | None = None
+    error: str | None = None
+
+
+class Ingestor:
+    """Runs the periodic ingest and tracks per-prefix probe health.
+
+    Each pass probes every prefix, then refreshes the store from the union of what was found.
+    ``run_once`` holds ``_lock`` for the whole pass, so the background loop and a manual
+    ``/api/refresh`` never ingest concurrently — whichever arrives second waits for the first
+    to finish, then runs its own pass.
+    """
+
+    def __init__(self, store: RecordStore, prefixes: tuple[str, ...], interval: float) -> None:
+        self._store = store
+        self._prefixes = prefixes
+        self.interval = interval
+        self._lock = asyncio.Lock()
+        self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
+        self.last_pass_time: str | None = None
+
+    async def run_once(self) -> None:
+        """Run one full ingest pass, serialised against any other pass via ``_lock``."""
+        async with self._lock:
+            records: list[EvalRunRecord] = []
+            for prefix in self._prefixes:
+                probe = self._probes[prefix]
+                probe.last_probe_time = _utcnow_iso()
+                try:
+                    found = await asyncio.to_thread(list_records, prefix)
+                except Exception as exc:
+                    # One unreachable store (missing CW keys, transient outage) must not hide the rest.
+                    probe.error = f"{type(exc).__name__}: {exc}"
+                    logger.exception("ingest: listing %s failed; skipping this cycle", prefix)
+                    continue
+                probe.last_success_time = probe.last_probe_time
+                probe.record_count = len(found)
+                probe.error = None
+                logger.info("ingest: %d records from %s", len(found), prefix)
+                records.extend(found)
+            await asyncio.to_thread(self._store.refresh, records)
+            self.last_pass_time = _utcnow_iso()
+
+    async def run_loop(self) -> None:
+        while True:
+            try:
+                await self.run_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("ingest cycle failed; retrying in %ss", self.interval)
+            await asyncio.sleep(self.interval)
+
+    def status(self) -> dict:
+        """Serialisable ingest health: cadence, last full pass, and each prefix's probe."""
+        return {
+            "interval_seconds": self.interval,
+            "last_pass_time": self.last_pass_time,
+            "prefixes": [asdict(self._probes[prefix]) for prefix in self._prefixes],
+        }
+
+
+# --------------------------------------------------------------------------------------
+# SPA serving
+# --------------------------------------------------------------------------------------
+
+_NOT_BUILT_HTML = (
+    "<!doctype html><meta charset=utf-8><title>Marin Evals</title>"
+    "<body style='font-family:system-ui;margin:3rem'><h1>Marin Evals</h1>"
+    "<p>Dashboard not built — run "
+    "<code>npm --prefix infra/evaldash/dashboard install &amp;&amp; "
+    "npm --prefix infra/evaldash/dashboard run build</code>.</p>"
+)
+
+
+def _dashboard_dist() -> Path:
+    """Locate the built SPA: env override, the image layout (beside this file), or the repo
+    layout (``../dashboard/dist``)."""
+    override = os.environ.get("EVALDASH_DASHBOARD_DIST")
+    if override:
+        return Path(override)
+    here = Path(__file__).resolve()
+    candidates = [here.parent / "dist", here.parents[1] / "dashboard" / "dist"]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
+def _index_html(dist: Path, forwarded_prefix: str) -> HTMLResponse:
+    """Serve ``dist/index.html``, rewriting ``<base href="/">`` to any reverse-proxy prefix.
+
+    The controller/proxy sets ``X-Forwarded-Prefix``; rewriting the base makes the SPA's
+    relative asset and API URLs resolve under it. An empty prefix leaves the base at ``/``.
+    """
+    index_path = dist / "index.html"
+    if not index_path.is_file():
+        return HTMLResponse(_NOT_BUILT_HTML, status_code=503)
+    html = index_path.read_text(encoding="utf-8")
+    prefix = forwarded_prefix.rstrip("/")
+    if prefix:
+        html = html.replace('<base href="/"', f'<base href="{prefix}/"', 1)
+    return HTMLResponse(html)
+
+
+# --------------------------------------------------------------------------------------
+# App
+# --------------------------------------------------------------------------------------
+
+
+def _current_user(request: Request) -> str | None:
+    """The IAP-stamped caller email, prefix stripped, or None outside IAP."""
+    raw = request.headers.get(IAP_USER_HEADER)
+    if not raw:
+        return None
+    return raw.removeprefix(IAP_USER_PREFIX)
+
+
+def _parse_limit(raw: str | None) -> int:
+    return _parse_int(raw, default=DEFAULT_RUNS_LIMIT, low=1, high=MAX_RUNS_LIMIT)
+
+
+def _parse_int(raw: str | None, *, default: int, low: int, high: int) -> int:
+    """Parse a query-param int, clamped to ``[low, high]``; ``default`` on absent/unparseable."""
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(low, min(value, high))
+
+
+def _collect_job_status(gateway: ClusterGateway, jobs: dict[str, str]) -> list[dict]:
+    """Live iris job status for each pipeline role in a record's ``jobs`` map, order preserved."""
+    return [{"role": role, "job_path": path, **gateway.job_status(path)} for role, path in jobs.items()]
+
+
+def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
+    """The ``/api/status`` body: which store serves reads plus ingest/probe health."""
+    return {"store": asdict(store.store_info()), "ingest": ingestor.status()}
+
+
+def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starlette:
+    """Build the Starlette app over a store, the built SPA directory, and the cluster gateway."""
+    ingestor = Ingestor(store, RECORDS_PREFIXES, INGEST_INTERVAL_SECONDS)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        task = asyncio.create_task(ingestor.run_loop())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            gateway.close()
+
+    async def healthz(_request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok", "store": store.backend})
+
+    async def api_runs(request: Request) -> JSONResponse:
+        params = request.query_params
+        rows = await asyncio.to_thread(
+            store.fetch_runs,
+            model=params.get("model") or None,
+            eval_name=params.get("eval") or None,
+            user=params.get("user") or None,
+            status=params.get("status") or None,
+            group=params.get("group") or None,
+            limit=_parse_limit(params.get("limit")),
+        )
+        return JSONResponse(rows)
+
+    async def api_run_detail(request: Request) -> JSONResponse:
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        return JSONResponse(record)
+
+    async def api_run_jobs(request: Request) -> JSONResponse:
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        roles = await asyncio.to_thread(_collect_job_status, gateway, record.get("jobs") or {})
+        return JSONResponse({"roles": roles})
+
+    async def api_run_logs(request: Request) -> JSONResponse:
+        params = request.query_params
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        role = params.get("role")
+        jobs = record.get("jobs") or {}
+        if role not in jobs:
+            return JSONResponse({"error": f"run has no {role!r} job"}, status_code=404)
+        tail = _parse_int(params.get("tail"), default=DEFAULT_LOG_TAIL, low=1, high=MAX_LOG_TAIL)
+        payload = await asyncio.to_thread(
+            gateway.fetch_logs, jobs[role], max_lines=tail, substring=params.get("substring") or None
+        )
+        payload["role"] = role
+        return JSONResponse(payload)
+
+    async def api_run_samples_tasks(request: Request) -> JSONResponse:
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        payload = await asyncio.to_thread(samples.list_sample_tasks, record.get("results_path"))
+        return JSONResponse(payload)
+
+    async def api_run_samples(request: Request) -> JSONResponse:
+        params = request.query_params
+        record = await asyncio.to_thread(store.get_record, request.path_params["run_id"])
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        task = params.get("task")
+        if not task:
+            return JSONResponse({"error": "task is required"}, status_code=400)
+        payload = await asyncio.to_thread(
+            samples.fetch_samples,
+            record.get("results_path"),
+            task,
+            offset=_parse_int(params.get("offset"), default=0, low=0, high=10_000_000),
+            limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
+            correct=params.get("correct") or "all",
+        )
+        return JSONResponse(payload)
+
+    async def api_run_group(request: Request) -> JSONResponse:
+        run_id = request.path_params["run_id"]
+        record = await asyncio.to_thread(store.get_record, run_id)
+        if record is None:
+            return JSONResponse({"error": "unknown run_id"}, status_code=404)
+        group_id = record.get("group_id")
+        siblings = await asyncio.to_thread(store.group_siblings, group_id, run_id) if group_id else []
+        return JSONResponse({"group_id": group_id, "siblings": siblings})
+
+    async def api_history(request: Request) -> JSONResponse:
+        params = request.query_params
+        model = params.get("model")
+        task = params.get("task")
+        if not model or not task:
+            return JSONResponse({"error": "model and task are required"}, status_code=400)
+        points = await asyncio.to_thread(store.history, model, task)
+        return JSONResponse({"model": model, "task": task, "points": points})
+
+    async def api_matrix(_request: Request) -> JSONResponse:
+        return JSONResponse(store.matrix())
+
+    async def api_meta(request: Request) -> JSONResponse:
+        meta = store.meta()
+        meta["current_user"] = _current_user(request)
+        meta["store"] = store.backend
+        return JSONResponse(meta)
+
+    async def api_status(_request: Request) -> JSONResponse:
+        return JSONResponse(_status_payload(store, ingestor))
+
+    async def api_refresh(_request: Request) -> JSONResponse:
+        await ingestor.run_once()
+        return JSONResponse(_status_payload(store, ingestor))
+
+    async def index(request: Request) -> HTMLResponse:
+        return _index_html(dist, request.headers.get("x-forwarded-prefix", ""))
+
+    routes = [
+        Route("/healthz", healthz),
+        Route("/api/runs", api_runs),
+        Route("/api/runs/{run_id:str}/jobs", api_run_jobs),
+        Route("/api/runs/{run_id:str}/logs", api_run_logs),
+        Route("/api/runs/{run_id:str}/samples/tasks", api_run_samples_tasks),
+        Route("/api/runs/{run_id:str}/samples", api_run_samples),
+        Route("/api/runs/{run_id:str}/group", api_run_group),
+        Route("/api/runs/{run_id:str}", api_run_detail),
+        Route("/api/matrix", api_matrix),
+        Route("/api/history", api_history),
+        Route("/api/meta", api_meta),
+        Route("/api/status", api_status),
+        Route("/api/refresh", api_refresh, methods=["POST"]),
+        Mount("/static", StaticFiles(directory=dist / "static", check_dir=False), name="static"),
+        # SPA catch-all: any other path serves index.html so client-side routing works on
+        # deep links and refreshes. Registered last so it never shadows the API or /static.
+        Route("/{full_path:path}", index),
+    ]
+    app = Starlette(routes=routes, lifespan=lifespan)
+    app.state.store = store
+    return app
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    configure_coreweave_s3()
+    store = create_store()
+    app = create_app(store, _dashboard_dist(), ClusterGateway())
+    port = int(os.environ.get("PORT", "8080"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()

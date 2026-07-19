@@ -1,0 +1,220 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Postgres mirror of the eval-run records.
+
+Each ``record.json`` (:mod:`marin.evaluation.records`) is upserted into a Cloud SQL Postgres instance
+so the dashboard can filter and aggregate runs with SQL instead of scanning object storage. The record
+is the source of truth; this table is a rebuildable index -- ``ingest`` re-derives it from
+``list_records``, and the full record rides along in the ``record`` jsonb column so nothing is lost.
+
+Import-light and copy-friendly: stdlib and SQLAlchemy at module scope; the Cloud SQL connector, pg8000
+driver, and Secret Manager client are imported lazily inside the functions that need them, so a reader
+that only touches :class:`EvalRunRecord` never pulls the database stack.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from datetime import datetime
+
+import sqlalchemy
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Double,
+    ForeignKey,
+    MetaData,
+    PrimaryKeyConstraint,
+    Table,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import Engine
+
+from marin.evaluation.records import EvalRunRecord
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_DB_INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
+DEFAULT_DB_NAME = "evals"
+DEFAULT_DB_USER = "evals"
+DEFAULT_DB_PASSWORD_SECRET = "cloudsql-evals-password"
+SECRET_MANAGER_PROJECT = "hai-gcp-models"
+
+metadata = MetaData()
+
+eval_runs = Table(
+    "eval_runs",
+    metadata,
+    Column("run_id", Text, primary_key=True),
+    Column("group_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("user_name", Text, nullable=False),
+    Column("model_name", Text, nullable=False),
+    Column("model_location", Text, nullable=False),
+    Column("eval_name", Text, nullable=False),
+    Column("mechanism", Text, nullable=False),
+    Column("backend", Text, nullable=False),
+    Column("platform", Text, nullable=False),
+    Column("accelerator", Text, nullable=False),
+    Column("region", Text),
+    Column("status", Text, nullable=False),
+    Column("results_path", Text),
+    Column("git_sha", Text),
+    Column("image_digest", Text),
+    Column("error", Text),
+    Column("record", JSONB, nullable=False),
+)
+
+eval_metrics = Table(
+    "eval_metrics",
+    metadata,
+    Column("run_id", Text, ForeignKey("eval_runs.run_id", ondelete="CASCADE"), nullable=False),
+    Column("task", Text, nullable=False),
+    Column("metric", Text, nullable=False),
+    Column("value", Double, nullable=False),
+    PrimaryKeyConstraint("run_id", "task", "metric"),
+)
+
+
+@dataclass(frozen=True)
+class DbConfig:
+    """Connection parameters for the eval-metadata Cloud SQL instance."""
+
+    instance: str
+    db: str
+    user: str
+    password: str
+
+
+def connect_engine(instance: str, db: str, user: str, password: str) -> Engine:
+    """Build a SQLAlchemy engine that dials the Cloud SQL instance through the Python connector.
+
+    Uses the ``cloud-sql-python-connector`` + pg8000 creator pattern: every pooled connection is
+    minted by the connector, which handles IAM-authenticated TLS to ``instance`` without a local proxy.
+    """
+    from google.cloud.sql.connector import Connector  # noqa: PLC0415  # lazy: keep the DB stack optional
+
+    connector = Connector()
+
+    def getconn():
+        return connector.connect(instance, "pg8000", user=user, password=password, db=db)
+
+    return sqlalchemy.create_engine("postgresql+pg8000://", creator=getconn, pool_pre_ping=True)
+
+
+def _secret_password(secret_id: str) -> str | None:
+    """Fetch the latest version of ``secret_id`` from Secret Manager, or None if it cannot be read."""
+    from google.cloud import secretmanager  # noqa: PLC0415  # lazy: keep the DB stack optional
+
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{SECRET_MANAGER_PROJECT}/secrets/{secret_id}/versions/latest"
+    try:
+        response = client.access_secret_version(name=name)
+    except Exception:
+        logger.warning("could not read eval-db password secret %s from project %s", secret_id, SECRET_MANAGER_PROJECT)
+        return None
+    return response.payload.data.decode("utf-8")
+
+
+def resolve_db_config() -> DbConfig | None:
+    """Resolve the eval-DB connection from the environment, or None when no password is available.
+
+    Reads ``EVAL_DB_INSTANCE``/``EVAL_DB_NAME``/``EVAL_DB_USER`` (with defaults). The password comes
+    from ``EVAL_DB_PASSWORD`` if set, otherwise the latest version of the ``EVAL_DB_PASSWORD_SECRET``
+    secret in Secret Manager. Returns None when neither yields a password so callers can degrade to
+    "DB unavailable" instead of failing.
+    """
+    instance = os.environ.get("EVAL_DB_INSTANCE", DEFAULT_DB_INSTANCE)
+    db = os.environ.get("EVAL_DB_NAME", DEFAULT_DB_NAME)
+    user = os.environ.get("EVAL_DB_USER", DEFAULT_DB_USER)
+    password = os.environ.get("EVAL_DB_PASSWORD")
+    if not password:
+        secret_id = os.environ.get("EVAL_DB_PASSWORD_SECRET", DEFAULT_DB_PASSWORD_SECRET)
+        password = _secret_password(secret_id)
+    if not password:
+        return None
+    return DbConfig(instance=instance, db=db, user=user, password=password)
+
+
+def ensure_schema(engine: Engine) -> None:
+    """Create the ``eval_runs`` and ``eval_metrics`` tables if they do not already exist."""
+    metadata.create_all(engine)
+
+
+def _run_row(record: EvalRunRecord) -> dict:
+    return {
+        "run_id": record.run_id,
+        "group_id": record.group_id,
+        "created_at": datetime.fromisoformat(record.created_at),
+        "user_name": record.user,
+        "model_name": record.model.name,
+        "model_location": record.model.location,
+        "eval_name": record.evaluation.name,
+        "mechanism": record.evaluation.mechanism,
+        "backend": record.model.backend,
+        "platform": record.hardware.platform,
+        "accelerator": record.hardware.accelerator,
+        "region": record.hardware.region_or_cluster,
+        "status": record.status.value,
+        "results_path": record.results_path,
+        "git_sha": record.provenance.git_sha,
+        "image_digest": record.provenance.evalchemy_image,
+        "error": record.error,
+        "record": record.to_json(),
+    }
+
+
+def _metric_rows(record: EvalRunRecord) -> list[dict]:
+    return [
+        {"run_id": record.run_id, "task": task, "metric": metric, "value": float(value)}
+        for task, metrics in record.metrics.items()
+        for metric, value in metrics.items()
+    ]
+
+
+def upsert_record(engine: Engine, record: EvalRunRecord) -> None:
+    """Upsert one run into ``eval_runs`` and replace its ``eval_metrics`` rows, in one transaction."""
+    row = _run_row(record)
+    insert = pg_insert(eval_runs).values(**row)
+    upsert = insert.on_conflict_do_update(
+        index_elements=[eval_runs.c.run_id],
+        set_={key: insert.excluded[key] for key in row if key != "run_id"},
+    )
+    metric_rows = _metric_rows(record)
+    with engine.begin() as conn:
+        conn.execute(upsert)
+        conn.execute(eval_metrics.delete().where(eval_metrics.c.run_id == record.run_id))
+        if metric_rows:
+            conn.execute(eval_metrics.insert(), metric_rows)
+
+
+def fetch_runs(
+    engine: Engine,
+    model: str | None = None,
+    eval_name: str | None = None,
+    user: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Return the most recent ``eval_runs`` rows matching the given filters, newest first."""
+    stmt = sqlalchemy.select(eval_runs).order_by(eval_runs.c.created_at.desc()).limit(limit)
+    if model is not None:
+        stmt = stmt.where(eval_runs.c.model_name == model)
+    if eval_name is not None:
+        stmt = stmt.where(eval_runs.c.eval_name == eval_name)
+    if user is not None:
+        stmt = stmt.where(eval_runs.c.user_name == user)
+    if status is not None:
+        stmt = stmt.where(eval_runs.c.status == status)
+    with engine.begin() as conn:
+        rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
+    # timestamptz comes back as datetime; the callers (CLI table, dashboard JSON) want the
+    # same ISO-8601 string the record carries.
+    for row in rows:
+        row["created_at"] = row["created_at"].isoformat()
+    return rows

@@ -29,6 +29,12 @@ PROJECT = "hai-gcp-models"
 REGION = "us-central1"
 SERVICE = "marin-grafana"
 
+# The cloudsql stack (infra/cloudsql) publishes the marin-metadata connection name that backs
+# Grafana's state. On the self-managed GCS backend a stack reference is
+# "organization/<project>/<stack>" (the literal "organization"), so this names the
+# marin-cloudsql stack of the marin-cloudsql project.
+CLOUDSQL_STACK = "organization/marin-cloudsql/marin-cloudsql"
+
 # This file sits beside the Dockerfile, dashboards, and bridge source; the whole directory
 # is the image build context.
 BUILD_CONTEXT = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +47,15 @@ def main() -> None:
     viewers = config.get_object("viewers") or []
 
     provider = gcp.Provider("gcp", project=PROJECT)
+
+    # Grafana's state lives in the shared marin-metadata Postgres (infra/cloudsql), reached
+    # through the Cloud SQL socket the service mounts under /cloudsql. The socket directory
+    # travels in DATABASE_SOCKET_DIR (not GF_DATABASE_HOST: Grafana host:port parsing rejects
+    # the colons in a connection name); entrypoint.sh composes GF_DATABASE_URL from it.
+    cloudsql = pulumi.StackReference(CLOUDSQL_STACK)
+    connection_name = cloudsql.get_output("connection_name")
+    database_socket_dir = connection_name.apply(lambda name: f"/cloudsql/{name}")
+
     service = CloudRunService(
         "grafana",
         CloudRunServiceArgs(
@@ -53,9 +68,19 @@ def main() -> None:
             cpu_always_allocated=True,
             # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
-            # The ferry/build panels call the GitHub API; the token lifts the REST rate limit
-            # and is required for the GraphQL build query. Value stays in Secret Manager.
-            secrets=(SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),),
+            env={
+                "DATABASE_SOCKET_DIR": database_socket_dir,
+                "GF_DATABASE_NAME": "grafana",
+                "GF_DATABASE_USER": "grafana",
+            },
+            # GITHUB_TOKEN: the ferry/build panels call the GitHub API; the token lifts the REST
+            # rate limit and is required for the GraphQL build query. GF_DATABASE_PASSWORD: the
+            # grafana Postgres user's password. Both stay in Secret Manager.
+            secrets=(
+                SecretEnv(name="GITHUB_TOKEN", secret="marin-status-page-github-token"),
+                SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
+            ),
+            cloudsql_instances=(connection_name,),
             iap_members=tuple(viewers),
         ),
         gcp_provider=provider,
@@ -75,9 +100,12 @@ def main() -> None:
             location=REGION,
             metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
             spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=SERVICE),
+            # Domain mappings are immutable in the provider, and adoption fills server-set
+            # metadata/status the program does not declare; without ignoring them every up
+            # plans an unsupported update.
             opts=pulumi.ResourceOptions(
                 provider=provider,
-                import_=f"locations/{REGION}/namespaces/{PROJECT}/domainmappings/{custom_domain}",
+                ignore_changes=["metadata", "spec", "statuses"],
             ),
         )
         cloudflare.DnsRecord(

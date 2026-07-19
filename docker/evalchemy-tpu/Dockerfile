@@ -39,11 +39,11 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 ENV UV_HTTP_TIMEOUT=300
 ENV UV_RETRIES=5
 
-# marin-community/evalchemy branch `main` @ a84543c (current main HEAD — the consolidated fork carrying
-# PRs #14/#11/#13/#16; supersedes the old c4598e64 pin). Pinned to the exact main-HEAD sha so the
-# :evalchemy-tpu-<gitsha> image stays immutable/reproducible while tracking the de-pinned main branch.
+# marin-community/evalchemy @ 440dd75 (fix-pretrain-log-samples: pretrain merge preserves
+# samples/configs so --log_samples emits samples_*.jsonl for lm-eval-native tasks; evalchemy PR #28).
+# Pinned to the exact sha so the :evalchemy-tpu-<gitsha> image stays immutable/reproducible.
 ARG EVALCHEMY_REPO=https://github.com/marin-community/evalchemy.git
-ARG EVALCHEMY_COMMIT=a84543cda02f76bd4db0ae9a84039d792d3ed6e7
+ARG EVALCHEMY_COMMIT=405603c655b6d203d6c5c604e088abb1740ea39b
 
 WORKDIR /opt/eval
 

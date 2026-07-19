@@ -84,6 +84,15 @@ docs = [
 
 math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
 
+# Postgres mirror for eval-run records (marin.evaluation.results_db): SQLAlchemy Core over a Cloud SQL
+# instance reached through the Python connector + pg8000, with the password read from Secret Manager.
+evaldb = [
+    "sqlalchemy>=2",
+    "pg8000",
+    "cloud-sql-python-connector",
+    "google-cloud-secret-manager",
+]
+
 dev = [
     { include-group = "test" },
     { include-group = "lint" },

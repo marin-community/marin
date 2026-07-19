@@ -55,6 +55,7 @@ import botocore.client
 import botocore.config
 import botocore.session
 import click
+import rigging.filesystem.s3_compat
 from botocore.exceptions import ClientError
 from rigging.filesystem import BucketSpec, StoreType, load_cluster_config, s3_data_buckets
 
@@ -78,7 +79,7 @@ R2_ENDPOINT_URL = "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage
 
 # CoreWeave AI Object Storage S3 API endpoint (account-level VIP). CoreWeave AOS
 # is virtual-host only and signs with each bucket's CoreWeave region.
-CW_ENDPOINT_URL = "https://cwobject.com"
+CW_ENDPOINT_URL = rigging.filesystem.s3_compat.CW_ENDPOINT_URL
 
 # Lifecycle rules this script owns on S3-compatible buckets (R2 and CoreWeave)
 # carry an ``ID`` with this prefix; everything else is treated as a foreign rule

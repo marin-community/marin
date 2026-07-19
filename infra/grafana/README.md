@@ -8,9 +8,11 @@ internal IPs over Direct VPC egress. `marin` is the federation hub (the CoreWeav
 clusters forward their rows to it), so its finelog datasource sees the whole fleet;
 `marin-dev` sees only itself.
 
-Dashboards and datasources are provisioned from the files in this directory.
-Grafana's SQLite is ephemeral on Cloud Run, so UI edits do not persist: change the
-JSON under `dashboards/` and redeploy.
+Dashboards and datasources are provisioned from the files in this directory. Grafana's
+state — users, stars, preferences, alert state, and UI-created dashboards — lives in the
+shared `marin-metadata` Postgres (`infra/cloudsql`), so UI edits persist across redeploys.
+The provisioned dashboards under `dashboards/` are still code: change the JSON and redeploy
+to update them.
 
 ## Why Cloud Run and not an Iris job
 
@@ -128,10 +130,19 @@ pulumi up
 ```
 
 `pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
-Registry, and rolls the service to that digest. `min` and `max` instances are both 1:
-Grafana's SQLite is per-instance and ephemeral, so more than one instance means divergent
-alert state and dashboard versions, while zero means no alert rules evaluate and first
-paint is a cold start.
+Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one
+warm instance serves this internal dashboard, min 1 keeps alert evaluation warm and first
+paint off a cold start, and max 1 avoids duplicate alert notifications from parallel
+evaluators.
+
+Grafana's state is the `grafana` database on the shared `marin-metadata` Cloud SQL Postgres
+(`infra/cloudsql`). `__main__.py` reads the instance connection name from a
+`pulumi.StackReference` to the `marin-cloudsql` stack, mounts the Cloud SQL connector socket
+under `/cloudsql`, and points Grafana at it (`GF_DATABASE_HOST=/cloudsql/<connection_name>`,
+SSL off — the hop is a local socket). `GF_DATABASE_PASSWORD` comes from the
+`cloudsql-grafana-password` secret. Prerequisite: bring up the `marin-cloudsql` stack and
+create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
+`pulumi up` here, or Grafana fails to reach its database.
 
 IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
 project-level and shared across the project's IAP services, so nothing per-service needs
