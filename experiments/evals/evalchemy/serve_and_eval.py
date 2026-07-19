@@ -445,6 +445,7 @@ def _submit_eval_child(config: EvalchemyEvalConfig, endpoint: ServedEndpoint) ->
             env_vars=_propagated_env(
                 JAX_PLATFORMS="cpu",
                 HF_ALLOW_CODE_EVAL="1",
+                EVAL_RAW_PROBE=os.environ.get("EVAL_RAW_PROBE", "0"),  # LOCAL: raw-response diagnostic
                 **{CONFIG_ENV_KEY: _client_config_json(config, endpoint)},
             )
         ),

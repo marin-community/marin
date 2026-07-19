@@ -45,6 +45,14 @@ def build_model_args(config: dict) -> str:
             "trust_remote_code=True",
             "tokenized_requests=False",
             f"num_concurrent={config['num_concurrent']}",
+            # LOCAL (uncommitted) — THE tier-2 empty-content fix: set the lm-eval model's default
+            # generation budget. evalchemy chat_benchmarks (MATH500/…) pass their budget as
+            # `max_new_tokens`, which lm-eval's chat `_create_payload` IGNORES (it reads
+            # max_tokens/max_gen_toks), falling back to self._max_gen_toks (~256). At ~256 a thinking
+            # model fills the budget with <think> and never emits the answer → empty `content` → 0.
+            # Setting max_gen_toks here makes self._max_gen_toks the real budget → the payload's
+            # max_tokens is correct → the model finishes and content holds the answer.
+            f"max_gen_toks={config['max_gen_toks']}",
         ]
     )
 
@@ -92,6 +100,34 @@ def build_command(config: dict, task: dict, output_path: str, python: str) -> li
 
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
+    # LOCAL (uncommitted) DIAGNOSTIC: EVAL_RAW_PROBE=1 → one raw chat/completions call in-cluster,
+    # print content / reasoning_content / finish_reason / usage to distinguish (a) client-read bug vs
+    # (b) truncation vs (c) serve issue for the thinking-model empty-content blocker. Then exit.
+    if os.environ.get("EVAL_RAW_PROBE") == "1":
+        import urllib.request  # noqa: PLC0415
+        url = config["base_url"].rstrip("/") + "/chat/completions"
+        payload = {
+            "model": config["model_id"],
+            "messages": [{"role": "user", "content":
+                          "Convert the point $(0,3)$ in rectangular coordinates to polar coordinates. "
+                          "Enter your answer in the form $(r,\\theta)$, where $r>0$ and $0\\le\\theta<2\\pi$."}],
+            "max_tokens": config.get("max_gen_toks", 30720),
+            "temperature": 0.0,
+        }
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=1800) as resp:
+            d = json.loads(resp.read().decode())
+        ch = (d.get("choices") or [{}])[0]
+        msg = ch.get("message", {}) or {}
+        content = msg.get("content")
+        rc = msg.get("reasoning_content")
+        print(f"RAW_PROBE finish_reason={ch.get('finish_reason')} usage={d.get('usage')}", flush=True)
+        print(f"RAW_PROBE message_keys={list(msg.keys())}", flush=True)
+        print(f"RAW_PROBE content_len={len(content or '')} content_tail={(content or '')[-400:]!r}", flush=True)
+        print(f"RAW_PROBE reasoning_content_present={rc is not None} reasoning_len="
+              f"{len(rc or '') if rc is not None else 'NA'} reasoning_tail={(rc or '')[-400:]!r}", flush=True)
+        return
     tasks = config["tasks"]
     if not tasks:
         raise SystemExit("run_evalchemy_client requires at least one task")

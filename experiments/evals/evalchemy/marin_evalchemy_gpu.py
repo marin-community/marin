@@ -255,7 +255,7 @@ def main() -> None:
     }.get(priority, job_pb2.PRIORITY_BAND_BATCH)
 
     env_vars = {"EVALCHEMY_PYTHON": EVAL_PYTHON, "MARINBASE_EVAL_PRIORITY": priority}
-    for k in ("HF_TOKEN", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJECT"):
+    for k in ("HF_TOKEN", "WANDB_API_KEY", "WANDB_ENTITY", "WANDB_PROJECT", "EVAL_RAW_PROBE"):
         if os.environ.get(k):
             env_vars[k] = os.environ[k]
 
