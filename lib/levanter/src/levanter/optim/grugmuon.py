@@ -209,10 +209,17 @@ def _grug_scale_with_muon(
                 lead = x.shape[:-1]  # (..., ckv) plus a leading layer axis under scan
                 n = x.shape[-1] // hd
                 xr = jnp.moveaxis(x.reshape(*lead, n, hd), -2, -3)  # (..., n, ckv, hd)
-                flat = xr.reshape(-1, xr.shape[-2], hd)
-                ns = jax.vmap(
-                    lambda m: _zeropower_via_newtonschulz_replicated(m, steps, muon_eps, coefficient_type, None)
-                )(flat).reshape(xr.shape)
+
+                # NS on each head's (ckv, hd) block, vmapped over the leading (layer, head) axes.
+                # Do NOT flatten those axes into one: the head axis is sharded on `model` while the
+                # scan-layer axis is replicated, and merging them via reshape is not sharding-
+                # expressible (raises ShardingTypeError). Nested vmap maps over each axis in place.
+                def ns_fn(m):
+                    return _zeropower_via_newtonschulz_replicated(m, steps, muon_eps, coefficient_type, None)
+
+                for _ in range(xr.ndim - 2):
+                    ns_fn = jax.vmap(ns_fn)
+                ns = ns_fn(xr)  # (..., n, ckv, hd)
                 return jnp.moveaxis(ns, -3, -2).reshape(*lead, x.shape[-1])
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
