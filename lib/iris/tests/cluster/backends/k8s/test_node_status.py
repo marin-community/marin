@@ -7,7 +7,9 @@ from iris.cluster.backends.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUN
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.worker.stats import IrisWorkerStat, WorkerStatus
 
-from .conftest import FakeStatsTable, make_batch, make_kueue_provider
+from tests.cluster.conftest import FakeStatsTable
+
+from .conftest import make_batch, make_kueue_provider
 
 NODE_EXPORTER_TEXT = """
 node_memory_MemAvailable_bytes 2.077648867328e+12

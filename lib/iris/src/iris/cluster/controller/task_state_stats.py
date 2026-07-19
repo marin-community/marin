@@ -155,9 +155,9 @@ class TaskStateCollector:
     """Periodic emitter of ``iris.task_state`` rows from the controller DB.
 
     Runs on its own controller thread, off the control tick: each cycle takes a
-    read snapshot, aggregates active tasks per root job (an indexed scan of the
-    small active set, never a full ``tasks`` walk), and writes the rows. A failed
-    cycle logs and skips — the emitter never propagates into the controller.
+    read snapshot, aggregates active tasks per root job, and writes the rows.
+    A failed cycle logs and skips — the emitter never propagates into the
+    controller.
     """
 
     def __init__(self, db: ControllerDB, table: Table, *, interval: float = TASK_STATE_INTERVAL) -> None:

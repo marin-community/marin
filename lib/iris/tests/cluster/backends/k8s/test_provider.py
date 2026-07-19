@@ -40,7 +40,9 @@ from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 
-from .conftest import FakeStatsTable, make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
+from tests.cluster.conftest import FakeStatsTable
+
+from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run

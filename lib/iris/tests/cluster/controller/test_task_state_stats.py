@@ -5,28 +5,19 @@
 wait-age anchors, the cluster rollup row, and federated-task exclusion."""
 
 import pytest
-from rigging.timing import Timestamp
-from sqlalchemy import update
-
 from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.controller.task_state_stats import CLUSTER_ROLLUP_ROOT_JOB, TaskStateCollector
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
+from rigging.timing import Timestamp
+from sqlalchemy import update
+
+from tests.cluster.conftest import FakeStatsTable
 
 NOW_MS = 1_700_000_000_000
 NOW = Timestamp.from_ms(NOW_MS)
-
-
-class FakeStatsTable:
-    """Records every Table.write call so tests can assert on emitted rows."""
-
-    def __init__(self) -> None:
-        self.writes: list[list[object]] = []
-
-    def write(self, rows) -> None:
-        self.writes.append(list(rows))
 
 
 @pytest.fixture
@@ -187,9 +178,7 @@ def test_tasks_handed_off_to_peer_are_excluded(db):
         seed_job(tx, job, submitted_at_ms=NOW_MS - 500_000)
         seed_task(tx, job, 0, job_pb2.TASK_STATE_PENDING, submitted_at_ms=NOW_MS - 500_000)
         seed_task(tx, job, 1, job_pb2.TASK_STATE_PENDING, submitted_at_ms=NOW_MS - 400_000)
-        tx.execute(
-            update(tasks_table).where(tasks_table.c.task_id == job.task(1)).values(cluster="peer-1")
-        )
+        tx.execute(update(tasks_table).where(tasks_table.c.task_id == job.task(1)).values(cluster="peer-1"))
 
     rows = rows_by_root(collect(db))
     assert rows["/u/fed-job"].pending == 1

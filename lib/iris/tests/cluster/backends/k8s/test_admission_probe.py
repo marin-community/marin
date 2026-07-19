@@ -5,7 +5,6 @@
 the K8sService boundary, failure classification, and message truncation."""
 
 import pytest
-
 from iris.cluster.backends.k8s.admission_probe import (
     PROBE_MESSAGE_MAX_LEN,
     AdmissionProber,
@@ -14,7 +13,7 @@ from iris.cluster.backends.k8s.admission_probe import (
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import KubectlError
 
-from .conftest import FakeStatsTable
+from tests.cluster.conftest import FakeStatsTable
 
 
 @pytest.fixture
@@ -47,8 +46,7 @@ def test_fail_closed_webhook_emits_failed_webhook_row(prober_env):
         "dry_run_create",
         KubectlError(
             "dry-run create Pod/iris-admission-probe failed (500): Internal Server Error "
-            'Internal error occurred: failed calling webhook "mpod.kb.io": no endpoints available '
-            + "x" * 1000,
+            'Internal error occurred: failed calling webhook "mpod.kb.io": no endpoints available ' + "x" * 1000,
             status=500,
         ),
     )

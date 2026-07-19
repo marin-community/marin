@@ -483,7 +483,8 @@ class TerminalTaskCountRow:
     count: int
 
 
-# PENDING plus the dispatched states — every task the task-state emitter ages.
+# Every state the task-state rollup counts: PENDING plus ASSIGNED/BUILDING/RUNNING.
+# PENDING and dispatched rows also carry a wait anchor; RUNNING rows are counted only.
 _ROLLUP_ACTIVE_STATES = (job_pb2.TASK_STATE_PENDING, *sorted(ACTIVE_TASK_STATES))
 
 _ROLLUP_ANCHOR_MS = case(
