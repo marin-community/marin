@@ -23,21 +23,21 @@ not yet modeled anywhere.
 |---|---|---|---|---|
 | 1 | Reserved NodePools (per scale group) | `ensure_nodepools()` | **IaC-pt1** | `CoreweaveCluster` ✅ |
 | 2 | Namespace + controller RBAC (SA, ClusterRole, Binding) | `ensure_rbac()` | **IaC-pt1** | `IrisRbac` ✅ |
-| 3 | CKS cluster object + VPC + kubeconfig | manual (console / CW TF provider) | **decided: permanently manual** | `CoreweaveCluster` documents it (`CksClusterSpec`, exported not managed — [cluster.py](../../../infra/iac/src/iac/coreweave/cluster.py)); no CoreWeave TF provider bridged, no CoreWeave API credentials — see below |
+| 3 | CKS cluster object + VPC + kubeconfig | manual (console / CW TF provider) | **Manual (permanent)** | `CoreweaveCluster` records it as config (`CksClusterSpec`, exported outputs — [cluster.py](../../../infra/iac/src/iac/coreweave/cluster.py)); no CoreWeave TF provider bridged, no CoreWeave API credentials — see below |
 | 4 | Kueue: `cks-kueue` chart, Topology CRs, `cw-ib` ResourceFlavor, `iris-cq` ClusterQueue, **namespace-scoped webhooks** | `install_kueue.py --with-queues` | **IaC-landed** | `KueueAddon` ✅ |
 | 5 | Traefik + cert-manager + HTTP-01 ClusterIssuers | `install_cw_network.py` | **IaC-landed** | `TraefikAddon` ✅ |
 | 6 | **Federation ingress**: IP-locked `Ingress` + `ipAllowList` Middleware over the whole controller host | `install_cw_network.py` | **IaC-landed** | `TraefikAddon` ✅ — reads `IngressSpec.federation_allow_sources` (see §Egress IPs) |
 | 7 | Object-storage buckets + access keys (`s3://marin-<region>`) | manual console + `configure_buckets.py` (lifecycle) | IaC-next | `ObjectStorage` (`ObjectStorageSpec` exists); bucket *lifecycle* stays out (spec §7) |
-| 8 | **iris controller signing key** (`iris-<cluster>-signing-key`) | `iris cluster init-keys` → GCP Secret Manager | **decided: stays manual** | `init-keys` does the whole thing (create-if-absent + write + IAM); Pulumi only warns (non-fatal, `pulumi.log.warn` in `__main__.py`) when `auth.signing_key` is unset, with the exact command to run (see §Signing secrets) |
-| 9 | **finelog forwarding signing key** (`finelog-<cluster>-signing-key`) | minted by hand → GCP Secret Manager | **gap** | same posture as row 8 once a cluster needs finelog forwarding (see §Signing secrets) |
+| 8 | **iris controller signing key** (`iris-<cluster>-signing-key`) | `iris cluster init-keys` → GCP Secret Manager | **Manual** | `init-keys` does the whole thing (create-if-absent + write + IAM); Pulumi only warns (non-fatal, `pulumi.log.warn` in `__main__.py`) when `auth.signing_key` is unset, with the exact command to run (see §Signing secrets) |
+| 9 | **finelog forwarding signing key** (`finelog-<cluster>-signing-key`) | minted by hand → GCP Secret Manager | **Open** | same posture as row 8 once a cluster needs finelog forwarding (see §Signing secrets) |
 | 10 | Federation **egress** IP reservations (`34.27.183.11`, `35.254.13.19` = `iris-marin-fed-egress` / `iris-marin-dev-fed-egress`) | reserved by hand in `hai-gcp-models` | **IaC-landed** (GCP arm) | `GcpStaticAddresses` ✅ ([gcp/addresses.py](../../../infra/iac/src/iac/gcp/addresses.py)); the CoreWeave-side allowlist is `IngressSpec.federation_allow_sources` (see §Egress IPs) |
-| 11 | DNS: `iris-cw-<cluster>.oa.dev` CNAME → Traefik LB FQDN | manual (Cloudflare) | **decided: stays manual for now** | considered and deferred — see §DNS CNAME below |
+| 11 | DNS: `iris-cw-<cluster>.oa.dev` CNAME → Traefik LB FQDN | manual (Cloudflare) | **Manual (deferred)** | considered and deferred — see §DNS CNAME below |
 | 12 | finelog server Deployment (in-cluster) | `finelog deploy up <cluster>` | IaC-next (planned) | `FinelogServer` component (a later CoreWeave slice; needs the finelog signing key) |
 | 13 | Iris runtime objects: ConfigMap, `iris-task-env` Secret, LocalQueue, PriorityClasses, controller Deployment + Service, state PVC | `start_controller()` | **Iris (by design)** | stays in Iris (spec §4) |
 
-Rows 1–2, 4–6, 8, 10 are done. Rows 3 and 11 are resolved decisions (deferred, not undecided —
-see below). Row 7 is the remaining sequenced CoreWeave follow-up already in the design; row 12
-is a planned CoreWeave slice. Row 9 is still open. Row 13 is deliberately *not* IaC.
+Rows 1–2, 4–6, 8, 10 are done. Rows 3 and 11 are deferred (see below). Row 7 is the remaining
+sequenced CoreWeave follow-up already in the design; row 12 is a planned CoreWeave slice. Row 9
+is still open. Row 13 stays in Iris by design.
 
 ## The two gaps rjpower named
 
@@ -67,10 +67,9 @@ two now modeled, one deferred:
   k8s object currently applied by `install_cw_network.py`, folded into `TraefikAddon` when
   that lands — it reads `federation_allow_sources`.
 
-**One home, eventually.** Until the federation-ingress component consumes the field, the
-allowlist has two copies (the config constant and the script constant); the config docstring
-flags the sync obligation, and the follow-up deletes the script constant so the input is the
-sole source.
+Until the federation-ingress component consumes the field, the allowlist has two copies (the
+config constant and the script constant); the config docstring flags the sync obligation, and
+the follow-up deletes the script constant so the input is the sole source.
 
 ### finelog auth secrets (rows 8–9)
 
@@ -94,7 +93,7 @@ naming the exact `init-keys` command to run. The **public** halves are config, h
 in two places: the cluster's `auth.federation_peers` (peer controllers' keys) and the hub's
 [`marin.yaml`](../../../lib/finelog/config/marin.yaml) finelog `auth` (accepted forwarder keys).
 
-Row 9 (finelog) is still a **hard gate**, not just a to-do: `test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts`
+Row 9 (finelog) is a **hard gate**: `test_every_bundled_sender_names_a_cluster_some_bundled_hub_trusts`
 in [`lib/finelog/tests/test_config.py`](../../../lib/finelog/tests/test_config.py) fails a
 bundled finelog config that forwards as a cluster no hub's jwt layer trusts. So a forwarding
 finelog server for a cluster cannot even be committed until its key is minted and registered.
@@ -124,107 +123,105 @@ provider (`pulumi package add terraform-provider cloudflare/cloudflare`) and rej
   (which `TraefikAddon`'s `helm.v3.Release` doesn't expose directly; a separate `Service.get()`
   read would be needed on top).
 
-Comparable in size to `TraefikAddon` itself once a Cloudflare token exists — not a quick
-bolt-on, but bounded. The DNS CNAME stays a manual, printed-instruction step
-(`install_cw_network.py`'s own "Done. To finish wiring..." output) until then.
+Comparable in size to `TraefikAddon` itself once a Cloudflare token exists. The DNS CNAME stays
+a manual, printed-instruction step (`install_cw_network.py`'s own "Done. To finish wiring..."
+output) until then.
 
-### Pulumi Helm chart resolution — resolved (2026-07-17), workaround adopted
+### Pulumi Helm chart resolution (2026-07-17)
 
 `TraefikAddon`'s two Helm `Release`s (`traefik`, `cert-manager`) intermittently failed
 `pulumi preview`/`up` with `chart "coreweave/<x>" version "<y>" not found in
-https://charts.core-services.ingress.coreweave.com repository`, even though the chart and
-version genuinely exist and resolve fine via the real `helm` CLI. `KueueAddon`'s `cks-kueue`
-Release (same repo, same `repository_opts` pattern) never once failed across the whole
-investigation below.
+https://charts.core-services.ingress.coreweave.com repository`, though the chart and version
+exist and resolve via the real `helm` CLI. `KueueAddon`'s `cks-kueue` Release (same repo, same
+`repository_opts` pattern) never failed across the investigation.
 
-**Decision: drop `repository_opts` on `traefik`/`cert-manager` only** (`src/iac/coreweave/traefik.py`).
-Verified clean across 8 consecutive `pulumi preview` runs after the change (0 failures), versus
-5/5 failures the same session with `repository_opts` present. Requires `helm repo add coreweave
-<url>` registered locally — now documented as a hard prerequisite in `infra/iac/README.md`, not
-optional. `KueueAddon`'s `cks-kueue` Release is untouched (still uses `repository_opts`) since it
-was never observed to fail.
+**Current mitigation: drop `repository_opts` on `traefik`/`cert-manager`** (`src/iac/coreweave/traefik.py`).
+Verified clean across 8 consecutive `pulumi preview` runs (0 failures), versus 5/5 failures the
+same session with `repository_opts` present. Without `repository_opts`, `chart="coreweave/traefik"`
+resolves through the local `helm` CLI's repo config (populated by `helm repo add coreweave <url>`),
+so that registration becomes a prerequisite — documented in one place, `infra/iac/README.md`
+Prerequisites. `KueueAddon`'s `cks-kueue` Release is untouched (still `repository_opts`), never
+having failed.
 
-**Confirmed, via direct testing (not documentation, not speculation):**
-- Not caching. Pointing `HELM_CACHE_HOME` at an empty directory and re-running: the directory
-  was never touched. Deleting and regenerating the real `helm` CLI's own cache
-  (`~/Library/Caches/helm`) made no difference either. There is no local cache being read for
-  this code path at all.
-- Not chart-specific. Forcing `traefik` to resolve before `cert-manager` (via `depends_on`):
-  `traefik` failed 5/5 runs. Flipping the order: `cert-manager` failed 5/5. Whichever one goes
-  first in a forced pair fails, every time — not a property of one chart.
-- Not a simple ordering/position rule either. Making both Releases depend on `KueueAddon`'s
-  (always-succeeding) Release, so they'd start after it but race each other: exactly one of the
-  pair failed each run, but *which* one varied — not deterministic. Chaining them into a fully
-  serial `kueue -> cert-manager -> traefik` sequence (zero concurrency, one resolution in
-  flight at a time) made `cert-manager` fail deterministically, 8/8 runs — worse than the
-  original intermittent behavior, not better. No dependency-graph shape tried produced a
-  reliably clean run.
+**Empirical findings (direct testing):**
+- No local cache is involved. Pointing `HELM_CACHE_HOME` at an empty directory left it untouched;
+  deleting and regenerating the `helm` CLI's own cache (`~/Library/Caches/helm`) changed nothing.
+- Chart-independent. Forcing `traefik` to resolve before `cert-manager` (via `depends_on`) failed
+  `traefik` 5/5; flipping the order failed `cert-manager` 5/5. Whichever resolves first in a
+  forced pair fails.
+- No positional rule. Making both Releases depend on `KueueAddon`'s (always-succeeding) Release so
+  they race each other failed exactly one per run, but which one varied. A fully serial
+  `kueue -> cert-manager -> traefik` chain failed `cert-manager` 8/8 — worse than the intermittent
+  baseline. No dependency-graph shape produced a reliably clean run, so ordering via `depends_on`
+  is a dead end.
 
-**Two confirmed-working alternatives; here's why one was picked:**
-- **Adopted: drop `repository_opts`.** Pulumi falls back to the local `helm` CLI's own repo
-  config (`~/Library/Preferences/helm/repositories.yaml`, populated by `helm repo add coreweave
-  <url>`). Reliable in every test. Real, accepted cost: `pulumi preview`/`up` now silently
-  depends on that local, undeclared-in-code prerequisite — breaks on any fresh checkout or CI
-  runner that hasn't run `helm repo add`. Mitigated, not eliminated, by making it an explicit,
-  documented step in `infra/iac/README.md`'s Prerequisites; still needs to be added to any CI
-  workflow that runs `pulumi preview`/`up` against a CoreWeave stack (none exists yet — see §9
-  Phase 1 in `spec.md`, not yet built). Also: resolution now trusts whatever `coreweave` is
-  aliased to locally, with no URL pinned in code to verify against (low-likelihood risk, but
-  real — accepted).
-- **Rejected: vendor the chart locally** (download + untar once, reference via Pulumi's `path`
-  option instead of `repositoryOpts` + remote chart name) — a validated pattern from the Pulumi
-  community for this exact gap (see [pulumi-kubernetes#935](https://github.com/pulumi/pulumi-kubernetes/issues/935)
-  comment thread). Removes the live-fetch dependency entirely, the most durable of the three
-  options. Rejected for this cluster (2026-07-17): adds a re-vendoring maintenance step on every
-  chart version bump; revisit if the local-repo-registration prerequisite proves too fragile in
-  practice (e.g., if CI adoption of `helm repo add` turns out harder than expected).
-- **Tried and abandoned: forcing resolution order via `depends_on`.** Not a third alternative,
-  a dead end — see below. Recorded so nobody re-attempts it expecting a different result.
+**Root cause (upstream, open):** [pulumi-kubernetes#935](https://github.com/pulumi/pulumi-kubernetes/issues/935)
+— Pulumi's Helm resources cache nothing; every `preview`/`up` re-fetches the chart live. Open
+since 2020. A maintainer comment on [#1504](https://github.com/pulumi/pulumi-kubernetes/issues/1504)
+attributes this failure class to "network issues" during resolution. Neither issue names the
+"whichever resolves first in a forced pair fails" behavior seen here; worth a precise upstream
+report if it recurs.
 
-**Root cause (upstream, confirmed via Pulumi's own issue tracker, not fixed):**
-[pulumi-kubernetes#935](https://github.com/pulumi/pulumi-kubernetes/issues/935) — Pulumi's Helm
-resources do not cache the fetched/rendered chart at all; every `preview`/`up` re-fetches live.
-Open since 2020. A maintainer comment on
-[#1504](https://github.com/pulumi/pulumi-kubernetes/issues/1504) confirms this causes exactly
-this class of failure ("network issues" during resolution). Neither upstream issue names the
-specific "whichever resolves in a given slot fails" behavior found here — worth filing as a new,
-more precise report if this becomes a recurring blocker.
+**Structuring the out-of-band `helm repo add`.** The `repository_opts` drop trades a flaky
+in-program resolution for a local prerequisite: `pulumi preview`/`up` needs `helm repo add
+coreweave <url>` run first, which breaks on a fresh checkout or an ephemeral CI runner. The Helm
+`Release` resolves its chart during `preview` (the engine's diff render, per #935), so any fix
+has to make the repo available at preview time. Three ways to handle it, in preference order:
 
-**Current state: mitigated.** `pulumi preview`/`up` on `cw-us-west-04a` resolves cleanly with the
-`repository_opts` drop in place and `helm repo add coreweave <url>` registered locally (README
-Prerequisites). The live cluster was never at risk from the underlying bug either way — every
-failure observed during the investigation happened during Pulumi's diff computation, before any
-resource was actually created, updated, or deleted (verified via `iris cluster status` / live
-`kubectl` checks after every failed attempt).
+1. **Fold it into the program with `command.local.run`** (recommended; not yet adopted). The
+   `pulumi-command` provider's `local.run` is an invoke that executes during program evaluation —
+   on every `preview` and `up`, before the engine resolves the Release charts — so calling
+   `helm repo add coreweave <url> --force-update` (idempotent) at the top of the CoreWeave build
+   registers the repo ahead of chart resolution. The out-of-band step and its duplicated
+   instructions collapse into one place: the program. Needs the `helm` binary on PATH (already
+   required) and the `pulumi-command` dependency. Use `local.run` (the invoke), not
+   `command.local.Command` (the resource): the resource's `create` runs only at `up`, after chart
+   resolution, so it would not help `preview`
+   ([pulumi-command#49](https://github.com/pulumi/pulumi-command/issues/49)). Confirm with a live
+   `pulumi preview` on `cw-us-west-04a` before adopting.
+2. **Vendor the charts as local paths.** `helm.v3.Release`'s `chart` field accepts a path to an
+   unpacked chart or a `.tgz` (local-path support added in provider v0.65,
+   [pulumi-kubernetes#1732](https://github.com/pulumi/pulumi-kubernetes/issues/1732)), so
+   `chart="./charts/traefik"` drops the remote repo and network entirely, makes `preview`
+   self-contained, and sidesteps the #935 re-fetch flakiness. Cost: re-vendor (`helm pull`) on
+   every chart bump, and the tarballs live in-tree.
+3. **Keep it out-of-band** (current). One documented step in `infra/iac/README.md` Prerequisites,
+   plus an explicit step in any CI workflow that runs a CoreWeave preview/up (none exists yet —
+   spec.md §9 Phase 1). Residual risk: resolution trusts whatever `coreweave` is aliased to
+   locally, with no URL pinned in code.
 
-### Traefik/cert-manager CRD-registration race — investigated, accepted
+Option 1 answers the review question directly (fold the step into `pulumi up`); option 2 is the
+most robust. Both are larger than doc-only option 3 and want a live preview to confirm, so this PR
+keeps option 3 and records 1–2 as the next step.
+
+**Current state.** `pulumi preview`/`up` on `cw-us-west-04a` resolves cleanly with the
+`repository_opts` drop and `helm repo add coreweave <url>` registered locally. The live cluster
+was never at risk: every failure occurred during Pulumi's diff computation, before any resource
+was created, updated, or deleted (verified via `iris cluster status` / `kubectl` after each).
+
+### Traefik/cert-manager CRD-registration race
 
 `TraefikAddon` applies the `ClusterIssuer`/`Middleware`/`Ingress` CustomResources right after
 their Helm `Release` (`depends_on=[cert_manager_release]` / `[traefik_release]`), with no
-explicit CRD-readiness wait — unlike `install_cw_network.py`'s `wait_for_crd` (up to 120s,
-hard-fails with a clear error if the CRD never shows up). Flagged in code review as a
-theoretical race: the CRD a CustomResource needs might not be registered in the API server yet
-even though the Helm Release that ships it has been created.
+explicit CRD-readiness wait — `install_cw_network.py` uses `wait_for_crd` (up to 120s,
+hard-fails if the CRD never shows up). Code review flagged the theoretical race: a
+CustomResource's CRD might not be registered in the API server yet even though the Helm Release
+that ships it has been created.
 
-**Checked, not assumed:** [pulumi-kubernetes#1446](https://github.com/pulumi/pulumi-kubernetes/issues/1446)
-confirms the provider does retry a CustomResource create when its CRD isn't found yet — but only
-5 times, hardcoded, not configurable via `custom_timeouts` (a user-reported attempt to raise it
-that way was ignored by the provider). Still an open enhancement request upstream, not fixed.
+[pulumi-kubernetes#1446](https://github.com/pulumi/pulumi-kubernetes/issues/1446) confirms the
+provider retries a CustomResource create when its CRD isn't found — 5 times, hardcoded, not
+configurable via `custom_timeouts`. Still an open upstream enhancement request.
 
-**Why this is an accepted risk, not a bug to fix here:** `depends_on=[cert_manager_release]`
-already orders CR creation after the Release's own readiness check, which waits for
-cert-manager's Deployments to have healthy pods — image pull + container start + probe passes
-takes far longer in practice than API-server CRD registration, so by the time the Release is
-"complete" the CRD is essentially always already Established. The bounded 5-retry provider
-behavior is a safety net under that for the remaining edge case. This combination has never
-failed across all `pulumi up`/`preview` runs against `cw-us-west-04a` this session,
-including the real adoption apply. Reproducing `install_cw_network.py`'s imperative
-`wait_for_crd` polling loop inside a declarative Pulumi resource graph would need a custom
-Dynamic Provider — real, ongoing complexity for a risk that's small and already has a
-provider-level safety net. Revisit only if this actually manifests in practice (retry a
-`pulumi up` if it ever does — the fix upstream is a higher retry budget, not a wait added here).
+The race is an accepted, bounded risk. `depends_on=[cert_manager_release]` orders CR creation
+after the Release's readiness check, which waits for cert-manager's Deployments to have healthy
+pods; image pull, container start, and probe passes take longer than API-server CRD
+registration, so the CRD is Established by the time the Release completes. The 5-retry provider
+behavior covers the remaining edge case. This held across every `pulumi up`/`preview` run against
+`cw-us-west-04a` this session, including the adoption apply. Replicating `wait_for_crd`'s polling
+loop inside a declarative Pulumi graph would need a custom Dynamic Provider. Revisit if it
+manifests in practice; the upstream fix is a higher retry budget.
 
-## "Easy to land now" vs deferred — the call
+## What lands now vs. what's deferred
 
 Three things land now:
 
@@ -236,11 +233,10 @@ Three things land now:
 3. **The CoreWeave-side allowlist** — the config input `IngressSpec.federation_allow_sources`
    with a constant default, read later by the deferred federation-ingress enforcement.
 
-Everything else needs a deferred component (rows 3–7, 12) or a later GCP slice (rows 8–9): the
-CKS cluster object, Kueue, Traefik/cert-manager, object storage, the finelog server, and the
-Secret Manager signing keys. Those are **documented, not added** — a bucket name or secret with
-no component to create it would be dead config. Each row above names its exact landing site so
-the follow-up slices are turnkey.
+The rest is deferred or manual: the CKS cluster object (row 3), object storage (row 7), the
+finelog server (row 12), and the Secret Manager signing keys (rows 8–9). These are documented
+here with no component to create them — a bucket name or secret with no creator would be dead
+config. Each row above names its exact landing site so the follow-up slices are turnkey.
 
 ## What landed now: `cw-us-east-08a` (GB200)
 
@@ -264,9 +260,9 @@ the deps. This is the GCP arm's first slice (§Egress IPs); its live `pulumi pre
 is operator-run.
 
 `derive_nodepools` yields `cw-use08a-cpu-erapids` (min=max=4) and `cw-use08a-gb200`
-(min=max=72). 72 is a multiple of 18, which the GB200 NVL72 rack constraint requires
-(instances deploy in whole racks of 18 nodes; a NodePool count must be a multiple of 18 —
-[CoreWeave docs](https://docs.coreweave.com/platform/instances/gpu/gb200-4x)).
+(min=max=216 = 12 racks). 216 is a multiple of 18, which the GB200 NVL72 rack constraint
+requires (instances deploy in whole racks of 18 nodes; a NodePool count must be a multiple of
+18 — [CoreWeave docs](https://docs.coreweave.com/platform/instances/gpu/gb200-4x)).
 
 ### Confirmed / still to confirm
 

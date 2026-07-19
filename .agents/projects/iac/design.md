@@ -172,13 +172,13 @@ IAM split, secrets model, and CD gate are pinned in `spec.md §9`.
 ## Open Questions
 
 - **CoreWeave declarative coverage — resolved.** IaC starts at the NodePool/add-on layer;
-  `coreweave_cks_cluster` create/adopt is deliberately not built. We never bridged the
-  CoreWeave Terraform provider and have no CoreWeave API credentials to authenticate one —
-  Pulumi has no resource type for the CKS cluster object at all, so it can't even be
-  *adopted* into state (import needs a provider, same as create). `CoreweaveCluster` documents
-  the cluster as external config (`CksClusterSpec`, exported as plain outputs, not managed);
-  cluster-create stays a console step. Revisit only if CoreWeave API credentials get
-  provisioned and the bridge is worth the maintenance cost.
+  `coreweave_cks_cluster` create/adopt is not built. Bridging the CoreWeave Terraform provider
+  into Pulumi needs CoreWeave API credentials, which we do not have; without the bridge Pulumi
+  has no resource type for the CKS cluster object, so it cannot even be *adopted* into state
+  (import needs a provider, same as create). `CoreweaveCluster` records the cluster as external
+  config (`CksClusterSpec`, exported as plain outputs); cluster-create stays a console step.
+  Revisit if CoreWeave API credentials get provisioned and the bridge is worth its maintenance
+  cost — we manage only the NodePools, so provider coverage of cluster-create is the open unknown.
 - **Verification strictness.** How strict should `iris cluster start`'s new prerequisite
   check be — exact-match on NodePool specs/RBAC verbs (catches drift, brittle across Iris
   versions) or presence-only (tolerant, misses drift)? This defines the portability contract's

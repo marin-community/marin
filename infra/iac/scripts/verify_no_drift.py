@@ -35,9 +35,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from iac.config import load_iris_config
+from iac.config import IAC_CLUSTER_CONFIG_DIR, load_iris_config
+from iris.cli.connect import open_controller_endpoint, rpc_client
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.provenance import provenance_from_proto
+from iris.rpc import controller_pb2, job_pb2
+from rigging.config_discovery import resolve_cluster_config
 
 DEFAULT_SNAPSHOT_DIR = Path("/tmp")
 
@@ -71,14 +75,24 @@ def _pod_creation_timestamps(kubeconfig: str, context: str) -> dict[str, str]:
 
 
 def _controller_status(cluster: str) -> dict[str, object]:
-    result = subprocess.run(
-        ["uv", "run", "iris", f"--cluster={cluster}", "cluster", "status", "--json"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise SystemExit(f"`iris cluster status --json` failed:\n{result.stdout}\n{result.stderr}")
-    return json.loads(result.stdout)
+    """The controller's reported identity, read straight from its RPC surface.
+
+    A changed Version between snapshots means the controller was redeployed, which a
+    `pulumi up` over the static substrate must never cause. Talks to the controller
+    through the Iris client rather than a CLI subprocess: the client returns typed
+    protos, where CLI stdout is not a stable contract. Resolves the controller from
+    the reviewed in-tree config (IAC_CLUSTER_CONFIG_DIR), matching the rest of capture().
+    """
+    config_file = Path(resolve_cluster_config(cluster, dirs=(IAC_CLUSTER_CONFIG_DIR,)))
+    with open_controller_endpoint(config_file=config_file) as endpoint:
+        with rpc_client(endpoint.url, endpoint.credentials) as client:
+            proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
+            workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
+    return {
+        "version": str(provenance_from_proto(proc.provenance)),
+        "workers_healthy": sum(1 for w in workers if w.healthy),
+        "workers_total": len(workers),
+    }
 
 
 def capture(cluster: str, namespace: str, kubeconfig: str, context: str) -> dict:

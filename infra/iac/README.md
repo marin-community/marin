@@ -48,16 +48,15 @@ chart repo registered locally:
   helm repo add coreweave https://charts.core-services.ingress.coreweave.com
   helm repo update coreweave
   ```
-  This is a real, required prerequisite, not a nice-to-have: `TraefikAddon`'s Traefik and
-  cert-manager `Release`s deliberately omit Pulumi's `repository_opts` (a workaround for an
-  upstream Pulumi bug — see `.agents/projects/iac/gaps.md`'s "Pulumi Helm chart resolution"),
-  so Pulumi resolves those two charts by reading this local Helm config instead of fetching the
-  repo itself. Without it, `pulumi preview`/`up` fails with `"coreweave" is not a valid chart
-  repository`. Re-run `helm repo update coreweave` any time `TRAEFIK_VERSION`/
-  `CERT_MANAGER_VERSION` in `src/iac/coreweave/traefik.py` bumps to a version published after
-  your last update — a stale local index won't list it. **Any CI workflow that runs `pulumi
-  preview`/`up` against a CoreWeave stack must add this as an explicit step** — CI runners are
-  ephemeral, so this is never a "ran it once" setup step there.
+  Required before any `pulumi preview`/`up` on a CoreWeave stack. `TraefikAddon`'s Traefik and
+  cert-manager `Release`s omit Pulumi's `repository_opts` (a workaround for an upstream Pulumi
+  bug — see `.agents/projects/iac/gaps.md`'s "Pulumi Helm chart resolution"), so Pulumi resolves
+  those two charts through this local Helm config. Without it, `pulumi preview` fails with
+  `"coreweave" is not a valid chart repository`. Re-run `helm repo update coreweave` after a
+  `TRAEFIK_VERSION`/`CERT_MANAGER_VERSION` bump in `src/iac/coreweave/traefik.py` — a stale local
+  index won't list the new version. This is per-machine and per-CI-runner (runners are ephemeral).
+  gaps.md records the options for folding this step into `pulumi up` itself (a `command.local.run`
+  invoke, or vendored charts); this PR keeps it as the documented prerequisite here.
 
 
 

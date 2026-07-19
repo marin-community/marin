@@ -3,16 +3,15 @@
 
 """CoreweaveCluster — the reserved NodePools for an existing CKS cluster.
 
-Renders only the NodePools (as `compute.coreweave.com/v1alpha1 NodePool` custom resources,
-exactly as Iris does today) and assumes the CKS cluster + kubeconfig already exist.
+Renders the cluster's NodePools as `compute.coreweave.com/v1alpha1 NodePool` custom
+resources, the objects Iris applies today, and targets an existing CKS cluster and its
+kubeconfig.
 
-The CKS cluster object itself (`coreweave_cks_cluster` + VPC) is deliberately NOT managed by
-Pulumi — not a TODO, a decision. Real create/adopt would need the bridged CoreWeave Terraform
-provider (`pulumi package add terraform-provider coreweave/coreweave`), which design.md's Open
-Questions flagged as unproven at our fleet sizes; we have not bridged it, and have no CoreWeave
-API credentials wired in to do so. `CksClusterSpec` stays documented, in-tree config (`args.cluster`,
-exported below) describing a cluster provisioned out of band (console / CoreWeave TF directly) —
-see gaps.md row 3.
+The CKS cluster object (`coreweave_cks_cluster` + VPC) stays outside Pulumi. Managing or
+adopting it would need the CoreWeave Terraform provider bridged into Pulumi
+(`pulumi package add terraform-provider coreweave/coreweave`) and CoreWeave API credentials,
+neither of which exists here (design.md Open Questions; gaps.md row 3). `CksClusterSpec`
+(`args.cluster`, exported below) records that externally-provisioned cluster as in-tree config.
 """
 
 from dataclasses import dataclass
@@ -96,6 +95,6 @@ class CoreweaveCluster(pulumi.ComponentResource):
                     import_=nodepool.name if args.adopt else None,
                 ),
             )
-        # Not Pulumi-managed (see module docstring) — exported for visibility only, so
-        # `pulumi stack output` still names the CKS cluster this stack's NodePools live on.
+        # Exported so `pulumi stack output` names the CKS cluster this stack's NodePools
+        # live on; the cluster object itself is not Pulumi-managed (see module docstring).
         self.register_outputs({"cluster_name": args.cluster.name, "cluster_zone": args.cluster.zone})

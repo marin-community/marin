@@ -1,12 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TraefikAddon — Traefik, cert-manager, HTTP-01 ClusterIssuers, and the IP-locked federation ingress.
+"""TraefikAddon — the ingress stack a CoreWeave controller needs for Iris federation.
 
-Reproduces what `lib/iris/scripts/install_cw_network.py install` installs, so an already-
-installed cluster adopts with no change. Manifest shapes come from the shared
-`iris.cluster.platforms.k8s.network_manifests` builders, so IaC and the script render
-identically.
+Parent Marin controllers federate jobs by dialing a CoreWeave controller's RPC surface
+inbound, so each cluster runs its own ingress. This component declares that stack: the
+Traefik ingress controller and cert-manager, a Let's Encrypt HTTP-01 ClusterIssuer per
+configured environment, and one IP-locked Ingress (a Traefik ipAllowList Middleware)
+admitting only the parent controllers' egress IPs over the whole controller host.
+
+Manifest shapes come from iris.cluster.platforms.k8s.network_manifests, shared with
+install_cw_network.py so the two render identical objects.
 """
 
 from dataclasses import dataclass
@@ -23,10 +27,10 @@ from iris.cluster.platforms.k8s.network_manifests import (
     ISSUER_ENVS,
     MIDDLEWARE_NAME,
     TRAEFIK_CHART,
-    build_federation_ingress,
-    build_http01_issuer,
-    build_ipallowlist_middleware,
     default_federation_host,
+    federation_ingress,
+    http01_issuer,
+    ipallowlist_middleware,
     normalize_source,
 )
 
@@ -57,14 +61,11 @@ class TraefikAddonArgs:
 
 
 class TraefikAddon(pulumi.ComponentResource):
-    """Traefik + cert-manager + HTTP-01 ClusterIssuers + the IP-locked federation ingress.
+    """Traefik, cert-manager, HTTP-01 ClusterIssuers, and the IP-locked federation Ingress.
 
-    The federation Ingress + Middleware admit only `spec.federation_allow_sources` (the
-    marin-side controllers' egress IPs) over the whole controller host — there is no
-    world-open surface. Does not remove the controller's legacy `iris-controller-proxy`
-    Ingress: that is a one-time migration cleanup the imperative script performs, not a
-    stable piece of declared state; run the script by hand once if that cleanup is still
-    needed on a given cluster.
+    The federation Ingress and its ipAllowList Middleware admit only
+    `spec.federation_allow_sources` — the parent controllers' egress IPs — over the whole
+    controller host.
     """
 
     def __init__(
@@ -98,42 +99,13 @@ class TraefikAddon(pulumi.ComponentResource):
                 import_=import_id if (args.adopt and import_id) else None,
             )
 
-        # WORKAROUND, deliberate and load-bearing — see gaps.md's "Pulumi Helm chart resolution"
-        # section for the full investigation before touching this.
-        #
-        # Neither Release below sets `repository_opts`. That's the fix, not an oversight: Pulumi's
-        # embedded Helm client intermittently fails to resolve a `repository_opts`-based chart
-        # with "chart ... version ... not found in ... repository", even though the chart/version
-        # genuinely exist (confirmed by direct download and by the real `helm` CLI resolving them
-        # instantly). Extensive testing (documented in gaps.md — ~20 preview runs, multiple
-        # dependency-graph shapes) found no way to make `repository_opts` resolve reliably;
-        # forcing resolution order via `depends_on` made failures *more* deterministic, not less.
-        #
-        # Without `repository_opts`, `chart="coreweave/traefik"` (repo-alias/chart-name syntax)
-        # is resolved by Pulumi falling back to the LOCAL `helm` CLI's own repo config —
-        # `~/Library/Preferences/helm/repositories.yaml` on macOS — which must already have the
-        # `coreweave` alias registered. This is the one non-obvious operational cost of this
-        # workaround, and it is REQUIRED, not optional:
-        #
-        #     helm repo add coreweave https://charts.core-services.ingress.coreweave.com
-        #     helm repo update coreweave
-        #
-        # Run this once per machine, and again any time TRAEFIK_VERSION/CERT_MANAGER_VERSION
-        # below is bumped to a version published after your last `helm repo update` (a stale
-        # local index just won't list the new version — a real, non-flaky error in that case).
-        # This is now documented in infra/iac/README.md's Prerequisites, and MUST be added as an
-        # explicit step in any CI workflow that runs `pulumi preview`/`up` against this stack —
-        # CI runners are ephemeral, so this can never be a "ran it once" step there.
-        #
-        # Residual risk, accepted: resolution now trusts whatever `coreweave` happens to be
-        # aliased to locally, with no URL pinned in code to verify against. Low-likelihood
-        # (nobody has a reason to alias `coreweave` to something else), but real.
-        #
-        # Root cause is upstream and unfixed: https://github.com/pulumi/pulumi-kubernetes/issues/935
-        # (Pulumi caches nothing for Helm chart resolution, by design, open since 2020).
-        # `KueueAddon`'s `cks-kueue` Release has never failed in this investigation and still
-        # uses `repository_opts` (untouched) — this workaround is scoped to the two Releases that
-        # actually failed, not applied everywhere by default.
+        # These two Releases omit `repository_opts`: with it set, Pulumi intermittently fails to
+        # resolve the chart at preview time (upstream pulumi-kubernetes#935). Without it,
+        # `chart="coreweave/traefik"` resolves through the local `helm` CLI repo config, which
+        # must have the `coreweave` alias registered first (`helm repo add coreweave <url>`).
+        # That prerequisite, and the options for folding it into `pulumi up`, are documented in
+        # one place: infra/iac/README.md Prerequisites and gaps.md's "Pulumi Helm chart
+        # resolution". `KueueAddon`'s `cks-kueue` Release keeps `repository_opts`, never having failed.
         cert_manager_release = k8s.helm.v3.Release(
             "cert-manager",
             name=DEFAULT_CERT_MANAGER_RELEASE,
@@ -155,22 +127,15 @@ class TraefikAddon(pulumi.ComponentResource):
 
         # HTTP-01 ClusterIssuers named in spec.cluster_issuers (normally both staging + prod).
         #
-        # No explicit CRD-readiness wait here (unlike install_cw_network.py's wait_for_crd), by
-        # design: `depends_on=[cert_manager_release]` already orders this after the Release's
-        # readiness check, which waits for cert-manager's Deployments to have healthy pods — a
-        # bar that in practice clears well after the CRDs it ships are registered, since pod
-        # readiness (image pull, container start, probe passes) takes far longer than API-server
-        # CRD registration. Pulumi's k8s provider also retries a CustomResource create up to 5
-        # times with backoff if the CRD genuinely isn't found yet (verified against
-        # https://github.com/pulumi/pulumi-kubernetes/issues/1446 — hardcoded, not configurable
-        # via custom_timeouts, and still an open enhancement request upstream as of this writing).
-        # Between the two, this has never failed in real testing on this repo. If it ever does,
-        # the fix is upstream (a higher retry budget), not a bespoke polling loop here — see
-        # gaps.md's "Traefik/cert-manager CRD-registration race" entry.
+        # No explicit CRD-readiness wait: `depends_on=[cert_manager_release]` orders these after
+        # the Release's readiness check (healthy cert-manager pods), which in practice clears
+        # after the CRDs it ships are registered, and the k8s provider retries a CustomResource
+        # create up to 5 times if the CRD is not yet found. See gaps.md's "Traefik/cert-manager
+        # CRD-registration race" for the investigation and the accepted-risk rationale.
         issuers = []
         for issuer_name in args.spec.cluster_issuers:
             env = ISSUER_ENVS[issuer_name]
-            manifest = build_http01_issuer(env, args.spec.acme_email, args.spec.ingress_class)
+            manifest = http01_issuer(env, args.spec.acme_email, args.spec.ingress_class)
             issuers.append(
                 k8s.apiextensions.CustomResource(
                     f"cluster-issuer-{env}",
@@ -187,7 +152,7 @@ class TraefikAddon(pulumi.ComponentResource):
         namespace_deps = [args.namespace_dependency] if args.namespace_dependency is not None else []
 
         source_ranges = [normalize_source(source) for source in args.spec.federation_allow_sources]
-        middleware_manifest = build_ipallowlist_middleware(namespace=args.namespace, source_ranges=source_ranges)
+        middleware_manifest = ipallowlist_middleware(namespace=args.namespace, source_ranges=source_ranges)
         k8s.apiextensions.CustomResource(
             "federation-ipallowlist",
             api_version=middleware_manifest["apiVersion"],
@@ -197,7 +162,7 @@ class TraefikAddon(pulumi.ComponentResource):
             opts=child_opts(f"{args.namespace}/{MIDDLEWARE_NAME}", depends_on=[traefik_release, *namespace_deps]),
         )
 
-        ingress_manifest = build_federation_ingress(
+        ingress_manifest = federation_ingress(
             namespace=args.namespace,
             service_name=args.service_name,
             port=args.port,

@@ -68,7 +68,7 @@ def normalize_source(value: str) -> str:
     return f"{value}/{32 if ip.version == 4 else 128}"
 
 
-def build_http01_issuer(env: str, email: str, ingress_class: str) -> dict:
+def http01_issuer(env: str, email: str, ingress_class: str) -> dict:
     """A Let's Encrypt HTTP-01 ClusterIssuer validated through ``ingress_class``.
 
     HTTP-01 (not CoreWeave's bundled DNS-01) so it can issue for a custom host, which
@@ -90,7 +90,7 @@ def build_http01_issuer(env: str, email: str, ingress_class: str) -> dict:
     }
 
 
-def build_ipallowlist_middleware(*, namespace: str, source_ranges: list[str], xff_depth: int = 0) -> dict:
+def ipallowlist_middleware(*, namespace: str, source_ranges: list[str], xff_depth: int = 0) -> dict:
     """A Traefik ``ipAllowList`` Middleware admitting only ``source_ranges``.
 
     By default Traefik matches the client's direct transport peer (``RemoteAddr``). If
@@ -110,7 +110,7 @@ def build_ipallowlist_middleware(*, namespace: str, source_ranges: list[str], xf
     }
 
 
-def build_federation_ingress(
+def federation_ingress(
     *,
     namespace: str,
     service_name: str,

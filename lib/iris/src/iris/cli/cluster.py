@@ -830,39 +830,22 @@ def cluster_delete_slice(ctx, slice_id: str):
 
 
 @cluster.command("status")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON instead of a formatted report.")
 @click.pass_context
-def cluster_status_cmd(ctx, as_json: bool):
+def cluster_status_cmd(ctx):
     """Show cluster status including controller and autoscaler."""
     controller_url = require_controller_url(ctx)
-    if not as_json:
-        click.echo("Checking controller status...")
+    click.echo("Checking controller status...")
     try:
         with rpc_client_for_ctx(ctx, url=controller_url) as client:
             proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
             workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers
             as_status = client.get_autoscaler_status(controller_pb2.Controller.GetAutoscalerStatusRequest()).status
         healthy = sum(1 for w in workers if w.healthy)
-        version = provenance_from_proto(proc.provenance)
-        if as_json:
-            click.echo(
-                json.dumps(
-                    {
-                        "running": True,
-                        "healthy": True,
-                        "address": controller_url,
-                        "version": str(version),
-                        "workers_healthy": healthy,
-                        "workers_total": len(workers),
-                    }
-                )
-            )
-            return
         click.echo("Controller Status:")
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
-        click.echo(f"  Version: {version}")
+        click.echo(f"  Version: {provenance_from_proto(proc.provenance)}")
         click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
@@ -870,9 +853,6 @@ def cluster_status_cmd(ctx, as_json: bool):
         else:
             click.echo(_format_status_table(as_status))
     except Exception as e:
-        if as_json:
-            click.echo(json.dumps({"running": False, "address": controller_url, "error": str(e)}))
-            return
         click.echo("Controller Status:")
         click.echo(f"  Running: False (RPC failed: {e})")
         click.echo(f"  Address: {controller_url}")

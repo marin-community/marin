@@ -93,10 +93,10 @@ from iris.cluster.platforms.k8s.network_manifests import (
     MIDDLEWARE_CRD,
     MIDDLEWARE_NAME,
     TRAEFIK_CHART,
-    build_federation_ingress,
-    build_http01_issuer,
-    build_ipallowlist_middleware,
     default_federation_host,
+    federation_ingress,
+    http01_issuer,
+    ipallowlist_middleware,
     normalize_source,
 )
 from rigging.config_discovery import resolve_cluster_config
@@ -343,14 +343,12 @@ def install(
         )
 
     issuer_docs = (
-        [build_http01_issuer(env, acme_email, settings.ingress_class) for env in ("staging", "prod")]
+        [http01_issuer(env, acme_email, settings.ingress_class) for env in ("staging", "prod")]
         if not skip_issuers and acme_email
         else []
     )
-    middleware = build_ipallowlist_middleware(
-        namespace=settings.namespace, source_ranges=source_ranges, xff_depth=xff_depth
-    )
-    ingress = build_federation_ingress(
+    middleware = ipallowlist_middleware(namespace=settings.namespace, source_ranges=source_ranges, xff_depth=xff_depth)
+    ingress = federation_ingress(
         namespace=settings.namespace,
         service_name=settings.service_name,
         port=settings.port,
