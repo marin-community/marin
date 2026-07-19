@@ -162,6 +162,12 @@ class GrugModelConfig:
     # up-projection (kv: sqrt(d/kv_lora_rank), q: sqrt(d/q_lora_rank)). Off by default.
     mla_scale_q_lora: bool = False
     mla_scale_kv_lora: bool = False
+    mla_attn_gate: bool = False
+    """Ablation: add the CausalSelfAttention-style headwise gate (2*sigmoid(x @ attn_gate)) to MLA,
+    which by default has none. Init to zeros -> gate == 1 (identity) at start."""
+    mla_disable_xsa: bool = False
+    """Ablation: skip MLA's Exclusive Self Attention (subtracting the vᵢ-parallel component of the
+    per-head output)."""
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -724,6 +730,7 @@ class MultiheadLatentAttention(eqx.Module):
     q_norm: RMSNorm | None
     w_uq: Float[Array, "Cq NQ"] | None
     w_o: Float[Array, "NV D"]
+    attn_gate: Float[Array, "D N"] | None  # optional headwise gate (cfg.mla_attn_gate)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -760,6 +767,7 @@ class MultiheadLatentAttention(eqx.Module):
             q_norm=q_norm,
             w_uq=w_uq,
             w_o=reshard(_init_weight(k_o, (n * vd, d), std), P("model", "data")),
+            attn_gate=(reshard(jnp.zeros((d, n)), P(None, None)) if cfg.mla_attn_gate else None),
             cfg=cfg,
         )
 
@@ -814,13 +822,18 @@ class MultiheadLatentAttention(eqx.Module):
         k = jnp.concatenate([k_nope, k_r], axis=-1)
 
         attn_out = attention(q, k, v, mask, implementation=cfg.attention_implementation)
-        # Exclusive Self Attention: subtract the component of the output parallel to vᵢ. v already
-        # carries head_spec; pin attn_out to match so they align per head.
+        # v already carries head_spec; pin attn_out to match so they align per head.
         attn_out = reshard(attn_out, head_spec)
-        aligned_v = v
-        dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
-        v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
-        attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if not cfg.mla_disable_xsa:
+            # Exclusive Self Attention: subtract the component of the output parallel to vᵢ.
+            aligned_v = v
+            dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
+            v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
+            attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        if self.attn_gate is not None:
+            # Headwise gating: one scalar per head, 2*sigmoid so it starts at 1 (attn_gate init 0).
+            gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+            attn_out = reshard(gate * attn_out, head_spec)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 

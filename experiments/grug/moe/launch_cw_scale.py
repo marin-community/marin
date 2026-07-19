@@ -145,6 +145,10 @@ def build_scale_model() -> GrugModelConfig:
     mla_default = "1" if use_mla else "0"
     mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
     mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
+    # MLA feature ablations: SCALE_MLA_ATTN_GATE=1 adds the headwise attention gate MLA lacks;
+    # SCALE_MLA_NO_XSA=1 drops Exclusive Self Attention.
+    mla_attn_gate = os.environ.get("SCALE_MLA_ATTN_GATE") == "1"
+    mla_disable_xsa = os.environ.get("SCALE_MLA_NO_XSA") == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -182,6 +186,8 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         mla_scale_q_lora=mla_scale_q_lora,
         mla_scale_kv_lora=mla_scale_kv_lora,
+        mla_attn_gate=mla_attn_gate,
+        mla_disable_xsa=mla_disable_xsa,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,
