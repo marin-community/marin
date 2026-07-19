@@ -73,10 +73,6 @@ class K8sService(Protocol):
 
     def apply_json(self, manifest: dict) -> None: ...
 
-    def dry_run_create(self, manifest: dict) -> None:
-        """Create with ``dryRun=All``: run full admission, persist nothing."""
-        ...
-
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
     def list_json(
@@ -306,32 +302,6 @@ class CloudK8sService:
                 # leave it. A later reconcile re-applies once any deletion lands.
                 return
             raise
-
-    def dry_run_create(self, manifest: dict) -> None:
-        """Create the resource with ``dryRun=All``, exercising the full admission
-        chain (mutating/validating webhooks, quota, policy) without persisting.
-
-        Raises :class:`KubectlError` carrying the HTTP status on an API verdict;
-        transport failures propagate as-is.
-        """
-        kind = manifest.get("kind", "?")
-        name = manifest["metadata"]["name"]
-        res = K8sResource.from_kind(manifest["kind"])
-        ns = manifest["metadata"].get("namespace", self.namespace) if res.is_namespaced else None
-        with slow_log(logger, f"dry-run create {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                self._resource_api(res).create(
-                    body=manifest,
-                    dry_run="All",
-                    **self._request_timeout_kwargs(),
-                    **({"namespace": ns} if ns else {}),
-                )
-            except ApiException as e:
-                body = (e.body or "")[:_ERROR_BODY_MAX_LEN]
-                raise KubectlError(
-                    f"dry-run create {kind}/{name} failed ({e.status}): {e.reason} {body}",
-                    status=e.status,
-                ) from e
 
     # -- get -----------------------------------------------------------------
 

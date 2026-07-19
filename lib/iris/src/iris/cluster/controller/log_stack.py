@@ -25,7 +25,6 @@ from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.stats.tables import (
-    ADMISSION_PROBE_NAMESPACE,
     PROFILE_NAMESPACE,
     PROVISIONING_NAMESPACE,
     TASK_EVENT_NAMESPACE,
@@ -33,7 +32,6 @@ from iris.cluster.stats.tables import (
     TASK_STATE_NAMESPACE,
     TASK_STATS_NAMESPACE,
     WORKER_STATS_NAMESPACE,
-    IrisAdmissionProbe,
     IrisProfile,
     IrisProvisioning,
     IrisTaskStat,
@@ -66,8 +64,6 @@ class LogStack:
     worker_stats_table: Table
     # iris.task_state rows from the controller's periodic per-root-job aggregate.
     task_state_table: Table
-    # iris.admission_probe rows from the k8s backend's dry-run canary applies.
-    admission_probe_table: Table
     server: Any = None
 
     def close(self) -> None:
@@ -115,6 +111,5 @@ def build_log_stack(
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
         worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
         task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
-        admission_probe_table=client.get_table(ADMISSION_PROBE_NAMESPACE, IrisAdmissionProbe),
         server=server,
     )

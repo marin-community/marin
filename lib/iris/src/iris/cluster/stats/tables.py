@@ -24,8 +24,6 @@ from here; ``LogStack`` resolves every table from this catalog.
   the autoscaler).
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
-- ``iris.admission_probe`` — dry-run canary pod apply outcomes (producer:
-  ``iris.cluster.backends.k8s.admission_probe``).
 """
 
 from dataclasses import dataclass
@@ -45,7 +43,6 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
-ADMISSION_PROBE_NAMESPACE = "iris.admission_probe"
 
 # Task status rows are only useful while a task is still running — once
 # the job ends the data is dead weight on the finelog server. Cap the
@@ -326,34 +323,6 @@ class IrisTaskState:
     running: int
     oldest_pending_age_ms: int
     oldest_building_age_ms: int
-
-
-class ProbeOutcome(StrEnum):
-    """How one dry-run canary apply ended."""
-
-    OK = "ok"
-    FAILED = "failed"
-
-
-@dataclass
-class IrisAdmissionProbe:
-    """One dry-run canary apply outcome.
-
-    ``outcome`` and ``error_class`` are stored as strings (finelog columns are
-    primitive); ``outcome`` always holds a :class:`ProbeOutcome` value and
-    ``error_class`` a ``classify_probe_failure`` bucket (``""`` on ok).
-    """
-
-    # Alert queries scan for failures in a window; clustering parquet by outcome
-    # lets row-group min/max skip the all-ok bulk of the table.
-    key_column: ClassVar[str] = "outcome"
-
-    outcome: str
-    ts: datetime
-    namespace: str
-    error_class: str
-    latency_ms: int
-    message: str  # truncated failure detail, "" on ok
 
 
 def build_worker_stat(

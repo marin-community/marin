@@ -26,7 +26,6 @@ from typing import ClassVar, NamedTuple
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.k8s.admission_probe import DEFAULT_ADMISSION_PROBE_INTERVAL, AdmissionProber
 from iris.cluster.backends.k8s.node_metrics import (
     CW_EXPORTERS_NAMESPACE,
     DEFAULT_NODE_STATS_POLL_INTERVAL,
@@ -2156,18 +2155,11 @@ class K8sTaskProvider:
     # daemon, so the backend writes one iris.worker row per node (host + GPU
     # readings) here, surfacing nodes as workers. None in tests without finelog.
     worker_stats_table: Table | None = None
-    # Pre-resolved iris.admission_probe Table handle. The backend dry-run-applies
-    # a canary pod on a cadence and writes the outcome here, so a fail-closed
-    # admission webhook is detected even while no task pod exists. None in tests
-    # without finelog disables the prober.
-    admission_probe_table: Table | None = None
     # Namespace whose node-exporter/dcgm-exporter DaemonSets the node-stats
     # collector scrapes (CoreWeave's cw-exporters by default).
     exporters_namespace: str = CW_EXPORTERS_NAMESPACE
     # Node-stats scrape cadence, coarser than the reconcile tick (see NodeStatsCollector).
     node_stats_poll_interval: float = DEFAULT_NODE_STATS_POLL_INTERVAL
-    # Dry-run canary apply cadence (see AdmissionProber).
-    admission_probe_interval: float = DEFAULT_ADMISSION_PROBE_INTERVAL
     # Resource-usage poll cadence. Defaults to the metrics-server scrape
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
     # metrics list per tick covers every managed pod (see ResourceCollector).
@@ -2198,7 +2190,6 @@ class K8sTaskProvider:
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _periodic_profiler: PeriodicProfiler | None = field(default=None, init=False, repr=False)
     _node_stats_collector: NodeStatsCollector | None = field(default=None, init=False, repr=False)
-    _admission_prober: AdmissionProber | None = field(default=None, init=False, repr=False)
     _task_event_log: TaskEventLog | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_gc_time: float = field(default=0.0, init=False, repr=False)
@@ -2241,17 +2232,6 @@ class K8sTaskProvider:
                 on_snapshot=self._cluster_state.set_node_metrics,
             )
         return self._node_stats_collector
-
-    def _ensure_admission_prober(self) -> AdmissionProber | None:
-        if self.admission_probe_table is None:
-            return None
-        if self._admission_prober is None:
-            self._admission_prober = AdmissionProber(
-                self.kubectl,
-                self.admission_probe_table,
-                poll_interval=self.admission_probe_interval,
-            )
-        return self._admission_prober
 
     def _ensure_task_event_log(self) -> TaskEventLog | None:
         if self.task_event_table is None:
@@ -2429,10 +2409,6 @@ class K8sTaskProvider:
         if node_collector is not None:
             node_collector.set_nodes(_node_targets(nodes, managed_pods))
 
-        # Start the admission canary (dry-run pod applies -> iris.admission_probe
-        # rows). Self-contained: it needs no per-tick data, only a live backend.
-        self._ensure_admission_prober()
-
         self._maybe_gc_terminal_resources(managed_pods)
 
         return updates
@@ -2531,8 +2507,6 @@ class K8sTaskProvider:
             self._periodic_profiler.close()
         if self._node_stats_collector is not None:
             self._node_stats_collector.close()
-        if self._admission_prober is not None:
-            self._admission_prober.close()
 
     def get_cluster_status(self) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
