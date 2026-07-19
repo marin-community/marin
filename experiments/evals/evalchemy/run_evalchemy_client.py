@@ -118,14 +118,33 @@ def main() -> None:
     if os.environ.get("EVAL_RAW_PROBE") == "1":
         import urllib.request  # noqa: PLC0415
         url = config["base_url"].rstrip("/") + "/chat/completions"
+        # LOCAL (grug thinking probe): fold extra_gen_kwargs (e.g. skip_special_tokens=false) into the
+        # raw payload so the probe validates the SAME generation params the eval will use — critically
+        # skip_special_tokens=false, which PRESERVES the atomic <|start_think|>/<|end_think|> delimiters
+        # vLLM strips by default. Temperature is overridable (EVAL_PROBE_TEMPERATURE); the Delphi thinking
+        # model loops under greedy (temp=0) and never emits <|end_think|>, so a delimiter smoke wants temp>0.
+        def _coerce(v):
+            s = str(v).strip()
+            if s.lower() in ("true", "false"):
+                return s.lower() == "true"
+            try:
+                return int(s)
+            except ValueError:
+                pass
+            try:
+                return float(s)
+            except ValueError:
+                return s
         payload = {
             "model": config["model_id"],
             "messages": [{"role": "user", "content":
                           "Convert the point $(0,3)$ in rectangular coordinates to polar coordinates. "
                           "Enter your answer in the form $(r,\\theta)$, where $r>0$ and $0\\le\\theta<2\\pi$."}],
             "max_tokens": config.get("max_gen_toks", 30720),
-            "temperature": 0.0,
+            "temperature": float(os.environ.get("EVAL_PROBE_TEMPERATURE", "0.0")),
         }
+        for _k, _v in (config.get("extra_gen_kwargs") or {}).items():
+            payload[_k] = _coerce(_v)
         req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=1800) as resp:

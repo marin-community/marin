@@ -201,6 +201,28 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
         )
         apply_chat_template = True
     max_eval_instances = int(os.environ["EVAL_LIMIT"]) if os.environ.get("EVAL_LIMIT") else None
+    # LOCAL (grug thinking model): serve a chat template the model's repo does not carry a vLLM-loadable
+    # copy of (or override it). EVAL_CHAT_TEMPLATE_FILE → ServeSpec.chat_template_content (server renders
+    # /v1/chat/completions with it). For Delphi grug this is the delphi_v0_think jinja carrying the
+    # <|start_think|>/<|end_think|> machinery — the marin `/think` default in the repo would mis-structure
+    # the prompt and never cue the model's thinking protocol.
+    chat_template_content = None
+    ctf = os.environ.get("EVAL_CHAT_TEMPLATE_FILE")
+    if ctf:
+        chat_template_content = Path(ctf).read_text()
+    # LOCAL (grug thinking model): extra --gen_kwargs (key=value, comma-separated) folded into every
+    # lm-eval request. THE crux for Delphi thinking models: EVAL_EXTRA_GEN_KWARGS="skip_special_tokens=false"
+    # PRESERVES the atomic 128002/128003 delimiters (vLLM's skip_special_tokens=True default STRIPS them,
+    # which made the model look like it emitted no CoT — the original serving bug).
+    extra_gen_kwargs: dict[str, str] = {}
+    egk = os.environ.get("EVAL_EXTRA_GEN_KWARGS")
+    if egk:
+        for pair in egk.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            k, _, v = pair.partition("=")
+            extra_gen_kwargs[k.strip()] = v.strip()
     # Durable CoreWeave LOTA object store (marin-us-east-02a): the eval child writes each task's
     # results_*.json here (run_evalchemy_client passes the LOTA virtual-addressing storage_options).
     # Unique per-run sub-path so re-runs don't collide. Mac can't read LOTA directly (in-cluster only) —
@@ -227,9 +249,11 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
             # Auto-derived per-model serve args (GDN triton / limit-mm) merged with any EVAL_VLLM_EXTRA_ARGS;
             # rides ServeSpec.vllm_extra_args — the maintainer-blessed surface (marin #7373).
             vllm_extra_args=vllm_extra_args,
+            chat_template_content=chat_template_content,
         ),
         apply_chat_template=apply_chat_template,
         max_gen_toks=max_gen_toks,
+        extra_gen_kwargs=extra_gen_kwargs,
         max_eval_instances=max_eval_instances,
         num_concurrent=num_concurrent,
         eval_image=EVAL_IMAGE,
