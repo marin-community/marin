@@ -788,3 +788,15 @@ data-first, every decision needs a data point. natural_epoch_experiment.py.
   guardrail for HIGH-repetition PROPOSALS. Open decisive test: twobucket-a2 (code ep→32) + transect
   (→24) — does harm exceed seed noise in the high-ep regime? If yes → keep a bolt-on harm term/caps
   for extrapolation; if no → kernel alone + hard epoch caps suffices.
+
+## 2026-07-19 DP5: in-regime-fit swoosh UNDER-predicts high-rep harm (form needs high-rep data)
+- Fitted humaneval harm term (τ=4, b NNLS on kernel residuals) predicts +0.0089 bpb harm for the
+  n=4 high-code-rep runs; realized kernel-residual is +0.0230 → form UNDER-predicts 2.6×, explains
+  only 22% of high-rep residual variance. Shape directionally right (corr(resid, harm-feat) +0.018,
+  favors low τ~2-4) but MAGNITUDE mis-calibrated by in-regime fit (too little high-rep signal).
+- **Implication**: the harm term CANNOT be calibrated from the observational sweep. The high-rep
+  controlled experiments (twobucket-a2 code ep→32, transect ep→24, + seed replication) are REQUIRED
+  to (a) confirm harm exists at high-rep and (b) calibrate its magnitude. This is why they're run.
+- Decision converging (data-backed): SURROGATE = kernel (in-regime universal winner DP4). EPOCHING
+  = a bolt-on harm term is needed for high-rep PROPOSALS, but must be calibrated on high-rep
+  experimental data, not the sweep. Pending: a2/transect realized high-ep residual vs seed noise.
