@@ -46,7 +46,7 @@ ENV UV_RETRIES=5
 # as temperature-0, seed-free API requests -- a temperature>0 request carrying a seed is rejected
 # by the JAX/TPU vLLM backend -- evalchemy#34) and per-sample accuracy for chat benchmarks.
 ARG EVALCHEMY_REPO=https://github.com/marin-community/evalchemy.git
-ARG EVALCHEMY_COMMIT=b4072e0a942301bb3980b5eb903c11a3c70aad31
+ARG EVALCHEMY_COMMIT=e006f2e9e0df606179f397e77ae1883b47d2e80b
 
 WORKDIR /opt/eval
 

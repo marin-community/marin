@@ -19,7 +19,7 @@ import os
 # overridable via env so the launcher can be pointed at a fresh build without a code edit.
 EVALCHEMY_IMAGE = os.environ.get(
     "EVALCHEMY_TPU_IMAGE",
-    "ghcr.io/marin-community/evalchemy-tpu@sha256:996c137242067b7122ab7de71456fe89bca6822c3b1f3f06060948faaa456afb",
+    "ghcr.io/marin-community/evalchemy-tpu@sha256:1b134caeb2ab7967905d5de93dcafd88aba24c62f12d78089b32a9ef61819f7b",
 )
 
 # evalchemy/lm-eval are installed into the image's OWN venv (docker/evalchemy-tpu/Dockerfile:
