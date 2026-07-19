@@ -109,6 +109,7 @@ CORE_EVALS: tuple[str, ...] = (
     "boolq",
     "piqa",
     "openbookqa",
+    "humaneval",
 )
 
 # Named suite groups selectable by name on the CLI (``--evals smoke``).

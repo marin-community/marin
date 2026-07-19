@@ -42,9 +42,9 @@ sizing heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval 
 
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,
-winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts): one model boot, nine
-evals against the shared endpoint, nine records — the dashboard shows the full model x task grid of
-runs.
+winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus humaneval): one
+model boot, ten evals against the shared endpoint, ten records — the dashboard shows the full
+model x task grid of runs.
 
 `ingest` rebuilds the Postgres index from object storage (useful after runs written while the DB was
 unavailable):
@@ -101,4 +101,8 @@ limit must cover the full weight volume or the kernel OOM-kills the server mid-l
 
 Add an eval by adding an `EvalSuiteConfig` to `EVALS` in `evals.py` (its `tasks` are `EvalTaskConfig`
 entries, the same task menu the in-loop suites use). Add it to a group in `SUITES` to make it selectable
-by name.
+by name. Task flags that matter for served evals: `generation` routes the task through the chat API for
+chat-template models (MCQ tasks always use completions, which alone can echo prompt logprobs);
+`unsafe_code` passes lm-eval's `--confirm_run_unsafe_code` for code-execution scoring; and
+`completion_only` pins a generation task to the completions API for every model (humaneval's infill
+prompt breaks under chat formatting -- chat models reply with prose and markdown fences).
