@@ -7,6 +7,7 @@ dashboard datasources exist. These files only otherwise fail inside a deployed
 Grafana, which is the most expensive place to find out."""
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -133,6 +134,24 @@ def test_critical_contact_point_reaches_email_and_slack():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
                 assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+
+
+def test_dashboard_filter_expressions_reference_selected_columns():
+    # Infinity's backend parser applies filterExpression to the frame built from
+    # `columns`, so every field a filter references must also be selected.
+    literals = {"true", "false", "null"}
+    for path in (ROOT / "dashboards").glob("*.json"):
+        dashboard = json.loads(path.read_text())
+        for panel in dashboard["panels"]:
+            for target in panel.get("targets", []):
+                expression = target.get("filterExpression")
+                if not expression:
+                    continue
+                columns = target.get("columns", [])
+                selected = {c["text"] for c in columns} | {c["selector"] for c in columns}
+                fields = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r"'[^']*'", "", expression))) - literals
+                missing = fields - selected
+                assert not missing, f"{path.name} panel {panel.get('id')}: filter references unselected {missing}"
 
 
 def test_dashboard_datasource_uids_are_provisioned():

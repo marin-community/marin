@@ -135,6 +135,18 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
@@ -151,6 +163,11 @@
           },
           "filterExpression": "kind == 'webhook'",
           "columns": [
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
             {
               "selector": "cluster",
               "text": "cluster",
@@ -295,6 +312,18 @@
                 ]
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
           }
         ]
       },
@@ -311,6 +340,11 @@
           },
           "filterExpression": "kind == 'component'",
           "columns": [
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
             {
               "selector": "cluster",
               "text": "cluster",
