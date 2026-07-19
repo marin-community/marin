@@ -181,7 +181,7 @@ def test_cli_defaulted_vllm_options_do_not_trip_the_levanter_backend(monkeypatch
     def _fail_at_controller(*_args, **_kwargs):
         raise reached_controller
 
-    monkeypatch.setattr("marin.inference.quick_serve_cli.open_controller_endpoint", _fail_at_controller)
+    monkeypatch.setattr("marin.inference.quick_serve_cli.connect_controller", _fail_at_controller)
     result = CliRunner().invoke(main, ["Qwen/Qwen3-0.6B", "--backend", "levanter", "--max-seqs", "4"])
     assert result.exception is reached_controller
 

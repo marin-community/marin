@@ -38,9 +38,7 @@ def registry_host(image_tag: str) -> str | None:
     registry host only when it looks like one — it contains a ``.`` or ``:``
     (domain or port) or equals ``localhost``. A reference with no such segment
     (``ubuntu:24.04``, ``library/python``, ``bitnami/redis``) names no registry and
-    defaults to Docker Hub. The host is compared by callers with ``==``/set
-    membership, never by substring, so a crafted tag cannot smuggle a trusted
-    host name into an untrusted position.
+    defaults to Docker Hub.
     """
     if "/" not in image_tag:
         return None
@@ -82,6 +80,8 @@ def upstream_registry(image_tag: str) -> str:
     returned as-is. The result indexes ``registry_mirrors``.
     """
     host = registry_host(image_tag)
+    # Exact set membership, never a substring/prefix check: a crafted tag cannot
+    # smuggle a trusted host name into an untrusted position.
     if host is None or host in _DOCKER_HUB_HOSTS:
         return DOCKER_HUB
     return host

@@ -190,20 +190,6 @@ def connect_controller(
         raise
 
 
-@contextmanager
-def open_controller_endpoint(
-    *,
-    config_file: Path | None = None,
-    controller_url: str | None = None,
-    cluster_name: str | None = None,
-) -> Iterator[ControllerEndpoint]:
-    """Resolve a reachable controller URL and keep its local resources alive for the block."""
-    with connect_controller(
-        config_file=config_file, controller_url=controller_url, cluster_name=cluster_name
-    ) as endpoint:
-        yield endpoint
-
-
 def iris_client_for_ctx(
     ctx: click.Context,
     *,
@@ -233,7 +219,7 @@ def open_iris_client(
     extra_bundle_includes: Sequence[str] = (),
 ) -> Iterator[IrisClient]:
     """Open an IrisClient from a config file, cluster name, or direct controller URL."""
-    with open_controller_endpoint(
+    with connect_controller(
         config_file=config_file,
         controller_url=controller_url,
         cluster_name=cluster_name,
@@ -304,8 +290,8 @@ def _resolve_controller_url(
     """Resolve a reachable controller URL, opening a tunnel/local cluster if needed.
 
     Any SSH tunnel or local cluster opened to reach the controller is registered
-    on *resources*, so the caller controls its lifetime: the CLI ties it to the
-    click context, programmatic callers to the returned endpoint. Returns the URL
+    on *resources*, so it lives exactly as long as *resources* does — the caller
+    picks the lifetime by choosing what it ties *resources* to. Returns the URL
     and the provider bundle built along the way, or ``None`` when none was needed
     (direct URL or IAP ingress).
     """

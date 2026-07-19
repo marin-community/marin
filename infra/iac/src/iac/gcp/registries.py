@@ -16,7 +16,12 @@ from dataclasses import dataclass
 import pulumi
 import pulumi_gcp as gcp
 
-from iac.config import DOCKER_HUB_UPSTREAM, GcpArtifactRegistryCleanupPolicy, GcpRemoteRepositorySpec
+from iac.config import (
+    DOCKER_HUB_UPSTREAM,
+    GcpArtifactRegistryCleanupPolicy,
+    GcpDeleteCleanupPolicy,
+    GcpRemoteRepositorySpec,
+)
 
 
 @dataclass(frozen=True)
@@ -52,13 +57,13 @@ def _remote_config(spec: GcpRemoteRepositorySpec) -> gcp.artifactregistry.Reposi
 
 def _cleanup_policy(policy: GcpArtifactRegistryCleanupPolicy) -> gcp.artifactregistry.RepositoryCleanupPolicyArgs:
     """Translate a cleanup-policy spec into its Artifact Registry arg (DELETE by age, KEEP N newest)."""
-    condition = None
-    most_recent = None
-    if policy.action == "DELETE":
+    if isinstance(policy, GcpDeleteCleanupPolicy):
         condition = gcp.artifactregistry.RepositoryCleanupPolicyConditionArgs(
             tag_state=policy.tag_state, older_than=policy.older_than
         )
+        most_recent = None
     else:
+        condition = None
         most_recent = gcp.artifactregistry.RepositoryCleanupPolicyMostRecentVersionsArgs(keep_count=policy.keep_count)
     return gcp.artifactregistry.RepositoryCleanupPolicyArgs(
         id=policy.id, action=policy.action, condition=condition, most_recent_versions=most_recent

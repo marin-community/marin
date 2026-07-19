@@ -44,7 +44,7 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
-from iris.cli.connect import open_controller_endpoint
+from iris.cli.connect import connect_controller
 from iris.cli.job import parse_gpu_spec
 from iris.client import IrisClient, Job
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
@@ -514,7 +514,7 @@ def main(
         constraints.append(Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster))
 
     endpoint_cluster = cluster if controller is None else None
-    with open_controller_endpoint(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
+    with connect_controller(cluster_name=endpoint_cluster, controller_url=controller) as endpoint_info:
         controller_url = endpoint_info.url
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
