@@ -616,9 +616,12 @@ def test_describe_resolves_topology_from_live_tpu_when_handle_variant_empty():
 
 
 def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
-    """create_slice rewrites GHCR images in worker_config via resolve_image."""
+    """create_slice rewrites mirrored images in worker_config via resolve_image."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="my-proj")
-    gcp_config = GcpPlatformConfig(project_id="my-proj")
+    gcp_config = GcpPlatformConfig(
+        project_id="my-proj",
+        registry_mirrors={"ghcr.io": {"europe": "europe-docker.pkg.dev/my-proj/ghcr-mirror"}},
+    )
     platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = SliceConfig(

@@ -49,7 +49,7 @@ model behind this.
 
 ```bash
 iris cluster start|stop|restart|status
-iris cluster dashboard              # open tunnel, print URL, block
+iris cluster dashboard              # print controller URL, block
 iris cluster dashboard-proxy        # local proxy to remote controller (no tunnel needed)
 ```
 

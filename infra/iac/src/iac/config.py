@@ -134,8 +134,7 @@ class GcpArtifactRegistryCleanupPolicy(BaseModel):
 
 # Bound each pull-through cache: drop versions not pulled in 30 days, but always keep the 16
 # newest so a routine pull never re-fetches a still-current image from the upstream. Applied to
-# every mirror repo unless a spec overrides cleanup_policies. Mirrors the policy documented in
-# lib/iris/docs/image-push.md; that doc's gcloud recipe is the manual equivalent of this arm.
+# every mirror repo unless a spec overrides cleanup_policies.
 DEFAULT_MIRROR_CLEANUP_POLICIES = [
     GcpArtifactRegistryCleanupPolicy(id="delete-older-than-30d", action="DELETE", older_than="2592000s"),
     GcpArtifactRegistryCleanupPolicy(id="keep-latest", action="KEEP", keep_count=16),

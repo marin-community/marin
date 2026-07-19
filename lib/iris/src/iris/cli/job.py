@@ -645,7 +645,7 @@ def run_iris_job(
     """Core job submission logic.
 
     Args:
-        controller_url: Controller URL (from parent context tunnel).
+        controller_url: Controller URL (resolved by the parent context).
         dashboard_url: Public dashboard origin (e.g. https://iris.oa.dev). When
             set, a clickable job URL is logged on submit.
         terminate_on_exit: If True, terminate the job on any non-normal exit
@@ -1008,7 +1008,7 @@ Examples:
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
-    help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
+    help="Terminate the job on Ctrl+C (default: terminate). Losing connectivity never kills the job.",
 )
 @click.argument("cmd", nargs=-1, type=click.UNPROCESSED, required=True)
 @click.pass_context

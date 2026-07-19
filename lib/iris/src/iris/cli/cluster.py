@@ -861,15 +861,15 @@ def cluster_status_cmd(ctx):
 @cluster.command("dashboard")
 @click.pass_context
 def cluster_dashboard(ctx):
-    """Print dashboard URL and keep tunnel open.
+    """Print the dashboard URL and block.
 
-    Uses the tunnel established by the iris group. Blocks until Ctrl+C.
+    Blocks until Ctrl+C, keeping any local cluster the URL resolution started alive.
     """
     controller_url = require_controller_url(ctx)
     stop = threading.Event()
 
     def on_signal(sig, frame):
-        click.echo("\nClosing tunnel...")
+        click.echo("\nClosing...")
         stop.set()
 
     signal.signal(signal.SIGINT, on_signal)
@@ -877,7 +877,7 @@ def cluster_dashboard(ctx):
 
     click.echo(f"\nDashboard:      {controller_url}")
     click.echo(f"Controller RPC: {controller_url}")
-    click.echo("\nPress Ctrl+C to close tunnel.")
+    click.echo("\nPress Ctrl+C to exit.")
     stop.wait()
 
 
@@ -1410,7 +1410,7 @@ def worker_restart(
     config = ctx.obj.get("config")
     if not config:
         raise click.ClickException("--config is required for worker-restart")
-    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
+    bundle = provider_bundle(config)
     if not isinstance(bundle.workers, GcpWorkerProvider):
         raise click.ClickException("worker-restart is only supported on GCP clusters")
 

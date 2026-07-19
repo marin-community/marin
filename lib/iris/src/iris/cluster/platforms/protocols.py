@@ -22,7 +22,7 @@ class ControllerProvider(Protocol):
     """Controller lifecycle + connectivity.
 
     Covers controller discovery, start/restart/stop/stop_all, and
-    connectivity methods (tunnel, resolve_image, debug_report).
+    connectivity methods (tunnel, resolve_image).
     """
 
     def discover_controller(self, controller_config: ControllerVmConfig) -> str:
@@ -81,10 +81,6 @@ class ControllerProvider(Protocol):
         cluster's ``registry_mirrors`` config maps for the zone's continent.
         Other platforms return the image unchanged.
         """
-        ...
-
-    def debug_report(self) -> None:
-        """Log diagnostic info about the controller after a failure."""
         ...
 
     def shutdown(self) -> None:

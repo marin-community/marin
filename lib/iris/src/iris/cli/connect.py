@@ -272,10 +272,10 @@ def rpc_client_for_ctx(
 ) -> ControllerServiceClientSync:
     """Build an RPC client from the CLI context, threading both auth tokens.
 
-    Resolves the controller URL (establishing a tunnel if needed, unless ``url``
-    is given) and attaches the ``ClientCredentials`` stashed on the context by the
-    ``iris`` group. Prefer this over ``rpc_client`` in subcommands so IAP-fronted
-    clusters work uniformly.
+    Resolves the controller URL (unless ``url`` is given) and attaches the
+    ``ClientCredentials`` stashed on the context by the ``iris`` group. Prefer
+    this over ``rpc_client`` in subcommands so IAP-fronted clusters work
+    uniformly.
     """
     controller_url = url or require_controller_url(ctx)
     obj = ctx.obj or {}
