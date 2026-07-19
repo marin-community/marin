@@ -122,13 +122,14 @@ class _CapturingClient:
 class TestSubmit:
     def test_always_on_budgets_and_policy(self):
         client = _CapturingClient()
-        submit_service(client, _spec(), {"K": "v"}, job_pb2.EXISTING_JOB_POLICY_RECREATE)  # pyrefly: ignore
+        submit_service(client, _spec(), {"K": "v"})  # pyrefly: ignore
         kwargs = client.kwargs
         assert kwargs["max_retries_preemption"] == ALWAYS_ON_RETRIES
         assert kwargs["max_retries_failure"] == ALWAYS_ON_RETRIES
         # max_task_failures defaults to 0 job-wide: one hard container failure would
         # otherwise end the service regardless of the per-task budget.
         assert kwargs["max_task_failures"] == ALWAYS_ON_RETRIES
+        # Submit is always RECREATE — the only policy the deploy uses.
         assert kwargs["existing_job_policy"] == job_pb2.EXISTING_JOB_POLICY_RECREATE
         assert kwargs["user"] == "ops"
         assert kwargs["ports"] == ["svc"]
@@ -136,7 +137,7 @@ class TestSubmit:
 
     def test_region_pin(self):
         client = _CapturingClient()
-        submit_service(client, _spec(regions=("us-east5",)), {}, job_pb2.EXISTING_JOB_POLICY_KEEP)  # pyrefly: ignore
+        submit_service(client, _spec(regions=("us-east5",)), {})  # pyrefly: ignore
         (constraint,) = client.kwargs["constraints"]
         assert "us-east5" in str(constraint)
 

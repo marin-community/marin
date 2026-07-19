@@ -6,8 +6,7 @@
 The imperative half of :mod:`iac.iris.service`: Pulumi's ``local.Command`` invokes
 these verbs with the :class:`~iac.iris.spec.ServiceSpec` JSON in ``$IRIS_SVC_SPEC``.
 ``up`` submits with RECREATE and probes readiness through the controller proxy;
-``down`` terminates (idempotent, for ``pulumi destroy``); ``watchdog`` adopts a
-running instance via KEEP and recreates a lost one.
+``down`` terminates (idempotent, for ``pulumi destroy``).
 
 All validation, secret resolution, and bundle checks run before the submit, so a bad
 spec never terminates the healthy instance. Logs go to stderr; stdout carries exactly
@@ -109,10 +108,11 @@ def resources_from_spec(spec: ServiceSpec) -> ResourceSpec:
     )
 
 
-def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, str], policy: int) -> Job:
-    """Submit the always-on service job. The three retry budgets together make
-    preemptions and container deaths non-terminal (see ALWAYS_ON_RETRIES in
-    :mod:`iac.iris.spec`)."""
+def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, str]) -> Job:
+    """Submit the always-on service job, replacing any running instance (RECREATE).
+
+    The three retry budgets together make preemptions and container deaths
+    non-terminal (see ALWAYS_ON_RETRIES in :mod:`iac.iris.spec`)."""
     return client.submit(
         entrypoint=Entrypoint.from_command(*spec.entrypoint),
         name=spec.name,
@@ -124,7 +124,7 @@ def submit_service(client: IrisClient, spec: ServiceSpec, env_vars: dict[str, st
         max_retries_preemption=spec.max_retries_preemption,
         max_retries_failure=spec.max_retries_failure,
         max_task_failures=spec.max_task_failures,
-        existing_job_policy=policy,
+        existing_job_policy=job_pb2.EXISTING_JOB_POLICY_RECREATE,
     )
 
 
@@ -177,7 +177,7 @@ def _print_outputs(job_id: JobName, url: str, ready: bool) -> None:
     print(json.dumps({"job_id": str(job_id), "url": url, "ready": ready}, sort_keys=True))
 
 
-def _deploy(spec: ServiceSpec, policy: int) -> None:
+def _deploy(spec: ServiceSpec) -> None:
     workspace = Path.cwd()
     run_build_commands(workspace, spec.build_commands)
     check_bundle_includes(workspace, spec.extra_bundle_includes)
@@ -189,7 +189,7 @@ def _deploy(spec: ServiceSpec, policy: int) -> None:
             credentials=endpoint.credentials,
             extra_bundle_includes=spec.extra_bundle_includes,
         ) as client:
-            job = submit_service(client, spec, env_vars, policy)
+            job = submit_service(client, spec, env_vars)
             service_url = endpoint.url.rstrip("/") + proxy_path(spec.endpoint)
             logger.info("submitted %s; probing %s", job.job_id, service_url)
             ready = probe_ready(
@@ -210,14 +210,7 @@ def cli() -> None:
 @click.option("--spec-file", default=None, help=f"Spec JSON path (default: ${SPEC_ENV_VAR}).")
 def up(spec_file: str | None) -> None:
     """Submit the service, replacing a running instance (RECREATE)."""
-    _deploy(load_spec(spec_file), job_pb2.EXISTING_JOB_POLICY_RECREATE)
-
-
-@cli.command()
-@click.option("--spec-file", default=None, help=f"Spec JSON path (default: ${SPEC_ENV_VAR}).")
-def watchdog(spec_file: str | None) -> None:
-    """Adopt a running instance untouched (KEEP); recreate a lost or finished one."""
-    _deploy(load_spec(spec_file), job_pb2.EXISTING_JOB_POLICY_KEEP)
+    _deploy(load_spec(spec_file))
 
 
 def terminate_service(client: IrisClient, job_id: JobName, *, wait: float = TERMINATE_WAIT) -> None:
