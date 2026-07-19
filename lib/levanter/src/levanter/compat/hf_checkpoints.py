@@ -187,25 +187,20 @@ def _embed_chat_template_in_tokenizer_config(
     local_path: str,
     chat_template: str | None = None,
 ) -> None:
-    """Write the chat template to both places loaders read it from: the ``chat_template`` field
-    of ``tokenizer_config.json`` and the ``chat_template.jinja`` file (newer
-    ``transformers.save_pretrained`` writes only the latter). An explicit ``chat_template``
-    argument overrides the tokenizer's own template. No-op when neither is set.
+    """Embed the chat template (the explicit ``chat_template`` argument if given, else the
+    tokenizer's own) in the ``chat_template`` field of ``tokenizer_config.json``. The
+    ``chat_template.jinja`` file that newer ``transformers.save_pretrained`` writes is updated to
+    match when present, and created when an override is given. No-op when no template is set.
     """
     template = chat_template if chat_template is not None else getattr(tokenizer, "chat_template", None)
     if template is None:
         return
 
-    # Write chat_template.jinja when overriding; otherwise only update an existing file.
+    # Write chat_template.jinja when overriding; otherwise only refresh an existing file.
     jinja_path = os.path.join(local_path, "chat_template.jinja")
     if chat_template is not None or os.path.exists(jinja_path):
-        try:
-            existing_jinja = open(jinja_path).read() if os.path.exists(jinja_path) else None
-            if existing_jinja != template:
-                with open(jinja_path, "w") as f:
-                    f.write(template)
-        except OSError as e:  # noqa: BLE001
-            logger.warning("Could not write chat_template.jinja at %s: %s", jinja_path, e)
+        with open(jinja_path, "w") as f:
+            f.write(template)
 
     config_path = os.path.join(local_path, "tokenizer_config.json")
     if not os.path.exists(config_path):
