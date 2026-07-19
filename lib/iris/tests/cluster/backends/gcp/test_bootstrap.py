@@ -49,6 +49,25 @@ def test_bootstrap_renders_versioned_runsc_url() -> None:
         assert re.match(r"https://storage\.googleapis\.com/gvisor/releases/release/\d{8}\.\d+/", url), url
 
 
+def test_bootstrap_reserves_task_port_range() -> None:
+    """The task named-port range must be excluded from kernel ephemeral
+    assignment: a task binds its allocated port only after container setup,
+    and a co-tenant's outbound socket handed that port in the window kills
+    the task with EADDRINUSE (#7392)."""
+    script = build_worker_bootstrap_script(_worker_config())
+    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482,30000-40000"' in script
+
+
+def test_bootstrap_reserves_configured_task_port_range() -> None:
+    script = build_worker_bootstrap_script(_worker_config(port_range="20000-25000"))
+    assert 'sysctl -w net.ipv4.ip_local_reserved_ports="8081,8431,8470-8482,20000-25000"' in script
+
+
+def test_bootstrap_rejects_malformed_task_port_range() -> None:
+    with pytest.raises(ValueError):
+        build_worker_bootstrap_script(_worker_config(port_range="all-of-them"))
+
+
 def test_render_template_preserves_docker_templates() -> None:
     template = 'docker ps --format "{{.Names}} {{.Status}}" and {{ value }}'
     rendered = render_template(template, value="x")

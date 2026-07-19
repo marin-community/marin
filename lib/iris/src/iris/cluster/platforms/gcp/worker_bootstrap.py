@@ -241,7 +241,13 @@ export PATH="$PATH:/snap/bin"
 # outbound connection be handed one of them and block the TPU trainer, which
 # crash-loops with "[::]:8431 ... Address already in use". Host-network task
 # containers share this netns, so this covers them. ip_local_reserved_ports
-# additionally pins the TPU/JAX ports as defense-in-depth.
+# pins the TPU/JAX ports as defense-in-depth and excludes the worker's task
+# named-port range, which sits inside the ephemeral range: a task binds its
+# allocated port only after container setup (up to a minute after allocation),
+# and without the reservation any co-tenant's outbound socket can be handed
+# that exact port in the window, killing the task's bind with EADDRINUSE
+# (#7392). Reservation only exempts ports from automatic assignment; explicit
+# binds by tasks are unaffected.
 sudo sysctl -w net.ipv4.ip_local_port_range="{{ port_range }}"
 sudo sysctl -w net.ipv4.ip_local_reserved_ports="{{ reserved_ports }}"
 sudo sysctl -w net.ipv4.tcp_tw_reuse=1
@@ -371,6 +377,11 @@ def build_worker_bootstrap_script(
         indent=2,
     )
 
+    # Reserve the task named-port range from kernel ephemeral assignment (see
+    # the sysctl comment in the template). Parsing validates the configured
+    # range and fails the deploy on a malformed value.
+    task_port_start, task_port_end = map(int, worker_config.port_range.split("-"))
+
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
         cache_dir=worker_config.cache_dir,
@@ -378,6 +389,6 @@ def build_worker_bootstrap_script(
         worker_port=worker_config.port,
         worker_config_json=worker_config_json,
         port_range=EPHEMERAL_PORT_RANGE,
-        reserved_ports=RESERVED_HOST_PORTS,
+        reserved_ports=f"{RESERVED_HOST_PORTS},{task_port_start}-{task_port_end}",
         runsc_version=RUNSC_VERSION,
     )

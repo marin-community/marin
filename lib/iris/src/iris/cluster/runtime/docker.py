@@ -179,6 +179,15 @@ EPHEMERAL_PORT_RANGE = "11000 65535"
 # unaffected. libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
 # runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's default
 # 8476); 8081 is levanter megascale.
+#
+# The worker bootstrap appends the worker's task named-port range (default
+# 30000-40000) to this list for the host netns: that range sits inside
+# EPHEMERAL_PORT_RANGE, and a task binds its allocated port only after
+# container setup, so without the reservation a co-tenant's outbound socket
+# can squat the port in the window (#7392). It is not baked in here because
+# the range is per-cluster config (`WorkerConfig.port_range`), and named host
+# ports are only reachable with host networking — isolated-netns containers
+# (the consumers of _NETWORK_SYSCTLS below) never bind them.
 RESERVED_HOST_PORTS = "8081,8431,8470-8482"
 
 # Network sysctl tuning for containers with their own network namespace (#3066).
