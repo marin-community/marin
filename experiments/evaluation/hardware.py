@@ -27,7 +27,7 @@ UTILIZATION = 0.85
 # path runs on one VM, so multi-host slices are out regardless of pool availability.
 SERVABLE_TPU_SLICES = ("v5litepod-4", "v5litepod-8", "v6e-4", "v6e-8", "v5p-8")
 
-# A US region whose zones carry each family's pool (marin.yaml tpu_pools zones). Children of an
+# The region whose zones carry each family's pool (marin.yaml tpu_pools zones). Children of an
 # eval orchestrator inherit its region unless pinned, and the orchestrator can land anywhere, so
 # every TPU choice pins a region where its slice actually exists.
 TPU_FAMILY_REGION: dict[str, str] = {"v5e": "us-west4", "v6e": "europe-west4", "v5p": "us-central1"}

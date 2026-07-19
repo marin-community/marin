@@ -54,7 +54,9 @@ from marin.evaluation.results_db import (
     connect_engine,
     ensure_schema,
     eval_runs,
+    fetch_runs,
     resolve_db_config,
+    run_row,
     upsert_record,
 )
 from metrics import primary_metric, stderr_for
@@ -151,30 +153,16 @@ def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
 
 
 def record_to_row(record: EvalRunRecord) -> dict:
-    """Flatten a record to the ``/api/runs`` row shape: the ``eval_runs`` columns plus a ``tasks``
-    list and the ``jobs`` map. Kept identical to what the Postgres ``fetch_runs`` (enriched from the
-    cached record) returns so the two stores expose one shape to the dashboard."""
-    return {
-        "run_id": record.run_id,
-        "group_id": record.group_id,
-        "created_at": record.created_at,
-        "user_name": record.user,
-        "model_name": record.model.name,
-        "model_location": record.model.location,
-        "eval_name": record.evaluation.name,
-        "mechanism": record.evaluation.mechanism,
-        "backend": record.model.backend,
-        "platform": record.hardware.platform,
-        "accelerator": record.hardware.accelerator,
-        "region": record.hardware.region_or_cluster,
-        "status": record.status.value,
-        "results_path": record.results_path,
-        "git_sha": record.provenance.git_sha,
-        "image_digest": record.provenance.evalchemy_image,
-        "error": record.error,
-        "tasks": [task.name for task in record.evaluation.tasks],
-        "jobs": dict(record.jobs),
-    }
+    """Flatten a record to the ``/api/runs`` row shape: the ``eval_runs`` columns
+    (:func:`~marin.evaluation.results_db.run_row`) plus a ``tasks`` list and the ``jobs`` map,
+    with ``created_at`` as the record's ISO string. Matches what the Postgres ``fetch_runs``
+    (enriched from the cached record) returns so the two stores expose one shape."""
+    row = run_row(record)
+    del row["record"]
+    row["created_at"] = record.created_at
+    row["tasks"] = [task.name for task in record.evaluation.tasks]
+    row["jobs"] = dict(record.jobs)
+    return row
 
 
 def record_score(record: EvalRunRecord) -> TaskScore | None:
@@ -482,23 +470,12 @@ class PgRecordStore(RecordStore):
         group: str | None = None,
         limit: int = DEFAULT_RUNS_LIMIT,
     ) -> list[dict]:
-        stmt = sqlalchemy.select(eval_runs).order_by(eval_runs.c.created_at.desc()).limit(limit)
-        for column, value in (
-            (eval_runs.c.model_name, model),
-            (eval_runs.c.eval_name, eval_name),
-            (eval_runs.c.user_name, user),
-            (eval_runs.c.status, status),
-            (eval_runs.c.group_id, group),
-        ):
-            if value is not None:
-                stmt = stmt.where(column == value)
-        with self._engine.begin() as conn:
-            rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
-        # timestamptz comes back as datetime; the dashboard wants the record's ISO string. The
-        # task list and jobs map live in the record jsonb, so enrich each row from the cached record.
+        rows = fetch_runs(
+            self._engine, model=model, eval_name=eval_name, user=user, status=status, group=group, limit=limit
+        )
+        # The task list and jobs map live in the record jsonb, so enrich each row from the cache.
         _records, by_id = self._snapshot()
         for row in rows:
-            row["created_at"] = row["created_at"].isoformat()
             record = by_id.get(row.get("run_id"))
             row["tasks"] = [task.name for task in record.evaluation.tasks] if record else []
             row["jobs"] = dict(record.jobs) if record else {}

@@ -116,7 +116,12 @@ def _secret_password(secret_id: str) -> str | None:
     try:
         response = client.access_secret_version(name=name)
     except Exception:
-        logger.warning("could not read eval-db password secret %s from project %s", secret_id, SECRET_MANAGER_PROJECT)
+        logger.warning(
+            "could not read eval-db password secret %s from project %s",
+            secret_id,
+            SECRET_MANAGER_PROJECT,
+            exc_info=True,
+        )
         return None
     return response.payload.data.decode("utf-8")
 
@@ -146,7 +151,8 @@ def ensure_schema(engine: Engine) -> None:
     metadata.create_all(engine)
 
 
-def _run_row(record: EvalRunRecord) -> dict:
+def run_row(record: EvalRunRecord) -> dict:
+    """Flatten a record to its ``eval_runs`` column values (with ``created_at`` as a datetime)."""
     return {
         "run_id": record.run_id,
         "group_id": record.group_id,
@@ -179,7 +185,7 @@ def _metric_rows(record: EvalRunRecord) -> list[dict]:
 
 def upsert_record(engine: Engine, record: EvalRunRecord) -> None:
     """Upsert one run into ``eval_runs`` and replace its ``eval_metrics`` rows, in one transaction."""
-    row = _run_row(record)
+    row = run_row(record)
     insert = pg_insert(eval_runs).values(**row)
     upsert = insert.on_conflict_do_update(
         index_elements=[eval_runs.c.run_id],
@@ -199,18 +205,20 @@ def fetch_runs(
     eval_name: str | None = None,
     user: str | None = None,
     status: str | None = None,
+    group: str | None = None,
     limit: int = 200,
 ) -> list[dict]:
     """Return the most recent ``eval_runs`` rows matching the given filters, newest first."""
     stmt = sqlalchemy.select(eval_runs).order_by(eval_runs.c.created_at.desc()).limit(limit)
-    if model is not None:
-        stmt = stmt.where(eval_runs.c.model_name == model)
-    if eval_name is not None:
-        stmt = stmt.where(eval_runs.c.eval_name == eval_name)
-    if user is not None:
-        stmt = stmt.where(eval_runs.c.user_name == user)
-    if status is not None:
-        stmt = stmt.where(eval_runs.c.status == status)
+    for column, value in (
+        (eval_runs.c.model_name, model),
+        (eval_runs.c.eval_name, eval_name),
+        (eval_runs.c.user_name, user),
+        (eval_runs.c.status, status),
+        (eval_runs.c.group_id, group),
+    ):
+        if value is not None:
+            stmt = stmt.where(column == value)
     with engine.begin() as conn:
         rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
     # timestamptz comes back as datetime; the callers (CLI table, dashboard JSON) want the
