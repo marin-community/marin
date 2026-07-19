@@ -64,6 +64,11 @@ export function formatMillis(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return '—'
   return formatTimestamp(new Date(ms).toISOString())
 }
+export function protoTimestampMillis(
+  timestamp: { epoch_ms?: string | number } | null | undefined,
+): number | null {
+  return timestamp?.epoch_ms === undefined ? null : Number(timestamp.epoch_ms)
+}
 
 export function formatDuration(startMs: number | null | undefined, endMs: number | null | undefined): string {
   if (!startMs) return '—'

@@ -3,10 +3,9 @@
 
 """Command-line entry point for the eval launcher.
 
-``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Four commands:
-``launch`` submits runs (and, by default, waits and mirrors results to Postgres); ``ingest`` rebuilds
-the Postgres index from object-store records; ``runs`` queries it; ``backfill-samples`` rewrites every
-run's per-sample parquet exports from its kept ``samples_*.jsonl`` sources.
+``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Two commands:
+``launch`` submits runs and optionally waits for their object-store records; ``backfill-samples``
+rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`` sources.
 """
 
 from __future__ import annotations
@@ -14,13 +13,6 @@ from __future__ import annotations
 import click
 from iris.cli.connect import open_iris_client
 from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
-from marin.evaluation.results_db import (
-    connect_engine,
-    ensure_schema,
-    fetch_runs,
-    resolve_db_config,
-    upsert_record,
-)
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -39,25 +31,6 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
     if unknown:
         raise click.BadParameter(f"unknown eval(s) {unknown}; known: {sorted(EVALS)} or suites {sorted(SUITES)}")
     return keys
-
-
-def _connect_db_or_fail():
-    config = resolve_db_config()
-    if config is None:
-        raise click.ClickException("eval DB unavailable: set EVAL_DB_PASSWORD or grant Secret Manager access")
-    engine = connect_engine(config.instance, config.db, config.user, config.password)
-    ensure_schema(engine)
-    return engine
-
-
-def _maybe_engine():
-    config = resolve_db_config()
-    if config is None:
-        click.echo("eval DB unavailable (no password); results will not be mirrored to Postgres")
-        return None
-    engine = connect_engine(config.instance, config.db, config.user, config.password)
-    ensure_schema(engine)
-    return engine
 
 
 def _print_plan(spec: LaunchSpec) -> None:
@@ -131,27 +104,7 @@ def launch(
             click.echo(f"  {ref.run_id}  ({group.model_key} / {ref.eval_key})")
         if no_wait:
             return
-        wait_and_report([group], _maybe_engine())
-
-
-@cli.command()
-@click.option(
-    "--prefix",
-    "prefixes",
-    multiple=True,
-    default=(DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX),
-    show_default=True,
-    help="Object-store prefix(es) to scan for records; repeatable.",
-)
-def ingest(prefixes: tuple[str, ...]) -> None:
-    """Rebuild the Postgres index from every record under the given prefixes."""
-    configure_coreweave_s3()
-    engine = _connect_db_or_fail()
-    for prefix in prefixes:
-        records = list_records(prefix)
-        for record in records:
-            upsert_record(engine, record)
-        click.echo(f"ingested {len(records)} record(s) from {prefix}")
+        wait_and_report([group])
 
 
 @cli.command("backfill-samples")
@@ -170,26 +123,6 @@ def backfill_samples(prefixes: tuple[str, ...]) -> None:
         for record in list_records(prefix):
             written = export_lm_eval_samples(record.results_path)
             click.echo(f"{record.run_id}  {len(written)} parquet(s)  {record.results_path}")
-
-
-@cli.command()
-@click.option("--model", default=None, help="Filter by model name.")
-@click.option("--eval", "eval_name", default=None, help="Filter by eval name.")
-@click.option("--user", default=None, help="Filter by user.")
-@click.option("--status", default=None, help="Filter by status (succeeded/failed/infra_failed).")
-@click.option("--limit", type=int, default=200, help="Maximum rows to return.")
-def runs(model: str | None, eval_name: str | None, user: str | None, status: str | None, limit: int) -> None:
-    """List recorded eval runs, newest first."""
-    engine = _connect_db_or_fail()
-    rows = fetch_runs(engine, model=model, eval_name=eval_name, user=user, status=status, limit=limit)
-    if not rows:
-        click.echo("no runs")
-        return
-    for row in rows:
-        click.echo(
-            f"{str(row['created_at'])[:19]}  {row['run_id']:<46}  {row['user_name']:<12}  "
-            f"{row['model_name']:<20}  {row['eval_name']:<14}  {row['accelerator']:<10}  {row['status']}"
-        )
 
 
 def main() -> None:

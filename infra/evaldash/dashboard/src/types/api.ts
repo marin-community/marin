@@ -109,41 +109,44 @@ export interface EvalRecord {
   provenance: { git_sha: string; evalchemy_image: string; launch_host: string }
 }
 
-// --- Live iris job status (cluster.py) ---
+// --- Live Iris/finelog protobuf JSON (cluster.py) ---
+
+export interface ProtoTimestamp {
+  epoch_ms?: string | number
+}
 
 export interface JobAttempt {
   attempt_id: number
   state: string
-  worker_id: string | null
+  worker_id: string
   exit_code: number
-  error: string | null
-  started_at_ms: number | null
-  finished_at_ms: number | null
+  error: string
+  started_at?: ProtoTimestamp
+  finished_at?: ProtoTimestamp
   is_worker_failure: boolean
-  attempt_uid: string | null
+  attempt_uid: string
 }
 
 export interface JobTask {
   task_id: string
-  task_index: string
   state: string
-  worker_id: string | null
+  worker_id: string
   exit_code: number
-  error: string | null
-  started_at_ms: number | null
-  finished_at_ms: number | null
+  error: string
+  started_at?: ProtoTimestamp
+  finished_at?: ProtoTimestamp
   current_attempt_id: number
   attempts: JobAttempt[]
 }
 
 export interface JobInfo {
   state: string
-  error: string | null
+  error: string
   exit_code: number
-  started_at_ms: number | null
-  finished_at_ms: number | null
-  name: string | null
-  status_message: string | null
+  started_at?: ProtoTimestamp
+  finished_at?: ProtoTimestamp
+  name: string
+  status_message: string
 }
 
 export interface JobRole {
@@ -159,15 +162,14 @@ export interface JobsResponse {
   roles: JobRole[]
 }
 
-// --- Live finelog logs (cluster.py) ---
-
 export interface LogEntry {
-  timestamp_ms: number | null
-  source: string | null
+  timestamp?: ProtoTimestamp
+  source: string
   data: string
-  attempt_id: number | null
-  level: string | null
-  key: string | null
+  attempt_id: number
+  level: string
+  key: string
+  seq: string | number
 }
 
 export interface LogsResponse {

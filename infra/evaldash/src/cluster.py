@@ -1,18 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Live Iris job status and finelog logs for a run's child jobs, read over Direct VPC egress.
+"""Live Iris job status and finelog logs for evaldash.
 
-evaldash runs on Cloud Run with Direct VPC egress (PRIVATE_RANGES_ONLY) into the hai-gcp-models
-default VPC, the same network as the Iris controller and finelog hub VMs. Both are reached by internal
-IP resolved from a GCE instance filter (cached with a TTL) and queried with no token: the Iris
-controller runs null-auth and finelog's cidr auth admits the RFC1918 ranges, so a caller on the VPC is
-trusted.
+Cloud Run reaches the Iris controller and finelog hub through Direct VPC egress. Their internal IPs
+are resolved from GCE instance filters and cached briefly. RPCs use the generated Connect clients and
+protobuf messages; successful responses are serialized with protobuf's canonical JSON conversion.
 
-Outside the VPC (local dev) discovery or the RPC fails fast under a short timeout, and every method
-returns a degrade payload carrying ``reachable=False`` and an ``error`` string rather than raising, so
-the dashboard shows "unreachable" instead of a 500. This is the one place exceptions are deliberately
-swallowed into data — reachability is the signal the UI renders.
+Outside the VPC, discovery or RPC failures become reachable=False payloads so the dashboard can show
+recorded fallback data instead of failing the whole run-detail request.
 """
 
 from __future__ import annotations
@@ -20,116 +16,45 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeVar
 
-import httpx
+from connectrpc.errors import ConnectError
 from discovery import resolve_internal_ip
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
+from google.protobuf.json_format import MessageToDict
+from google.protobuf.message import Message
+from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 
 logger = logging.getLogger(__name__)
 
 PROJECT = "hai-gcp-models"
 ZONE = "us-central1-a"
 
-# The marin production Iris controller and finelog hub, mirroring infra/grafana's config.
 CONTROLLER_FILTER = "labels.iris-marin-controller=true AND status=RUNNING"
 CONTROLLER_PORT = 10000
 FINELOG_FILTER = "name = finelog-marin"
 FINELOG_PORT = 10001
 
-CONTROLLER_RPC_BASE = "iris.cluster.ControllerService"
-FINELOG_RPC_BASE = "finelog.logging.LogService"
-
 IP_CACHE_TTL = 300.0
-# Short so a caller outside the VPC degrades quickly rather than blocking the request.
-HTTP_TIMEOUT = 4.0
+RPC_TIMEOUT = 4.0
+
+ResponseT = TypeVar("ResponseT")
 
 
 def _describe(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"[:400]
 
 
-def _short_state(raw: str | int | None) -> str:
-    """``JOB_STATE_RUNNING`` / ``TASK_STATE_WORKER_FAILED`` -> ``running`` / ``worker_failed``."""
-    if not raw:
-        return "unspecified"
-    if isinstance(raw, int):
-        return str(raw)
-    tail = raw.rsplit("_STATE_", 1)[-1] if "_STATE_" in raw else raw
-    return tail.lower()
-
-
-_LOG_LEVELS = {1: "debug", 2: "info", 3: "warning", 4: "error", 5: "critical"}
-
-
-def _short_level(raw: str | int | None) -> str | None:
-    if raw is None or raw == "" or raw == 0:
-        return None
-    if isinstance(raw, int):
-        return _LOG_LEVELS.get(raw, str(raw))
-    return raw.removeprefix("LOG_LEVEL_").lower()
-
-
-def _ts_ms(obj: dict | None) -> int | None:
-    """Milliseconds from an iris/finelog ``Timestamp`` message (``epochMs``/``epoch_ms``), or None."""
-    if not obj:
-        return None
-    value = obj.get("epochMs", obj.get("epoch_ms"))
-    return int(value) if value is not None else None
-
-
-def _job(job: dict | None) -> dict | None:
-    if not job:
-        return None
-    return {
-        "state": _short_state(job.get("state")),
-        "error": job.get("error") or None,
-        "exit_code": int(job.get("exitCode") or 0),
-        "started_at_ms": _ts_ms(job.get("startedAt")),
-        "finished_at_ms": _ts_ms(job.get("finishedAt")),
-        "name": job.get("name") or None,
-        "status_message": job.get("statusMessage") or None,
-    }
-
-
-def _attempt(attempt: dict) -> dict:
-    return {
-        "attempt_id": int(attempt.get("attemptId") or 0),
-        "state": _short_state(attempt.get("state")),
-        "worker_id": attempt.get("workerId") or None,
-        "exit_code": int(attempt.get("exitCode") or 0),
-        "error": attempt.get("error") or None,
-        "started_at_ms": _ts_ms(attempt.get("startedAt")),
-        "finished_at_ms": _ts_ms(attempt.get("finishedAt")),
-        "is_worker_failure": bool(attempt.get("isWorkerFailure") or False),
-        "attempt_uid": attempt.get("attemptUid") or None,
-    }
-
-
-def _task(task: dict) -> dict:
-    task_id = task.get("taskId") or ""
-    return {
-        "task_id": task_id,
-        "task_index": task_id.rsplit("/", 1)[-1] if task_id else "",
-        "state": _short_state(task.get("state")),
-        "worker_id": task.get("workerId") or None,
-        "exit_code": int(task.get("exitCode") or 0),
-        "error": task.get("error") or None,
-        "started_at_ms": _ts_ms(task.get("startedAt")),
-        "finished_at_ms": _ts_ms(task.get("finishedAt")),
-        "current_attempt_id": int(task.get("currentAttemptId") or 0),
-        "attempts": [_attempt(attempt) for attempt in task.get("attempts") or []],
-    }
-
-
-def _log_entry(entry: dict) -> dict:
-    return {
-        "timestamp_ms": _ts_ms(entry.get("timestamp")),
-        "source": entry.get("source") or None,
-        "data": entry.get("data") or "",
-        "attempt_id": entry.get("attemptId", entry.get("attempt_id")),
-        "level": _short_level(entry.get("level")),
-        "key": entry.get("key") or None,
-    }
+def _message_dict(message: Message) -> dict:
+    return MessageToDict(
+        message,
+        preserving_proto_field_name=True,
+        always_print_fields_with_no_presence=True,
+    )
 
 
 @dataclass
@@ -139,21 +64,13 @@ class _CachedIp:
 
 
 class ClusterGateway:
-    """Resolves the controller and finelog VMs by internal IP and queries them with plain JSON POSTs.
+    """Resolve internal service addresses and query them through generated Connect clients."""
 
-    IPs are cached for ``ip_ttl`` and re-resolved after a transport error, so a rebuilt VM is picked up
-    without a restart. One ``httpx.Client`` is shared across calls; close it on shutdown.
-    """
-
-    def __init__(self, *, timeout: float = HTTP_TIMEOUT, ip_ttl: float = IP_CACHE_TTL) -> None:
-        self._timeout = timeout
+    def __init__(self, *, timeout: float = RPC_TIMEOUT, ip_ttl: float = IP_CACHE_TTL) -> None:
+        self._timeout_ms = int(timeout * 1000)
         self._ip_ttl = ip_ttl
-        self._client = httpx.Client(timeout=timeout, headers={"content-type": "application/json"})
         self._lock = threading.Lock()
         self._ips: dict[str, _CachedIp] = {}
-
-    def close(self) -> None:
-        self._client.close()
 
     def _resolve(self, instance_filter: str, port: int) -> str:
         now = time.monotonic()
@@ -161,7 +78,7 @@ class ClusterGateway:
             cached = self._ips.get(instance_filter)
             if cached is not None and cached.expires_at > now:
                 return f"http://{cached.ip}:{port}"
-        ip = resolve_internal_ip(PROJECT, ZONE, instance_filter, timeout=self._timeout)
+        ip = resolve_internal_ip(PROJECT, ZONE, instance_filter, timeout=self._timeout_ms / 1000)
         with self._lock:
             self._ips[instance_filter] = _CachedIp(ip, now + self._ip_ttl)
         logger.info("resolved %s to %s", instance_filter, ip)
@@ -171,31 +88,32 @@ class ClusterGateway:
         with self._lock:
             self._ips.pop(instance_filter, None)
 
-    def _post(self, instance_filter: str, port: int, rpc_base: str, method: str, body: dict) -> dict:
-        """POST a Connect RPC as JSON, re-resolving the VM IP once on a transport error."""
-        for attempt in (1, 2):
-            base = self._resolve(instance_filter, port)
+    def _call(self, instance_filter: str, port: int, rpc: Callable[[str], ResponseT]) -> ResponseT:
+        """Run one RPC, re-resolving the service once after a Connect transport failure."""
+        for attempt in range(2):
+            address = self._resolve(instance_filter, port)
             try:
-                response = self._client.post(f"{base}/{rpc_base}/{method}", json=body)
-            except httpx.TransportError:
+                return rpc(address)
+            except ConnectError:
                 self._invalidate(instance_filter)
-                if attempt == 2:
+                if attempt == 1:
                     raise
-                continue
-            if response.status_code != 200:
-                raise httpx.HTTPError(f"{method} returned {response.status_code}: {response.text[:200]}")
-            return response.json()
         raise AssertionError("unreachable")
 
     def job_status(self, job_path: str) -> dict:
-        """Job state plus per-task attempt detail for one iris job, or an unreachable degrade payload."""
+        """Return canonical protobuf JSON for one Iris job and its tasks."""
+
+        def fetch(address: str):
+            client = ControllerServiceClientSync(address=address, timeout_ms=self._timeout_ms)
+            try:
+                status = client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=job_path))
+                tasks = client.list_tasks(controller_pb2.Controller.ListTasksRequest(job_id=job_path))
+                return status.job, tasks.tasks
+            finally:
+                client.close()
+
         try:
-            status = self._post(
-                CONTROLLER_FILTER, CONTROLLER_PORT, CONTROLLER_RPC_BASE, "GetJobStatus", {"job_id": job_path}
-            )
-            tasks = self._post(
-                CONTROLLER_FILTER, CONTROLLER_PORT, CONTROLLER_RPC_BASE, "ListTasks", {"job_id": job_path}
-            )
+            job, tasks = self._call(CONTROLLER_FILTER, CONTROLLER_PORT, fetch)
         except Exception as exc:
             logger.info("iris controller unreachable for %s: %s", job_path, exc)
             return {
@@ -207,20 +125,30 @@ class ClusterGateway:
         return {
             "reachable": True,
             "error": None,
-            "job": _job(status.get("job")),
-            "tasks": [_task(task) for task in tasks.get("tasks") or []],
+            "job": _message_dict(job),
+            "tasks": [_message_dict(task) for task in tasks],
         }
 
     def fetch_logs(self, job_path: str, *, max_lines: int, substring: str | None) -> dict:
-        """The last ``max_lines`` finelog lines across every task of ``job_path`` (prefix match), or an
-        unreachable degrade payload."""
+        """Return canonical protobuf JSON for the latest finelog entries under one Iris job."""
         source = f"{job_path.rstrip('/')}/"
-        # tail is the proto's direction bool: return the LAST max_lines entries.
-        body: dict = {"source": source, "match_scope": "MATCH_SCOPE_PREFIX", "max_lines": max_lines, "tail": True}
-        if substring:
-            body["substring"] = substring
+        request = logging_pb2.FetchLogsRequest(
+            source=source,
+            match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+            max_lines=max_lines,
+            tail=True,
+            substring=substring or "",
+        )
+
+        def fetch(address: str):
+            client = LogServiceClientSync(address=address, timeout_ms=self._timeout_ms)
+            try:
+                return client.fetch_logs(request)
+            finally:
+                client.close()
+
         try:
-            response = self._post(FINELOG_FILTER, FINELOG_PORT, FINELOG_RPC_BASE, "FetchLogs", body)
+            response = self._call(FINELOG_FILTER, FINELOG_PORT, fetch)
         except Exception as exc:
             logger.info("finelog unreachable for %s: %s", source, exc)
             return {
@@ -233,5 +161,5 @@ class ClusterGateway:
             "reachable": True,
             "error": None,
             "source": source,
-            "entries": [_log_entry(entry) for entry in response.get("entries") or []],
+            "entries": [_message_dict(entry) for entry in response.entries],
         }

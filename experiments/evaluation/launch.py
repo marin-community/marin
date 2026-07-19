@@ -7,8 +7,7 @@
 :func:`launch_group` submits ONE CPU orchestrator job for the whole launch, which runs
 :func:`run_eval_group`: serve the model once, evaluate every eval against the endpoint in order, and
 write one ``record.json`` per eval as it finishes (records share a ``group_id``).
-:func:`wait_and_report` waits on the group job, reads the records back, mirrors them into Postgres,
-and prints per-run metrics.
+:func:`wait_and_report` waits on the group job, reads the records back, and prints per-run metrics.
 
 The GPU path routes the whole orchestrator to a CoreWeave peer via a ``cluster`` constraint, so its
 serve + eval child jobs land on that cluster too (they inherit the orchestrator's in-cluster client).
@@ -44,9 +43,7 @@ from marin.evaluation.records import (
     record_path,
     write_record,
 )
-from marin.evaluation.results_db import upsert_record
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from sqlalchemy.engine import Engine
 
 from experiments.evals.evalchemy.image import EVALCHEMY_IMAGE
 from experiments.evals.evalchemy.serve_and_eval import (
@@ -455,8 +452,8 @@ def _print_record(record: EvalRunRecord) -> None:
             print(f"  {task:<40} {metric:<24} {record.metrics[task][metric]:.4f}")
 
 
-def wait_and_report(groups: list[SubmittedGroup], engine: Engine | None) -> None:
-    """Wait on each group, read its run records back, mirror them into Postgres, and print them."""
+def wait_and_report(groups: list[SubmittedGroup]) -> None:
+    """Wait on each group, read its run records back, and print them."""
     configure_coreweave_s3()
     for group in groups:
         group.job.wait(timeout=float("inf"), raise_on_failure=False)
@@ -468,9 +465,4 @@ def wait_and_report(groups: list[SubmittedGroup], engine: Engine | None) -> None
                 logger.warning("no readable record.json for run %s at %s", ref.run_id, path, exc_info=True)
                 print(f"{ref.run_id}  [no record]  {group.model_key} / {ref.eval_key}")
                 continue
-            if engine is not None:
-                try:
-                    upsert_record(engine, record)
-                except Exception:
-                    logger.warning("failed to upsert run %s into the eval DB", ref.run_id, exc_info=True)
             _print_record(record)

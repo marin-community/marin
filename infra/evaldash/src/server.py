@@ -26,14 +26,14 @@ Cloud Run sits behind IAP, which is the only gate; there is no application auth.
 the caller into ``X-Goog-Authenticated-User-Email`` (``accounts.google.com:<email>``), which
 ``/api/meta`` echoes as ``current_user``.
 
-``records`` and ``results_db`` are copied flat into the image (see the Dockerfile) from
-``lib/marin/src/marin/evaluation/``.
+``records`` and ``samples`` are copied from ``lib/marin/src/marin/evaluation/``. Generated Iris
+and finelog RPC packages are copied as directories; ``results_db`` lives beside this server under
+``infra/evaldash/src``.
 """
 
 import asyncio
 import contextlib
 import logging
-import math
 import os
 import threading
 from collections.abc import AsyncIterator
@@ -51,7 +51,8 @@ from marin.evaluation.records import (
     EvalRunRecord,
     list_records,
 )
-from marin.evaluation.results_db import (
+from metrics import build_matrix, build_meta, record_score
+from results_db import (
     connect_engine,
     ensure_schema,
     eval_runs,
@@ -59,7 +60,6 @@ from marin.evaluation.results_db import (
     resolve_db_config,
     upsert_record,
 )
-from metrics import primary_metric, stderr_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from sqlalchemy.engine import Engine
 from starlette.applications import Starlette
@@ -85,186 +85,6 @@ MAX_SAMPLE_LIMIT = 500
 
 IAP_USER_HEADER = "x-goog-authenticated-user-email"
 IAP_USER_PREFIX = "accounts.google.com:"
-
-
-# --------------------------------------------------------------------------------------
-# Pure views over a list of records
-# --------------------------------------------------------------------------------------
-
-
-def _task_of(metric_key: str) -> str:
-    """The task a metrics key belongs to: the prefix before ``/`` for a group subtask, else the key."""
-    return metric_key.split("/", 1)[0]
-
-
-def _combined_stderr(stderrs: list[float | None]) -> float | None:
-    """Standard error of an unweighted mean of independent means: ``sqrt(sum se^2)/n``.
-
-    None when any component stderr is missing, since the aggregate is then unknown.
-    """
-    values: list[float] = []
-    for stderr in stderrs:
-        if stderr is None:
-            return None
-        values.append(stderr)
-    if not values:
-        return None
-    return math.sqrt(sum(value * value for value in values)) / len(values)
-
-
-@dataclass(frozen=True)
-class TaskScore:
-    """One task's headline score for a record: the value, its metric label, and paired stderr."""
-
-    value: float
-    metric: str
-    stderr: float | None
-
-
-def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
-    """One record's headline metric per task as ``{task: TaskScore}``.
-
-    A group task writes namespaced ``prefix/subtask`` keys; those roll up to ``prefix`` by the
-    unweighted mean of each subtask's primary metric, with the aggregate stderr combined across
-    subtasks. A plain task keeps its single primary value. ``metric`` is the shared metric name, or
-    ``mean`` when a rollup spans differing metrics.
-    """
-    by_task: dict[str, list[tuple[str, float, str, float | None]]] = {}
-    for metric_key, metrics in (record.metrics or {}).items():
-        picked = primary_metric(metrics)
-        if picked is None:
-            continue
-        name, value = picked
-        subtask = metric_key.rsplit("/", 1)[-1]
-        by_task.setdefault(_task_of(metric_key), []).append((subtask, value, name, stderr_for(metrics, name)))
-    result: dict[str, TaskScore] = {}
-    for task, entries in by_task.items():
-        # lm-eval writes a group's doc-weighted aggregate as a subtask whose name prefixes every
-        # other subtask (``mmlu_5shot/mmlu`` beside ``mmlu_5shot/mmlu_anatomy``); score from that
-        # row alone rather than re-averaging it with the per-subject rows it already summarizes.
-        aggregates = [e for e in entries if all(other.startswith(e[0]) for other, _, _, _ in entries)]
-        if len(aggregates) == 1 and len(entries) > 1:
-            entries = aggregates
-        mean = sum(value for _, value, _, _ in entries) / len(entries)
-        labels = {name for _, _, name, _ in entries}
-        stderr = _combined_stderr([stderr for _, _, _, stderr in entries])
-        result[task] = TaskScore(mean, next(iter(labels)) if len(labels) == 1 else "mean", stderr)
-    return result
-
-
-def record_score(record: EvalRunRecord) -> TaskScore | None:
-    """One record's headline score: its per-task primaries rolled up by unweighted mean.
-
-    Records here carry a single top-level task, so this is normally that task's primary metric;
-    a multi-task eval averages its tasks with the stderrs combined. None when nothing scored.
-    """
-    per_task = primary_metrics_by_task(record) if record.metrics else {}
-    if not per_task:
-        return None
-    entries = list(per_task.values())
-    mean = sum(score.value for score in entries) / len(entries)
-    labels = {score.metric for score in entries}
-    metric = labels.pop() if len(labels) == 1 else "mean"
-    return TaskScore(value=mean, metric=metric, stderr=_combined_stderr([score.stderr for score in entries]))
-
-
-def build_matrix(records: list[EvalRunRecord]) -> dict:
-    """Pivot runs into a ``model x eval`` matrix plus a per-model leaderboard.
-
-    Columns are registry eval names (``record.evaluation.name``), so a failed run occupies the same
-    column its succeeded retry fills. Each cell shows the latest succeeded run's rolled-up primary
-    metric (with stderr) for that ``(model, eval)``; when no run for a cell ever succeeded, the cell
-    carries the latest run's failure status instead, still linking to that run so a failure is
-    visible and clickable rather than silently dropped. The leaderboard scores each model by the
-    unweighted mean of its succeeded cells and reports coverage over the full eval set, sorted
-    best-first with unscored models last.
-    """
-    succeeded: dict[tuple[str, str], dict] = {}
-    latest_any: dict[tuple[str, str], dict] = {}
-    tasks: set[str] = set()
-    for record in records:
-        model = record.model.name
-        created_at = record.created_at or ""
-        status = record.status.value
-        eval_name = record.evaluation.name
-        if eval_name.endswith("-smoke"):
-            # Smoke suites are capped-instance launcher validation runs; keep them out of the
-            # headline grid (they remain visible in the runs list and history).
-            continue
-        tasks.add(eval_name)
-        key = (model, eval_name)
-        latest = latest_any.get(key)
-        if latest is None or created_at > latest["created_at"]:
-            latest_any[key] = {"run_id": record.run_id, "created_at": created_at, "status": status}
-        score = record_score(record)
-        if score is not None:
-            current = succeeded.get(key)
-            if current is None or created_at > current["created_at"]:
-                succeeded[key] = {
-                    "value": score.value,
-                    "stderr": score.stderr,
-                    "metric": score.metric,
-                    "run_id": record.run_id,
-                    "created_at": created_at,
-                }
-
-    rows_by_model: dict[str, dict] = {}
-    for key, latest in latest_any.items():
-        model, task = key
-        win = succeeded.get(key)
-        if win is not None:
-            cell = {
-                "status": "succeeded",
-                "value": win["value"],
-                "stderr": win["stderr"],
-                "metric": win["metric"],
-                "run_id": win["run_id"],
-                "created_at": win["created_at"],
-            }
-        else:
-            cell = {
-                "status": latest["status"],
-                "value": None,
-                "stderr": None,
-                "metric": None,
-                "run_id": latest["run_id"],
-                "created_at": latest["created_at"],
-            }
-        rows_by_model.setdefault(model, {})[task] = cell
-
-    task_list = sorted(tasks)
-    rows = [{"model": model, "cells": rows_by_model[model]} for model in sorted(rows_by_model)]
-    leaderboard = []
-    for model, cells in rows_by_model.items():
-        scored = [cell for cell in cells.values() if cell["value"] is not None]
-        score = sum(cell["value"] for cell in scored) / len(scored) if scored else None
-        stderr = _combined_stderr([cell["stderr"] for cell in scored]) if scored else None
-        leaderboard.append(
-            {"model": model, "score": score, "stderr": stderr, "covered": len(scored), "total": len(task_list)}
-        )
-    leaderboard.sort(key=lambda entry: (entry["score"] is not None, entry["score"] or 0.0), reverse=True)
-    return {"tasks": task_list, "rows": rows, "leaderboard": leaderboard}
-
-
-def build_meta(records: list[EvalRunRecord]) -> dict:
-    """Distinct filter values (models, evals, users, statuses) across all records."""
-    return {
-        "models": sorted({r.model.name for r in records}),
-        "evals": sorted({r.evaluation.name for r in records}),
-        "users": sorted({r.user for r in records if r.user}),
-        "statuses": sorted({r.status.value for r in records}),
-    }
-
-
-def _group_sibling(record: EvalRunRecord) -> dict:
-    """The compact summary of a group sibling shown on a run's detail page."""
-    return {
-        "run_id": record.run_id,
-        "eval_name": record.evaluation.name,
-        "model_name": record.model.name,
-        "status": record.status.value,
-        "created_at": record.created_at,
-    }
 
 
 # --------------------------------------------------------------------------------------
@@ -410,10 +230,7 @@ def create_store() -> RecordStore:
     """
     config = resolve_db_config()
     if config is None:
-        raise RuntimeError(
-            "eval DB unavailable: set EVAL_DB_PASSWORD or grant Secret Manager access to "
-            "EVAL_DB_PASSWORD_SECRET (see marin.evaluation.results_db.resolve_db_config)"
-        )
+        raise RuntimeError("eval DB unavailable: set EVAL_DB_PASSWORD or grant access to EVAL_DB_PASSWORD_SECRET")
     engine = connect_engine(config.instance, config.db, config.user, config.password)
     ensure_schema(engine)
     logger.info("connected to eval DB %s/%s", config.instance, config.db)
@@ -604,7 +421,6 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-            gateway.close()
 
     async def healthz(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "store": store.backend})
@@ -656,7 +472,7 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
         if record is None:
             return JSONResponse({"error": "unknown run_id"}, status_code=404)
         payload = await asyncio.to_thread(samples.list_sample_tasks, record.get("results_path"))
-        return JSONResponse(payload)
+        return JSONResponse(payload.model_dump(mode="json"))
 
     async def api_run_samples(request: Request) -> JSONResponse:
         params = request.query_params
@@ -674,7 +490,7 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
             limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=params.get("correct") or "all",
         )
-        return JSONResponse(payload)
+        return JSONResponse(payload.model_dump(mode="json"))
 
     async def api_run_group(request: Request) -> JSONResponse:
         run_id = request.path_params["run_id"]

@@ -44,9 +44,9 @@ the reported standard error. A matrix cell shows the latest succeeded run's scor
 no run there ever succeeded -- the latest run's failure status (still linking to that run).
 `/api/meta` echoes the IAP caller from `X-Goog-Authenticated-User-Email` as `current_user`.
 
-The `jobs` and `logs` endpoints reach the Iris controller and finelog hub by internal IP over
-the service's Direct VPC egress (resolved from a GCE instance filter with the runtime SA's
-`roles/compute.viewer`). Outside the VPC (local dev) they degrade to a `reachable: false`
+The `jobs` and `logs` endpoints use generated Connect clients to reach the Iris controller and
+finelog hub by internal IP over Direct VPC egress. GCE instance discovery requires
+`roles/compute.viewer` on the runtime service account. Outside the VPC (local dev) they return a `reachable: false`
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
@@ -54,10 +54,11 @@ tails recorded on the run.
 
 ```
 src/server.py          Starlette app: JSON API + SPA serving + background ingest
-src/metrics.py         primary-metric + stderr selection over lm-eval metric dicts
-src/discovery.py       resolve a VM's internal IP from a GCE list filter
-src/cluster.py         iris job status + finelog logs over Direct VPC egress (httpx)
-src/samples.py         per-sample parquet reader (fsspec + pyarrow)
+src/results_db.py      private Cloud SQL schema, connection, upserts, and filtered reads
+src/metrics.py         primary metrics, score rollups, matrix, leaderboard, and metadata
+src/discovery.py       resolve a VM internal IP from a GCE list filter
+src/cluster.py         Iris and finelog generated Connect clients over Direct VPC egress
+src/samples.py         typed sample API responses over fsspec + pyarrow
 dashboard/             Vue 3 + TypeScript SPA (rsbuild + Tailwind 4 + Observable Plot, vue-router)
 Dockerfile             node build stage + python:3.12-slim server (context = repo root)
 __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.cloud_run)
@@ -76,10 +77,20 @@ npm --prefix infra/evaldash/dashboard run build
 RECORDS_PREFIXES=/path/to/records \
 EVALDASH_DASHBOARD_DIST=infra/evaldash/dashboard/dist \
 PORT=8080 \
-PYTHONPATH=lib/marin/src \
-.venv/bin/python infra/evaldash/src/server.py
-# → http://localhost:8080  (server.py imports marin.evaluation.{records,results_db};
-#   the image copies just those modules with their package skeleton)
+PYTHONPATH=lib/marin/src:lib/iris/src:lib/finelog/src \
+uv run \
+  --with cloud-sql-python-connector \
+  --with connect-python \
+  --with google-cloud-compute \
+  --with google-cloud-secret-manager \
+  --with pg8000 \
+  --with protobuf \
+  --with pyarrow \
+  --with pydantic \
+  --with sqlalchemy \
+  --with uvicorn \
+  python infra/evaldash/src/server.py
+# → http://localhost:8080  (the image copies these import-light package directories too)
 ```
 
 `build:check` (`vue-tsc --noEmit && rsbuild build`) is the frontend gate.

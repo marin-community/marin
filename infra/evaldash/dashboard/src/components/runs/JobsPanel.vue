@@ -7,7 +7,7 @@
  */
 import { onMounted, watch } from 'vue'
 import { useApi } from '@/composables/useApi'
-import { formatDuration, formatMillis } from '@/utils/formatting'
+import { formatDuration, formatMillis, protoTimestampMillis } from '@/utils/formatting'
 import type { JobsResponse } from '@/types/api'
 
 const props = defineProps<{ runId: string }>()
@@ -19,6 +19,14 @@ watch(() => props.runId, refresh)
 
 function irisJobUrl(path: string): string {
   return `https://iris.oa.dev/#/job/${encodeURIComponent(path)}`
+}
+
+function stateName(state: string): string {
+  return state.replace(/^(JOB|TASK)_STATE_/, '').toLowerCase()
+}
+
+function taskIndex(taskId: string): string {
+  return taskId.split('/').pop() ?? ''
 }
 
 // A terminal-state colour for a job/task/attempt state badge.
@@ -66,8 +74,8 @@ function stateBadge(state: string): string {
           <span
             v-if="role.job"
             class="inline-block rounded px-1.5 py-0.5 text-xs font-medium border whitespace-nowrap"
-            :class="stateBadge(role.job.state)"
-          >{{ role.job.state.replace(/_/g, ' ') }}</span>
+            :class="stateBadge(stateName(role.job.state))"
+          >{{ stateName(role.job.state).replace(/_/g, ' ') }}</span>
           <span v-else-if="!role.reachable" class="text-xs text-text-muted" :title="role.error ?? ''">iris unreachable</span>
           <a
             :href="irisJobUrl(role.job_path)"
@@ -102,20 +110,20 @@ function stateBadge(state: string): string {
                   :key="`${task.task_id}:${attempt?.attempt_id ?? 'x'}`"
                   class="border-b border-surface-border-subtle align-top"
                 >
-                  <td class="px-2 py-1.5 font-mono">{{ task.task_index }}</td>
+                  <td class="px-2 py-1.5 font-mono">{{ taskIndex(task.task_id) }}</td>
                   <td class="px-2 py-1.5 tabular-nums">{{ attempt ? attempt.attempt_id : task.current_attempt_id }}</td>
                   <td class="px-2 py-1.5">
                     <span
                       class="inline-block rounded px-1 py-0.5 border"
-                      :class="stateBadge(attempt ? attempt.state : task.state)"
-                    >{{ (attempt ? attempt.state : task.state).replace(/_/g, ' ') }}</span>
+                      :class="stateBadge(stateName(attempt ? attempt.state : task.state))"
+                    >{{ stateName(attempt ? attempt.state : task.state).replace(/_/g, ' ') }}</span>
                     <span v-if="attempt?.is_worker_failure" class="ml-1 text-status-warning" title="worker failure">⚑</span>
                   </td>
-                  <td class="px-2 py-1.5 font-mono text-text-secondary">{{ (attempt ? attempt.worker_id : task.worker_id) ?? '—' }}</td>
+                  <td class="px-2 py-1.5 font-mono text-text-secondary">{{ (attempt ? attempt.worker_id : task.worker_id) || '—' }}</td>
                   <td class="px-2 py-1.5 text-right tabular-nums">{{ attempt ? attempt.exit_code : task.exit_code }}</td>
-                  <td class="px-2 py-1.5 whitespace-nowrap text-text-secondary">{{ formatMillis(attempt ? attempt.started_at_ms : task.started_at_ms) }}</td>
+                  <td class="px-2 py-1.5 whitespace-nowrap text-text-secondary">{{ formatMillis(protoTimestampMillis(attempt ? attempt.started_at : task.started_at)) }}</td>
                   <td class="px-2 py-1.5 text-right whitespace-nowrap text-text-secondary">
-                    {{ formatDuration(attempt ? attempt.started_at_ms : task.started_at_ms, attempt ? attempt.finished_at_ms : task.finished_at_ms) }}
+                    {{ formatDuration(protoTimestampMillis(attempt ? attempt.started_at : task.started_at), protoTimestampMillis(attempt ? attempt.finished_at : task.finished_at)) }}
                   </td>
                   <td class="px-2 py-1.5 text-status-danger break-words max-w-[24ch]">{{ (attempt ? attempt.error : task.error) ?? '' }}</td>
                 </tr>

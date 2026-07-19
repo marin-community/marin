@@ -7,7 +7,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useApi } from '@/composables/useApi'
-import { formatMillis } from '@/utils/formatting'
+import { formatMillis, protoTimestampMillis } from '@/utils/formatting'
 import type { LogsResponse } from '@/types/api'
 
 const props = defineProps<{ runId: string; roles: string[]; logTails: Record<string, string[]> }>()
@@ -98,7 +98,7 @@ const recordedFallback = computed<string[]>(() => props.logTails[role.value] ?? 
         <pre
           v-if="data.entries.length"
           class="rounded border border-surface-border bg-surface-sunken p-3 text-[12px] font-mono overflow-auto max-h-96 whitespace-pre-wrap"
-        >{{ data.entries.map(e => `[${formatMillis(e.timestamp_ms)}] ${e.data}`).join('\n') }}</pre>
+        >{{ data.entries.map(e => `[${formatMillis(protoTimestampMillis(e.timestamp))}] ${e.data}`).join('\n') }}</pre>
         <p v-else class="text-xs text-text-muted">No matching log lines.</p>
       </template>
 

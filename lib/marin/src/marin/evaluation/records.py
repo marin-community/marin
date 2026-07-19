@@ -5,10 +5,10 @@
 
 One eval launch writes one ``record.json`` under ``{prefix}/{run_id}/record.json``: the durable,
 self-describing account of what model was evaluated on what hardware, whether it succeeded, and the
-per-task metrics it produced. The record is the source of truth; the Postgres mirror
-(:mod:`marin.evaluation.results_db`) is a queryable index built from it.
+per-task metrics it produced. The record is the source of truth; evaldash builds its query index from
+these object-store records.
 
-This module is import-light on purpose -- stdlib plus fsspec and pydantic only, no marin/levanter/iris
+This module is import-light on purpose -- stdlib plus fsspec and Pydantic only, no marin/levanter/iris
 imports -- so it can be vendored verbatim into a standalone dashboard image that only reads records back.
 """
 

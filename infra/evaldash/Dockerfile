@@ -4,7 +4,7 @@
 # Eval-results dashboard: a Vue SPA bundled by rsbuild, served by a Starlette app.
 #
 # IMPORTANT: the build context is the REPO ROOT, not this directory — the runtime stage
-# copies the two eval modules from lib/marin/src/marin/evaluation/. All COPY sources are
+# copies import-light Marin record contracts and the generated Iris/finelog RPC packages. All COPY sources are
 # therefore repo-root-relative. The repo-root .dockerignore applies (it excludes .git,
 # node_modules, .venv, caches), so the context stays reasonable despite being the whole repo.
 # The Pulumi entry point passes build_context=<repo root> and dockerfile=infra/evaldash/Dockerfile.
@@ -39,20 +39,25 @@ RUN pip install --no-cache-dir \
     cloud-sql-python-connector \
     google-cloud-secret-manager \
     google-cloud-compute \
-    "httpx>=0.28.1,<1" \
+    connect-python \
+    protobuf \
     pyarrow \
     pydantic \
     && rm -rf /build
 
-# The eval record + DB-index + per-sample contract modules, copied with their package skeleton
-# (both __init__ files are header-only) so their `marin.evaluation.*` imports resolve without
-# installing the marin distribution. They are import-light: stdlib+fsspec / sqlalchemy+connector /
-# pyarrow+pydantic.
+# The canonical record and sample contracts are the only Marin modules in the image. The private
+# Postgres index lives with the server under infra/evaldash/src.
 COPY lib/marin/src/marin/__init__.py /app/marin/__init__.py
 COPY lib/marin/src/marin/evaluation/__init__.py /app/marin/evaluation/__init__.py
 COPY lib/marin/src/marin/evaluation/records.py /app/marin/evaluation/records.py
-COPY lib/marin/src/marin/evaluation/results_db.py /app/marin/evaluation/results_db.py
 COPY lib/marin/src/marin/evaluation/samples.py /app/marin/evaluation/samples.py
+# Copy the generated Connect clients and protobufs as package directories; evaldash does not need
+# the full Iris or finelog runtime packages.
+COPY lib/iris/src/iris/__init__.py /app/iris/__init__.py
+COPY lib/iris/src/iris/rpc/ /app/iris/rpc/
+COPY lib/finelog/src/finelog/__init__.py /app/finelog/__init__.py
+COPY lib/finelog/src/finelog/rpc/ /app/finelog/rpc/
+
 # The server plus its flat top-level modules: metric selection, VM discovery, the iris/finelog
 # cluster gateway, and the per-sample parquet reader.
 COPY infra/evaldash/src/ /app/
@@ -62,6 +67,5 @@ COPY --from=dashboard /build/dist /app/dist
 ENV PORT=8080
 EXPOSE 8080
 
-# `python server.py` runs main(): pick the store (Postgres or GCS fallback), build the
-# app, and serve it with uvicorn on $PORT.
+# Connect to Postgres, start the object-store ingestor, and serve the app on $PORT.
 CMD ["python", "server.py"]

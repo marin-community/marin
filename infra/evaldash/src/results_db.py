@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Postgres mirror of the eval-run records.
+"""Evaldash's Postgres index of the canonical object-store eval records.
 
 Each ``record.json`` (:mod:`marin.evaluation.records`) is upserted into a Cloud SQL Postgres instance
 so the dashboard can filter and aggregate runs with SQL instead of scanning object storage. The record
-is the source of truth; this table is a rebuildable index -- ``ingest`` re-derives it from
-``list_records``, and the full record rides along in the ``record`` jsonb column so nothing is lost.
+is the source of truth; this table is a rebuildable index populated by evaldash's background
+object-store ingestor, and the full record rides along in the ``record`` jsonb column so nothing is
+lost.
 
-Import-light and copy-friendly: stdlib and SQLAlchemy at module scope; the Cloud SQL connector, pg8000
-driver, and Secret Manager client are imported lazily inside the functions that need them, so a reader
-that only touches :class:`EvalRunRecord` never pulls the database stack.
+This is an evaldash implementation detail. Evaluation launchers only write records to object storage;
+the dashboard owns database configuration and periodically rebuilds this query index from those records.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import sqlalchemy
+from marin.evaluation.records import EvalRunRecord
 from sqlalchemy import (
     Column,
     DateTime,
@@ -34,8 +35,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
-
-from marin.evaluation.records import EvalRunRecord
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +129,8 @@ def resolve_db_config() -> DbConfig | None:
 
     Reads ``EVAL_DB_INSTANCE``/``EVAL_DB_NAME``/``EVAL_DB_USER`` (with defaults). The password comes
     from ``EVAL_DB_PASSWORD`` if set, otherwise the latest version of the ``EVAL_DB_PASSWORD_SECRET``
-    secret in Secret Manager. Returns None when neither yields a password; it is the caller's choice
-    whether that is fatal (the dashboard requires the DB and fails to start) or something to work
-    around (the CLI's ``launch`` command still submits and runs evals without mirroring to Postgres).
+    secret in Secret Manager. Returns None when neither yields a password; dashboard startup treats
+    that as fatal.
     """
     instance = os.environ.get("EVAL_DB_INSTANCE", DEFAULT_DB_INSTANCE)
     db = os.environ.get("EVAL_DB_NAME", DEFAULT_DB_NAME)
