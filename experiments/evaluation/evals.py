@@ -66,7 +66,16 @@ EVALS: dict[str, EvalSuiteConfig] = {
     "humaneval": EvalSuiteConfig(
         name="humaneval",
         mechanism=EvalMechanism.EVALCHEMY,
-        tasks=(EvalTaskConfig("humaneval", 0, task_alias="humaneval_0shot", generation=True, unsafe_code=True),),
+        tasks=(
+            EvalTaskConfig(
+                "humaneval",
+                0,
+                task_alias="humaneval_0shot",
+                generation=True,
+                unsafe_code=True,
+                completion_only=True,
+            ),
+        ),
         max_gen_toks=1024,
     ),
     "mmlu-smoke": EvalSuiteConfig(

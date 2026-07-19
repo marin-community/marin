@@ -475,6 +475,7 @@ def _client_config_json(session: EvalSession, unit: EvalUnit, endpoint: ServedEn
                     "dir": _task_dir(t),
                     "generation": t.generation,
                     "unsafe_code": t.unsafe_code,
+                    "completion_only": t.completion_only,
                 }
                 for t in unit.tasks
             ],

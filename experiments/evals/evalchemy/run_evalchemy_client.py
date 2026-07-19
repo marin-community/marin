@@ -81,7 +81,8 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     loglikelihood (MCQ) tasks always go through the completions API, since chat endpoints cannot echo
     prompt logprobs (lm-eval rejects them with "Loglikelihood is not supported for chat completions").
     """
-    use_chat = config["apply_chat_template"] and task["generation"]
+    # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
+    use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
     cmd = [
         python,
