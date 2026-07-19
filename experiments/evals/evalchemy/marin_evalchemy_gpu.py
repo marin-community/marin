@@ -195,9 +195,13 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
         tasks = (EvalTaskConfig("MATH500", 0),)
         apply_chat_template = True
     if os.environ.get("EVAL_TASK_SET") == "aime24_seeds":
+        # Seeds: EVAL_AIME_SEEDS as a comma list (e.g. "42,43,44") — MARIN_EVAL_POLICY is 3-seed
+        # (seeds 42,43,44; report the mean). Default = the historical 10-seed set (42..51) for back-compat.
+        _seed_env = os.environ.get("EVAL_AIME_SEEDS")
+        _seeds = [int(s) for s in _seed_env.split(",") if s.strip()] if _seed_env else list(range(42, 52))
         tasks = tuple(
             EvalTaskConfig("AIME24", 0, task_alias=f"AIME24_seed{s}", task_kwargs={"seed": s})
-            for s in range(42, 52)
+            for s in _seeds
         )
         apply_chat_template = True
     max_eval_instances = int(os.environ["EVAL_LIMIT"]) if os.environ.get("EVAL_LIMIT") else None
