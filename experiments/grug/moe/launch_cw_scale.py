@@ -130,6 +130,10 @@ def build_scale_model() -> GrugModelConfig:
     use_mla = os.environ.get("SCALE_MLA") == "1"
     if use_mla:
         num_heads = env_int("SCALE_MLA_HEAD_MULT", 2) * hidden_dim // HEAD_DIM
+    # SCALE_NUM_HEADS sets the head count directly for both GQA and MLA (overrides hidden/head_dim
+    # and SCALE_MLA_HEAD_MULT). For over-complete-head ablations, e.g. 12/16 heads at d1024 where
+    # hidden/head_dim=8; Q/K/V widen to num_heads*head_dim.
+    num_heads = env_int("SCALE_NUM_HEADS", num_heads)
     # Q latent rank. SCALE_Q_LORA_RANK=0 uses a direct Q projection; >0 routes Q through a
     # compressed latent. Defaults to d/2 (the grug MLA prototype value) when unset.
     q_lora_rank = env_int("SCALE_Q_LORA_RANK", hidden_dim // 2)
