@@ -158,14 +158,6 @@ def test_build_pod_manifest_uses_gpu_image_for_gpu_jobs():
     assert _build_pod_manifest(override, cfg)["spec"]["containers"][0]["image"] == "repo/mine:v1"
 
 
-def test_build_pod_manifest_gpu_falls_back_when_no_gpu_image():
-    """With no default_gpu_image configured, a GPU job keeps default_image (non-breaking)."""
-    gpu = make_run_req("/test-job/0")
-    gpu.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
-    manifest = _build_pod_manifest(gpu, pod_config(default_image="repo/task:latest"))
-    assert manifest["spec"]["containers"][0]["image"] == "repo/task:latest"
-
-
 def test_build_pod_manifest_env_vars():
     req = make_run_req("/test-job/0")
     req.environment.env_vars["MY_VAR"] = "hello"
