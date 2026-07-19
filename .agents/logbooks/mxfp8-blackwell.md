@@ -1402,3 +1402,57 @@ author: mcwitt
 - Driver lesson recorded: 900s log-staleness autokill fires mid-compile for
   cold mxfp8 programs (tn killed wrongly); v13+ uses 2400s + rendezvous-spam
   detection is still the only reliable deadlock tell.
+
+### 2026-07-19 10:45 - MXFP8-009: "libNVVM node heterogeneity" ROOT-CAUSED — cutlass-dsl wheel shadowing, fixed in lockfile; producer probe deleted
+
+- Hypothesis: pinpoint what makes CuTe DSL compiles fail on "some nodes"
+  (mcwitt directive: bisect the failing construct + survey the fleet-facing
+  toolchain for heterogeneity).
+- Commit Hash: 166696dfb (survey script), d064dc173 (lockfile fix),
+  f4cac5066 (probe deletion). Jobs `/mwittmann/nvvm-survey-s1..s3`,
+  `/mwittmann/mxfp8-cute-prod-g1`.
+- Method: `standalone/nvvm_node_survey.py` — per-node census (toolchain
+  binary hashes + loaded-.so maps + installed-tree fingerprints) + the 002c
+  compile ladder, run as a 32-replica GB200x4 job (one pod per node), twice
+  on the old lock and once on the fixed lock. Detailed per-node results are
+  in local session files only (not for publication).
+- Result (`replicated`, 96 pods total):
+  - NOT a kernel construct: failing pods fail EVERY ladder variant, incl. a
+    trivial inline-asm-only kernel AND the native `.to(Float8E4M3FN)`
+    intrinsic control; passing pods pass everything.
+  - NOT node heterogeneity: half the nodes FLIPPED verdict between two
+    identical survey draws minutes apart. Driver, kernel, ptxas, libnvvm,
+    libcuda are hash-identical on passing and failing pods.
+  - ACTUAL cause: `nvidia-cutlass-dsl` requires `-libs-base` unconditionally
+    and the `[cu13]` extra merely ADDS `-libs-cu13`; the two wheels ship 99
+    identical paths with different CUDA-12/CUDA-13 builds of the entire DSL
+    (frontend + `_cutlass_ir` MLIR compiler). uv silently lets one clobber
+    the other, re-rolled per `uv sync` (~coin flip). Venv tree fingerprints:
+    always a clean sweep of one variant; variant predicted the verdict 64/64
+    (base -> NVVM "unsupported operation" on every compile, cu13 -> all
+    green). Big training gangs dodged it because they delta-install into a
+    pre-baked venv (one shared draw); per-pod-synced bench jobs re-rolled
+    every submit — the source of every "works on some nodes" observation
+    since 002c.
+  - Fix: uv `override-dependencies` excludes libs-base (impossible marker).
+    Confirmation draw on the fixed lock: 32/32 pods pass ALL ladder
+    variants, venvs pure cu13.
+- Fallout corrections (stale-claims cleanup, f4cac5066):
+  - `cute_producer_available()` subprocess probe DELETED (mxfp8.py + the
+    bench copy); `producer="auto"` now simply means the CuTe kernel, `xla`
+    stays as an explicit A/B knob. This also removes the MXFP8-007c
+    multi-node startup-wedge vector for good.
+  - The 002c inline-PTX `cvt` bypass is KEPT (bit-exactness validated) but
+    its rationale comment corrected: the intrinsic compiles fine on a clean
+    cu13 install; the failures were base-variant compilers.
+  - 002c/004c gotcha entries claiming "GB200 nodes are HETEROGENEOUS for
+    libNVVM" are superseded by this entry. The 004c "probe fails on ~3/4 of
+    nodes while fused kernels compile" observation should also be re-read
+    with suspicion: probe-subprocess GPU-init failures were
+    indistinguishable from compile failures in that setup.
+- Validation in flight: `mxfp8-cute-prod-g1` runs the GPU op ladder with the
+  CuTe producer as default (first e2e exercise of the in-op CuTe producer —
+  closes the 004c caveat).
+- Next action: fold the fix into the production PR set; consider reporting
+  the packaging conflict upstream (nvidia-cutlass-dsl metadata) and a uv
+  feature request for loud file-clobber warnings.
