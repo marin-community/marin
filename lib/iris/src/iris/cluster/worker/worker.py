@@ -71,7 +71,7 @@ class WorkerConfig:
     host: str = "127.0.0.1"
     port: int = 0
     cache_dir: Path | None = None
-    port_range: tuple[int, int] = (30000, 40000)
+    port_range: tuple[int, int] = (12000, 14000)
     controller_address: str | None = None
     worker_id: str | None = None
     slice_id: str | None = None
@@ -99,7 +99,7 @@ def worker_config_from_wire(
     Translates the parsed config model into the internal dataclass, applying
     defaults where fields are unset.
     """
-    port_start, port_end = 30000, 40000
+    port_start, port_end = 12000, 14000
     if wire.port_range:
         port_start, port_end = map(int, wire.port_range.split("-"))
 

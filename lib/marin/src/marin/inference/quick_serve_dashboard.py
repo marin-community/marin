@@ -182,9 +182,9 @@ def build_dashboard_app(
 def bind_serving_socket(host: str, port: int) -> socket.socket:
     """Bind a listening socket up front so the port is claimed before serving.
 
-    Iris allocates the task's named port from a range (default 30000-40000)
-    that workers exclude from kernel ephemeral assignment at VM bootstrap
-    (marin-community/marin#7392). Binding before the backend starts claims
+    Iris allocates the task's named port from a range (default 12000-13999)
+    kept below the kernel ephemeral floor so no other socket can be assigned
+    it (marin-community/marin#7392). Binding before the backend starts claims
     the port ahead of any listener the backend might open.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

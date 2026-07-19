@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class PortAllocator:
     """Allocate ephemeral ports for tasks."""
 
-    def __init__(self, port_range: tuple[int, int] = (30000, 40000)):
+    def __init__(self, port_range: tuple[int, int] = (12000, 14000)):
         self._range = port_range
         self._allocated: set[int] = set()
         self._lock = threading.Lock()
