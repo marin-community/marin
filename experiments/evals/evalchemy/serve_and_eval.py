@@ -554,7 +554,8 @@ def _refresh_endpoint(endpoint: ServedEndpoint) -> ServedEndpoint | None:
     try:
         _wait_for_endpoint(client, endpoint.handle, endpoint.name)
         base_url = client.resolve_endpoint(endpoint.name).rstrip("/") + "/v1"
-    except (RuntimeError, TimeoutError):
+    except (ConnectionError, RuntimeError, TimeoutError):
+        # ConnectionError: the registration vanished between the wait and the resolve.
         return None
     if base_url == endpoint.base_url:
         return endpoint
@@ -584,7 +585,9 @@ def _endpoint_departed(endpoint: ServedEndpoint) -> bool:
         return True
     try:
         base_url = client.resolve_endpoint(endpoint.name).rstrip("/") + "/v1"
-    except (RuntimeError, TimeoutError):
+    except (ConnectionError, RuntimeError, TimeoutError):
+        # ConnectionError: nothing registered right now (a mid-restart gap) -- not yet proof the
+        # serve left this address.
         return False
     return base_url != endpoint.base_url
 
