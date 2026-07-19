@@ -57,8 +57,8 @@ USER grafana
 #
 # SMTP: the Google Workspace relay, STARTTLS on 587. The user doubles as the from
 # address; the password (a Workspace app password) arrives as GF_SMTP_PASSWORD from
-# Secret Manager. Until that secret holds a real credential, email notifications
-# fail while Slack still delivers.
+# Secret Manager. Without a valid credential there, email notification delivery
+# fails while Slack still delivers.
 ENV GF_SMTP_ENABLED=true \
     GF_SMTP_HOST=smtp-relay.gmail.com:587 \
     GF_SMTP_FROM_ADDRESS=grafana@openathena.ai \

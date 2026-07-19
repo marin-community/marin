@@ -12,7 +12,8 @@ from urllib.parse import urlsplit
 
 import httpx
 import yaml
-from config import BridgeConfig, ClusterTarget, K8sClusterTarget
+from config import ClusterTarget, K8sClusterTarget
+from conftest import bridge_config
 from github_source import GithubSource
 from k8s_source import K8sFleet, K8sSource
 from server import create_app
@@ -88,20 +89,9 @@ class _FakeIris:
 
 def test_every_rule_query_url_answers_on_the_bridge():
     """Join each rule's datasource base path with its query URL and GET it for real."""
-    config = BridgeConfig(
-        max_rows=1000,
-        cache_ttl=20,
-        query_timeout_ms=5000,
-        iris_cache_ttl=15,
-        github_cache_ttl=60,
-        k8s_cache_ttl=30,
-        http_timeout=5,
-        github_token=None,
-        cw_read_token=None,
-    )
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
     fleet = K8sFleet([_healthy_k8s_source()])
-    client = TestClient(create_app(config, {}, iris_sources, GithubSource(token=None, timeout=5.0), fleet))
+    client = TestClient(create_app(bridge_config(), {}, iris_sources, GithubSource(token=None, timeout=5.0), fleet))
 
     base_paths = _datasources()
     for rule in _rules():

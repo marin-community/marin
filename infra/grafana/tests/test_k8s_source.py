@@ -6,7 +6,8 @@ error classification, and the fleet's always-one-row-per-cluster alert contract.
 
 import httpx
 import pytest
-from config import BridgeConfig, K8sClusterTarget
+from config import K8sClusterTarget
+from conftest import bridge_config
 from github_source import GithubSource
 from k8s_source import K8sError, K8sErrorClass, K8sFleet, K8sSource
 from server import create_app
@@ -64,12 +65,10 @@ def _api(routes: dict):
     """A MockTransport handler serving canned bodies by path.
 
     A list value becomes a one-page LIST response; a callable runs per request;
-    anything else is returned as the JSON body. Unknown paths 404. Requests are
-    recorded on ``handler.calls``.
+    anything else is returned as the JSON body. Unknown paths 404.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
-        handler.calls.append(request)
         body = routes.get(request.url.path)
         if body is None:
             return httpx.Response(404, json={})
@@ -79,7 +78,6 @@ def _api(routes: dict):
             return httpx.Response(200, json={"items": body, "metadata": {}})
         return httpx.Response(200, json=body)
 
-    handler.calls = []
     return handler
 
 
@@ -358,18 +356,7 @@ def test_crashloop_alert_counts_by_scope():
 
 
 def _client(fleet: K8sFleet) -> TestClient:
-    config = BridgeConfig(
-        max_rows=1000,
-        cache_ttl=20,
-        query_timeout_ms=5000,
-        iris_cache_ttl=15,
-        github_cache_ttl=60,
-        k8s_cache_ttl=30,
-        http_timeout=5,
-        github_token=None,
-        cw_read_token=None,
-    )
-    return TestClient(create_app(config, {}, {}, GithubSource(token=None, timeout=5.0), fleet))
+    return TestClient(create_app(bridge_config(), {}, {}, GithubSource(token=None, timeout=5.0), fleet))
 
 
 def test_k8s_routes_serve_fleet_rows():

@@ -142,11 +142,10 @@ now (deploys are infrequent; `min=max=1` keeps a single evaluator); the hardenin
 if it ever matters is a small Cloud SQL Postgres for Grafana state.
 
 SMTP is the Google Workspace relay (`smtp-relay.gmail.com:587`, STARTTLS), sending as
-grafana@openathena.ai; `GF_SMTP_PASSWORD` comes from Secret Manager. Until a Workspace
-admin fills that secret with a real app password, email notifications fail while Slack
-still delivers. After changing contact points or their credentials, send a test
-notification to both receivers (Alerting → Contact points → Test) rather than trusting
-config presence.
+grafana@openathena.ai; `GF_SMTP_PASSWORD` comes from Secret Manager. Without a valid
+app password in that secret, email delivery fails while Slack still delivers. After
+changing contact points or their credentials, send a test notification to both
+receivers (Alerting → Contact points → Test) rather than trusting config presence.
 
 ## Secrets and rotation
 
@@ -167,8 +166,8 @@ read-role token in the CW console, `gcloud secrets versions add` it, redeploy, t
 revoke the old token. The same applies to the Slack webhook and SMTP password — add a
 version, redeploy, retire the old credential.
 
-Human setup, once, before the first deploy of this configuration (Cloud Run fails to
-start on a missing secret — create all three even if a value is a placeholder):
+Creating the secrets (Cloud Run fails to start on a missing secret, so each must
+exist even if its value is a placeholder):
 
 1. CoreWeave console → API access → new token (e.g. `grafana-observer`) with only the
    `read` role, then

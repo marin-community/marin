@@ -54,6 +54,11 @@ _EVENT_MESSAGE_LIMIT = 200
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
+# Crashloop scope labels: pods of a watched component vs everything else. The alert
+# rules filter on these values (the crashloops rule pages only on SCOPE_CONTROL_PLANE).
+SCOPE_CONTROL_PLANE = "control-plane"
+SCOPE_WORKLOAD = "workload"
+
 
 class K8sErrorClass(StrEnum):
     """Why a cluster query failed, coarse enough to be an alert label."""
@@ -334,12 +339,12 @@ def _pod_condition(pod: dict, condition_type: str) -> dict:
 
 
 def _pod_scope(metadata: dict) -> str:
-    """control-plane if the pod belongs to a watched Deployment, else workload."""
+    """SCOPE_CONTROL_PLANE if the pod belongs to a watched Deployment, else SCOPE_WORKLOAD."""
     namespace, name = metadata.get("namespace"), metadata.get("name") or ""
     for component in WATCHED_COMPONENTS:
         if namespace == component.namespace and name.startswith(f"{component.deployment}-"):
-            return "control-plane"
-    return "workload"
+            return SCOPE_CONTROL_PLANE
+    return SCOPE_WORKLOAD
 
 
 class K8sFleet:
@@ -408,12 +413,14 @@ class K8sFleet:
         """Per cluster: backoff container counts for both scopes, zero rows included."""
 
         def counts(source: K8sSource) -> list[dict]:
-            by_scope = {"control-plane": 0, "workload": 0}
+            by_scope = {SCOPE_CONTROL_PLANE: 0, SCOPE_WORKLOAD: 0}
             for row in source.crashloops():
                 by_scope[row["scope"]] += 1
             return [{"scope": scope, "value": count} for scope, count in by_scope.items()]
 
-        return self._fan_out(counts, lambda err: [{"scope": s, "value": 0} for s in ("control-plane", "workload")])
+        return self._fan_out(
+            counts, lambda err: [{"scope": s, "value": 0} for s in (SCOPE_CONTROL_PLANE, SCOPE_WORKLOAD)]
+        )
 
     def alert_webhook_ready(self) -> list[dict]:
         """Per cluster and watched webhook: the ready-endpoint count (0 when unreachable)."""

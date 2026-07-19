@@ -11,7 +11,8 @@ import json
 
 import httpx
 import pytest
-from config import BridgeConfig, ClusterTarget
+from config import ClusterTarget
+from conftest import bridge_config
 from errors import UpstreamError
 from github_source import GithubSource
 from iris_source import IrisSource
@@ -226,19 +227,8 @@ class _FakeIris:
 
 
 def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
-    config = BridgeConfig(
-        max_rows=1000,
-        cache_ttl=20,
-        query_timeout_ms=5000,
-        iris_cache_ttl=15,
-        github_cache_ttl=60,
-        k8s_cache_ttl=30,
-        http_timeout=5,
-        github_token=None,
-        cw_read_token=None,
-    )
     github = github_source or GithubSource(token=None, timeout=5.0)
-    return TestClient(create_app(config, {}, {"marin": iris_source}, github, K8sFleet(())))
+    return TestClient(create_app(bridge_config(), {}, {"marin": iris_source}, github, K8sFleet(())))
 
 
 def test_iris_endpoint_returns_rows():

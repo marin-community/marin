@@ -140,8 +140,7 @@ class IrisSource:
 
         Returns 200 with reachable=false on failure — reachability is the signal, so the
         panel threshold renders it, rather than the endpoint erroring. ``up`` mirrors
-        ``reachable`` as 0/1 for the IrisControllerDown alert rule, which needs a
-        numeric column to threshold on.
+        ``reachable`` as 0/1 so a threshold can evaluate it numerically.
         """
         base = self._base()
         started = time.monotonic()
