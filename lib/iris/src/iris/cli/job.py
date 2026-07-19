@@ -1088,48 +1088,39 @@ def run(
 
     env_vars_dict = load_env_vars(env_vars)
 
-    try:
-        exit_code = run_iris_job(
-            command=command,
-            env_vars=env_vars_dict,
-            controller_url=controller_url,
-            tpu=tpu,
-            gpu=gpu,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            wait=not no_wait,
-            job_name=job_name,
-            user=user,
-            replicas=replicas,
-            processes_per_task=processes_per_task,
-            max_retries=max_retries,
-            timeout=timeout,
-            extras=list(extra),
-            setup_scripts=[] if no_sync else None,
-            sync_packages=list(sync_package),
-            terminate_on_exit=terminate_on_exit,
-            regions=region or None,
-            zone=zone,
-            target_cluster=target_cluster,
-            reserve=reserve or None,
-            priority=priority,
-            preemptible=preemptible,
-            task_image=task_image,
-            container_profile=container_profile,
-            profile_hook=profile_hook,
-            credentials=ctx.obj.get("credentials"),
-            submit_argv=submit_argv,
-            dashboard_url=dashboard_url or None,
-        )
-    except Exception:
-        bundle = ctx.obj.get("provider_bundle")
-        if bundle is not None:
-            try:
-                bundle.controller.debug_report()
-            except Exception:
-                logger.debug("Controller post-mortem failed", exc_info=True)
-        raise
+    exit_code = run_iris_job(
+        command=command,
+        env_vars=env_vars_dict,
+        controller_url=controller_url,
+        tpu=tpu,
+        gpu=gpu,
+        cpu=cpu,
+        memory=memory,
+        disk=disk,
+        wait=not no_wait,
+        job_name=job_name,
+        user=user,
+        replicas=replicas,
+        processes_per_task=processes_per_task,
+        max_retries=max_retries,
+        timeout=timeout,
+        extras=list(extra),
+        setup_scripts=[] if no_sync else None,
+        sync_packages=list(sync_package),
+        terminate_on_exit=terminate_on_exit,
+        regions=region or None,
+        zone=zone,
+        target_cluster=target_cluster,
+        reserve=reserve or None,
+        priority=priority,
+        preemptible=preemptible,
+        task_image=task_image,
+        container_profile=container_profile,
+        profile_hook=profile_hook,
+        credentials=ctx.obj.get("credentials"),
+        submit_argv=submit_argv,
+        dashboard_url=dashboard_url or None,
+    )
 
     sys.exit(exit_code)
 

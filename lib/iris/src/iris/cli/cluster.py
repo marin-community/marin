@@ -748,14 +748,14 @@ def cluster_create_slice(ctx, scale_group_name: str):
         raise click.ClickException(f"Unknown scale group '{scale_group_name}'. Available: {available}")
 
     # Verify the controller is reachable before creating the slice. The
-    # returned URL may be a tunnel endpoint that's only reachable from the CLI
-    # host; workers need the cluster-internal address instead, resolved below.
+    # returned URL may be a client-facing ingress (IAP); workers need the
+    # cluster-internal address instead, resolved below.
     require_controller_url(ctx)
-    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
+    bundle = provider_bundle(config)
 
     # Resolve the address workers will connect to. Prefer an explicit value in
     # defaults.worker.controller_address, then discover it via the provider
-    # (e.g., GCE label lookup). Never pass the CLI-local tunnel URL here.
+    # (e.g., GCE label lookup). Never pass the client-facing URL here.
     worker_controller_address = config.controller_address()
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
@@ -806,7 +806,7 @@ def cluster_delete_slice(ctx, slice_id: str):
     if config.controller.controller_kind() == "local":
         raise click.ClickException("delete-slice is not supported for local clusters")
 
-    bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
+    bundle = provider_bundle(config)
 
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
