@@ -53,12 +53,24 @@ emits, per ISO week:
   chip-hours = host active-seconds × chips-per-host. 2026-W29 totalled 132,659
   preemptible + 155,573 reserved chip-hours: larry 137,695 reserved (v4),
   michaelryan 64,699, eczech 49,026 preemptible.
-- **Chip-hours by capacity type and generation** — reserved v4 155,573;
-  preemptible v5p 67,614, v6e 44,399, v5e 20,282.
+- **Top jobs by chip-hours** (`/user/jobname` grain) with a per-job distinct
+  attempt count as a churn signal — the issue's "top-N jobs."
+- **Waste — chip-hours redone after preemption/failure.** For each task, every
+  attempt a later attempt superseded, split by capacity. An honest **upper
+  bound** on preempt→re-place churn from finelog alone (see the gap below).
+- **Chip-hours by region** (parsed from the worker id zone) and **by capacity
+  type and generation** — reserved v4 155,573; preemptible v5p 67,614, v6e
+  44,399, v5e 20,282.
 - **Preemption events by pool/zone** from `iris.provisioning` — 2,036 events in
   the week, led by v6e-4/us-east1-d.
 - **MFU per job** from `telltale.levanter_throughput_mfu` (collapse worker
   replicas per step; `process_index` is null).
+
+A **headline block** (total chip-hours, waste %, preemption count) leads the
+report so the three numbers a reader wants are above the fold in the gist and
+Discord. The full enhancement roadmap — reserved idle, provisioning health,
+week-over-week deltas, the controller snapshot, and the HTML dashboard — is in
+[`enhancements.md`](./enhancements.md).
 
 It publishes a markdown gist and a compact summary to `#internal-discuss`,
 modeled on
@@ -67,11 +79,12 @@ cron'd weekly. The report states a coverage figure — the share of active
 worker-time on parseable TPU workers — so the chip-hour totals stay honest
 (GPU/CoreWeave and CPU workers are not counted yet).
 
-**The remaining gap: preemption waste.** Preemptible chip-hours _consumed_ is a
-headline number the report gives today. Attributing chip-hours to the specific
-attempts that _ended_ in a preemption (waste, and recovery idle between attempts)
-needs a per-attempt terminal cause, which `iris.task` lacks. Two ways to close
-it, to decide with the team:
+**The remaining gap: attributed preemption waste.** The report ships a waste
+_upper bound_ today — chip-hours on attempts a later attempt superseded. That
+over-counts intentional restarts and cannot separate preempted from failed from
+manually-killed, because `iris.task` carries no per-attempt terminal cause.
+Turning the upper bound into an attributed preempted-vs-failed decomposition
+needs that terminal cause. Two ways to close it, to decide with the team:
 
 1. Read the controller DB for the week's terminal attempts (via the SELECT-only
    `ExecuteRawQuery`), join `state ∈ {PREEMPTED, WORKER_FAILED}` attempts to

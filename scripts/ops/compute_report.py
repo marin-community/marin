@@ -8,7 +8,10 @@ Reads durable finelog namespaces and emits, per ISO week, with no controller
 change:
 
 - TPU chip-hours by user, split preemptible vs reserved (``iris.task``)
-- chip-hours by capacity type and generation (``iris.task``)
+- top jobs by chip-hours, with per-job attempt (churn) count (``iris.task``)
+- waste: chip-hours on attempts a later attempt superseded — an upper bound on
+  preempt→re-place churn (``iris.task``)
+- chip-hours by region and by capacity type / generation (``iris.task``)
 - preemption events by pool/zone (``iris.provisioning``)
 - MFU per job (``telltale.levanter_throughput_mfu``)
 
@@ -125,11 +128,52 @@ class CapacityGenChipHours:
 
 
 @dataclass(frozen=True)
+class RegionChipHours:
+    region: str  # "us-east5" | "us-central1" | "europe-west" | ...
+    preemptible: float
+    reserved: float
+
+    @property
+    def total(self) -> float:
+        return self.preemptible + self.reserved
+
+
+@dataclass(frozen=True)
+class JobChipHours:
+    job: str  # "/user/jobname"
+    user: str
+    generation: str
+    chip_hours: float
+    attempts: int  # distinct (task, attempt) pairs — a churn signal
+
+
+@dataclass(frozen=True)
+class RetriedWaste:
+    """Chip-hours on attempts that a later attempt of the same task superseded.
+
+    An upper bound on preemption/failure churn: an attempt followed by a higher
+    attempt_id did not complete, so its compute was redone. The final attempt of
+    each task is excluded (it completed, or is the last one seen in the window).
+    """
+
+    capacity: str  # "preemptible" | "reserved"
+    retried: float
+    total: float
+
+    @property
+    def pct(self) -> float:
+        return 100.0 * self.retried / self.total if self.total else 0.0
+
+
+@dataclass(frozen=True)
 class WeeklyReport:
     iso_week: str
     window: TimeWindow
     chip_hours: list[UserChipHours]
     by_capacity_gen: list[CapacityGenChipHours]
+    by_region: list[RegionChipHours]
+    top_jobs: list[JobChipHours]
+    retried_waste: list[RetriedWaste]
     chip_hour_coverage: float
     mfu: list[JobMfu]
     preemptions: list[PoolPreemptions]
@@ -141,6 +185,18 @@ class WeeklyReport:
     @property
     def total_reserved(self) -> float:
         return sum(u.reserved for u in self.chip_hours)
+
+    @property
+    def total_chip_hours(self) -> float:
+        return self.total_preemptible + self.total_reserved
+
+    @property
+    def total_retried(self) -> float:
+        return sum(w.retried for w in self.retried_waste)
+
+    @property
+    def retried_pct(self) -> float:
+        return 100.0 * self.total_retried / self.total_chip_hours if self.total_chip_hours else 0.0
 
     @property
     def total_preemptions(self) -> int:
@@ -208,69 +264,149 @@ def preemptions_by_pool(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> l
     return [PoolPreemptions(v, z, n) for v, z, n in rows]
 
 
-# A marin TPU worker_id encodes placement: marin-tpu-<gen>-<capacity>-<chips>-<zone>-...-worker-<n>.
-# capacity, generation, and slice chip count are parsed from it; the per-host
-# chip count is the slice's chips divided by its live hosts (SPMD, so every host
-# of a slice emits iris.task rows). ondemand is folded into reserved.
+# A marin TPU worker_id encodes placement:
+# marin-tpu-<gen>-<capacity>-<chips>-<zone>-<yyyymmdd>-<hhmm>-<hash>-worker-<n>.
+# capacity, generation, slice chip count, and zone are parsed from it; the
+# per-host chip count is the slice's chips divided by its live hosts (SPMD, so
+# every host of a slice emits iris.task rows). ondemand is folded into reserved.
+# `zn` avoids the reserved word `zone`.
 _PARSE_WORKER = (
-    "regexp_extract(worker_id, '^marin-tpu-([a-z0-9]+)-(reserved|preemptible|ondemand)-([0-9]+)-', "
-    "['generation', 'cap', 'chips'])"
+    "regexp_extract(worker_id, "
+    "'^marin-tpu-([a-z0-9]+)-(reserved|preemptible|ondemand)-([0-9]+)-([a-z0-9-]+?)-[0-9]{8}-', "
+    "['generation', 'cap', 'chips', 'zn'])"
 )
 
-# CTE that resolves per (task, attempt, worker): user, capacity, generation, and
-# chip-hours = host active-seconds * (slice chips / live hosts in slice) / 3600.
-# Bind the window twice (chips CTE + the caller's SELECT reuse the same view).
-_CHIP_HOURS_CTE = f"""
+# Full SELECT producing one row per (task, attempt, host): user, job (/user/job),
+# capacity, generation, region, and chip-hours = host active-seconds *
+# (slice chips / live hosts in slice) / 3600. ``materialize_chip_hours`` runs it
+# once into a temp table the rollups read, so the iris.task scan and the
+# worker_id regex parse happen once, not once per rollup.
+_CHIP_HOURS_SELECT = f"""
 WITH parsed AS (
   SELECT split_part(task_id, '/', 2) AS user,
+         '/' || split_part(task_id, '/', 2) || '/' || split_part(task_id, '/', 3) AS job,
+         task_id, attempt_id,
          {_PARSE_WORKER} AS p,
          regexp_replace(worker_id, '-worker-[0-9]+$', '') AS slice_id,
          worker_id, ts
   FROM task
   WHERE worker_id LIKE 'marin-tpu-%' AND ts >= ? AND ts < ?),
 host AS (
-  SELECT user,
+  SELECT user, job, task_id, attempt_id,
          CASE WHEN p.cap = 'preemptible' THEN 'preemptible' ELSE 'reserved' END AS capacity,
-         p.generation AS generation, slice_id, CAST(p.chips AS BIGINT) AS slice_chips, worker_id,
+         p.generation AS generation,
+         regexp_extract(p.zn, '^([a-z]+-[a-z0-9]+)', 1) AS region,
+         slice_id, CAST(p.chips AS BIGINT) AS slice_chips, worker_id,
          date_diff('second', min(ts), max(ts)) AS active_seconds
-  FROM parsed WHERE p.cap <> '' GROUP BY 1, 2, 3, 4, 5, 6),
-chip AS (
-  SELECT user, capacity, generation,
-         active_seconds * slice_chips / count(*) OVER (PARTITION BY slice_id) / 3600.0 AS chip_hours
-  FROM host)
+  FROM parsed WHERE p.cap <> '' GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+SELECT user, job, task_id, attempt_id, capacity, generation, region,
+       active_seconds * slice_chips / count(*) OVER (PARTITION BY slice_id) / 3600.0 AS chip_hours
+FROM host
 """
 
 
-def chip_hours_by_user(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> list[UserChipHours]:
-    """TPU chip-hours per user, split preemptible vs reserved, from iris.task.
+def materialize_chip_hours(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> None:
+    """Parse iris.task worker placement into a temp ``chip`` table for the window.
 
-    Placement comes from the worker_id string (see ``_CHIP_HOURS_CTE``); no
-    controller state is consulted, so a preempted attempt's placement is not lost.
+    One row per (task, attempt, host) with user/job/capacity/generation/region
+    and chip-hours. Every chip-hour rollup reads this table, so the full
+    iris.task scan and the worker_id regex parse run once. Placement comes from
+    the worker_id string, so a preempted attempt's placement is not lost.
     """
+    con.execute("DROP TABLE IF EXISTS chip")
+    con.execute(f"CREATE TEMP TABLE chip AS {_CHIP_HOURS_SELECT}", [window.start, window.end])
+
+
+def chip_hours_by_user(con: duckdb.DuckDBPyConnection) -> list[UserChipHours]:
+    """TPU chip-hours per user, split preemptible vs reserved (reads ``chip``)."""
     rows = con.execute(
-        _CHIP_HOURS_CTE
-        + """
+        """
         SELECT user,
                coalesce(sum(chip_hours) FILTER (WHERE capacity = 'preemptible'), 0),
                coalesce(sum(chip_hours) FILTER (WHERE capacity = 'reserved'), 0)
         FROM chip GROUP BY user ORDER BY sum(chip_hours) DESC
-        """,
-        [window.start, window.end],
+        """
     ).fetchall()
-    return [UserChipHours(u, round(p, 1), round(r, 1)) for u, p, r in rows]
+    return [UserChipHours(u, round(p), round(r)) for u, p, r in rows]
 
 
-def chip_hours_by_capacity_gen(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> list[CapacityGenChipHours]:
-    """TPU chip-hours by capacity type and generation."""
+def chip_hours_by_capacity_gen(con: duckdb.DuckDBPyConnection) -> list[CapacityGenChipHours]:
+    """TPU chip-hours by capacity type and generation (reads ``chip``)."""
     rows = con.execute(
-        _CHIP_HOURS_CTE
-        + """
-        SELECT capacity, generation, round(sum(chip_hours), 1)
+        """
+        SELECT capacity, generation, round(sum(chip_hours))
         FROM chip GROUP BY 1, 2 ORDER BY sum(chip_hours) DESC
-        """,
-        [window.start, window.end],
+        """
     ).fetchall()
     return [CapacityGenChipHours(c, g, h) for c, g, h in rows]
+
+
+def chip_hours_by_region(con: duckdb.DuckDBPyConnection) -> list[RegionChipHours]:
+    """TPU chip-hours by region, split preemptible vs reserved (reads ``chip``).
+
+    Region is parsed from the worker_id zone (``us-east5-a`` -> ``us-east5``). Some
+    pool names truncate the zone to varying lengths (``europe-wes`` /
+    ``europe-west`` / ``europe-west4``); merge each region into the longest region
+    it is a prefix of so one region is not split across rows.
+    """
+    rows = con.execute(
+        """
+        SELECT coalesce(nullif(region, ''), 'unknown'),
+               coalesce(sum(chip_hours) FILTER (WHERE capacity = 'preemptible'), 0),
+               coalesce(sum(chip_hours) FILTER (WHERE capacity = 'reserved'), 0)
+        FROM chip GROUP BY 1
+        """
+    ).fetchall()
+    names = [reg for reg, _, _ in rows]
+    longest_first = sorted(names, key=len, reverse=True)
+    canonical = {reg: next(c for c in longest_first if c.startswith(reg)) for reg in names}
+    merged: dict[str, list[float]] = {}
+    for reg, preempt, reserved in rows:
+        acc = merged.setdefault(canonical[reg], [0.0, 0.0])
+        acc[0] += preempt
+        acc[1] += reserved
+    out = [RegionChipHours(reg, round(p), round(r)) for reg, (p, r) in merged.items()]
+    return sorted(out, key=lambda r: r.total, reverse=True)
+
+
+def top_jobs(con: duckdb.DuckDBPyConnection, limit: int = TOP_ROWS) -> list[JobChipHours]:
+    """Top jobs by chip-hours (``/user/jobname`` grain), with attempt count.
+
+    ``attempts`` counts distinct (task, attempt) pairs under the job — a rough
+    churn signal; a job re-placed many times shows more attempts than tasks.
+    Reads ``chip``.
+    """
+    rows = con.execute(
+        """
+        SELECT job, any_value(user), mode(generation), round(sum(chip_hours)),
+               count(DISTINCT task_id || '#' || attempt_id)
+        FROM chip GROUP BY job ORDER BY sum(chip_hours) DESC LIMIT ?
+        """,
+        [limit],
+    ).fetchall()
+    return [JobChipHours(j, u, g, h, n) for j, u, g, h, n in rows]
+
+
+def retried_attempt_waste(con: duckdb.DuckDBPyConnection) -> list[RetriedWaste]:
+    """Chip-hours on superseded attempts, split by capacity — a waste upper bound.
+
+    For each task the final (max) attempt is treated as productive; every earlier
+    attempt's chip-hours are counted as redone work. This is the preemption/
+    failure-churn overhead derivable from finelog alone (iris.task carries no
+    terminal cause), so it over-counts intentional restarts and under-counts a
+    final attempt that itself never completed. Reads ``chip``.
+    """
+    rows = con.execute(
+        """
+        WITH task_final AS (SELECT task_id, max(attempt_id) AS final_attempt FROM chip GROUP BY task_id)
+        SELECT c.capacity,
+               round(coalesce(sum(c.chip_hours) FILTER (WHERE c.attempt_id < f.final_attempt), 0)),
+               round(sum(c.chip_hours))
+        FROM chip c JOIN task_final f USING (task_id)
+        GROUP BY c.capacity ORDER BY c.capacity
+        """
+    ).fetchall()
+    return [RetriedWaste(cap, retried, total) for cap, retried, total in rows]
 
 
 def chip_hour_coverage(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> float:
@@ -297,11 +433,15 @@ def chip_hour_coverage(con: duckdb.DuckDBPyConnection, window: TimeWindow) -> fl
 
 def build_report(con: duckdb.DuckDBPyConnection, iso_week: str) -> WeeklyReport:
     window = iso_week_window(iso_week)
+    materialize_chip_hours(con, window)
     return WeeklyReport(
         iso_week=iso_week,
         window=window,
-        chip_hours=chip_hours_by_user(con, window),
-        by_capacity_gen=chip_hours_by_capacity_gen(con, window),
+        chip_hours=chip_hours_by_user(con),
+        by_capacity_gen=chip_hours_by_capacity_gen(con),
+        by_region=chip_hours_by_region(con),
+        top_jobs=top_jobs(con),
+        retried_waste=retried_attempt_waste(con),
         chip_hour_coverage=chip_hour_coverage(con, window),
         mfu=mfu_per_job(con, window),
         preemptions=preemptions_by_pool(con, window),
@@ -327,6 +467,13 @@ def render_markdown(report: WeeklyReport) -> str:
         "TPU chip-hours from iris.task worker placement; "
         f"{report.chip_hour_coverage:.0%} of active worker-time is on parseable TPU workers._",
         "",
+        "## Headline",
+        f"- **{report.total_chip_hours:,.0f} TPU chip-hours** — "
+        f"{report.total_preemptible:,.0f} preemptible + {report.total_reserved:,.0f} reserved.",
+        f"- **{report.total_retried:,.0f} chip-hours ({report.retried_pct:.0f}%) on attempts that did not complete** — "
+        "redone after preemption or failure (upper bound; iris.task has no terminal cause).",
+        f"- **{report.total_preemptions} preemption events** across pools.",
+        "",
         "## Chip-hours by user",
         f"Total: {report.total_preemptible:,.0f} preemptible + {report.total_reserved:,.0f} reserved chip-hours.",
         "",
@@ -336,6 +483,23 @@ def render_markdown(report: WeeklyReport) -> str:
                 [u.user, f"{u.preemptible:,.0f}", f"{u.reserved:,.0f}", f"{u.total:,.0f}"]
                 for u in report.chip_hours[:TOP_ROWS]
             ],
+        ),
+        "## Top jobs by chip-hours",
+        _table(
+            ["job", "user", "generation", "chip-hours", "attempts"],
+            [[j.job, j.user, j.generation, f"{j.chip_hours:,.0f}", str(j.attempts)] for j in report.top_jobs],
+        ),
+        "## Waste: chip-hours redone after preemption or failure",
+        "Compute on attempts a later attempt superseded — an upper bound on preempt→re-place churn.",
+        "",
+        _table(
+            ["capacity", "redone chip-hours", "total chip-hours", "share"],
+            [[w.capacity, f"{w.retried:,.0f}", f"{w.total:,.0f}", f"{w.pct:.0f}%"] for w in report.retried_waste],
+        ),
+        "## Chip-hours by region",
+        _table(
+            ["region", "preemptible", "reserved", "total"],
+            [[r.region, f"{r.preemptible:,.0f}", f"{r.reserved:,.0f}", f"{r.total:,.0f}"] for r in report.by_region],
         ),
         "## Chip-hours by capacity and generation",
         _table(
@@ -361,10 +525,14 @@ def render_markdown(report: WeeklyReport) -> str:
 def compose_discord_summary(report: WeeklyReport, gist_url: str) -> str:
     top = report.chip_hours[0] if report.chip_hours else None
     top_str = f"{top.user} ({top.total:,.0f} chip-h)" if top else "—"
+    top_job = report.top_jobs[0] if report.top_jobs else None
+    job_str = f"{top_job.job} ({top_job.chip_hours:,.0f} chip-h)" if top_job else "—"
     return (
         f"**Iris compute — {report.iso_week}**\n"
-        f"{report.total_preemptible:,.0f} preemptible + {report.total_reserved:,.0f} reserved chip-hours. "
-        f"Top user: {top_str}. Preemption events: {report.total_preemptions}.\n"
+        f"{report.total_chip_hours:,.0f} TPU chip-hours "
+        f"({report.total_preemptible:,.0f} preemptible + {report.total_reserved:,.0f} reserved). "
+        f"{report.total_retried:,.0f} ({report.retried_pct:.0f}%) redone after preemption/failure.\n"
+        f"Top user: {top_str}. Top job: {job_str}. Preemption events: {report.total_preemptions}.\n"
         f"Full report: {gist_url}"
     )
 

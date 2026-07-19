@@ -2,9 +2,10 @@ name: "Ops - Compute Report"
 
 # Weekly Iris compute-accounting report. Reads durable finelog namespaces from
 # GCS (telltale, iris.provisioning, iris.task), renders per-user TPU chip-hours
-# split preemptible vs reserved, chip-hours by capacity/generation, preemption
-# events, and MFU per job, publishes a secret gist, and posts a summary to
-# Discord (see .agents/projects/iris_compute_accounting/).
+# split preemptible vs reserved, top jobs by chip-hours, chip-hours redone after
+# preemption/failure (waste), chip-hours by region and capacity/generation,
+# preemption events, and MFU per job, publishes a secret gist, and posts a
+# summary to Discord (see .agents/projects/iris_compute_accounting/).
 
 on:
   schedule:

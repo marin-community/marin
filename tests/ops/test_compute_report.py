@@ -18,12 +18,16 @@ from scripts.ops.compute_report import (
     build_report,
     chip_hour_coverage,
     chip_hours_by_capacity_gen,
+    chip_hours_by_region,
     chip_hours_by_user,
     iso_week_window,
+    materialize_chip_hours,
     mfu_per_job,
     preemptions_by_pool,
     previous_iso_week,
     render_markdown,
+    retried_attempt_waste,
+    top_jobs,
 )
 
 WEEK = "2026-W29"  # Mon 2026-07-13 .. Mon 2026-07-20 UTC
@@ -33,8 +37,8 @@ def _ts(day: int, hour: int = 12) -> dt.datetime:
     return dt.datetime(2026, 7, day, hour, tzinfo=dt.UTC)
 
 
-def _wid(gen: str, cap: str, chips: int, host: int, tag: str = "aaaa1111") -> str:
-    return f"marin-tpu-{gen}-{cap}-{chips}-us-east5-a-20260101-0000-{tag}-worker-{host}"
+def _wid(gen: str, cap: str, chips: int, host: int, tag: str = "aaaa1111", zone: str = "us-east5-a") -> str:
+    return f"marin-tpu-{gen}-{cap}-{chips}-{zone}-20260101-0000-{tag}-worker-{host}"
 
 
 @pytest.fixture
@@ -49,10 +53,16 @@ def con() -> duckdb.DuckDBPyConnection:
     return c
 
 
-def _run_hour(con, task_id: str, worker_id: str, day: int = 14):
+def _run_hour(con, task_id: str, worker_id: str, day: int = 14, attempt: int = 0):
     # One attempt active for exactly one hour on one host (two samples, 1h apart).
-    con.execute("INSERT INTO task VALUES (?, 0, ?, ?)", [task_id, worker_id, _ts(day, 10)])
-    con.execute("INSERT INTO task VALUES (?, 0, ?, ?)", [task_id, worker_id, _ts(day, 11)])
+    con.execute("INSERT INTO task VALUES (?, ?, ?, ?)", [task_id, attempt, worker_id, _ts(day, 10)])
+    con.execute("INSERT INTO task VALUES (?, ?, ?, ?)", [task_id, attempt, worker_id, _ts(day, 11)])
+
+
+def _chip(con):
+    """Materialize the chip table for WEEK; chip-hour rollups read it."""
+    materialize_chip_hours(con, iso_week_window(WEEK))
+    return con
 
 
 def test_iso_week_window():
@@ -106,20 +116,60 @@ def test_chip_hours_split_and_per_host_division(con):
     # -> 8 chips/host, 1h each -> 16 reserved chip-hours. ondemand folds to reserved.
     _run_hour(con, "/bob/job/t0", _wid("v4", "reserved", 16, 0, "b1"))
     _run_hour(con, "/bob/job/t0", _wid("v4", "reserved", 16, 1, "b1"))
-    by_user = {u.user: u for u in chip_hours_by_user(con, iso_week_window(WEEK))}
+    by_user = {u.user: u for u in chip_hours_by_user(_chip(con))}
     assert by_user["alice"].preemptible == 8.0
     assert by_user["alice"].reserved == 0.0
     assert by_user["bob"].reserved == 16.0
     assert by_user["bob"].preemptible == 0.0
 
-    by_pool = {(c.capacity, c.generation): c.chip_hours for c in chip_hours_by_capacity_gen(con, iso_week_window(WEEK))}
+    by_pool = {(c.capacity, c.generation): c.chip_hours for c in chip_hours_by_capacity_gen(con)}
     assert by_pool == {("preemptible", "v5p"): 8.0, ("reserved", "v4"): 16.0}
 
 
 def test_ondemand_counts_as_reserved(con):
     _run_hour(con, "/carol/job/t0", _wid("v6e", "ondemand", 4, 0, "c1"))
-    (u,) = chip_hours_by_user(con, iso_week_window(WEEK))
+    (u,) = chip_hours_by_user(_chip(con))
     assert u.reserved == 4.0 and u.preemptible == 0.0
+
+
+def test_chip_hours_by_region_parses_and_merges_truncated_zone(con):
+    _run_hour(con, "/alice/job/t0", _wid("v5p", "preemptible", 8, 0, "a1", zone="us-east5-a"))
+    _run_hour(con, "/bob/job/t0", _wid("v4", "reserved", 8, 0, "b1", zone="us-central1-b"))
+    # Two europe rows whose worker_id zone was truncated to different lengths;
+    # both are really europe-west4 and must merge into one row.
+    _run_hour(con, "/carol/job/t0", _wid("v6e", "preemptible", 8, 0, "c1", zone="europe-west4-a"))
+    _run_hour(con, "/dave/job/t0", _wid("v5e", "preemptible", 8, 0, "d1", zone="europe-wes"))
+    by_region = {r.region: r for r in chip_hours_by_region(_chip(con))}
+    assert by_region["us-east5"].preemptible == 8.0 and by_region["us-east5"].reserved == 0.0
+    assert by_region["us-central1"].reserved == 8.0
+    assert by_region["europe-west4"].preemptible == 16.0  # truncated + full merged
+    assert "europe-wes" not in by_region and "europe-west" not in by_region
+
+
+def test_top_jobs_group_by_job_and_count_attempts(con):
+    # One job, two tasks; task t1 was retried (attempt 0 then 1) -> 3 attempts, 24 chip-h.
+    _run_hour(con, "/alice/train/t0", _wid("v5p", "preemptible", 8, 0, "a1"))
+    _run_hour(con, "/alice/train/t1", _wid("v5p", "preemptible", 8, 0, "a2"), attempt=0)
+    _run_hour(con, "/alice/train/t1", _wid("v5p", "preemptible", 8, 0, "a3"), attempt=1)
+    # A smaller job by another user.
+    _run_hour(con, "/bob/eval/t0", _wid("v4", "reserved", 4, 0, "b1"))
+    jobs = top_jobs(_chip(con))
+    assert jobs[0].job == "/alice/train" and jobs[0].user == "alice"
+    assert jobs[0].chip_hours == 24.0 and jobs[0].attempts == 3
+    assert jobs[0].generation == "v5p"
+    assert jobs[1].job == "/bob/eval" and jobs[1].chip_hours == 4.0
+
+
+def test_retried_attempt_waste_counts_superseded_attempts(con):
+    # task t0: attempt 0 (superseded) + attempt 1 (final). 8 preemptible chip-h each.
+    _run_hour(con, "/alice/job/t0", _wid("v5p", "preemptible", 8, 0, "a1"), attempt=0)
+    _run_hour(con, "/alice/job/t0", _wid("v5p", "preemptible", 8, 0, "a2"), attempt=1)
+    # task t1: single reserved attempt, never superseded.
+    _run_hour(con, "/bob/job/t1", _wid("v4", "reserved", 8, 0, "b1"), attempt=0)
+    waste = {w.capacity: w for w in retried_attempt_waste(_chip(con))}
+    assert waste["preemptible"].retried == 8.0 and waste["preemptible"].total == 16.0
+    assert waste["preemptible"].pct == 50.0
+    assert waste["reserved"].retried == 0.0 and waste["reserved"].total == 8.0
 
 
 def test_chip_hour_coverage_excludes_non_tpu(con):
@@ -137,9 +187,14 @@ def test_empty_namespaces_do_not_crash():
     report = build_report(c, WEEK)
     assert report.chip_hours == []
     assert report.by_capacity_gen == []
+    assert report.by_region == []
+    assert report.top_jobs == []
+    assert report.retried_waste == []
     assert report.mfu == []
     assert report.preemptions == []
     assert report.chip_hour_coverage == 0.0
+    assert report.total_chip_hours == 0.0
+    assert report.retried_pct == 0.0
     assert "# Iris compute — 2026-W29" in render_markdown(report)
 
 
@@ -147,7 +202,11 @@ def test_render_markdown_has_sections(con):
     _run_hour(con, "/alice/job/t0", _wid("v5p", "preemptible", 8, 0))
     md = render_markdown(build_report(con, WEEK))
     assert "# Iris compute — 2026-W29" in md
+    assert "## Headline" in md
     assert "Chip-hours by user" in md
+    assert "Top jobs by chip-hours" in md
+    assert "Waste: chip-hours redone after preemption or failure" in md
+    assert "Chip-hours by region" in md
     assert "Chip-hours by capacity and generation" in md
     assert "Preemption events by pool" in md
     assert "MFU per job" in md
