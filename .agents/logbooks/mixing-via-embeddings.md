@@ -827,3 +827,18 @@ this) → the harm term needs a FULL refit on E2: τ, exponent, per-GROUP b (cod
 web: b_code-e32≈7e-3 vs b_web≈1.7e-3). A single softplus²(e−2) with one b does NOT fit both arms.
 Reconciles with DP4 (in-regime null, harm negligible ≤4-8 ep) — both true: flat in-regime, severe
 out-of-regime. NEXT: refit the harm term on E2 (+ transect/a2 shape), validate kernel+harm combined.
+
+## 2026-07-19 twobucket readout — swoosh confirmed + HARM IS SCALE-DEPENDENT (major)
+- **f22 natural swoosh CONFIRMED**: realized humaneval bpb 2.11(w=0)→MIN 1.11(w=0.10, e_code≈5)→
+  2.89(w=1.0). Content benefit + repetition harm; min at ~5 epochs = the 4-epoch threshold. Kernel
+  flat ~0.69 (OOD). Matches #2846's independent U.
+- **f23 epoch axis (fixed w=0.2, dense e=1..32)**: humaneval 0.914(e=1)→2.204(e=32); kernel refuted
+  52σ(e16)/162σ(e32). Dense shape for the harm-term refit.
+- **MAJOR: harm is NOT scale-invariant** (refutes any pure H(e)):
+  - budget: e4→e16 harm 0.688 bpb @2.5B vs 0.092 bpb @40B → harm SHRINKS ~7× with budget.
+  - model size: e2→e32 harm 0.408 (d256) vs 1.304 (d512) → LARGER model over-epochs HARDER.
+  → The harm term must be H(epochs, budget, model_size). The 10B E2/a2 harm OVER-states the 100B
+  production harm ~7×. Calibrate the harm term at the TARGET budget (100B = the transect scale),
+  NOT 10B.
+- budget10b readout (f26) also landed (tier C; provisional zmacro pending HF re-run).
+- NEXT: transect (100B) readout = production-scale harm; refit H(e,budget,size); validate kernel+harm.
