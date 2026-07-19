@@ -50,6 +50,15 @@ export function formatStderr(value: number | null | undefined, stderr: number | 
   return `±${scaled.toFixed(1)}`
 }
 
+// A signed delta against a reference score (e.g. a leaderboard leader), in the same
+// percentage-point scale formatScore displays, e.g. '-3.1'. Empty string when there is
+// nothing to compare (no value, or the value is the reference itself).
+export function formatDelta(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return ''
+  const scaled = value * 100
+  return `${scaled > 0 ? '+' : ''}${scaled.toFixed(1)}`
+}
+
 // Epoch-milliseconds timestamp (iris/finelog) -> short local time, or '—'.
 export function formatMillis(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return '—'

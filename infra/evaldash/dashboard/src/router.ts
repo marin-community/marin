@@ -9,6 +9,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/RunDetailPage.vue'),
     props: true,
   },
+  {
+    path: '/runs/:runId/samples',
+    name: 'samples',
+    component: () => import('@/pages/SampleViewerPage.vue'),
+    props: true,
+  },
   { path: '/status', name: 'status', component: () => import('@/pages/StatusPage.vue') },
 ]
 

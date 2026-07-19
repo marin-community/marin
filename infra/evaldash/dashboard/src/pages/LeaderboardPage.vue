@@ -3,10 +3,12 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { formatScore, formatStderr } from '@/utils/formatting'
-import type { Matrix, MatrixCell } from '@/types/api'
+import { formatDelta, formatScore, formatStderr } from '@/utils/formatting'
+import type { LeaderboardEntry, Matrix, MatrixCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
+import EvalProfileChart from '@/components/charts/EvalProfileChart.vue'
+import SparkStrip from '@/components/charts/SparkStrip.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
 
 const router = useRouter()
@@ -30,6 +32,14 @@ function canSelect(model: string): boolean {
 }
 
 const comparing = computed(() => selected.value.length >= 2)
+
+// --- Δ best: gap from each model's mean score to the leader's, empty for the leader ---
+const topScore = computed<number | null>(() => data.value?.leaderboard.find((e) => e.score !== null)?.score ?? null)
+
+function deltaBest(entry: LeaderboardEntry): number | null {
+  if (entry.score === null || topScore.value === null || entry.score === topScore.value) return null
+  return entry.score - topScore.value
+}
 
 // --- Score-over-time modal target ---
 const historyTarget = ref<{ model: string; task: string } | null>(null)
@@ -100,7 +110,9 @@ function goToRun(runId: string) {
                 <th class="px-3 py-2 text-left w-8">#</th>
                 <th class="px-3 py-2 text-left">Model</th>
                 <th class="px-3 py-2 text-right">Mean score</th>
+                <th class="px-3 py-2 text-right">Δ best</th>
                 <th class="px-3 py-2 text-right">Coverage</th>
+                <th class="px-3 py-2 text-left">Profile</th>
               </tr>
             </thead>
             <tbody>
@@ -127,11 +139,26 @@ function goToRun(runId: string) {
                   </template>
                   <span v-else class="text-text-muted">—</span>
                 </td>
+                <td class="px-3 py-2 text-right tabular-nums text-text-muted whitespace-nowrap">
+                  {{ formatDelta(deltaBest(entry)) }}
+                </td>
                 <td class="px-3 py-2 text-right tabular-nums text-text-secondary">{{ entry.covered }}/{{ entry.total }} tasks</td>
+                <td class="px-3 py-2">
+                  <SparkStrip :model="entry.model" :tasks="data.tasks" :matrix="data" />
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
+      </div>
+
+      <!-- Eval profile: every model's score on every task, snowball highlighted -->
+      <div>
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Eval profile</h3>
+        <p class="text-xs text-text-muted mb-2">
+          each row: one eval; dots: models; highlighted: snowball; line: gap to fleet best
+        </p>
+        <EvalProfileChart :matrix="data" />
       </div>
 
       <!-- Model comparison chart -->

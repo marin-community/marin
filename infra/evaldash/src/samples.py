@@ -126,25 +126,51 @@ def _sample_row(row: dict, metric_columns: list[str], primary: str | None) -> di
 
 def fetch_samples(results_path: str | None, task: str, *, offset: int, limit: int, correct: str) -> dict:
     """Paginated sample rows for one task, filtered by ``correct`` in ``{"correct","incorrect","all"}``."""
+    empty_counts = {"all": 0, "correct": 0, "incorrect": 0}
     if not results_path:
-        return {"available": False, "error": "run has no results_path", "task": task, "total": 0, "rows": []}
+        return {
+            "available": False,
+            "error": "run has no results_path",
+            "task": task,
+            "total": 0,
+            "rows": [],
+            "counts": empty_counts,
+        }
     try:
         fs, by_task = _discover(results_path)
         paths = by_task.get(task)
         if not paths:
-            return {"available": True, "error": f"no samples for task {task!r}", "task": task, "total": 0, "rows": []}
+            return {
+                "available": True,
+                "error": f"no samples for task {task!r}",
+                "task": task,
+                "total": 0,
+                "rows": [],
+                "counts": empty_counts,
+            }
         table = _load_table(fs, paths)
     except Exception as exc:
         logger.info("sample fetch failed for %s/%s: %s", results_path, task, exc)
-        return {"available": False, "error": f"{type(exc).__name__}: {exc}"[:400], "task": task, "total": 0, "rows": []}
+        return {
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}"[:400],
+            "task": task,
+            "total": 0,
+            "rows": [],
+            "counts": empty_counts,
+        }
 
     metric_columns = [column for column in table.column_names if column not in STRUCTURAL_COLUMNS]
     primary = primary_metric_column(metric_columns)
-    rows = table.to_pylist()
+    all_rows = table.to_pylist()
+    n_correct = sum(1 for row in all_rows if _is_correct(row, primary))
+    counts = {"all": len(all_rows), "correct": n_correct, "incorrect": len(all_rows) - n_correct}
     if correct == "correct":
-        rows = [row for row in rows if _is_correct(row, primary)]
+        rows = [row for row in all_rows if _is_correct(row, primary)]
     elif correct == "incorrect":
-        rows = [row for row in rows if not _is_correct(row, primary)]
+        rows = [row for row in all_rows if not _is_correct(row, primary)]
+    else:
+        rows = all_rows
     total = len(rows)
     page = rows[offset : offset + limit]
     return {
@@ -156,5 +182,6 @@ def fetch_samples(results_path: str | None, task: str, *, offset: int, limit: in
         "total": total,
         "offset": offset,
         "limit": limit,
+        "counts": counts,
         "rows": [_sample_row(row, metric_columns, primary) for row in page],
     }

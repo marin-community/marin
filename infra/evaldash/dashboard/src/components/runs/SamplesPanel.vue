@@ -1,14 +1,17 @@
 <script setup lang="ts">
 /**
  * Per-sample browser for a succeeded run. Lists the tasks with exported sample parquets, then
- * pages their rows filtered by correctness (per-sample primary metric == 1). A row click opens a
- * side panel with the full prompt arguments and the raw + filtered model responses.
+ * pages their rows filtered by correctness (per-sample primary metric == 1). A row click opens
+ * the full-screen sample viewer at that row; "Open viewer" jumps straight in at the first row.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useApi } from '@/composables/useApi'
-import type { SampleRow, SamplesResponse, SampleTasksResponse } from '@/types/api'
+import { answerSummary } from '@/components/samples/detect'
+import type { SamplesResponse, SampleTasksResponse } from '@/types/api'
 
 const props = defineProps<{ runId: string }>()
+const router = useRouter()
 
 const LIMIT = 50
 type Correct = 'all' | 'correct' | 'incorrect'
@@ -16,7 +19,6 @@ type Correct = 'all' | 'correct' | 'incorrect'
 const selectedTask = ref('')
 const correct = ref<Correct>('all')
 const offset = ref(0)
-const selectedRow = ref<SampleRow | null>(null)
 
 const { data: tasksData, error: tasksError, refresh: refreshTasks } = useApi<SampleTasksResponse>(
   () => `api/runs/${props.runId}/samples/tasks`,
@@ -52,12 +54,6 @@ function toText(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function pretty(value: unknown): string {
-  if (value === null || value === undefined) return ''
-  if (typeof value === 'string') return value
-  return JSON.stringify(value, null, 2)
-}
-
 function truncate(text: string, n = 140): string {
   return text.length > n ? `${text.slice(0, n)}…` : text
 }
@@ -77,6 +73,13 @@ function prevPage() {
     offset.value = Math.max(0, offset.value - LIMIT)
     refresh()
   }
+}
+
+function openViewer(rowIndex: number) {
+  router.push({
+    path: `/runs/${props.runId}/samples`,
+    query: { task: selectedTask.value, filter: correct.value, i: String(offset.value + rowIndex) },
+  })
 }
 </script>
 
@@ -110,6 +113,10 @@ function prevPage() {
             @click="correct = opt"
           >{{ opt }}</button>
         </div>
+        <button
+          class="px-2 py-1 text-xs rounded border border-surface-border hover:bg-surface-raised"
+          @click="openViewer(0)"
+        >Open viewer ⛶</button>
         <span v-if="data" class="text-xs text-text-muted ml-auto">
           primary: <span class="font-mono">{{ data.primary_metric ?? '—' }}</span>
         </span>
@@ -136,7 +143,7 @@ function prevPage() {
                 v-for="(row, i) in data.rows"
                 :key="`${row.doc_id}-${i}`"
                 class="border-b border-surface-border-subtle hover:bg-surface-raised cursor-pointer"
-                @click="selectedRow = row"
+                @click="openViewer(i)"
               >
                 <td class="px-2 py-1.5 font-mono text-text-secondary">{{ row.doc_id }}</td>
                 <td class="px-2 py-1.5">
@@ -148,7 +155,7 @@ function prevPage() {
                   >{{ row.primary_value ?? (row.correct ? '✓' : '✗') }}</span>
                 </td>
                 <td class="px-2 py-1.5 font-mono max-w-[24ch] truncate">{{ truncate(toText(row.target), 60) }}</td>
-                <td class="px-2 py-1.5 font-mono max-w-[40ch] truncate">{{ truncate(toText(row.filtered_responses)) }}</td>
+                <td class="px-2 py-1.5 font-mono max-w-[40ch] truncate">{{ truncate(answerSummary(row)) }}</td>
               </tr>
             </tbody>
           </table>
@@ -171,50 +178,6 @@ function prevPage() {
         </div>
       </template>
       <p v-else-if="data" class="text-sm text-text-muted">{{ data.error ?? 'No samples.' }}</p>
-    </div>
-
-    <!-- Detail side panel -->
-    <div v-if="selectedRow" class="fixed inset-0 z-50 flex justify-end bg-black/40" @click.self="selectedRow = null">
-      <div class="w-full max-w-xl h-full overflow-auto bg-surface border-l border-surface-border p-5 space-y-4">
-        <div class="flex items-center justify-between gap-3">
-          <h4 class="text-sm font-semibold">
-            Sample <span class="font-mono">{{ selectedRow.doc_id }}</span>
-            <span
-              class="ml-2 inline-block rounded px-1.5 py-0.5 text-xs border"
-              :class="selectedRow.correct
-                ? 'bg-status-success-bg text-status-success border-status-success-border'
-                : 'bg-status-danger-bg text-status-danger border-status-danger-border'"
-            >{{ selectedRow.correct ? 'correct' : 'incorrect' }}</span>
-          </h4>
-          <button class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised" @click="selectedRow = null">Close</button>
-        </div>
-
-        <div>
-          <h5 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">Prompt arguments</h5>
-          <pre class="rounded border border-surface-border bg-surface-sunken p-3 text-[12px] font-mono overflow-auto max-h-72 whitespace-pre-wrap">{{ pretty(selectedRow.arguments) }}</pre>
-        </div>
-        <div>
-          <h5 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">Gold target</h5>
-          <pre class="rounded border border-surface-border bg-surface-sunken p-3 text-[12px] font-mono overflow-auto max-h-40 whitespace-pre-wrap">{{ pretty(selectedRow.target) }}</pre>
-        </div>
-        <div>
-          <h5 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">Filtered response</h5>
-          <pre class="rounded border border-surface-border bg-surface-sunken p-3 text-[12px] font-mono overflow-auto max-h-40 whitespace-pre-wrap">{{ pretty(selectedRow.filtered_responses) }}</pre>
-        </div>
-        <div>
-          <h5 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">Raw response</h5>
-          <pre class="rounded border border-surface-border bg-surface-sunken p-3 text-[12px] font-mono overflow-auto max-h-56 whitespace-pre-wrap">{{ pretty(selectedRow.responses) }}</pre>
-        </div>
-        <div>
-          <h5 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-1">Metrics</h5>
-          <dl class="text-xs grid grid-cols-2 gap-1">
-            <template v-for="(v, k) in selectedRow.metrics" :key="k">
-              <dt class="text-text-muted font-mono">{{ k }}</dt>
-              <dd class="tabular-nums">{{ v }}</dd>
-            </template>
-          </dl>
-        </div>
-      </div>
     </div>
   </div>
 </template>
