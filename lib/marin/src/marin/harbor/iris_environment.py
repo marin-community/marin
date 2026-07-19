@@ -34,7 +34,7 @@ from pathlib import Path
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
 from harbor.trial.errors import EnvironmentStartTimeoutError
-from iris.cli.connect import open_controller_endpoint
+from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
@@ -153,6 +153,7 @@ class IrisEnvironment(BaseEnvironment):
         self._scheduling_timeout = int(scheduling_timeout)
         self._container_profile = _CONTAINER_PROFILES[container_profile]
         self._sandbox_ttl = int(sandbox_ttl)
+        self._endpoint: ControllerEndpoint | None = None
         self._iris: IrisClient | None = None
         self._rpc: ControllerServiceClientSync | None = None
         self._job: Job | None = None
@@ -210,14 +211,13 @@ class IrisEnvironment(BaseEnvironment):
             raise
 
     def _start_sync(self) -> None:
-        # Resolve the controller URL and credentials, then close the endpoint
-        # context immediately: it pushes a thread-local click.Context, which
-        # must be popped by the same thread that pushed it, and start/stop run
-        # in different asyncio.to_thread workers. The URL outlives the context
-        # for IAP-fronted and direct-URL clusters (no local tunnel).
-        with open_controller_endpoint(cluster_name=self._cluster, controller_url=self._controller_url) as endpoint:
-            url = endpoint.url
-            credentials = endpoint.credentials
+        # Resolve the controller URL and open any tunnel it needs. The endpoint
+        # owns that tunnel and carries no click context, so it survives the
+        # start()/stop() hop across asyncio.to_thread workers; _stop_sync closes
+        # it once the sandbox is done.
+        self._endpoint = connect_controller(cluster_name=self._cluster, controller_url=self._controller_url)
+        url = self._endpoint.url
+        credentials = self._endpoint.credentials
         self._iris = IrisClient.remote(url, workspace=None, credentials=credentials)
         self._rpc = ControllerServiceClientSync(
             address=url,
@@ -289,6 +289,10 @@ class IrisEnvironment(BaseEnvironment):
         if self._iris is not None:
             self._iris.shutdown()
             self._iris = None
+        # Close the tunnel last: the client above reaches the controller through it.
+        if self._endpoint is not None:
+            self._endpoint.close()
+            self._endpoint = None
 
     async def exec(
         self,

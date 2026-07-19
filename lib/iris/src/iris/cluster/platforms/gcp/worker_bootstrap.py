@@ -70,6 +70,59 @@ def rewrite_ghcr_to_ar_remote(
     return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
 
 
+# Registry prefixes that all denote Docker Hub, the implicit default registry.
+_DOCKER_HUB_HOSTS = ("docker.io/", "index.docker.io/", "registry-1.docker.io/")
+
+
+def docker_hub_repo_path(image_tag: str) -> str | None:
+    """Return the Docker Hub repository path for *image_tag*, or None if it names another registry.
+
+    Applies Docker's default-registry rule: a reference belongs to Docker Hub
+    unless its first ``/``-segment looks like a registry host — it contains a
+    ``.`` or ``:`` (domain or port) or equals ``localhost``. Official single-name
+    images gain the implicit ``library/`` namespace, matching how Docker Hub
+    stores them:
+
+        ubuntu:24.04                → library/ubuntu:24.04
+        bitnami/redis:latest        → bitnami/redis:latest
+        docker.io/library/python:3  → library/python:3
+        gcr.io/proj/img:v1          → None (another registry)
+        us-docker.pkg.dev/p/r/i:v1  → None (Artifact Registry)
+    """
+    for host in _DOCKER_HUB_HOSTS:
+        if image_tag.startswith(host):
+            remainder = image_tag.removeprefix(host)
+            return remainder if "/" in remainder else f"library/{remainder}"
+    if "/" not in image_tag:
+        # No registry host and no namespace: a Docker Hub official image. The tag
+        # may carry a ':' (ubuntu:24.04), so this branch precedes the host check.
+        return f"library/{image_tag}"
+    first_segment = image_tag.split("/", 1)[0]
+    if "." in first_segment or ":" in first_segment or first_segment == "localhost":
+        return None
+    return image_tag
+
+
+def rewrite_docker_hub_to_ar_remote(
+    image_tag: str,
+    multi_region: str,
+    project: str,
+    mirror_repo: str,
+) -> str:
+    """Rewrite a Docker Hub image reference to pull from an AR remote repo.
+
+    ubuntu:24.04
+    → us-docker.pkg.dev/hai-gcp-models/docker-mirror/library/ubuntu:24.04
+
+    References that name another registry pass through unchanged (see
+    :func:`docker_hub_repo_path`).
+    """
+    path = docker_hub_repo_path(image_tag)
+    if path is None:
+        return image_tag
+    return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
+
+
 def render_template(template: str, **variables: str | int) -> str:
     """Render a template string with {{ variable }} placeholders.
 
