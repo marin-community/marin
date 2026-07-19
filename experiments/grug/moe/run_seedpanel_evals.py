@@ -54,6 +54,7 @@ from experiments.grug.moe.eval_logprob import (
     _make_grug_lm,
     _with_eval_capacity,
 )
+from experiments.grug.moe.launch_mve_twobucket_h100 import _family_model
 from experiments.grug.moe.model import Transformer
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -166,6 +167,13 @@ def main() -> None:
     parser.add_argument("--output-prefix", default=None, help="default evaluation/grug_logprob/<run>")
     parser.add_argument("--list-tasks", action="store_true", help="print resolved tasks and exit (no GPU needed)")
     parser.add_argument("--redo-tasks", default="", help="comma-separated aliases to recompute even if results exist")
+    parser.add_argument(
+        "--model-dim",
+        type=int,
+        default=512,
+        choices=(512, 256),
+        help="eval model hidden dim; pass 256 for the twobucket axis-4 d256 checkpoints (default 512, the swarm shape)",
+    )
     args = parser.parse_args()
 
     manifest, tasks = load_task_manifest()
@@ -194,7 +202,9 @@ def main() -> None:
         distributed=DistributedConfig(initialize_jax_distributed=False),
     )
     trainer_config.initialize()
-    eval_model = b200_panel.B200_MODEL  # swarm shapes + gpu_fa4_cute
+    # d512 (default) is the swarm shape (B200_MODEL); d256 rebuilds the axis-4
+    # twobucket model exactly (the launcher asserts _family_model(512)==B200_MODEL).
+    eval_model = b200_panel.B200_MODEL if args.model_dim == 512 else _family_model(args.model_dim)
     max_seq_len = eval_model.max_seq_len
 
     with trainer_config.use_device_mesh():
