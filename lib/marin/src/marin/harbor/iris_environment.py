@@ -211,9 +211,10 @@ class IrisEnvironment(BaseEnvironment):
 
     def _start_sync(self) -> None:
         # Resolve the controller URL and credentials, then close the endpoint
-        # context immediately. The context only keeps an SSH tunnel or local
-        # cluster alive; harbor targets IAP-fronted or direct-URL clusters,
-        # where the URL outlives the context.
+        # context immediately: it pushes a thread-local click.Context, which
+        # must be popped by the same thread that pushed it, and start/stop run
+        # in different asyncio.to_thread workers. The URL outlives the context
+        # for IAP-fronted and direct-URL clusters (no local tunnel).
         with open_controller_endpoint(cluster_name=self._cluster, controller_url=self._controller_url) as endpoint:
             url = endpoint.url
             credentials = endpoint.credentials
