@@ -162,6 +162,10 @@ class GrugModelConfig:
     # up-projection (kv: sqrt(d/kv_lora_rank), q: sqrt(d/q_lora_rank)). Off by default.
     mla_scale_q_lora: bool = False
     mla_scale_kv_lora: bool = False
+    mla_init_mult_component: str = ""
+    mla_init_mult_factor: float = 1.0
+    """Fine-grained MLA init ablation: multiply the init std of the named MLA weight
+    (w_dkv/w_kr/w_uk/w_uv/w_dq/w_uq) by ``mla_init_mult_factor``. Empty component = no-op."""
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -739,6 +743,11 @@ class MultiheadLatentAttention(eqx.Module):
         # output dim. RMSNorm still sees the full latent because it acts on the gathered
         # activation, not the sharded weight.
         k_dkv, k_uk, k_uv, k_kr, k_q, k_o = random.split(key, 6)
+
+        def _std(name: str) -> float:
+            # Fine-grained MLA init ablation: scale one named component's init std (cfg.mla_init_mult_*).
+            return std * (cfg.mla_init_mult_factor if name == cfg.mla_init_mult_component else 1.0)
+
         if cq == 0:
             # Direct Q projection (DeepSeek-V3 q_lora_rank=0), TP on ``model`` like the GQA w_q.
             w_q = reshard(_init_weight(k_q, (d, n * qk), std), P("data", "model"))
@@ -746,15 +755,15 @@ class MultiheadLatentAttention(eqx.Module):
         else:
             k_dq, k_uq = random.split(k_q, 2)
             w_q = None
-            w_dq = reshard(_init_weight(k_dq, (d, cq), std), P("data", None))
+            w_dq = reshard(_init_weight(k_dq, (d, cq), _std("w_dq")), P("data", None))
             q_norm = RMSNorm.init(cq, cfg.layer_norm_eps)
-            w_uq = reshard(_init_weight(k_uq, (cq, n * qk), std), P("data", "model"))
+            w_uq = reshard(_init_weight(k_uq, (cq, n * qk), _std("w_uq")), P("data", "model"))
         return MultiheadLatentAttention(
-            w_dkv=reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None)),
+            w_dkv=reshard(_init_weight(k_dkv, (d, ckv), _std("w_dkv")), P("data", None)),
             kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),
-            w_uk=reshard(_init_weight(k_uk, (ckv, n * nope), std), P("data", "model")),
-            w_uv=reshard(_init_weight(k_uv, (ckv, n * vd), std), P("data", "model")),
-            w_kr=reshard(_init_weight(k_kr, (d, rope_d), std), P("data", None)),
+            w_uk=reshard(_init_weight(k_uk, (ckv, n * nope), _std("w_uk")), P("data", "model")),
+            w_uv=reshard(_init_weight(k_uv, (ckv, n * vd), _std("w_uv")), P("data", "model")),
+            w_kr=reshard(_init_weight(k_kr, (d, rope_d), _std("w_kr")), P("data", None)),
             w_q=w_q,
             w_dq=w_dq,
             q_norm=q_norm,

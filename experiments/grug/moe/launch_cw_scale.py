@@ -145,6 +145,9 @@ def build_scale_model() -> GrugModelConfig:
     mla_default = "1" if use_mla else "0"
     mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
     mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
+    # Fine-grained MLA init ablation: SCALE_MLA_INIT_MULT_COMPONENT (a weight name) x _FACTOR.
+    mla_init_mult_component = os.environ.get("SCALE_MLA_INIT_MULT_COMPONENT", "")
+    mla_init_mult_factor = float(os.environ.get("SCALE_MLA_INIT_MULT_FACTOR", "1.0"))
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -182,6 +185,8 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         mla_scale_q_lora=mla_scale_q_lora,
         mla_scale_kv_lora=mla_scale_kv_lora,
+        mla_init_mult_component=mla_init_mult_component,
+        mla_init_mult_factor=mla_init_mult_factor,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,

@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 
 import jax
@@ -120,6 +121,17 @@ def scale_with_grug_muonh(
 
         muon_updates, next_state = muon_transform.update(updates, state, params)
         muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        # Fine-grained MLA LR ablation: scale one named MLA weight's *final* (post-hyperball) update
+        # -- i.e. its effective LR -- by SCALE_MLA_LR_MULT_FACTOR. Must be after the scale-invariant
+        # hyperball projection, which would otherwise renormalize away a pre-projection scaling.
+        mla_lr_comp = os.environ.get("SCALE_MLA_LR_MULT_COMPONENT")
+        if mla_lr_comp:
+            factor = float(os.environ.get("SCALE_MLA_LR_MULT_FACTOR", "1.0"))
+            muonh_updates = jax.tree_util.tree_map_with_path(
+                lambda path, u: u * factor if (u is not None and mla_lr_comp in jax.tree_util.keystr(path)) else u,
+                muonh_updates,
+                is_leaf=lambda x: x is None,
+            )
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
