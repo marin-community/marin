@@ -5,6 +5,7 @@
 
 import dataclasses
 import json
+import re
 import socket
 import time
 from unittest.mock import MagicMock
@@ -26,6 +27,7 @@ from marin.inference.quick_serve_cli import (
     main,
 )
 from marin.inference.quick_serve_dashboard import (
+    DASHBOARD_HTML,
     ServingInfo,
     bind_serving_socket,
     build_dashboard_app,
@@ -334,6 +336,18 @@ def _collect_sse_text(response: requests.Response, field: str) -> str:
         delta = json.loads(payload)["choices"][0]
         text += delta["delta"]["content"] if field == "delta" else delta["text"]
     return text
+
+
+def test_dashboard_html_is_self_contained():
+    """The dashboard artifact must inline every script and style.
+
+    It is served on networks that reach only the controller proxy, so a CDN or
+    sibling-asset reference (a broken rsbuild inlining config) would render a
+    blank page in exactly the environments the dashboard exists for.
+    """
+    assert "marin · quick serve" in DASHBOARD_HTML
+    assert not re.search(r'(?:src|href)="[^"]*\.(?:js|css)"', DASHBOARD_HTML)
+    assert 'src="http' not in DASHBOARD_HTML
 
 
 def test_dashboard_serves_ui_and_reverse_proxies_streaming():
