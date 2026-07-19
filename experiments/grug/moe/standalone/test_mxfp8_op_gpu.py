@@ -43,14 +43,13 @@ from bench_mxfp8_fused import (
     wgrad_ref,
 )
 from mxfp8_grouped.quantize import (
+    SF_VEC_SIZE,
     dequantize_mxfp8,
     e8m0_to_f32,
     quantize_mxfp8,
     quantize_mxfp8_tokens,
-    SF_VEC_SIZE,
 )
 
-from experiments.grug.moe import mxfp8
 from experiments.grug.moe.mxfp8 import (
     MxFp8MoeMlpOp,
     _backward_pipeline,
@@ -120,7 +119,7 @@ def deq_cols(q, sf_raw):
 def check_contract(op, results):
     print("\n== contract phase (eval_shape) ==", flush=True)
     m = 4096
-    x, w13, w2, cot, groups, gs = make_inputs(m)
+    x, w13, w2, cot, _groups, gs = make_inputs(m)
 
     def fwd_and_grads(x_, w13_, w2_):
         y, vjp = jax.vjp(lambda a, b, c: op(a, b, c, gs), x_, w13_, w2_)
@@ -138,7 +137,7 @@ def check_contract(op, results):
 
 def check_dequant(op, m: int, results):
     print(f"\n== dequant phase (M={m}) ==", flush=True)
-    x, w13, w2, cot, groups, gs = make_inputs(m)
+    x, w13, w2, cot, _groups, gs = make_inputs(m)
 
     def _arrays_only(d):
         return {k: v for k, v in d.items() if k not in ("layout", "producer")}
@@ -261,8 +260,6 @@ def main():
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind} (cc {dev.compute_capability}), jax {jax.__version__}", flush=True)
     op = MxFp8MoeMlpOp(producer=a.producer)
-    if a.producer == "auto":
-        print(f"producer auto; cute available: {mxfp8.cute_producer_available()}", flush=True)
 
     results = {"device": str(dev.device_kind), "producer": a.producer}
     if "contract" in phases:

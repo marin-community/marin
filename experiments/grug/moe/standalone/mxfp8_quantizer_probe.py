@@ -1,13 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MXFP8-002c debug: bisect which kernel construct trips the pod's libNVVM.
+"""MXFP8-002c debug: bisect which kernel construct trips a pod's NVVM compile.
 
-The dual quantizer compiles clean on a GPU-less x86 box (PTX-only conditional
-SASS) but fails on the GB200 pod with ``NVVM_ERROR_COMPILATION: unsupported
-operation`` (jobs 002c-g1/g2). The vendored GEMM kernel compiles fine on the
-same pod, so one of the quantizer's constructs is the culprit. This script
-compiles+runs a ladder of stripped variants, each adding one construct:
+RESOLVED: the ``NVVM_ERROR_COMPILATION: unsupported operation`` failures were
+never construct- or node-specific — they were the cutlass-dsl libs-base/
+libs-cu13 wheel-shadowing conflict (a pod whose venv got the base-variant
+``_cutlass_ir`` fails EVERY variant below, cu13 passes all), fixed in the
+lockfile by excluding libs-base. Kept as a compile smoke ladder; also driven
+per-node by ``nvvm_node_survey.py``. The ladder compiles+runs stripped
+variants, each adding one construct:
 
   v1_cvt        bf16 read -> f32 -> e4m3 cvt -> store (packfloat path)
   v2_shuffle    + scalar shuffle_sync_bfly / fmax combine
@@ -169,9 +171,8 @@ def run_full(m: int, k: int):
 
 
 def print_env():
-    """Node/toolchain diagnostics: the same probe PASSes and FAILs across jobs
-    (g3 all-pass vs g4 v1-fail), so suspicion is node- or toolchain-resolution
-    dependence of the libNVVM the DSL invokes."""
+    """Node/toolchain diagnostics (the g3-vs-g4 pass/fail flip that pointed at
+    node dependence was really the per-sync base/cu13 install lottery)."""
     print(f"hostname: {socket.gethostname()}", flush=True)
     for cmd in (
         ["nvidia-smi", "--query-gpu=driver_version,name", "--format=csv,noheader"],

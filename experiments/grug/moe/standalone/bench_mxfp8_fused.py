@@ -37,7 +37,6 @@ import argparse
 import json
 import os
 import statistics
-import subprocess
 import sys
 import time
 
@@ -293,11 +292,18 @@ def run_legs(inp, tilers):
     w13i_q, sfb13f, w13dg_q, sfb13d, w2f_q, sfb2f, w2dg_q, sfb2d = inp["weights"]
     x_q, x_sf, x_col, x_sfc = inp["x_ops"]
     g_q, g_sf, g_col, g_sfc = inp["g_ops"]
-    m = inp["m"]
 
-    swiglu_kw = dict(mma_tiler_mn=tilers["swiglu"][0], cluster_shape_mn=tilers["swiglu"][1], vector_f32=tilers.get("swiglu_vecf32", False))
+    swiglu_kw = dict(
+        mma_tiler_mn=tilers["swiglu"][0],
+        cluster_shape_mn=tilers["swiglu"][1],
+        vector_f32=tilers.get("swiglu_vecf32", False),
+    )
     gemm_kw = dict(mma_tiler_mn=tilers["gemm"][0], cluster_shape_mn=tilers["gemm"][1])
-    dsw_kw = dict(mma_tiler_mn=tilers["dswiglu"][0], cluster_shape_mn=tilers["dswiglu"][1], vectorized_f32=tilers.get("dswiglu_vecf32", True))
+    dsw_kw = dict(
+        mma_tiler_mn=tilers["dswiglu"][0],
+        cluster_shape_mn=tilers["dswiglu"][1],
+        vectorized_f32=tilers.get("dswiglu_vecf32", True),
+    )
     wg_kw = dict(mma_tiler_mn=tilers["wgrad"][0], cluster_shape_mn=tilers["wgrad"][1])
 
     legs = {}
@@ -360,9 +366,9 @@ def check_phase(m: int, tilers, results: dict):
         parts = "  ".join(f"{k}={v:.3e}" if isinstance(v, float) else f"{k}={v}" for k, v in kv.items())
         print(f"  {name}: {parts}", flush=True)
 
-    w13i_q, sfb13f, w13dg_q, sfb13d, w2f_q, sfb2f, w2dg_q, sfb2d = inp["weights"]
-    x_q, x_sf, x_col, x_sfc = inp["x_ops"]
-    g_q, g_sf, g_col, g_sfc = inp["g_ops"]
+    w13i_q, _sfb13f, w13dg_q, _sfb13d, w2f_q, _sfb2f, w2dg_q, _sfb2d = inp["weights"]
+    x_q, _x_sf, x_col, _x_sfc = inp["x_ops"]
+    g_q, _g_sf, g_col, _g_sfc = inp["g_ops"]
 
     # Dequantized operands (ground truth = what the hardware actually multiplies).
     x_deq = deq_rows(x_q, quantize_mxfp8(inp["x"])[1])
@@ -379,7 +385,9 @@ def check_phase(m: int, tilers, results: dict):
     rec(
         "leg1_swiglu",
         c_relfrob=err_c,
-        h_deq_relfrob=rel_frob(deq_rows(outs["h"], unswizzle_sf_row(outs["sfh_row"], m, F // 32)), deq_rows(hq_ref, sh_ref)),
+        h_deq_relfrob=rel_frob(
+            deq_rows(outs["h"], unswizzle_sf_row(outs["sfh_row"], m, F // 32)), deq_rows(hq_ref, sh_ref)
+        ),
         h_bytes=byte_match(outs["h"], hq_ref),
         hcol_bytes=byte_match(outs["h_col"], hc_ref),
         sfrow_bytes=byte_match(outs["sfh_row"], sfh_row_ref),
@@ -389,9 +397,9 @@ def check_phase(m: int, tilers, results: dict):
 
     # ---- leg2: fwd w2 (operands = the kernel's own h + sfh) ----
     h_deq_kernel = deq_rows(outs["h"], unswizzle_sf_row(outs["sfh_row"], m, F // 32))
-    w2f_deq = deq_rows(w2f_q.reshape(E * D, F), quantize_mxfp8(jnp.swapaxes(inp["w2"], 1, 2))[1].reshape(E * D, -1)).reshape(
-        E, D, F
-    )
+    w2f_deq = deq_rows(
+        w2f_q.reshape(E * D, F), quantize_mxfp8(jnp.swapaxes(inp["w2"], 1, 2))[1].reshape(E * D, -1)
+    ).reshape(E, D, F)
     y_ref = ragged_ref(h_deq_kernel, jnp.swapaxes(w2f_deq, 1, 2), groups)
     err_y = rel_frob(outs["y"], y_ref.astype(jnp.bfloat16))
     rec("leg2_gemm_w2", y_relfrob=err_y)
@@ -452,35 +460,6 @@ def check_phase(m: int, tilers, results: dict):
 # --------------------------------------------------------------------------- #
 # timing
 # --------------------------------------------------------------------------- #
-
-
-def cute_producer_available() -> bool:
-    """Compile-probe the 002c CuTe producer in a SUBPROCESS.
-
-    cutlass_call compile failures happen on an FFI thread and are fatal to the
-    process (they cannot be caught with try/except): on GB200 nodes with the
-    bad libNVVM (the MXFP8-002c heterogeneity gotcha) the quantizer kernel
-    dies with NVVM_ERROR_COMPILATION. Probe in a child process instead.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    code = (
-        "import sys; sys.path.insert(0, %r)\n"
-        "import jax, jax.numpy as jnp\n"
-        "from mxfp8_grouped.quantize_cute import dual_quantize_mxfp8_cute\n"
-        "x = jnp.ones((256, 128), jnp.bfloat16)\n"
-        "jax.block_until_ready(dual_quantize_mxfp8_cute(x))\n"
-        "print('CUTE_PROBE_OK')\n"
-    ) % here
-    try:
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600)
-    except subprocess.TimeoutExpired:
-        print("  cute producer probe timed out; using XLA producer", flush=True)
-        return False
-    ok = proc.returncode == 0 and "CUTE_PROBE_OK" in proc.stdout
-    if not ok:
-        tail = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
-        print(f"  cute producer unavailable on this node: {' | '.join(tail)}", flush=True)
-    return ok
 
 
 # Per-leg tiler variants for --ablate (mma_m, mma_n, cluster_m, cluster_n).
@@ -596,13 +575,10 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: b
     results["times"] = times
     results["producers"] = prod
     results["bf16"] = bf16
-    cute_ok = cute_producer_available()
-    if cute_ok:
-        cute_fn = jax.jit(lambda t: dual_quantize_activation_cute(t, inp["row_idx"], inp["col_idx"], inp["perms"]["d"]))
-        prod["x_dual_cute_ms"] = timed(cute_fn, (inp["x"],), iters, warmup) * 1e3
-        print(f"  producers: x dual CuTe {prod['x_dual_cute_ms']:.3f} ms", flush=True)
-    per_mb_key = "x_dual_cute_ms" if cute_ok else "x_dual_xla_ms"
-    prod["per_microbatch_ms"] = 2 * prod[per_mb_key]  # x and g2, identical shape (M, D)
+    cute_fn = jax.jit(lambda t: dual_quantize_activation_cute(t, inp["row_idx"], inp["col_idx"], inp["perms"]["d"]))
+    prod["x_dual_cute_ms"] = timed(cute_fn, (inp["x"],), iters, warmup) * 1e3
+    print(f"  producers: x dual CuTe {prod['x_dual_cute_ms']:.3f} ms", flush=True)
+    prod["per_microbatch_ms"] = 2 * prod["x_dual_cute_ms"]  # x and g2, identical shape (M, D)
 
     quad = {
         "gemm_ms": gemm_total,
@@ -663,7 +639,7 @@ def time_phase(m: int, tilers, iters: int, warmup: int, results: dict, ablate: b
                     t = timed(fn, args[leg], max(iters // 2, 10), warmup)
                     ab_res[f"{leg}@{tag}"] = {"ms": t * 1e3, "tfs": flops[leg] / t / 1e12}
                     print(f"  {leg:10s} @ {tag:12s} {t * 1e3:8.3f} ms  {flops[leg] / t / 1e12:7.1f} TF/s", flush=True)
-                except Exception as exc:  # noqa: BLE001 - unsupported tiler combos raise at trace time
+                except Exception as exc:
                     print(f"  {leg:10s} @ {tag:12s} FAILED: {type(exc).__name__}: {exc}", flush=True)
         results["ablate"] = ab_res
 
@@ -702,7 +678,9 @@ def main():
     }
 
     dev = jax.devices()[0]
-    print(f"device: {dev.device_kind} (cc {dev.compute_capability}), jax {jax.__version__}, cutlass {cutlass.__version__}")
+    print(
+        f"device: {dev.device_kind} (cc {dev.compute_capability}), jax {jax.__version__}, cutlass {cutlass.__version__}"
+    )
     results = {
         "device": str(dev.device_kind),
         "jax": jax.__version__,

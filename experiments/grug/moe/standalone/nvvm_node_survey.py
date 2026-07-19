@@ -78,7 +78,7 @@ print("LADDER_DONE", flush=True)
 def _run(cmd: list[str], timeout: int = 30) -> str:
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout.strip()
-    except Exception as e:  # noqa: BLE001 - survey must not die on a missing tool
+    except Exception as e:
         return f"<failed: {e}>"
 
 

@@ -78,10 +78,13 @@ def _cvt2_e4m3(hi, lo):
     """Pack two f32 into an e4m3x2 Int16 via inline PTX (``hi`` in the upper byte).
 
     The DSL's native ``.to(Float8E4M3FN)`` lowers to the ``nvvm.cvt.packfloat``
-    intrinsic, which the cluster's libNVVM rejects (``NVVM_ERROR_COMPILATION:
-    unsupported operation``, jobs 002c-g2/g4-g7); inline asm bypasses the
-    intrinsic set entirely. ``cvt.rn.satfinite`` is RTNE with saturation to
-    +-448, bit-identical to the XLA clip+convert for finite inputs.
+    intrinsic; the ``NVVM_ERROR_COMPILATION: unsupported operation`` failures
+    that motivated this bypass (jobs 002c-g2/g4-g7) were the cutlass-dsl
+    libs-base/libs-cu13 wheel-shadowing conflict (a base-variant compiler
+    lacks the op), since fixed in the lockfile — the intrinsic compiles fine
+    on a clean cu13 install. The inline asm is kept because its numerics are
+    validated: ``cvt.rn.satfinite`` is RTNE with saturation to +-448,
+    bit-identical to the XLA clip+convert for finite inputs.
     """
     res = llvm.inline_asm(
         cutlass.Int16.mlir_type,

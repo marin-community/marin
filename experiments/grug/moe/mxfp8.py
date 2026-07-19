@@ -38,9 +38,11 @@ builders from ``mxfp8_grouped.quantize`` with traced index maps; under
 wgrad atom-block permutation stays group-dependent.
 
 Producers: the dual-orientation quantize of x / cotangent uses the MXFP8-002c
-CuTe kernel when the node's libNVVM can compile it (probed once in a
-subprocess -- compile failures on the FFI thread are process-fatal) and falls
-back to the corrected XLA path otherwise.
+CuTe kernel; ``producer="xla"`` selects the corrected XLA path (kept for A/B
+comparison). Historical note: an earlier subprocess compile-probe guarded
+against seemingly node-dependent NVVM compile failures, which turned out to be
+the cutlass-dsl libs-base/libs-cu13 wheel-shadowing conflict (fixed in the
+lockfile by excluding libs-base), not node heterogeneity.
 
 The vendored kernels live under ``standalone/`` (imported via sys.path, as the
 benches do); this module itself stays importable without ``cutlass`` -- kernel
@@ -49,8 +51,6 @@ imports: optional GPU-only dependency).
 """
 
 import functools
-import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -250,42 +250,14 @@ def _deinterleave_w13_grad(dw13i: jax.Array) -> jax.Array:
 
 
 # --------------------------------------------------------------------------- #
-# dual-orientation activation producers (CuTe kernel with XLA fallback)
+# dual-orientation activation producers (CuTe kernel, XLA path for A/B)
 # --------------------------------------------------------------------------- #
-
-
-@functools.cache
-def cute_producer_available() -> bool:
-    """Compile-probe the MXFP8-002c CuTe dual quantizer in a SUBPROCESS.
-
-    cutlass_call compile failures happen on an FFI thread and are fatal to the
-    calling process: GB200 nodes are heterogeneous for libNVVM and the
-    quantizer kernel dies with NVVM_ERROR_COMPILATION on most of them (the
-    fused GEMM kernels are all-inline-PTX and compile everywhere). Probe once
-    per process in a child; on failure the op uses the XLA producer.
-    """
-    code = (
-        f"import sys; sys.path.insert(0, {str(_STANDALONE_DIR)!r})\n"
-        "import jax, jax.numpy as jnp\n"
-        "from mxfp8_grouped.quantize_cute import dual_quantize_mxfp8_cute\n"
-        "x = jnp.ones((256, 128), jnp.bfloat16)\n"
-        "jax.block_until_ready(dual_quantize_mxfp8_cute(x))\n"
-        "print('CUTE_PROBE_OK')\n"
-    )
-    env = {**os.environ, "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
-    try:
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600, env=env)
-    except subprocess.TimeoutExpired:
-        return False
-    return proc.returncode == 0 and "CUTE_PROBE_OK" in proc.stdout
 
 
 def _resolve_producer(producer: str) -> str:
     if producer not in _PRODUCER_CHOICES:
         raise ValueError(f"producer must be one of {_PRODUCER_CHOICES}, got {producer!r}")
-    if producer == "auto":
-        return "cute" if cute_producer_available() else "xla"
-    return producer
+    return "cute" if producer == "auto" else producer
 
 
 def _dual_quantize(t, row_idx, col_idx, block_perm, producer: str):
@@ -480,8 +452,8 @@ class MxFp8MoeMlpOp:
     """Stateless MXFP8 expert-MLP op (implements ``MoeExpertMlpOp``).
 
     ``producer`` selects the dual-orientation activation quantizer: ``"auto"``
-    probes the CuTe kernel once per process and falls back to XLA on nodes
-    whose libNVVM cannot compile it; ``"cute"``/``"xla"`` force one path.
+    means the CuTe kernel; ``"xla"`` keeps the corrected XLA path for A/B
+    comparison.
     """
 
     producer: Literal["auto", "cute", "xla"] = "auto"
