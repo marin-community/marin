@@ -176,11 +176,16 @@ class ServeSpec:
     values raise the TPU paged-attention kernel's VMEM scratch and overflow at compile, which fails the
     serve child at startup rather than corrupting results."""
     vllm_extra_args: tuple[str, ...] = ()
-    """Raw flags forwarded verbatim to ``vllm serve`` on the vLLM serve path (``VllmBackend.extra_args``).
-    Needed for models the portable defaults cannot serve: e.g. a 256-expert Grug MoE export shards its
-    experts with data + expert parallelism (``--data-parallel-size N --enable-expert-parallel
-    --model-loader-extra-config '{"distributed":true}'``, with ``tensor_parallel_size=1``), which the
-    per-head TP heuristic cannot infer. Empty for the common single-model case."""
+    """Extra flags forwarded to ``vllm serve`` (``VllmBackend.extra_args``); empty for the common case.
+    Use it for models the portable defaults miss:
+
+    - 256-expert Grug MoE export: ``--data-parallel-size N --enable-expert-parallel
+      --model-loader-extra-config '{"distributed":true}'`` with ``tensor_parallel_size=1``; the per-head
+      TP heuristic cannot infer this.
+    - Qwen gated-delta-net models (``qwen_gdn_linear_attn``: ``Qwen/Qwen3.5-35B-A3B``,
+      ``Qwen/Qwen3-Next-80B-A3B``): ``--gdn-prefill-backend triton``. The GPU serve env runs without
+      ``nvcc``, so the default FlashInfer GDN prefill kernel — JIT-compiled at warmup — fails; triton
+      needs no compiler."""
     chat_template_content: str | None = None
     """Chat template (jinja) served so ``/v1/chat/completions`` templates server-side, required when the
     eval uses ``--apply_chat_template`` and the model's own repo does not carry a vLLM-loadable template.

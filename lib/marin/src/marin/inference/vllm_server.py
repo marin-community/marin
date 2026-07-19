@@ -117,8 +117,10 @@ class IsolatedCudaVllm:
         ]
 
     def env(self) -> dict[str, str]:
-        # CoreWeave runtime images provide CUDA libraries but not nvcc. FlashInfer may otherwise
-        # JIT-compile its sampling kernel; vLLM's native/Triton sampler needs no CUDA toolkit.
+        # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
+        # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
+        # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
+        # callers pass `--gdn-prefill-backend triton` in vllm_extra_args (see ServeSpec.vllm_extra_args).
         environment = {_FLASHINFER_SAMPLER_ENV_VAR: "0"}
         if self.source is VllmType.MARIN_FORK:
             environment.update(

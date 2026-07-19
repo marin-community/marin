@@ -346,13 +346,7 @@ class HarborEvaluator(Evaluator):
         """
         from harbor.job import Job  # noqa: PLC0415  # optional dep: harbor
         from harbor.models.environment_type import EnvironmentType  # noqa: PLC0415  # optional dep: harbor
-        from harbor.models.job.config import (  # noqa: PLC0415  # optional dep: harbor
-            JobConfig,
-            LocalDatasetConfig,
-            RegistryDatasetConfig,
-        )
-        from harbor.models.orchestrator_type import OrchestratorType  # noqa: PLC0415  # optional dep: harbor
-        from harbor.models.registry import RemoteRegistryInfo  # noqa: PLC0415  # optional dep: harbor
+        from harbor.models.job.config import DatasetConfig, JobConfig  # noqa: PLC0415  # optional dep: harbor
         from harbor.models.trial.config import AgentConfig, EnvironmentConfig  # noqa: PLC0415  # optional dep: harbor
 
         # Generate deterministic job name for resume capability
@@ -381,7 +375,7 @@ class HarborEvaluator(Evaluator):
             except ValueError:
                 logger.warning(f"Unknown environment type: {env_type}, falling back to docker")
 
-        dataset_config: LocalDatasetConfig | RegistryDatasetConfig
+        dataset_config: DatasetConfig
         dataset_path = Path(dataset).expanduser()
         if (
             dataset.startswith("hf://")
@@ -410,20 +404,20 @@ class HarborEvaluator(Evaluator):
             if gitattributes_path.exists():
                 gitattributes_path.unlink()
 
-            dataset_config = LocalDatasetConfig(
+            dataset_config = DatasetConfig(
                 path=Path(dataset_root),
                 n_tasks=task_limit,
             )
         elif dataset_path.exists():
             if not dataset_path.is_dir():
                 raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
-            dataset_config = LocalDatasetConfig(
+            dataset_config = DatasetConfig(
                 path=dataset_path,
                 n_tasks=task_limit,
             )
         else:
-            dataset_config = RegistryDatasetConfig(
-                registry=RemoteRegistryInfo(),
+            # No registry_url/registry_path means the default remote registry.
+            dataset_config = DatasetConfig(
                 name=dataset,
                 version=version,
                 n_tasks=task_limit,
@@ -441,10 +435,7 @@ class HarborEvaluator(Evaluator):
                     kwargs=agent_kwargs or {},
                 )
             ],
-            orchestrator=dict(
-                type=OrchestratorType.LOCAL,
-                n_concurrent_trials=n_concurrent,
-            ),
+            n_concurrent_trials=n_concurrent,
             environment=EnvironmentConfig(
                 type=harbor_env_type,
             ),

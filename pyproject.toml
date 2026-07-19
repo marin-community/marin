@@ -171,7 +171,7 @@ nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
-harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+harbor = { git = "https://github.com/marin-community/harbor.git", rev = "0d0dbe8904ed984137a0dfa764583f1508cf3274" }
 # Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
 # release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
 # if this is a fixed-base overlay PR, then follow
@@ -325,6 +325,9 @@ ignore-missing-imports = [
     "google.cloud.secretmanager.*",
     "harbor",
     "harbor.*",
+    # Ships with the harbor extra (universal-pathlib); marin.harbor imports it.
+    "upath",
+    "upath.*",
     "jax_triton",
     "jax_triton.*",
     "jaxlib",
