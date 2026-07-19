@@ -105,8 +105,10 @@ def _load_table(fs, paths: list[str]) -> pa.Table:
     key = "|".join(sorted(paths))
     now = time.monotonic()
     with _cache_lock:
+        for expired_key in [cache_key for cache_key, value in _cache.items() if value.expires_at <= now]:
+            _cache.pop(expired_key)
         cached = _cache.get(key)
-        if cached is not None and cached.expires_at > now:
+        if cached is not None:
             return cached.table
     tables = []
     for path in sorted(paths):

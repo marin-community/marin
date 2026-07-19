@@ -42,9 +42,9 @@ sizing heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval 
 
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,
-winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus humaneval): one
-model boot, ten evals against the shared endpoint, ten records — the dashboard shows the full
-model x task grid of runs.
+winogrande, truthfulqa, boolq, piqa, openbookqa at OpenLLM-v1 shot counts, plus humaneval and
+math500): one model boot, eleven evals against the shared endpoint, eleven records — the dashboard
+shows the full model x task grid of runs.
 
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
 useful after a change to the contract in `marin.evaluation.samples` (the parquet files are

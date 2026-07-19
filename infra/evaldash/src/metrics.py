@@ -59,6 +59,14 @@ class TaskScore:
     stderr: float | None
 
 
+@dataclass(frozen=True)
+class _MetricScore:
+    subtask: str
+    value: float
+    metric: str
+    stderr: float | None
+
+
 def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
     """One record's headline metric per task as ``{task: TaskScore}``.
 
@@ -67,25 +75,27 @@ def primary_metrics_by_task(record: EvalRunRecord) -> dict[str, TaskScore]:
     subtasks. A plain task keeps its single primary value. ``metric`` is the shared metric name, or
     ``mean`` when a rollup spans differing metrics.
     """
-    by_task: dict[str, list[tuple[str, float, str, float | None]]] = {}
+    by_task: dict[str, list[_MetricScore]] = {}
     for metric_key, metrics in (record.metrics or {}).items():
         picked = primary_metric(metrics)
         if picked is None:
             continue
         name, value = picked
         subtask = metric_key.rsplit("/", 1)[-1]
-        by_task.setdefault(_task_of(metric_key), []).append((subtask, value, name, stderr_for(metrics, name)))
+        by_task.setdefault(_task_of(metric_key), []).append(
+            _MetricScore(subtask=subtask, value=value, metric=name, stderr=stderr_for(metrics, name))
+        )
     result: dict[str, TaskScore] = {}
     for task, entries in by_task.items():
         # lm-eval writes a group's doc-weighted aggregate as a subtask whose name prefixes every
         # other subtask (``mmlu_5shot/mmlu`` beside ``mmlu_5shot/mmlu_anatomy``); score from that
         # row alone rather than re-averaging it with the per-subject rows it already summarizes.
-        aggregates = [e for e in entries if all(other.startswith(e[0]) for other, _, _, _ in entries)]
+        aggregates = [entry for entry in entries if all(other.subtask.startswith(entry.subtask) for other in entries)]
         if len(aggregates) == 1 and len(entries) > 1:
             entries = aggregates
-        mean = sum(value for _, value, _, _ in entries) / len(entries)
-        labels = {name for _, _, name, _ in entries}
-        stderr = _combined_stderr([stderr for _, _, _, stderr in entries])
+        mean = sum(entry.value for entry in entries) / len(entries)
+        labels = {entry.metric for entry in entries}
+        stderr = _combined_stderr([entry.stderr for entry in entries])
         result[task] = TaskScore(mean, next(iter(labels)) if len(labels) == 1 else "mean", stderr)
     return result
 

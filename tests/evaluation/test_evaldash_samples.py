@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from fsspec.core import url_to_fs
-from infra.evaldash.src.samples import fetch_samples, list_sample_tasks
 from marin.evaluation.samples import EvalSample, SampleKind, write_sample_parquet
+
+from infra.evaldash.src.samples import fetch_samples, list_sample_tasks
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:

@@ -38,8 +38,8 @@ POST /api/refresh           run one ingest pass now; returns the /api/status pay
 ```
 
 The primary metric per task matches on the base metric name with lm-eval's `,<filter>`
-suffix stripped: the first present of `exact_match`, `acc`, `acc_norm`, `pass@1` (falling
-back to the alphabetically-first non-stderr metric); its paired `<base>_stderr,<filter>` is
+suffix stripped: the first present of `exact_match`, `accuracy`, `acc_norm`, `acc`, `pass@1`
+(falling back to the alphabetically-first non-stderr metric); its paired `<base>_stderr,<filter>` is
 the reported standard error. A matrix cell shows the latest succeeded run's score, or -- when
 no run there ever succeeded -- the latest run's failure status (still linking to that run).
 `/api/meta` echoes the IAP caller from `X-Goog-Authenticated-User-Email` as `current_user`.

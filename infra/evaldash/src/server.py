@@ -548,9 +548,7 @@ def create_app(store: RecordStore, dist: Path, gateway: ClusterGateway) -> Starl
         # deep links and refreshes. Registered last so it never shadows the API or /static.
         Route("/{full_path:path}", index),
     ]
-    app = Starlette(routes=routes, lifespan=lifespan)
-    app.state.store = store
-    return app
+    return Starlette(routes=routes, lifespan=lifespan)
 
 
 def main() -> None:

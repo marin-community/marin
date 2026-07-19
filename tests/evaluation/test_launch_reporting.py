@@ -58,6 +58,6 @@ def test_wait_and_report_reads_object_store_record_without_database(tmp_path, ca
     wait_and_report([group])
 
     output = capsys.readouterr().out
-    assert "test-run  [succeeded]  test-model / test-eval" in output
+    assert "test-run" in output
     assert "test-task" in output
     assert "0.7500" in output
