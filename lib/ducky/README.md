@@ -176,11 +176,12 @@ Ducky deploys through Pulumi: the `infra/ducky` project declares it as an always
 job (`iac.iris.service.IrisService`), with the job shape and `DUCKY_*` task environment in
 the committed `infra/ducky/Pulumi.ducky-marin.yaml` and secret values in Secret Manager.
 CI rolls the stack on merge to main (`ops-ducky.yaml`); to force a redeploy with unchanged
-code, dispatch that workflow with a `deploy_generation` override. For a manual roll:
+code, dispatch that workflow with a `deploy_generation` override. The deploy builds the
+Vue dashboard itself on every roll (node/npm required on the deploying machine). For a
+manual roll:
 
 ```bash
 uv sync --all-packages --extra deploy
-(cd lib/ducky/dashboard && npm ci && npm run build)   # dist/ ships in the bundle
 cd infra/ducky
 pulumi login gs://marin-iac-state
 export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \

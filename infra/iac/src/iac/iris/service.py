@@ -46,15 +46,16 @@ class IrisServiceArgs:
     regions: tuple[str, ...]
     port: str
     endpoint: str
+    health_path: str
     env: dict[str, str] = field(default_factory=dict)
     secret_env: dict[str, str] = field(default_factory=dict)
-    health_path: str = "/"
     wait: int = DEFAULT_READY_WAIT
     deploy_generation: int = 0
     code_paths: tuple[str, ...] = ()
     """Redeploy-trigger scope: git-tracked files under these paths are content-hashed.
     Changes outside them (shared libraries) do not trigger a redeploy — the same
     scoping CI path filters apply today. Widen per service to change that."""
+    build_commands: tuple[str, ...] = ()
     extra_bundle_includes: tuple[str, ...] = ()
     max_retries_preemption: int = ALWAYS_ON_RETRIES
     max_retries_failure: int = ALWAYS_ON_RETRIES
@@ -67,14 +68,15 @@ def workspace_root() -> Path:
     return Path(result.stdout.strip())
 
 
-def code_hash(root: Path, code_paths: tuple[str, ...], extra_includes: tuple[str, ...]) -> str:
-    """Deterministic content hash of the service's shipped code.
+def code_hash(root: Path, code_paths: tuple[str, ...]) -> str:
+    """Deterministic content hash of the service's git-tracked sources under ``code_paths``.
 
-    Covers git-tracked files under ``code_paths`` plus files matched by
-    ``extra_includes`` (gitignored build outputs, hashed as built bytes). Hashes
-    (path, content) pairs, so it is stable across checkouts and mtimes — the
-    workspace-zip sha256 the controller stores is not, because the zip embeds
-    file metadata.
+    Hashes (path, content) pairs, so it is stable across checkouts and mtimes — the
+    workspace-zip sha256 the controller stores is not, because the zip embeds file
+    metadata. Generated build outputs (``extra_bundle_includes``) are deliberately
+    absent: ``up`` rebuilds them on every deploy and their sources are tracked under
+    ``code_paths``, so hashing built bytes would only make the trigger depend on
+    which machine built last.
     """
     files: set[Path] = set()
     if code_paths:
@@ -86,8 +88,6 @@ def code_hash(root: Path, code_paths: tuple[str, ...], extra_includes: tuple[str
             text=True,
         )
         files.update(root / name for name in result.stdout.split("\0") if name)
-    for pattern in extra_includes:
-        files.update(path for path in root.glob(pattern) if path.is_file())
     digest = hashlib.sha256()
     for path in sorted(files):
         digest.update(str(path.relative_to(root)).encode())
@@ -108,11 +108,12 @@ def wire_spec(args: IrisServiceArgs) -> ServiceSpec:
         regions=args.regions,
         port=args.port,
         endpoint=args.endpoint,
+        health_path=args.health_path,
         env=dict(args.env),
         secret_env=dict(args.secret_env),
-        health_path=args.health_path,
         wait=args.wait,
         deploy_generation=args.deploy_generation,
+        build_commands=args.build_commands,
         extra_bundle_includes=args.extra_bundle_includes,
         max_retries_preemption=args.max_retries_preemption,
         max_retries_failure=args.max_retries_failure,
@@ -147,7 +148,7 @@ class IrisService(pulumi.ComponentResource):
         spec.validate()
 
         root = workspace_root()
-        digest = code_hash(root, args.code_paths, args.extra_bundle_includes)
+        digest = code_hash(root, args.code_paths)
         # Relative dir keeps state portable across checkouts (an absolute path
         # recorded at create time would replay wrong on another machine).
         rel_root = os.path.relpath(root, Path.cwd())

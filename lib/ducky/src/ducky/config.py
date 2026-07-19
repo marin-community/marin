@@ -48,6 +48,10 @@ _BACKEND_ENV = {
 PORT_NAME = "ducky"
 ENDPOINT_NAME = "/ducky"
 
+# The one auth-free route (liveness). The deploy's readiness probe targets it, so it must
+# stay public: the controller proxy strips auth headers before forwarding.
+HEALTH_PATH = "/health"
+
 # Default object-store roots for the pre-baked catalog (see catalog.py), applied by
 # `from_environment` when the DUCKY_* env var is unset; set `DUCKY_FINELOG_ROOT=`/
 # `DUCKY_DATAKIT_ROOT=` (empty) to disable a source's views. Catalog views over a root

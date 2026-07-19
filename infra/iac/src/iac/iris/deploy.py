@@ -17,6 +17,7 @@ one JSON document — the outputs Pulumi parses.
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -57,17 +58,36 @@ def load_spec(spec_file: str | None) -> ServiceSpec:
     return spec
 
 
+def run_build_commands(workspace: Path, commands: tuple[str, ...]) -> None:
+    """Run the spec's build commands, in order, from the workspace root.
+
+    Runs before secret resolution and any cluster interaction, so a broken build
+    aborts with the running instance untouched. Building inside every ``up`` (never
+    conditionally) is what makes a stale or missing build output impossible to
+    deploy. Command output goes to stderr to keep the stdout JSON contract.
+    """
+    for build_command in commands:
+        logger.info("running build command: %s", build_command)
+        result = subprocess.run(
+            build_command, shell=True, cwd=workspace, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        if result.stdout:
+            sys.stderr.write(result.stdout)
+        if result.returncode != 0:
+            raise click.ClickException(f"build command failed (exit {result.returncode}): {build_command}")
+
+
 def check_bundle_includes(workspace: Path, includes: tuple[str, ...]) -> None:
     """Fail when a bundle-include glob matches nothing — a build output is missing.
 
-    Without this a forgotten build ships a bundle that silently lacks the artifact
-    (the glob just matches zero files).
+    Backstops ``run_build_commands``: without this, a build that silently produced
+    nothing ships a bundle that lacks the artifact (the glob just matches zero files).
     """
     for pattern in includes:
         if not any(p.is_file() for p in workspace.glob(pattern)):
             raise click.ClickException(
                 f"extra bundle include {pattern!r} matches no files under {workspace} — "
-                "is a build output missing? Build it before deploying."
+                "did the spec's build_commands produce the expected output?"
             )
 
 
@@ -159,6 +179,7 @@ def _print_outputs(job_id: JobName, url: str, ready: bool) -> None:
 
 def _deploy(spec: ServiceSpec, policy: int) -> None:
     workspace = Path.cwd()
+    run_build_commands(workspace, spec.build_commands)
     check_bundle_includes(workspace, spec.extra_bundle_includes)
     env_vars = resolve_env(spec)
     with open_controller_endpoint(cluster_name=spec.cluster) as endpoint:

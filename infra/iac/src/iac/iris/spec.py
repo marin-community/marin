@@ -61,15 +61,18 @@ class ServiceSpec:
     """Cluster-global endpoint the service registers (leading slash, e.g. ``/ducky``);
     the service is reachable at ``<controller>/proxy/<endpoint>``."""
 
+    health_path: str
+    """Readiness-probe path under the service's proxy URL. Required, and it must be a
+    route the service serves without app auth: the controller proxy strips
+    ``authorization``/``proxy-authorization`` before forwarding, so a probe of a
+    protected route waits out the full readiness window on a healthy service."""
+
     env: dict[str, str] = dataclasses.field(default_factory=dict)
     """Plain environment values. Secret references are rejected here."""
 
     secret_env: dict[str, str] = dataclasses.field(default_factory=dict)
     """Environment values resolved at submit time from secret references
     (``gcp-secret://`` / ``env:`` / ``file:``, see :mod:`rigging.secrets`)."""
-
-    health_path: str = "/"
-    """Readiness-probe path under the service's proxy URL."""
 
     wait: int = DEFAULT_READY_WAIT
     """Readiness wait in seconds. Expiry warns and exits 0: the submit already
@@ -80,9 +83,17 @@ class ServiceSpec:
     """Bump to force a redeploy with an otherwise unchanged spec — the operational
     hammer for a wedged-but-RUNNING instance."""
 
+    build_commands: tuple[str, ...] = ()
+    """Shell commands ``up`` runs (in order, from the workspace root) before anything
+    touches Secret Manager or the cluster — the build step producing the
+    ``extra_bundle_includes`` outputs. Running inside every ``up`` means a deploy can
+    never ship a stale or missing build; a failing command aborts before the running
+    instance is disturbed."""
+
     extra_bundle_includes: tuple[str, ...] = ()
     """Gitignored globs (build outputs) shipped in the workspace bundle. ``up``
-    fails when a glob matches nothing, so a missing build stops the deploy."""
+    fails when a glob matches nothing after the build, so a broken build stops the
+    deploy."""
 
     max_retries_preemption: int = ALWAYS_ON_RETRIES
     max_retries_failure: int = ALWAYS_ON_RETRIES
@@ -104,6 +115,8 @@ class ServiceSpec:
             raise ValueError("port must be set (the named Iris port the service binds)")
         if not self.endpoint.startswith("/"):
             raise ValueError(f"endpoint {self.endpoint!r} must start with '/' (a cluster-global endpoint)")
+        if not self.health_path.startswith("/"):
+            raise ValueError(f"health_path {self.health_path!r} must start with '/'")
         for key, value in self.env.items():
             if is_secret_reference(value):
                 raise ValueError(f"env[{key!r}] is a secret reference; move it to secret_env")
@@ -125,7 +138,7 @@ class ServiceSpec:
         unknown = set(raw) - known
         if unknown:
             raise ValueError(f"unknown spec fields: {sorted(unknown)}")
-        for field_name in ("entrypoint", "regions", "extra_bundle_includes"):
+        for field_name in ("entrypoint", "regions", "build_commands", "extra_bundle_includes"):
             if field_name in raw:
                 raw[field_name] = tuple(raw[field_name])
         return cls(**raw)

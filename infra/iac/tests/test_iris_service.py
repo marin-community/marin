@@ -25,6 +25,7 @@ from iac.iris.deploy import (
     check_bundle_includes,
     cli,
     resources_from_spec,
+    run_build_commands,
     submit_service,
     terminate_service,
 )
@@ -43,6 +44,7 @@ _SPEC_KWARGS = dict(
     regions=("us-east5",),
     port="svc",
     endpoint="/svc",
+    health_path="/health",
 )
 
 
@@ -77,6 +79,7 @@ class TestSpec:
             ({"regions": ()}, "regions"),
             ({"port": ""}, "port"),
             ({"endpoint": "svc"}, "start with '/'"),
+            ({"health_path": "health"}, "must start with '/'"),
             ({"env": {"KEY": "gcp-secret://projects/p/secrets/s/versions/1"}}, "move it to secret_env"),
             ({"secret_env": {"KEY": "plaintext-value"}}, "not a secret reference"),
         ],
@@ -185,7 +188,21 @@ class TestBundleIncludes:
     def test_present_build_output_passes(self, tmp_path):
         (tmp_path / "dist").mkdir()
         (tmp_path / "dist" / "index.html").write_text("x")
+        # Not raising is the contract: the check's only job is to reject a missing
+        # build output, so a matched glob must pass the deploy through untouched.
         check_bundle_includes(tmp_path, ("dist/**/*",))
+
+
+class TestBuildCommands:
+    def test_commands_run_in_order_from_workspace(self, tmp_path):
+        run_build_commands(tmp_path, ("mkdir dist", "echo built > dist/app.js"))
+        assert (tmp_path / "dist" / "app.js").read_text().strip() == "built"
+
+    def test_failing_command_aborts(self, tmp_path):
+        with pytest.raises(click.ClickException, match="build command failed"):
+            run_build_commands(tmp_path, ("false", "mkdir dist"))
+        # The failing command must abort the sequence (nothing after it runs).
+        assert not (tmp_path / "dist").exists()
 
 
 def _git_repo(root: Path, files: dict[str, str]) -> None:
@@ -200,34 +217,35 @@ def _git_repo(root: Path, files: dict[str, str]) -> None:
 class TestCodeHash:
     def test_stable_across_mtimes(self, tmp_path):
         _git_repo(tmp_path, {"lib/svc/a.py": "one", "lib/svc/b.py": "two"})
-        first = code_hash(tmp_path, ("lib/svc",), ())
+        first = code_hash(tmp_path, ("lib/svc",))
         for path in tmp_path.rglob("*.py"):
             path.touch()
-        assert code_hash(tmp_path, ("lib/svc",), ()) == first
+        assert code_hash(tmp_path, ("lib/svc",)) == first
 
     def test_content_change_changes_hash(self, tmp_path):
         _git_repo(tmp_path, {"lib/svc/a.py": "one"})
-        first = code_hash(tmp_path, ("lib/svc",), ())
+        first = code_hash(tmp_path, ("lib/svc",))
         (tmp_path / "lib/svc/a.py").write_text("changed")
         # git ls-files lists the path; the hash reads working-tree bytes.
-        assert code_hash(tmp_path, ("lib/svc",), ()) != first
+        assert code_hash(tmp_path, ("lib/svc",)) != first
 
     def test_out_of_scope_change_ignored(self, tmp_path):
         _git_repo(tmp_path, {"lib/svc/a.py": "one", "lib/other/b.py": "two"})
-        first = code_hash(tmp_path, ("lib/svc",), ())
+        first = code_hash(tmp_path, ("lib/svc",))
         (tmp_path / "lib/other/b.py").write_text("changed")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-        assert code_hash(tmp_path, ("lib/svc",), ()) == first
+        assert code_hash(tmp_path, ("lib/svc",)) == first
 
-    def test_gitignored_build_output_hashed_via_includes(self, tmp_path):
+    def test_generated_outputs_not_hashed(self, tmp_path):
+        # Build outputs are rebuilt inside every `up`, so the trigger hashes sources
+        # only — a dist/ produced (or not yet produced) on this machine must not move
+        # the hash, or fresh CI runners and warm operator checkouts would disagree.
         _git_repo(tmp_path, {"lib/svc/a.py": "one", ".gitignore": "dist/\n"})
+        first = code_hash(tmp_path, ("lib/svc",))
         dist = tmp_path / "lib/svc/dashboard/dist"
         dist.mkdir(parents=True)
         (dist / "app.js").write_text("bundle-v1")
-        include = "lib/svc/dashboard/dist/**/*"
-        first = code_hash(tmp_path, ("lib/svc",), (include,))
-        (dist / "app.js").write_text("bundle-v2")
-        assert code_hash(tmp_path, ("lib/svc",), (include,)) != first
+        assert code_hash(tmp_path, ("lib/svc",)) == first
 
 
 class TestOutputs:
