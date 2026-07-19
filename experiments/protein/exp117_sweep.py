@@ -62,6 +62,7 @@ mode the slice and effective correction factor are folded into the run identity,
 """
 
 import logging
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -276,19 +277,25 @@ def parse_region() -> str:
     return region.lower()
 
 
-def validate_sweep_target(point: Point, tpu: str) -> None:
-    """Reject a production placement incompatible with the global batch."""
+def placement_axes(tpu: str, batch_size: int) -> tuple[int, int]:
+    """Return ``(data_axis_size, tensor_parallel_size)`` for placing ``batch_size`` on ``tpu``.
+
+    Tensor parallelism lets a slice have MORE chips than the batch: the batch shards over
+    ``data_axis_size`` chips (Levanter's data axis) and the remaining chips form the model
+    (tensor-parallel) axis, so any slice is usable regardless of the chip-count vs. batch-size
+    relationship. ``data_axis_size`` is the largest chip count dividing both the slice and the
+    batch (their gcd), which maximizes data parallelism and minimizes tensor parallelism.
+    ``tensor_parallel_size == 1`` (no model sharding) whenever the slice has no more chips than the
+    batch, so pre-TP placements are unchanged.
+    """
     chip_count = get_tpu_topology(tpu).chip_count
-    if chip_count > point.batch_size:
-        raise SystemExit(
-            f"TPU {tpu} has {chip_count} chips, more than BATCH_SIZE={point.batch_size}; "
-            "choose a slice with no more chips than the global batch"
-        )
-    if point.batch_size % chip_count != 0:
-        raise SystemExit(
-            f"BATCH_SIZE={point.batch_size} must be divisible by TPU {tpu}'s {chip_count} data-axis chips; "
-            "choose a smaller compatible slice or another batch size"
-        )
+    data_axis_size = math.gcd(chip_count, batch_size)
+    return data_axis_size, chip_count // data_axis_size
+
+
+def validate_sweep_target(point: Point, tpu: str) -> None:
+    """Confirm the global batch can be placed on the slice (raises on an unknown TPU name)."""
+    placement_axes(tpu, point.batch_size)
 
 
 def preview() -> bool:
@@ -363,7 +370,7 @@ def _batch_bytes(batch_size: int, correction_factor: float) -> int:
         num_layers=MODEL_CONFIG.num_layers,
     )
     return batch_memory_bytes(
-        param_bytes=param_bytes,
+        parameter_bytes=param_bytes,
         optimizer_bytes=adam_optimizer_bytes(params),
         activation_bytes=activation_bytes,
         correction_factor=correction_factor,
@@ -377,10 +384,12 @@ def batch_fit(tpu: str, batch_size: int, correction_factor: float | None) -> tup
     ``correction_factor`` is the per-launch override, or ``None`` to use the slice's calibrated
     per-family default.
     """
+    data_axis_size, _ = placement_axes(tpu, batch_size)
     return tpu_batch_config(
         tpu,
         batch_size,
         _batch_bytes(batch_size, correction_factor_for(tpu, correction_factor)),
+        data_axis_size=data_axis_size,
     )
 
 
@@ -581,6 +590,9 @@ def build_run(
         datasets={train_cache: 1.0},
         validation=[val_cache],
         batch_size=point.batch_size,
+        # Model (tensor-parallel) axis width: >1 only when the slice has more chips than the batch,
+        # letting any batch (e.g. bs64) use a large slice. 1 => pure data parallelism, as before.
+        tensor_parallel_size=placement_axes(tpu, point.batch_size)[1],
         seq_len=SEQ_LEN,
         num_train_steps=shape.num_train_steps,
         z_loss_weight=None,
@@ -604,6 +616,7 @@ def _print_preview(
     point: Point, shape: RunShape, tpu: str, region: str, mode: str, correction_factor: float | None
 ) -> None:
     per_device_parallelism, grad_accum = batch_fit(tpu, point.batch_size, correction_factor)
+    data_axis_size, tensor_parallel_size = placement_axes(tpu, point.batch_size)
     batch = point.batch_size
     params = MODEL_CONFIG.total_trainable_params(VOCAB_SIZE)
     tokens = batch * SEQ_LEN * shape.num_train_steps
@@ -618,6 +631,7 @@ def _print_preview(
         f"  tpu={tpu} region={region} prefix={marin_prefix_for_region(region)}\n"
         f"  correction_factor={correction_factor_for(tpu, correction_factor):g} "
         f"per_device_parallelism={per_device_parallelism} grad_accum={grad_accum} (global batch {batch})\n"
+        f"  data_axis_size={data_axis_size} tensor_parallel_size={tensor_parallel_size}\n"
         f"  objective=eval/{COMPONENT_VAL}/loss (final step, minimize)",
         flush=True,
     )

@@ -284,6 +284,28 @@ def tpu_family(tpu_type: str) -> str:
     raise ValueError(f"Cannot determine TPU family for type: {tpu_type}")
 
 
+TPU_HBM_BYTES_PER_CHIP: dict[str, int] = {
+    "v4": 32 * (1024**3),
+    "v5e": 16 * (1024**3),
+    "v5p": 95 * (1024**3),
+    "v6e": 32 * (1024**3),
+}
+
+
+def tpu_hbm_bytes_per_chip(family: str) -> int:
+    """Return the HBM capacity of one TPU chip in bytes."""
+    hbm_bytes = TPU_HBM_BYTES_PER_CHIP.get(family)
+    if hbm_bytes is None:
+        raise ValueError(f"Unknown TPU family {family!r}; expected one of {sorted(TPU_HBM_BYTES_PER_CHIP)}")
+    return hbm_bytes
+
+
+def tpu_hbm_capacity_bytes(tpu_type: str) -> int:
+    """Return the aggregate HBM capacity of a TPU slice in bytes."""
+    topology = get_tpu_topology(tpu_type)
+    return topology.chip_count * tpu_hbm_bytes_per_chip(tpu_family(tpu_type))
+
+
 DeviceKind = Literal["cpu", "gpu", "tpu"]
 
 

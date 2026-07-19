@@ -91,16 +91,16 @@ execution:
 
 ## Execution Preferences
 
-The trainer is data-parallel only. A target is feasible when its chip count does not exceed and evenly
-divides `batch_size`. `v5p-N` names count cores and have `N/2` chips.
+The trainer uses data + tensor parallelism, so **any allowed slice is feasible for any batch** — a
+batch too small to fill a slice runs with a model (tensor-parallel) axis. `v5p-N` names count cores
+and have `N/2` chips.
 
 The contacts-v1 raw docs and bucket must be region-local. Verified 2026-07-14 in us-east5, us-east1,
 us-central1, us-west4, and europe-west4 (`gs://marin-eu-west4`). Large-slice capacity is not guaranteed.
 
 ```yaml
 placement:
-  max_tpu_chips: "{batch_size}"
-  require_batch_divisible_by_chip_count: true
+  # Any slice fits any batch; the trainer derives the data/tensor-parallel split (see runbook).
 targets:
   allow:
     - region: us-east5

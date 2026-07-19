@@ -42,29 +42,22 @@ liveness signal, submission mechanics, the DB schema, and the operator's executi
   `(point, region)`, never the TPU. Region change ⇒ fresh run from step 0 (no cross-region checkpoint
   copy — forbidden). W&B group `exp117-contacts-v1-tune`.
 
-## Placement feasibility (filter BEFORE `rank-targets`)
-The trainer is data-parallel only and **hard-rejects** (`SystemExit`) a production placement whose
-chip count exceeds `batch_size` or does not divide it (`validate_sweep_target`). Skill step 6 =
-filter targets to feasible, THEN call `rank-targets` with only those. Chip counts: **v6e-N=N,
-v5litepod-N=N, v5p-N=N/2**. Since every slice size and every batch value is a power of two,
-divisibility reduces to **chips ≤ batch_size**, and the largest feasible slice for a trial has
-`chips = batch_size` (so a bs=64 trial caps at 64 chips, bs=256 at 256 — this bounds how many run
-in parallel under the 2048 cap).
+## Placement feasibility (data + tensor parallelism)
+Since 2026-07-19 (PR #7204 `batch_calibration` module + `tensor_parallel_size` wiring in the trainer)
+the recipe uses data **and** tensor parallelism, so **every allowed slice is feasible for every
+batch** — `validate_sweep_target` no longer rejects on chip count, and the old "chips ≤ batch" filter
+is gone. For a `(tpu, batch)` the trainer derives: **`data_axis_size = gcd(chips, batch)`** (chips the
+batch shards over) and **`tensor_parallel_size = chips / data_axis_size`** (the rest = the model
+axis). `tensor_parallel_size == 1` whenever chips ≤ batch, so all pre-TP placements are byte-identical
+(verified via PREVIEW). Chip counts: **v6e-N=N, v5litepod-N=N, v5p-N=N/2**.
 
-| batch | max chips | feasible allowed slices |
-|---|---|---|
-| 64  | 64  | v6e-{8,16,32,64}; v5litepod-{32,64}; v5p-{16,32,64,128} |
-| 128 | 128 | v6e-{8,16,32,64,128}; v5litepod-{32,64,128}; v5p-{16,32,64,128,256} |
-| 256 | 256 | v6e-{8,16,32,64,128,256}; v5litepod-{32,64,128,256}; v5p-{16,32,64,128,256,512} |
-| 512 | 512 | (grid expansion only) v5p-1024=512ch at full width; else ≤256-chip slices w/ accum |
-| 1024 | 1024 | (grid expansion only) v5p-2048=1024ch at full width; v5p-1024=512ch; else ≤256-chip w/ accum |
-
-(Region availability from policy `targets.allow`; large slices are not capacity-guaranteed.) **Only
-v5p exceeds 256 chips** in the topology (`v6e`/`v5litepod` have no `-512`/`-1024`), so a future
-`batch_size` 512/1024 expansion can only run at full width on `v5p-1024`/`v5p-2048` (us-east5,
-us-central1); every other family caps at 256 chips and would need gradient accumulation. `v5p-2048`
-(1024 chips) is the largest usable slice since chips ≤ batch ≤ 1024. The 512/1024 rows are inert at
-the current `[64,128,256]` batch grid.
+**Consequence — small batches can now use the biggest slices.** e.g. `bs64` on `v6e-256` = 64 data ×
+4 model, using all 256 chips at ~4× the wall-clock of a 64-chip slice. Placement is no longer
+chip-capped by batch; pick slice size by desired throughput vs. TP overhead — **more TP = more
+model-axis comms, so keep `tensor_parallel_size` modest for the 1.5B model (≈ ≤ 4–8); don't 16-way
+shard a small model**. HBM is the only hard limit (`tpu_batch_config` raises if even `pdp=1` won't
+fit). v5p is still the only family > 256 chips (`v5p-1024`=512ch, `v5p-2048`=1024ch). Region
+availability from policy `targets.allow`; large slices are not capacity-guaranteed.
 
 ## Slice-throughput balancing (bs64 catch-up)
 Every 8-epoch run is the SAME ~37.4B tokens regardless of batch, so wall-clock ≈ tokens ÷ chips. A
@@ -76,7 +69,10 @@ completions, BEFORE launching new grid points. Mechanism = a same-region slice c
 v5litepod-32→v5litepod-64): stop the job, resubmit the same `--job-name`-with-new-slice + same
 `(EPOCHS,LR,WD,BATCH_SIZE,REGION)` → the run_id is unchanged so it **resumes from checkpoint** (no
 restart-from-0). Prioritize the most-progressed runs (soonest objective). Doing this off *freed*
-chips keeps ≤ `max_inflight_chips` and avoids a sudden reallocation.
+chips keeps ≤ `max_inflight_chips` and avoids a sudden reallocation. **Since 2026-07-19 tensor
+parallelism removes the 64-chip ceiling for bs64** (it can use v6e-128/256 etc. via TP), so this same
+upsize mechanism now pushes small batches onto even larger slices — mind the chip budget and TP
+overhead (keep `tensor_parallel_size` ≲ 4–8; see Placement feasibility).
 
 ## Env (every command)
 ```
