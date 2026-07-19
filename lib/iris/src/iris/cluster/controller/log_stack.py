@@ -23,7 +23,9 @@ from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_polic
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
+from iris.cluster.backends.k8s.admission_probe import ADMISSION_PROBE_NAMESPACE, IrisAdmissionProbe
 from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
+from iris.cluster.controller.task_state_stats import TASK_STATE_NAMESPACE, IrisTaskState
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.worker.stats import (
@@ -58,6 +60,10 @@ class LogStack:
     # clusters the daemons register and write this themselves; the controller holds
     # the handle so the k8s backend (which has no daemon) can write node rows.
     worker_stats_table: Table
+    # iris.task_state rows from the controller's periodic per-root-job aggregate.
+    task_state_table: Table
+    # iris.admission_probe rows from the k8s backend's dry-run canary applies.
+    admission_probe_table: Table
     server: Any = None
 
     def close(self) -> None:
@@ -104,5 +110,7 @@ def build_log_stack(
         profile_table=client.get_table(PROFILE_NAMESPACE, IrisProfile),
         provisioning_table=client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning),
         worker_stats_table=client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat),
+        task_state_table=client.get_table(TASK_STATE_NAMESPACE, IrisTaskState),
+        admission_probe_table=client.get_table(ADMISSION_PROBE_NAMESPACE, IrisAdmissionProbe),
         server=server,
     )

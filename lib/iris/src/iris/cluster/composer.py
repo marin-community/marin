@@ -62,6 +62,7 @@ def make_task_backend(
     task_event_table: Table | None = None,
     profile_table: Table | None = None,
     worker_stats_table: Table | None = None,
+    admission_probe_table: Table | None = None,
     autoscaler: Autoscaler | None = None,
     transition_reader: TransitionReader | None = None,
 ) -> TaskBackend:
@@ -147,6 +148,7 @@ def make_task_backend(
             task_event_table=task_event_table,
             profile_table=profile_table,
             worker_stats_table=worker_stats_table,
+            admission_probe_table=admission_probe_table,
             transition_reader=transition_reader,
         )
     if which == "worker_provider":
@@ -227,6 +229,7 @@ def make_backend(
             task_event_table=log_stack.task_event_table,
             profile_table=log_stack.profile_table,
             worker_stats_table=log_stack.worker_stats_table,
+            admission_probe_table=log_stack.admission_probe_table,
             transition_reader=DbTransitionReader(db),
         )
         logger.info("Backend created: %s", type(provider).__name__)

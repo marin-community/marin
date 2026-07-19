@@ -56,7 +56,15 @@ def iris_priority_class_manifest(name: str) -> dict:
 
 
 class KubectlError(RuntimeError):
-    """Error raised for kubectl command failures."""
+    """Error raised for kubectl command failures.
+
+    ``status`` carries the HTTP status code when the failure is a Kubernetes
+    API verdict; it is None for transport-level failures (connection, timeout).
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class K8sResource(Enum):

@@ -662,6 +662,10 @@ class InMemoryK8sService:
         if self._mode == ServiceMode.LOCAL and resource is K8sResource.PODS:
             self._run_pod_locally(name, manifest)
 
+    def dry_run_create(self, manifest: dict) -> None:
+        self._check_failure("dry_run_create")
+        self._validate_manifest(manifest)
+
     def get_json(self, resource: K8sResource, name: str) -> dict | None:
         self._check_failure("get_json")
         return self._resources.get((resource.plural, name))

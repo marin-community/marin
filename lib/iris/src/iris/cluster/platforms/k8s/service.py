@@ -54,6 +54,10 @@ DEFAULT_TIMEOUT: float = 60.0
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
 
+# API error bodies quote the offending manifest; keep enough to identify the
+# verdict without flooding logs.
+_ERROR_BODY_MAX_LEN: int = 500
+
 
 @runtime_checkable
 class K8sService(Protocol):
@@ -68,6 +72,10 @@ class K8sService(Protocol):
     def namespace(self) -> str: ...
 
     def apply_json(self, manifest: dict) -> None: ...
+
+    def dry_run_create(self, manifest: dict) -> None:
+        """Create with ``dryRun=All``: run full admission, persist nothing."""
+        ...
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
@@ -270,7 +278,9 @@ class CloudK8sService:
                         **({"namespace": ns} if ns else {}),
                     )
             except ApiException as e:
-                raise KubectlError(f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:500]}") from e
+                raise KubectlError(
+                    f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
+                ) from e
 
     def _apply_pod(self, res: K8sResource, name: str, ns: str | None, manifest: dict) -> None:
         """Create the Pod if it is not already present (create-if-absent).
@@ -296,6 +306,32 @@ class CloudK8sService:
                 # leave it. A later reconcile re-applies once any deletion lands.
                 return
             raise
+
+    def dry_run_create(self, manifest: dict) -> None:
+        """Create the resource with ``dryRun=All``, exercising the full admission
+        chain (mutating/validating webhooks, quota, policy) without persisting.
+
+        Raises :class:`KubectlError` carrying the HTTP status on an API verdict;
+        transport failures propagate as-is.
+        """
+        kind = manifest.get("kind", "?")
+        name = manifest["metadata"]["name"]
+        res = K8sResource.from_kind(manifest["kind"])
+        ns = manifest["metadata"].get("namespace", self.namespace) if res.is_namespaced else None
+        with slow_log(logger, f"dry-run create {kind}/{name}", threshold_ms=_SLOW_THRESHOLD_MS):
+            try:
+                self._resource_api(res).create(
+                    body=manifest,
+                    dry_run="All",
+                    **self._request_timeout_kwargs(),
+                    **({"namespace": ns} if ns else {}),
+                )
+            except ApiException as e:
+                body = (e.body or "")[:_ERROR_BODY_MAX_LEN]
+                raise KubectlError(
+                    f"dry-run create {kind}/{name} failed ({e.status}): {e.reason} {body}",
+                    status=e.status,
+                ) from e
 
     # -- get -----------------------------------------------------------------
 
