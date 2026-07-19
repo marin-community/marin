@@ -263,8 +263,6 @@ def _serve_spec(model: EvalModelConfig, accel: AcceleratorChoice) -> ServeSpec:
         )
     if model.serve_memory is not None:
         spec = replace(spec, serve_memory=model.serve_memory)
-    if model.max_num_batched_tokens is not None:
-        spec = replace(spec, max_num_batched_tokens=model.max_num_batched_tokens)
     return spec
 
 
