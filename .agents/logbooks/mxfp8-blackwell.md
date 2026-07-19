@@ -1340,3 +1340,27 @@ author: mcwitt
 - Scope note: a first pass deleted the Hopper stack outright; mcwitt
   clarified the Hopper impl must stay functional — reverted before commit,
   no history impact.
+
+### 2026-07-18 18:40 - MXFP8-007c: bf16 control GREEN at 64 GPUs; mxfp8 arm blocked by k8s pod-creation outage
+- **tj-bf16 (arm B) SUCCEEDED**: fray path, ring EP4, muonh NO_NS, scan,
+  B1024, 50 steps — **330,897 tok/s steady ≈ 21.3% GB200-MFU** (derived via
+  the 2.5 PF/GPU convention using the baseline harvest's tok/s↔MFU factor);
+  final loss 8.121@step 49. Submitted 15:05 PDT on a fresh allocation minutes
+  after the incident window lifted (first larger-gang successes ~14:44);
+  cleared clique init and trained clean.
+- Chained mxfp8 arm (tj-mx, submitted ~1 min after tj-bf16 teardown) wedged
+  in clique init — textbook B200MFU-038 fast-restart deadlock; the rendezvous
+  spam kept logs fresh on the ti attempt but tj-mx went log-stale and the
+  driver autokill caught it at 17 min.
+- Cool-down retries tk-mx / tl-mx / tm-mx all blocked by a NEW cluster
+  failure mode starting ~16:00 PDT: k8s admission webhook `mpod.kb.io`
+  returns 500 on pod creation (iris burns 130-300 placement attempts/job at
+  ~1/s), and post-outage pods that do get admitted stall in 'starting'
+  indefinitely (no container start). Even 1-cpu `echo ok` probe jobs place
+  but never complete. All treatment jobs killed promptly; zero GPUs held.
+  Standing down with a completion-probe sentinel (webhook-probe2 must reach
+  state 4) before the next mx attempt.
+- Comparison state: A (#7201 best, their stack) 313,666 tok/s / 20.21%;
+  B (our stack, bf16) 330,897 tok/s / ≈21.3% (+5.5% tok/s — caveat: B runs
+  SCALE_MUON_NO_NS, so B-vs-A conflates stack wins with skipped
+  Newton-Schulz); C (mxfp8) pending — C-vs-B is the clean mxfp8 read.
