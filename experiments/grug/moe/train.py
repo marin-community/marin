@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -453,6 +454,26 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if os.environ.get("SCALE_ANALYZE_WDKV"):
+            # #7424: analyze the trained MLA KV down-projection, then exit before training.
+            # The full-state restore above uses allow_partial=False and hard-fails on any
+            # optimizer-state mismatch (silently falling back to init), so load the params
+            # directly with allow_partial=True to skip opt-state and pull only trained weights.
+            from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint  # noqa: PLC0415
+
+            from experiments.grug.moe.wdkv_analysis import run_wdkv_analysis  # noqa: PLC0415
+
+            ckpt = next(
+                (c for base in trainer.checkpoint_search_paths(run_id) if (c := discover_latest_checkpoint(base))),
+                None,
+            )
+            if ckpt is None:
+                raise FileNotFoundError(f"no checkpoint under {list(trainer.checkpoint_search_paths(run_id))}")
+            logger.info(f"[wdkv] loading params-only from {ckpt} (allow_partial=True)")
+            loaded = load_checkpoint(state, ckpt, mesh=mesh, allow_partial=True)
+            run_wdkv_analysis(loaded.params)
+            levanter.tracker.current_tracker().finish()
+            return
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
