@@ -68,3 +68,10 @@ def test_cute_producer_is_explicit():
     args = benchmark.parse_args(["--git-sha", "abc123", "--producer", "cute"])
 
     assert args.producer == "cute"
+
+
+def test_byte_mismatch_count_compares_fp8_bits():
+    lhs = jnp.array([1.0, 2.0, 3.0], dtype=jnp.float8_e4m3fn)
+    rhs = jnp.array([1.0, 2.5, 3.0], dtype=jnp.float8_e4m3fn)
+
+    assert benchmark.byte_mismatch_count(lhs, rhs) == 1

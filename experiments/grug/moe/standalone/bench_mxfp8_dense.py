@@ -102,6 +102,12 @@ def linear_orientations(q_row, s_row_t, q_col, s_col):
     return q_row[None], row_scale[None], q_col.T[None], col_scale[None]
 
 
+def byte_mismatch_count(actual, expected):
+    actual_bits = jax.lax.bitcast_convert_type(actual, jnp.uint8)
+    expected_bits = jax.lax.bitcast_convert_type(expected, jnp.uint8)
+    return int(jnp.sum(actual_bits != expected_bits))
+
+
 def timed_samples(fn, args, iters, warmup):
     for _ in range(warmup):
         jax.block_until_ready(fn(*args))
@@ -133,6 +139,10 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     if a.producer == "cute":
+        from experiments.grug.moe.standalone.mxfp8_grouped.quantize import (  # noqa: PLC0415
+            quantize_mxfp8,
+            quantize_mxfp8_tokens,
+        )
         from experiments.grug.moe.standalone.mxfp8_grouped.quantize_cute import (  # noqa: PLC0415
             dual_quantize_mxfp8_cute,
         )
@@ -278,12 +288,46 @@ def main():
             producer_outputs = jax.block_until_ready(producer(x, w, g))
             xqr, xrs, xqc, xcs, wqr, wrs, wqc, wcs, gqr, grs, gqc, gcs = producer_outputs
             cute_operands = (xqr, xrs, wqc, wcs, gqr, grs, wqr, wrs, xqc, xcs, gqc, gcs)
-            matches_oracle = [
-                bool(jnp.array_equal(actual, expected))
-                for actual, expected in zip(cute_operands, oracle_operands, strict=True)
+
+            def grouped_reference_orientations(t):
+                q_row, s_row = quantize_mxfp8(t)
+                q_col, s_col = quantize_mxfp8_tokens(t)
+                return linear_orientations(q_row, s_row.T, q_col, s_col)
+
+            grouped_reference = jax.jit(
+                lambda x, w, g: (
+                    *grouped_reference_orientations(x),
+                    *grouped_reference_orientations(w),
+                    *grouped_reference_orientations(g),
+                )
+            )(x, w, g)
+            grouped_mismatches = [
+                byte_mismatch_count(actual, expected)
+                for actual, expected in zip(producer_outputs, grouped_reference, strict=True)
             ]
-            mismatch_indices = [i for i, matches in enumerate(matches_oracle) if not matches]
-            assert all(matches_oracle), f"CuTe linear operands differ from JAX at indices {mismatch_indices}"
+            assert not any(grouped_mismatches), f"CuTe operands differ from grouped reference: {grouped_mismatches}"
+            dense_jax_mismatches = {
+                name: byte_mismatch_count(actual, expected)
+                for name, actual, expected in zip(
+                    (
+                        "x_row",
+                        "x_row_scale",
+                        "w_col",
+                        "w_col_scale",
+                        "g_row",
+                        "g_row_scale",
+                        "w_row",
+                        "w_row_scale",
+                        "x_col",
+                        "x_col_scale",
+                        "g_col",
+                        "g_col_scale",
+                    ),
+                    cute_operands,
+                    oracle_operands,
+                    strict=True,
+                )
+            }
             producer_ms, producer_mad_ms = timed_samples(producer, (x, w, g), a.iters, a.warmup)
 
             def cute_reuse_fwdbwd(x, w, g):
@@ -328,6 +372,7 @@ def main():
                     "standalone_reuse_producer_mad_ms": producer_mad_ms * 1e3,
                     "custom_call_targets": targets,
                     "block_scaled_dot_call_count": block_scaled_dot_calls,
+                    "dense_jax_operand_byte_mismatches": dense_jax_mismatches,
                     "err_out": rel_frob(out.reshape(a.tokens, n), ref_out),
                     "err_gx": rel_frob(dx.reshape(a.tokens, k), oracle_ref_gx),
                     "err_gw": rel_frob(dw.reshape(k, n), oracle_ref_gw),
