@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """MXFP8-001: dense GEMM microbench on B200 — mxfp8 vs bf16 vs per-tensor fp8.
 
 Benchmarks the grug row-13 dense GEMM shapes (attention q/k/v/o and the
@@ -23,8 +26,10 @@ Usage: python bench_mxfp8_dense.py [--tokens 65536] [--iters 50] [--out out.json
 
 import argparse
 import json
+import os
 import re
 import statistics
+import subprocess
 import time
 
 import jax
@@ -33,12 +38,14 @@ from haliax.quantization import Fp8DotGeneralOp
 from jax._src.cudnn.scaled_matmul_stablehlo import quantize
 from jax.nn import get_scaled_dot_general_config, scaled_dot_general, scaled_matmul
 
-# (label, K, N): row-13 d2560 dense GEMMs. q/k/v/o are all 2560x2560
-# (20 heads x head_dim 128, MHA); shared expert is 2560<->1280.
+# (label, K, N, production weight). The production mix has five square
+# projections (Q, O, shared gate/up/down) and two GQA K/V projections.
 SHAPES = [
-    ("qkvo_2560x2560", 2560, 2560),
-    ("shared_up_2560x1280", 2560, 1280),
-    ("shared_down_1280x2560", 1280, 2560),
+    ("q_o_shared_5120x5120", 5120, 5120, 5),
+    ("kv_5120x1280", 5120, 1280, 2),
+    ("qkvo_2560x2560", 2560, 2560, 0),
+    ("shared_up_2560x1280", 2560, 1280, 0),
+    ("shared_down_1280x2560", 1280, 2560, 0),
 ]
 DNUMS = (((1,), (0,)), ((), ()))  # (T,K) x (K,N) -> (T,N)
 MXFP8_CONFIGS = [get_scaled_dot_general_config("mxfp8") for _ in range(3)]
@@ -73,7 +80,20 @@ def rel_frob(a, ref):
     return float(jnp.linalg.norm(a - ref) / jnp.linalg.norm(ref))
 
 
-def timed(fn, args, iters, warmup):
+def sample_statistics(samples):
+    median = statistics.median(samples)
+    mad = statistics.median(abs(sample - median) for sample in samples)
+    return median, mad
+
+
+def weighted_production_ratio(measurements):
+    weighted_oracle = sum(weight * oracle for weight, oracle, _ in measurements)
+    weighted_per_tensor = sum(weight * per_tensor for weight, _, per_tensor in measurements)
+    assert weighted_per_tensor > 0
+    return weighted_oracle / weighted_per_tensor
+
+
+def timed_samples(fn, args, iters, warmup):
     for _ in range(warmup):
         jax.block_until_ready(fn(*args))
     times = []
@@ -81,7 +101,12 @@ def timed(fn, args, iters, warmup):
         t0 = time.perf_counter()
         jax.block_until_ready(fn(*args))
         times.append(time.perf_counter() - t0)
-    return statistics.median(times)
+    return sample_statistics(times)
+
+
+def timed(fn, args, iters, warmup):
+    median, _ = timed_samples(fn, args, iters, warmup)
+    return median
 
 
 def main():
@@ -89,57 +114,80 @@ def main():
     p.add_argument("--tokens", type=int, default=65536)
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
+    p.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
     p.add_argument("--out", default="bench_mxfp8_dense.json")
     a = p.parse_args()
 
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind}, jax {jax.__version__}")
-    results = {"device": str(dev.device_kind), "jax": jax.__version__, "tokens": a.tokens, "shapes": {}}
+    selected_shapes = [shape for shape in SHAPES if a.shape is None or shape[0] in a.shape]
+    results = {
+        "device": str(dev.device_kind),
+        "backend": str(dev.client.platform_version),
+        "jax": jax.__version__,
+        "git_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "tokens": a.tokens,
+        "warmup": a.warmup,
+        "iters": a.iters,
+        "shapes": {},
+    }
+    production_measurements = []
 
-    for label, k, n in SHAPES:
+    for label, k, n, production_weight in selected_shapes:
         key = jax.random.PRNGKey(0)
         kx, kw = jax.random.split(key)
         x = jax.random.normal(kx, (a.tokens, k), dtype=jnp.bfloat16)
         w = jax.random.normal(kw, (k, n), dtype=jnp.bfloat16) / (k**0.5)
         flops_fwd = 2 * a.tokens * k * n
-        ref_out = dot_bf16(x.astype(jnp.float32), w.astype(jnp.float32))
+        ref_out = jax.lax.dot_general(x.astype(jnp.float32), w.astype(jnp.float32), DNUMS)
         ref_gx, ref_gw = fwd_bwd(lambda x, w: jax.lax.dot_general(x, w, DNUMS))(
             x.astype(jnp.float32), w.astype(jnp.float32)
         )
+        g = (2 * ref_out).astype(jnp.bfloat16)
+        oracle_ref_gx = jax.lax.dot_general(g.astype(jnp.float32), w.T.astype(jnp.float32), DNUMS)
+        oracle_ref_gw = jax.lax.dot_general(x.T.astype(jnp.float32), g.astype(jnp.float32), DNUMS)
         shape_res = {}
         for arm, dot in ARMS.items():
             fwd = jax.jit(dot)
             bwd = jax.jit(fwd_bwd(dot))
+            lowered_fwd = fwd.lower(x, w)
+            lowered_bwd = bwd.lower(x, w)
+            compile_started = time.perf_counter()
+            compiled_fwd = lowered_fwd.compile()
+            compiled_bwd = lowered_bwd.compile()
+            compile_ms = (time.perf_counter() - compile_started) * 1e3
             if arm == "mxfp8":
-                lowered = fwd.lower(x, w)
                 # The custom call must be present at lowering time; after XLA
                 # optimization it may be rewritten (e.g. into a cuDNN fusion),
                 # so log the compiled custom-call targets rather than assert.
-                assert "block_scaled_dot" in lowered.as_text(), "mxfp8 arm did not lower to __op$block_scaled_dot"
-                compiled = lowered.compile().as_text()
-                targets = sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled)))
-                fp8_ops = sorted(set(re.findall(r"\b(\S*(?:block_scaled|blockScaled|f8)\S*)\b", compiled)))[:8]
+                assert "block_scaled_dot" in lowered_fwd.as_text(), "mxfp8 arm did not lower to __op$block_scaled_dot"
+                compiled_text = compiled_fwd.as_text()
+                targets = sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_text)))
+                fp8_ops = sorted(set(re.findall(r"\b(\S*(?:block_scaled|blockScaled|f8)\S*)\b", compiled_text)))[:8]
                 print(f"  [mxfp8] compiled custom calls: {targets}")
                 print(f"  [mxfp8] fp8-ish compiled symbols: {fp8_ops}")
-            t_fwd = timed(fwd, (x, w), a.iters, a.warmup)
-            t_bwd = timed(bwd, (x, w), a.iters, a.warmup)
-            gx, gw = bwd(x, w)
+            t_fwd, mad_fwd = timed_samples(compiled_fwd, (x, w), a.iters, a.warmup)
+            t_bwd, mad_bwd = timed_samples(compiled_bwd, (x, w), a.iters, a.warmup)
+            gx, gw = compiled_bwd(x, w)
             shape_res[arm] = {
                 "fwd_ms": t_fwd * 1e3,
+                "fwd_mad_ms": mad_fwd * 1e3,
                 "fwd_tfs": flops_fwd / t_fwd / 1e12,
                 "fwdbwd_ms": t_bwd * 1e3,
+                "fwdbwd_mad_ms": mad_bwd * 1e3,
                 "fwdbwd_tfs": 3 * flops_fwd / t_bwd / 1e12,
-                "err_out": rel_frob(fwd(x, w), ref_out),
+                "compile_ms": compile_ms,
+                "err_out": rel_frob(compiled_fwd(x, w), ref_out),
                 "err_gx": rel_frob(gx, ref_gx),
                 "err_gw": rel_frob(gw, ref_gw),
             }
-        # MXFP8-001b: GEMM-only throughput — scaled_matmul on operands quantized
-        # OUTSIDE the timed region, to separate the __cudnn$blockScaledDot call
-        # from XLA's quantize kernels. Also time the quantize step itself.
-        cfg = MXFP8_CONFIGS[0]
+        # MXFP8-001b/U001: quantize outside the timed region to isolate the
+        # __cudnn$blockScaledDot calls. U001 prepares every orientation needed
+        # by forward, dgrad, and wgrad, then times those three GEMMs together.
         x3 = x.reshape(1, a.tokens, k)
         wt3 = w.T.reshape(1, n, k)  # rhs is (B, N, K), contract dim last
-        quant = jax.jit(lambda t: quantize(t, cfg))
+        quant = jax.jit(lambda t: quantize(t, MXFP8_CONFIGS[0]))
         xq, xs = jax.block_until_ready(quant(x3))
         wq, ws = jax.block_until_ready(quant(wt3))
         pm = jax.jit(lambda xq, wq, xs, ws: scaled_matmul(xq, wq, xs, ws, preferred_element_type=jnp.bfloat16))
@@ -153,10 +201,60 @@ def main():
             "err_out": rel_frob(out_pm, ref_out),
         }
 
+        def quantize_oracle_operands(x, w, g):
+            return (
+                *quantize(x[None], MXFP8_CONFIGS[0]),
+                *quantize(w.T[None], MXFP8_CONFIGS[0]),
+                *quantize(g[None], MXFP8_CONFIGS[0]),
+                *quantize(w[None], MXFP8_CONFIGS[0]),
+                *quantize(x.T[None], MXFP8_CONFIGS[0]),
+                *quantize(g.T[None], MXFP8_CONFIGS[0]),
+            )
+
+        def prequant_fwdbwd(xq, xs, wtq, wts, gq, gs, wq, ws, xtq, xts, gtq, gts):
+            y = scaled_matmul(xq, wtq, xs, wts, preferred_element_type=jnp.bfloat16)
+            dx = scaled_matmul(gq, wq, gs, ws, preferred_element_type=jnp.bfloat16)
+            dw = scaled_matmul(xtq, gtq, xts, gts, preferred_element_type=jnp.bfloat16)
+            return y, dx, dw
+
+        quantize_all = jax.jit(quantize_oracle_operands)
+        oracle_operands = jax.block_until_ready(quantize_all(x, w, g))
+        quantize_ms, quantize_mad_ms = timed_samples(quantize_all, (x, w, g), a.iters, a.warmup)
+        oracle = jax.jit(prequant_fwdbwd)
+        lowered_oracle = oracle.lower(*oracle_operands)
+        lowered_oracle_text = lowered_oracle.as_text()
+        assert lowered_oracle_text.count("block_scaled_dot") >= 3, "oracle did not lower all three block-scaled dots"
+        compile_started = time.perf_counter()
+        compiled_oracle = lowered_oracle.compile()
+        compile_ms = (time.perf_counter() - compile_started) * 1e3
+        compiled_oracle_text = compiled_oracle.as_text()
+        oracle_targets = sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_oracle_text)))
+        oracle_ms, oracle_mad_ms = timed_samples(compiled_oracle, oracle_operands, a.iters, a.warmup)
+        oracle_y, oracle_dx, oracle_dw = compiled_oracle(*oracle_operands)
+        oracle_y = oracle_y.reshape(a.tokens, n)
+        oracle_dx = oracle_dx.reshape(a.tokens, k)
+        oracle_dw = oracle_dw.reshape(k, n)
+        shape_res["mxfp8_prequant_fwdbwd"] = {
+            "fwdbwd_ms": oracle_ms * 1e3,
+            "fwdbwd_mad_ms": oracle_mad_ms * 1e3,
+            "fwdbwd_tfs": 3 * flops_fwd / oracle_ms / 1e12,
+            "quantize_all_ms": quantize_ms * 1e3,
+            "quantize_all_mad_ms": quantize_mad_ms * 1e3,
+            "compile_ms": compile_ms,
+            "custom_call_targets": oracle_targets,
+            "err_out": rel_frob(oracle_y, ref_out),
+            "err_gx": rel_frob(oracle_dx, oracle_ref_gx),
+            "err_gw": rel_frob(oracle_dw, oracle_ref_gw),
+        }
+        if production_weight:
+            production_measurements.append((production_weight, oracle_ms, shape_res["fp8_tensor"]["fwdbwd_ms"] / 1e3))
+
         base = shape_res["bf16"]
         print(f"\n== {label} (T={a.tokens}) ==")
         for arm, r in shape_res.items():
-            line = f"  {arm:14s} fwd {r['fwd_ms']:7.3f} ms ({r['fwd_tfs']:7.1f} TF/s, {base['fwd_ms']/r['fwd_ms']:.3f}x)"
+            line = f"  {arm:24s}"
+            if "fwd_ms" in r:
+                line += f" fwd {r['fwd_ms']:7.3f} ms ({r['fwd_tfs']:7.1f} TF/s," f" {base['fwd_ms'] / r['fwd_ms']:.3f}x)"
             if "fwdbwd_ms" in r:
                 line += (
                     f"  fwd+bwd {r['fwdbwd_ms']:7.3f} ms ({r['fwdbwd_tfs']:7.1f} TF/s,"
@@ -167,6 +265,16 @@ def main():
                 line += f"  quantize_x {r['quantize_x_ms']:.3f} ms  err out {r['err_out']:.2e}"
             print(line)
         results["shapes"][label] = shape_res
+
+    covered_weight = sum(weight for weight, _, _ in production_measurements)
+    results["covered_production_weight"] = covered_weight
+    if covered_weight:
+        results["weighted_production_ratio"] = weighted_production_ratio(production_measurements)
+        results["complete_production_mix"] = covered_weight == 7
+        print(
+            f"\nprequant MXFP8 / per-tensor weighted production time: "
+            f"{results['weighted_production_ratio']:.4f}x (weight {covered_weight}/7)"
+        )
 
     with open(a.out, "w") as f:
         json.dump(results, f, indent=2)
