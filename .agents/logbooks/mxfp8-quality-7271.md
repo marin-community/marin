@@ -16,7 +16,7 @@ author: Matt Wittmann
 - Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the unguarded production hybrid fails. A finite reduction plus conditional BF16 `w_down`-gradient recompute clears the exact failure and is now part of the treatment implementation.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
 - The promoted implementation passes a fresh paired 20-step smoke: MXFP8 is finite, tracks BF16 within 0.0038 loss, and is 1.0666x faster on mean throughput.
-- The full 1e21-FLOP pair is running. At step 9,000, its trailing-100-step train delta is +0.00242; eval/Paloma/uncheatable deltas are +0.00190/+0.00481/+0.00246, and mean throughput is 1.0722x BF16. Three consecutive gates now have aligned held-out signs favoring BF16, but the gaps remain a few thousandths, cover only 28.6% of the schedule, and are not the final quality conclusion.
+- The full 1e21-FLOP pair is running. At step 10,000, its trailing-100-step train delta is +0.00184; eval/Paloma/uncheatable deltas are +0.00328/+0.00421/+0.00690, and mean throughput is 1.0722x BF16. Four consecutive gates now have aligned held-out signs favoring BF16, with the largest uncheatable gap so far, but this covers only 31.8% of the schedule and is not the final cooldown-tail quality conclusion.
 
 ## Scope
 
@@ -253,3 +253,19 @@ author: Matt Wittmann
 - Interpretation: at 28.6% of the schedule, all three held-out metrics favor BF16 for a third consecutive gate. Aggregate eval narrows relative to step 8,000, while Paloma and uncheatable widen; the smoothed train delta remains a stable few thousandths. This extends the evidence for a small persistent early quality difference without establishing the final cooldown-tail verdict.
 - Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. Seventh hourly recovery checkpoints are available at BF16 step 8,830 and MXFP8 step 9,354.
 - Next action: continue to the planned step-10,000 issue milestone and all subsequent scheduled evaluations and checkpoints through step 31,474.
+
+### 2026-07-20 04:16 - MXFP8Q-007 step-10,000 milestone extends the aligned held-out gap
+
+- Hypothesis: the persistent held-out gap will remain small through the planned issue milestone while the smoothed train trajectory and throughput advantage remain stable.
+- Commit Hash: running jobs use `d11d6ac54` (treatment implementation `f8be94f87`).
+- Result: BF16/MXFP8 train loss at exactly step 10,000 is 1.840105/1.840291 (delta +0.000186); the trailing 100-step mean delta is +0.001841. Eval loss is 2.599134/2.602409 (+0.003275), Paloma macro is 2.920813/2.925022 (+0.004209), and uncheatable macro is 2.348996/2.355901 (+0.006905).
+- Performance: cumulative mean non-compile throughput is 789,017 tok/s BF16 versus 845,971 tok/s MXFP8, or 1.0722x. W&B runtime from the first train sample to step 10,000 is 28,519.6s versus 26,718.4s; at the BF16 arm's step-10,000 elapsed time, MXFP8 had reached step 10,678, a 678-step lead.
+- Interpretation: at 31.8% of the schedule, all three held-out metrics favor BF16 for a fourth consecutive gate. The single-step train losses are nearly identical and the smoothed delta remains below two thousandths, but uncheatable widens to the largest held-out gap observed so far. This strengthens the evidence for a small persistent early quality cost without establishing the final cooldown-tail verdict.
+- Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation.
+- Next action: publish the planned coordinating-issue milestone, then continue all scheduled evaluations and checkpoints through step 31,474.
+
+### 2026-07-20 04:17 - MXFP8Q-007 eighth hourly checkpoints pass
+
+- Result: both arms completed their eighth hourly checkpoint write to region-local S3. BF16 saved step 10,051 and MXFP8 saved step 10,704; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
+- Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
+- Next action: continue monitoring finite telemetry, scheduled evaluations, and hourly recovery points.
