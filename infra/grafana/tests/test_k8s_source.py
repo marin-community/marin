@@ -364,9 +364,7 @@ def test_alert_routes_return_explicit_zeros_when_healthy():
         {"cluster": "cw-a", "component": "traefik/traefik", "value": 0},
         {"cluster": "cw-a", "component": "cert-manager/cert-manager", "value": 0},
     ]
-    assert fleet.alert_stuck_gpu_pods() == [
-        {"cluster": "cw-a", "node": "", "pods": "", "task_attempts": "", "gpus": "0", "value": 0}
-    ]
+    assert fleet.alert_stuck_gpu_pods() == [{"cluster": "cw-a", "node": "", "value": 0}]
 
 
 def test_alert_routes_keep_one_row_per_cluster_when_unreachable():
@@ -399,12 +397,9 @@ def test_stuck_gpu_alert_groups_only_node_cleanup_rows_by_node():
         {
             "cluster": "cw-a",
             "node": "node-a",
-            "pods": "task-a,task-b",
-            "task_attempts": "/u/job/0:2,/u/job/1:2",
-            "gpus": "3",
             "value": 2,
         },
-        {"cluster": "cw-b", "node": "", "pods": "", "task_attempts": "", "gpus": "0", "value": 0},
+        {"cluster": "cw-b", "node": "", "value": 0},
     ]
 
 
@@ -459,9 +454,6 @@ def test_stuck_termination_routes_return_classification_and_alert_projection():
         {
             "cluster": "cw-a",
             "node": "gpu-node",
-            "pods": "task-0",
-            "task_attempts": "/user/job/0:1",
-            "gpus": "4",
             "value": 1,
         }
     ]

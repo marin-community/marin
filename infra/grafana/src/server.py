@@ -30,7 +30,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
-    GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, pod labels, value(count)
+    GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, value(count)
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not

@@ -618,27 +618,24 @@ class K8sFleet:
     def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
         """Return node-grouped counts plus zero rows where no qualifying evidence exists."""
         rows = list(candidates) if candidates is not None else self.termination_candidates()
-        by_node: dict[tuple[str, str], list[TerminatingPod]] = {}
+        by_node: dict[tuple[str, str], int] = {}
         for row in rows:
             if not isinstance(row, TerminatingPod):
                 continue
             if row.classification != TerminationClass.NODE_CLEANUP or row.gpu_count <= 0:
                 continue
             key = (row.cluster, row.node)
-            by_node.setdefault(key, []).append(row)
+            by_node[key] = by_node.get(key, 0) + 1
 
         alert_rows = []
         affected_clusters = set()
-        for (cluster, node), node_rows in sorted(by_node.items()):
+        for (cluster, node), count in sorted(by_node.items()):
             affected_clusters.add(cluster)
             alert_rows.append(
                 {
                     "cluster": cluster,
                     "node": node,
-                    "pods": ",".join(sorted(row.pod for row in node_rows)),
-                    "task_attempts": ",".join(sorted(row.task_attempt for row in node_rows if row.task_attempt)),
-                    "gpus": str(sum(row.gpu_count for row in node_rows)),
-                    "value": len(node_rows),
+                    "value": count,
                 }
             )
         for source in self._sources:
@@ -647,9 +644,6 @@ class K8sFleet:
                     {
                         "cluster": source.target.name,
                         "node": "",
-                        "pods": "",
-                        "task_attempts": "",
-                        "gpus": "0",
                         "value": 0,
                     }
                 )

@@ -183,7 +183,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.cluster }}: GPU pod termination stuck on {{ $labels.node }} ({{ $labels.pods }})"
+          summary: "{{ $labels.cluster }}: GPU pod termination stuck on {{ $labels.node }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/.agents/skills/recover-stuck-k8s-pod/SKILL.md
         data:
           - refId: A
@@ -201,9 +201,6 @@ groups:
               columns:
                 - { selector: cluster, text: cluster, type: string }
                 - { selector: node, text: node, type: string }
-                - { selector: pods, text: pods, type: string }
-                - { selector: task_attempts, text: task_attempts, type: string }
-                - { selector: gpus, text: gpus, type: string }
                 - { selector: value, text: value, type: number }
           - refId: C
             datasourceUid: __expr__

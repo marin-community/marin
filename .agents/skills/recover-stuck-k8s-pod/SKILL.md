@@ -91,9 +91,9 @@ Before node recovery, choose an explicit retry policy with the operator:
 
 - Stop the parent job with `iris job stop <job>` when all work must remain
   quiescent.
-- Mark only the canonical attempt failed with
-  `iris job kick <attempt> --state failed` when the operator accepts Iris
-  scheduling its retry.
+- Mark only the canonical attempt preempted with
+  `iris job kick <attempt> --state preempted` when the operator accepts Iris
+  scheduling its retry within the job's preemption budget.
 
 Do not kick by pod label, and do not permit an immediate retry onto a node that
 has not yet been cordoned.
