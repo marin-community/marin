@@ -15,7 +15,8 @@ author: Matt Wittmann
 - The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with unit-normal, loss-scaled, and all-zero synthetic cotangents.
 - Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the unguarded production hybrid fails. A finite reduction plus conditional BF16 `w_down`-gradient recompute clears the exact failure and is now part of the treatment implementation.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
-- The promoted implementation passes a fresh paired 20-step smoke: MXFP8 is finite, tracks BF16 within 0.0038 loss, and is 1.0666x faster on mean throughput. The full 1e21-FLOP pair is ready to launch; no long-run quality result is claimed yet.
+- The promoted implementation passes a fresh paired 20-step smoke: MXFP8 is finite, tracks BF16 within 0.0038 loss, and is 1.0666x faster on mean throughput.
+- The full 1e21-FLOP pair is running. Its step-1,000 gate is finite and quality-neutral so far: train/eval/Paloma deltas are +0.00077/+0.00074/+0.00046, while mean throughput is 1.0594x BF16. This is an early milestone, not the final quality conclusion.
 
 ## Scope
 
@@ -144,3 +145,13 @@ author: Matt Wittmann
 - Config: d2560/L26/E128/top-4/f1280/shared-f2560, seq4096, batch512, seed0; identical data order, optimizer, schedule, ring/scan/remat topology, Paloma and uncheatable eval; BF16 versus hybrid grouped MXFP8 + dense per-tensor FP8. Hourly and forced-final checkpoints use region-local S3.
 - Result: both 32-GPU child gangs allocated and passed the first-gradient gate. BF16/MXFP8 total grad norm=0.56620/0.36288 and expert `w_down`=0.03072/0.02595. At step 7, loss=11.76569/11.76785 and instantaneous throughput=805,660/857,373 tok/s. W&B: [BF16](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-007-full-bf16-s31474), [MXFP8](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-007-full-mxfp8-s31474).
 - Next action: babysit progress, hourly checkpoints, periodic evaluation, and terminal state without changing the cluster.
+
+### 2026-07-19 21:10 - MXFP8Q-007 step-1,000 gate passes
+
+- Hypothesis: the first scheduled same-token evaluation will remain within the smoke-scale quality delta while preserving a measurable throughput advantage.
+- Commit Hash: running jobs use `d11d6ac54` (treatment implementation `f8be94f87`).
+- Result: both arms completed 1,000 finite steps and the scheduled Paloma/uncheatable evaluation. BF16/MXFP8 train loss at exactly step 1,000 is 2.341675/2.342448 (delta +0.000773); the trailing 100-step mean delta is +0.001807. Eval loss is 3.060175/3.060911 (+0.000736), Paloma macro is 3.406820/3.407281 (+0.000461), and uncheatable macro is 2.853132/2.852828 (-0.000304). No non-finite train-loss or total-gradient samples were found.
+- Performance: through step 1,000, 100 non-compile throughput samples average 789,096 tok/s BF16 versus 835,929 tok/s MXFP8, or 1.0594x. W&B runtime from the first train sample to step 1,000 is 2,830.4s versus 2,638.7s; at the BF16 gate time, MXFP8 had reached step 1,070.
+- Interpretation: the treatment is quality-neutral at the first early gate and retains a 5.9% throughput advantage. This gate covers only 3.2% of the 31,474-step schedule and does not establish the final cooldown-tail or matched-loss conclusion.
+- Health: both Iris child gangs and coordinators remain running. An error-level log scan found no training or infrastructure errors; only known JAX bootstrap, partitioning, and evaluation data-loader warnings appeared.
+- Next action: verify the first hourly checkpoints, then continue babysitting scheduled evaluations and both runs through step 31,474 before drawing the issue conclusion.
