@@ -221,3 +221,9 @@ author: Matt Wittmann
 - Interpretation: at 22.2% of the schedule, all three held-out metrics favor BF16 at this gate, with uncheatable showing the largest gap so far. The gaps remain only a few thousandths and the smoothed train delta is unchanged from prior gates, but the aligned held-out sign is a new signal to track rather than dismiss. Later gates and the cooldown tail are required before deciding whether it persists.
 - Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. Fifth hourly recovery checkpoints are available at BF16 step 6,284 and MXFP8 step 6,664.
 - Next action: continue scheduled evaluations and checkpoints; escalate the issue update before step 10,000 if the aligned held-out regression persists or grows at the next gates.
+
+### 2026-07-20 02:17 - MXFP8Q-007 sixth hourly checkpoints pass
+
+- Result: both arms completed their sixth hourly checkpoint write to region-local S3. BF16 saved step 7,557 and MXFP8 saved step 8,006; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
+- Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
+- Next action: complete the matched step-8,000 quality and performance gate once BF16 finishes its scheduled evaluation.
