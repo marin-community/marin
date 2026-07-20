@@ -14,13 +14,14 @@ dataclasses carrying their own knobs and their own ``serve()``, and the launcher
 chosen one into the Iris job.
 """
 
+import dataclasses
 import logging
 import socket
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import jax
 import jax.numpy as jnp
@@ -28,16 +29,16 @@ import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.models.lm_model import LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from transformers import PreTrainedTokenizerBase
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.quick_serve_dashboard import BackgroundServer, bind_serving_socket, serve_app_background
 from marin.inference.vllm_server import (
     JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS,
     JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES,
-    IsolatedCudaVllm,
-    IsolatedTpuVllm,
     VllmEnvironment,
     VllmLauncher,
     WorkspaceVllm,
@@ -56,6 +57,27 @@ DEFAULT_LEVANTER_MAX_SEQ_LEN = 4096
 _MIN_QUEUED_TOKENS = 512
 # Levanter loads weights at one dtype; vLLM's `auto`/`half`/`float` aliases have no meaning here.
 LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
+
+
+@runtime_checkable
+class SupportsPagedGeneration(Protocol):
+    """A Levanter model the paged-decode inference engine can drive.
+
+    :meth:`LevanterBackend.serve` builds an ``InferenceEngine`` that calls ``initial_cache`` and
+    ``decode``. A model that implements only the full-forward ``LmHeadModel`` interface -- e.g.
+    Snowball, which has no paged decode for grug attention yet -- cannot be served through it, so
+    ``serve`` rejects it up front rather than after the (large) weight load.
+    """
+
+    def initial_cache(self, spec, *, dtype): ...
+
+    def decode(self, tokens, cache, binfo, pos_ids): ...
+
+
+# Renders a message list as the raw concatenation of its contents, one blank line between turns.
+# The faithful chat-API template for a base model whose tokenizer ships none: it introduces no
+# protocol tokens, so a chat request degrades to the plain completion the model was trained on.
+CONCAT_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\n\n{%- endfor -%}"
 
 
 @dataclass(frozen=True)
@@ -122,21 +144,15 @@ class VllmServedModel:
 class VllmBackend:
     """Serve the model with vLLM, launched as a subprocess.
 
-    The launcher decides which vLLM runs: the one already on the venv/image ``PATH``, or a stock
-    CUDA / Marin-forked TPU vLLM provisioned in a throwaway uv-tool env (see
-    :meth:`select_launcher`).
+    ``launcher`` decides which vLLM runs: ``None`` serves the ``vllm`` already on the venv/image
+    ``PATH`` (:class:`~marin.inference.vllm_server.WorkspaceVllm`) — the workspace TPU-vLLM stack or
+    a prebuilt ``--task-image``. Pass :class:`~marin.inference.vllm_server.IsolatedCudaVllm` for GPU
+    serving (stock or the Marin fork) or :class:`~marin.inference.vllm_server.IsolatedTpuVllm` for
+    the checkout-free TPU fork.
     """
 
     name: str = "vllm"
-    vllm_version: str | None = None
-    """When set, provision stock CUDA vLLM at this exact version in an isolated uv-tool env — the
-    GPU serving path. ``None`` serves from the vLLM already on the venv/image ``PATH``: the
-    workspace TPU-vLLM stack, or a prebuilt ``--task-image``."""
-    tpu_vllm_ref: str | None = None
-    """When set (with ``tpu_inference_ref``), provision Marin's forked TPU vLLM in an isolated
-    uv-tool env — the checkout-free TPU serving path."""
-    tpu_inference_ref: str | None = None
-    """``uvx --with`` requirement for the tpu-inference fork; paired with ``tpu_vllm_ref``."""
+    launcher: VllmLauncher | None = None
     max_num_batched_tokens: int = 512
     """Prefill batch size. Kept modest because the TPU paged-attention kernel's on-chip (VMEM)
     scratch grows with this; large values overflow VMEM at compile."""
@@ -146,13 +162,7 @@ class VllmBackend:
     """Raw flags forwarded verbatim to ``vllm serve``."""
 
     def select_launcher(self) -> VllmLauncher:
-        if self.vllm_version:
-            return IsolatedCudaVllm(version=self.vllm_version)
-        if self.tpu_vllm_ref:
-            if not self.tpu_inference_ref:
-                raise ValueError("tpu_vllm_ref requires tpu_inference_ref (the tpu-inference fork).")
-            return IsolatedTpuVllm(vllm_ref=self.tpu_vllm_ref, tpu_inference_ref=self.tpu_inference_ref)
-        return WorkspaceVllm()
+        return self.launcher or WorkspaceVllm()
 
     @contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
@@ -208,6 +218,22 @@ class LevanterServedModel:
 
 
 @dataclass(frozen=True)
+class LoadedLevanterModel:
+    """A Levanter model loaded on the slice's device mesh, ready to score or wrap in an engine.
+
+    Yielded from :meth:`LevanterBackend.load_model` *inside* the device-mesh context: the model's
+    arrays are already committed and sharded on ``trainer.device_mesh``, and Grug-style forwards
+    reshard against the ambient mesh, so it must be used within the yielding ``with`` block.
+    """
+
+    model: LmHeadModel
+    trainer: TrainerConfig
+    tokenizer: PreTrainedTokenizerBase
+    max_seq_len: int
+    compute_dtype: str
+
+
+@dataclass(frozen=True)
 class LevanterBackend:
     """Serve the model with Levanter's inference engine, in-process on the slice's chips.
 
@@ -226,7 +252,22 @@ class LevanterBackend:
     """Fraction of device HBM the KV cache may claim."""
 
     @contextmanager
-    def serve(self, spec: ModelSpec) -> Iterator[LevanterServedModel]:
+    def load_model(
+        self, spec: ModelSpec, config_overrides: Mapping[str, Any] | None = None
+    ) -> Iterator[LoadedLevanterModel]:
+        """Load ``spec`` into a Levanter model on the slice's device mesh, yielding it on-mesh.
+
+        The weight-load half of :meth:`serve`, split out so the load path can be exercised without
+        booting the inference engine. It discovers the model class from the HF checkpoint, builds
+        the serving mesh — with ``AxisType.Explicit`` axes when the model requires them (Grug/
+        Snowball reshard against named specs) — and loads the weights sharded across the slice at
+        ``spec.dtype`` (so a BF16 export loads directly as BF16, casting per-shard on read). The
+        model is yielded inside the device-mesh context; use it within the ``with`` block.
+
+        ``config_overrides`` replaces fields on the discovered model config before load — the escape
+        hatch for runtime knobs the HF ``config.json`` does not carry, e.g. a Grug MoE's kernel
+        backend (``moe_implementation="sonic"``), which the portable default cannot size on GPU.
+        """
         # Levanter compiles on the first request; write to the cache the vLLM path already uses so
         # a re-serve of the same model on the same slice skips the compile.
         jax.config.update("jax_compilation_cache_dir", default_jax_compilation_cache_dir())
@@ -234,50 +275,79 @@ class LevanterBackend:
         jax.config.update("jax_persistent_cache_min_compile_time_secs", JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECONDS)
 
         dtype = validate_levanter_dtype(spec.dtype)
+        # Resolve the model class first: whether the mesh needs explicit axes is a model property.
+        converter = HFCheckpointConverter.from_hf(spec.model_path)
+        model_config = converter.default_config
+        if config_overrides:
+            model_config = dataclasses.replace(model_config, **dict(config_overrides))
         trainer = TrainerConfig(
             mp=jmp.get_policy(f"p={dtype},c={dtype}"),
             mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size),
+            use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
         tokenizer = load_tokenizer(spec.model_path)
         if spec.chat_template_content is not None:
             tokenizer.chat_template = spec.chat_template_content
 
-        converter = HFCheckpointConverter.from_hf(spec.model_path)
-        model_config = converter.default_config
         max_seq_len = levanter_max_seq_len(spec.max_model_len, model_config.max_seq_len)
         logger.info(
-            "Loading %s into Levanter (%s, dtype=%s, max_seq_len=%d, chips=%d, model_axis=%d)",
+            "Loading %s into Levanter (%s, dtype=%s, max_seq_len=%d, chips=%d, model_axis=%d, explicit_mesh=%s)",
             spec.model_path,
             type(model_config).__name__,
             dtype,
             max_seq_len,
             spec.num_chips,
             spec.tensor_parallel_size,
+            trainer.use_explicit_mesh_axes,
         )
 
         with trainer.use_device_mesh():
             model = converter.load_pretrained(
                 model_config.model_type,
                 ref=spec.model_path,
+                config=model_config,
                 dtype=trainer.mp.compute_dtype,
                 axis_mapping=trainer.parameter_axis_mapping,
             )
+            yield LoadedLevanterModel(
+                model=model,
+                trainer=trainer,
+                tokenizer=tokenizer,
+                max_seq_len=max_seq_len,
+                compute_dtype=dtype,
+            )
+
+    @contextmanager
+    def serve(self, spec: ModelSpec) -> Iterator[LevanterServedModel]:
+        # Reject models the inference engine cannot drive before the weight load: resolving the model
+        # class from the HF config is cheap, loading the weights is not. (Forward-only scoring via
+        # load_model has no such requirement.)
+        model_type = HFCheckpointConverter.from_hf(spec.model_path).default_config.model_type
+        if not issubclass(model_type, SupportsPagedGeneration):
+            raise NotImplementedError(
+                f"{model_type.__name__} implements only the full-forward LmHeadModel interface (no "
+                "paged initial_cache/decode), so it cannot be served through the Levanter inference "
+                "engine. Score it with LevanterBackend.load_model, or serve it with vLLM."
+            )
+        with self.load_model(spec) as loaded:
+            # InferenceServer.create must build the engine on-mesh, so it runs inside load_model's
+            # device-mesh context; the serve loop below then runs off-mesh, as before.
             server = InferenceServer.create(
                 InferenceServerConfig(
-                    trainer=trainer,
+                    trainer=loaded.trainer,
                     tokenizer=spec.model_path,
                     model_name=spec.model,
                     service=InferenceEngineConfig(
-                        max_seq_len=max_seq_len,
+                        max_seq_len=loaded.max_seq_len,
                         max_seqs=self.max_seqs,
                         page_size=self.page_size,
                         hbm_utilization=self.hbm_utilization,
                         max_queued_tokens=max(_MIN_QUEUED_TOKENS, self.max_seqs),
-                        compute_dtype=jnp.dtype(dtype),
+                        compute_dtype=jnp.dtype(loaded.compute_dtype),
                     ),
                 ),
-                model=model,
-                tokenizer=tokenizer,
+                model=loaded.model,
+                tokenizer=loaded.tokenizer,
             )
 
         # Levanter's own InferenceServer.serve() owns a uvicorn it never signals to stop, so serve

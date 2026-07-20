@@ -6,7 +6,6 @@ name: "CodeQL — JavaScript/TypeScript (security + code quality)"
 # Quality default setup scanned because it did not honor path filters. Limiting
 # to authored source removes that noise at the source.
 paths:
-  - infra/status-page
   - lib/iris/dashboard/src
   - lib/finelog/dashboard/src
   - docs/javascript

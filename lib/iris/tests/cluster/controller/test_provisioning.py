@@ -10,13 +10,11 @@ covered without driving a live controller.
 """
 
 import pytest
-from iris.cluster.controller.autoscaler.provisioning import (
-    ProvisioningOutcome,
-    classify_create_failure,
-)
+from iris.cluster.controller.autoscaler.provisioning import classify_create_failure
 from iris.cluster.controller.autoscaler.runtime import _ScaleUpOutcome, _ScaleUpRequest
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.platforms.types import InfraError, QuotaExhaustedError
+from iris.cluster.stats.tables import ProvisioningOutcome
 from iris.cluster.types import CapacityType
 from rigging.timing import Timestamp
 from tests.cluster.backends.conftest import make_mock_platform, make_mock_slice_handle

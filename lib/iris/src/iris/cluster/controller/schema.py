@@ -348,6 +348,11 @@ tasks_table = Table(
     Column("priority_insertion", Integer, nullable=False),
     Column("priority_band", Integer, nullable=False, server_default="2"),
     Column("container_id", String),
+    # Backend status one-liner for a waiting/building task (the current reason it is
+    # not running yet, e.g. the Kubernetes pod/Kueue admission verdict). NULL/"" when
+    # running or when the backend has nothing to say. Served as TaskStatus.status_message
+    # and mirrored across federation.
+    Column("status_message", String),
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
     Column("backend_id", String, nullable=False, server_default=""),

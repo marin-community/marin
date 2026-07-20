@@ -16,6 +16,7 @@ Namespace derives from `kubernetes_provider.namespace`, the Kueue ClusterQueue n
 
 import enum
 from enum import StrEnum
+from typing import Annotated, Literal
 
 from iris.cluster.config import IrisClusterConfig, load_config
 from pydantic import BaseModel, Field
@@ -118,11 +119,71 @@ class GcpAddressSpec(BaseModel):
     description: str | None = None
 
 
+class GcpDeleteCleanupPolicy(BaseModel):
+    """A DELETE cleanup policy: prune versions whose age exceeds a threshold."""
+
+    id: str
+    action: Literal["DELETE"] = "DELETE"
+    older_than: str  # Go duration string, e.g. "2592000s" = 30d
+    tag_state: str = "ANY"  # which tag states the condition matches ("ANY", "TAGGED", "UNTAGGED")
+
+
+class GcpKeepCleanupPolicy(BaseModel):
+    """A KEEP cleanup policy: retain the most-recent N versions regardless of age."""
+
+    id: str
+    action: Literal["KEEP"] = "KEEP"
+    keep_count: int
+
+
+# `action` discriminates two disjoint field sets (older_than/tag_state vs. keep_count); the
+# discriminated union rejects a policy that carries fields from the wrong arm instead of
+# silently ignoring them.
+GcpArtifactRegistryCleanupPolicy = Annotated[
+    GcpDeleteCleanupPolicy | GcpKeepCleanupPolicy, Field(discriminator="action")
+]
+
+
+# Default for mirrors of versioned image streams (the iris images on ghcr): drop versions cached
+# more than 30 days ago (older_than counts from caching time; an evicted version is re-fetched on
+# the next pull), keeping the 16 newest versions of each package so the current release train
+# stays warm. Repos caching a few mutable base tags override cleanup_policies with a plain short
+# TTL instead — with so few versions per package, a keep floor would protect them all
+# indefinitely (see docker-mirror in marin.yaml).
+DEFAULT_MIRROR_CLEANUP_POLICIES = [
+    GcpDeleteCleanupPolicy(id="delete-older-than-30d", older_than="2592000s"),
+    GcpKeepCleanupPolicy(id="keep-latest", keep_count=16),
+]
+
+# Sentinel `docker_upstream` value selecting GCP's predefined Docker Hub upstream rather than a
+# custom registry URL. Matches the `DOCKER-HUB` keyword of `gcloud ... --remote-docker-repo`.
+DOCKER_HUB_UPSTREAM = "DOCKER_HUB"
+
+
+class GcpRemoteRepositorySpec(BaseModel):
+    """A Docker Artifact Registry remote repository (pull-through cache) across multi-regions.
+
+    ``docker_upstream`` selects the upstream: the sentinel ``"DOCKER_HUB"`` uses GCP's predefined
+    Docker Hub public repository; any other value is a custom registry URL (e.g. ``"https://ghcr.io"``).
+    The repo is created once per entry in ``locations`` (``us``, ``europe``, …) so a worker pulls
+    from its own continent. See lib/iris/docs/image-push.md for how workers rewrite image tags to it.
+    """
+
+    name: str  # repository_id, e.g. "docker-mirror"
+    docker_upstream: str  # "DOCKER_HUB" or a URL like "https://ghcr.io"
+    locations: list[str] = Field(default_factory=list)  # multi-regions, e.g. ["us", "europe"]
+    description: str = ""
+    cleanup_policies: list[GcpArtifactRegistryCleanupPolicy] = Field(
+        default_factory=lambda: list(DEFAULT_MIRROR_CLEANUP_POLICIES)
+    )
+
+
 class GcpProvisioning(BaseModel):
-    """GCP-arm provisioning: the project and its reserved static IP addresses (GcpStaticAddresses)."""
+    """GCP-arm provisioning: the project, reserved static IPs, and Artifact Registry mirrors."""
 
     project: str
     addresses: list[GcpAddressSpec] = Field(default_factory=list)
+    registries: list[GcpRemoteRepositorySpec] = Field(default_factory=list)
 
 
 class ProvisioningConfig(BaseModel):

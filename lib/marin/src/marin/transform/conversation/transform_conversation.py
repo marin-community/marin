@@ -22,6 +22,7 @@ from typing import Any
 import datasets
 import draccus
 import fsspec
+from fray.types import ResourceConfig
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.utils import load_dataset_with_backoff
 from rigging.filesystem import StoragePath, prefix_join, url_to_fs
@@ -31,6 +32,13 @@ from zephyr.readers import load_jsonl
 from zephyr.writers import write_jsonl_file
 
 from .adapters import TransformAdapter
+
+# One map task streams a whole HF shard (a subset/split slice) row by row. That is memory-bounded per
+# row, but chat shards carry long conversations and the Arrow reader buffers full row groups, so the
+# 1 GiB that ZephyrContext floors an unset ``resources`` to OOM-kills the worker mid-shard. Give each
+# worker headroom; this is a runtime resource only and does not enter the transform's data
+# fingerprint or output path, so bumping it never forks an existing cache.
+_TRANSFORM_WORKER_RESOURCES = ResourceConfig(cpu=1, ram="8g")
 
 _RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
 DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_think|>"}
@@ -387,7 +395,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-conversation")
+    ctx = ZephyrContext(name="transform-conversation", resources=_TRANSFORM_WORKER_RESOURCES)
     metric_files = ctx.execute(pipeline).results
 
     # Log summary by subset/split

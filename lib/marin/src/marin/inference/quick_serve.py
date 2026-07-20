@@ -242,11 +242,10 @@ def serve_in_job(config: QuickServeConfig) -> None:
     ctx = iris_ctx()
     port = ctx.get_port(config.port_name)
     advertise_host = job_info.advertise_host
-    # Claim the dashboard's port now, before the backend launches: Iris' named-port range
-    # overlaps the OS ephemeral range, so the backend's internal sockets could otherwise
-    # squat it. Binding here reserves it for us until uvicorn takes over. Bind only
-    # the advertised interface (the address the controller proxy connects to), not
-    # all interfaces.
+    # Claim the dashboard's port before the backend launches so none of the
+    # backend's internal sockets can take it first (see bind_serving_socket).
+    # Bind only the advertised interface (the address the controller proxy
+    # connects to).
     serving_socket = bind_serving_socket(advertise_host, port)
     # On the k8s runtime (e.g. CoreWeave GPU pods) named ports are kernel-assigned:
     # ``get_port`` returns 0 and the real port is only known after binding. Register

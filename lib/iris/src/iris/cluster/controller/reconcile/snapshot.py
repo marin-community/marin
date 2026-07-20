@@ -35,6 +35,11 @@ class TaskUpdate:
     error: str | None = None
     exit_code: int | None = None
     container_id: str | None = None
+    # Backend status one-liner for a waiting/building task. Tri-state: ``None`` means
+    # "this update does not speak to the status message; leave it unchanged"; ``""``
+    # clears it (task now running/quiet); a string sets it. A provider that reports it
+    # (k8s) sets it on every update so it clears naturally on RUNNING.
+    status_message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

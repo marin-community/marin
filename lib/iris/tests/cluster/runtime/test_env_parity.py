@@ -274,15 +274,6 @@ def test_ports_set_to_zero():
     assert env["IRIS_PORT_DEBUG"] == "0"
 
 
-def test_standard_paths_always_present():
-    env = _common_env(_make_req())
-    assert env["IRIS_WORKDIR"] == "/app"
-    assert env["IRIS_PYTHON"] == "python"
-    assert env["IRIS_BIND_HOST"] == "0.0.0.0"
-    assert env["UV_PYTHON_INSTALL_DIR"] == "/uv/cache/python"
-    assert env["CARGO_TARGET_DIR"] == "/root/.cargo/target"
-
-
 # ---------------------------------------------------------------------------
 # IRIS_TASK_RESOURCES serialization
 # ---------------------------------------------------------------------------

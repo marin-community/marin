@@ -1,0 +1,23 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The notification policy tree. severity=critical routes to ops-critical (email +
+# Slack); severity=warning routes to ops-slack, which is also the root receiver
+# so an unlabeled alert still lands somewhere visible. Instances group by
+# (alertname, cluster) and re-notify every 4h while firing.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: ops-slack
+    group_by: ["alertname", "cluster"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - receiver: ops-critical
+        object_matchers:
+          - ["severity", "=", "critical"]
+      - receiver: ops-slack
+        object_matchers:
+          - ["severity", "=", "warning"]

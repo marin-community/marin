@@ -1,0 +1,601 @@
+{
+  "uid": "marin-k8s",
+  "title": "K8s control plane",
+  "description": "Current control-plane state of the CoreWeave clusters, read straight from their k8s API servers by the bridge's k8s source: watched components, webhook endpoints, backoff pods, pending/gated pods, Kueue admission backlog, and Warning events. Every table carries a cluster column; a cluster the bridge cannot read shows up in the Cluster health panel with its error class. These panels are current-state only — the bridge stores no history; trends live in the finelog-backed dashboards.",
+  "tags": [
+    "marin",
+    "generated"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Cluster health",
+      "description": "Whether each cluster's k8s API server answers the bridge, with the error class (auth, network, timeout, http) when it does not.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "latency_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/health",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "reachable",
+              "text": "reachable",
+              "type": "boolean"
+            },
+            {
+              "selector": "error_class",
+              "text": "error_class",
+              "type": "string"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            },
+            {
+              "selector": "latency_ms",
+              "text": "latency_ms",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Webhook endpoints",
+      "description": "Ready endpoints behind each watched admission-webhook service, from discovery.k8s.io EndpointSlices. Zero means fail-closed admission is rejecting pod CREATE.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ready_endpoints"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/control_plane",
+          "url_options": {
+            "method": "GET"
+          },
+          "filterExpression": "kind == 'webhook'",
+          "columns": [
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "component",
+              "text": "webhook",
+              "type": "string"
+            },
+            {
+              "selector": "ready_endpoints",
+              "text": "ready_endpoints",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Kueue admission backlog",
+      "description": "Unadmitted, unfinished Kueue Workloads per local queue, with the age of the oldest. A backlog is normal under capacity pressure; it is a dashboard signal, not an alert.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "oldest_age_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/kueue",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "queue",
+              "text": "queue",
+              "type": "string"
+            },
+            {
+              "selector": "unadmitted",
+              "text": "unadmitted",
+              "type": "number"
+            },
+            {
+              "selector": "oldest_age_seconds",
+              "text": "oldest_age_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Control-plane components",
+      "description": "Ready vs desired replicas, cumulative container restarts, and any waiting reason for each watched component. Missing means the Deployment does not exist.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "waiting_reason"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "CrashLoopBackOff": {
+                        "color": "red",
+                        "index": 1
+                      },
+                      "ImagePullBackOff": {
+                        "color": "red",
+                        "index": 2
+                      },
+                      "Missing": {
+                        "color": "red",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/control_plane",
+          "url_options": {
+            "method": "GET"
+          },
+          "filterExpression": "kind == 'component'",
+          "columns": [
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "component",
+              "text": "component",
+              "type": "string"
+            },
+            {
+              "selector": "ready",
+              "text": "ready",
+              "type": "number"
+            },
+            {
+              "selector": "desired",
+              "text": "desired",
+              "type": "number"
+            },
+            {
+              "selector": "restarts",
+              "text": "restarts",
+              "type": "number"
+            },
+            {
+              "selector": "waiting_reason",
+              "text": "waiting_reason",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Crash-looping pods",
+      "description": "Containers sitting in CrashLoopBackOff or ImagePullBackOff, across every namespace except CoreWeave-managed ones (cw-*, kube-*). scope=control-plane means the pod belongs to a watched component; workload backoffs are informational.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/crashloops",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "container",
+              "text": "container",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "restarts",
+              "text": "restarts",
+              "type": "number"
+            },
+            {
+              "selector": "scope",
+              "text": "scope",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Pending / gated pods",
+      "description": "Pods in phase Pending, oldest first: scheduling_gated means a scheduling gate (e.g. Kueue admission) is holding the pod; pending means the scheduler has it but has not placed it.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "age_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/pending",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "age_seconds",
+              "text": "age_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Warning events",
+      "description": "The most recent Warning events per cluster (fieldSelector type=Warning), newest first. Event retention on the API server is about an hour.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/events",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "last_seen",
+              "text": "last_seen",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "object",
+              "text": "object",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -40,7 +40,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
 )
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
-from iris.cluster.controller.main import run_controller_serve
+from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
     ROLLOUT_RECORD_FILENAME,
     RolloutPhase,
@@ -662,7 +662,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; set it or manage the log server via `finelog deploy` directly"
         )
     return cfg.finelog.config
 
@@ -1021,37 +1021,7 @@ def controller(ctx):
 
 
 @controller.command("serve")
-@click.option("--host", default="0.0.0.0", help="Bind host")
-@click.option("--port", default=10000, type=int, help="Bind port")
-@click.option(
-    "--checkpoint-path",
-    default=None,
-    help="Restore from this specific checkpoint directory (e.g. gs://bucket/.../controller-state/1234567890)",
-)
-@click.option(
-    "--checkpoint-interval",
-    default=None,
-    type=float,
-    help="Periodic checkpoint interval in seconds (default: hourly)",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Start in dry-run mode: compute scheduling but suppress all side effects",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Start with an empty database, ignoring any remote checkpoint",
-)
-@click.option(
-    "--state-dir",
-    default=None,
-    type=click.Path(path_type=Path),
-    help="Override the local state dir (default: /var/cache/iris/controller, or /tmp/dry-run/{today} in dry-run)",
-)
+@controller_serve_options
 @click.pass_context
 def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_run, fresh, state_dir):
     """Start a local controller process.
@@ -1641,6 +1611,5 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
 
 def _print_summary(succeeded: int, failures: int, remaining: int, offset: int):
     click.echo(
-        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining "
-        f"(aborted at worker {offset + 1})"
+        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining (aborted at worker {offset + 1})"
     )

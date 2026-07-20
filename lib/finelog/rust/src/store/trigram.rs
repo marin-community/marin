@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn trigram_windows_basic() {
         let t: Vec<[u8; 3]> = trigram_windows(b"abcd").collect();
-        assert_eq!(t, vec![[b'a', b'b', b'c'], [b'b', b'c', b'd']]);
+        assert_eq!(t, vec![*b"abc", *b"bcd"]);
         // Shorter than 3 bytes yields nothing.
         assert!(trigram_windows(b"ab").next().is_none());
     }

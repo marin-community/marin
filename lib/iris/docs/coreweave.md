@@ -146,7 +146,8 @@ Key architectural properties:
   controller calls the same three uniform phase methods regardless. The dashboard
   reflects this via the backend descriptor served by
   `/auth/config`: capability `cluster` shows the **Cluster** panel, and the
-  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler).
+  Workers/Autoscaler panels are hidden (no worker daemons, no Iris autoscaler),
+  and per-node host and GPU readings surface in the **Cluster** panel instead.
   See `docs/architecture.md` "The TaskBackend contract".
 - **Shared NodePool model**: One NodePool per scale group (not per slice). CoreWeave
   autoscaling is enabled (`autoscaling: true`). NodePool names follow
@@ -421,10 +422,52 @@ uv run python lib/iris/scripts/install_kueue.py --variant coreweave \
   --kubeconfig <kubeconfig> --with-queues --apply
 ```
 
-This installs the CoreWeave `cks-kueue` chart, the Topology CRs, and the
-cluster-scoped `cw-ib` ResourceFlavor + `iris-cq` ClusterQueue. Iris reconciles
-its namespaced LocalQueue (`{label_prefix}-lq`) at controller start, bound via
-`kubernetes_provider.kueue.cluster_queue`.
+This installs the CoreWeave `cks-kueue` chart, the Topology CRs, the
+cluster-scoped `cw-ib` + `cw-cpu` ResourceFlavors, and the `iris-cq` ClusterQueue.
+Iris reconciles its namespaced LocalQueue (`{label_prefix}-lq`) at controller
+start, bound via `kubernetes_provider.kueue.cluster_queue`.
+
+**Flavor routing.** Every pod on the k8s backend routes through Kueue (not just
+gangs), so `iris-cq` carries two flavors in one resourceGroup:
+
+- **`cw-ib`** selects InfiniBand nodes (`backend.coreweave.cloud/flavor=infiniband`)
+  and binds the `infiniband` Topology for TAS. GPU pods request `nvidia.com/gpu` +
+  `rdma/ib` and match here.
+- **`cw-cpu`** (listed first) zeroes the `nvidia.com/gpu` and `rdma/ib` quota, so a
+  GPU pod can never be admitted under it and falls through to `cw-ib`, while a
+  CPU-only pod matches `cw-cpu`. It is **selector-less** by default — its spec is
+  empty, so Kueue injects no `nodeSelector` and the admitted CPU pod stays
+  schedulable on any node. It prefers CPU nodes (GPU nodes carry a soft
+  `PreferNoSchedule` taint) but reuses idle GPU nodes when CPU capacity is full,
+  instead of being fenced onto CPU-only capacity. Pass `--cpu-flavor-node-label
+  KEY=VALUE` to pin `cw-cpu` to specific CPU nodes instead.
+
+**GB200 NVLink-domain placement.** NVL72 nodes (GB200/GB300, `gb200-4x` — 4
+Blackwell GPUs each) carry `ds.coreweave.com/nvlink.domain`; one NVL72 rack is one
+NVLink domain of 18 physical nodes, of which CoreWeave keeps only **16 schedulable
+at once** (the rest absorb host failures and maintenance — a floor, not a cap).
+Iris picks a placement level per multi-node GB200 gang from its replica count:
+
+- **≤ 16 nodes** bind **hard** to a single `nvlink.domain`
+  (`podset-required-topology`) — the whole gang shares one rack's NVLink fabric.
+  16 is the largest hard single-domain gang; binding a 17–18-node gang hard would
+  demand a fully-healthy rack and could sit unschedulable whenever one is short a
+  node.
+- **> 16 nodes** use Kueue **PodSet slices** (`podset-slice-required-topology:
+  nvlink.domain` + a computed `podset-slice-size`). The gang is split evenly over
+  the fewest racks that hold ≤ 16 nodes each, and each slice is hard-bound to its
+  own NVLink domain, so it lands as an exact **balanced N-rack layout**: 24 → 12+12,
+  32 → 16+16, 48 → 16+16+16. Because two slices always exceed a rack (each is more
+  than half of 18), no two share a rack. A soft `leafgroup` preference is paired so
+  the racks also cluster on one IB leaf group.
+
+The sliced level requires **node-saturating pods** (one pod = one whole `gb200-4x`
+node = 4 GPUs) so a slice fills whole nodes, and a gang size that splits into equal,
+more-than-half-a-rack slices — sizes that cannot (e.g. 17, 18, 40) are rejected at
+submit. PodSet slices need **Kueue ≥ 0.13**; use **0.18+** for the `IsTAS()`
+recognition fix for slice-only pod groups (upstream #10282). On an older Kueue the
+slice annotations are silently ignored and a multi-rack gang degrades to a soft
+leafgroup gang with no per-rack NVLink guarantee.
 
 **Never install Kueue with unscoped admission webhooks on a CoreWeave cluster.**
 The script scopes them to the `iris` namespace (`--pod-namespace`); the chart
@@ -657,8 +700,11 @@ uv run iris --cluster=<cluster> job run \
   -e SCALE_GPU_REPLICAS 2 -e SCALE_HIDDEN_DIM 1024 -e SCALE_NUM_LAYERS 8 \
   -e SCALE_NUM_EXPERTS 16 -e SCALE_TOP_K 2 -e SCALE_BATCH 32 \
   -e SCALE_SEQ_LEN 1024 -e SCALE_STEPS 10 -e RUN_ID <run-id> \
-  -- python -m experiments.grug.moe.launch_cw_scale
+  -- python -m experiments.grug.moe.launch_cw_scale --version dev --run
 ```
+
+`--version` sets the checkpoint version (required; `dev` to iterate) and `--run` builds it —
+without `--run` the launcher prints the lowered plan and exits.
 
 Success signals: every replica enters `initialize_jax` with
 `IRIS_NUM_TASKS=<replicas>`, steps complete, a checkpoint commits, and the
@@ -673,9 +719,16 @@ model per node instead of sharding across nodes.
 
 ### KubernetesProvider Operations
 
-On CoreWeave, there are no persistent worker daemons. The controller dispatches
-tasks directly as Kubernetes Pods, `list-workers` returns empty, and the
-`workers` SQL table is empty. Use:
+On CoreWeave, there are no persistent worker daemons: the controller dispatches
+tasks directly as Kubernetes Pods, so the `list-workers` RPC returns empty and
+the controller's `workers` state table stays empty. Node-level telemetry is
+surfaced differently. Each cluster sync the controller scrapes the
+`cw-exporters` DaemonSets — `node-exporter` (host CPU/memory/disk/network over
+the node's hostPort `:9100`) and `dcgm-exporter` (GPU HBM/utilization/
+temperature/power over the pod's `:9400`) — and writes one `iris.worker` finelog
+row per node, keyed by node name. The same readings appear in
+`get-kubernetes-cluster-status` and the dashboard **Cluster** panel's node
+table. Use:
 
 ```bash
 kci get pods -n iris -l iris.managed=true
@@ -719,7 +772,9 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 ### Gotchas
 
 - **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
-- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly.
+- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly; no
+  worker daemons register. Per-node readings live in the `iris.worker` finelog table
+  and the **Cluster** panel, not this RPC.
 - **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
 - **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
 - **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
@@ -731,6 +786,18 @@ kci delete nodepool -l iris-<label_prefix>-managed=true
 - **`NCCL_SOCKET_IFNAME` is per-region.** The same GPU SKU exposes different PCI
   interface names in different regions; verify on a live node (see "Bringing up
   a new cluster").
+- **A controller restart can CrashLoop on a stale node-local state DB.** The
+  controller keeps its SQLite state on node-local NVMe (`storage.local_state_dir`,
+  a hostPath), and `cluster controller restart` may reschedule the new pod onto a
+  different CPU node. If that node holds a corrupt leftover state DB from an earlier
+  stint whose mtime is at least as fresh as the latest remote checkpoint, startup
+  trusts it (skips the checkpoint restore) and crashes with `database disk image is
+  malformed`. The deploy's post-restart health check catches the CrashLoopBackOff
+  and **auto-rolls-back** to the previous image + pre-deploy checkpoint, so the
+  cluster stays healthy. Recovery: just re-run the restart — a fresher pre-deploy
+  checkpoint makes a stale node restore the clean checkpoint, and landing back on
+  the current controller node reuses its good DB. A persistently bad node needs its
+  `local_state_dir/db` wiped so startup falls back to the checkpoint.
 
 Cold-start timings:
 
@@ -799,10 +866,41 @@ in `CoreweavePlatform`):
 | `cache_dir` | string | — | **Must point to NVMe** (see warning below) |
 | `runtime` | string | — | Set to `kubernetes` for CoreWeave (enables Pod-per-task) |
 
-> **Warning — Disk layout**: CoreWeave bare-metal nodes have a **15 GB RAM disk**
-> as the root filesystem and multi-TB NVMe at `/mnt/local`. The `cache_dir` must
+> **Warning — Disk layout**: CoreWeave bare-metal nodes boot a **15 GB RAM disk**
+> as the root filesystem, with the node's NVMe RAID (`/dev/md127`, 7.7 TB on CPU
+> nodes, 15–31 TB on GPU nodes) mounted at `/mnt/local`. The `cache_dir` must
 > point to NVMe (e.g. `/mnt/local/iris-cache`). Using the default root path will
 > fill the RAM disk immediately and cause Pod eviction.
+>
+> Only `cache_dir` needs this: the kubelet root is on the NVMe, so task `emptyDir`
+> volumes (`/app`, `/tmp`) and container writable layers already land there.
+
+### Task storage layout
+
+Task pods use no PVCs — nothing on the task path touches the `shared-vast`
+(distributed) storage class, which backs only the controller state and finelog
+caches. Every task volume is node-local NVMe:
+
+| Container path | Volume | Lifetime |
+|----------------|--------|----------|
+| `/app`, `/tmp` | `emptyDir` (kubelet root) | Pod |
+| `/uv/cache`, `/hf/cache`, `/cargo` | `hostPath` under `cache_dir` | Node |
+| `/dev/shm` | `emptyDir` (memory) | Pod |
+
+Iris points `UV_CACHE_DIR`, `HF_HUB_CACHE`, and `CARGO_HOME` at those
+`hostPath` mounts for every task, including tasks that bring their own image, so
+wheels and model weights are fetched once per node rather than once per task.
+`HF_HOME` is deliberately not among them. It holds the submitter's `HF_TOKEN`, so
+it stays under the pod's own `$HOME` (`iris job run` defaults it to
+`~/.cache/huggingface`) rather than a directory every task on the node can read.
+`HF_HUB_CACHE` covers the part worth sharing: the content-addressed blobs.
+
+The `cache_dir` tree is never pruned; it grows until the node is rebuilt or an
+operator clears it. Watch it on long-lived reserved fleets:
+
+```bash
+kubectl exec -n iris <pod> -c task -- du -sh /uv/cache /hf/cache
+```
 
 ### Startup grace period
 
@@ -1155,6 +1253,13 @@ kubectl logs <pod> -n iris --previous    # Logs from the last crash
 
 If `cache_dir` is not set to `/mnt/local/...`, the 15 GB root RAM disk fills
 instantly. Fix in config and redeploy.
+
+A pod evicted for `ephemeral-storage` while `cache_dir` is correct is a different
+fault: that limit comes from the task's own `disk` resource request and covers
+only `emptyDir` plus the container layer, not the `hostPath` caches. Either the
+task is writing large files under `/app` or `/tmp`, or it is writing to a cache
+path Iris does not mount (check `env | grep -iE 'CACHE|HF_'` against the task
+storage layout above) and needs a larger `disk` request.
 
 ## 17. References
 

@@ -238,8 +238,8 @@ class Overlay:
         """Merge a task delta into the accumulator.
 
         Per-field fold (earlier accumulated ``old`` then newer ``delta``):
-        state last-wins; error/exit_code/container_id last-non-null; started_at
-        first-non-null; finished_at last-wins (may clear to None).
+        state last-wins; error/exit_code/container_id/status_message last-non-null;
+        started_at first-non-null; finished_at last-wins (may clear to None).
         """
         old = self._effects.tasks.get(delta.task_id)
         if old is None:
@@ -253,6 +253,7 @@ class Overlay:
             started_at=_first(old.started_at, delta.started_at),
             finished_at=delta.finished_at,
             container_id=_last_non_null(old.container_id, delta.container_id),
+            status_message=_last_non_null(old.status_message, delta.status_message),
         )
 
     def merge_attempt(self, delta: AttemptRowDelta) -> None:

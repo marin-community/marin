@@ -39,6 +39,14 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.hooks import TaskHook
+from iris.cluster.hooks.nsys import build_profile_hook, profile_cli_options
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_NVLINK_DOMAIN_SLICED,
+    NVL72_GPUS_PER_NODE,
+    balanced_rack_slice_size,
+    gpu_gang_coscheduling_level,
+)
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
@@ -62,6 +70,11 @@ from iris.rpc.proto_display import (
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+# Default page size for `iris job list`. The server sorts by submission date
+# descending, so this fetches the most recent jobs rather than walking the whole
+# jobs table (which would hit the controller's deep-offset cap on a busy cluster).
+DEFAULT_JOB_LIST_LIMIT = 50
 
 _STATE_MAP: dict[str, job_pb2.JobState] = {
     "pending": job_pb2.JOB_STATE_PENDING,
@@ -490,13 +503,18 @@ def resolve_multinode_defaults(
 
     For TPUs with vm_count > 1, infers replicas from the topology and enables
     coscheduling by ``tpu-name`` so that all tasks land on workers in the same
-    TPU slice. For GPUs with replicas > 1, enables coscheduling by ``leafgroup``
-    (the H100 InfiniBand multi-node colocation level) so all replicas are
-    scheduled together.
+    TPU slice. For GPUs with replicas > 1, the coscheduling level is derived from
+    the GPU variant: NVL72 (GB200/GB300) gangs that fit a rack's guaranteed-schedulable
+    node slice bind HARD to ``nvlink.domain``; larger NVL72 gangs bind to
+    ``nvlink.domain.sliced``, which partitions them into rack-sized slices placed one per
+    NVLink domain (balanced N racks x 16); H100 and other GPUs coschedule on the soft
+    ``leafgroup`` IB level. A sliced gang whose size cannot split into equal, more-than-half-a-rack
+    slices, or whose pods are not node-saturating, is rejected here with a ``click.UsageError``
+    rather than deferred to a controller-side failure.
 
     Args:
         tpu: TPU type string (e.g. ``"v6e-32"``), or ``None``.
-        gpu: GPU type string (e.g. ``"H100"``), or ``None``.
+        gpu: GPU spec string (e.g. ``"H100x8"``, ``"GB200x4"``), or ``None``.
         replicas: Explicit replica count from the caller, or ``None`` if not
             specified (meaning the default should be inferred).
 
@@ -506,7 +524,22 @@ def resolve_multinode_defaults(
     """
     if not tpu:
         if gpu and replicas is not None and replicas > 1:
-            return replicas, CoschedulingConfig(group_by="leafgroup")
+            variant, gpu_count = parse_gpu_spec(gpu)
+            level = gpu_gang_coscheduling_level(variant, replicas)
+            if level == COSCHEDULE_NVLINK_DOMAIN_SLICED:
+                # Reject a knowably-unplaceable sliced gang at submit rather than let the
+                # controller terminal-fail it a round-trip later. Only the sliced level constrains
+                # size and per-node GPU count; smaller gangs and other GPUs are always placeable.
+                if gpu_count != NVL72_GPUS_PER_NODE:
+                    raise click.UsageError(
+                        f"A sliced multi-rack {variant} gang needs node-saturating pods "
+                        f"({NVL72_GPUS_PER_NODE} GPUs each so one slice fills whole nodes); got {gpu_count}."
+                    )
+                try:
+                    balanced_rack_slice_size(replicas)
+                except ValueError as e:
+                    raise click.UsageError(f"--replicas {replicas} for {variant}: {e}") from e
+            return replicas, CoschedulingConfig(group_by=level)
         return replicas or 1, None
 
     try:
@@ -603,6 +636,7 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
+    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -718,6 +752,7 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         container_profile=profile,
+        profile_hook=profile_hook,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -745,6 +780,7 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    profile_hook: TaskHook | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -763,7 +799,11 @@ def _submit_and_wait_job(
         name=job_name,
         resources=resources,
         environment=EnvironmentSpec(
-            env_vars=env_vars, extras=extras or [], setup_scripts=setup_scripts, sync_packages=sync_packages or []
+            env_vars=env_vars,
+            extras=extras or [],
+            setup_scripts=setup_scripts,
+            sync_packages=sync_packages or [],
+            profile=profile_hook,
         ),
         constraints=constraints,
         coscheduling=coscheduling,
@@ -964,6 +1004,7 @@ Examples:
         "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
     ),
 )
+@profile_cli_options
 @click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
@@ -998,6 +1039,11 @@ def run(
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
+    profile: str | None,
+    profile_output: str | None,
+    profile_tasks: str,
+    profile_trace: str,
+    profile_capture_range: bool,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -1013,6 +1059,19 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    if profile and no_sync:
+        raise click.UsageError("--profile installs its profiler during setup; it cannot be combined with --no-sync.")
+    if profile_output and not profile:
+        raise click.UsageError("--profile-output has no effect without --profile.")
+    # The nsys hook owns its --profile* flags and how to build itself from them.
+    profile_hook: TaskHook | None = build_profile_hook(
+        profile,
+        output_uri=profile_output,
+        tasks=profile_tasks,
+        trace=profile_trace,
+        capture_range=profile_capture_range,
+    )
 
     submit_argv = redact_submit_argv(list(sys.argv))
 
@@ -1058,6 +1117,7 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
+            profile_hook=profile_hook,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
@@ -1198,9 +1258,21 @@ def kick(ctx, target: tuple[str, ...], state: str, reason: str, stdin: bool, dry
     default=None,
     help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
 )
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=DEFAULT_JOB_LIST_LIMIT,
+    show_default=True,
+    help="Show at most this many of the most recent jobs. Raise it (with --state/--prefix to narrow) to see more.",
+)
 @click.pass_context
-def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
-    """List jobs with optional filtering."""
+def list_jobs(ctx, state: str | None, prefix: str | None, limit: int) -> None:
+    """List the most recent jobs with optional filtering.
+
+    Only the ``--limit`` most recently submitted matching jobs are fetched, so
+    the command stays fast on a busy cluster instead of scanning the whole jobs
+    table. Narrow with ``--state`` / ``--prefix`` to find older jobs.
+    """
     client = _remote_client(ctx)
 
     state_value: job_pb2.JobState | None = None
@@ -1211,7 +1283,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
         state_value = _STATE_MAP[state_lower]
 
-    jobs = client.list_jobs(state=state_value, prefix=prefix)
+    jobs = client.list_jobs(state=state_value, prefix=prefix, limit=limit)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
@@ -1242,6 +1314,12 @@ def list_jobs(ctx, state: str | None, prefix: str | None) -> None:
         rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
+
+    if len(jobs) >= limit:
+        click.echo(
+            f"\nShowing the {limit} most recent jobs. Raise --limit or narrow with --state/--prefix to see more.",
+            err=True,
+        )
 
 
 def _task_index(task_id: str) -> str:

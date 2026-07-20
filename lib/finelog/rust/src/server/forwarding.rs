@@ -64,7 +64,9 @@ use crate::query::{make_ctx, run_query_over, QueryResult, RegisteredProvider};
 use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
-use crate::store::schema::{schema_to_proto_owned, Schema, IMPLICIT_SEQ_COLUMN};
+use crate::store::schema::{
+    schema_to_proto_owned, Schema, IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN,
+};
 use crate::store::store::LOG_NAMESPACE_NAME;
 use crate::store::Store;
 
@@ -101,11 +103,6 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// Emit a progress line at most this often, so a healthy forwarder is observable
 /// without flooding the logs it forwards.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(300);
-
-/// The column, when a table has one, that names a row's origin cluster. The forwarder
-/// stamps it with its own cluster on the way out and forwards only rows that do not
-/// already carry a foreign origin, so a hub's own relayed rows never loop back.
-const ORIGIN_COLUMN: &str = "cluster";
 
 /// Where this store forwards, and as whom. Parsed from the `FINELOG_FORWARDING` JSON;
 /// the Ed25519 private key arrives separately (`FINELOG_SIGNING_KEY`) so it never rides
@@ -361,7 +358,13 @@ where
             }
         };
         cursor = self.cap_lag(name, cursor, persisted, progress);
-        let has_origin = schema.column(ORIGIN_COLUMN).is_some();
+        // The forwarder stamps this column with its own cluster on the way out and
+        // forwards only rows that do not already carry a foreign origin, so a hub's
+        // own relayed rows never loop back. A registered table always has it (added
+        // implicitly at registration); a legacy namespace adopted from disk before
+        // the column existed does not, and forwards unstamped until it is
+        // re-registered.
+        let has_origin = schema.column(IMPLICIT_CLUSTER_COLUMN).is_some();
 
         while cursor < persisted && !*stop.borrow() {
             let batch = match self.read_batch(name, cursor, persisted, has_origin).await {
@@ -596,7 +599,7 @@ where
                 continue;
             }
             fields.push(field.as_ref().clone());
-            if field.name() == ORIGIN_COLUMN {
+            if field.name() == IMPLICIT_CLUSTER_COLUMN {
                 columns.push(Arc::clone(&origin));
             } else {
                 columns.push(Arc::clone(batch.column(i)));

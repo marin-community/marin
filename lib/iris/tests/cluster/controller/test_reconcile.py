@@ -69,6 +69,7 @@ from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
     apply_task_observations,
+    commit_dispatch_updates,
     commit_reconcile,
 )
 
@@ -886,6 +887,43 @@ def test_terminal_observation_transitions_task_and_job(
         job = query_job(state, task.job_id)
         assert job is not None
         assert job.state == expected_job_state
+
+
+def _building_with_message(task_id: JobName, attempt_id: int, msg: str) -> TaskUpdate:
+    return TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_BUILDING, status_message=msg)
+
+
+def test_status_message_change_emits_a_delta_but_an_unchanged_message_is_a_noop():
+    """A direct-provider (k8s) BUILDING observation persists its status_message, and a
+    same-state re-observation emits a task delta ONLY when the message changed. The
+    delta is what appends a federation changelog row, so this dedup keeps a stuck task
+    from churning the changelog every scan while still propagating a genuine change."""
+    with make_controller_state() as state:
+        task_id, attempt_id, _ = _setup_assigned_task(state)
+
+        # ASSIGNED -> BUILDING with a reason: a real transition; the message persists.
+        with state._db.transaction() as cur:
+            effects = commit_dispatch_updates(
+                cur, [_building_with_message(task_id, attempt_id, "waiting: reason A")], now=Timestamp.now()
+            )
+        assert task_id in effects.tasks
+        assert query_task(state, task_id).status_message == "waiting: reason A"
+
+        # Same state, same message: no delta -> no changelog row -> no sync churn.
+        with state._db.transaction() as cur:
+            effects = commit_dispatch_updates(
+                cur, [_building_with_message(task_id, attempt_id, "waiting: reason A")], now=Timestamp.now()
+            )
+        assert task_id not in effects.tasks
+        assert query_task(state, task_id).status_message == "waiting: reason A"
+
+        # Same state, changed message: a delta again; the new message persists.
+        with state._db.transaction() as cur:
+            effects = commit_dispatch_updates(
+                cur, [_building_with_message(task_id, attempt_id, "waiting: reason B")], now=Timestamp.now()
+            )
+        assert task_id in effects.tasks
+        assert query_task(state, task_id).status_message == "waiting: reason B"
 
 
 def test_missing_observation_on_active_task_charges_preemption_budget():

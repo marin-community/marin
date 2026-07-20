@@ -1,10 +1,11 @@
 # Releasing Packages to PyPI
 
-Marin publishes nine distributions to [PyPI](https://pypi.org/). Two GitHub
+Marin publishes ten distributions to [PyPI](https://pypi.org/). Two GitHub
 Actions workflows build and publish them:
 
 - [`dupekit-release-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/dupekit-release-wheels.yaml)
-  builds `marin-dupekit`, the Rust dedup extension.
+  builds `marin-dupekit` (pure Python) and its native companion
+  `marin-dupekit-native` (the Rust dedup kernels), in lockstep.
 - [`marin-release-libs-wheels.yaml`](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-release-libs-wheels.yaml)
   builds the eight pure-Python libs, driven by
   [`scripts/python_libs_package.py`](https://github.com/marin-community/marin/blob/main/scripts/python_libs_package.py).
@@ -24,6 +25,7 @@ the names don't collide on PyPI, which has no namespaces. The **import name**
 | `marin-zephyr` | `zephyr` | `lib/zephyr` |
 | `marin-finelog` | `finelog` | `lib/finelog` |
 | `marin-dupekit` | `dupekit` | `lib/dupekit` |
+| `marin-dupekit-native` | `dupekit_native` | `lib/dupekit/rust` |
 
 All publishing uses **OIDC trusted publishing**. There is no API token stored
 in the repository, in GitHub secrets, or anywhere else. At workflow runtime
@@ -122,8 +124,9 @@ Configure **all eight before the first publish run**. The publish job uploads
 the whole `dist/` directory in one batch; a single missing binding fails the
 upload partway and can poison a version (see [Troubleshooting](#troubleshooting)).
 
-`marin-dupekit` already has its own binding for `dupekit-release-wheels.yaml`.
-Leave it untouched.
+`marin-dupekit` and its native companion `marin-dupekit-native` each already
+have a binding for the `dupekit-release-wheels.yaml` workflow and `pypi-publish`
+environment; leave them untouched.
 
 ### 4. The `pypi-publish` GitHub Actions environment
 

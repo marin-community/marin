@@ -27,6 +27,16 @@ EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
+# Subset of ACTIVE that excludes RUNNING — dispatched to a worker (or pod) but
+# not yet observed running. These tasks age from their current attempt's
+# creation in the ``iris.task_state`` wait-age columns.
+DISPATCHED_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_ASSIGNED,
+        job_pb2.TASK_STATE_BUILDING,
+    }
+)
+
 
 class RunningTaskEntry(NamedTuple):
     """Task ID and attempt ID pair captured at snapshot time.
@@ -127,6 +137,9 @@ class TaskDetailRow:
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    # Backend status one-liner for a waiting/building task (why it is not running
+    # yet); None/"" when running or quiet. See tasks.status_message.
+    status_message: str | None
     backend_id: str
     cluster: str
     # Federated task's peer-side worker label ("" for a local task); NULL from the

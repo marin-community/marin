@@ -169,6 +169,18 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
         return Axis("position", self.max_seq_len)
 
     @property
+    def requires_explicit_mesh_axes(self) -> bool:
+        """Whether this model's forward/sharding needs an ``AxisType.Explicit`` device mesh.
+
+        Models that reshard with ``jax.sharding.reshard(..., out_sharding=)`` over named
+        ``PartitionSpec``s (e.g. Snowball/Grug) require explicit mesh axes. The default
+        haliax named-axis partitioning does not, so this is ``False`` for most models.
+        Consumers that build the mesh (e.g. the marin-serve Levanter backend) read this to
+        decide whether to set ``TrainerConfig.use_explicit_mesh_axes``.
+        """
+        return False
+
+    @property
     @abc.abstractmethod
     def Embed(self) -> Axis:
         pass
@@ -181,6 +193,20 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "LmT":
         return self.model_type.init(Vocab, self, key=key)  # type: ignore
+
+
+def split_activations(
+    activations: NamedArray | tuple[NamedArray, NamedOrNumeric],
+) -> tuple[NamedArray, NamedOrNumeric]:
+    """Normalize an ``activations`` return value into ``(hidden_states, aux_loss)``.
+
+    [`LmHeadModel.activations`][] returns either a bare hidden-state array or, for MoE heads that add a
+    router auxiliary loss, a ``(hidden_states, aux_loss)`` tuple. Callers that only need the hidden
+    states use ``x, _ = split_activations(...)``; the aux loss defaults to ``0``.
+    """
+    if isinstance(activations, tuple):
+        return activations
+    return activations, 0
 
 
 class LmHeadModel(eqx.Module, Generic[LmConfigT]):
@@ -308,11 +334,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
         (*batch axes, sequence_length).
         """
-        activations = self.activations(example.tokens, example.attn_mask, key=key)
-
-        aux_loss = 0
-        if isinstance(activations, tuple):
-            activations, aux_loss = activations
+        activations, aux_loss = split_activations(self.activations(example.tokens, example.attn_mask, key=key))
 
         loss = maybe_fused_next_token_loss(
             self.Pos,

@@ -13,8 +13,7 @@ import regex
 from rigging.filesystem import StoragePath, open_url, prefix_join
 
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text.datasets import DatasetComponent
-from levanter.data.text.formats import SupervisedLmDatasetFormat, TextLmDatasetFormat
+from levanter.data.text.datasets import LmDatasetSourceConfigBase
 from levanter.tokenizers import MarinTokenizer, _safe_split_for_tokenizer
 
 
@@ -441,41 +440,49 @@ class GapReportBuilder:
         )
 
 
+@dataclass(frozen=True)
+class GapScoringDataset:
+    """A perplexity-gap eval dataset: a raw JSONL source plus which bytes to score.
+
+    When both ``input_key`` and ``target_key`` are set, only the ``target_key`` bytes
+    are scored while the ``input_key`` bytes still condition the model (target-only
+    scoring). Otherwise every byte of ``text_key`` is scored.
+
+    This is intentionally decoupled from the training-time dataset formats so the gap
+    report never has to grow a branch per format.
+    """
+
+    source: LmDatasetSourceConfigBase
+    split: str = "validation"
+    tags: tuple[str, ...] = ()
+    text_key: str = "text"
+    input_key: str | None = None
+    target_key: str | None = None
+
+    def __post_init__(self):
+        if (self.input_key is None) != (self.target_key is None):
+            raise ValueError("GapScoringDataset requires both input_key and target_key for target-only scoring.")
+
+
 def iter_raw_text_documents(
-    datasets: dict[str, DatasetComponent],
+    datasets: dict[str, GapScoringDataset],
     *,
     max_docs_per_dataset: int | None,
     max_doc_bytes: int | None,
 ) -> Iterator[RawTextDocument]:
-    for name, component in datasets.items():
-        if component.source is None:
-            raise ValueError(f"Dataset {name} has no source; raw gap finding requires raw sources.")
-        if isinstance(component.format, TextLmDatasetFormat):
-            text_key = component.format.text_key
-            input_key = None
-            target_key = None
-        elif isinstance(component.format, SupervisedLmDatasetFormat):
-            text_key = "text"
-            input_key = component.format.input_key
-            target_key = component.format.target_key
-        else:
-            raise ValueError(
-                f"Dataset {name} uses unsupported format {type(component.format).__name__}. "
-                "Gap finding currently supports TextLmDatasetFormat and SupervisedLmDatasetFormat only."
-            )
-
-        source = component.source.get_shard_source(component.split)
+    for name, dataset in datasets.items():
+        source = dataset.source.get_shard_source(dataset.split)
         if source is None:
             continue
 
-        tags = tuple(component.tags or ()) + (name,)
+        tags = tuple(dataset.tags or ()) + (name,)
         yield from _iter_dataset_documents(
             dataset_name=name,
             tags=tags,
             source=source,
-            text_key=text_key,
-            input_key=input_key,
-            target_key=target_key,
+            text_key=dataset.text_key,
+            input_key=dataset.input_key,
+            target_key=dataset.target_key,
             max_docs=max_docs_per_dataset,
             max_doc_bytes=max_doc_bytes,
         )

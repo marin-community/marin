@@ -1,0 +1,13 @@
+name: marin-cloudsql
+runtime:
+  name: python
+  # Pin the shared repo venv (which has the `iac` helper package and the Pulumi GCP provider
+  # via marin-iac[deploy]). Without this, Pulumi's Auto toolchain would build an isolated venv
+  # with no Pulumi SDK.
+  options:
+    virtualenv: ../../.venv
+description: Shared Cloud SQL (Postgres) metadata instance + eval-records bucket.
+# State backend and secrets provider come from the operator/CI environment, shared with
+# infra/iac (see README.md):
+#   pulumi login gs://marin-iac-state
+#   PULUMI_CONFIG_PASSPHRASE from Secret Manager (pulumi-iac-passphrase)

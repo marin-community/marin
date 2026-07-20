@@ -23,15 +23,17 @@ from infra.ci.select_tests import (
 )
 
 
-def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str]]:
+def select_matrix(changed_files: list[str], repo_root: Path) -> list[dict[str, str | int]]:
     """Mirror the diff-driven branch of select_tests.main without git."""
     classification = classify(changed_files, repo_root)
+    source_build_scopes = set(classification.native_changed)
     if classification.broad:
-        return full_matrix(repo_root)
+        return full_matrix(repo_root, source_build_scopes)
     return compute_matrix(
         classification.src_modules,
         classification.direct_tests,
         classification.forced,
+        source_build_scopes,
         repo_root,
     )
 
@@ -43,12 +45,12 @@ def write(repo_root: Path, relative: str, body: str = "") -> Path:
     return path
 
 
-def leg_paths(matrix: list[dict[str, str]], scope: str) -> list[str]:
+def leg_paths(matrix: list[dict[str, str | int]], scope: str) -> list[str]:
     leg = next(entry for entry in matrix if entry["package"] == UV_PACKAGE[scope])
-    return leg["test_paths"].split()
+    return str(leg["test_paths"]).split()
 
 
-def scopes_in(matrix: list[dict[str, str]]) -> set[str]:
+def scopes_in(matrix: list[dict[str, str | int]]) -> set[str]:
     packages = {entry["package"] for entry in matrix}
     return {scope for scope in SCOPES if UV_PACKAGE[scope] in packages}
 
@@ -327,5 +329,50 @@ def test_broad_trigger_runs_every_scope() -> None:
         "package": "marin-core",
         "extras": "--extra cpu --extra dedup",
         "test_paths": "tests",
+        "setup": "",
+        "timeout": 15,
     }
-    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"))
+    assert select_matrix(["uv.lock"], Path("/unused")) == full_matrix(Path("/unused"), set())
+
+
+def _leg(matrix: list[dict[str, str | int]], label: str) -> dict[str, str | int]:
+    return next(entry for entry in matrix if entry["label"] == label)
+
+
+def test_native_rust_change_forces_the_owning_scope(tmp_path: Path) -> None:
+    """A rust/ change is invisible to the import graph, so it force-selects its owning scope
+    and marks it for a source build."""
+    result = classify(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    assert result.forced == {"dupekit"}
+    assert result.native_changed == {"dupekit"}
+    # A Cargo.lock under the crate counts as a native change too.
+    assert classify(["lib/finelog/rust/Cargo.lock"], tmp_path).native_changed == {"finelog"}
+
+
+def test_native_rust_only_change_runs_just_the_owning_scope(tmp_path: Path) -> None:
+    """A rust-only change runs the owning scope from source; its own tests cover the native,
+    and consumers are not pulled in."""
+    matrix = select_matrix(["lib/dupekit/rust/src/lib.rs"], tmp_path)
+    assert scopes_in(matrix) == {"dupekit"}
+    assert _leg(matrix, "dupekit")["setup"] == "rust"
+    assert _leg(matrix, "dupekit")["timeout"] == 30
+
+
+def test_native_change_source_builds_only_the_owning_scope(tmp_path: Path) -> None:
+    """A finelog rust change source-builds only the finelog leg; a co-changed consumer (iris)
+    is selected by its own Python change and runs against the prebuilt wheel."""
+    write(tmp_path, "lib/iris/src/iris/__init__.py")
+    write(tmp_path, "lib/iris/src/iris/log.py", "X = 1\n")
+    write(tmp_path, "lib/iris/tests/test_log.py", "from iris.log import X\n")
+
+    matrix = select_matrix(["lib/finelog/rust/pyext/src/lib.rs", "lib/iris/src/iris/log.py"], tmp_path)
+
+    assert _leg(matrix, "finelog")["setup"] == "rust"
+    assert _leg(matrix, "iris")["setup"] == ""
+
+
+def test_broad_trigger_does_not_source_build(tmp_path: Path) -> None:
+    """A uv.lock bump reruns the full matrix but keeps every leg on the prebuilt wheel."""
+    matrix = select_matrix(["uv.lock"], tmp_path)
+    assert matrix, "broad trigger emits the full matrix"
+    assert all(leg["setup"] == "" for leg in matrix)

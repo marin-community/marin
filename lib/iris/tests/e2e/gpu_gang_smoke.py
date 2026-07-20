@@ -318,7 +318,7 @@ class KindTarget(ControllerTarget):
         install_kueue.run_install(
             variant=install_kueue.VARIANT_UPSTREAM,
             kubeconfig=self.kubeconfig,
-            chart_version="0.11.0",
+            chart_version=install_kueue.UPSTREAM_DEFAULT_VERSION,
             with_queues=True,
             cluster_queue=cfg.kubernetes_provider.kueue.cluster_queue,
             flavor_topology=install_kueue.MULTINODE_TOPOLOGY_NAME,

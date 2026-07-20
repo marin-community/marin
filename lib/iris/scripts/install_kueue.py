@@ -38,20 +38,21 @@ Both variants:
   3. Create the Topology CRs (infiniband + multinode-nvlink-ib) so TAS can resolve
      the podset-topology annotations (``backend.coreweave.cloud/leafgroup``,
      ``ds.coreweave.com/nvlink.domain``).
-  4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavor
-     (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes) +
-     ClusterQueue. The ClusterQueue enables priority preemption within the queue
-     (``preemption.withinClusterQueue: LowerPriority``): a higher-priority Workload
-     evicts lower-priority admitted ones when it cannot otherwise be admitted —
-     including when TAS cannot place it on real nodes (topology pressure), which is
-     how a higher-priority gang reclaims capacity from running lower-priority gangs.
-     Quota stays non-binding, so the pressure signal is TAS, not quota. Because Iris
-     now routes *every* pod through Kueue (not just gangs), pass
-     ``--cpu-flavor-node-label KEY=VALUE`` to also provision the ``cw-cpu``
-     ResourceFlavor so CPU-only pods have a flavor to match. The namespaced
-     LocalQueue is NOT created here: Iris reconciles its own (``{label_prefix}-lq``)
-     at controller start (``K8sControllerProvider.ensure_kueue_queues``), binding it
-     to this ClusterQueue via ``kubernetes_provider.kueue.cluster_queue``.
+  4. (``--with-queues``) Create the cluster-scoped, admin-owned ResourceFlavors
+     (``cw-ib``, selecting ``backend.coreweave.cloud/flavor=infiniband`` nodes, and
+     the selector-less ``cw-cpu``) + ClusterQueue. Every pod routes through Kueue, so
+     both flavors are always provisioned; ``--cpu-flavor-node-label KEY=VALUE`` pins
+     ``cw-cpu`` to specific CPU nodes instead of leaving it selector-less (flavor
+     routing: ``lib/iris/docs/coreweave.md``). The ClusterQueue enables priority
+     preemption within the queue (``preemption.withinClusterQueue: LowerPriority``):
+     a higher-priority Workload evicts lower-priority admitted ones when it cannot
+     otherwise be admitted — including when TAS cannot place it on real nodes
+     (topology pressure), which is how a higher-priority gang reclaims capacity from
+     running lower-priority gangs. Quota stays non-binding, so the pressure signal is
+     TAS, not quota. The namespaced LocalQueue is NOT created here: Iris reconciles its
+     own (``{label_prefix}-lq``) at controller start
+     (``K8sControllerProvider.ensure_kueue_queues``), binding it to this ClusterQueue
+     via ``kubernetes_provider.kueue.cluster_queue``.
 
 NB on Kueue version: TAS-aware preemption is version-sensitive. On too-old a Kueue
 a ClusterQueue that combines a topology-bound flavor with a ``preemption`` stanza
@@ -116,9 +117,11 @@ from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_pr
 _WEBHOOK_WARMUP_RETRIES = 6
 _WEBHOOK_WARMUP_DELAY = 5.0
 
-# Upstream Kueue OCI helm chart (kind / generic clusters).
+# Upstream Kueue OCI helm chart (kind / generic clusters). Pinned >= 0.13 for the PodSet-slice
+# TAS feature (multi-rack GB200 nvlink.domain.sliced placement); 0.18 also carries the
+# IsTAS()-recognition fix for slice-only pod groups (upstream #10282, patched in 0.16/0.17).
 UPSTREAM_CHART = "oci://registry.k8s.io/kueue/charts/kueue"
-UPSTREAM_DEFAULT_VERSION = "0.11.0"
+UPSTREAM_DEFAULT_VERSION = "0.18.0"
 
 
 # --------------------------------------------------------------------------
@@ -240,9 +243,9 @@ def run_install(
     Idempotent. Prints the plan and returns without mutating the cluster unless
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
-    ``cpu_flavor_node_label`` is a ``(key, value)`` node label selecting CPU nodes;
-    when set, ``--with-queues`` also provisions the cw-cpu ResourceFlavor and adds it
-    to the ClusterQueue so CPU-only pods routed through Kueue have a flavor to match.
+    ``--with-queues`` always provisions the cw-cpu ResourceFlavor;
+    ``cpu_flavor_node_label`` as ``(key, value)`` pins it to specific CPU nodes,
+    otherwise it is selector-less.
     ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
     namespace) — never widen this to system namespaces on a shared cluster.
     """
@@ -252,10 +255,11 @@ def run_install(
     hflags = helm_flags(kubeconfig, context)
     kflags = kubectl_flags(kubeconfig, context)
     if with_queues:
-        queue_docs = [build_resource_flavor(flavor_topology)]
-        if cpu_flavor_node_label is not None:
-            queue_docs.append(build_cpu_resource_flavor(*cpu_flavor_node_label))
-        queue_docs.append(build_cluster_queue(cluster_queue, include_cpu_flavor=cpu_flavor_node_label is not None))
+        queue_docs = [
+            build_resource_flavor(flavor_topology),
+            build_cpu_resource_flavor(cpu_flavor_node_label),
+            build_cluster_queue(cluster_queue),
+        ]
     else:
         queue_docs = []
 
@@ -301,7 +305,7 @@ def run_install(
         fg="green",
         bold=True,
     )
-    click.echo("  kubernetes_provider:\n    kueue:\n" f"      cluster_queue: {cluster_queue}")
+    click.echo(f"  kubernetes_provider:\n    kueue:\n      cluster_queue: {cluster_queue}")
 
 
 def _helm_upgrade(chart: str, release: str, values_file: str, hflags: list[str], version_args: list[str]) -> None:
@@ -424,7 +428,11 @@ def _parse_node_label(spec: str) -> tuple[str, str]:
 )
 @click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config).")
 @click.option("--context", default=None, help="kube context to target.")
-@click.option("--chart-version", default=None, help="Pin the chart version (upstream default: 0.11.0; cw: latest).")
+@click.option(
+    "--chart-version",
+    default=None,
+    help=f"Pin the chart version (upstream default: {UPSTREAM_DEFAULT_VERSION}; cw: latest).",
+)
 @click.option("--release", default=RELEASE_DEFAULT, help="helm release name (default: kueue).")
 @click.option(
     "--with-queues/--no-with-queues",
@@ -442,8 +450,8 @@ def _parse_node_label(spec: str) -> tuple[str, str]:
     "--cpu-flavor-node-label",
     default=None,
     metavar="KEY=VALUE",
-    help="Node label selecting CPU nodes. When set, --with-queues also provisions the cw-cpu "
-    "ResourceFlavor so CPU-only pods routed through Kueue land on CPU capacity (never the IB GPU flavor).",
+    help="Optional node label pinning the cw-cpu ResourceFlavor to specific CPU nodes; omit to leave "
+    "it selector-less. --with-queues always provisions cw-cpu.",
 )
 @click.option(
     "--pod-namespace",

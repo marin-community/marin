@@ -301,3 +301,25 @@ def use_test_mesh(tensor_parallelism: int = 1, *, mesh: Optional[Mesh] = None, s
         mesh = create_test_mesh(tensor_parallelism, skip_ok=skip_ok)
     with set_mesh(mesh):
         yield mesh
+
+
+def moe_gate_grad_row_norms(block_grad, config) -> np.ndarray:
+    """Per-expert L2 norm of an MoE block's router-gate weight gradient (shape [num_experts])."""
+    per_expert = hax.sqrt(hax.sum(block_grad.gate.weight**2, axis=config.Embed))
+    return np.asarray(per_expert.rearrange((config.Experts,)).array)
+
+
+def single_token_moe_block_grad(block, config):
+    """Task-loss gradient of a one-token MoE-block forward.
+
+    With a single token, the router-gate weight gradient factors as ``x (x) dL/d(logit_e)``, so a
+    zero gate-gradient row for expert ``e`` means expert ``e``'s router logit received no task-loss
+    gradient. This isolates the router gradient per expert without reimplementing the routing.
+    """
+    x = hax.random.normal(PRNGKey(2), (hax.Axis(config.max_Pos.name, 1), config.Embed))
+
+    def task_loss(block, x):
+        out, _ = block(x)
+        return hax.sum(out).scalar()
+
+    return eqx.filter_jit(eqx.filter_grad(task_loss))(block, x)

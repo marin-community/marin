@@ -39,6 +39,8 @@ SCOPES: tuple[str, ...] = (
     "levanter",
     "zephyr",
     "marin",
+    "dupekit",
+    "finelog",
 )
 
 
@@ -57,12 +59,15 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("experiments", "."),
 )
 
-# Files whose change triggers running every package's full test suite.
+# Files whose change triggers running every package's full test suite. The Rust
+# source-build machinery is included so a change to it re-runs the full matrix
+# and exercises a source build somewhere.
 BROAD_TRIGGERS: frozenset[str] = frozenset(
     {
         "uv.lock",
         "pyproject.toml",
         "infra/ci/select_tests.py",
+        "scripts/rust_mode.py",
         ".github/workflows/unified-unit.yaml",
     }
 )
@@ -76,6 +81,8 @@ UV_PACKAGE: dict[str, str] = {
     "levanter": "marin-levanter",
     "zephyr": "marin-zephyr",
     "marin": "marin-core",
+    "dupekit": "marin-dupekit",
+    "finelog": "marin-finelog",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
@@ -95,6 +102,24 @@ SHARD_COUNT: dict[str, int] = {"levanter": 4}
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
 MIN_FILES_PER_SHARD = 15
+
+# Native (maturin) packages, keyed by their owning scope. A change under a crate's
+# rust/ tree is invisible to the Python import graph, so classify force-selects the
+# owning scope and builds it from source. Its own tests cover the extension;
+# downstream consumers are selected only by their Python-level changes and run
+# against the prebuilt wheel.
+NATIVE_CRATE_DIR: dict[str, str] = {
+    "dupekit": "lib/dupekit/rust",
+    "finelog": "lib/finelog/rust",
+}
+
+# The matrix `setup` tag that unified-unit.yaml maps to the Rust source-build
+# steps (toolchain + cargo cache + scripts/rust_mode.py dev).
+RUST_SETUP_TAG = "rust"
+# A native source build (finelog links the datafusion/arrow tree) exceeds the
+# default per-leg budget; source-build legs carry this timeout instead.
+SOURCE_BUILD_TIMEOUT = 30
+DEFAULT_LEG_TIMEOUT = 15
 
 # Suites that cannot be import-selected: each drives a whole subsystem (accelerator
 # kernels, a browser-driven smoke test) rather than a set of importable modules, so
@@ -305,8 +330,11 @@ def dependencies_by_test_file(scope: str, repo_root: Path, known: set[str]) -> d
 
 def git_changed_files(base_ref: str, repo_root: Path) -> list[str]:
     """Files changed between base_ref and HEAD (repo-root-relative POSIX paths)."""
+    # --no-renames: a file moved out of a native crate's rust/ tree must surface as a
+    # delete of its old path, or its scope would miss the source-build trigger; with
+    # rename detection git reports only the destination.
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+        ["git", "diff", "--name-only", "--no-renames", f"{base_ref}...HEAD"],
         capture_output=True,
         text=True,
         cwd=repo_root,
@@ -327,6 +355,8 @@ class ClassifyResult:
     """{scope: [repo-root-relative test file paths]}."""
     forced: set[str]
     """Scopes that must run their full test suite."""
+    native_changed: set[str]
+    """Scopes whose native crate (lib/<scope>/rust) changed — need a source build."""
 
 
 def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
@@ -335,10 +365,24 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
     src_modules: set[str] = set()
     direct_tests: dict[str, list[str]] = defaultdict(list)
     forced: set[str] = set()
+    native_changed: set[str] = set()
 
     for filepath in changed_files:
         if filepath in BROAD_TRIGGERS:
             broad = True
+            continue
+
+        # A native crate's rust/ tree is not on any import root, so this branch
+        # runs before source-root handling. The change is invisible to the Python
+        # import graph, so force-select the owning scope and mark it for a source
+        # build; its own tests exercise the extension.
+        native_scope = next(
+            (scope for scope, crate_dir in NATIVE_CRATE_DIR.items() if filepath.startswith(f"{crate_dir}/")),
+            None,
+        )
+        if native_scope is not None:
+            forced.add(native_scope)
+            native_changed.add(native_scope)
             continue
 
         source_root = next(
@@ -375,6 +419,7 @@ def classify(changed_files: list[str], repo_root: Path) -> ClassifyResult:
         src_modules=src_modules,
         direct_tests=dict(direct_tests),
         forced=forced,
+        native_changed=native_changed,
     )
 
 
@@ -392,17 +437,28 @@ def extra_suites(changed_files: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def matrix_leg(scope: str, tests: list[str], shard: tuple[int, int] | None = None) -> dict[str, str]:
+def matrix_leg(
+    scope: str,
+    tests: list[str],
+    shard: tuple[int, int] | None = None,
+    *,
+    source_build: bool = False,
+) -> dict[str, str | int]:
     """Build one unified-unit matrix leg with uv/pytest arguments.
 
     ``shard`` is a ``(index, total)`` pair when the scope's suite is split across several
     runners; it rides in the label so each shard surfaces as its own workflow job.
+    ``source_build`` flags a leg whose native extension must be built from source (the
+    workflow reads the ``setup`` tag).
     """
+    label = scope if shard is None else f"{scope} {shard[0]}/{shard[1]}"
     return {
-        "label": scope if shard is None else f"{scope} {shard[0]}/{shard[1]}",
+        "label": label,
         "package": UV_PACKAGE[scope],
         "extras": " ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
         "test_paths": " ".join(tests) if tests else TEST_DIR[scope],
+        "setup": RUST_SETUP_TAG if source_build else "",
+        "timeout": SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
     }
 
 
@@ -425,39 +481,52 @@ def shard_files(tests: list[str], count: int) -> list[list[str]]:
     return chunks
 
 
-def scope_legs(scope: str, tests: list[str] | None, repo_root: Path) -> list[dict[str, str]]:
+def scope_legs(
+    scope: str,
+    tests: list[str] | None,
+    repo_root: Path,
+    *,
+    source_build: bool = False,
+) -> list[dict[str, str | int]]:
     """Matrix legs for one scope: one leg, or several when the scope is sharded.
 
     ``tests is None`` runs the full suite. A sharded scope expands that to its file list so
     full and diff-driven runs spread across the same runners; below MIN_FILES_PER_SHARD it
-    stays a single leg.
+    stays a single leg. ``source_build`` flags the legs whose native extension must be built
+    from source.
     """
     cap = SHARD_COUNT.get(scope, 1)
     files = tests if tests is not None else (all_test_files(scope, repo_root) if cap > 1 else None)
     if cap <= 1 or files is None or len(files) <= MIN_FILES_PER_SHARD:
-        return [matrix_leg(scope, files or [])]
+        return [matrix_leg(scope, files or [], source_build=source_build)]
 
     # Floor, not ceil: pick the largest shard count that still leaves every shard at least
     # MIN_FILES_PER_SHARD files, so a medium selection is not split into runners so small that
     # setup overhead dominates (16 files stays one leg, not two 8-file legs).
     count = min(cap, len(files) // MIN_FILES_PER_SHARD)
     if count <= 1:
-        return [matrix_leg(scope, sorted(files))]
+        return [matrix_leg(scope, sorted(files), source_build=source_build)]
     chunks = shard_files(sorted(files), count)
-    return [matrix_leg(scope, chunk, shard=(index + 1, count)) for index, chunk in enumerate(chunks)]
+    return [
+        matrix_leg(scope, chunk, shard=(index + 1, count), source_build=source_build)
+        for index, chunk in enumerate(chunks)
+    ]
 
 
 def compute_matrix(
     src_modules: set[str],
     direct_tests: dict[str, list[str]],
     forced_scopes: set[str],
+    source_build_scopes: set[str],
     repo_root: Path,
-) -> list[dict[str, str]]:
+) -> list[dict[str, str | int]]:
     """Compute the test matrix.
 
-    Returns a list of matrix legs. Each leg has a label, package (uv name), extras, and
-    test_paths. An empty tests list means run the full suite directory; a scope may fan out
-    into several sharded legs.
+    Returns a list of matrix legs. Each leg has a label, package (uv name), extras,
+    test_paths, and a source-build ``setup``/``timeout``. An empty tests list means run the
+    full suite directory; a scope may fan out into several sharded legs.
+    ``source_build_scopes`` are the scopes whose legs must build the native extension from
+    source.
     """
     if not (src_modules or direct_tests or forced_scopes):
         return []
@@ -466,10 +535,11 @@ def compute_matrix(
     known = set(modules)
     affected = affected_modules(src_modules, build_importers(modules)) if src_modules else set()
 
-    matrix: list[dict[str, str]] = []
+    matrix: list[dict[str, str | int]] = []
     for scope in SCOPES:
+        source_build = scope in source_build_scopes
         if scope in forced_scopes:
-            matrix.extend(scope_legs(scope, None, repo_root))
+            matrix.extend(scope_legs(scope, None, repo_root, source_build=source_build))
             continue
 
         selected = list(direct_tests.get(scope, []))
@@ -479,16 +549,16 @@ def compute_matrix(
                     selected.append(test_file)
 
         if selected:
-            matrix.extend(scope_legs(scope, sorted(selected), repo_root))
+            matrix.extend(scope_legs(scope, sorted(selected), repo_root, source_build=source_build))
 
     return matrix
 
 
-def full_matrix(repo_root: Path) -> list[dict[str, str]]:
+def full_matrix(repo_root: Path, source_build_scopes: set[str]) -> list[dict[str, str | int]]:
     """Every scope, each running its full suite (sharded where configured)."""
-    legs: list[dict[str, str]] = []
+    legs: list[dict[str, str | int]] = []
     for scope in SCOPES:
-        legs.extend(scope_legs(scope, None, repo_root))
+        legs.extend(scope_legs(scope, None, repo_root, source_build=scope in source_build_scopes))
     return legs
 
 
@@ -511,9 +581,14 @@ def main() -> None:
 
     repo_root = Path(__file__).parent.parent.parent
 
-    # Without a base ref there is nothing to gate the out-of-band suites on, so run them all.
+    # Without a base ref there is no diff to inspect, so conservatively build every native
+    # extension from source and run the out-of-band suites too.
     if args.base_ref is None:
-        result = {"reason": "run-all-tests", "matrix": full_matrix(repo_root), "suites": sorted(EXTRA_SUITE_TRIGGERS)}
+        result = {
+            "reason": "run-all-tests",
+            "matrix": full_matrix(repo_root, set(NATIVE_CRATE_DIR)),
+            "suites": sorted(EXTRA_SUITE_TRIGGERS),
+        }
         print(json.dumps(result, indent=2))
         return
 
@@ -521,16 +596,23 @@ def main() -> None:
     classification = classify(changed, repo_root)
     suites = extra_suites(changed)
 
+    # The scopes whose native extension's Rust changed build it from source; every other
+    # leg installs the prebuilt wheel. This is independent of full vs. diff-driven runs: a
+    # broad trigger (e.g. a uv.lock bump) runs the whole matrix but keeps every leg on the
+    # fast prebuilt-wheel path.
+    source_build_scopes = set(classification.native_changed)
+
     if args.run_all_tests:
-        reason, matrix = "run-all-tests", full_matrix(repo_root)
+        reason, matrix = "run-all-tests", full_matrix(repo_root, source_build_scopes)
     elif classification.broad:
-        reason, matrix = "broad-trigger", full_matrix(repo_root)
+        reason, matrix = "broad-trigger", full_matrix(repo_root, source_build_scopes)
     else:
         reason = "diff-driven"
         matrix = compute_matrix(
             classification.src_modules,
             classification.direct_tests,
             classification.forced,
+            source_build_scopes,
             repo_root,
         )
 

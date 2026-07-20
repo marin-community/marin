@@ -43,6 +43,9 @@ class TaskRowDelta:
     started_at: Timestamp | None = None
     finished_at: Timestamp | None = None
     container_id: str | None = None
+    # Tri-state, folded last-non-null: None leaves the column unchanged, "" clears it,
+    # a string sets it (commit._flush_tasks coalesces None→keep, ""→clear).
+    status_message: str | None = None
 
 
 @dataclass

@@ -1,0 +1,59 @@
+name: "Ops - Ducky"
+
+# Deploys the ducky service to the marin Iris cluster on merge to main (when lib/ducky
+# or infra/ducky change) and on manual dispatch. Rolls the `ducky-marin` Pulumi stack
+# (infra/ducky): the IrisService Command resubmits /ops/ducky with RECREATE when its
+# spec or code hash changed, building the Vue dashboard itself (spec build_commands)
+# on every deploy.
+#
+# Service config lives in infra/ducky/Pulumi.ducky-marin.yaml; secret values live in
+# Secret Manager, resolved at submit time. The one dispatch input is a
+# deploy_generation override — the forced-redeploy hammer for a wedged instance whose
+# spec and code are unchanged.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lib/ducky/**'
+      - 'infra/ducky/**'
+      - '.github/workflows/ops-ducky.yaml'
+  workflow_dispatch:
+    inputs:
+      deploy_generation:
+        description: "Override ducky:deploy_generation to force a redeploy (any value not used before, e.g. a timestamp)"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ducky-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # The dashboard build runs inside `pulumi up` (spec build_commands); this step
+      # only pins the node version and primes the npm cache it uses.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: lib/ducky/dashboard/package-lock.json
+
+      - name: Roll the ducky service
+        uses: ./.github/actions/pulumi-deploy
+        with:
+          stack: ducky-marin
+          work-dir: infra/ducky
+          gcp-credentials: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+          gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}
+          # The program imports ducky + iris, so sync the whole workspace.
+          uv-sync-args: "--all-packages --extra deploy --frozen"
+          config-map: ${{ inputs.deploy_generation && format('{{"ducky:deploy_generation": {{"value": "{0}"}}}}', inputs.deploy_generation) || '' }}

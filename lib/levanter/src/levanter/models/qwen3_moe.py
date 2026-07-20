@@ -26,6 +26,7 @@ from levanter.layers.attention import Attention, AttentionBackend, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding
 from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
+from levanter.models.moe import dense_router_delta
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -71,6 +72,11 @@ class Qwen3MoeConfig(LlamaConfig):
     router_aux_loss_coef: float | None = 0.001
     decoder_sparse_step: int = 1
     mlp_only_layers: tuple[int, ...] = ()
+
+    # DenseMixer-style dense router gradient (training only). When enabled, the block keeps the
+    # sparse forward value but routes the dense all-experts gradient to the router logits. Default
+    # off; the exported/served forward is untouched. See levanter.models.moe.dense_router_delta.
+    dense_router_gradient: bool = False
 
     sliding_window: int | None = None
     max_window_layers: int = 48
@@ -291,6 +297,9 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
     config: Qwen3MoeConfig = eqx.field(static=True)
     gate: hnn.Linear
     experts: Qwen3MoeExperts
+    # Non-static (hnn.Dropout pattern) so levanter.utils.tree_utils.inference_mode can flip it for
+    # eval, which skips the DenseMixer dense pass. The flag only saves compute; values are identical.
+    inference: bool = False
 
     @staticmethod
     def init(config: Qwen3MoeConfig, *, key) -> "Qwen3MoeSparseMoeBlock":
@@ -404,19 +413,20 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
             return hax.named(out_repeat_unflat, (Token, TopExperts, self.config.Embed))
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, *, key=None) -> tuple[NamedArray, Dict[str, NamedArray]]:
         if x.has_axis("batch"):
             squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.max_Pos.name)]
         else:
             squash_axes = [x.resolve_axis(self.config.max_Pos.name)]
 
+        Experts = self.config.Experts
         TopExperts = self.config.TopExperts
         k_gate, k_experts = maybe_rng_split(key, 2)
 
         x_flat = hax.flatten_axes(x, old_axes=squash_axes, new_axis="token")
         Token = x_flat.resolve_axis("token")
         router_logits = self.gate(x_flat, key=k_gate)
-        topk_weights, topk_idx, _ = self._route(router_logits.astype(jnp.float32), Token, TopExperts)
+        topk_weights, topk_idx, expert_loads = self._route(router_logits.astype(jnp.float32), Token, TopExperts)
         topk_weights = topk_weights.astype(x.dtype)
 
         topk_idx_flat = hax.flatten_axes(topk_idx, old_axes=[Token, TopExperts], new_axis="token_repeat")
@@ -424,8 +434,38 @@ class Qwen3MoeSparseMoeBlock(eqx.Module):
         x_repeat_sort, group_sizes, sort_idx = self._permute(x_flat, topk_idx_flat, TokenRepeat)
         out_repeat_sort = self.experts(x_repeat_sort, group_sizes, key=k_experts)
         out_repeat_unflat = self._unpermute(out_repeat_sort, sort_idx, Token, TopExperts)
-        out = out_repeat_unflat.dot(topk_weights, axis=TopExperts)
-        return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes)
+
+        use_dense = self.config.dense_router_gradient and not self.inference
+        # Detach the router weights in the sparse combine so the router logits get their gradient
+        # purely from the dense delta (below); expert parameters still get the conventional sparse
+        # gradient through out_repeat_unflat.
+        combine_weights = jax.lax.stop_gradient(topk_weights) if use_dense else topk_weights
+        out = out_repeat_unflat.dot(combine_weights, axis=TopExperts)
+        if use_dense:
+            out = out + dense_router_delta(
+                x_flat,
+                router_logits,
+                self.experts.gate_proj.weight,
+                self.experts.up_proj.weight,
+                self.experts.down_proj.weight,
+                self.experts.act,
+                Experts=Experts,
+                Embed=self.config.Embed,
+                Mlp=self.config.MoeMlp,
+            )
+        out = hax.unflatten_axis(out, axis=Token, new_axes=squash_axes)
+
+        extras: Dict[str, NamedArray] = {}
+        if self.config.router_aux_loss_coef is not None:
+            # HF Qwen3-MoE load_balancing_loss_func: num_experts * sum_e f_e * P_e, with
+            # f_e = (top-k slot assignments to expert e) / tokens and P_e = mean-over-tokens softmax prob.
+            router_probs = hnn.softmax(router_logits.astype(jnp.float32), axis=Experts)
+            f = expert_loads.astype(jnp.float32) / Token.size
+            p = hax.mean(router_probs, axis=Token)
+            extras["load_balancing_loss"] = (
+                self.config.router_aux_loss_coef * self.config.num_experts * hax.sum(f * p, axis=Experts)
+            )
+        return out, extras
 
 
 class Qwen3MoeDecoderLayer(eqx.Module):
@@ -447,7 +487,7 @@ class Qwen3MoeDecoderLayer(eqx.Module):
     @named_call
     def __call__(
         self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+    ) -> tuple[NamedArray, Dict[str, NamedArray]]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         residual = x
         x = self.input_layernorm(x)
@@ -455,7 +495,8 @@ class Qwen3MoeDecoderLayer(eqx.Module):
 
         residual = x
         x = self.post_attention_layernorm(x)
-        return residual + self.mlp(x, key=k_mlp)
+        mlp_out, extras = self.mlp(x, key=k_mlp)
+        return residual + mlp_out, extras
 
 
 class Qwen3MoeTransformer(eqx.Module):
@@ -477,10 +518,16 @@ class Qwen3MoeTransformer(eqx.Module):
     @named_call
     def __call__(
         self, x: NamedArray, attn_mask: AttentionMask | None, *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+    ) -> tuple[NamedArray, Dict[str, NamedArray]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
-        return self.norm(x)
+        x, extras = cast(
+            tuple[NamedArray, Dict[str, NamedArray]],
+            self.layers.scan(x, mask=attn_mask, key=keys, pos_ids=pos_ids),
+        )
+        x = self.norm(x)
+        if self.config.router_aux_loss_coef is not None:
+            extras["load_balancing_loss"] = hax.sum(extras["load_balancing_loss"], axis=self.config.Layers)
+        return x, extras
 
 
 class Qwen3MoeLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen3MoeConfig]):
@@ -515,7 +562,7 @@ class Qwen3MoeLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen3Moe
         key=None,
     ) -> NamedArray:
         k_t, k_head = maybe_rng_split(key, 2)
-        x = self.activations(input_ids, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids)
+        x, _ = self.activations(input_ids, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids)
         if self.lm_head is not None:
             return self.lm_head(x, key=k_head)
         return self.embeddings.unembed(x)
@@ -527,9 +574,14 @@ class Qwen3MoeLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Qwen3Moe
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+    ) -> tuple[NamedArray, NamedArray | float]:
         x = self.embeddings.embed(input_ids)
-        return self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
+        x, extras = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
+
+        aux_loss: NamedArray | float = 0
+        if self.config.router_aux_loss_coef is not None:
+            aux_loss = extras["load_balancing_loss"]
+        return x, aux_loss
 
     def get_lm_head(self) -> hax.NamedArray:
         if self.lm_head is None:

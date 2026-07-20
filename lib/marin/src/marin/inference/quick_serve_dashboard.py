@@ -3,11 +3,13 @@
 
 """Browser dashboard and OpenAI-compatible reverse proxy for a quick-serve job.
 
-The dashboard is a single self-contained Vue page served at ``/``. It and every
-``/v1/*`` request resolve through the Iris controller proxy's
-``/proxy/<encoded-name>/`` prefix, so all browser fetches use relative URLs
-(``new URL(path, location.href)``) — the proxy does not rewrite HTML bodies, so an
-absolute path like ``/v1/chat/completions`` would escape the prefix.
+The dashboard is a single self-contained HTML file served at ``/``, built from
+the Vue app in the sibling ``dashboard/`` directory (``npm run build`` there
+regenerates the committed artifact). It and every ``/v1/*`` request resolve
+through the Iris controller proxy's ``/proxy/<encoded-name>/`` prefix, so all
+browser fetches use relative URLs (``new URL(path, location.href)``) — the proxy
+does not rewrite HTML bodies, so an absolute path like ``/v1/chat/completions``
+would escape the prefix.
 
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
 slice (see :mod:`marin.inference.serving_backend`) with the response streamed back
@@ -19,7 +21,7 @@ import importlib.resources
 import logging
 import socket
 import threading
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 
@@ -52,6 +54,25 @@ _REQUEST_DROP_HEADERS = frozenset(
 # Response headers dropped so the framing matches the re-chunked StreamingResponse.
 # Content-Encoding is preserved because aiter_raw() yields the undecoded body.
 _RESPONSE_DROP_HEADERS = frozenset({"content-length", "connection", "keep-alive", "transfer-encoding"})
+
+
+def _forwardable_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Headers to forward upstream: drop hop-by-hop headers and a blank-token ``Authorization``.
+
+    lm-eval's ``local-completions`` client always sends ``Authorization: Bearer <key>`` with an empty
+    key when none is configured, i.e. the literal value ``"Bearer "``. That trailing-space value is an
+    illegal HTTP header that httpx refuses to send, which would 502 the whole request. The upstream
+    needs no auth, so a blank-token ``Authorization`` is dropped rather than forwarded; a real token
+    passes through unchanged.
+    """
+    forwardable: dict[str, str] = {}
+    for key, value in headers.items():
+        if key.lower() in _REQUEST_DROP_HEADERS:
+            continue
+        if key.lower() == "authorization" and not value.removeprefix("Bearer").strip():
+            continue
+        forwardable[key] = value
+    return forwardable
 
 
 @dataclass(frozen=True)
@@ -117,7 +138,7 @@ def build_dashboard_app(
     async def proxy(request: Request) -> Response:
         client = state["client"]
         body = await request.body()
-        fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _REQUEST_DROP_HEADERS}
+        fwd_headers = _forwardable_request_headers(request.headers)
         upstream_request = client.build_request(
             request.method,
             request.url.path,
@@ -161,10 +182,10 @@ def build_dashboard_app(
 def bind_serving_socket(host: str, port: int) -> socket.socket:
     """Bind a listening socket up front so the port is claimed before serving.
 
-    Iris allocates the task's named port from a range (30000-40000) that overlaps
-    the OS ephemeral range, so any ephemeral socket the task later opens — notably
-    vLLM's many internal sockets — can squat the port we need. Binding here, before the
-    backend starts, removes the port from the ephemeral pool and reserves it for us.
+    Iris allocates the task's named port from a range (default 12000-13999)
+    kept below the kernel ephemeral floor so no other socket can be assigned
+    it (marin-community/marin#7392). Binding before the backend starts claims
+    the port ahead of any listener the backend might open.
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -217,7 +238,8 @@ def serve_app_background(
         thread.join()
 
 
-# Single-file Vue 3 dashboard served at /, read from a sibling .html file. Vue is
-# loaded from a CDN by the browser directly (not through the Iris proxy); all
-# same-origin fetches stay relative so they resolve under the controller proxy prefix.
+# Single-file Vue dashboard served at /, read from a sibling .html file. The file
+# is the committed build artifact of the dashboard/ Vue app: fully self-contained
+# (scripts and styles inlined, no CDN), so it works from both the bundled
+# workspace and the PyPI wheel, on networks that reach only the controller proxy.
 DASHBOARD_HTML = (importlib.resources.files(__package__) / "quick_serve_dashboard.html").read_text(encoding="utf-8")

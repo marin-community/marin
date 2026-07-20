@@ -27,11 +27,42 @@ provisioning:
         address: 34.27.183.11
         description: "Static egress for the marin Iris controller; allowlisted at the CoreWeave federation ingress"
       - { name: iris-marin-dev-fed-egress, region: us-central1, address: 35.254.13.19 }
+    # Docker Artifact Registry remote repositories: regional pull-through caches for the fleet's
+    # public base images. Workers rewrite image tags to the same-continent copy (see
+    # lib/iris/docs/image-push.md); cleanup defaults to 30d-delete / keep-16 (config.py), sized
+    # for the versioned iris image stream on ghcr.
+    registries:
+      - name: ghcr-mirror
+        docker_upstream: https://ghcr.io
+        locations: [us, europe]
+        description: "Pull-through cache for ghcr.io (iris worker/controller/task images)"
+      - name: docker-mirror
+        docker_upstream: DOCKER_HUB
+        locations: [us, europe]
+        description: "Pull-through cache for Docker Hub (harbor sandbox base images)"
+        # Base-image packages hold a handful of mutable tags, so the default keep-16 floor
+        # would protect every version indefinitely. Plain 7-day TTL instead: an evicted image
+        # is re-cached on its next pull, and a mutable tag is never more than a week stale.
+        cleanup_policies:
+          - id: delete-older-than-7d
+            action: DELETE
+            older_than: 604800s
 
 platform:
   label_prefix: marin
   gcp:
     project_id: hai-gcp-models
+    # Route public-image pulls (ghcr worker/controller/task images, harbor
+    # sandbox base images like ubuntu:24.04) through the same-continent AR
+    # remote repos declared in provisioning.gcp.registries above: upstream
+    # registry → zone prefix → mirror repo prefix.
+    registry_mirrors:
+      ghcr.io:
+        us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+        europe: europe-docker.pkg.dev/hai-gcp-models/ghcr-mirror
+      docker.io:
+        us: us-docker.pkg.dev/hai-gcp-models/docker-mirror
+        europe: europe-docker.pkg.dev/hai-gcp-models/docker-mirror
 
 defaults:
   ssh:

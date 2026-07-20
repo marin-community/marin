@@ -369,6 +369,59 @@ mod tests {
     }
 
     #[test]
+    fn project_to_schema_handles_native_map_column() {
+        // The full-DataType-equality gate must accept a canonical Map<Utf8,Utf8>
+        // column unchanged (fast path) and null-fill it when an older segment
+        // predates the column — a naming/nullability/sorted drift here would hard
+        // reject at compaction.
+        use crate::store::schema::map_utf8_utf8_type;
+        use arrow::array::{MapBuilder, MapFieldNames, StringBuilder};
+
+        let target: SchemaRef = Arc::new(ArrowSchema::new(vec![
+            Field::new("seq", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("worker_id", DataType::Utf8, false),
+            Field::new("labels", map_utf8_utf8_type(), true),
+        ]));
+
+        // Older segment without `labels` → null-filled as a typed empty MapArray.
+        let old = batch(vec![(1, 10, "a1")]);
+        let filled = project_to_schema(&old, &target).unwrap();
+        assert_eq!(filled.column(3).data_type(), &map_utf8_utf8_type());
+        assert_eq!(filled.column(3).null_count(), 1);
+
+        // A segment that already carries the canonical Map passes through as-is.
+        let names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut mb = MapBuilder::new(Some(names), StringBuilder::new(), StringBuilder::new());
+        mb.keys().append_value("scope");
+        mb.values().append_value("fleet");
+        mb.append(true).unwrap();
+        let labels = mb.finish();
+        let with_labels = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("seq", DataType::Int64, false),
+                Field::new("key", DataType::Int64, false),
+                Field::new("worker_id", DataType::Utf8, false),
+                Field::new("labels", map_utf8_utf8_type(), true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64])),
+                Arc::new(Int64Array::from(vec![10_i64])),
+                Arc::new(StringArray::from(vec!["a1"])),
+                Arc::new(labels),
+            ],
+        )
+        .unwrap();
+        let projected = project_to_schema(&with_labels, &target).unwrap();
+        assert_eq!(projected.column(3).data_type(), &map_utf8_utf8_type());
+        assert_eq!(projected.column(3).null_count(), 0);
+    }
+
+    #[test]
     fn project_to_schema_type_mismatch_errors() {
         // target says `key` is Utf8 but batch has Int64 — a non-additive conflict
         // (NOT a timestamp-unit difference), so it must still error.

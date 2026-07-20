@@ -26,7 +26,8 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, with_implicit_seq, AlignedBatch, Column, Schema,
+    merge_schemas, resolve_key_column, with_implicit_cluster, with_implicit_seq, AlignedBatch,
+    Column, Schema,
 };
 use crate::store::types::NamespaceStats;
 
@@ -317,7 +318,13 @@ impl Store {
     }
 
     /// Register or evolve `name` to `schema`; return the EFFECTIVE store-form
-    /// schema (WITH implicit `seq`). On re-register an empty policy is kept.
+    /// schema (WITH implicit `seq` and `cluster`). On re-register an empty policy
+    /// is kept.
+    ///
+    /// Every registered table gains the implicit `cluster` origin column when it
+    /// does not declare one, so a table's rows become attributable to their origin
+    /// cluster on a hub finelog uniformly — the forwarder stamps that column, and a
+    /// producer need not know the column exists.
     pub fn register_table(
         &self,
         name: &str,
@@ -327,7 +334,7 @@ impl Store {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(schema);
+        let stored = with_implicit_seq(with_implicit_cluster(schema));
 
         // `merge_schemas` (pure) raises SchemaConflict on a non-additive change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -671,13 +678,23 @@ mod tests {
     }
 
     #[test]
-    fn register_returns_store_form_with_seq() {
+    fn register_returns_store_form_with_seq_and_cluster() {
         let store = mem_store();
         let effective = store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
             .unwrap();
-        assert_eq!(effective, with_implicit_seq(worker_schema()));
+        // The store form prepends the implicit `seq` and appends the implicit
+        // origin `cluster` column, so a producer's plain schema becomes
+        // cluster-attributable without declaring the column.
+        assert_eq!(
+            effective,
+            with_implicit_seq(with_implicit_cluster(worker_schema()))
+        );
         assert_eq!(effective.columns[0].name, "seq");
+        let cluster = effective
+            .column("cluster")
+            .expect("implicit cluster column");
+        assert!(cluster.nullable);
     }
 
     #[test]
@@ -773,7 +790,7 @@ mod tests {
         let eff = store
             .register_table("iris.worker", subset, StoragePolicy::default())
             .unwrap();
-        assert_eq!(eff, with_implicit_seq(full));
+        assert_eq!(eff, with_implicit_seq(with_implicit_cluster(full)));
     }
 
     #[test]
@@ -791,9 +808,18 @@ mod tests {
                 StoragePolicy::default(),
             )
             .unwrap();
+        // `cluster` was added implicitly at the first registration, so it precedes
+        // `note`, which this re-register adds as the new additive column.
         assert_eq!(
             eff.column_names(),
-            vec!["seq", "worker_id", "mem_bytes", "timestamp_ms", "note"]
+            vec![
+                "seq",
+                "worker_id",
+                "mem_bytes",
+                "timestamp_ms",
+                "cluster",
+                "note"
+            ]
         );
     }
 

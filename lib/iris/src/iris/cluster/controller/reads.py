@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Row, bindparam, case, exists, func, literal_column, select, tuple_
+from sqlalchemy import Integer, Row, bindparam, case, exists, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.attempt_counts import (
@@ -58,6 +58,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
+    DISPATCHED_TASK_STATES,
     ActiveTaskRow,
     RunningTaskEntry,
     TaskDetailRow,
@@ -455,6 +456,74 @@ def task_summaries_for_jobs(
         )
         for jid, summary in summaries.items()
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveTaskRollupRow:
+    """One (root job, state) aggregate over waiting/running local tasks.
+
+    ``oldest_anchor_ms`` is the group's oldest wait anchor: for PENDING tasks the
+    last requeue (prior attempt's finish, else submission), for ASSIGNED/BUILDING
+    the current attempt's creation (dispatch time), NULL for RUNNING.
+    """
+
+    root_job_id: str
+    state: int
+    count: int
+    oldest_anchor_ms: int | None
+
+
+# Every state the task-state rollup counts: PENDING plus ASSIGNED/BUILDING/RUNNING.
+# PENDING and dispatched rows also carry a wait anchor; RUNNING rows are counted only.
+_ROLLUP_ACTIVE_STATES = (job_pb2.TASK_STATE_PENDING, *sorted(ACTIVE_TASK_STATES))
+
+_ROLLUP_ANCHOR_MS = case(
+    (
+        local_tasks.c.state == job_pb2.TASK_STATE_PENDING,
+        func.coalesce(task_attempts_table.c.finished_at_ms, local_tasks.c.submitted_at_ms),
+    ),
+    (
+        local_tasks.c.state.in_(sorted(DISPATCHED_TASK_STATES)),
+        func.coalesce(task_attempts_table.c.created_at_ms, local_tasks.c.submitted_at_ms),
+    ),
+    else_=None,
+)
+
+_ACTIVE_TASK_ROLLUP_STMT = (
+    select(
+        jobs_table.c.root_job_id,
+        local_tasks.c.state,
+        func.count().label("cnt"),
+        func.min(_ROLLUP_ANCHOR_MS, type_=Integer).label("oldest_anchor_ms"),
+    )
+    .select_from(
+        local_tasks.join(jobs_table, local_tasks.c.job_id == jobs_table.c.job_id).outerjoin(
+            task_attempts_table,
+            (task_attempts_table.c.task_id == local_tasks.c.task_id)
+            & (task_attempts_table.c.attempt_id == local_tasks.c.current_attempt_id),
+        )
+    )
+    .where(hint_rare_state(local_tasks.c.state.in_(bindparam("rollup_states", expanding=True))))
+    .group_by(jobs_table.c.root_job_id, local_tasks.c.state)
+)
+
+
+def active_task_rollup_by_root_job(tx: Tx) -> list[ActiveTaskRollupRow]:
+    """Aggregate waiting/running local tasks per (root job, state) with wait anchors.
+
+    Scans only tasks in the waiting/running states, so cost scales with the
+    active set rather than the table.
+    """
+    rows = tx.execute(_ACTIVE_TASK_ROLLUP_STMT, {"rollup_states": list(_ROLLUP_ACTIVE_STATES)}).all()
+    return [
+        ActiveTaskRollupRow(
+            root_job_id=str(row.root_job_id),
+            state=int(row.state),
+            count=int(row.cnt),
+            oldest_anchor_ms=int(row.oldest_anchor_ms) if row.oldest_anchor_ms is not None else None,
+        )
+        for row in rows
+    ]
 
 
 def parent_ids_with_children(tx: Tx, job_ids: Iterable[JobName]) -> set[JobName]:
@@ -1132,6 +1201,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_id,
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
+    tasks_table.c.status_message,
     tasks_table.c.backend_id,
     tasks_table.c.cluster,
 )
@@ -1169,6 +1239,7 @@ def _task_detail_from_row(row, counts: AttemptCounts) -> TaskDetailRow:
         current_worker_id=row.current_worker_id,
         current_worker_address=row.current_worker_address,
         container_id=row.container_id,
+        status_message=row.status_message,
         backend_id=str(row.backend_id or ""),
         cluster=str(row.cluster),
         peer_worker_label=row.peer_worker_label,
@@ -2091,15 +2162,21 @@ def changelog_min_seq(tx: Tx) -> int:
 
 
 def received_jobs_for_requester(tx: Tx, requester_id: str) -> list[JobName]:
-    """Every still-present job this peer received from ``requester_id`` (the full set
-    a stale/first-contact requester is resynced with)."""
+    """Every still-present job under a root this peer received from ``requester_id``
+    (the full set a stale/first-contact requester is resynced with).
+
+    Covers the whole subtree, not just the handed-off roots: a job the root spawns
+    runs locally on this peer and is reported to the same requester, so it is matched
+    through ``root_job_id``. Ordered by depth, so a parent precedes its children.
+    """
     rows = tx.execute(
-        select(federated_jobs_table.c.job_id)
-        .select_from(federated_jobs_table.join(jobs_table, jobs_table.c.job_id == federated_jobs_table.c.job_id))
+        select(jobs_table.c.job_id)
+        .select_from(jobs_table.join(federated_jobs_table, federated_jobs_table.c.job_id == jobs_table.c.root_job_id))
         .where(
             federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
             federated_jobs_table.c.peer_id == requester_id,
         )
+        .order_by(jobs_table.c.depth)
     ).all()
     return [r.job_id for r in rows]
 

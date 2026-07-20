@@ -29,18 +29,23 @@ SESSION_COOKIE = "iris_session"
 DASHBOARD_ROLE = "dashboard"
 
 # Role carried by a verified federation token — a trusted peer handing a job off or
-# driving its sync/cancel/proxy. Method-scoped to FEDERATION_RPCS below, never a
-# general identity: a federation bearer the composite verifier accepts cannot reach
-# any other RPC even though it authenticated.
+# driving its sync/cancel/proxy. Method-scoped to FEDERATION_RPCS and the
+# target-scoped FEDERATION_SCOPED_RPCS below, never a general identity: a federation
+# bearer the composite verifier accepts cannot reach any other RPC even though it
+# authenticated.
 FEDERATION_PEER_ROLE = "federation-peer"
 
-# The only RPCs a federation-peer identity may call: whole-job handoff, routed
+# RPCs a federation-peer identity may call unconditionally: whole-job handoff, routed
 # cancel, delta-sync, and the capability heartbeat. A default-deny allowlist, like
-# DASHBOARD_READABLE_RPCS. The on-demand exec/profile proxies (ProfileTask,
-# ExecInContainer) are deliberately excluded until their handlers scope a peer to
-# the jobs it federated per target — a peer must not exec into the receiving
-# cluster's own tasks or profile its controller.
+# DASHBOARD_READABLE_RPCS.
 FEDERATION_RPCS: frozenset[str] = frozenset({"LaunchJob", "TerminateJob", "FederationSync", "ListBackends"})
+
+# On-demand debug proxies a federation-peer identity may call, but only after the
+# handler confirms the target task belongs to a job that peer federated here (its
+# RECEIVED handle) — a peer must not profile/exec/inspect the receiving cluster's own
+# tasks or its controller. authorize_method admits these; the controller service's
+# _authorize_federated_debug_target enforces the per-target ownership.
+FEDERATION_SCOPED_RPCS: frozenset[str] = frozenset({"ProfileTask", "ExecInContainer", "GetProcessStatus"})
 
 
 class AuthzAction(StrEnum):
@@ -120,7 +125,11 @@ def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
             f"Read-only dashboard access cannot call {method_name}; "
             "this identity is not provisioned for write access",
         )
-    if identity.role == FEDERATION_PEER_ROLE and method_name not in FEDERATION_RPCS:
+    if (
+        identity.role == FEDERATION_PEER_ROLE
+        and method_name not in FEDERATION_RPCS
+        and method_name not in FEDERATION_SCOPED_RPCS
+    ):
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"Federation-peer identity cannot call {method_name}; it is scoped to the federation RPC subset",

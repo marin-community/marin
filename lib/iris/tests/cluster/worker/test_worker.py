@@ -27,10 +27,10 @@ from iris.cluster.runtime.types import (
     MountKind,
     MountSpec,
 )
+from iris.cluster.stats.tables import IrisTaskStat, IrisWorkerStat
 from iris.cluster.types import Entrypoint, JobName
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
-from iris.cluster.worker.stats import IrisTaskStat, IrisWorkerStat
 from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.cluster.worker.worker_types import LogLine
@@ -1442,7 +1442,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
             run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id="/test-user/test-job/0",
         attempt_id=3,
@@ -1488,7 +1488,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
             run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id="/test-user/discover-job/0",
         attempt_id=5,
@@ -1530,7 +1530,7 @@ def test_docker_adopt_container(docker_runtime, tmp_path):
             run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id="/test-user/adopt-job/0",
         attempt_id=0,
@@ -1574,7 +1574,7 @@ def test_docker_worker_restart_round_trip_adopts_surviving_container(docker_runt
             run_command=job_pb2.CommandEntrypoint(argv=["sleep", "60"]),
         ),
         env={},
-        mounts=[MountSpec("/app", kind=MountKind.WORKDIR)],
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
         workdir_host_path=workdir,
         task_id=task_id,
         attempt_id=0,

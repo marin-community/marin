@@ -1,0 +1,34 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Contact points, provisioned from files like the rest of the alerting tree: UI
+# edits do not persist (Grafana's SQLite is ephemeral on Cloud Run) and would be
+# overwritten by these files anyway.
+#
+# ops-critical carries two receivers so a critical alert reaches email and Slack
+# without relying on routing-tree subtleties; ops-slack is the warning tier.
+# $SLACK_ALERTS_WEBHOOK is expanded from the container environment (Secret
+# Manager: marin-grafana-slack-webhook). Email delivery additionally needs valid
+# SMTP credentials — without them email is inert while Slack still delivers.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ops-critical
+    receivers:
+      - uid: ops-critical-email
+        type: email
+        settings:
+          addresses: ops@openathena.ai
+      - uid: ops-critical-slack
+        type: slack
+        settings:
+          url: $SLACK_ALERTS_WEBHOOK
+
+  - orgId: 1
+    name: ops-slack
+    receivers:
+      - uid: ops-slack-webhook
+        type: slack
+        settings:
+          url: $SLACK_ALERTS_WEBHOOK

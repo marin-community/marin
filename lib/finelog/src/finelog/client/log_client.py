@@ -115,6 +115,25 @@ _PRIMITIVE_TYPE_MAP: dict[Any, ColumnTypeValue] = {
     datetime: stats_pb2.COLUMN_TYPE_TIMESTAMP_MS,
 }
 
+# Human-readable list of the dataclass field types finelog can infer a column
+# from, for the unsupported-type error message.
+_SUPPORTED_FIELD_TYPES = "str, int, float, bool, bytes, datetime, dict[str, str]"
+
+
+def _column_type_for_annotation(inner: Any) -> ColumnTypeValue | None:
+    """Resolve a non-``Optional`` field annotation to a ``ColumnType``.
+
+    Returns ``None`` for an unsupported annotation. ``dict[str, str]`` infers to
+    ``COLUMN_TYPE_MAP`` (a native ``Map<Utf8,Utf8>`` column); every other
+    supported field is a bare primitive class in ``_PRIMITIVE_TYPE_MAP``.
+    """
+    primitive = _PRIMITIVE_TYPE_MAP.get(inner)
+    if primitive is not None:
+        return primitive
+    if typing.get_origin(inner) is dict and typing.get_args(inner) == (str, str):
+        return stats_pb2.COLUMN_TYPE_MAP
+    return None
+
 
 def _strip_optional(annotation: Any) -> tuple[Any, bool]:
     """Return ``(inner, nullable)`` for ``T | None`` annotations.
@@ -161,11 +180,11 @@ def schema_from_dataclass(cls: type) -> Schema:
         # rebuild and wedge all writes. _strip_optional still runs to unwrap the
         # inner type of ``T | None`` fields and to reject unsupported unions.
         inner, _nullable = _strip_optional(annotation)
-        col_type = _PRIMITIVE_TYPE_MAP.get(inner)
+        col_type = _column_type_for_annotation(inner)
         if col_type is None:
             raise SchemaValidationError(
                 f"dataclass {cls.__name__}: field {field.name!r} has unsupported "
-                f"type {annotation!r} (supported: str, int, float, bool, bytes, datetime)"
+                f"type {annotation!r} (supported: {_SUPPORTED_FIELD_TYPES})"
             )
         columns.append(Column(name=field.name, type=col_type, nullable=True))
     key_column = getattr(cls, "key_column", "")

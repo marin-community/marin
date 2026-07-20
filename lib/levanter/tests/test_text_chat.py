@@ -18,6 +18,8 @@ from levanter.data.text.trace_chat import (
     TRACE_LABEL_OBSERVATION,
     TRACE_LABEL_PATCH,
     TraceChatDataset,
+    TraceChatEvaluationFormat,
+    dataset_for_trace_chat_format,
 )
 from levanter.store.cache import SerialCacheWriter
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
@@ -332,6 +334,70 @@ def test_chat_template_with_masks_returns_message_spans(tokenizer: MarinTokenize
     assert '{"result": 5}' in tool_text
 
 
+NO_GENERATION_TEMPLATE = """{{ bos_token }}
+{%- for message in messages -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{{ message['content'] | trim }}<|eot_id|>
+{%- endfor -%}
+"""
+
+
+def test_chat_template_with_masks_tolerates_template_without_generation_block(tokenizer: MarinTokenizer):
+    # The primitive is also used for message-span extraction, which needs no generation block, so
+    # it returns an all-zero mask rather than raising. Mask consumers enforce the block themselves.
+    conversation = [
+        {"role": "user", "content": "alpha prompt."},
+        {"role": "assistant", "content": "beta answer."},
+    ]
+
+    result = tokenizer.apply_chat_template_with_masks([conversation], chat_template=NO_GENERATION_TEMPLATE)
+
+    assert not any(result["assistant_masks"][0])
+
+
+def test_chat_processor_rejects_template_without_generation_block(tokenizer: MarinTokenizer):
+    with pytest.raises(ValueError, match="generation"):
+        ChatProcessor(tokenizer, chat_template=NO_GENERATION_TEMPLATE, mask_user_turns=True)
+
+
+def test_trace_chat_processor_rejects_template_without_generation_block(tokenizer: MarinTokenizer):
+    with pytest.raises(ValueError, match="generation"):
+        TraceChatProcessor(tokenizer, chat_template=NO_GENERATION_TEMPLATE, loss_tags=("assistant",))
+
+
+# Jinja allows `+` whitespace-control markers on block tags (`{%+ generation +%}`), which the
+# environment parses as a generation block just like `{% generation %}`. The generation-block
+# detection must recognize it rather than reject a valid template.
+PLUS_CONTROL_GENERATION_TEMPLATE = """{{ bos_token }}
+{%- for message in messages -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{%- if message['role'] == 'assistant' -%}
+{%+ generation %}{{ message['content'] }}{%+ endgeneration %}
+{%- else -%}
+{{ message['content'] }}
+{%- endif -%}
+<|eot_id|>
+{%- endfor -%}
+"""
+
+
+def test_chat_template_with_masks_labels_plus_control_generation_block(tokenizer: MarinTokenizer):
+    conversation = [
+        {"role": "user", "content": "alpha prompt."},
+        {"role": "assistant", "content": "beta answer."},
+    ]
+
+    result = tokenizer.apply_chat_template_with_masks([conversation], chat_template=PLUS_CONTROL_GENERATION_TEMPLATE)
+
+    mask = result["assistant_masks"][0]
+    assert any(m == 1 for m in mask), "assistant content inside the plus-control generation block should be labeled"
+
+
+def test_chat_processor_accepts_plus_control_generation_block(tokenizer: MarinTokenizer):
+    # Regression: the generation-block check must accept `+` whitespace-control blocks.
+    ChatProcessor(tokenizer, chat_template=PLUS_CONTROL_GENERATION_TEMPLATE, mask_user_turns=True)
+
+
 def test_trace_chat_processor_labels_generation_masked_tool_spans(tokenizer: MarinTokenizer):
     processor = TraceChatProcessor(
         tokenizer,
@@ -630,6 +696,62 @@ def test_chat_processor_rejects_system_mapping_without_content(tokenizer: MarinT
 
     with pytest.raises(ValueError, match="System prompt mapping must include 'content'"):
         processor(batch)
+
+
+def _write_trace_cache(tmp_path, docs):
+    exemplar = {
+        "input_ids": np.zeros((0,), dtype=np.int32),
+        "loss_labels": np.zeros((0,), dtype=np.int32),
+    }
+    with SerialCacheWriter(str(tmp_path), exemplar) as writer:
+        writer.write_batch(
+            [
+                {
+                    "input_ids": np.array(ids, dtype=np.int32),
+                    "loss_labels": np.array(labels, dtype=np.int32),
+                }
+                for ids, labels in docs
+            ]
+        )
+    return writer.result()
+
+
+@pytest.mark.parametrize("pack", [False, 1])
+def test_dataset_for_trace_chat_format_unpacked_yields_one_padded_example_per_trace(tmp_path, pack):
+    cache = _write_trace_cache(
+        tmp_path,
+        [
+            ([10, 11, 12], [TRACE_LABEL_ASSISTANT_TEXT] * 3),
+            ([20, 21], [TRACE_LABEL_ASSISTANT_TOOL_CALL] * 2),
+        ],
+    )
+    trace_format = TraceChatEvaluationFormat(pack=pack)
+    Pos = Axis("position", 8)
+    ds = dataset_for_trace_chat_format(trace_format, Pos, cache).as_sync_dataset()
+
+    # one example per trace; unpacked mode never packs two traces together
+    assert len(ds) == 2
+    first = ds[0]
+    np.testing.assert_array_equal(np.asarray(first.tokens)[:3], np.array([10, 11, 12], dtype=np.int32))
+    for ex in ds:
+        assert ex.tokens.shape == (Pos.size,)
+        segment_ids = np.asarray(ex.attn_mask.segment_ids[0])
+        padding = segment_ids == -1
+        assert padding.any(), "trace should be shorter than Pos, leaving padding"
+        # neither padding nor the position predicting the first pad token may carry a loss label
+        predicts_padding = np.roll(segment_ids, -1) == -1
+        np.testing.assert_array_equal(np.asarray(ex.loss_labels)[padding | predicts_padding], 0)
+
+
+def test_dataset_for_trace_chat_format_unpacked_raises_on_document_longer_than_pos(tmp_path):
+    cache = _write_trace_cache(
+        tmp_path,
+        [([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], [TRACE_LABEL_ASSISTANT_TEXT] * 10)],
+    )
+    trace_format = TraceChatEvaluationFormat(pack=False)
+    Pos = Axis("position", 4)
+    with pytest.raises(ValueError, match="exceeds"):
+        dataset_for_trace_chat_format(trace_format, Pos, cache)
 
 
 # ---------------------------------------------------------------------------

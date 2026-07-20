@@ -28,6 +28,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.caches import CacheRegistry
+from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
@@ -869,6 +870,32 @@ def mark_federated_job_unschedulable(tx: Tx, job_id: JobName, *, now_ms: int, er
     )
 
 
+@writes_to(job_config_table)
+def insert_mirrored_job_config(
+    tx: Tx,
+    *,
+    job_id: JobName,
+    name: str,
+    resources: job_pb2.ResourceSpecProto,
+) -> None:
+    """Insert the ``job_config`` companion for a job mirrored from a peer.
+
+    Sets the name and the resources the peer reports; the columns describing how to
+    run the job (entrypoint, bundle, retries, timeouts) keep their defaults, since
+    the peer runs it and the parent only renders it.
+    """
+    tx.execute(
+        insert(job_config_table).values(
+            job_id=job_id,
+            name=name,
+            res_cpu_millicores=int(resources.cpu_millicores),
+            res_memory_bytes=int(resources.memory_bytes),
+            res_disk_bytes=int(resources.disk_bytes),
+            res_device_json=proto_to_json(resources.device),
+        )
+    )
+
+
 @writes_to(jobs_table)
 def mirror_federated_job(
     tx: Tx,
@@ -917,6 +944,7 @@ def mirror_federated_task(
     current_attempt_id: int,
     worker_address: str,
     peer_worker_label: str,
+    status_message: str | None,
 ) -> None:
     """Upsert a mirrored federated task row (``cluster`` set to a peer, no worker FK).
 
@@ -945,6 +973,7 @@ def mirror_federated_task(
             current_attempt_id=current_attempt_id,
             current_worker_id=None,
             current_worker_address=worker_address,
+            status_message=status_message,
             backend_id="",
             cluster=peer_id,
             priority_neg_depth=0,
@@ -962,6 +991,7 @@ def mirror_federated_task(
                 "finished_at_ms": finished_at_ms,
                 "current_attempt_id": current_attempt_id,
                 "current_worker_address": worker_address,
+                "status_message": status_message,
                 "cluster": peer_id,
             },
         )

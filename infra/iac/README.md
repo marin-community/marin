@@ -16,6 +16,11 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 reserved federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice; its
 live adoption is operator-run — see `gaps.md`).
 
+Beyond cluster prerequisites, the `iac` package also carries the reusable *service*
+components other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run`
+(IAP-gated Cloud Run, used by `infra/grafana`) and `iac.iris` (always-on Iris service
+jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky`).
+
 ## What it reads
 
 Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):
@@ -35,10 +40,11 @@ new `provisioning:` section in that same file. Iris carries `provisioning:` as a
 - The [Pulumi CLI](https://www.pulumi.com/docs/install/) (`brew install pulumi/tap/pulumi`).
 - The repo's uv venv, synced so `iris`, `rigging`, `pulumi`, `pulumi_kubernetes` all import.
 `marin-iac` is a member of the root uv workspace, so its deps live in the shared repo
-`.venv`. Sync the **whole** workspace — a bare `uv sync` from a member dir prunes the venv
-to just that member, so use `--all-packages`:
+`.venv`. The pulumi SDK sits behind the package's `deploy` extra (it is deploy-only
+tooling, kept out of the plain workspace sync so Iris job venvs don't pull the pulumi
+providers), so pass `--extra deploy` when preparing a preview/up:
   ```bash
-  uv sync --all-packages    # run from the repo root or anywhere in the tree
+  uv sync --all-packages --extra deploy    # run from the repo root or anywhere in the tree
   ```
 - For the k8s dry-run: the CoreWeave kubeconfig at the path in the cluster's
 `platform.coreweave.kubeconfig_path` (read access to the live cluster).

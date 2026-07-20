@@ -11,6 +11,7 @@ platform:
     region: US-WEST-04A
     namespace: iris-ci
     kubeconfig_path: ~/.kube/coreweave-iris
+    kube_context: marin_US-WEST-04A
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
 
 storage:

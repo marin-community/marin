@@ -6,6 +6,8 @@ Script to import HuggingFace models and save them as Levanter Tensorstore checkp
 """
 
 import logging
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Union
@@ -13,7 +15,7 @@ from typing import Optional, Union
 import jax.numpy as jnp
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, prefix_join
 
 import levanter
 import levanter.config
@@ -45,12 +47,24 @@ class ImportHfConfig:
     tokenizer: Optional[str] = None
     """Override tokenizer path/name. If None, will use tokenizer from HF checkpoint"""
 
+    tokenizer_revision: Optional[str] = None
+    """Commit pin for the tokenizer, when it is a hub id (for reproducibility)."""
+
     dtype: Optional[str] = "bfloat16"
     """Target dtype for the saved checkpoint (e.g., 'float32', 'bfloat16', 'float16')"""
 
     resize_vocab_to_match_tokenizer: bool = False
     """If True, resize model vocab to match tokenizer vocab size. Defaults to False because many models
     (e.g., Qwen) intentionally pad their embedding matrices beyond the tokenizer vocab size for hardware efficiency."""
+
+    subpath: Optional[str] = None
+    """Subtree to save the model under (e.g. 'model', matching a TrainerState's model field, so it loads
+    with load_checkpoint(..., subpath='model')). None saves the bare model at the checkpoint root."""
+
+    emit_padded_tokenizer: bool = False
+    """If True, also write a tokenizer padded to the model's vocab size to output_path, so a downstream
+    run that builds its Vocab axis from len(tokenizer) matches the checkpoint's embedding axis. Padding
+    appends never-emitted dummy tokens, so text tokenizes unchanged."""
 
 
 def _coerce_to_repo_ref(checkpoint: Union[str, RepoRef]) -> RepoRef:
@@ -80,7 +94,7 @@ def main(config: ImportHfConfig):
         tokenizer_path = hf_checkpoint.model_name_or_path
 
     logger.info(f"Loading tokenizer from: {tokenizer_path}")
-    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer = load_tokenizer(tokenizer_path, revision=config.tokenizer_revision)
 
     logger.info("Setting up HF checkpoint converter")
     converter = config.model.hf_checkpoint_converter()
@@ -106,14 +120,31 @@ def main(config: ImportHfConfig):
         elapsed = time.time() - start_time
         logger.info(f"Checkpoint committed to Tensorstore successfully! Total time: {elapsed:.2f}s")
 
+    # A subpath saves the model as a subtree (e.g. `model/`), matching a TrainerState's model field so
+    # it loads with load_checkpoint(..., subpath=...); None saves the bare model at the root.
+    tree = {config.subpath: model} if config.subpath is not None else model
     save_checkpoint(
-        tree=model,
+        tree=tree,
         checkpoint_path=config.output_path,
         manager=manager,
         commit_callback=commit_callback,
         step=0,
         is_temporary=False,
     )
+    # Block until the async commit lands, so a caller (or an artifact record) never observes an
+    # incomplete checkpoint after main() returns.
+    manager.wait_until_finished()
+
+    if config.emit_padded_tokenizer:
+        padded_tokenizer = converter.with_tokenizer_padded_to_match_model().tokenizer
+        with tempfile.TemporaryDirectory() as tokenizer_dir:
+            padded_tokenizer.save_pretrained(tokenizer_dir)
+            for name in os.listdir(tokenizer_dir):
+                if name.startswith("."):
+                    continue
+                StoragePath(prefix_join(config.output_path, name)).upload_from(os.path.join(tokenizer_dir, name))
+        logger.info(f"Emitted padded tokenizer (vocab {len(padded_tokenizer)}) to {config.output_path}")
+
     logger.info("Conversion completed successfully!")
 
 
