@@ -78,6 +78,10 @@ def _account_id(project: str, email: str) -> str:
     return email.removesuffix(suffix)
 
 
+def _service_account_member(email: str) -> str:
+    return f"serviceAccount:{email}"
+
+
 def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPermissionSet, ...]:
     """Resolve stable IAM members and resource IDs for each deployment account."""
     unknown_id_token_accounts = args.id_token_service_accounts - set(args.service_accounts)
@@ -97,7 +101,7 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
         GcpDeployPermissionSet(
             account_id=_account_id(args.project, email),
             service_account_id=f"projects/{args.project}/serviceAccounts/{email}",
-            service_account_member=f"serviceAccount:{email}",
+            service_account_member=_service_account_member(email),
             github_principal=github_principal,
             state_bucket=args.state_bucket,
             crypto_key_id=crypto_key_id,
@@ -125,8 +129,8 @@ def _validate_permission_accounts(args: GcpDeployPermissionsArgs) -> None:
 class GcpDeployPermissions(pulumi.ComponentResource):
     """Grant main-branch GitHub workflows access to deploy through existing accounts.
 
-    The component owns only non-authoritative IAM members. The service accounts, workload
-    identity pool/provider, state bucket, and KMS key are existing shared resources.
+    The component owns custom roles and non-authoritative IAM members. The service accounts,
+    workload identity pool/provider, state bucket, and KMS key are existing shared resources.
     """
 
     def __init__(
@@ -176,7 +180,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
                 f"{_account_id(args.project, email)}-secret-metadata",
                 project=args.project,
                 role=SECRET_METADATA_VIEWER,
-                member=f"serviceAccount:{email}",
+                member=_service_account_member(email),
                 opts=child,
             )
 
@@ -198,7 +202,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
                         project=args.project,
                         secret_id=secret,
                         role=secret_iam_role.name,
-                        member=f"serviceAccount:{grant.service_account}",
+                        member=_service_account_member(grant.service_account),
                         opts=child,
                     )
 
@@ -210,7 +214,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
                     project=args.project,
                     secret_id=secret,
                     role=SECRET_ACCESSOR,
-                    member=f"serviceAccount:{grant.service_account}",
+                    member=_service_account_member(grant.service_account),
                     opts=child,
                 )
 
@@ -223,7 +227,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
                     location=grant.location,
                     repository=repository,
                     role=ARTIFACT_REGISTRY_WRITER,
-                    member=f"serviceAccount:{grant.service_account}",
+                    member=_service_account_member(grant.service_account),
                     opts=child,
                 )
 
@@ -242,7 +246,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
                     f"{_account_id(args.project, email)}-iap-iam-manager",
                     project=args.project,
                     role=iap_iam_role.name,
-                    member=f"serviceAccount:{email}",
+                    member=_service_account_member(email),
                     opts=child,
                 )
 
