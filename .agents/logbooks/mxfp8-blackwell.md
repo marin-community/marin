@@ -1627,3 +1627,72 @@ author: mcwitt
   producer in the dense linear-scale layout, first unshared and then reusing
   each high-precision `x`, `w`, and cotangent producer across the three
   oracle products and across Q/K/V or gate/up projections.
+
+### 2026-07-20 16:09 - MXFP8-U002: optimized CuTe producers miss the dense gate
+
+- Hypothesis: the existing CuTe dual-orientation MXFP8 quantizer can recover
+  the zero-producer oracle by producing rowwise and columnwise tensors once
+  per operand and reusing activation producers across adjacent projections.
+- Commit Hashes: `8f6f1d55e` for the replicated forward+backward production
+  mix and `b7771837b` for the projection-reuse benchmark.
+- Command (run twice for each benchmark, changing `r1` to `r2`):
+  `/home/marin/projects/marin/.venv/bin/iris --cluster=cw-us-east-08a job run
+  --no-wait --user mwittmann --job-name mxfp8-uniform-cute-mix-r1 --gpu
+  GB200x1 --enable-extra-resources --cpu 16 --memory 96g --extra gpu -- python
+  experiments/grug/moe/standalone/bench_mxfp8_dense.py --git-sha
+  8f6f1d55e --producer cute --shape q_o_shared_5120x5120 --shape
+  kv_5120x1280 --tokens 65536 --warmup 10 --iters 50 --out /dev/stdout`.
+  The projection jobs used commit `b7771837b`, job name
+  `mxfp8-uniform-projection-reuse-r1`, and added `--projection-reuse`.
+- Config: one GB200 per job, JAX 0.10.1, CUDA 13, cuDNN 9.19, BF16 inputs,
+  10 warmups, median and MAD of 50 iterations. Each replication ran both
+  production shapes on the same GPU. The CuTe forward+backward arm quantized
+  each of `x`, `w`, and the output cotangent once into both orientations,
+  then issued the same three block-scaled matmuls as the oracle.
+- Producer validation: the dense layouts are bit-exact with Marin's grouped
+  MXFP8 reference on normal and adversarial inputs at `M=8192` and `M=65536`.
+  They intentionally differ from JAX's internal dense quantizer on some
+  values because JAX applies scaling in BF16 while the grouped/CuTe reference
+  uses F32 power-of-two scaling. Relative errors against the F32 reference
+  remained lower than delayed per-tensor FP8. The corrected recheck job was
+  `/mwittmann/mxfp8-uniform-quantizer-recheck-r2`; an earlier smoke failed a
+  too-strong native-JAX-bit-match assertion and is excluded.
+- Result (`replicated`, two independent production-mix jobs):
+
+  | replication | shape | per-tensor fwd+bwd | prequant oracle | CuTe producer + reuse | standalone producer |
+  |---|---|---:|---:|---:|---:|
+  | mix-r1 | 5120x5120 | 4.033 ms | 4.013 ms | 4.847 +/- 0.085 ms | 1.206 ms |
+  | mix-r1 | 5120x1280 | 1.240 ms | 1.151 ms | 1.722 +/- 0.031 ms | 0.854 ms |
+  | mix-r2 | 5120x5120 | 4.114 ms | 4.147 ms | 4.874 +/- 0.142 ms | 1.088 ms |
+  | mix-r2 | 5120x1280 | 1.277 ms | 1.107 ms | 1.723 +/- 0.039 ms | 0.743 ms |
+
+  On the weighted 5:2 dense mix, actual CuTe producer+GEMM time was
+  **1.2221x** and **1.2030x** the per-tensor baseline; the median ratio was
+  **1.2125x**, well outside the `<=1.01x` gate. The benchmark's emitted
+  `weighted_production_ratio` in these jobs describes the prequantized oracle,
+  not the CuTe arm; the ratios above are recomputed from the retained rows.
+- Forward projection reuse (`replicated`, two independent jobs):
+
+  | projection bundle | per-tensor r1/r2 | CuTe unshared r1/r2 | CuTe reused r1/r2 | reused / per-tensor |
+  |---|---:|---:|---:|---:|
+  | Q/K/V | 1.948 / 2.003 ms | 2.739 / 2.913 ms | 2.266 / 2.401 ms | 1.163x / 1.199x |
+  | shared gate/up | 2.443 / 2.719 ms | 3.013 / 3.188 ms | 2.761 / 3.048 ms | 1.130x / 1.121x |
+
+  Reusing the activation quantization saved 0.47-0.51 ms for Q/K/V and
+  0.14-0.25 ms for gate/up, confirming that reuse works. It still left a
+  12-20% forward deficit. Backward cotangents are projection-specific, so
+  they cannot receive the same reuse.
+- Artifacts: `/mwittmann/mxfp8-uniform-cute-mix-r1`,
+  `/mwittmann/mxfp8-uniform-cute-mix-r2`,
+  `/mwittmann/mxfp8-uniform-projection-reuse-r1`, and
+  `/mwittmann/mxfp8-uniform-projection-reuse-r2`. Full JSON is in each
+  durable task log.
+- Interpretation: a correct standalone dual-orientation producer cannot
+  recover the oracle margin at these shapes, even with the two material
+  cross-projection reuse opportunities. This rules out the available
+  Pallas/CuTe producer architecture for the 99% full-step target. It does
+  not prove that a future producer fused into GEMM epilogues is impossible.
+- Next action: benchmark NVIDIA Transformer Engine 2.16's supported JAX
+  `MXFP8BlockScaling` dense path against the same per-tensor baseline. This
+  provides an independent implementation control before concluding that
+  only unavailable epilogue fusion could meet the gate.
