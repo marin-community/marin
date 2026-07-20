@@ -640,13 +640,16 @@ def reference_datakit_steps(
         }
 
     # ---- Cross-source dedup ----------------------------------------------------
-    # No content params of its own -- the MinHash params live in the minhash deps
-    # (so a param change re-keys minhash, then dedup via dep names); connected
-    # components is deterministic given those inputs. ``v`` is a manual salt.
+    # The MinHash params live in the minhash deps (so a param change re-keys
+    # minhash, then dedup via dep names); connected components is deterministic
+    # given those inputs. ``canonical_scope`` is the one content param the fn
+    # reads that is not carried by a dep, so it must be in the hash: a scope
+    # flip has to land in a fresh artifact, never reuse a prior GLOBAL dedup at
+    # the same path. ``v`` is a manual salt.
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
-        hash_attrs={"v": 1},
+        hash_attrs={"canonical_scope": CanonicalScope.PER_SOURCE.value, "v": 1},
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
@@ -655,10 +658,6 @@ def reference_datakit_steps(
             cc_resume=True,
             worker_resources=scale.pool.worker,
         ),
-        # canonical_scope changes which docs survive, so bind it into the step
-        # hash: a scope flip must land in a fresh artifact, never reuse a
-        # previously-computed GLOBAL dedup at the same path.
-        hash_attrs={"canonical_scope": CanonicalScope.PER_SOURCE.value},
     )
 
     # ---- Final store: 5-way join + per-bucket Levanter cache ------------------

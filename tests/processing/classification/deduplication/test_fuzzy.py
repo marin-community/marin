@@ -296,7 +296,12 @@ def test_fuzzy_dups_rejects_duplicate_source(fox_corpus):
 def _canonical_assignment(source: NormalizedData, output_path: str) -> dict[str, tuple[str, bool]]:
     """Run minhash + fuzzy_dups for *source* and return ``{id -> (dup_cluster_id, is_canonical)}``."""
     minhash = compute_minhash_attrs(source=source, output_path=os.path.join(output_path, "minhash"))
-    dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=os.path.join(output_path, "dups"), max_parallelism=4)
+    dups = compute_fuzzy_dups_attrs(
+        inputs=[minhash],
+        output_path=os.path.join(output_path, "dups"),
+        canonical_scope=CanonicalScope.PER_SOURCE,
+        max_parallelism=4,
+    )
     rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
     return {r["id"]: (r["attributes"]["dup_cluster_id"], r["attributes"]["is_cluster_canonical"]) for r in rows}
 
@@ -359,6 +364,7 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
     dups = compute_fuzzy_dups_attrs(
         inputs=[mh],
         output_path=os.path.join(fox_corpus["output_dir"], "fuzzy_dups_path"),
+        canonical_scope=CanonicalScope.PER_SOURCE,
         cc_max_iterations=1,
         max_parallelism=4,
     )
