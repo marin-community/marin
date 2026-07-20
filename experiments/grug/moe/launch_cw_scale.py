@@ -179,6 +179,9 @@ def build_scale_model() -> GrugModelConfig:
     rel_pos_bias = os.environ.get("SCALE_REL_POS_BIAS") == "1"
     rel_pos_latent = env_int("SCALE_REL_POS_LATENT", 16)
     rel_pos_window = env_int("SCALE_REL_POS_WINDOW", 1024)
+    # SCALE_DISABLE_LONG_ROPE=0 applies half-RoPE on the long/global layers too ("rope on all");
+    # the default (1) leaves the global layers NoPE ("rope on local"). No effect under rel_pos_bias.
+    disable_long_rope = os.environ.get("SCALE_DISABLE_LONG_ROPE", "1") == "1"
     return dataclasses.replace(
         base,
         vocab_size=VOCAB_SIZE,
@@ -208,6 +211,7 @@ def build_scale_model() -> GrugModelConfig:
         rel_pos_bias=rel_pos_bias,
         rel_pos_latent=rel_pos_latent,
         rel_pos_window=rel_pos_window,
+        disable_long_rope=disable_long_rope,
         use_array_stacked_blocks=os.environ.get("SCALE_SCAN_LAYERS") == "1",
     )
 
