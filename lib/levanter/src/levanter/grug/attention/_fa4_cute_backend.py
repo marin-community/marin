@@ -20,7 +20,6 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
-from levanter.grug.attention._core import align_kv_heads
 from levanter.grug.attention._fa4_cute_kernels import (
     flash_attention_backward_postprocess_launcher,
     segmented_flash_attention_backward_launcher,
@@ -155,12 +154,13 @@ def segmented_flash_attention_backward(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     bias: jax.Array | None = None,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Return dq/dk/dv for FA4/CuTe packed-segment attention.
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array | None]:
+    """Return ``(dq, dk, dv, d_bias)`` for FA4/CuTe packed-segment attention.
 
     When ``bias`` (the ``[B, S, Hq, window]`` relative-position band) is given, the recomputed
-    score tile is biased so dq/dk/dv match the biased forward. The band's own gradient is not
-    produced here (the custom VJP forms it in JAX from the forward residuals).
+    score tile is biased so dq/dk/dv match the biased forward, and the band's own gradient
+    ``d_bias`` is scattered from the same dS tiles inside the segmented kernel (``d_bias`` is ``None``
+    when no bias is given). No separate windowed recompute is required.
     """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
@@ -187,7 +187,7 @@ def segmented_flash_attention_backward(
             tile_m=sm90_config.tile[0],
             tile_n=sm90_config.tile[1],
         )
-        return segmented_flash_attention_backward_sm90_native(
+        dq, dk, dv = segmented_flash_attention_backward_sm90_native(
             q,
             k,
             v,
@@ -204,6 +204,7 @@ def segmented_flash_attention_backward(
             kernel_config=kernel_config,
             window_size_left=None,
         )
+        return dq, dk, dv, None
 
     backward_tile = kernel_config.backward_tile
     num_threads = kernel_config.num_threads
@@ -225,7 +226,7 @@ def segmented_flash_attention_backward(
         qhead_per_kvhead=qhead_per_kvhead,
         include_bias=bias is not None,
     )
-    output_shape_dtype = _cutlass_attention_backward_output_shapes(q, k, v, backward_tile)
+    output_shape_dtype = _cutlass_attention_backward_output_shapes(q, k, v, backward_tile, window=rel_pos_window)
     call = modules.cjax.cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
@@ -236,9 +237,12 @@ def segmented_flash_attention_backward(
     )
     if bias is None:
         dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
-    else:
-        dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32), bias)
-    return dq, dk, dv
+        return dq, dk, dv, None
+    dq, dk, dv, *rest = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32), bias)
+    # rest = (dpsum, lse_log2, dq_accum, dk_accum, dv_accum, d_bias); the kernel scatters the band
+    # gradient straight from its dS tiles, so no separate windowed recompute is needed.
+    d_bias = rest[-1]
+    return dq, dk, dv, d_bias
 
 
 def segmented_flash_attention_backward_sm90_native(
@@ -483,7 +487,7 @@ def _cutlass_attention_backward_specs(
         bias_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
         input_spec = (*input_spec, bias_spec)
     dkv_accum_spec = scratch_spec if qhead_per_kvhead > 1 else qkv_spec
-    return input_spec, (
+    output_spec = (
         qkv_spec,
         qkv_spec,
         qkv_spec,
@@ -493,6 +497,11 @@ def _cutlass_attention_backward_specs(
         dkv_accum_spec,
         dkv_accum_spec,
     )
+    if include_bias:
+        # d_bias band gradient output [B, S, Hq, window], identity 4D layout like the input band.
+        dbias_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
+        output_spec = (*output_spec, dbias_spec)
+    return input_spec, output_spec
 
 
 def _cutlass_attention_backward_sm90_accum_specs(
@@ -651,6 +660,7 @@ def _cutlass_attention_backward_output_shapes(
     k: jax.Array,
     v: jax.Array,
     backward_tile: tuple[int, int],
+    window: int | None = None,
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
@@ -670,7 +680,7 @@ def _cutlass_attention_backward_output_shapes(
         if qhead_per_kvhead > 1
         else jax.ShapeDtypeStruct(v.shape, v.dtype)
     )
-    return (
+    outputs = (
         jax.ShapeDtypeStruct(q.shape, q.dtype),
         jax.ShapeDtypeStruct(k.shape, k.dtype),
         jax.ShapeDtypeStruct(v.shape, v.dtype),
@@ -680,6 +690,10 @@ def _cutlass_attention_backward_output_shapes(
         dk_accum,
         dv_accum,
     )
+    if window is not None:
+        # Band gradient d_bias[B, S, Hq, window] scattered inside the kernel (fp32 accumulator).
+        outputs = (*outputs, jax.ShapeDtypeStruct((batch, seq_len, q_heads, window), jnp.float32))
+    return outputs
 
 
 def _cutlass_attention_backward_sm90_preprocess_output_shapes(
@@ -816,7 +830,7 @@ def _segmented_flash_attention_custom_vjp_bwd(
     q, k, v, out, lse, lower_bounds, valid = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
-    dq, dk, dv = segmented_flash_attention_backward(
+    dq, dk, dv, _d_bias = segmented_flash_attention_backward(
         q,
         k,
         v,
@@ -895,7 +909,9 @@ def _segmented_flash_attention_bias_custom_vjp_bwd(
         zeros = (jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, jnp.zeros_like(bias))
         return zeros
     dout = cotangent.astype(q.dtype)
-    dq, dk, dv = segmented_flash_attention_backward(
+    # dq/dk/dv AND the band gradient d_bias all come out of the one fused segmented backward: the
+    # kernel scatters its dS tiles into d_bias, so there is no separate windowed recompute pass.
+    dq, dk, dv, d_bias = segmented_flash_attention_backward(
         q,
         k,
         v,
@@ -908,156 +924,13 @@ def _segmented_flash_attention_bias_custom_vjp_bwd(
         kernel_config=kernel_config,
         bias=bias,
     )
-    d_bias = _rel_pos_bias_band_grad(
-        q,
-        k,
-        v,
-        out,
-        dout,
-        lse,
-        lower_bounds,
-        valid,
-        bias,
-        softmax_scale=softmax_scale,
-    )
-    return dq, dk, dv, None, None, d_bias
+    return dq, dk, dv, None, None, d_bias.astype(bias.dtype)
 
 
 _segmented_flash_attention_bias_custom_vjp.defvjp(
     _segmented_flash_attention_bias_custom_vjp_fwd,
     _segmented_flash_attention_bias_custom_vjp_bwd,
 )
-
-
-# Query-block size for the banded d_bias scan. Each block contracts against a contiguous
-# [B, block+window-1, Hq, D] key slice and forms [B, block, block+window-1, Hq] score/dP tiles, so this
-# bounds peak backward memory. Larger blocks reduce per-block launch overhead and redundant key reads
-# (adjacent blocks overlap by window-1) at the cost of a slightly larger tile.
-_D_BIAS_QUERY_BLOCK = 128
-
-
-def _rel_pos_bias_band_grad(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    out: jax.Array,
-    dout: jax.Array,
-    lse: jax.Array,
-    lower_bounds: jax.Array,
-    valid: jax.Array,
-    bias: jax.Array,
-    *,
-    softmax_scale: float,
-) -> jax.Array:
-    """Gradient of the loss w.r.t. the relative-position bias band ``[B, S, Hq, window]``.
-
-    The band adds 1:1 to the scaled logit, so ``d_bias[b, i, h, r] == dL/ds_{i, j=i-r}`` where
-    ``s`` is the (biased, masked) scaled score. Using the flash residuals this is the exact softmax
-    input gradient restricted to the causal in-window band::
-
-        P_ij  = exp(scale * q_i·k_j + bias[b,i,h,i-j] - lse_i)
-        dP_ij = dO_i · v_j
-        D_i   = sum_d dO_i,d * O_i,d
-        g_ij  = P_ij * (dP_ij - D_i)
-
-    computed only for ``0 <= i-j < window`` and the same causal/segment predicate the kernel uses.
-    This mirrors the kernel's own dQ/dK/dV recompute (which uses the biased P), so the band gradient
-    is consistent with dq/dk/dv without scattering out of the fused CuTe kernel.
-    """
-    batch, seq_len, q_heads, head_dim = q.shape
-    window = bias.shape[3]
-    compute_dtype = q.dtype
-
-    # Upcast to fp32 for the recompute, matching the prior (naive-gather) path exactly so d_bias is
-    # numerically identical to it (bit-close on CPU; TF32 tensor cores on GPU). Only the *shape* of the
-    # contraction changes below, not the dtype/precision.
-    k_f = align_kv_heads(k, num_q_heads=q_heads).astype(jnp.float32)  # [B, S, Hq, D]
-    v_f = align_kv_heads(v, num_q_heads=q_heads).astype(jnp.float32)  # [B, S, Hq, Dv]
-    v_head_dim = v_f.shape[-1]
-    q_f = q.astype(jnp.float32)
-    do_f = dout.astype(jnp.float32)
-    bias_f = bias.astype(jnp.float32)  # [B, S, Hq, window]
-    o_f = out.astype(jnp.float32)
-
-    # D_i = rowsum(dO ∘ O) over head_dim -> [B, S, Hq]; lse arrives as [B, Hq, S].
-    d_row = jnp.sum(do_f * o_f, axis=-1)  # [B, S, Hq]
-    lse_bshq = jnp.transpose(lse, (0, 2, 1))  # [B, S, Hq]
-
-    # Per query block, contract Q/dO against a *contiguous* key slice covering that block's window
-    # (dense matmul, fp32), then extract the banded diagonals. This avoids the naive per-(query, offset)
-    # gather, which materializes [B, block, window, Hq, D] (tens of GB at seq 4096 / window 1024) and is
-    # bandwidth-bound; here the score/dP tiles are only [B, block, block+window-1, Hq]. Chunking over
-    # query blocks bounds peak memory; the per-element math (biased softmax-input gradient, fp32) is
-    # unchanged. ``block+window-1`` keys are left-padded by ``window-1`` so each block's slice starts at
-    # its own query offset.
-    block = min(_D_BIAS_QUERY_BLOCK, seq_len)
-    num_blocks = (seq_len + block - 1) // block
-    padded = num_blocks * block
-    key_range = block + window - 1
-
-    def _pad_q(x: jax.Array) -> jax.Array:
-        pad = [(0, 0)] * x.ndim
-        pad[1] = (0, padded - seq_len)
-        return jnp.pad(x, pad)
-
-    def _pad_k(x: jax.Array) -> jax.Array:  # window-1 on the left (older keys), pad to padded on right
-        pad = [(0, 0)] * x.ndim
-        pad[1] = (window - 1, padded - seq_len)
-        return jnp.pad(x, pad)
-
-    q_p = _pad_q(q_f).reshape(batch, num_blocks, block, q_heads, head_dim)
-    do_p = _pad_q(do_f).reshape(batch, num_blocks, block, q_heads, v_head_dim)
-    d_row_p = _pad_q(d_row).reshape(batch, num_blocks, block, q_heads)
-    lse_p = _pad_q(lse_bshq).reshape(batch, num_blocks, block, q_heads)
-    bias_p = _pad_q(bias_f).reshape(batch, num_blocks, block, q_heads, window)
-    lb_p = _pad_q(lower_bounds).reshape(batch, num_blocks, block)
-    valid_p = _pad_q(valid).reshape(batch, num_blocks, block)
-    k_pad = _pad_k(k_f)  # [B, window-1+padded, Hq, D]
-    v_pad = _pad_k(v_f)
-
-    offsets = jnp.arange(window)
-    row_local = jnp.arange(block)
-    # Band offset r maps to local key column i_l + (window-1) - r inside the [block, key_range] tile.
-    band_col = row_local[:, None] + (window - 1) - offsets[None, :]  # [block, window]
-
-    def _one_block(block_idx: jax.Array) -> jax.Array:
-        q0 = block_idx * block
-        qi = q0 + row_local  # [block] global query indices
-        q_blk = q_p[:, block_idx]  # [B, block, Hq, D]  (fp32)
-        do_blk = do_p[:, block_idx]
-        d_row_blk = d_row_p[:, block_idx]
-        lse_blk = lse_p[:, block_idx]
-        bias_blk = bias_p[:, block_idx]  # [B, block, Hq, window]
-        lb_blk = lb_p[:, block_idx]  # [B, block]
-        valid_blk = valid_p[:, block_idx]  # [B, block]
-
-        k_range = jax.lax.dynamic_slice_in_dim(k_pad, q0, key_range, axis=1)  # [B, key_range, Hq, D]
-        v_range = jax.lax.dynamic_slice_in_dim(v_pad, q0, key_range, axis=1)
-        qk = jnp.einsum("bihd,bjhd->bijh", q_blk, k_range, preferred_element_type=jnp.float32) * softmax_scale
-        dp = jnp.einsum("bihd,bjhd->bijh", do_blk, v_range, preferred_element_type=jnp.float32)
-        # Extract the banded diagonals: qk_band[:, i_l, r, :] = qk[:, i_l, i_l+window-1-r, :].
-        gather_col = jnp.broadcast_to(band_col[None, :, :, None], (batch, block, window, q_heads))
-        qk_band = jnp.take_along_axis(qk, gather_col, axis=2)  # [B, block, window, Hq]
-        dp_band = jnp.take_along_axis(dp, gather_col, axis=2)
-
-        scores = qk_band + jnp.transpose(bias_blk.astype(jnp.float32), (0, 1, 3, 2))  # [B, block, window, Hq]
-        p = jnp.exp(scores - lse_blk[:, :, None, :])
-        g = p * (dp_band - d_row_blk[:, :, None, :])  # [B, block, window, Hq]
-
-        j = qi[:, None] - offsets[None, :]  # [block, window] global key index
-        in_band = (
-            (j[None] >= 0)
-            & (j[None] >= lb_blk[:, :, None])
-            & (j[None] <= qi[None, :, None])
-            & valid_blk[:, :, None]
-            & (qi[None, :, None] < seq_len)
-        )  # [B, block, window]
-        g = jnp.where(in_band[:, :, :, None], g, 0.0)
-        return jnp.transpose(g, (0, 1, 3, 2))  # [B, block, Hq, window]
-
-    d_bias_blocks = jax.lax.map(_one_block, jnp.arange(num_blocks))  # [num_blocks, B, block, Hq, window]
-    d_bias = jnp.transpose(d_bias_blocks, (1, 0, 2, 3, 4)).reshape(batch, padded, q_heads, window)
-    return d_bias[:, :seq_len].astype(compute_dtype)
 
 
 def _validate_forward_inputs(

@@ -1205,8 +1205,13 @@ def segmented_flash_attention_backward_launcher(
         dv_accum,
         softmax_scale,
         bias,
+        d_bias,
     ):
         preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
+        # The band gradient accumulator is scattered into (plain stores of the dS tile), not produced
+        # by preprocess, so zero it explicitly like dk/dv_accum. Out-of-window / masked cells stay 0.
+        if cutlass.const_expr(d_bias is not None):
+            zero_fill(d_bias, stream)
         if cutlass.const_expr(qhead_per_kvhead == 1):
             backward(
                 q,
@@ -1222,6 +1227,7 @@ def segmented_flash_attention_backward_launcher(
                 valid,
                 softmax_scale,
                 mBias=bias,
+                mBiasGrad=d_bias,
                 stream=stream,
             )
             dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
@@ -1244,6 +1250,7 @@ def segmented_flash_attention_backward_launcher(
             valid,
             softmax_scale,
             mBias=bias,
+            mBiasGrad=d_bias,
             stream=stream,
         )
         dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
@@ -1294,6 +1301,7 @@ def segmented_flash_attention_backward_launcher(
                 dv_accum,
                 softmax_scale,
                 None,
+                None,
             )
 
         return _launch_segmented_flash_attention_backward
@@ -1318,6 +1326,7 @@ def segmented_flash_attention_backward_launcher(
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
+        d_bias: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
@@ -1341,6 +1350,7 @@ def segmented_flash_attention_backward_launcher(
             dv_accum,
             softmax_scale,
             bias,
+            d_bias,
         )
 
     return _launch_segmented_flash_attention_backward_bias
