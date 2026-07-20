@@ -205,3 +205,9 @@ author: Matt Wittmann
 - Interpretation: at 19.1% of the schedule, the smoothed train gap remains about two thousandths and the three held-out deltas remain small with mixed signs. This extends the quality-neutral early trajectory while the treatment's roughly 7.2% throughput advantage persists, but does not establish the cooldown-tail or final matched-loss conclusion.
 - Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. The fourth hourly checkpoints at BF16 step 5,011 and MXFP8 step 5,313 remain the latest verified recovery points.
 - Next action: continue babysitting scheduled evaluations and checkpoints; reserve the next coordinating-issue update for step 10,000 unless health or the quality conclusion changes sooner.
+
+### 2026-07-20 01:18 - MXFP8Q-007 fifth hourly checkpoints pass
+
+- Result: both arms completed their fifth hourly checkpoint write to region-local S3. BF16 saved step 6,284 and MXFP8 saved step 6,664; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
+- Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
+- Next action: continue monitoring finite telemetry and the scheduled step-7,000 evaluations.
