@@ -454,7 +454,13 @@ class CausalSelfAttention(eqx.Module):
             # Contract the latent against the (zero-init) offset table to get a per-head band:
             # bias_band[b, i, h, r] is the bias on the logit between query i and key i-r (r=0 is self).
             bias_band = jnp.einsum("bsnd,rd->bsnr", rel_latent, self.rel_pos_b)
-            bias = _rel_pos_bias_full(bias_band, seq_len, window)
+            # The FA4/CuTe kernel consumes the compact band [B, S, Hq, window] directly (cast to the
+            # compute dtype). Every other path takes the dense [B, H, Q, K] scatter. Densifying at
+            # seq >> window would be quadratic, so keep the band on the fused path.
+            if self.cfg.attention_implementation == "gpu_fa4_cute":
+                bias = bias_band.astype(q.dtype)
+            else:
+                bias = _rel_pos_bias_full(bias_band, seq_len, window)
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation, bias=bias)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         # GPU XSA with GQA can give attn_out a backend-specific head sharding;

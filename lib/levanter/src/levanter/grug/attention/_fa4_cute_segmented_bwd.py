@@ -95,6 +95,7 @@ class SegmentedFlashAttentionBackwardSm80:
         V_in_regs: bool = False,
         score_mod: cutlass.Constexpr | None = None,
         score_mod_bwd: cutlass.Constexpr | None = None,
+        rel_pos_window: int | None = None,
     ):
         """Initializes the configuration for a flash attention v2 kernel.
 
@@ -142,6 +143,10 @@ class SegmentedFlashAttentionBackwardSm80:
         self.share_QV_smem = V_in_regs
         self.score_mod = score_mod
         self.score_mod_bwd = score_mod_bwd
+        # When set, the backward recomputes P with the learned relative-position bias added to the
+        # score tile (so dQ/dK/dV match the biased forward). The bias band gradient itself is formed
+        # in JAX from the forward residuals, not scattered here.
+        self.rel_pos_window = rel_pos_window
 
     @staticmethod
     def can_implement(
@@ -474,6 +479,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mdV_semaphore: Optional[cute.Tensor] = None,
         aux_tensors: Optional[list] = None,
         blocksparse_tensors: Optional[BlockSparseTensors] = None,
+        mBias: Optional[cute.Tensor] = None,
         # Always keep stream as the last parameter (EnvStream: obtained implicitly via TVM FFI).
         stream: cuda.CUstream = None,
     ):
@@ -562,6 +568,7 @@ class SegmentedFlashAttentionBackwardSm80:
             mdV,
             mLowerBounds,
             mValid,
+            mBias,
             mCuSeqlensQ,
             mCuSeqlensK,
             mSeqUsedQ,
@@ -608,6 +615,7 @@ class SegmentedFlashAttentionBackwardSm80:
         mdV: cute.Tensor,
         mLowerBounds: cute.Tensor,
         mValid: cute.Tensor,
+        mBias: Optional[cute.Tensor],
         mCuSeqlensQ: Optional[cute.Tensor],
         mCuSeqlensK: Optional[cute.Tensor],
         mSeqUsedQ: Optional[cute.Tensor],
@@ -932,6 +940,22 @@ class SegmentedFlashAttentionBackwardSm80:
                 tLSEcLSE,
                 seqlen=seqlen.seqlen_q,
             )
+            bias_fn = None
+            if cutlass.const_expr(self.rel_pos_window is not None and mBias is not None):
+                inv_softmax_scale = 1.0 / softmax_scale
+
+                def bias_fn(acc_S: cute.Tensor, m_block: cutlass.Int32):
+                    self.apply_bias_band(
+                        acc_S,
+                        mBias,
+                        batch_idx,
+                        head_idx,
+                        m_block,
+                        n_block,
+                        thr_mma_sdp,
+                        inv_softmax_scale,
+                    )
+
             compute_one_m_block = partial(
                 self.compute_one_m_block,
                 mma_params=mma_params,
@@ -942,6 +966,7 @@ class SegmentedFlashAttentionBackwardSm80:
                 m_block_max=m_block_max,
                 softmax_scale=softmax_scale,
                 softmax_scale_log2=softmax_scale_log2,
+                bias_fn=bias_fn,
             )
 
             # ///////////////////////////////////////////////////////////////////////////////
@@ -1102,6 +1127,44 @@ class SegmentedFlashAttentionBackwardSm80:
                     acc_S_mn[r, c] = -cutlass.Float32.inf
 
     @cute.jit
+    def apply_bias_band(
+        self,
+        acc_S: cute.Tensor,
+        mBias: cute.Tensor,
+        batch_idx: cutlass.Int32,
+        head_idx: cutlass.Int32,
+        m_block: cutlass.Int32,
+        n_block: cutlass.Int32,
+        thr_mma: cute.TiledMma,
+        inv_softmax_scale: cutlass.Float32,
+    ):
+        # Mirror of the forward bias injection: add bias[b, i, h, i-j] / softmax_scale to the raw
+        # score tile for every in-window causal pair. acc_S here is the raw QK product; the kernel
+        # multiplies it by softmax_scale inside exp2, so pre-divide the (scaled-logit) bias.
+        acc_S_mn = layout_utils.reshape_acc_to_mn(acc_S, transpose=self.SdP_swapAB)
+        acc_shape = (
+            (self.m_block_size, self.n_block_size)
+            if cutlass.const_expr(not self.SdP_swapAB)
+            else (self.n_block_size, self.m_block_size)
+        )
+        cS = cute.make_identity_tensor(acc_shape)
+        tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma.partition_C(cS), transpose=self.SdP_swapAB)
+        row_coord = 0 if cutlass.const_expr(not self.SdP_swapAB) else 1
+        col_coord = 1 if cutlass.const_expr(not self.SdP_swapAB) else 0
+        seq_len = mBias.shape[1]
+        for r in cutlass.range(cute.size(tScS_mn.shape[0]), unroll_full=True):
+            query_idx = tScS_mn[r, 0][row_coord] + m_block * self.m_block_size
+            query_in_bounds = cute.elem_less(query_idx, seq_len)
+            query_meta_idx = cutlass.min(query_idx, seq_len - 1)
+            for c in cutlass.range(cute.size(tScS_mn.shape[1]), unroll_full=True):
+                key_idx = tScS_mn[0, c][col_coord] + n_block * self.n_block_size
+                offset = query_idx - key_idx
+                in_window = (not cute.elem_less(offset, 0)) and cute.elem_less(offset, self.rel_pos_window)
+                if query_in_bounds and in_window:
+                    bias_val = mBias[batch_idx, query_meta_idx, head_idx, offset]
+                    acc_S_mn[r, c] = acc_S_mn[r, c] + cutlass.Float32(bias_val) * inv_softmax_scale
+
+    @cute.jit
     def compute_one_m_block(
         self,
         m_block: cutlass.Int32,
@@ -1118,6 +1181,7 @@ class SegmentedFlashAttentionBackwardSm80:
         softmax_scale: cutlass.Float32,
         softmax_scale_log2: cutlass.Float32,
         mask_fn: Optional[Callable] = None,
+        bias_fn: Optional[Callable] = None,
     ):
         def load_Q_next():
             m_block_next = m_block + (self.num_stages_Q - 1 if cutlass.const_expr(self.num_stages_Q > 1) else 1)
@@ -1175,6 +1239,11 @@ class SegmentedFlashAttentionBackwardSm80:
                         [],
                     )
                 )
+        # Add the learned relative-position bias to the recomputed score tile before masking so the
+        # softmax P (and therefore dQ/dK/dV) matches the biased forward. Masking still overrides any
+        # biased-but-disallowed entry with -inf below.
+        if cutlass.const_expr(bias_fn is not None):
+            bias_fn(acc_S, m_block=m_block)
         if cutlass.const_expr(mask_fn is not None):
             mask_fn(acc_S, m_block=m_block)
         bidx = 0

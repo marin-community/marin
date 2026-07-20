@@ -164,6 +164,7 @@ def segmented_flash_attention_forward_launcher(
     tile_m: int = 128,
     tile_n: int = 64,
     num_threads: int = 128,
+    rel_pos_window: int | None = None,
 ) -> Any:
     """Build a JAX/CUTLASS-callable segmented FlashAttention forward launcher.
 
@@ -177,10 +178,18 @@ def segmented_flash_attention_forward_launcher(
         tile_m: Query tile size.
         tile_n: Key/value tile size.
         num_threads: CUDA threads per CTA.
+        rel_pos_window: When set, the launcher takes an extra ``bias`` operand
+            (a compact ``[B, S, Hq, window]`` learned relative-position band) and
+            adds ``bias[b, i, h, i-j] / softmax_scale`` to the pre-softmax score of
+            every in-window causal pair ``(i, j)``. When ``None`` the launcher is
+            byte-for-byte the original bias-free kernel (no extra operand, no
+            injection emitted).
 
     Returns:
         A ``cute.jit`` launcher with the JAX ``cutlass_call`` signature:
-        ``(stream, q, k, v, lower_bounds, valid, out, lse, *, softmax_scale)``.
+        ``(stream, q, k, v, lower_bounds, valid, out, lse, *, softmax_scale)`` when
+        ``rel_pos_window is None``, or ``(stream, q, k, v, lower_bounds, valid,
+        bias, out, lse, *, softmax_scale)`` when a window is set.
     """
     _validate_config(
         head_dim=head_dim,
@@ -207,12 +216,14 @@ def segmented_flash_attention_forward_launcher(
             m_block_size: int,
             n_block_size: int,
             num_threads: int,
+            rel_pos_window: int | None = None,
         ):
             self._head_dim = head_dim
             self._head_dim_v = head_dim_v
             self._qhead_per_kvhead = qhead_per_kvhead
             self._m_block_size = m_block_size
             self._n_block_size = n_block_size
+            self._rel_pos_window = rel_pos_window
             self._head_dim_padded = (head_dim + 31) // 32 * 32
             self._head_dim_v_padded = (head_dim_v + 31) // 32 * 32
             self._head_dim_qo_padded = max(self._head_dim_padded, self._head_dim_v_padded)
@@ -256,6 +267,7 @@ def segmented_flash_attention_forward_launcher(
             mLSE: cute.Tensor,
             softmax_scale: cutlass.Float32,
             stream: cuda.CUstream,
+            mBias: cute.Tensor | None = None,
         ):
             if cutlass.const_expr(mQ.element_type != mK.element_type or mQ.element_type != mV.element_type):
                 raise TypeError("q/k/v tensors must have the same element type")
@@ -352,6 +364,19 @@ def segmented_flash_attention_forward_launcher(
                 cute.size(mQ.shape[2]),
             )
             softmax_scale_log2 = softmax_scale * 1.4426950408889634
+            # The kernel folds softmax_scale into exp2, so a bias defined on the *scaled* logit
+            # must be pre-divided by softmax_scale before it is added to the raw acc_S.
+            inv_softmax_scale = 1.0 / softmax_scale
+            if cutlass.const_expr(mBias is not None):
+                # mBias keeps the JAX [B, S, Hq, window] layout (identity TensorSpec), whereas
+                # mQ is permuted to [S, D, Hq, B]; check the matching extents.
+                if cutlass.const_expr(
+                    mBias.shape[0] != mQ.shape[3]
+                    or mBias.shape[1] != mQ.shape[0]
+                    or mBias.shape[2] != mQ.shape[2]
+                    or mBias.shape[3] != self._rel_pos_window
+                ):
+                    raise ValueError("bias must have shape [B, S, Hq, window]")
             self.kernel(
                 mQ,
                 mK,
@@ -361,6 +386,7 @@ def segmented_flash_attention_forward_launcher(
                 mO,
                 mLSE,
                 softmax_scale_log2,
+                inv_softmax_scale,
                 sQ_layout,
                 sK_layout,
                 sV_layout,
@@ -369,6 +395,7 @@ def segmented_flash_attention_forward_launcher(
                 gmem_tiled_copy_O,
                 tiled_mma,
                 SharedStorage,
+                mBias,
             ).launch(grid=grid_dim, block=[self._num_threads, 1, 1], stream=stream)
 
         @cute.kernel
@@ -382,6 +409,7 @@ def segmented_flash_attention_forward_launcher(
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale_log2: cutlass.Float32,
+            inv_softmax_scale: cutlass.Float32,
             sQ_layout: cute.ComposedLayout,
             sK_layout: cute.ComposedLayout,
             sV_layout: cute.ComposedLayout,
@@ -390,6 +418,7 @@ def segmented_flash_attention_forward_launcher(
             gmem_tiled_copy_O: cute.TiledCopy,
             tiled_mma: cute.TiledMma,
             SharedStorage: cutlass.Constexpr,
+            mBias: cute.Tensor | None = None,
         ):
             tidx, _, _ = cute.arch.thread_idx()
             m_block, batch_idx, q_head = cute.arch.block_idx()
@@ -558,6 +587,7 @@ def segmented_flash_attention_forward_launcher(
                 mK=mK,
                 mLowerBounds=mLowerBounds,
                 mValid=mValid,
+                mBias=mBias,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -583,7 +613,12 @@ def segmented_flash_attention_forward_launcher(
                 tOsVt=tOsVt,
                 tOrVt_copy_view=tOrVt_copy_view,
             )
-            softmax_params = SimpleNamespace(row_max=row_max, row_sum=row_sum, softmax_scale_log2=softmax_scale_log2)
+            softmax_params = SimpleNamespace(
+                row_max=row_max,
+                row_sum=row_sum,
+                softmax_scale_log2=softmax_scale_log2,
+                inv_softmax_scale=inv_softmax_scale,
+            )
 
             if n_block_min < n_block_max:
                 basic_params.n_block = n_block_max - 1
@@ -829,13 +864,28 @@ def segmented_flash_attention_forward_launcher(
                     key_in_bounds = cute.elem_less(key_idx, basic_params.mK.shape[0])
                     key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                     key_before_query = cute.elem_less(key_idx, query_idx + 1)
-                    if not (
+                    keep = (
                         query_in_bounds
                         and query_valid
                         and key_in_bounds
                         and key_after_lower_bound
                         and key_before_query
-                    ):
+                    )
+                    # Learned relative-position bias: add bias[b, i, h, i-j] to the *scaled* logit
+                    # of every kept in-window causal pair. acc_S is the raw QK product and the kernel
+                    # multiplies it by softmax_scale inside exp2, so divide the bias by softmax_scale
+                    # (== multiply by inv_softmax_scale) to match the reference which biases q*scale·k.
+                    if cutlass.const_expr(basic_params.mBias is not None):
+                        offset = query_idx - key_idx
+                        in_window = (not cute.elem_less(offset, 0)) and cute.elem_less(offset, self._rel_pos_window)
+                        if keep and in_window:
+                            bias_val = basic_params.mBias[
+                                basic_params.batch_idx, query_meta_idx, basic_params.q_head, offset
+                            ]
+                            acc_S_mn[r, c] = (
+                                acc_S_mn[r, c] + cutlass.Float32(bias_val) * softmax_params.inv_softmax_scale
+                            )
+                    if not keep:
                         acc_S_mn[r, c] = -cutlass.Float32.inf
 
                 acc_S_row = acc_S_mn[r, None].load()
@@ -937,24 +987,45 @@ def segmented_flash_attention_forward_launcher(
         m_block_size=tile_m,
         n_block_size=tile_n,
         num_threads=num_threads,
+        rel_pos_window=rel_pos_window,
     )
 
+    if rel_pos_window is None:
+
+        @cute.jit
+        def _launch_segmented_flash_attention_forward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            lower_bounds: cute.Tensor,
+            valid: cute.Tensor,
+            out: cute.Tensor,
+            lse: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
+            kernel(q, k, v, lower_bounds, valid, out, lse, softmax_scale, stream)
+
+        return _launch_segmented_flash_attention_forward
+
     @cute.jit
-    def _launch_segmented_flash_attention_forward(
+    def _launch_segmented_flash_attention_forward_bias(
         stream: cuda.CUstream,
         q: cute.Tensor,
         k: cute.Tensor,
         v: cute.Tensor,
         lower_bounds: cute.Tensor,
         valid: cute.Tensor,
+        bias: cute.Tensor,
         out: cute.Tensor,
         lse: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
-        kernel(q, k, v, lower_bounds, valid, out, lse, softmax_scale, stream)
+        kernel(q, k, v, lower_bounds, valid, out, lse, softmax_scale, stream, bias)
 
-    return _launch_segmented_flash_attention_forward
+    return _launch_segmented_flash_attention_forward_bias
 
 
 def segmented_flash_attention_backward_launcher(
@@ -968,6 +1039,7 @@ def segmented_flash_attention_backward_launcher(
     tile_n: int = 64,
     num_threads: int = 128,
     compute_arch: int | None = None,
+    rel_pos_window: int | None = None,
 ) -> Any:
     """Build the FA4/CuTe segmented backward launcher.
 
@@ -1087,6 +1159,7 @@ def segmented_flash_attention_backward_launcher(
         V_in_regs=False,
         score_mod=None,
         score_mod_bwd=None,
+        rel_pos_window=rel_pos_window,
     )
 
     class _Float32ZeroFill:
@@ -1112,27 +1185,26 @@ def segmented_flash_attention_backward_launcher(
 
     zero_fill = _Float32ZeroFill(postprocess_threads)
 
-    @cute.jit
-    def _launch_segmented_flash_attention_backward(
-        stream: cuda.CUstream,
-        q: cute.Tensor,
-        k: cute.Tensor,
-        v: cute.Tensor,
-        out: cute.Tensor,
-        dout: cute.Tensor,
-        lse: cute.Tensor,
-        lower_bounds: cute.Tensor,
-        valid: cute.Tensor,
-        dq: cute.Tensor,
-        dk: cute.Tensor,
-        dv: cute.Tensor,
-        dpsum: cute.Tensor,
-        lse_log2: cute.Tensor,
-        dq_accum: cute.Tensor,
-        dk_accum: cute.Tensor,
-        dv_accum: cute.Tensor,
-        *,
-        softmax_scale: cutlass.Float32,
+    def _run_backward(
+        stream,
+        q,
+        k,
+        v,
+        out,
+        dout,
+        lse,
+        lower_bounds,
+        valid,
+        dq,
+        dk,
+        dv,
+        dpsum,
+        lse_log2,
+        dq_accum,
+        dk_accum,
+        dv_accum,
+        softmax_scale,
+        bias,
     ):
         preprocess(out, dout, dpsum, lse, lse_log2, dq_accum, None, None, None, stream)
         if cutlass.const_expr(qhead_per_kvhead == 1):
@@ -1149,18 +1221,8 @@ def segmented_flash_attention_backward_launcher(
                 lower_bounds,
                 valid,
                 softmax_scale,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                stream,
+                mBias=bias,
+                stream=stream,
             )
             dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
             return
@@ -1181,24 +1243,107 @@ def segmented_flash_attention_backward_launcher(
             lower_bounds,
             valid,
             softmax_scale,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            stream,
+            mBias=bias,
+            stream=stream,
         )
         dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
         dk_postprocess(dk_accum, dk, softmax_scale, None, None, stream)
         dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), None, None, stream)
 
-    return _launch_segmented_flash_attention_backward
+    if rel_pos_window is None:
+
+        @cute.jit
+        def _launch_segmented_flash_attention_backward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            out: cute.Tensor,
+            dout: cute.Tensor,
+            lse: cute.Tensor,
+            lower_bounds: cute.Tensor,
+            valid: cute.Tensor,
+            dq: cute.Tensor,
+            dk: cute.Tensor,
+            dv: cute.Tensor,
+            dpsum: cute.Tensor,
+            lse_log2: cute.Tensor,
+            dq_accum: cute.Tensor,
+            dk_accum: cute.Tensor,
+            dv_accum: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
+            _run_backward(
+                stream,
+                q,
+                k,
+                v,
+                out,
+                dout,
+                lse,
+                lower_bounds,
+                valid,
+                dq,
+                dk,
+                dv,
+                dpsum,
+                lse_log2,
+                dq_accum,
+                dk_accum,
+                dv_accum,
+                softmax_scale,
+                None,
+            )
+
+        return _launch_segmented_flash_attention_backward
+
+    @cute.jit
+    def _launch_segmented_flash_attention_backward_bias(
+        stream: cuda.CUstream,
+        q: cute.Tensor,
+        k: cute.Tensor,
+        v: cute.Tensor,
+        out: cute.Tensor,
+        dout: cute.Tensor,
+        lse: cute.Tensor,
+        lower_bounds: cute.Tensor,
+        valid: cute.Tensor,
+        bias: cute.Tensor,
+        dq: cute.Tensor,
+        dk: cute.Tensor,
+        dv: cute.Tensor,
+        dpsum: cute.Tensor,
+        lse_log2: cute.Tensor,
+        dq_accum: cute.Tensor,
+        dk_accum: cute.Tensor,
+        dv_accum: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        _run_backward(
+            stream,
+            q,
+            k,
+            v,
+            out,
+            dout,
+            lse,
+            lower_bounds,
+            valid,
+            dq,
+            dk,
+            dv,
+            dpsum,
+            lse_log2,
+            dq_accum,
+            dk_accum,
+            dv_accum,
+            softmax_scale,
+            bias,
+        )
+
+    return _launch_segmented_flash_attention_backward_bias
 
 
 def segmented_flash_attention_backward_sm90_launcher(

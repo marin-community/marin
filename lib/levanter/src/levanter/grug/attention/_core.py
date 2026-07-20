@@ -498,18 +498,19 @@ def attention(
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, bias=bias)
-    if bias is not None:
-        # Only the reference path applies a per-head additive bias today; the fused FA4/CuTe
-        # kernels get bias injection in Stage 2.
-        raise NotImplementedError(
-            f"Per-head attention bias is only supported by the 'reference' implementation; got {implementation!r}."
-        )
-    if implementation == "cudnn":
-        return cudnn_attention(q, k, v, mask)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        # The FA4/CuTe path consumes the compact band [B, S, Hq, window] directly (not a dense
+        # [B, H, Q, K] bias); the model passes the band on this path and only densifies for reference.
+        return gpu_fa4_cute_attention(q, k, v, mask, bias=bias)
+    if bias is not None:
+        # The remaining fused kernels do not yet apply a per-head additive bias.
+        raise NotImplementedError(
+            f"Per-head attention bias is only supported by 'reference' and 'gpu_fa4_cute'; got {implementation!r}."
+        )
+    if implementation == "cudnn":
+        return cudnn_attention(q, k, v, mask)
     if implementation == "gpu_fa4_thd":
         from levanter.grug.attention._fa4_thd import gpu_fa4_thd_attention  # noqa: PLC0415
 
