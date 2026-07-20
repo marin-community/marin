@@ -185,6 +185,11 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     _act_env = os.environ.get("EVAL_APPLY_CHAT_TEMPLATE")
     apply_chat_template = (_act_env == "1") if _act_env is not None else (tier == 2)
     tasks = TIER1_TASKS if tier == 1 else TIER2_TASKS
+    # Subset override (serial tier-2 rerun of only the un-banked benchmarks): EVAL_TIER2_TASKS as a
+    # comma list of benchmark names (e.g. "MATH500,MBPPPlus,GPQADiamond,IFEval" to skip an already-
+    # harvested HumanEvalPlus). Applies on the tier-2 path; num_fewshot 0 (tier-2 is all 0-shot chat).
+    if tier == 2 and os.environ.get("EVAL_TIER2_TASKS"):
+        tasks = tuple(EvalTaskConfig(n.strip(), 0) for n in os.environ["EVAL_TIER2_TASKS"].split(",") if n.strip())
     # Fast diagnostic smoke: a generative task (gsm8k) + an MC/loglikelihood task (hellaswag), small
     # --limit → proves BOTH request types score non-empty over local-completions before the full suite.
     if os.environ.get("EVAL_SMOKE") == "1":
