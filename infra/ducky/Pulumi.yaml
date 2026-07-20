@@ -8,7 +8,7 @@ runtime:
   options:
     virtualenv: ../../.venv
 description: ducky (ad-hoc DuckDB SQL service) as an always-on Iris job.
-# State backend and secrets provider come from the operator/CI environment, shared with
-# infra/iac (see infra/iac/README.md):
+# The state backend is selected by the operator/CI environment and shared with infra/iac
+# (see infra/iac/README.md):
 #   pulumi login gs://marin-iac-state
-# The production stack records the shared GCP KMS provider in Pulumi.ducky-marin.yaml.
+# Pulumi.ducky-marin.yaml records the production stack's shared GCP KMS provider.

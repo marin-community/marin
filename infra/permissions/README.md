@@ -33,9 +33,9 @@ pulumi stack init hai-gcp-models \
   --secrets-provider=gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 ```
 
-The first preview should contain seven IAM creates: WIF impersonation, state-bucket object
-admin, and KMS encrypt/decrypt for each deployment account, plus ID-token minting for Ducky.
-Any other IAM change is unexpected.
+A normal preview is a no-op. Recreating the stack should produce exactly seven IAM members:
+WIF impersonation, state-bucket object admin, and KMS encrypt/decrypt for each deployment
+account, plus ID-token minting for Ducky. Any other IAM change is unexpected.
 
 The shared bucket and key are a deliberate trust boundary: either deploy account can access
 state from other projects in the backend. Splitting state prefixes and keys requires a separate
@@ -43,8 +43,8 @@ backend migration; Grafana also reads the Cloud SQL stack through a stack refere
 
 ## Human access inventory
 
-[`user-access-inventory.yaml`](user-access-inventory.yaml) records the requested initial,
-read-only pull of Compute Admin and KMS access. It has no effect on GCP. Human access can be
+[`user-access-inventory.yaml`](user-access-inventory.yaml) records a read-only snapshot of
+Compute Admin and KMS access. It has no effect on GCP. Human access can be
 managed here later with non-authoritative `gcp.projects.IAMMember` and
 `gcp.kms.CryptoKeyIAMMember` resources after the entries have been reviewed. Do not use an
 authoritative project or role binding: the live project contains unrelated members that such a

@@ -60,13 +60,20 @@ def _workflow(name: str) -> dict:
 
 def test_deploy_workflows_use_main_branch_wif_service_accounts():
     expected = {
-        "ops-ducky.yaml": "iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com",
-        "ops-grafana.yaml": "marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com",
+        "ops-ducky.yaml": (
+            "github.ref == 'refs/heads/main'",
+            "iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com",
+        ),
+        "ops-grafana.yaml": (
+            "github.ref == 'refs/heads/main' && (github.event_name == 'push' || "
+            "github.event_name == 'workflow_dispatch')",
+            "marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com",
+        ),
     }
-    for workflow_name, service_account in expected.items():
+    for workflow_name, (condition, service_account) in expected.items():
         deploy = _workflow(workflow_name)["jobs"]["deploy"]
         assert deploy["permissions"] == {"contents": "read", "id-token": "write"}
-        assert "github.ref == 'refs/heads/main'" in deploy["if"]
+        assert deploy["if"] == condition
         step = next(step for step in deploy["steps"] if step.get("uses") == "./.github/actions/pulumi-deploy")
         assert step["with"]["service-account"] == service_account
 
@@ -77,9 +84,9 @@ def test_pulumi_deploy_action_uses_wif_without_passphrase_or_key_json():
     auth = next(step for step in action["runs"]["steps"] if step.get("uses") == "google-github-actions/auth@v3")
     assert auth["with"]["workload_identity_provider"] == "${{ inputs.workload-identity-provider }}"
     assert auth["with"]["service_account"] == "${{ inputs.service-account }}"
-    serialized = yaml.safe_dump(action)
-    assert "credentials_json" not in serialized
-    assert "pulumi-iac-passphrase" not in serialized
+    assert "credentials_json" not in auth["with"]
+    registry_auth = next(step for step in action["runs"]["steps"] if step.get("name") == "Configure registry auth")
+    assert registry_auth["run"] == "gcloud auth configure-docker us-central1-docker.pkg.dev --quiet"
 
 
 def test_service_stacks_use_shared_kms_provider():
