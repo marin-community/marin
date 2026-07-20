@@ -34,6 +34,7 @@ def main() -> None:
                     service_account=account["service_account"],
                     mint_id_tokens=account.get("mint_id_tokens", False),
                     secret_metadata_viewer=account.get("secret_metadata_viewer", False),
+                    secret_access_secrets=tuple(account.get("secret_access_secrets", [])),
                     secret_iam_secrets=tuple(account.get("secret_iam_secrets", [])),
                     artifact_registry_grants=tuple(
                         GcpArtifactRegistryGrant(

@@ -3,10 +3,13 @@
 This Pulumi project owns additive IAM grants shared by deployment workflows. It does not own
 the existing GitHub workload identity pool, service accounts, state bucket, or KMS key.
 
-The `hai-gcp-models` stack lets GitHub OIDC tokens for the `main` branch impersonate the Ducky
-and Grafana deployment accounts. Each account can update the shared Pulumi state bucket and
-encrypt or decrypt stack secrets with `marin-iac-key`. The IAM resources are protected, so a
-stack destroy fails instead of removing workflow authentication.
+The `hai-gcp-models` stack lets GitHub OIDC tokens for the `main` branch impersonate deployment
+accounts. Each account can update the shared Pulumi state bucket and encrypt or decrypt stack
+secrets with `marin-iac-key`. The IAM resources are protected, so a stack destroy fails instead
+of removing workflow authentication.
+
+The Iris CI account can read only the `iris-cw-us-west-04a-signing-key` secret needed to start
+the CoreWeave smoke-test controller.
 
 The Ducky account also receives `roles/iam.serviceAccountTokenCreator` from the same exact
 GitHub subject. Rigging needs it to mint the service-account ID token accepted by Iris's IAP

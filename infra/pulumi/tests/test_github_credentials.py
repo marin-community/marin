@@ -36,9 +36,6 @@ EXPECTED_REMOVAL_CANDIDATES = frozenset(
     {
         "repository:marin-community/marin:DISCORD_WEBHOOK_CODE_REVIEW",
         "repository:marin-community/marin:DUCKY_CW_ACCESS_KEY",
-        "repository:marin-community/marin:DUCKY_CW_SECRET_KEY",
-        "repository:marin-community/marin:DUCKY_GCS_HMAC_KEY_ID",
-        "repository:marin-community/marin:DUCKY_GCS_HMAC_SECRET",
         "repository:marin-community/marin:GCP_ARTIFACT_REPOSITORY_SA_KEY",
         "repository:marin-community/marin:GCP_SA_KEY",
         "repository:marin-community/marin:GCP_SA_LOGGING_KEY",

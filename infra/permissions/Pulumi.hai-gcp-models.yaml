@@ -10,6 +10,8 @@ config:
   marin-permissions:deploy_accounts:
     - service_account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
       mint_id_tokens: true
+      secret_access_secrets:
+        - iris-cw-us-west-04a-signing-key
     - service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
       secret_metadata_viewer: true
       # Keep this permission allowlist explicit: a new runtime secret should fail closed

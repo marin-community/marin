@@ -97,27 +97,24 @@ config:
     presence: present
     source_kind: manual
     source_ref: owner-recovery:ducky-cw-secret-key
-    disposition: remove-candidate
-    note: Runtime-required by Ducky; recover and seed the Secret Manager source named by the stack before
-      removing only the unused GitHub copy. The source is not currently listed in hai-gcp-models.
+    disposition: keep
+    note: Consumed by .github/workflows/ops-ducky.yaml.
   - name: DUCKY_GCS_HMAC_KEY_ID
     scope: repository
     repository: marin-community/marin
     presence: present
     source_kind: manual
     source_ref: owner-recovery:ducky-gcs-hmac-key-id
-    disposition: remove-candidate
-    note: Runtime-required by Ducky; recover and seed the Secret Manager source named by the stack before
-      removing only the unused GitHub copy. The source is not currently listed in hai-gcp-models.
+    disposition: keep
+    note: Consumed by .github/workflows/ops-ducky.yaml.
   - name: DUCKY_GCS_HMAC_SECRET
     scope: repository
     repository: marin-community/marin
     presence: present
     source_kind: manual
     source_ref: owner-recovery:ducky-gcs-hmac-secret
-    disposition: remove-candidate
-    note: Runtime-required by Ducky; recover and seed the Secret Manager source named by the stack before
-      removing only the unused GitHub copy. The source is not currently listed in hai-gcp-models.
+    disposition: keep
+    note: Consumed by .github/workflows/ops-ducky.yaml.
   - name: GCP_ARTIFACT_REPOSITORY_SA_KEY
     scope: repository
     repository: marin-community/marin

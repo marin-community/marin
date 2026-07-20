@@ -13,6 +13,7 @@ STATE_WRITER = "roles/storage.objectAdmin"
 KMS_ENCRYPTER_DECRYPTER = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
 SERVICE_ACCOUNT_TOKEN_CREATOR = "roles/iam.serviceAccountTokenCreator"
 SECRET_METADATA_VIEWER = "roles/secretmanager.viewer"
+SECRET_ACCESSOR = "roles/secretmanager.secretAccessor"
 SECRET_IAM_ROLE_ID = "marinSecretIamManager"
 SECRET_IAM_PERMISSIONS = (
     "secretmanager.secrets.get",
@@ -38,6 +39,7 @@ class GcpDeployAccount:
     service_account: str
     mint_id_tokens: bool = False
     secret_metadata_viewer: bool = False
+    secret_access_secrets: tuple[str, ...] = ()
     secret_iam_secrets: tuple[str, ...] = ()
     artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
     iap_iam_manager: bool = False
@@ -140,15 +142,25 @@ def _create_base_permissions(
 
 def _create_secret_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:
     for account in args.accounts:
-        if not account.secret_metadata_viewer:
-            continue
-        gcp.projects.IAMMember(
-            f"{_account_id(args.project, account.service_account)}-secret-metadata",
-            project=args.project,
-            role=SECRET_METADATA_VIEWER,
-            member=_service_account_member(account.service_account),
-            opts=opts,
-        )
+        account_id = _account_id(args.project, account.service_account)
+        account_member = _service_account_member(account.service_account)
+        if account.secret_metadata_viewer:
+            gcp.projects.IAMMember(
+                f"{account_id}-secret-metadata",
+                project=args.project,
+                role=SECRET_METADATA_VIEWER,
+                member=account_member,
+                opts=opts,
+            )
+        for secret in account.secret_access_secrets:
+            gcp.secretmanager.SecretIamMember(
+                f"{account_id}-{secret}-accessor",
+                project=args.project,
+                secret_id=secret,
+                role=SECRET_ACCESSOR,
+                member=account_member,
+                opts=opts,
+            )
 
     secret_iam_accounts = tuple(account for account in args.accounts if account.secret_iam_secrets)
     if not secret_iam_accounts:
