@@ -25,6 +25,7 @@ Usage: python bench_mxfp8_dense.py --git-sha REV [--tokens 65536] [--iters 50]
 """
 
 import argparse
+import itertools
 import json
 import os
 import re
@@ -133,6 +134,7 @@ def parse_args(argv=None):
     p.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
     p.add_argument("--producer", choices=["none", "cute"], default="none")
     p.add_argument("--projection-reuse", action="store_true")
+    p.add_argument("--projection-fusion", action="store_true")
     p.add_argument("--out", default="bench_mxfp8_dense.json")
     return p.parse_args(argv)
 
@@ -397,6 +399,114 @@ def main():
                 line += f"  quantize_x {r['quantize_x_ms']:.3f} ms  err out {r['err_out']:.2e}"
             print(line)
         results["shapes"][label] = shape_res
+
+    if a.projection_fusion:
+        assert a.producer == "cute", "--projection-fusion requires --producer cute"
+        fusion_results = {}
+        for label, widths in (("qkv", (5120, 1280, 1280)), ("shared_gate_up", (5120, 5120))):
+            split_points = tuple(itertools.accumulate(widths))[:-1]
+            output_width = sum(widths)
+            keys = jax.random.split(jax.random.PRNGKey(output_width), 3)
+            projection_x = jax.random.normal(keys[0], (a.tokens, 5120), dtype=jnp.bfloat16)
+            projection_w = jax.random.normal(keys[1], (5120, output_width), dtype=jnp.bfloat16) / (5120**0.5)
+            projection_g = jax.random.normal(keys[2], (a.tokens, output_width), dtype=jnp.bfloat16)
+
+            def cute_fused_fwdbwd(x, w, g):
+                x_orientations = cute_orientations(x)
+                w_orientations = cute_orientations(w)
+                g_orientations = cute_orientations(g)
+                out_type = jnp.bfloat16
+                y = scaled_matmul(
+                    x_orientations[0],
+                    w_orientations[2],
+                    x_orientations[1],
+                    w_orientations[3],
+                    preferred_element_type=out_type,
+                )
+                dx = scaled_matmul(
+                    g_orientations[0],
+                    w_orientations[0],
+                    g_orientations[1],
+                    w_orientations[1],
+                    preferred_element_type=out_type,
+                )
+                dw = scaled_matmul(
+                    x_orientations[2],
+                    g_orientations[2],
+                    x_orientations[3],
+                    g_orientations[3],
+                    preferred_element_type=out_type,
+                )
+                return y, dx, dw
+
+            def tensor_split_fwd(x, w, split_points=split_points):
+                return tuple(dot_fp8_tensor(x, part) for part in jnp.split(w, split_points, axis=1))
+
+            def tensor_split_fwdbwd(x, w, g, split_points=split_points):
+                y, pullback = jax.vjp(tensor_split_fwd, x, w)
+                return y, pullback(tuple(jnp.split(g, split_points, axis=1)))
+
+            ref_y = jax.lax.dot_general(projection_x.astype(jnp.float32), projection_w.astype(jnp.float32), DNUMS)
+            ref_dx = jax.lax.dot_general(projection_g.astype(jnp.float32), projection_w.T.astype(jnp.float32), DNUMS)
+            ref_dw = jax.lax.dot_general(projection_x.T.astype(jnp.float32), projection_g.astype(jnp.float32), DNUMS)
+            bundle_results = {}
+            for arm, fn in {
+                "mxfp8_cute_fused": cute_fused_fwdbwd,
+                "fp8_tensor_split": tensor_split_fwdbwd,
+            }.items():
+                lowered = jax.jit(fn).lower(projection_x, projection_w, projection_g)
+                compile_started = time.perf_counter()
+                compiled = lowered.compile()
+                compile_ms = (time.perf_counter() - compile_started) * 1e3
+                elapsed, elapsed_mad = timed_samples(
+                    compiled, (projection_x, projection_w, projection_g), a.iters, a.warmup
+                )
+                compiled_text = compiled.as_text()
+                outputs = compiled(projection_x, projection_w, projection_g)
+                if arm == "fp8_tensor_split":
+                    y, (dx, dw) = outputs
+                    y = jnp.concatenate(y, axis=1)
+                else:
+                    y, dx, dw = outputs
+                y = y.reshape(a.tokens, output_width)
+                dx = dx.reshape(a.tokens, 5120)
+                dw = dw.reshape(5120, output_width)
+                bundle_results[arm] = {
+                    "fwdbwd_ms": elapsed * 1e3,
+                    "fwdbwd_mad_ms": elapsed_mad * 1e3,
+                    "compile_ms": compile_ms,
+                    "custom_call_targets": sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_text))),
+                    "block_scaled_dot_call_count": custom_call_count(compiled_text, "__cudnn$blockScaledDot"),
+                    "err_out": rel_frob(y, ref_y),
+                    "err_gx": rel_frob(dx, ref_dx),
+                    "err_gw": rel_frob(dw, ref_dw),
+                }
+            fusion_results[label] = bundle_results
+            print(f"\n== fused {label} projection (T={a.tokens}, N={output_width}) ==")
+            for arm, row in bundle_results.items():
+                print(
+                    f"  {arm:20s} {row['fwdbwd_ms']:.3f} +/- {row['fwdbwd_mad_ms']:.3f} ms "
+                    f"err {row['err_out']:.2e}/{row['err_gx']:.2e}/{row['err_gw']:.2e}"
+                )
+
+        square_results = results["shapes"]["q_o_shared_5120x5120"]
+        fused_total = (
+            fusion_results["qkv"]["mxfp8_cute_fused"]["fwdbwd_ms"]
+            + fusion_results["shared_gate_up"]["mxfp8_cute_fused"]["fwdbwd_ms"]
+            + 2 * square_results["mxfp8_cute_reuse"]["fwdbwd_ms"]
+        )
+        current_total = (
+            fusion_results["qkv"]["fp8_tensor_split"]["fwdbwd_ms"]
+            + fusion_results["shared_gate_up"]["fp8_tensor_split"]["fwdbwd_ms"]
+            + 2 * square_results["fp8_tensor"]["fwdbwd_ms"]
+        )
+        results["projection_fusion"] = {
+            "bundles": fusion_results,
+            "production_dense_mxfp8_cute_ms": fused_total,
+            "production_dense_fp8_tensor_ms": current_total,
+            "production_dense_time_ratio": fused_total / current_total,
+        }
+        print(f"\nfused CuTe MXFP8 / current per-tensor production dense time: {fused_total / current_total:.4f}x")
 
     if a.projection_reuse:
         assert a.producer == "cute", "--projection-reuse requires --producer cute"

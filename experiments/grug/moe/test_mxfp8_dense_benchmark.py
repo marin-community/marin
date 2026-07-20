@@ -84,6 +84,12 @@ def test_projection_reuse_benchmark_is_explicit():
     assert args.projection_reuse
 
 
+def test_projection_fusion_benchmark_is_explicit():
+    args = benchmark.parse_args(["--git-sha", "abc123", "--producer", "cute", "--projection-fusion"])
+
+    assert args.projection_fusion
+
+
 def test_te_dense_benchmark_requires_provenance():
     with pytest.raises(SystemExit):
         te_benchmark.parse_args([])
