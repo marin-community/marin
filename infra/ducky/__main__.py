@@ -14,7 +14,7 @@ The Vue dashboard is built by the deploy itself (``build_commands`` runs on ever
 needs node/npm on the deploying machine.
 
 Runs on the shared repo venv; ``uv sync --all-packages --extra deploy`` first. See
-infra/iac/README.md for the state backend and KMS provider.
+infra/pulumi/README.md for the state backend and KMS provider.
 """
 
 import pulumi

@@ -512,11 +512,11 @@ max_slices` — there is nothing to save by autoscaling it down. GB200 NVL72
 deploys in whole racks of 18, so a rack pool's node count must be a multiple of
 18.
 
-**2. Provision the static prerequisites (IaC).** The `infra/iac` Pulumi program
+**2. Provision the static prerequisites (IaC).** The `infra/pulumi` Pulumi program
 declares the namespace, controller RBAC, the reserved NodePools, and the whole
 cluster-scoped Kueue substrate (`cks-kueue` release, Topology CRs, `cw-ib`
 ResourceFlavor, `iris-cq` ClusterQueue, `iris-system` PriorityClass) from the
-`provisioning:` section of the config. See `infra/iac/README.md`. (Pre-IaC path:
+`provisioning:` section of the config. See `infra/pulumi/README.md`. (Pre-IaC path:
 `install_kueue.py --with-queues` for Kueue and let `cluster start` create the
 RBAC + NodePools.)
 

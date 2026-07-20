@@ -135,7 +135,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
-    "infra/iac",
+    "infra/pulumi",
 ]
 # The native (maturin) companions are NOT members: their extensions are consumed
 # as pre-built wheels by default and only built from source under

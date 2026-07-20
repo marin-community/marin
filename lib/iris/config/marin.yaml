@@ -8,7 +8,7 @@ finelog:
   config: marin
 dashboard_url: https://iris.oa.dev
 
-# Infrastructure-as-code provisioning (see infra/iac). Iris carries this as an opaque dict;
+# Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque dict;
 # iac.config owns the typed schema. The GCP arm's first resources are the reserved
 # federation-egress static IPs: the marin / marin-dev controllers' egress, which the CoreWeave
 # controllers' ipAllowList admits (mirrored as iac.config.MARIN_FEDERATION_EGRESS_SOURCES /

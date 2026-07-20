@@ -38,7 +38,7 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
 
-# Infrastructure-as-code provisioning (see infra/iac). Iris carries this as an opaque
+# Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
 # dict; iac.config owns the typed schema. NodePools derive from scale_groups,
 # namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
 # from kubernetes_provider.kueue.cluster_queue — none of those are repeated here.

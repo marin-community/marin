@@ -204,7 +204,7 @@ class GcpPlatformConfig(_Config):
     # Workers rewrite matching images so pulls stay on-continent and dodge
     # upstream rate limits; unlisted registries and zone prefixes pull straight
     # from upstream. Every named repo must exist and be enabled or pulls fail
-    # (provisioned by infra/iac from provisioning.gcp.registries).
+    # (provisioned by infra/pulumi from provisioning.gcp.registries).
     registry_mirrors: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
@@ -774,7 +774,7 @@ class IrisClusterConfig(_OneofConfig):
     finelog: ClusterFinelogConfig = Field(default_factory=ClusterFinelogConfig)
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
     dashboard_url: str = ""
-    # Infrastructure-as-code provisioning section (see infra/iac). Carried as an
+    # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
     provisioning: dict[str, Any] | None = None

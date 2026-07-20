@@ -15,7 +15,7 @@ per-job Pod dispatch, the GCP TPU-slice autoscaler, NHC preemption — stays in 
 
 Owner legend: **IaC-pt1** = provisioned by this PR · **IaC-next** = a deferred component
 named in [spec.md §3](spec.md) whose config schema already exists in
-[`config.py`](../../../infra/iac/src/iac/config.py) · **IaC-gcp** = belongs to the deferred
+[`config.py`](../../../infra/pulumi/src/iac/config.py) · **IaC-gcp** = belongs to the deferred
 GCP arm · **Iris** = stays in `start_controller()` by design · **manual** = console / script,
 not yet modeled anywhere.
 
@@ -23,18 +23,18 @@ not yet modeled anywhere.
 |---|---|---|---|---|
 | 1 | Reserved NodePools (per scale group) | `ensure_nodepools()` | **IaC-pt1** | `CoreweaveCluster` ✅ |
 | 2 | Namespace + controller RBAC (SA, ClusterRole, Binding) | `ensure_rbac()` | **IaC-pt1** | `IrisRbac` ✅ |
-| 3 | CKS cluster object + VPC + kubeconfig | manual (console / CW TF provider) | **Manual (permanent)** | `CoreweaveCluster` records it as config (`CksClusterSpec`, exported outputs — [cluster.py](../../../infra/iac/src/iac/coreweave/cluster.py)); no CoreWeave TF provider bridged, no CoreWeave API credentials — see below |
+| 3 | CKS cluster object + VPC + kubeconfig | manual (console / CW TF provider) | **Manual (permanent)** | `CoreweaveCluster` records it as config (`CksClusterSpec`, exported outputs — [cluster.py](../../../infra/pulumi/src/iac/coreweave/cluster.py)); no CoreWeave TF provider bridged, no CoreWeave API credentials — see below |
 | 4 | Kueue: `cks-kueue` chart, Topology CRs, `cw-ib` ResourceFlavor, `iris-cq` ClusterQueue, **namespace-scoped webhooks** | `install_kueue.py --with-queues` | **IaC-landed** | `KueueAddon` ✅ |
 | 5 | Traefik + cert-manager + HTTP-01 ClusterIssuers | `install_cw_network.py` | **IaC-landed** | `TraefikAddon` ✅ |
 | 6 | **Federation ingress**: IP-locked `Ingress` + `ipAllowList` Middleware over the whole controller host | `install_cw_network.py` | **IaC-landed** | `TraefikAddon` ✅ — reads `IngressSpec.federation_allow_sources` (see §Egress IPs) |
 | 7 | Object-storage buckets + access keys (`s3://marin-<region>`) | manual console + `configure_buckets.py` (lifecycle) | IaC-next | `ObjectStorage` (`ObjectStorageSpec` exists); bucket *lifecycle* stays out (spec §7) |
 | 8 | **iris controller signing key** (`iris-<cluster>-signing-key`) | `iris cluster init-keys` → GCP Secret Manager | **Manual** | `init-keys` does the whole thing (create-if-absent + write + IAM); Pulumi only warns (non-fatal, `pulumi.log.warn` in `__main__.py`) when `auth.signing_key` is unset, with the exact command to run (see §Signing secrets) |
 | 9 | **finelog forwarding signing key** (`finelog-<cluster>-signing-key`) | minted by hand → GCP Secret Manager | **Open** | same posture as row 8 once a cluster needs finelog forwarding (see §Signing secrets) |
-| 10 | Federation **egress** IP reservations (`34.27.183.11`, `35.254.13.19` = `iris-marin-fed-egress` / `iris-marin-dev-fed-egress`) | reserved by hand in `hai-gcp-models` | **IaC-landed** (GCP arm) | `GcpStaticAddresses` ✅ ([gcp/addresses.py](../../../infra/iac/src/iac/gcp/addresses.py)); the CoreWeave-side allowlist is `IngressSpec.federation_allow_sources` (see §Egress IPs) |
+| 10 | Federation **egress** IP reservations (`34.27.183.11`, `35.254.13.19` = `iris-marin-fed-egress` / `iris-marin-dev-fed-egress`) | reserved by hand in `hai-gcp-models` | **IaC-landed** (GCP arm) | `GcpStaticAddresses` ✅ ([gcp/addresses.py](../../../infra/pulumi/src/iac/gcp/addresses.py)); the CoreWeave-side allowlist is `IngressSpec.federation_allow_sources` (see §Egress IPs) |
 | 11 | DNS: `iris-cw-<cluster>.oa.dev` CNAME → Traefik LB FQDN | manual (Cloudflare) | **Manual (deferred)** | considered and deferred — see §DNS CNAME below |
 | 12 | finelog server Deployment (in-cluster) | `finelog deploy up <cluster>` | IaC-next (planned) | `FinelogServer` component (a later CoreWeave slice; needs the finelog signing key) |
 | 13 | Iris runtime objects: ConfigMap, `iris-task-env` Secret, LocalQueue, PriorityClasses, controller Deployment + Service, state PVC | `start_controller()` | **Iris (by design)** | stays in Iris (spec §4) |
-| 14 | AR pull-through caches: `ghcr-mirror` (ghcr.io), `docker-mirror` (Docker Hub), each in `us` + `europe`, plus 30d-delete / keep-16 cleanup | manual console / `gcloud artifacts` | **IaC-landed** (GCP arm) | `GcpArtifactRegistries` ✅ ([gcp/registries.py](../../../infra/iac/src/iac/gcp/registries.py)); declared in `provisioning.gcp.registries`, consumed by `GcpWorkerProvider.resolve_image` (see [image-push.md](../../../lib/iris/docs/image-push.md)) |
+| 14 | AR pull-through caches: `ghcr-mirror` (ghcr.io), `docker-mirror` (Docker Hub), each in `us` + `europe`, plus 30d-delete / keep-16 cleanup | manual console / `gcloud artifacts` | **IaC-landed** (GCP arm) | `GcpArtifactRegistries` ✅ ([gcp/registries.py](../../../infra/pulumi/src/iac/gcp/registries.py)); declared in `provisioning.gcp.registries`, consumed by `GcpWorkerProvider.resolve_image` (see [image-push.md](../../../lib/iris/docs/image-push.md)) |
 
 Rows 1–2, 4–6, 8, 10, 14 are done. Rows 3 and 11 are deferred (see below). Row 7 is the
 remaining sequenced CoreWeave follow-up already in the design; row 12 is a planned CoreWeave
@@ -51,7 +51,7 @@ two now modeled, one deferred:
   *into* each CoreWeave controller, and their egress IPs (`34.27.183.11`, `35.254.13.19`) are
   reserved as `iris-marin-fed-egress` / `iris-marin-dev-fed-egress` in project
   `hai-gcp-models`. These are now `google_compute_address` resources in the GCP arm —
-  `GcpStaticAddresses` ([gcp/addresses.py](../../../infra/iac/src/iac/gcp/addresses.py)), the
+  `GcpStaticAddresses` ([gcp/addresses.py](../../../infra/pulumi/src/iac/gcp/addresses.py)), the
   GCP arm's first slice, on the `marin` stack. Each pins its IP so adoption imports the live
   reservation without ever reassigning an IP baked into a CoreWeave allowlist. (Confirmed
   against the live reservations: both are EXTERNAL, `us-central1`, in use.)
@@ -59,7 +59,7 @@ two now modeled, one deferred:
 - **The CoreWeave-side allowlist (part of row 6) — landed as a config input.** Which sources
   the CoreWeave federation route admits is `IngressSpec.federation_allow_sources`, defaulting
   to the `MARIN_FEDERATION_EGRESS_SOURCES` constant in
-  [`config.py`](../../../infra/iac/src/iac/config.py) (the same values as the
+  [`config.py`](../../../infra/pulumi/src/iac/config.py) (the same values as the
   `FEDERATION_ALLOW_SOURCES` constant in
   [`install_cw_network.py`](../../../lib/iris/scripts/install_cw_network.py)).
 
@@ -140,7 +140,7 @@ exist and resolve via the real `helm` CLI. `KueueAddon`'s `cks-kueue` Release (s
 Verified clean across 8 consecutive `pulumi preview` runs (0 failures), versus 5/5 failures the
 same session with `repository_opts` present. Without `repository_opts`, `chart="coreweave/traefik"`
 resolves through the local `helm` CLI's repo config (populated by `helm repo add coreweave <url>`),
-so that registration becomes a prerequisite — documented in one place, `infra/iac/README.md`
+so that registration becomes a prerequisite — documented in one place, `infra/pulumi/README.md`
 Prerequisites. `KueueAddon`'s `cks-kueue` Release is untouched (still `repository_opts`), never
 having failed.
 
@@ -186,7 +186,7 @@ has to make the repo available at preview time. Three ways to handle it, in pref
    `chart="./charts/traefik"` drops the remote repo and network entirely, makes `preview`
    self-contained, and sidesteps the #935 re-fetch flakiness. Cost: re-vendor (`helm pull`) on
    every chart bump, and the tarballs live in-tree.
-3. **Keep it out-of-band** (current). One documented step in `infra/iac/README.md` Prerequisites,
+3. **Keep it out-of-band** (current). One documented step in `infra/pulumi/README.md` Prerequisites,
    plus an explicit step in any CI workflow that runs a CoreWeave preview/up (none exists yet —
    spec.md §9 Phase 1). Residual risk: resolution trusts whatever `coreweave` is aliased to
    locally, with no URL pinned in code.
@@ -246,17 +246,17 @@ Added in this PR, using only the existing schema + pt1 components:
 - [`lib/iris/config/cw-us-east-08a.yaml`](../../../lib/iris/config/cw-us-east-08a.yaml) —
   the cluster: `cpu-erapids` pool (4× `cd-gp-i64-erapids`) + `gb200` pool (216× `gb200-4x`,
   4 GB200 GPUs each = 864 Blackwell GPUs = 12 NVL72 racks), both pinned warm.
-- [`infra/iac/Pulumi.cw-us-east-08a.yaml`](../../../infra/iac/Pulumi.cw-us-east-08a.yaml) —
+- [`infra/pulumi/Pulumi.cw-us-east-08a.yaml`](../../../infra/pulumi/Pulumi.cw-us-east-08a.yaml) —
   the Pulumi stack pointer.
 
 No finelog config ships for it — that's blocked on the signing key + hub registration (see
 §finelog auth secrets), so the Iris config omits `finelog:` and the controller uses MemStore
 until the key exists.
 
-Also landed: the **GCP address stub** — [`iac/gcp/addresses.py`](../../../infra/iac/src/iac/gcp/addresses.py)
+Also landed: the **GCP address stub** — [`iac/gcp/addresses.py`](../../../infra/pulumi/src/iac/gcp/addresses.py)
 (`GcpStaticAddresses`), the `GcpProvisioning` schema, the `Provider.GCP` dispatch in
 `__main__.py`, the `provisioning:` block on [`lib/iris/config/marin.yaml`](../../../lib/iris/config/marin.yaml),
-and the [`Pulumi.marin.yaml`](../../../infra/iac/Pulumi.marin.yaml) stack. `pulumi-gcp` joins
+and the [`Pulumi.marin.yaml`](../../../infra/pulumi/Pulumi.marin.yaml) stack. `pulumi-gcp` joins
 the deps. This is the GCP arm's first slice (§Egress IPs); its live `pulumi preview --import`
 is operator-run.
 

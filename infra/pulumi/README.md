@@ -1,7 +1,10 @@
-# marin-iac
+# Pulumi infrastructure
 
 Infrastructure-as-code for the static substrate of Marin clusters, per the design in
 [`.agents/projects/iac/`](../../.agents/projects/iac/). Pulumi (Python). **CoreWeave first.**
+
+The cluster project retains the `marin-iac` Pulumi name so this directory move does not change
+existing resource URNs or require a state migration.
 
 This is the **minimal cut**: it provisions the ceded RBAC, reserved NodePools, Kueue objects,
 and the Traefik/cert-manager/federation-ingress stack for a CoreWeave cluster. The CKS cluster
@@ -20,6 +23,10 @@ components other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run
 (IAP-gated Cloud Run, used by `infra/grafana`) and `iac.iris` (always-on Iris service
 jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky`).
 
+GitHub organization and repository resources live in the independent
+[`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets while
+their values remain outside Pulumi.
+
 ## What it reads
 
 Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.yaml`):
@@ -29,7 +36,7 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
 `kubernetes_provider.kueue.cluster_queue`.
 - The residual cluster facts (CKS cluster name, ResourceFlavor, ACME issuers, buckets) from the
 new `provisioning:` section in that same file. Iris carries `provisioning:` as an opaque dict;
-`iac.config` owns the typed schema. (The package is `infra/iac/src/iac/`, imported as
+`iac.config` owns the typed schema. (The package is `infra/pulumi/src/iac/`, imported as
 `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
 
 
@@ -71,7 +78,7 @@ The committed `Pulumi.<cluster>.yaml` is only the stack's **config**, not the st
 you create the stack once with `pulumi stack init` before it can be selected.
 
 ```bash
-cd infra/iac
+cd infra/pulumi
 
 # 1. one-time: pick a state backend. --local keeps state in a local file (good for
 #    experimentation); production uses gs://marin-iac-state (see spec.md §2 backend bootstrap).

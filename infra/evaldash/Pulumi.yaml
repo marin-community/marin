@@ -8,6 +8,6 @@ runtime:
     virtualenv: ../../.venv
 description: The Marin eval-results dashboard as an IAP-gated Cloud Run service.
 # State backend and secrets provider come from the operator/CI environment, shared with
-# infra/iac (see README.md):
+# infra/pulumi (see README.md):
 #   pulumi login gs://marin-iac-state
 #   PULUMI_CONFIG_PASSPHRASE from Secret Manager (pulumi-iac-passphrase)

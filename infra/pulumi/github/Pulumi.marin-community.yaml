@@ -1,0 +1,303 @@
+config:
+  github:owner: marin-community
+  marin-github:schemaVersion: 1
+  marin-github:organization: marin-community
+  marin-github:repositories:
+  - marin-community/marin
+  marin-github:credentials:
+  - name: CLAUDE_CODE_OAUTH_TOKEN
+    scope: organization
+    presence: present
+    visibility: all
+    source_kind: manual
+    source_ref: owner-recovery:claude-code-oauth
+    disposition: keep
+  - name: CW_ACCESS_KEY_ID
+    scope: organization
+    presence: present
+    visibility: all
+    source_kind: current-file
+    source_ref: file:/tmp/github-ci#key-id
+    disposition: keep
+    note: One-time bootstrap source; distinct from the shell CW pair, Ducky key, R2 pair, and existing
+      GCP cw-object-storage key.
+  - name: CW_SECRET_ACCESS_KEY
+    scope: organization
+    presence: present
+    visibility: all
+    source_kind: current-file
+    source_ref: file:/tmp/github-ci#key-secret
+    disposition: keep
+    note: One-time bootstrap source paired with CW_ACCESS_KEY_ID.
+  - name: GCP_PROJECT_ID
+    scope: organization
+    presence: present
+    visibility: all
+    source_kind: configuration
+    source_ref: config:lib/iris/config/marin.yaml#provisioning.gcp.project
+    disposition: move-to-variable
+  - name: LOOM_TRIGGER_GH_TOKEN
+    scope: organization
+    presence: present
+    visibility: selected
+    repositories:
+    - marin-community/MarinSkyRL
+    - marin-community/evalchemy
+    - marin-community/harbor
+    - marin-community/marin-style
+    - marin-community/tpu-inference
+    - marin-community/vllm
+    source_kind: manual
+    source_ref: owner-recovery:loom-trigger-token
+    disposition: keep
+    note: Consumed outside marin; MarinSkyRL has a default-branch workflow reference.
+  - name: SLACK_WEBHOOK_URL
+    scope: organization
+    presence: present
+    visibility: all
+    source_kind: manual
+    source_ref: owner-recovery:slack-webhook
+    disposition: keep
+    note: Shadowed in marin by the repository secret of the same name.
+  - name: CW_KUBECONFIG
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:coreweave-kubeconfig
+    disposition: keep
+  - name: DISCORD_WEBHOOK_CODE_REVIEW
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: gcp-secret
+    source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-code-review/versions/1
+    disposition: remove-candidate
+    note: No current workflow reference; the current shell value matches the GCP version.
+  - name: DISCORD_WEBHOOK_INTERNAL_DISCUSS
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: gcp-secret
+    source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-discord-webhook-internal-discuss/versions/1
+    disposition: keep
+    note: The current shell value matches the GCP version.
+  - name: DUCKY_CW_ACCESS_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: configuration
+    source_ref: config:infra/ducky/Pulumi.ducky-marin.yaml#ducky.env.DUCKY_CW_ACCESS_KEY
+    disposition: remove-candidate
+    note: Runtime-required by Ducky and supplied by Pulumi without GitHub Actions; remove only the unused
+      GitHub copy after confirming equality with the committed identifier.
+  - name: DUCKY_CW_SECRET_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:ducky-cw-secret-key
+    disposition: remove-candidate
+    note: Runtime-required by Ducky; recover and seed the Secret Manager source named by the stack before
+      removing only the unused GitHub copy. The source is not currently listed in hai-gcp-models.
+  - name: DUCKY_GCS_HMAC_KEY_ID
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:ducky-gcs-hmac-key-id
+    disposition: remove-candidate
+    note: Runtime-required by Ducky; recover and seed the Secret Manager source named by the stack before
+      removing only the unused GitHub copy. The source is not currently listed in hai-gcp-models.
+  - name: DUCKY_GCS_HMAC_SECRET
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:ducky-gcs-hmac-secret
+    disposition: remove-candidate
+    note: Runtime-required by Ducky; recover and seed the Secret Manager source named by the stack before
+      removing only the unused GitHub copy. The source is not currently listed in hai-gcp-models.
+  - name: GCP_ARTIFACT_REPOSITORY_SA_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:gcp-artifact-repository-service-account-key
+    disposition: remove-candidate
+  - name: GCP_PROJECT_ID
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: configuration
+    source_ref: config:lib/iris/config/marin.yaml#provisioning.gcp.project
+    disposition: move-to-variable
+    note: Overrides the organization secret of the same name.
+  - name: GCP_SA_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:gcp-service-account-key
+    disposition: remove-candidate
+  - name: GCP_SA_LOGGING_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:gcp-logging-service-account-key
+    disposition: remove-candidate
+  - name: GEMINI_API_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: current-environment
+    source_ref: env:GEMINI_API_KEY
+    disposition: remove-candidate
+  - name: GIST_PAT
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:gist-pat
+    disposition: keep
+  - name: HF_TOKEN
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: gcp-secret
+    source_ref: gcp-secret://projects/hai-gcp-models/secrets/HF_TOKEN/versions/3
+    disposition: keep
+    note: Candidate canonical source; the current shell HF_TOKEN is a different value, and GitHub cannot
+      reveal which one it stores.
+  - name: IRIS_CI_GCP_SA_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:iris-ci-gcp-service-account-key
+    disposition: replace-with-oidc
+  - name: IRIS_CI_GCP_SSH_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:iris-ci-gcp-ssh-private-key
+    disposition: replace-with-oidc
+  - name: IRIS_CI_GCP_SSH_KEY_PUB
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:iris-ci-gcp-ssh-public-key
+    disposition: move-to-variable
+  - name: MARIN_CD_CLOUD_RUN_SA_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:marin-cloud-run-service-account-key
+    disposition: replace-with-oidc
+  - name: MARIN_SSH_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:marin-ssh-key
+    disposition: remove-candidate
+  - name: NEW_GCP_JSON
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:new-gcp-json
+    disposition: remove-candidate
+  - name: NIGHTSHIFT_APP_ID
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: github-metadata
+    source_ref: github-app://marin-community/claude-nightshift#app-id
+    disposition: move-to-variable
+  - name: NIGHTSHIFT_APP_PRIVATE_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:claude-nightshift-private-key
+    disposition: keep
+  - name: R2_ACCESS_KEY_ID
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: current-environment
+    source_ref: env:R2_ACCESS_KEY_ID
+    disposition: keep
+  - name: R2_SECRET_ACCESS_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: current-environment
+    source_ref: env:R2_SECRET_ACCESS_KEY
+    disposition: keep
+  - name: RAY_AUTH_TOKEN
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: gcp-secret
+    source_ref: gcp-secret://projects/hai-gcp-models/secrets/RAY_AUTH_TOKEN/versions/1
+    disposition: remove-candidate
+  - name: SLACK_WEBHOOK_URL
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:slack-webhook
+    disposition: keep
+    note: Overrides the organization secret of the same name.
+  - name: SPEEDRUN_LEADERBOARD_PAT
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: manual
+    source_ref: owner-recovery:speedrun-leaderboard-pat
+    disposition: remove-candidate
+  - name: WANDB_API_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: present
+    source_kind: current-environment
+    source_ref: env:WANDB_API_KEY
+    disposition: keep
+  - name: ANTHROPIC_ADMIN_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: referenced-missing
+    source_kind: current-environment
+    source_ref: env:ANTHROPIC_ADMIN_KEY
+    disposition: review
+    note: Optional cost-report provider credential.
+  - name: CLAUDE_MAX_OAUTH_TOKEN
+    scope: repository
+    repository: marin-community/marin
+    presence: referenced-missing
+    source_kind: manual
+    source_ref: owner-recovery:claude-max-oauth-token
+    disposition: review
+    note: Fallback reference; CLAUDE_CODE_OAUTH_TOKEN is present at organization scope.
+  - name: COREWEAVE_API_TOKEN
+    scope: repository
+    repository: marin-community/marin
+    presence: referenced-missing
+    source_kind: current-environment
+    source_ref: env:COREWEAVE_API_TOKEN
+    disposition: review
+    note: Optional cost-report provider credential; distinct from CoreWeave object-storage keys.
+  - name: OPENAI_ADMIN_KEY
+    scope: repository
+    repository: marin-community/marin
+    presence: referenced-missing
+    source_kind: current-environment
+    source_ref: env:OPENAI_ADMIN_KEY
+    disposition: review
+    note: Optional cost-report provider credential.

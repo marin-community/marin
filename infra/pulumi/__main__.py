@@ -17,7 +17,7 @@ import os
 import sys
 
 # Make the `iac` package importable without a separate install step: Pulumi runs this file
-# from infra/iac/, so add its src/ to the path. Deps (pulumi, pulumi-kubernetes) and
+# from infra/pulumi/, so add its src/ to the path. Deps (pulumi, pulumi-kubernetes) and
 # marin-iris/marin-rigging come from the shared repo virtualenv (marin-iac is a workspace
 # member; run `uv sync --all-packages`).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))

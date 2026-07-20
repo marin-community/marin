@@ -11,7 +11,7 @@ under `/cloudsql` (see `iac.gcp.cloud_run.CloudRunService.cloudsql_instances`).
 Pulumi owns the instance, the two databases, the two Secret Manager secret *shells*, and the
 bucket. It does not own the SQL users or their passwords: a password passed to Pulumi would
 land in stack state. Users and secret values are set out-of-band with `gcloud` (below). This
-directory is its own Pulumi project, runs on the shared repo venv, and shares `infra/iac`'s
+directory is its own Pulumi project, runs on the shared repo venv, and shares `infra/pulumi`'s
 state backend.
 
 ## Deploy

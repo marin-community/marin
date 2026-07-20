@@ -14,7 +14,7 @@ platform:
   gcp:
     project_id: hai-gcp-models
     # Same-continent AR pull-through caches; shared with the marin cluster and
-    # provisioned by infra/iac from marin.yaml's provisioning.gcp.registries.
+    # provisioned by infra/pulumi from marin.yaml's provisioning.gcp.registries.
     registry_mirrors:
       ghcr.io:
         us: us-docker.pkg.dev/hai-gcp-models/ghcr-mirror

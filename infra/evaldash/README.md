@@ -98,7 +98,7 @@ uv run \
 ## Deploy
 
 Deployment is handled via Pulumi (`iac.gcp.cloud_run.CloudRunService`); this directory is its
-own Pulumi project (stack `marin-evaldash`), sharing `infra/iac`'s state backend. It depends
+own Pulumi project (stack `marin-evaldash`), sharing `infra/pulumi`'s state backend. It depends
 on the `hai-gcp-models:us-central1:marin-metadata` Cloud SQL instance and the
 `cloudsql-evals-password` secret from `infra/cloudsql` — see that project's README for
 provisioning them.

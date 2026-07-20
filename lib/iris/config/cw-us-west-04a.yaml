@@ -5,7 +5,7 @@
 # This cluster's identity. Used for token minting and for authenticating to peers.
 name: cw-us-west-04a
 
-# Infrastructure-as-code provisioning (see infra/iac). Iris carries this as an opaque
+# Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
 # dict; iac.config owns the typed schema. NodePools derive from scale_groups,
 # namespace from kubernetes_provider.namespace, and the Kueue ClusterQueue (iris-cq)
 # from kubernetes_provider.kueue.cluster_queue — none of those are repeated here.

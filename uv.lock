@@ -4737,10 +4737,11 @@ test = [
 [[package]]
 name = "marin-iac"
 version = "0.0.0"
-source = { editable = "infra/iac" }
+source = { editable = "infra/pulumi" }
 dependencies = [
     { name = "marin-iris", extra = ["controller"] },
     { name = "marin-rigging" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -4750,6 +4751,7 @@ deploy = [
     { name = "pulumi-command" },
     { name = "pulumi-docker-build" },
     { name = "pulumi-gcp" },
+    { name = "pulumi-github" },
     { name = "pulumi-kubernetes" },
 ]
 
@@ -4762,7 +4764,9 @@ requires-dist = [
     { name = "pulumi-command", marker = "extra == 'deploy'", specifier = ">=1,<2" },
     { name = "pulumi-docker-build", marker = "extra == 'deploy'", specifier = ">=0.0.8,<1" },
     { name = "pulumi-gcp", marker = "extra == 'deploy'", specifier = ">=9,<10" },
+    { name = "pulumi-github", marker = "extra == 'deploy'", specifier = ">=6,<7" },
     { name = "pulumi-kubernetes", marker = "extra == 'deploy'", specifier = ">=4.18,<5" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["deploy"]
 
@@ -7826,6 +7830,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c6/37/fa0b17bfa51f47ad720081fae0a435d07c4d92bc6f60042895484e9725d6/pulumi_gcp-9.23.0.tar.gz", hash = "sha256:31e9176cec85cb9abd7f1258f4ba81396b0870896a284d26fea6e8be814e838c", size = 10089050, upload-time = "2026-05-07T17:07:19.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/23/be/ef72978a1286c5d5b7b69f13c03517308580271d5c4f8695cc27030d5769/pulumi_gcp-9.23.0-py3-none-any.whl", hash = "sha256:14a81e27c1989ede680af8ab87cd1ba7efd3a90d5aa55eb6eb466594bb605643", size = 12394748, upload-time = "2026-05-07T17:07:16.282Z" },
+]
+
+[[package]]
+name = "pulumi-github"
+version = "6.13.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/30/ed/743b498f3abe89d86af746305bc274816c3833ef448657b8e6df1f3de0f5/pulumi_github-6.13.1.tar.gz", hash = "sha256:b4d42f8a650eb8d7a13ec863cdd5d5177b2fcb55df07c2402e75c3e181ead952", size = 267742, upload-time = "2026-04-29T04:36:56.144Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/d5/8fca222226459c6926be33f9b83504e61e955207b8ec089c4769b0ec9686/pulumi_github-6.13.1-py3-none-any.whl", hash = "sha256:742ffb8668e3b4f392aef0cb065735a23be8a1324ebefe10e160ded34ccd6d04", size = 474453, upload-time = "2026-04-29T04:36:54.015Z" },
 ]
 
 [[package]]

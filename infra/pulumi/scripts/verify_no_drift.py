@@ -19,12 +19,12 @@ Subsequent runs: captures ground truth again and diffs against the file, printin
 Exits non-zero if there's a diff, so this composes into a shell `&&` chain or a CI gate.
 
 Usage:
-    uv run infra/iac/scripts/verify_no_drift.py --cluster cw-us-west-04a
+    uv run infra/pulumi/scripts/verify_no_drift.py --cluster cw-us-west-04a
     # ... do something to the cluster (pulumi up, etc.) ...
-    uv run infra/iac/scripts/verify_no_drift.py --cluster cw-us-west-04a
+    uv run infra/pulumi/scripts/verify_no_drift.py --cluster cw-us-west-04a
 
     # Explicit snapshot path, or start over:
-    uv run infra/iac/scripts/verify_no_drift.py --cluster cw-us-west-04a --snapshot /tmp/before.json
+    uv run infra/pulumi/scripts/verify_no_drift.py --cluster cw-us-west-04a --snapshot /tmp/before.json
     rm /tmp/cw-us-west-04a-ground-truth.json  # discard the baseline, next run starts fresh
 """
 

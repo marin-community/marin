@@ -212,8 +212,8 @@ dashboards, and a bridge that 500s on query.
 Pulumi owns the deploy: the runtime service account and its `compute.viewer` grant, the
 Artifact Registry repo and image, the Cloud Run service, and the IAP wiring. The service
 and its image build come from the reusable `iac.gcp.cloud_run.CloudRunService` component
-(`infra/iac`); this directory is its own Pulumi project. It runs on the shared repo venv
-and shares `infra/iac`'s state backend.
+(`infra/pulumi`); this directory is its own Pulumi project. It runs on the shared repo venv
+and shares `infra/pulumi`'s state backend.
 
 ```bash
 uv sync --all-packages --extra deploy                     # once: iac + Pulumi providers on the venv (pulumi lives behind marin-iac[deploy])

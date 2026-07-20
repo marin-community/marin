@@ -78,7 +78,7 @@ official CoreWeave TF provider** (`coreweave_cks_cluster` + VPC), reused from Py
 honest counterweights — Terraform's larger ecosystem and native (un-bridged) CoreWeave/
 Cloudflare providers — are real but general, and didn't outweigh the stack-specific wins.
 
-**Layout: a top-level `infra/iac/` directory in the monorepo**, next to `config/` and
+**Layout: a top-level `infra/pulumi/` directory in the monorepo**, next to `config/` and
 the CI that runs it. One Pulumi **project**, one **stack per cluster** (`cw-us-east-02a`,
 `cw-rno2a`, later `marin` for GCP). Component resources model the surface:
 
@@ -103,7 +103,7 @@ validated.
 
 **Iris cedes the migrated resources.** `start_controller()` drops `ensure_rbac()` and
 `ensure_nodepools()` and instead **verifies** they exist, failing with a clear "run
-`infra/iac` apply first" message. Everything else it creates is unchanged (controller
+`infra/pulumi` apply first" message. Everything else it creates is unchanged (controller
 Deployment + Service, ConfigMap, `iris-task-env` Secret, namespaced LocalQueue, per-job
 Pods). The CoreWeave boundary: **IaC owns the node-capacity envelope + access substrate;
 Iris owns the Pods inside it.** This boundary is *provider-shaped*, not universal — on GCP
@@ -127,7 +127,7 @@ namespace-scoped webhooks, an ingress for `/proxy`, an object bucket + creds). B
 Iris verifies rather than creates these, the contract is explicit and a deployer can
 satisfy it however they like; our Pulumi program is a *reference implementation* of it, not
 a requirement. Two paths: if your topology matches ours (CKS, or GCP+IAP), **fork
-`infra/iac/` and bring your own `provisioning:` config + state/KMS backend** — the program
+`infra/pulumi/` and bring your own `provisioning:` config + state/KMS backend** — the program
 holds no Marin-specific constants, so only config differs. If your topology differs (EKS,
 on-prem, a different object store), **satisfy the prerequisite contract with your own IaC**
 and run `iris cluster start` against it. Detail and the tradeoff analysis are in
@@ -142,7 +142,7 @@ Three levels, no paid CoreWeave in the default path:
   most important regression, since an unscoped webhook deadlocks node delivery cluster-wide.
 - **kind**: the k8s-portable components (`KueueAddon` upstream variant, `IrisRbac`) apply
   against a kind cluster, reusing the existing `tests/e2e/gpu_gang_smoke.py` harness path.
-- **Greenfield rollout check** (the acceptance test): on `cw-us-west-04a`, `infra/iac` apply
+- **Greenfield rollout check** (the acceptance test): on `cw-us-west-04a`, `infra/pulumi` apply
   provisions RBAC + Kueue + Traefik + NodePools, then `iris cluster start` succeeds against
   those prerequisites **without** its own `ensure_rbac()`/`ensure_nodepools()`, and a CPU
   hello-world + 8-GPU `jax.devices()` job run. Proves the cede boundary end-to-end.

@@ -104,7 +104,7 @@ class TraefikAddon(pulumi.ComponentResource):
         # `chart="coreweave/traefik"` resolves through the local `helm` CLI repo config, which
         # must have the `coreweave` alias registered first (`helm repo add coreweave <url>`).
         # That prerequisite, and the options for folding it into `pulumi up`, are documented in
-        # one place: infra/iac/README.md Prerequisites and gaps.md's "Pulumi Helm chart
+        # one place: infra/pulumi/README.md Prerequisites and gaps.md's "Pulumi Helm chart
         # resolution". `KueueAddon`'s `cks-kueue` Release keeps `repository_opts`, never having failed.
         cert_manager_release = k8s.helm.v3.Release(
             "cert-manager",
