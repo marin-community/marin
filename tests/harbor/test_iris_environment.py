@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from upath import UPath
 
 try:
     from harbor.models.task.config import EnvironmentConfig
     from harbor.models.trial.paths import TrialPaths
     from marin.harbor import iris_environment
     from marin.harbor.iris_environment import IrisEnvironment
+    from upath import UPath
 except ImportError:
     pytest.skip("harbor is not installed (marin[harbor] extra)", allow_module_level=True)
 
