@@ -52,4 +52,4 @@ stack then previewed with 19 unchanged resources.
 ## Future work
 
 - [ ] Migrate the five Ducky repository secrets into their documented Secret Manager names.
-- [ ] Grant `iris-ci-smoke` accessor only on those five secrets after they exist.
+- [ ] Add and apply a resource-scoped `iris-ci-smoke` accessor grant after the secrets exist.

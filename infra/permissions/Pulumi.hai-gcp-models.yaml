@@ -14,6 +14,8 @@ config:
     - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
   marin-permissions:secret_metadata_viewers:
     - marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+  # Keep this permission allowlist explicit: a new runtime secret should fail closed until
+  # its deploy-account IAM management is reviewed here.
   marin-permissions:secret_iam_grants:
     marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com:
       - marin-status-page-github-token

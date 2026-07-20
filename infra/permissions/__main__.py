@@ -17,7 +17,6 @@ def main() -> None:
     config = pulumi.Config()
     project = config.require("project")
     secret_iam_grants = config.get_object("secret_iam_grants") or {}
-    secret_access_grants = config.get_object("secret_access_grants") or {}
     artifact_registry_grants = config.get_object("artifact_registry_grants") or []
     provider = gcp.Provider("gcp", project=project)
     GcpDeployPermissions(
@@ -37,10 +36,6 @@ def main() -> None:
             secret_iam_grants=tuple(
                 GcpSecretGrant(service_account=service_account, secrets=tuple(secrets))
                 for service_account, secrets in secret_iam_grants.items()
-            ),
-            secret_access_grants=tuple(
-                GcpSecretGrant(service_account=service_account, secrets=tuple(secrets))
-                for service_account, secrets in secret_access_grants.items()
             ),
             artifact_registry_grants=tuple(
                 GcpArtifactRegistryGrant(

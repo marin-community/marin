@@ -19,10 +19,9 @@ images only to the `marin-grafana` Artifact Registry repository. A separate cust
 it read and update IAP policies on web services without granting access to those services or
 control over IAP tunnels.
 
-`secret_access_grants` maps a deploy service account to the secret payloads it resolves during
-deployment. Add entries only after the named Secret Manager resources and versions exist. The
-permissions stack uses resource-level `roles/secretmanager.secretAccessor` members; it does
-not grant payload access across the project.
+The secret IAM list is an explicit permission allowlist rather than a value derived from the
+Grafana deployment. A newly wired runtime secret therefore fails closed until its deploy-account
+IAM management is reviewed here.
 
 ## Apply
 

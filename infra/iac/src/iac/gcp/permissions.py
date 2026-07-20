@@ -13,7 +13,6 @@ STATE_WRITER = "roles/storage.objectAdmin"
 KMS_ENCRYPTER_DECRYPTER = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
 SERVICE_ACCOUNT_TOKEN_CREATOR = "roles/iam.serviceAccountTokenCreator"
 SECRET_METADATA_VIEWER = "roles/secretmanager.viewer"
-SECRET_ACCESSOR = "roles/secretmanager.secretAccessor"
 SECRET_IAM_ROLE_ID = "marinSecretIamManager"
 SECRET_IAM_PERMISSIONS = (
     "secretmanager.secrets.get",
@@ -55,7 +54,6 @@ class GcpDeployPermissionsArgs:
     id_token_service_accounts: frozenset[str] = frozenset()
     secret_metadata_viewers: frozenset[str] = frozenset()
     secret_iam_grants: tuple[GcpSecretGrant, ...] = ()
-    secret_access_grants: tuple[GcpSecretGrant, ...] = ()
     artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
     iap_iam_managers: frozenset[str] = frozenset()
 
@@ -113,11 +111,7 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
 
 def _validate_permission_accounts(args: GcpDeployPermissionsArgs) -> None:
     deploy_accounts = set(args.service_accounts)
-    secret_accounts = (
-        args.secret_metadata_viewers
-        | {grant.service_account for grant in args.secret_iam_grants}
-        | {grant.service_account for grant in args.secret_access_grants}
-    )
+    secret_accounts = args.secret_metadata_viewers | {grant.service_account for grant in args.secret_iam_grants}
     permission_accounts = (
         secret_accounts | {grant.service_account for grant in args.artifact_registry_grants} | args.iap_iam_managers
     )
@@ -203,8 +197,6 @@ def _create_secret_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.Reso
             opts=opts,
         )
         _create_secret_iam_members(args.project, args.secret_iam_grants, secret_iam_role.name, "iam-manager", opts)
-
-    _create_secret_iam_members(args.project, args.secret_access_grants, SECRET_ACCESSOR, "accessor", opts)
 
 
 def _create_artifact_registry_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:

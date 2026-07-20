@@ -24,7 +24,7 @@ issue: weaver #543
   expected IAP redirect.
 - Ducky remained blocked because its five configured Secret Manager resources do
   not exist. Their values must be migrated from the corresponding GitHub secrets
-  before the resource-scoped accessor grants can be enabled.
+  before resource-scoped accessor grants can be added.
 
 ## Original problem report
 
@@ -86,7 +86,7 @@ value.
 ## Fix
 
 `infra/iac/src/iac/gcp/permissions.py` now models additive grants for Secret Manager
-metadata viewers, per-secret IAM managers and accessors, repository-scoped Artifact
+metadata viewers, per-secret IAM managers, repository-scoped Artifact
 Registry writers, and narrowly defined IAP IAM managers. The active
 `infra/permissions/Pulumi.hai-gcp-models.yaml` configuration grants Grafana only the
 capabilities exercised by its deployment. The resources remain protected against
@@ -94,8 +94,8 @@ accidental deletion.
 
 `infra/permissions/README.md` documents the permission boundaries, and
 `lib/ducky/README.md` records the exact GitHub-secret-to-Secret-Manager mapping and
-the bootstrap order. Ducky's accessor configuration remains inactive until an
-authorized operator creates and populates those secrets.
+the bootstrap order. Ducky's accessor change remains deferred until an authorized
+operator creates and populates those secrets.
 
 ## How OPS.md could have shortened this
 

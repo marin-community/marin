@@ -198,9 +198,9 @@ gcloud secrets create SECRET_NAME --project=hai-gcp-models --replication-policy=
 gcloud secrets versions add SECRET_NAME --project=hai-gcp-models --data-file=-
 ```
 
-Then add the five names under
-`marin-permissions:secret_access_grants.iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com`
-in `infra/permissions/Pulumi.hai-gcp-models.yaml` and apply that stack before rolling Ducky.
+Then update `infra/permissions` to grant the Ducky deploy account
+`roles/secretmanager.secretAccessor` on only these five resources, apply that stack, and roll
+Ducky. Do not grant secret payload access across the project.
 
 ```bash
 uv sync --all-packages --extra deploy
