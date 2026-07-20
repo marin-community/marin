@@ -25,8 +25,9 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import stamp_backend
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
+from rigging.timing import RateLimiter, Timestamp
 from sqlalchemy import update as sa_update
+from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (
@@ -34,6 +35,7 @@ from .conftest import (
     query_attempt,
     query_task,
     query_tasks_for_job,
+    reconcile_once,
     submit_direct_job,
 )
 
@@ -470,6 +472,47 @@ def test_apply_worker_failed_from_assigned(state):
 # =============================================================================
 # Controller-level tests
 # =============================================================================
+
+
+def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
+    """A CLUSTER_VIEW (K8s) controller enforces ``--timeout``: an executing task
+    past its wall-clock deadline is finalized even though the cluster has no
+    worker-daemon backend.
+
+    Regression for #7431 — the execution-timeout scan was gated to worker-daemon
+    backends, so a gang on the K8s backend (which skips activeDeadlineSeconds) had
+    no wall-clock enforcement and held its GPU nodes indefinitely.
+    """
+    ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431")
+    state = ControllerTestState(ctrl._db)
+
+    jid = JobName.root("test-user", "gang-timeout")
+    req = make_direct_job_request("gang-timeout", replicas=1)
+    req.timeout.milliseconds = 1000  # 1s wall-clock deadline
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+    [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
+
+    # Drive the task to RUNNING with a start two hours in the past (started_at_ms
+    # is stamped from ``now``), so it is well past its 1s deadline at the next tick.
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    attempt_id = batch.tasks_to_run[0].attempt_id
+    long_ago = Timestamp.from_ms(Timestamp.now().epoch_ms() - 2 * 3600 * 1000)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
+            now=long_ago,
+        )
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # One reconcile tick runs the (now backend-agnostic) execution-timeout scan.
+    ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
+    reconcile_once(ctrl)
+
+    # TIMEOUT is terminal without retry, so the task lands in FAILED.
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_FAILED
 
 
 def test_drain_multiple_tasks(state):

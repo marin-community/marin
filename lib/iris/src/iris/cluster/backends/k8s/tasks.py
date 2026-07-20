@@ -934,9 +934,10 @@ def _build_pod_manifest(
     # Skip activeDeadlineSeconds for gangs only: k8s counts it from pod creation,
     # including time a gang spends SchedulingGated while it waits for the autoscaler
     # to provision every node, so a large gang could hit DeadlineExceeded before it
-    # ever runs. Single pods admit quickly and, on a K8s-only cluster, this is their
-    # only timeout enforcement (the controller's execution-timeout scan runs only for
-    # worker-daemon backends), so they keep the deadline.
+    # ever runs. A gang's wall-clock timeout is instead enforced by the controller's
+    # execution-timeout scan, which counts from gang start. Single pods admit quickly,
+    # so they keep the deadline: it fires earlier (from creation) than the controller
+    # scan and needs no controller round-trip.
     if run_req.HasField("timeout") and run_req.timeout.milliseconds > 0 and not is_gang:
         spec["activeDeadlineSeconds"] = max(1, run_req.timeout.milliseconds // 1000)
 
