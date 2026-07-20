@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 from iac.config import IAC_CLUSTER_CONFIG_DIR, load_iris_config
-from iris.cli.connect import open_controller_endpoint, rpc_client
+from iris.cli.connect import connect_controller, rpc_client
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.provenance import provenance_from_proto
@@ -84,7 +84,7 @@ def _controller_status(cluster: str) -> dict[str, object]:
     the reviewed in-tree config (IAC_CLUSTER_CONFIG_DIR), matching the rest of capture().
     """
     config_file = Path(resolve_cluster_config(cluster, dirs=(IAC_CLUSTER_CONFIG_DIR,)))
-    with open_controller_endpoint(config_file=config_file) as endpoint:
+    with connect_controller(config_file=config_file) as endpoint:
         with rpc_client(endpoint.url, endpoint.credentials) as client:
             proc = client.get_process_status(job_pb2.GetProcessStatusRequest()).process_info
             workers = client.list_workers(controller_pb2.Controller.ListWorkersRequest()).workers

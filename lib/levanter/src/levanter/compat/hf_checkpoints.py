@@ -185,10 +185,22 @@ def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer)
 def _embed_chat_template_in_tokenizer_config(
     tokenizer: PreTrainedTokenizerBase,
     local_path: str,
+    chat_template: str | None = None,
 ) -> None:
-    chat_template = getattr(tokenizer, "chat_template", None)
-    if chat_template is None:
+    """Embed the chat template (the explicit ``chat_template`` argument if given, else the
+    tokenizer's own) in the ``chat_template`` field of ``tokenizer_config.json``. The
+    ``chat_template.jinja`` file that newer ``transformers.save_pretrained`` writes is updated to
+    match when present, and created when an override is given. No-op when no template is set.
+    """
+    template = chat_template if chat_template is not None else getattr(tokenizer, "chat_template", None)
+    if template is None:
         return
+
+    # Write chat_template.jinja when overriding; otherwise only refresh an existing file.
+    jinja_path = os.path.join(local_path, "chat_template.jinja")
+    if chat_template is not None or os.path.exists(jinja_path):
+        with open(jinja_path, "w") as f:
+            f.write(template)
 
     config_path = os.path.join(local_path, "tokenizer_config.json")
     if not os.path.exists(config_path):
@@ -198,10 +210,10 @@ def _embed_chat_template_in_tokenizer_config(
     with open(config_path) as f:
         tokenizer_config = json.load(f)
 
-    if tokenizer_config.get("chat_template") == chat_template:
+    if tokenizer_config.get("chat_template") == template:
         return
 
-    tokenizer_config["chat_template"] = chat_template
+    tokenizer_config["chat_template"] = template
     with open(config_path, "w") as f:
         json.dump(tokenizer_config, f)
 
@@ -209,10 +221,15 @@ def _embed_chat_template_in_tokenizer_config(
 def _save_tokenizer_pretrained(
     tokenizer: PreTrainedTokenizerBase | MarinTokenizer,
     local_path: str,
+    chat_template: str | None = None,
 ) -> None:
     hf_tokenizer = _coerce_to_hf_tokenizer(tokenizer)
+    if chat_template is not None:
+        # Set before save_pretrained so it writes this template to tokenizer_config.json
+        # and chat_template.jinja.
+        hf_tokenizer.chat_template = chat_template
     hf_tokenizer.save_pretrained(local_path)
-    _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path)
+    _embed_chat_template_in_tokenizer_config(hf_tokenizer, local_path, chat_template=chat_template)
 
 
 @dataclass(frozen=True)
@@ -1035,6 +1052,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
+        chat_template: Optional[str] = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1054,6 +1072,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         This is useful when using custom architectures, as it will allow the model to be loaded without the custom
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
+        :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+        (written to both tokenizer_config.json and chat_template.jinja)
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
@@ -1202,7 +1222,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if save_tokenizer:
                 logger.info("Saving tokenizer")
-                _save_tokenizer_pretrained(self.tokenizer, local_path)
+                _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
 
             if save_feature_extractor and self.feature_extractor is not None:
                 logger.info("Saving feature extractor")
@@ -1313,6 +1333,7 @@ def save_hf_checkpoint_callback(
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    chat_template: Optional[str] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1322,6 +1343,8 @@ def save_hf_checkpoint_callback(
     :param base_path: the base path to save the checkpoint to. `/step-<step>` will be appended to this. base_path
     may be a GCS bucket path, in which case the checkpoint will be uploaded to GCS after being written to a tmp
     :param upload_to_hf:
+    :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
+    (written to both tokenizer_config.json and chat_template.jinja)
     :param hf_upload_kwargs:
     :return:
     """
@@ -1341,6 +1364,7 @@ def save_hf_checkpoint_callback(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=generation_config,
+            chat_template=chat_template,
             **my_upload_kwargs,
         )
 

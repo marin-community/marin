@@ -1,22 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finelog stats schemas used by iris.
+"""The finelog stats catalog: every ``iris.*`` namespace and its row schema.
 
-- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt
-  resource rows. Replace the controller's old in-memory history tables. On
-  Kubernetes clusters, which have no per-node worker daemon, the cluster backend
-  emits one ``iris.worker`` row per node (host utilization + GPU hardware), so
-  nodes surface as workers in the same dashboards.
-- ``iris.task_status`` — markdown status text pushed from inside a running
-  task via ``RemoteClusterClient.report_task_status_text``.
+Time-series measurements live in these namespaces rather than the controller
+SQLite DB (see AGENTS.md "Decisions vs measurements"). This module is the single
+home for the wire contract — namespace names, row dataclasses, storage policies —
+that dashboards, Grafana alert rules, and the federation hub key on. Producers
+live next to their mechanism (the worker daemon, the k8s backend's collectors,
+the autoscaler, the controller's task-state emitter) and import their row types
+from here; ``LogStack`` resolves every table from this catalog.
 
-The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
-the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
-
-Worker schemas are registered eagerly in ``Worker.start()``; the task-status
-schema is registered lazily on first ``report_task_status_text`` call so a
-CLI that never touches status text doesn't open a finelog connection.
+- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt resource
+  rows. On Kubernetes clusters, which have no per-node worker daemon, the cluster
+  backend emits one ``iris.worker`` row per node (host utilization + GPU
+  hardware), so nodes surface as workers in the same dashboards.
+- ``iris.task_status`` — markdown status text pushed from inside a running task
+  via ``RemoteClusterClient.report_task_status_text``.
+- ``iris.task_event`` — scheduling/admission events per task attempt.
+- ``iris.profile`` — per-capture profile blobs (capture machinery:
+  ``iris.cluster.runtime.profile``).
+- ``iris.provisioning`` — one row per slice provisioning outcome (producer:
+  the autoscaler).
+- ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
+  ``iris.cluster.controller.task_state_stats``).
 """
 
 from dataclasses import dataclass
@@ -33,6 +40,9 @@ WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
 TASK_STATUS_NAMESPACE = "iris.task_status"
 TASK_EVENT_NAMESPACE = "iris.task_event"
+PROFILE_NAMESPACE = "iris.profile"
+PROVISIONING_NAMESPACE = "iris.provisioning"
+TASK_STATE_NAMESPACE = "iris.task_state"
 
 # Task status rows are only useful while a task is still running — once
 # the job ends the data is dead weight on the finelog server. Cap the
@@ -191,6 +201,128 @@ class TaskEventRow:
     message: str
     source: str
     count: int
+
+
+class ProfileType(StrEnum):
+    CPU = "cpu"
+    MEMORY = "memory"
+    THREAD = "thread"
+
+
+class ProfileFormat(StrEnum):
+    # CPU
+    RAW = "raw"
+    FLAMEGRAPH = "flamegraph"
+    SPEEDSCOPE = "speedscope"
+    # Memory
+    HTML = "html"
+    TABLE = "table"
+    STATS = "stats"
+
+
+class ProfileTrigger(StrEnum):
+    PERIODIC = "periodic"
+    ON_DEMAND = "on_demand"
+
+
+@dataclass
+class IrisProfile:
+    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
+
+    # The dashboard lists captures per source (a task, a worker, or every task
+    # under a job via a source prefix) ordered by captured_at. Clustering segments
+    # by source lets parquet row-group min/max prune to the few segments holding
+    # that source instead of scanning the whole namespace.
+    key_column: ClassVar[str] = "source"
+
+    source: str
+    attempt_id: int | None
+    vm_id: str
+    captured_at: datetime
+    duration_seconds: int
+    type: str
+    format: str
+    trigger: str
+    rate_hz: int | None = None
+    native: bool | None = None
+    leaks: bool | None = None
+    locals_dump: bool | None = None
+    profile_data: bytes = b""
+
+    def __post_init__(self) -> None:
+        ProfileType(self.type)
+        ProfileFormat(self.format)
+        ProfileTrigger(self.trigger)
+
+
+class ProvisioningOutcome(StrEnum):
+    """How a slice's provisioning attempt ended.
+
+    One flat outcome rather than an outcome+cause pair: the create failure modes
+    (``STOCKOUT``/``ERROR``) and the runtime death (``PREEMPTED``) are the
+    distinctions consumers actually split on. Success rate is
+    ``READY / (READY + STOCKOUT + ERROR)``; ``PREEMPTED`` is a post-ready death,
+    excluded from it.
+    """
+
+    READY = "ready"  # bootstrap succeeded
+    STOCKOUT = "stockout"  # create failed: no capacity in the zone
+    ERROR = "error"  # create failed: a fault other than stockout
+    PREEMPTED = "preempted"  # reached ready, then lost at runtime
+
+
+@dataclass
+class IrisProvisioning:
+    """One slice provisioning outcome.
+
+    ``outcome`` is stored as a string (finelog columns are primitive) but always
+    holds a :class:`ProvisioningOutcome` value.
+    """
+
+    # Pool-level queries (per scale group over time) dominate; clustering parquet
+    # by scale_group lets row-group min/max prune scans to a few groups.
+    key_column: ClassVar[str] = "scale_group"
+
+    ts: datetime
+    resource_type: str  # "tpu" | "gpu" | "cpu"
+    scale_group: str  # full authoritative pool name, e.g. tpu_v6e-preemptible_8-europe-west4-a
+    zone: str
+    accelerator_variant: str  # e.g. "v6e" ("" for cpu)
+    outcome: str  # ProvisioningOutcome value
+    error_message: str
+    worker_count: int
+    provision_latency_ms: int  # create→ready wall time; 0 for non-ready outcomes
+
+
+# ``root_job_id`` of the per-cluster rollup row (the sum over every root job).
+CLUSTER_ROLLUP_ROOT_JOB = ""
+
+
+@dataclass
+class IrisTaskState:
+    """One aggregate of a root job's waiting/running tasks per tick.
+
+    ``oldest_pending_age_ms`` measures the oldest PENDING task from its last
+    requeue (or submission for a first attempt); ``oldest_building_age_ms``
+    measures the oldest ASSIGNED-or-BUILDING task from its current attempt's
+    creation — time since dispatch without reaching RUNNING, the "tasks stuck
+    in BUILDING" alert quantity. Both are 0 when no task is in those states.
+    A fully finished root job stops producing rows; terminal history stays
+    queryable in the controller DB rather than being re-emitted every tick.
+    """
+
+    # Fleet queries slice one root job's history at a time; clustering parquet by
+    # root_job_id lets row-group min/max prune the scan.
+    key_column: ClassVar[str] = "root_job_id"
+
+    root_job_id: str  # wire job id, or "" for the per-cluster rollup row
+    ts: datetime
+    pending: int
+    assigned: int
+    building: int
+    running: int
+    oldest_pending_age_ms: int
+    oldest_building_age_ms: int
 
 
 def build_worker_stat(

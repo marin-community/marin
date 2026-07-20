@@ -1,0 +1,16 @@
+config:
+  # People admitted through IAP (roles/iap.httpsResourceAccessor). Each entry is a bare
+  # email, a domain wildcard (quote it — YAML reads a leading `*` as an alias), or an
+  # already-qualified IAM member. Editing this and re-running `pulumi up` updates only the
+  # grants, never the service:
+  #
+  #   marin-evaldash:viewers:
+  #     - alice@example.com
+  #     - "*@openathena.ai"
+  #     - group:marin-eng@example.com
+  marin-evaldash:viewers: [russell.power@gmail.com, '*@openathena.ai']
+  # Vanity host for the service. The DNS CNAME (evaldash -> ghs.googlehosted.com) is created
+  # in the oa.dev Cloudflare zone; unset custom_domain to serve only the run.app URL.
+  marin-evaldash:custom_domain: evaldash.oa.dev
+  marin-evaldash:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
+encryptionsalt: v1:AONWc+XQ/do=:v1:RRUP8bNePz9TVCoI:Aoz4KiiUDpsxnBGLgCjduulTE0kevA==

@@ -33,14 +33,13 @@ from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
-from iris.cluster.runtime.profile import ProfileTrigger
+from iris.cluster.stats.tables import IrisTaskStat, ProfileTrigger
 from iris.cluster.types import JobName
-from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2
-from iris.test_util import wait_for_condition
+from iris.test_util import FakeStatsTable, wait_for_condition
 from rigging.timing import Duration
 
-from .conftest import FakeStatsTable, make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
+from .conftest import make_batch, make_kueue_provider, make_run_req, populate_node, populate_pod
 
 # ---------------------------------------------------------------------------
 # sync(): tasks_to_run
@@ -479,18 +478,6 @@ def test_resource_collector_skips_pod_without_metrics_sample(k8s, task_stats_tab
 
     collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
     collector.close()  # stop the background loop; drive one collection synchronously
-    collector.set_pods({("/job/0", 0): "pod-a"})
-    collector.collect_once()
-
-    assert task_stats_table.writes == []
-
-
-def test_resource_collector_swallows_metrics_query_failure(k8s, task_stats_table):
-    """A raising bulk metrics query is swallowed; no row is written."""
-    k8s.inject_persistent_failure("top_pods", RuntimeError("metrics-server unavailable"))
-
-    collector = ResourceCollector(k8s, task_stats_table, poll_interval=60.0)
-    collector.close()
     collector.set_pods({("/job/0", 0): "pod-a"})
     collector.collect_once()
 

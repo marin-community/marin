@@ -1,0 +1,26 @@
+{
+  "name": "marin-serve-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "rsbuild build && node scripts/emit.mjs",
+    "build:check": "vue-tsc --noEmit && npm run build",
+    "dev": "rsbuild dev"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.3.0",
+    "dompurify": "^3.2.4",
+    "marked": "^18.0.4",
+    "vue": "^3.5.35"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^1.2.0",
+    "@rsbuild/plugin-vue": "^1.2.9",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^6.0.3",
+    "vue-tsc": "^2.2.0"
+  }
+}

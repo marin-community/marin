@@ -29,7 +29,7 @@ from pathlib import Path
 import click
 from connectrpc.errors import ConnectError
 from google.protobuf import json_format
-from iris.cli.connect import open_controller_endpoint, rpc_client
+from iris.cli.connect import connect_controller, rpc_client
 from iris.cli.job import build_job_summary
 from iris.client import IrisClient
 from iris.cluster.types import JobName
@@ -639,7 +639,7 @@ def main(
         "commit_sha": os.environ.get("GITHUB_SHA"),
     }
 
-    with open_controller_endpoint(config_file=iris_config) as endpoint:
+    with connect_controller(config_file=iris_config) as endpoint:
         with (
             IrisClient.remote(endpoint.url, workspace=_REPO_ROOT, credentials=endpoint.credentials) as client,
             rpc_client(endpoint.url, endpoint.credentials) as controller,

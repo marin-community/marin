@@ -1,0 +1,260 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Alert rules cover only conditions that are near-certainly an incident. The
+# k8s rules read the bridge's /k8s/alerts/* endpoints, which return string label
+# columns plus exactly one numeric column and always at least one row per cluster
+# (explicit zeros when healthy) — so a rule's NoData state is unreachable by
+# construction, and every rule still sets noDataState/execErrState to Alerting so
+# a broken datasource pages with the rule's own labels rather than going quiet.
+#
+# Workload-tier signals (gated pods, kueue backlog, workload crashloops) are
+# dashboard-only: they have expected benign causes (capacity pressure, user
+# error), so paging on them would be noise.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: k8s-control-plane
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: k8s-cluster-unreachable
+        title: K8sClusterUnreachable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: k8s API server unreachable ({{ $labels.error_class }})"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/unreachable
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: error_class, text: error_class, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-control-plane-crashloop
+        title: ControlPlaneCrashLooping
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: a watched control-plane component is in backoff"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/crashloops
+              url_options:
+                method: GET
+                params:
+                  - { key: scope, value: control-plane }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: scope, text: scope, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: k8s-webhook-endpoints-empty
+        title: WebhookEndpointsEmpty
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.webhook }} has no ready endpoints — fail-closed admission will reject pod CREATE"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/webhook_ready
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: webhook, text: webhook, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      - uid: k8s-control-plane-degraded
+        title: ControlPlaneDegraded
+        condition: C
+        for: 15m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.component }} has fewer ready replicas than desired"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/degraded
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: component, text: component, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # The GCE controllers are not in K8S_CLUSTERS; their liveness comes from the
+  # existing per-cluster iris datasources. The health row always exists (the
+  # bridge answers reachable=false rather than erroring), and `up` is its 0/1
+  # numeric mirror. The rule carries the cluster label itself since the endpoint
+  # is already cluster-scoped. marin-dev is warning: its controller matters to
+  # dev work, not to production paging.
+  - orgId: 1
+    name: iris-control-plane
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: iris-controller-down-marin
+        title: IrisControllerDown
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          cluster: marin
+        annotations:
+          summary: "marin: Iris controller /health is unreachable"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: iris-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: iris-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /health
+              url_options: { method: GET }
+              columns:
+                - { selector: up, text: up, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      - uid: iris-controller-down-marin-dev
+        title: IrisControllerDown
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          cluster: marin-dev
+        annotations:
+          summary: "marin-dev: Iris controller /health is unreachable"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: iris-marin-dev
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: iris-marin-dev }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /health
+              url_options: { method: GET }
+              columns:
+                - { selector: up, text: up, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }

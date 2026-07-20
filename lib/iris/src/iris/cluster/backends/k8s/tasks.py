@@ -89,8 +89,6 @@ from iris.cluster.runtime.env import (
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
-    IrisProfile,
-    ProfileTrigger,
     build_profile_row,
     capture_cpu,
     capture_memory_attach,
@@ -99,8 +97,17 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.types import MountKind
+from iris.cluster.stats.emitter import PeriodicEmitter
+from iris.cluster.stats.tables import (
+    IrisProfile,
+    IrisTaskStat,
+    ProfileTrigger,
+    TaskEventRow,
+    WorkerStatus,
+    build_task_stat,
+    stats_timestamp,
+)
 from iris.cluster.types import JobName, WellKnownAttribute, WorkerId, get_gpu_count
-from iris.cluster.worker.stats import IrisTaskStat, TaskEventRow, WorkerStatus, build_task_stat, stats_timestamp
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -1703,7 +1710,7 @@ class ClusterState:
 
 
 class ResourceCollector:
-    """Background thread that samples running pods' CPU/memory usage.
+    """Periodic emitter that samples running pods' CPU/memory usage.
 
     The reconcile loop declares the authoritative set of running pods via
     ``set_pods()`` once per cycle. Each ``poll_interval`` the collector samples
@@ -1727,40 +1734,28 @@ class ResourceCollector:
         self._kubectl = kubectl
         self._table = task_stats_table
         self._labels = labels
-        self._poll_interval = poll_interval
         # (task_id_wire, attempt_id) -> pod_name. Tuple keys carry the
         # identity needed to build IrisTaskStat without parsing strings.
         self._pods: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="resource-collector")
-        self._thread.start()
+        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="resource-collector")
 
     def set_pods(self, pods: dict[tuple[str, int], str]) -> None:
         """Declare the authoritative set of pods to collect resources for."""
         with self._lock:
             self._pods = dict(pods)
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            self.collect_once()
-            self._stop.wait(timeout=self._poll_interval)
-
     def collect_once(self) -> None:
         """Sample every tracked pod once and append a stat row per pod with usage.
 
-        Runs each ``poll_interval`` on the background thread; also the unit of
+        Runs each ``poll_interval`` on the emitter thread; also the unit of
         collection tests drive directly.
         """
         with self._lock:
             snapshot = list(self._pods.items())
         if not snapshot:
             return
-        try:
-            usage_by_pod = self._kubectl.top_pods(labels=self._labels)
-        except Exception as e:
-            logger.debug("ResourceCollector: top_pods raised: %s", e)
-            return
+        usage_by_pod = self._kubectl.top_pods(labels=self._labels)
 
         stats: list[IrisTaskStat] = []
         for (task_id_wire, attempt_id), pod_name in snapshot:
@@ -1780,16 +1775,11 @@ class ResourceCollector:
                     ),
                 )
             )
-        if not stats:
-            return
-        try:
+        if stats:
             self._table.write(stats)
-        except Exception:
-            logger.debug("ResourceCollector: write to iris.task failed", exc_info=True)
 
     def close(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=5)
+        self._emitter.close()
 
 
 # Periodic thread-dump cadence, 10 minutes to match the GCE/TPU worker cadence.
@@ -1833,30 +1823,20 @@ class PeriodicProfiler:
     ):
         self._kubectl = kubectl
         self._table = profile_table
-        self._poll_interval = poll_interval
         self._max_concurrency = max(1, max_concurrency)
         self._targets: dict[tuple[str, int], _ProfileTarget] = {}
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="periodic-profiler")
-        self._thread.start()
+        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="periodic-profiler")
 
     def set_pods(self, targets: dict[tuple[str, int], _ProfileTarget]) -> None:
         """Declare the authoritative set of running pods to profile."""
         with self._lock:
             self._targets = dict(targets)
 
-    def _run(self) -> None:
-        # Wait one interval before the first pass so freshly-started pods have
-        # begun running (and py-spy is importable in the task venv) before the
-        # first attach; wait() returns True only when close() sets the event.
-        while not self._stop.wait(timeout=self._poll_interval):
-            self.collect_once()
-
     def collect_once(self) -> None:
         """Dump every tracked pod once and append one profile row per pod.
 
-        Runs each ``poll_interval`` on the background thread; also the unit of
+        Runs each ``poll_interval`` on the emitter thread; also the unit of
         collection tests drive directly.
         """
         with self._lock:
@@ -1866,12 +1846,8 @@ class PeriodicProfiler:
         workers = min(self._max_concurrency, len(snapshot))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="k8s-profile") as pool:
             rows = [row for row in pool.map(self._capture, snapshot) if row is not None]
-        if not rows:
-            return
-        try:
+        if rows:
             self._table.write(rows)
-        except Exception:
-            logger.debug("PeriodicProfiler: write to iris.profile failed", exc_info=True)
 
     def _capture(self, target: _ProfileTarget) -> IrisProfile | None:
         """Dump one pod's threads; returns the row, or None on any failure.
@@ -1898,8 +1874,7 @@ class PeriodicProfiler:
         )
 
     def close(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=5)
+        self._emitter.close()
 
 
 class TaskEventLog:

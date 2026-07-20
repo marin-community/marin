@@ -164,21 +164,29 @@ def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> st
 
 # Widened ephemeral port range for high-connection workloads: the controller and
 # workers fan out to thousands of peers and would otherwise exhaust the default
-# ~28k-port pool. The floor is deliberately above every fixed port the cluster's
-# own services bind — the TPU/JAX runtime (8081, 8431, 8470-8482) and iris'
-# controller/worker RPC (10000/10001). An earlier floor of 1024 pulled those into
-# the kernel's random ephemeral pool, so a co-tenant's outbound connection could
-# be handed e.g. 8431 and block the TPU trainer from binding it, crash-looping
-# with "[::]:8431 ... Address already in use". 11000-65535 still leaves ~54k
-# ephemeral ports.
-EPHEMERAL_PORT_RANGE = "11000 65535"
+# ~28k-port pool. The floor is deliberately above every port the cluster
+# statically allocates — the TPU/JAX runtime (8081, 8431, 8470-8482), iris'
+# controller/worker RPC (10000/10001), and the task named-port range (default
+# 12000-13999, `WorkerConfig.port_range`). An earlier floor of 1024 pulled the
+# fixed service ports into the kernel's random ephemeral pool, so a co-tenant's
+# outbound connection could be handed e.g. 8431 and block the TPU trainer from
+# binding it, crash-looping with "[::]:8431 ... Address already in use". Task
+# named ports had the same failure while they lived at 30000-40000, inside both
+# this range and the kernel *default* range (32768-60999): a task binds its
+# allocated port only after container setup, and an outbound socket handed that
+# exact port in the window killed the bind with EADDRINUSE (#7392). Keeping the
+# task range below both floors makes allocated ports safe even on hosts where
+# these sysctls never ran. 14000-65535 still leaves ~51k ephemeral ports.
+EPHEMERAL_PORT_RANGE = "14000 65535"
 
-# Belt-and-suspenders for the fixed TPU/JAX ports that sit just below the floor:
-# reserve them so they stay out of automatic ephemeral assignment even if the
-# floor is ever lowered again. An explicit bind() by the TPU runtime is
-# unaffected. libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
-# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's default
-# 8476); 8081 is levanter megascale.
+# Belt-and-suspenders for the statically allocated ports that sit below the
+# floor: reserve them so they stay out of automatic ephemeral assignment even
+# if the floor is ever lowered again. An explicit bind() is unaffected.
+# libtpu's Runtime Metric Service is 8431; 8470-8482 is the Cloud TPU
+# runtime/SliceBuilder block (incl. the JAX coordinator 8482 and marin's
+# default 8476); 8081 is levanter megascale. The worker bootstrap appends the
+# worker's configured task named-port range, which also covers clusters that
+# override `port_range` back into the ephemeral span.
 RESERVED_HOST_PORTS = "8081,8431,8470-8482"
 
 # Network sysctl tuning for containers with their own network namespace (#3066).

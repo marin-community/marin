@@ -181,12 +181,20 @@ def install_fault_handler(*, sigusr_dump: bool = True) -> bool:
 
     Returns:
         True if faulthandler was enabled by this call (or already enabled);
-        False if it was skipped because of the opt-out env var.
+        False if it was skipped because of the opt-out env var or because
+        stderr has no real file descriptor.
     """
     global _fault_handler_installed
     if _fault_handler_installed:
         return True
     if os.environ.get(FAULTHANDLER_DISABLE_ENV):
+        return False
+    # faulthandler writes to a raw fd; a harness that captures sys.stderr
+    # (click's CliRunner, some notebook kernels) substitutes an object
+    # without one.
+    try:
+        sys.stderr.fileno()
+    except (OSError, ValueError, AttributeError):
         return False
 
     # faulthandler dup()s the fd at enable-time, so later reassignments of

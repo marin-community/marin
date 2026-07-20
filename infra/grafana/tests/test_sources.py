@@ -11,10 +11,12 @@ import json
 
 import httpx
 import pytest
-from config import BridgeConfig, ClusterTarget
+from config import ClusterTarget
+from conftest import bridge_config
 from errors import UpstreamError
 from github_source import GithubSource
 from iris_source import IrisSource
+from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
 from server import create_app
 from starlette.testclient import TestClient
@@ -108,6 +110,7 @@ def test_workers_follows_pagination():
 def test_health_reports_reachable_with_latency():
     result = _iris(lambda request: httpx.Response(200, json={})).health()
     assert result[0]["reachable"] is True
+    assert result[0]["up"] == 1
     assert isinstance(result[0]["latency_ms"], int)
 
 
@@ -115,7 +118,7 @@ def test_health_reports_unreachable_without_raising():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=request)
 
-    assert _iris(handler).health() == [{"reachable": False, "latency_ms": None, "error": "down"}]
+    assert _iris(handler).health() == [{"reachable": False, "up": 0, "latency_ms": None, "error": "down"}]
 
 
 def test_controller_non_200_raises_upstream_error():
@@ -224,18 +227,8 @@ class _FakeIris:
 
 
 def _app(iris_source, github_source: GithubSource | None = None) -> TestClient:
-    config = BridgeConfig(
-        max_rows=1000,
-        cache_ttl=20,
-        query_timeout_ms=5000,
-        iris_cache_ttl=15,
-        github_cache_ttl=60,
-        http_timeout=5,
-        github_token=None,
-    )
-    return TestClient(
-        create_app(config, {}, {"marin": iris_source}, github_source or GithubSource(token=None, timeout=5.0))
-    )
+    github = github_source or GithubSource(token=None, timeout=5.0)
+    return TestClient(create_app(bridge_config(), {}, {"marin": iris_source}, github, K8sFleet(())))
 
 
 def test_iris_endpoint_returns_rows():

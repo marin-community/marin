@@ -19,7 +19,19 @@ const { capabilities, backends, peers, fetchConfig, ensurePeers } = useBackends(
 const showScope = computed(() => backends.value.length + peers.value.length > 1)
 
 const authEnabled = ref(false)
+// Login provider from /auth/config. On an IAP cluster a 401 is an edge-session
+// lapse, recovered by reloading (not by the bearer-token page); see onAuthRequired.
+const authProvider = ref<string | null>(null)
 const legendOpen = ref(false)
+
+// sessionStorage key holding the epoch-ms of the last IAP re-auth reload, so a
+// genuinely persistent 401 falls through to /login instead of reload-looping.
+const IAP_REAUTH_RELOAD_KEY = 'iris-iap-reauth-reload-ms'
+// A second 401 within this window of a reload means the reload did not re-auth.
+const IAP_REAUTH_RELOAD_WINDOW_MS = 15_000
+// Set once we schedule a reload, so concurrent 401s (many polls in flight) don't
+// briefly route to /login before the reload navigation replaces the document.
+let reloadingForAuth = false
 
 // Tabs always shown have no `requires`; conditional tabs name the capability
 // the backend must advertise (see backend_descriptor in backend.py). The
@@ -67,6 +79,24 @@ const isDetailPage = computed(() => {
 const isLoginPage = computed(() => route.path === '/login')
 
 function onAuthRequired() {
+  // A 401 reached the SPA. On an IAP-fronted cluster this is almost always the
+  // browser's IAP EDGE session lapsing: IAP answers a background XHR/POST (the
+  // RPC polls, the 30s log-viewer FetchLogs) with 401 rather than the 302 it gives
+  // a GET navigation, so iris never sees the request. The remedy is a full-page
+  // reload — a GET that IAP redirects through its edge re-auth — not the
+  // bearer-token LoginPage, which does not apply to IAP. Reload at most once per
+  // window so a persistent 401 (revoked access, or a genuine iris challenge) still
+  // lands on /login instead of looping.
+  if (reloadingForAuth) return
+  if (authProvider.value === 'iap') {
+    const last = Number(sessionStorage.getItem(IAP_REAUTH_RELOAD_KEY) ?? '0')
+    if (!Number.isFinite(last) || Date.now() - last > IAP_REAUTH_RELOAD_WINDOW_MS) {
+      reloadingForAuth = true
+      sessionStorage.setItem(IAP_REAUTH_RELOAD_KEY, String(Date.now()))
+      window.location.reload()
+      return
+    }
+  }
   router.push('/login')
 }
 
@@ -81,8 +111,13 @@ onMounted(async () => {
   try {
     // fetchConfig fetches /auth/config once, populates capabilities + backends,
     // and returns auth-related fields for login redirection.
-    const { authEnabled: ae, authenticated, authOptional } = await fetchConfig()
+    const { authEnabled: ae, authenticated, authOptional, provider } = await fetchConfig()
     authEnabled.value = ae
+    authProvider.value = provider
+    // This config load reached us authenticated (a GET, which IAP re-auths at the
+    // edge), so the session is healthy again — clear the reload guard so a later,
+    // unrelated lapse can reload once more.
+    if (authenticated) sessionStorage.removeItem(IAP_REAUTH_RELOAD_KEY)
     // Only send the browser to the login page when auth is required and this
     // request is not already authenticated. Behind IAP the caller is
     // authenticated at the edge (no session cookie), so `authenticated` is true

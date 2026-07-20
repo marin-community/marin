@@ -74,6 +74,12 @@ class SupportsPagedGeneration(Protocol):
     def decode(self, tokens, cache, binfo, pos_ids): ...
 
 
+# Renders a message list as the raw concatenation of its contents, one blank line between turns.
+# The faithful chat-API template for a base model whose tokenizer ships none: it introduces no
+# protocol tokens, so a chat request degrades to the plain completion the model was trained on.
+CONCAT_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\n\n{%- endfor -%}"
+
+
 @dataclass(frozen=True)
 class ModelSpec:
     """What to serve, and on what slice: the inputs every backend needs."""

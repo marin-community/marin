@@ -1,0 +1,14 @@
+name: ducky
+runtime:
+  name: python
+  # Pin the shared repo venv (which has iac, iris, ducky, and pulumi-command via
+  # marin-iac[deploy]). Without this, Pulumi's toolchain would build an isolated venv
+  # and re-pull the heavy marin-iris closure. `uv sync --all-packages --extra deploy`
+  # first.
+  options:
+    virtualenv: ../../.venv
+description: ducky (ad-hoc DuckDB SQL service) as an always-on Iris job.
+# State backend and secrets provider come from the operator/CI environment, shared with
+# infra/iac (see infra/iac/README.md):
+#   pulumi login gs://marin-iac-state
+#   PULUMI_CONFIG_PASSPHRASE from Secret Manager (pulumi-iac-passphrase)

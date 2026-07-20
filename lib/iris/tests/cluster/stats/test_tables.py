@@ -6,7 +6,7 @@
 from datetime import datetime
 
 from finelog.client.log_client import schema_from_dataclass
-from iris.cluster.worker.stats import (
+from iris.cluster.stats.tables import (
     IrisTaskStat,
     IrisWorkerStat,
     TaskStatusRow,

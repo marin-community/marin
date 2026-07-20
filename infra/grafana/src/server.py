@@ -19,10 +19,24 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /github/ferries                          recent ferry runs per tier, with success rate
     GET /github/builds                           recent main commits with CI rollup state
     GET /github/nightlies                        7-day nightly-lane matrix (one row per lane/day)
+    GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
+    GET /k8s/crashloops                          containers in backoff waiting states
+    GET /k8s/pending                             Pending / SchedulingGated pods with age
+    GET /k8s/kueue                               unadmitted Kueue workloads per queue
+    GET /k8s/events                              recent Warning events
+    GET /k8s/health                              per-cluster API server reachability + latency
+    GET /k8s/alerts/unreachable                  alert rows: cluster, error_class, value(0|1)
+    GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
+    GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
+    GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
-cached. Handlers are sync defs; Starlette runs them in a threadpool.
+cached. The k8s routes aggregate every CW cluster into one response, so a dead
+cluster becomes labeled error rows while the rest render; the alert routes always
+return at least one row per cluster (explicit zeros when healthy) so Grafana
+rules never hit NoData. Handlers are sync defs; Starlette runs them in a
+threadpool.
 """
 
 import json
@@ -33,12 +47,13 @@ from datetime import UTC, datetime
 import pyarrow as pa
 import uvicorn
 from cache import TtlCache
-from config import BRIDGE_PORT, CLUSTERS, BridgeConfig, ClusterTarget
+from config import BRIDGE_PORT, CLUSTERS, K8S_CLUSTERS, BridgeConfig, ClusterTarget
 from errors import UpstreamError
 from finelog.errors import QueryResultTooLargeError
 from finelog_source import FinelogSource, MetricSource
 from github_source import GithubSource
 from iris_source import IrisSource
+from k8s_source import K8sFleet, K8sSource
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -223,11 +238,13 @@ def create_app(
     finelog_sources: Mapping[str, MetricSource],
     iris_sources: Mapping[str, IrisSource],
     github_source: GithubSource,
+    k8s_fleet: K8sFleet,
 ) -> Starlette:
-    """Build the ASGI app serving finelog, Iris, and GitHub for the configured clusters."""
+    """Build the ASGI app serving finelog, Iris, GitHub, and k8s for the configured clusters."""
     finelog_cache: TtlCache = TtlCache(config.cache_ttl)
     iris_cache: TtlCache = TtlCache(config.iris_cache_ttl)
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
+    k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
 
     def query(request: Request) -> JSONResponse:
         try:
@@ -281,6 +298,47 @@ def create_app(
     def github_nightlies(_: Request) -> JSONResponse:
         return github_endpoint("nightlies", github_source.nightlies)
 
+    def k8s_endpoint(key: str, run) -> JSONResponse:
+        # Per-cluster failures are labeled rows inside the response; only a bridge
+        # bug raises here, and Starlette turns that into a 500.
+        return JSONResponse(k8s_cache.get_or_compute(key, run))
+
+    def k8s_control_plane(_: Request) -> JSONResponse:
+        return k8s_endpoint("control_plane", k8s_fleet.control_plane)
+
+    def k8s_crashloops(_: Request) -> JSONResponse:
+        return k8s_endpoint("crashloops", k8s_fleet.crashloops)
+
+    def k8s_pending(_: Request) -> JSONResponse:
+        return k8s_endpoint("pending", k8s_fleet.pending)
+
+    def k8s_kueue(_: Request) -> JSONResponse:
+        return k8s_endpoint("kueue", k8s_fleet.kueue)
+
+    def k8s_events(_: Request) -> JSONResponse:
+        return k8s_endpoint("events", k8s_fleet.warning_events)
+
+    def k8s_health(_: Request) -> JSONResponse:
+        return k8s_endpoint("health", k8s_fleet.health)
+
+    def k8s_alerts_unreachable(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_unreachable", k8s_fleet.alert_unreachable)
+
+    def k8s_alerts_crashloops(request: Request) -> JSONResponse:
+        # The paging rule asks for scope=control-plane; workload backoffs stay
+        # observe-only. Filtering after the cache keeps one scan per TTL.
+        response = k8s_cache.get_or_compute("alerts_crashloops", k8s_fleet.alert_crashloops)
+        scope = request.query_params.get("scope")
+        if scope:
+            response = [row for row in response if row["scope"] == scope]
+        return JSONResponse(response)
+
+    def k8s_alerts_webhook_ready(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_webhook_ready", k8s_fleet.alert_webhook_ready)
+
+    def k8s_alerts_degraded(_: Request) -> JSONResponse:
+        return k8s_endpoint("alerts_degraded", k8s_fleet.alert_degraded)
+
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
@@ -295,6 +353,16 @@ def create_app(
             Route("/iris/{cluster}/workers", iris_workers),
             Route("/iris/{cluster}/health", iris_health),
             Route("/iris/{cluster}/query", iris_query),
+            Route("/k8s/control_plane", k8s_control_plane),
+            Route("/k8s/crashloops", k8s_crashloops),
+            Route("/k8s/pending", k8s_pending),
+            Route("/k8s/kueue", k8s_kueue),
+            Route("/k8s/events", k8s_events),
+            Route("/k8s/health", k8s_health),
+            Route("/k8s/alerts/unreachable", k8s_alerts_unreachable),
+            Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
+            Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
+            Route("/k8s/alerts/degraded", k8s_alerts_degraded),
         ]
     )
 
@@ -305,10 +373,11 @@ def main() -> None:
     finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     github_source = GithubSource(token=config.github_token, timeout=config.http_timeout)
+    k8s_fleet = K8sFleet([K8sSource(c, token=config.cw_read_token, timeout=config.http_timeout) for c in K8S_CLUSTERS])
     logger.info("grafana bridge serving %s on :%d", sorted(finelog_sources), BRIDGE_PORT)
     # Loopback only: Grafana fetches from the same container.
     uvicorn.run(
-        create_app(config, finelog_sources, iris_sources, github_source),
+        create_app(config, finelog_sources, iris_sources, github_source, k8s_fleet),
         host="127.0.0.1",
         port=BRIDGE_PORT,
         access_log=False,

@@ -41,7 +41,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from ducky.catalog import Catalog, build_catalog
-from ducky.config import ENDPOINT_NAME, PORT_NAME, DuckyConfig
+from ducky.config import ENDPOINT_NAME, HEALTH_PATH, PORT_NAME, DuckyConfig
 from ducky.query_log import QueryLog, QueryLogRow, now_utc
 from ducky.runner import DuckyError, QueryResult, QueryRunner
 
@@ -331,7 +331,7 @@ def create_app(
         Route("/result/{query_id:str}", result),
         Route("/api/config", api_config),
         Route("/api/catalog", api_catalog),
-        Route("/health", health),
+        Route(HEALTH_PATH, health),
     ]
     # check_dir=False: the app still boots (index shows a "not built" page) when the
     # SPA hasn't been built yet, instead of raising at startup.

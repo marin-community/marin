@@ -242,6 +242,14 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/marin"]
+# The quick-serve dashboard's node project lives inside the package for
+# colocation; only its build artifact (quick_serve_dashboard.html) ships.
+exclude = ["src/marin/inference/dashboard"]
 
 [tool.hatch.build.targets.sdist]
 packages = ["src/marin"]
+exclude = [
+  "src/marin/inference/dashboard/node_modules",
+  "src/marin/inference/dashboard/dist",
+  "src/marin/inference/dashboard/.rsbuild",
+]

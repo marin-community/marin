@@ -16,10 +16,8 @@ import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
-from urllib.parse import urlparse
 
-import fsspec.config
-import s3fs
+from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf
 from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
 from rigging.timing import Deadline
 
@@ -87,17 +85,6 @@ _DEFAULT_STATE_MOUNT_PATH = "/var/cache/iris/controller"
 _CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
-# S3-compatible endpoints that require virtual-hosted-style addressing where the
-# bucket name is a subdomain (https://<bucket>.cwobject.com). Path-style
-# requests are rejected with PathStyleRequestNotAllowed.
-_VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
-
-
-def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
-    hostname = urlparse(endpoint_url).hostname or ""
-    return any(hostname == domain or hostname.endswith("." + domain) for domain in _VIRTUAL_HOST_ONLY_S3_DOMAINS)
-
-
 def configure_client_s3(config: IrisClusterConfig) -> None:
     """Configure S3 env vars for fsspec access on CoreWeave (CW_KEY_* → AWS mapping).
 
@@ -115,31 +102,7 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
     endpoint = coreweave.external_object_storage_endpoint or coreweave.object_storage_endpoint
     if not endpoint:
         return
-
-    cw_key = os.environ.get("CW_KEY_ID", "")
-    cw_secret = os.environ.get("CW_KEY_SECRET", "")
-    if cw_key and cw_secret:
-        os.environ.setdefault("AWS_ACCESS_KEY_ID", cw_key)
-        os.environ.setdefault("AWS_SECRET_ACCESS_KEY", cw_secret)
-
-    os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
-    os.environ.setdefault("AWS_REGION", "auto")
-    os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
-
-    if "FSSPEC_S3" not in os.environ:
-        fsspec_conf: dict = {"endpoint_url": endpoint}
-        if _needs_virtual_host_addressing(endpoint):
-            fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-        # Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage, etc.)
-        # don't honor the AWS region scheme; signing with the wrong region
-        # surfaces as 400 Bad Request. "auto" tells boto3 to skip region
-        # validation and let the endpoint route the request itself.
-        fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
-        os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
-
-    # Flush fsspec/s3fs cached instances so they pick up the new config.
-    fsspec.config.set_conf_env(fsspec.config.conf)
-    s3fs.S3FileSystem.clear_instance_cache()
+    configure_fsspec_s3(endpoint, key=os.environ.get("CW_KEY_ID"), secret=os.environ.get("CW_KEY_SECRET"))
 
 
 # ============================================================================
@@ -957,14 +920,7 @@ class K8sControllerProvider:
             env["AWS_ENDPOINT_URL"] = endpoint
             env["AWS_REGION"] = "auto"
             env["AWS_DEFAULT_REGION"] = "auto"
-            fsspec_conf: dict = {"endpoint_url": endpoint}
-            if _needs_virtual_host_addressing(endpoint):
-                fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-            # Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage)
-            # reject the default us-east-1 region in the v4 signature with
-            # 400 Bad Request. "auto" tells boto3 to skip region validation.
-            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
-            env["FSSPEC_S3"] = json.dumps(fsspec_conf)
+            env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
         return env
 
     def ensure_task_env_secret(self, env: dict[str, str]) -> None:

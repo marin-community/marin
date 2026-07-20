@@ -8,8 +8,9 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 `pulumi up` provisions all of a stack's declared resources together. The provider decides
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects, and
 the Traefik/cert-manager/federation-ingress stack; GCP declares the reserved federation-egress
-static IPs. Components not yet implemented (object storage, the CKS cluster object itself;
-GCP IAM/GCLB+IAP/registry/buckets) are tracked in gaps.md.
+static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
+(object storage, the CKS cluster object itself; GCP IAM/GCLB+IAP/buckets) are tracked in
+gaps.md.
 """
 
 import os
@@ -30,6 +31,7 @@ from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
+from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.nodepools import derive_nodepools
 
 DEFAULT_NAMESPACE = "iris"
@@ -161,6 +163,15 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
         GcpStaticAddressesArgs(
             project=gcp_provisioning.project,
             addresses=gcp_provisioning.addresses,
+            adopt=adopt,
+        ),
+        gcp_provider=gcp_provider,
+    )
+    GcpArtifactRegistries(
+        "registries",
+        GcpArtifactRegistriesArgs(
+            project=gcp_provisioning.project,
+            registries=gcp_provisioning.registries,
             adopt=adopt,
         ),
         gcp_provider=gcp_provider,
