@@ -237,3 +237,9 @@ author: Matt Wittmann
 - Interpretation: at 25.4% of the schedule, all three held-out metrics favor BF16 for a second consecutive gate. The aggregate and Paloma gaps are slightly larger than at step 7,000 while the uncheatable gap is smaller, and the smoothed train delta remains stable near two thousandths. This is evidence of a small persistent early quality difference, not yet a final regression verdict; the cooldown tail and complete paired trajectory remain decisive.
 - Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. Sixth hourly recovery checkpoints are available at BF16 step 7,557 and MXFP8 step 8,006.
 - Next action: publish the changed quality signal to the coordinating issue, then continue babysitting every scheduled evaluation and checkpoint through step 31,474.
+
+### 2026-07-20 03:17 - MXFP8Q-007 seventh hourly checkpoints pass
+
+- Result: both arms completed their seventh hourly checkpoint write to region-local S3. BF16 saved step 8,830 and MXFP8 saved step 9,354; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
+- Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
+- Next action: complete the matched step-9,000 quality and performance gate once BF16 finishes its scheduled evaluation.
