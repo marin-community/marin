@@ -5,8 +5,9 @@
 
 Each arm trains the same d2560/L26/E128/top-4 model for 31,474 steps at
 batch 512 and sequence length 4096. Set ``MXFP8_QUALITY_ARM`` to ``bf16`` or
-``mxfp8`` and provide an experiment-specific ``MXFP8_QUALITY_RUN_ID``.
-``MXFP8_QUALITY_STEPS`` can shorten the run for an exact-shape smoke.
+``mxfp8`` and provide an experiment-specific ``MXFP8_QUALITY_PAIR_ID``.
+``MXFP8_QUALITY_STEPS`` can shorten the run for an exact-shape smoke. The
+durable run identity includes the pair, arm, and exact step count.
 """
 
 import dataclasses
@@ -49,7 +50,9 @@ _TRAIN_ENV = {
     "SCALE_MUON_DIST_NONEXPERT": "1",
     "SCALE_MUON_PAD_NONEXPERT": "1",
     "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc",
+    "CE_IMPL": "liger",
 }
+_CLOSED_RECIPE_ENV_PREFIXES = ("SCALE_MUON_", "CE_")
 
 _VALIDATION = [
     *paloma_datasets(tokenizer=marin_tokenizer).values(),
@@ -93,6 +96,19 @@ def quality_model(arm: str) -> GrugModelConfig:
     raise ValueError(f"unknown quality arm {arm!r}; expected 'bf16' or 'mxfp8'")
 
 
+def _apply_train_env() -> None:
+    conflicting = {}
+    for key, value in os.environ.items():
+        unsupported_recipe_key = key.startswith(_CLOSED_RECIPE_ENV_PREFIXES) and key not in _TRAIN_ENV
+        conflicting_pinned_value = key in _TRAIN_ENV and value != _TRAIN_ENV[key]
+        if unsupported_recipe_key or conflicting_pinned_value:
+            conflicting[key] = value
+    if conflicting:
+        details = ", ".join(f"{key}={value!r}" for key, value in sorted(conflicting.items()))
+        raise ValueError(f"unsupported quality runtime environment: {details}")
+    os.environ.update(_TRAIN_ENV)
+
+
 def build_quality_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """Build one durable BF16/MXFP8 quality arm from ``MXFP8_QUALITY_*`` env."""
     arm = os.environ.get("MXFP8_QUALITY_ARM", "")
@@ -100,13 +116,14 @@ def build_quality_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
     _, optimizer, batch_size, full_steps = quality_cell()
     assert batch_size == _BATCH_SIZE
 
-    run_id = os.environ.get("MXFP8_QUALITY_RUN_ID", "")
-    if not run_id:
-        raise ValueError("MXFP8_QUALITY_RUN_ID must identify this quality run")
     steps = env_int("MXFP8_QUALITY_STEPS", full_steps)
+    pair_id = os.environ.get("MXFP8_QUALITY_PAIR_ID", "")
+    if not pair_id:
+        raise ValueError("MXFP8_QUALITY_PAIR_ID must identify this quality comparison")
+    run_id = f"{pair_id}-{arm}-s{steps}"
 
-    # Grug forwards XLA_*, SCALE_MUON_*, and NCCL_* from the dispatcher to the GPU tasks.
-    os.environ.update(_TRAIN_ENV)
+    # Grug forwards XLA_*, SCALE_MUON_*, CE_*, and NCCL_* from the dispatcher to the GPU tasks.
+    _apply_train_env()
 
     resources = ResourceConfig.with_gpu(
         "GB200",
