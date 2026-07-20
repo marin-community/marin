@@ -983,3 +983,16 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
 - Published: Claude artifact (same URL, label 100b-gate-settled-vanishes), GCS private (refreshed),
   Marin public NEW version https://storage.googleapis.com/marin-public/rav/mixing-via-embeddings/2026.07.21/index.html
   (2026.07.19 + .20 links stay live). Both decisive questions now settled in the report.
+
+## 2026-07-20 Report simplified → decision-focused (7 figures), published + issue updated
+- Curated 20→7 figures, one per decision, in a 3-act story:
+  - 01 surrogate predicts: f8 (calibration/beats baseline) + f25 (noise floor)
+  - 02 epoch-harm correction: f27 (real @10B, kernel refuted) + f30 (linear-past-threshold) + f32 (math generality + per-bucket τ)
+  - 03 vanishes at production: f24 (scale-dependent) + f29 (100B gate → kernel suffices)
+- Dropped f9/f10/f11/f13/f15/f16/f17/f18/f22/f23/f26/f28/f31 (robustness/interpretability/superseded-transect/
+  redundant). "kernel blind to epoching" motivation folded into f27's explainer; footer states it's the
+  decision-focused view + where fuller diagnostics live. Size 1.2MB→343KB.
+- User reviewed a separate draft artifact first, approved, then published: canonical Claude artifact updated
+  (label decision-focused-7fig), GCS private refreshed, Marin public NEW version
+  https://storage.googleapis.com/marin-public/rav/mixing-via-embeddings/2026.07.21.1/index.html (prior versions
+  stay live). Issue #7067 results comment edited in place to the new link.
