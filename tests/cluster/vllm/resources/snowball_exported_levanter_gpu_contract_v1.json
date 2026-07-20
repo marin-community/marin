@@ -1,0 +1,29 @@
+{
+  "backend": "levanter-exported",
+  "canonical_golden_digest": "d695624cc411d7bf79a6c2e28f34538437985a9e07612d2a07a5095128ff4b2d",
+  "discovery": {
+    "candidate_headroom": 0.011726821622359093,
+    "clean_process_count": 3,
+    "max_probability_error": 0.06827317837764091,
+    "repeatability_probability_error": 0.0,
+    "same_process_repeat_count": 3,
+    "summary_sha256": "a756d1628ccdb1d303107e48bf67f37e80ebd270c947e5281d5e38ecb789456c"
+  },
+  "effective_attention": "gpu_fa4_cute",
+  "effective_moe": "sonic",
+  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
+  "max_probability_error": 0.08,
+  "mesh_shape": [
+    [
+      "data",
+      8
+    ]
+  ],
+  "name": "snowball-exported-levanter-gpu-v1",
+  "parameter_digest": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "platform": "gpu",
+  "prompt_fixture_digest": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
+  "requested_attention": "gpu_fa4_cute",
+  "requested_moe": "sonic",
+  "schema_version": 1
+}

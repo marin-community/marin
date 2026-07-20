@@ -23,7 +23,7 @@ uv run pytest tests
 ### TPU VMEM flags for kernel tuning
 
 - `v5p`/`v5e`: `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000`
-- `v6e`: `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304`
+- `v6e`: `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304` (the Marin task default was established in [Marin #3053](https://github.com/marin-community/marin/pull/3053))
 - `v4`: no special flag unless user explicitly asks.
 
 ## Code Conventions

@@ -12,6 +12,7 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
+from jax.experimental.array_serialization import serialization as array_ser
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
@@ -65,6 +66,29 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             tree_serialize_leaves_tensorstore(tmpdir, {"x": arr})
             restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": state_shape})
             assert jnp.allclose(restored["x"], arr)
+
+
+@pytest.mark.parametrize("checkpoint_format", ["ocdbt", "legacy"])
+def test_tensorstore_checkpoint_uses_exemplar_dtype_for_direct_cast(checkpoint_format: str):
+    with use_test_mesh():
+        source = jnp.array(
+            [-1000.125, -1.0001, -0.0, 0.33333334, 1.0001, 1000.125],
+            dtype=jnp.float32,
+        )
+        expected = source.astype(jnp.bfloat16)
+        bf16_exemplar = jax.ShapeDtypeStruct(source.shape, jnp.bfloat16)
+
+        with TemporaryDirectory() as tmpdir:
+            if checkpoint_format == "ocdbt":
+                tree_serialize_leaves_tensorstore(tmpdir, {"x": source})
+            else:
+                manager = array_ser.GlobalAsyncCheckpointManager()
+                manager.serialize_with_paths([source], [f"{tmpdir}/x"])
+                manager.wait_until_finished()
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": bf16_exemplar})["x"]
+
+        assert restored.dtype == jnp.bfloat16
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(expected))
 
 
 def test_checkpoint_steps():
@@ -122,7 +146,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 

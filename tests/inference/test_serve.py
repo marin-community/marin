@@ -51,7 +51,7 @@ from marin.inference.model_preparation import (
     select_tensor_parallel_size,
 )
 from marin.inference.serve_cli import main as serve_main
-from marin.inference.tpu_vllm_pins import vllm_fork_ref
+from marin.inference.tpu_vllm_pins import TPU_VLLM_EXCLUDE_NEWER, vllm_fork_ref
 from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -139,7 +139,10 @@ def test_vllm_backend_falls_back_to_workspace_without_version():
 
 
 def test_vllm_backend_returns_its_composed_launcher():
-    assert isinstance(vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)), IsolatedTpuVllm)
+    launcher = vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU))
+    assert isinstance(launcher, IsolatedTpuVllm)
+    assert launcher.command()[-3:] == ["--exclude-newer", TPU_VLLM_EXCLUDE_NEWER, "vllm"]
+    assert launcher.python_command()[-3:] == ["--exclude-newer", TPU_VLLM_EXCLUDE_NEWER, "python"]
 
 
 def test_levanter_max_seq_len_defaults_within_the_models_window():

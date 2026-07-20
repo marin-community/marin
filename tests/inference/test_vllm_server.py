@@ -7,16 +7,73 @@
 routing by severity and flushing/draining on teardown; these exercise that.
 """
 
+import dataclasses
 import os
 import subprocess
 import sys
 import time
 
-from marin.inference.vllm_server import VllmServerHandle, _engine_kwargs_to_cli_args, _LogPump, _native_logs_tail
+from marin.inference.vllm_server import (
+    InstalledPackageFingerprint,
+    VllmRuntimeFingerprint,
+    VllmServerHandle,
+    _engine_kwargs_to_cli_args,
+    _LogPump,
+    _native_logs_tail,
+)
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
+
+
+def _runtime_fingerprint(*packages: InstalledPackageFingerprint) -> VllmRuntimeFingerprint:
+    return VllmRuntimeFingerprint(
+        packages=packages,
+        environment=(("LIBTPU_INIT_ARGS", "--xla_tpu_scoped_vmem_limit_kib=98304"),),
+        engine_args=("serve", "model"),
+        launcher_args=("uvx", "vllm"),
+        python_version="3.12.0",
+        platform="Linux",
+        libc=("glibc", "2.36"),
+        os_release=(("ID", "debian"),),
+        cpu_affinity_count=160,
+        isolation="container",
+    )
+
+
+def test_runtime_fingerprint_uses_vcs_revision_instead_of_nondeterministic_record() -> None:
+    vllm = InstalledPackageFingerprint(
+        name="vllm",
+        version="1.0",
+        direct_url=(
+            '{"url":"https://example.com/vllm.git","vcs_info":'
+            '{"vcs":"git","commit_id":"abc","requested_revision":"abc"}}'
+        ),
+        record_sha256="first-build",
+    )
+    fingerprint = _runtime_fingerprint(vllm)
+
+    rebuilt = _runtime_fingerprint(dataclasses.replace(vllm, record_sha256="second-build"))
+    moved_revision = _runtime_fingerprint(
+        dataclasses.replace(vllm, direct_url=vllm.direct_url.replace('"abc"', '"def"'))
+    )
+
+    assert rebuilt.digest() == fingerprint.digest()
+    assert moved_revision.digest() != fingerprint.digest()
+
+
+def test_runtime_fingerprint_keeps_registry_wheel_record_and_version() -> None:
+    jax = InstalledPackageFingerprint(
+        name="jax",
+        version="0.10.1",
+        direct_url="",
+        record_sha256="wheel-a",
+    )
+    fingerprint = _runtime_fingerprint(jax)
+
+    assert _runtime_fingerprint(dataclasses.replace(jax, record_sha256="wheel-b")).digest() != fingerprint.digest()
+    assert _runtime_fingerprint(dataclasses.replace(jax, version="0.10.2")).digest() != fingerprint.digest()
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:

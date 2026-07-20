@@ -105,6 +105,10 @@ subnetwork: "default"  # default
 EOF
 ```
 
+Marin applies this v6e value to tasks by default; see
+[Marin #3053](https://github.com/marin-community/marin/pull/3053). Because it is
+an XLA compiler policy, numerical snapshots should record the effective value.
+
 Levanter also reads `.levanter.yaml` from the current checkout. Use it for repository-specific values that should
 override your personal defaults in `~/.config/marin/config.yaml`.
 

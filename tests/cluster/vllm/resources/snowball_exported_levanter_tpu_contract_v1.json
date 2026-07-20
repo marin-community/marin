@@ -1,0 +1,29 @@
+{
+  "backend": "levanter-exported",
+  "canonical_golden_digest": "d695624cc411d7bf79a6c2e28f34538437985a9e07612d2a07a5095128ff4b2d",
+  "discovery": {
+    "candidate_headroom": 0.10817347455189374,
+    "clean_process_count": 3,
+    "max_probability_error": 0.09182652544810627,
+    "repeatability_probability_error": 0.0,
+    "same_process_repeat_count": 3,
+    "summary_sha256": "7512ab4e899454865fe992cda22664b36807dadd591775c08121a1e58398ab4f"
+  },
+  "effective_attention": "tpu_splash",
+  "effective_moe": "scatter",
+  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
+  "max_probability_error": 0.2,
+  "mesh_shape": [
+    [
+      "data",
+      8
+    ]
+  ],
+  "name": "snowball-exported-levanter-tpu-v1",
+  "parameter_digest": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "platform": "tpu",
+  "prompt_fixture_digest": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
+  "requested_attention": "tpu_splash",
+  "requested_moe": "ring",
+  "schema_version": 1
+}

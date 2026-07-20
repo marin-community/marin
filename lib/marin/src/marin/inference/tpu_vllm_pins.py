@@ -11,12 +11,27 @@ in sync so a fork refresh (``refresh-tpu-vllm-forks``) cannot silently drift the
 pins from the workspace lock the in-checkout path uses.
 """
 
+import re
+
 # Keep these equal to the ``[tool.uv.sources]`` git/rev for ``vllm`` and ``tpu-inference``
 # in the root pyproject; the sync test enforces it.
 VLLM_FORK_URL = "https://github.com/marin-community/vllm.git"
-VLLM_FORK_REV = "afb26719464d5957e695bde478ae93a160b11d14"
+VLLM_FORK_REV = "0e09b62a096efbbaadd5c44b5e6060e7fc57c36c"
 TPU_INFERENCE_FORK_URL = "https://github.com/marin-community/tpu-inference.git"
-TPU_INFERENCE_FORK_REV = "e8809d492d5d6c7008369919a00384eb1c4de969"
+TPU_INFERENCE_FORK_REV = "0f60bf64458475cc2deccf12f47d6a048b2277a9"
+# uvx otherwise resolves unconstrained transitive releases independently on
+# every clean worker. Keep the release universe fixed for this qualified pair
+# of fork revisions; bump it deliberately when refreshing the serving stack.
+TPU_VLLM_EXCLUDE_NEWER = "2026-07-20T00:00:00Z"
+_FULL_GIT_REVISION = re.compile(r"[0-9a-f]{40}")
+
+
+def fork_source_revision(requirement: str, *, package: str) -> str:
+    """Extract the immutable Git revision from an isolated-launch requirement."""
+    _, separator, revision = requirement.rpartition("@")
+    if not separator or _FULL_GIT_REVISION.fullmatch(revision) is None:
+        raise ValueError(f"{package} must be pinned to a full Git commit, got {requirement!r}")
+    return revision
 
 
 def vllm_fork_ref() -> str:

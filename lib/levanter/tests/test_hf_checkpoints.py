@@ -27,6 +27,7 @@ from levanter.compat.hf_checkpoints import (
     ModelWithHfSerializationMixin,
     _causal_lm_architecture_name,
     _convert_to_jnp,
+    _to_state_dict_with_dtype,
 )
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from test_utils import use_test_mesh
@@ -116,6 +117,28 @@ class BasicModelWrapper(ModuleWithStateDictSerialization, ModelWithHfSerializati
             "a_bool_buffer": "a_bool_buffer",
             "a_float_param": "a_float_param",
         }
+
+
+class SubsetAwareModel(eqx.Module):
+    first: jax.Array
+    second: jax.Array
+
+    def to_state_dict(self, prefix=None):
+        raise AssertionError("full state dict should not be materialized for a subset export")
+
+    def to_state_dict_subset(self, subset):
+        values = {"first": self.first, "second": self.second}
+        return {name: values[name] for name in subset}
+
+
+def test_to_state_dict_with_dtype_uses_subset_aware_export() -> None:
+    model = SubsetAwareModel(first=jnp.arange(3), second=jnp.arange(2, dtype=jnp.float32))
+
+    with use_test_mesh():
+        actual = _to_state_dict_with_dtype(model, jnp.bfloat16, ("second",))
+
+    assert actual.keys() == {"second"}
+    assert actual["second"].dtype == jnp.bfloat16
 
 
 def test_save_pretrained_with_custom_dtype():

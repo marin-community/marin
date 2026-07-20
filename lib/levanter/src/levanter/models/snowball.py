@@ -20,8 +20,9 @@ guards against drift.
 """
 
 import dataclasses
+import functools
 from dataclasses import dataclass
-from typing import Any, Optional, Type
+from typing import Any, Callable, Optional, Type
 
 import equinox as eqx
 import jax
@@ -36,7 +37,8 @@ from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 
 import haliax as hax
 from haliax import Axis, NamedArray
-from haliax.jax_utils import named_call
+from haliax.jax_utils import named_call, shaped_rng_split
+from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -619,21 +621,25 @@ class SnowballTransformer(eqx.Module):
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    blocks: tuple[SnowballBlock, ...]
+    blocks: Stacked[SnowballBlock]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: SnowballConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballTransformer":
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, embed_gn_key, final_gn_key, blocks_key = random.split(key, 5)
         token_embed = _reshard_for_init(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = _reshard_for_init(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head
         )
-        blocks = tuple(SnowballBlock.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        Layer = Axis("layer", cfg.num_layers)
+        blocks = Stacked.init(Layer, SnowballBlock)(
+            cfg,
+            key=shaped_rng_split(blocks_key, cfg.num_layers),
+        )
         return SnowballTransformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -657,12 +663,10 @@ class SnowballTransformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=_bspec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        # Scan the layers instead of a Python loop so XLA plans HBM for ONE layer's MoE expert
-        # buffers at a time. Unrolling keeps every layer's buffers live simultaneously (temp scales
-        # linearly with depth), which OOMs the 67B on 8xH100. The stacked blocks + per-layer long
-        # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
-        num_blocks = len(self.blocks)
-        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
+        # The blocks are stored stacked so XLA plans HBM for one layer's MoE
+        # buffers at a time. Building this stack inside every forward costs an
+        # extra multi-GiB model-sized temporary on TPU.
+        num_blocks = self.blocks.Block.size
         idx = jnp.arange(num_blocks)
         long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
 
@@ -670,7 +674,7 @@ class SnowballTransformer(eqx.Module):
             layer, use_long = layer_and_flag
             return layer(carry, short_mask, long_mask, use_long), None
 
-        hidden, _ = jax.lax.scan(_scan_layer, hidden, (stacked, long_schedule))
+        hidden, _ = jax.lax.scan(_scan_layer, hidden, (self.blocks.stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
 
 
@@ -742,6 +746,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
         return SnowballLMHeadModel(new_tf, self._config)
 
+    def from_state_dict_incrementally(
+        self,
+        state_dict: StateDict,
+        prefix: Optional[str] = None,
+    ) -> "SnowballLMHeadModel":
+        """Destructively load stacked weights in bounded tensor groups."""
+        new_tf = snowball_from_state_dict_incrementally(self.transformer, state_dict, prefix=prefix)
+        return SnowballLMHeadModel(new_tf, self._config)
+
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:
     old = arr.shape[axis]
@@ -780,7 +793,8 @@ def snowball_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = N
         "model.final_gated_norm.up_proj.weight": _T(model.final_gated_norm.w_up),
         "lm_head.weight": _T(model.output_proj),
     }
-    for i, block in enumerate(model.blocks):
+    for i in range(model.blocks.Block.size):
+        block = model.blocks.get_layer(i)
         p = f"model.layers.{i}"
         tensors.update(
             {
@@ -812,6 +826,180 @@ def _get(state_dict: StateDict, prefix: Optional[str], name: str) -> jax.Array:
     return jnp.asarray(state_dict[_with_prefix(prefix, name)])
 
 
+@functools.partial(jax.jit, static_argnames=("transpose", "spec"))
+def _materialize_state_array(
+    value: jax.Array,
+    *,
+    transpose: bool,
+    spec: P,
+) -> jax.Array:
+    if transpose:
+        value = _T(value)
+    return _reshard_for_init(value, spec)
+
+
+@functools.partial(jax.jit, static_argnames=("transpose", "spec"))
+def _materialize_stacked_state_arrays(
+    values: tuple[jax.Array, ...],
+    *,
+    transpose: bool,
+    spec: P,
+) -> jax.Array:
+    if transpose:
+        values = tuple(_T(value) for value in values)
+    return _reshard_for_init(jnp.stack(values), spec)
+
+
+@dataclass(frozen=True)
+class _StateDictField:
+    name: str
+    where: Callable[[Any], Any]
+    spec: P
+    transpose: bool = False
+
+
+_TOP_LEVEL_STATE_FIELDS = (
+    _StateDictField("model.embed_tokens.weight", lambda t: t.token_embed, Pembed_vocab),
+    _StateDictField("model.embed_norm.weight", lambda t: t.embed_norm.weight, P(None)),
+    _StateDictField(
+        "model.embed_gated_norm.down_proj.weight",
+        lambda t: t.embed_gated_norm.w_down,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField(
+        "model.embed_gated_norm.up_proj.weight",
+        lambda t: t.embed_gated_norm.w_up,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField("model.norm.weight", lambda t: t.final_norm.weight, P(None)),
+    _StateDictField(
+        "model.final_gated_norm.down_proj.weight",
+        lambda t: t.final_gated_norm.w_down,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField(
+        "model.final_gated_norm.up_proj.weight",
+        lambda t: t.final_gated_norm.w_up,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField("lm_head.weight", lambda t: t.output_proj, Plm_head, transpose=True),
+)
+
+_BLOCK_STATE_FIELDS = (
+    _StateDictField("input_layernorm.weight", lambda b: b.rms_attn.weight, P(None)),
+    _StateDictField(
+        "attn_gated_norm.down_proj.weight",
+        lambda b: b.attn_gated_norm.w_down,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField(
+        "attn_gated_norm.up_proj.weight",
+        lambda b: b.attn_gated_norm.w_up,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField("self_attn.q_proj.weight", lambda b: b.attn.w_q, P("data", "model"), transpose=True),
+    _StateDictField("self_attn.k_proj.weight", lambda b: b.attn.w_k, P("data", "model"), transpose=True),
+    _StateDictField("self_attn.v_proj.weight", lambda b: b.attn.w_v, P("data", "model"), transpose=True),
+    _StateDictField("self_attn.o_proj.weight", lambda b: b.attn.w_o, P("model", "data"), transpose=True),
+    _StateDictField("self_attn.attn_gate.weight", lambda b: b.attn.attn_gate, P(None, None), transpose=True),
+    _StateDictField("post_attention_layernorm.weight", lambda b: b.rms_mlp.weight, P(None)),
+    _StateDictField(
+        "mlp_gated_norm.down_proj.weight",
+        lambda b: b.mlp_gated_norm.w_down,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField(
+        "mlp_gated_norm.up_proj.weight",
+        lambda b: b.mlp_gated_norm.w_up,
+        P(None, None),
+        transpose=True,
+    ),
+    _StateDictField("mlp.router.weight", lambda b: b.mlp.router, P(None, None), transpose=True),
+    _StateDictField("mlp.router.bias", lambda b: b.mlp.router_bias, P(None)),
+    _StateDictField(
+        "mlp.experts.gate_proj.weight",
+        lambda b: b.mlp.expert_mlp.w_gate,
+        P("expert", "data", "model"),
+        transpose=True,
+    ),
+    _StateDictField(
+        "mlp.experts.up_proj.weight",
+        lambda b: b.mlp.expert_mlp.w_up,
+        P("expert", "data", "model"),
+        transpose=True,
+    ),
+    _StateDictField(
+        "mlp.experts.down_proj.weight",
+        lambda b: b.mlp.expert_mlp.w_down,
+        P("expert", "model", "data"),
+        transpose=True,
+    ),
+    _StateDictField(
+        "shared_expert.gate_proj.weight",
+        lambda b: b.shared.w_gate,
+        P("data", "model"),
+        transpose=True,
+    ),
+    _StateDictField(
+        "shared_expert.up_proj.weight",
+        lambda b: b.shared.w_up,
+        P("data", "model"),
+        transpose=True,
+    ),
+    _StateDictField(
+        "shared_expert.down_proj.weight",
+        lambda b: b.shared.w_down,
+        P("model", "data"),
+        transpose=True,
+    ),
+)
+
+
+def snowball_from_state_dict_incrementally(
+    template: SnowballTransformer,
+    state_dict: StateDict,
+    prefix: Optional[str] = None,
+) -> SnowballTransformer:
+    """Consume Snowball tensors in groups, bounding input/output HBM liveness."""
+
+    def pop(name: str) -> jax.Array:
+        return jnp.asarray(state_dict.pop(_with_prefix(prefix, name)))
+
+    def load(name: str, spec: P, *, transpose: bool = False) -> jax.Array:
+        value = _materialize_state_array(pop(name), transpose=transpose, spec=spec)
+        return jax.block_until_ready(value)
+
+    def load_layers(suffix: str, spec: P, *, transpose: bool = False) -> jax.Array:
+        values = tuple(pop(f"model.layers.{index}.{suffix}") for index in range(template.config.num_layers))
+        value = _materialize_stacked_state_arrays(values, transpose=transpose, spec=spec)
+        return jax.block_until_ready(value)
+
+    model = template
+    for field in _TOP_LEVEL_STATE_FIELDS:
+        model = eqx.tree_at(
+            field.where,
+            model,
+            load(field.name, field.spec, transpose=field.transpose),
+        )
+
+    blocks = model.blocks.stacked
+    for field in _BLOCK_STATE_FIELDS:
+        stacked_spec = P(None, *field.spec)
+        blocks = eqx.tree_at(
+            field.where,
+            blocks,
+            load_layers(field.name, stacked_spec, transpose=field.transpose),
+        )
+    return eqx.tree_at(lambda t: t.blocks.stacked, model, blocks)
+
+
 def snowball_from_state_dict(
     template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
 ) -> SnowballTransformer:
@@ -823,108 +1011,25 @@ def snowball_from_state_dict(
     """
     g = lambda name: _get(state_dict, prefix, name)  # noqa: E731
 
-    m = template
-    m = eqx.tree_at(lambda t: t.token_embed, m, _reshard_for_init(g("model.embed_tokens.weight"), Pembed_vocab))
-    m = eqx.tree_at(lambda t: t.embed_norm.weight, m, g("model.embed_norm.weight"))
-    m = eqx.tree_at(
-        lambda t: t.embed_gated_norm.w_down, m, _reshard_replicated(_T(g("model.embed_gated_norm.down_proj.weight")))
-    )
-    m = eqx.tree_at(
-        lambda t: t.embed_gated_norm.w_up, m, _reshard_replicated(_T(g("model.embed_gated_norm.up_proj.weight")))
-    )
-    m = eqx.tree_at(lambda t: t.final_norm.weight, m, g("model.norm.weight"))
-    m = eqx.tree_at(
-        lambda t: t.final_gated_norm.w_down, m, _reshard_replicated(_T(g("model.final_gated_norm.down_proj.weight")))
-    )
-    m = eqx.tree_at(
-        lambda t: t.final_gated_norm.w_up, m, _reshard_replicated(_T(g("model.final_gated_norm.up_proj.weight")))
-    )
-    m = eqx.tree_at(lambda t: t.output_proj, m, _reshard_for_init(_T(g("lm_head.weight")), Plm_head))
+    model = template
+    for field in _TOP_LEVEL_STATE_FIELDS:
+        value = g(field.name)
+        if field.transpose:
+            value = _T(value)
+        model = eqx.tree_at(field.where, model, _reshard_for_init(value, field.spec))
 
-    for i in range(len(m.blocks)):
+    blocks = list(model.blocks.unstacked())
+    for i, block in enumerate(blocks):
         p = f"model.layers.{i}"
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].rms_attn.weight, m, g(f"{p}.input_layernorm.weight"))
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn_gated_norm.w_down,
-            m,
-            _reshard_replicated(_T(g(f"{p}.attn_gated_norm.down_proj.weight"))),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn_gated_norm.w_up,
-            m,
-            _reshard_replicated(_T(g(f"{p}.attn_gated_norm.up_proj.weight"))),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_q, m, _reshard(_T(g(f"{p}.self_attn.q_proj.weight")), P("data", "model"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_k, m, _reshard(_T(g(f"{p}.self_attn.k_proj.weight")), P("data", "model"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), P("data", "model"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", "data"))
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.attn_gate, m, _reshard_replicated(_T(g(f"{p}.self_attn.attn_gate.weight")))
-        )
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].rms_mlp.weight, m, g(f"{p}.post_attention_layernorm.weight"))
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_down,
-            m,
-            _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.down_proj.weight"))),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp_gated_norm.w_up,
-            m,
-            _reshard_replicated(_T(g(f"{p}.mlp_gated_norm.up_proj.weight"))),
-        )
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router, m, _reshard_replicated(_T(g(f"{p}.mlp.router.weight"))))
-        m = eqx.tree_at(lambda t, i=i: t.blocks[i].mlp.router_bias, m, g(f"{p}.mlp.router.bias"))
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_gate,
-            m,
-            _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_up,
-            m,
-            _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_down,
-            m,
-            _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].shared.w_gate,
-            m,
-            _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P("data", "model")),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].shared.w_up,
-            m,
-            _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P("data", "model")),
-        )
-        m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].shared.w_down,
-            m,
-            _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", "data")),
-        )
-    return m
+        for field in _BLOCK_STATE_FIELDS:
+            value = g(f"{p}.{field.name}")
+            if field.transpose:
+                value = _T(value)
+            block = eqx.tree_at(field.where, block, _reshard_for_init(value, field.spec))
+        blocks[i] = block
 
-
-_EXPERT_GATE_UP_SPEC = P("expert", "data", "model")
-_EXPERT_DOWN_SPEC = P("expert", "model", "data")
-
-
-def _reshard_replicated(arr: jax.Array) -> jax.Array:
-    return _reshard_for_init(arr, P(None, None))
-
-
-def _reshard(arr: jax.Array, spec: P) -> jax.Array:
-    return _reshard_for_init(arr, spec)
+    stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *blocks)
+    return eqx.tree_at(lambda t: t.blocks.stacked, model, stacked)
 
 
 # Register the HF config so ``AutoConfig.from_pretrained`` resolves ``grug_moe`` without remote code.
@@ -937,6 +1042,7 @@ __all__ = [
     "GrugMoeHfConfig",
     "SnowballConfig",
     "SnowballLMHeadModel",
+    "snowball_from_state_dict_incrementally",
     "snowball_from_state_dict",
     "snowball_to_state_dict",
 ]

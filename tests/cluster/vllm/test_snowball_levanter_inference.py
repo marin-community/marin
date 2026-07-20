@@ -10,153 +10,64 @@ Run from the repository root:
       -m cluster -o addopts= --import-mode=importlib -vv -s
 """
 
-import dataclasses
 import uuid
 
-import equinox as eqx
-import jax
-import jax.numpy as jnp
-import jmp
-import numpy as np
 import pytest
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
-from haliax.partitioning import set_mesh
-from huggingface_hub import snapshot_download
 from iris.client import IrisClient
 from iris.rpc import job_pb2
-from jax.sharding import PartitionSpec as P
-from levanter.grug.sharding import compact_grug_mesh
-from levanter.tokenizers import load_tokenizer
 
-from tests.cluster.vllm.backend_parity import TokenScore
+from tests.cluster.vllm.backend_parity import assert_report_matches_exact_goldens
 from tests.cluster.vllm.snowball import (
-    TOP_K,
-    RepresentativeGolden,
-    RepresentativePromptFixture,
-    pad_prompt_batch,
-    read_prompt_fixture,
+    SNOWBALL_GPU,
+    SNOWBALL_NATIVE_GPU,
+    SNOWBALL_NATIVE_TPU,
+    SNOWBALL_TPU,
+    read_native_tpu_contract,
+    read_native_tpu_goldens,
     read_representative_goldens,
 )
-from tests.cluster.vllm.snowball_checkpoint import (
-    VendoredTransformer,
-    apply_pending_qb_betas,
-    decode_vendored_config,
-    load_checkpoint,
-    read_executor_info,
-)
+from tests.cluster.vllm.snowball_levanter import assert_native_tpu_contract, capture_native_levanter
 
-PENDING_TIMEOUT = 5 * 60.0
+PENDING_TIMEOUT = 20 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
-JAX_COMPILATION_CACHE_DIR = (
-    "s3://marin-us-east-02a/tmp/ttl=30d/compilation-cache/june-tpu-67b-a2b-step-42150-sonic-fa4-representative-v2"
-)
-
 pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 60)]
 
 
-@eqx.filter_jit
-def top_k_next_token_logprobs(
-    model: VendoredTransformer,
-    pending_qb_betas: jax.Array,
-    token_ids: jax.Array,
-    last_token_indices: jax.Array,
-    policy: jmp.Policy,
-) -> tuple[jax.Array, jax.Array]:
-    """Project only each row's last real token, never the full sequence vocabulary."""
-    model = apply_pending_qb_betas(model, pending_qb_betas)
-    model = policy.cast_to_compute(model)
-    hidden, _ = model(token_ids)
-    last_hidden = hidden.at[jnp.arange(token_ids.shape[0]), last_token_indices].get(
-        out_sharding=P(("replica_dcn", "data", "expert"))
-    )
-    logits = jnp.einsum(
-        "bh,hv->bv",
-        last_hidden,
-        model.output_proj,
-        out_sharding=P(("replica_dcn", "data", "expert")),
-    )
-    assert logits.dtype == jnp.bfloat16
-    logprobs = jax.nn.log_softmax(logits.astype(jnp.float32))
-    return jax.lax.top_k(logprobs, TOP_K)
-
-
-def compute_checkpoint_inference(
-    prompt_fixture: RepresentativePromptFixture,
-) -> dict[str, tuple[TokenScore, ...]]:
-    """Load one checkpoint and return structured results for production batches."""
-    executor_info = read_executor_info()
-    assert executor_info["config"]["data"]["tokenizer"] == prompt_fixture.tokenizer
-    inference_model_config = dataclasses.replace(
-        decode_vendored_config(executor_info),
-        moe_implementation="sonic",
-        # The checkpoint leaves this unset, selecting quadratic reference attention on GPU, which cannot fit 32K.
-        attention_implementation="gpu_fa4_cute",
+def assert_checkpoint_inference_matches_golden(expected_cases) -> None:
+    report = capture_native_levanter(SNOWBALL_NATIVE_GPU, goldens=expected_cases)
+    assert_report_matches_exact_goldens(
+        report,
+        {expected.id: expected.top_logprobs for expected in expected_cases},
+        score_source="canonical_tokens",
     )
 
-    policy = jmp.get_policy(executor_info["config"]["mp"])
-    tokenizer = load_tokenizer(
-        snapshot_download(
-            prompt_fixture.tokenizer,
-            revision=prompt_fixture.tokenizer_revision,
-            allow_patterns=["tokenizer*", "special_tokens*", "added_tokens*", "chat_template*"],
-        )
+
+def assert_tpu_checkpoint_inference_matches_contract(gpu_goldens, tpu_goldens, contract) -> None:
+    report = capture_native_levanter(SNOWBALL_NATIVE_TPU, goldens=gpu_goldens)
+    assert_native_tpu_contract(report, gpu_goldens, contract)
+    assert_report_matches_exact_goldens(
+        report,
+        {expected.id: expected.top_logprobs for expected in tpu_goldens},
+        score_source="top_logprobs",
     )
-    assert tokenizer.eos_token_id is not None
-
-    mesh = compact_grug_mesh()
-    assert mesh.shape.get("expert", 1) == 1
-    with set_mesh(mesh):
-        params, pending_qb_betas = load_checkpoint(inference_model_config, mesh)
-
-        computed_cases = {}
-        for batch in prompt_fixture.batches:
-            token_ids, last_token_indices = pad_prompt_batch(batch, tokenizer.eos_token_id)
-            top_logprobs, top_token_ids = top_k_next_token_logprobs(
-                params,
-                pending_qb_betas,
-                jnp.asarray(token_ids),
-                jnp.asarray(last_token_indices),
-                policy,
-            )
-            top_logprobs = np.asarray(jax.device_get(top_logprobs))
-            top_token_ids = np.asarray(jax.device_get(top_token_ids))
-            for row, case in enumerate(batch.cases):
-                computed_cases[case.id] = tuple(
-                    TokenScore(
-                        logprob=float(logprob),
-                        token_id=int(token_id),
-                    )
-                    for logprob, token_id in zip(top_logprobs[row], top_token_ids[row], strict=True)
-                )
-
-    return computed_cases
-
-
-def assert_checkpoint_inference_matches_golden(
-    expected_cases: tuple[RepresentativeGolden, ...],
-) -> None:
-    prompt_fixture = read_prompt_fixture(expected_cases)
-    actual_cases = compute_checkpoint_inference(prompt_fixture)
-    for expected in expected_cases:
-        assert actual_cases[expected.id] == expected.top_logprobs, expected.id
 
 
 def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client: IrisClient, run_test_job) -> None:
-    expected_cases = read_representative_goldens()
     run_test_job(
         marin_gpu_client,
         JobRequest(
             name=f"snowball-checkpoint-inference-{uuid.uuid4().hex[:8]}",
             entrypoint=Entrypoint.from_callable(
                 assert_checkpoint_inference_matches_golden,
-                args=[expected_cases],
+                args=[read_representative_goldens()],
             ),
             resources=ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="256g", disk="64g"),
             environment=create_environment(
                 extras=["gpu"],
                 sync_packages=["marin-levanter"],
                 env_vars={
-                    "JAX_COMPILATION_CACHE_DIR": JAX_COMPILATION_CACHE_DIR,
+                    "JAX_COMPILATION_CACHE_DIR": SNOWBALL_GPU.compilation_cache_dir,
                     # XLA's auxiliary caches require local paths; keep only JAX's LOTA-backed cache.
                     "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES": "none",
                     # Keep BF16 kernel selection reproducible across independently compiled H100 nodes.
@@ -165,6 +76,41 @@ def test_snowball_checkpoint_matches_levanter_inference_goldens(marin_gpu_client
             ),
             # These e2es are manually triggered and highly interactive, so they use production priority.
             # Routine or automated workloads should not copy this priority.
+            priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+        ),
+        pending_timeout=PENDING_TIMEOUT,
+        runtime_timeout=RUNTIME_TIMEOUT,
+    )
+
+
+def test_snowball_checkpoint_matches_native_tpu_contract(
+    iris_client: IrisClient,
+    smoke_region: str,
+    run_test_job,
+) -> None:
+    run_test_job(
+        iris_client,
+        JobRequest(
+            name=f"snowball-checkpoint-inference-tpu-{uuid.uuid4().hex[:8]}",
+            entrypoint=Entrypoint.from_callable(
+                assert_tpu_checkpoint_inference_matches_contract,
+                args=[read_representative_goldens(), read_native_tpu_goldens(), read_native_tpu_contract()],
+            ),
+            resources=ResourceConfig.with_tpu(
+                "v6e-8",
+                cpu=64,
+                ram="256g",
+                disk="100g",
+                regions=(smoke_region,),
+            ),
+            environment=create_environment(
+                extras=["tpu"],
+                sync_packages=["marin-levanter"],
+                env_vars={
+                    "JAX_COMPILATION_CACHE_DIR": SNOWBALL_TPU.compilation_cache_dir,
+                    "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES": "none",
+                },
+            ),
             priority=job_pb2.PRIORITY_BAND_PRODUCTION,
         ),
         pending_timeout=PENDING_TIMEOUT,

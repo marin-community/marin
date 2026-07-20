@@ -1,0 +1,21 @@
+{
+  "canonical_golden_sha256": "d695624cc411d7bf79a6c2e28f34538437985a9e07612d2a07a5095128ff4b2d",
+  "discovery": {
+    "candidate_headroom": 0.007325869053435727,
+    "clean_process_count": 3,
+    "max_probability_error": 0.07267413094656427,
+    "repeatability_probability_error": 0.0,
+    "same_process_repeat_count": 3,
+    "summary_sha256": "b509a3aec1f648ef3c5ca252aec35bff11fbabdfb731b9984b00c7573744b8fe"
+  },
+  "effective_attention": "tpu_splash",
+  "effective_moe": "scatter",
+  "model_config_digest": "fe0a46688b9539ed2521e82a765233345cd4c2b9fab483e4928b93ae52fe796b",
+  "logical_bf16_parameters_sha256": "d33f30816fe6ea5a10a285304774e124d2906889d8e2e538956d40edc74a59a6",
+  "max_probability_error": 0.08,
+  "name": "snowball-native-levanter-tpu-v1",
+  "prompt_fixture_sha256": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
+  "requested_attention": "tpu_splash",
+  "requested_moe": "ring",
+  "schema_version": 1
+}

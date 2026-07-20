@@ -197,6 +197,24 @@ def test_snowball_state_dict_roundtrip_is_exact():
     assert np.array_equal(src_logits, dst_logits), "state-dict round-trip changed logits"
 
 
+def test_snowball_incremental_state_dict_roundtrip_is_exact():
+    cfg = _tiny_config()
+    Vocab = Axis("vocab", cfg.vocab_size)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        src = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.key(1))
+        state_dict = src.to_state_dict()
+        template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=jax.random.key(2))
+        loaded = template.from_state_dict_incrementally(state_dict)
+
+        ids = _device_batched_ids(cfg.vocab_size, 10)
+        run = hax.named_jit(lambda m, x: m(x))
+        src_logits = np.asarray(run(src, ids).array)
+        loaded_logits = np.asarray(run(loaded, ids).array)
+
+    assert not state_dict
+    assert np.array_equal(src_logits, loaded_logits), "incremental state-dict load changed logits"
+
+
 def test_snowball_torch_compatible_state_dict_roundtrip():
     """Exercise the exact serialization path load_pretrained uses (to/from_torch_compatible_state_dict)."""
     cfg = _tiny_config()

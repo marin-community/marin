@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
+import json
 import logging
 import os
 import shutil
@@ -22,7 +24,7 @@ from rigging.filesystem import marin_prefix
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.inference.config import WORKER_PYTHON_VERSION
-from marin.inference.tpu_vllm_pins import vllm_fork_ref
+from marin.inference.tpu_vllm_pins import TPU_VLLM_EXCLUDE_NEWER, vllm_fork_ref
 from marin.inference.vllm_metrics import VllmMetricsForwarder, start_vllm_metrics_forwarding
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,10 @@ class VllmLauncher(Protocol):
 
     def command(self) -> list[str]: ...
 
+    def python_command(self) -> list[str]:
+        """Build an argv for the Python interpreter in the vLLM environment."""
+        ...
+
     def env(self) -> dict[str, str]:
         """Extra environment variables to overlay on the vLLM subprocess env."""
         ...
@@ -62,6 +68,9 @@ class WorkspaceVllm:
 
     def command(self) -> list[str]:
         return [shutil.which("vllm") or "vllm"]
+
+    def python_command(self) -> list[str]:
+        return [sys.executable]
 
     def env(self) -> dict[str, str]:
         return {}
@@ -93,7 +102,7 @@ class IsolatedCudaVllm:
         if self.source is VllmType.UPSTREAM and not self.version:
             raise ValueError("IsolatedCudaVllm(UPSTREAM) requires an explicit vLLM version.")
 
-    def command(self) -> list[str]:
+    def _command(self, executable: str) -> list[str]:
         if self.source is VllmType.MARIN_FORK:
             from_spec, extra = vllm_fork_ref(), ["--with", _RUNAI_STREAMER_REQUIREMENT]
         else:
@@ -107,8 +116,14 @@ class IsolatedCudaVllm:
             self.python_version,
             "--torch-backend",
             _CUDA_TORCH_BACKEND,
-            "vllm",
+            executable,
         ]
+
+    def command(self) -> list[str]:
+        return self._command("vllm")
+
+    def python_command(self) -> list[str]:
+        return self._command("python")
 
     def env(self) -> dict[str, str]:
         # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
@@ -153,8 +168,11 @@ class IsolatedTpuVllm:
     # torch is only a dependency here (jax/libtpu do TPU compute), so resolve it from the
     # CPU index rather than dragging in a CUDA tree.
     torch_backend: str = "cpu"
+    # Keep clean workers on the same transitive package universe. Fork SHAs
+    # alone do not constrain packages published after the first qualification.
+    exclude_newer: str | None = TPU_VLLM_EXCLUDE_NEWER
 
-    def command(self) -> list[str]:
+    def _command(self, executable: str) -> list[str]:
         return [
             "uvx",
             "--from",
@@ -165,13 +183,159 @@ class IsolatedTpuVllm:
             self.python_version,
             "--torch-backend",
             self.torch_backend,
-            "vllm",
+            *([] if self.exclude_newer is None else ["--exclude-newer", self.exclude_newer]),
+            executable,
         ]
+
+    def command(self) -> list[str]:
+        return self._command("vllm")
+
+    def python_command(self) -> list[str]:
+        return self._command("python")
 
     def env(self) -> dict[str, str]:
         # vLLM targets CUDA unless VLLM_TARGET_DEVICE is set; the uvx build subprocess
         # inherits this from the launch environment.
         return {"VLLM_TARGET_DEVICE": "tpu"}
+
+
+@dataclass(frozen=True)
+class InstalledPackageFingerprint:
+    """One installed distribution in the environment that executes vLLM."""
+
+    name: str
+    version: str
+    direct_url: str
+    record_sha256: str
+
+
+@dataclass(frozen=True)
+class VllmRuntimeFingerprint:
+    """Resolved code and runtime inputs that can affect vLLM numerics."""
+
+    packages: tuple[InstalledPackageFingerprint, ...]
+    environment: tuple[tuple[str, str], ...]
+    engine_args: tuple[str, ...]
+    launcher_args: tuple[str, ...]
+    python_version: str
+    platform: str
+    libc: tuple[str, str]
+    os_release: tuple[tuple[str, str], ...]
+    cpu_affinity_count: int
+    isolation: str
+
+    def digest(self) -> str:
+        payload = dataclasses.asdict(self)
+        # A uv-built VCS wheel is identified by its immutable direct_url commit. Its
+        # RECORD can vary across clean builds of that same commit (generated wheel
+        # metadata and build paths), which made two otherwise identical standing
+        # workers produce different runtime digests. Registry wheels retain their
+        # RECORD digest, and every package version remains covered, so dependency
+        # drift still fails closed.
+        for package in payload["packages"]:
+            try:
+                direct_url = json.loads(package["direct_url"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(direct_url, dict) and "vcs_info" in direct_url:
+                package["record_sha256"] = ""
+        payload = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "VllmRuntimeFingerprint":
+        return cls(
+            packages=tuple(InstalledPackageFingerprint(**package) for package in raw["packages"]),
+            environment=tuple(tuple(item) for item in raw["environment"]),
+            engine_args=tuple(raw["engine_args"]),
+            launcher_args=tuple(raw["launcher_args"]),
+            python_version=raw["python_version"],
+            platform=raw["platform"],
+            libc=tuple(raw["libc"]),
+            os_release=tuple(tuple(item) for item in raw["os_release"]),
+            cpu_affinity_count=int(raw["cpu_affinity_count"]),
+            isolation=raw["isolation"],
+        )
+
+
+_RUNTIME_ENV_PREFIXES = ("JAX_", "LIBTPU_", "TPU_", "XLA_")
+_RUNTIME_ENV_NAMES = (
+    "MODEL_IMPL_TYPE",
+    "PJRT_DEVICE",
+    "UV_CACHE_DIR",
+    "UV_LINK_MODE",
+    "UV_NO_BUILD",
+    "UV_NO_CACHE",
+    "UV_OFFLINE",
+    "UV_PROJECT_ENVIRONMENT",
+    "UV_PYTHON",
+    "UV_PYTHON_INSTALL_DIR",
+    "UV_PYTHON_PREFERENCE",
+    "UV_RESOLUTION",
+    "UV_TORCH_BACKEND",
+    "VLLM_ATTENTION_BACKEND",
+    "VLLM_TARGET_DEVICE",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION",
+    "VLLM_USE_DEEP_GEMM",
+    "VLLM_USE_V1",
+    "VLLM_WORKER_MULTIPROC_METHOD",
+    "VLLM_XLA_CACHE_PATH",
+    "VLLM_XLA_CACHE_ROTATION_KEY",
+)
+_RUNTIME_FINGERPRINT_SCRIPT = r"""
+import hashlib
+import importlib.metadata
+import json
+import os
+import platform
+import sys
+from pathlib import Path
+
+packages = []
+for distribution in importlib.metadata.distributions():
+    name = distribution.metadata["Name"]
+    if not name:
+        continue
+    direct_url = distribution.read_text("direct_url.json") or ""
+    record = (distribution.read_text("RECORD") or "").encode()
+    packages.append(
+        {
+            "name": name.lower().replace("_", "-").replace(".", "-"),
+            "version": distribution.version,
+            "direct_url": direct_url,
+            "record_sha256": hashlib.sha256(record).hexdigest(),
+        }
+    )
+
+os_release = {}
+for line in Path("/etc/os-release").read_text().splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        os_release[key] = value.strip('"')
+
+print(
+    json.dumps(
+        {
+            "packages": sorted(
+                packages,
+                key=lambda package: (
+                    package["name"],
+                    package["version"],
+                    package["direct_url"],
+                    package["record_sha256"],
+                ),
+            ),
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "libc": platform.libc_ver(),
+            "os_release": sorted(os_release.items()),
+            "cpu_affinity_count": len(os.sched_getaffinity(0)),
+            "isolation": "container" if Path("/.dockerenv").exists() else "host",
+        },
+        sort_keys=True,
+    )
+)
+"""
 
 
 # Forwarded lines route to the parent's stderr (finelog tags it ERROR) or stdout (INFO) by their
@@ -551,6 +715,38 @@ class VllmEnvironment:
             return {}
         return _native_diagnostics(self.vllm_server, max_lines=max_lines)
 
+    def runtime_fingerprint(self) -> VllmRuntimeFingerprint:
+        """Resolve the exact package, environment, and engine configuration used by vLLM."""
+        environment = _vllm_subprocess_environment(self.launcher)
+        completed = subprocess.run(
+            [*self.launcher.python_command(), "-c", _RUNTIME_FINGERPRINT_SCRIPT],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        runtime = json.loads(completed.stdout)
+        relevant_environment = tuple(
+            sorted(
+                (key, value)
+                for key, value in environment.items()
+                if key in _RUNTIME_ENV_NAMES or key.startswith(_RUNTIME_ENV_PREFIXES)
+            )
+        )
+        return VllmRuntimeFingerprint.from_dict(
+            {
+                **runtime,
+                "environment": relevant_environment,
+                "engine_args": (
+                    "serve",
+                    self.model_name_or_path,
+                    "--trust-remote-code",
+                    *self.extra_cli_args,
+                ),
+                "launcher_args": self.launcher.command(),
+            }
+        )
+
 
 # Cache aggressively for iterative bring-up workflows: every compilation is worth keeping, and
 # a serve of the same model on the same slice should not pay for the compile twice. Both serving
@@ -595,6 +791,12 @@ def _vllm_env() -> dict[str, str]:
     return env
 
 
+def _vllm_subprocess_environment(launcher: VllmLauncher) -> dict[str, str]:
+    environment = _vllm_env()
+    environment.update(launcher.env())
+    return environment
+
+
 def _start_vllm_native_server(
     *,
     model_name_or_path: str,
@@ -624,10 +826,7 @@ def _start_vllm_native_server(
     log_dir = tempfile.mkdtemp(prefix="vllm_server_")
     stdout_path = os.path.join(log_dir, "stdout.log")
     stderr_path = os.path.join(log_dir, "stderr.log")
-    native_env = _vllm_env()
-    # A launcher (e.g. the isolated TPU build) may require extra env, such as the
-    # vLLM build target; overlay it after the canonical defaults so it wins.
-    native_env.update(launcher.env())
+    native_env = _vllm_subprocess_environment(launcher)
     logger.info(
         "Starting vLLM native server (output streams to the job log). "
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "

@@ -1,0 +1,70 @@
+{
+  "backend": "vllm",
+  "canonical_golden_digest": "d695624cc411d7bf79a6c2e28f34538437985a9e07612d2a07a5095128ff4b2d",
+  "discovery": {
+    "candidate_headroom": 0.12237485885878241,
+    "clean_process_count": 3,
+    "max_probability_error": 0.5776251411412177,
+    "repeatability_probability_error": 0.0,
+    "same_process_repeat_count": 3,
+    "summary_sha256": "c2f24489fb025e75539c9187c1878094fb4885917fcf4ddfc02cae4badd785f5"
+  },
+  "effective_attention": "production",
+  "effective_moe": "tpu-inference-grug",
+  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
+  "fork_source_revisions": [
+    [
+      "vllm",
+      "40cfab43c208dd9e762e6752fca887bdde69d1c9"
+    ],
+    [
+      "tpu-inference",
+      "e9a360537e2c9f8cffaecdbba124685061630550"
+    ]
+  ],
+  "max_probability_error": 0.7,
+  "max_probability_error_by_bucket": [
+    [
+      256,
+      0.06
+    ],
+    [
+      1024,
+      0.09
+    ],
+    [
+      4096,
+      0.07
+    ],
+    [
+      16384,
+      0.7
+    ],
+    [
+      32768,
+      0.5
+    ]
+  ],
+  "mesh_shape": [
+    [
+      "tensor",
+      8
+    ],
+    [
+      "data",
+      1
+    ],
+    [
+      "expert",
+      1
+    ]
+  ],
+  "name": "snowball-vllm-tpu-v1",
+  "parameter_digest": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "platform": "tpu",
+  "prompt_fixture_digest": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
+  "requested_attention": "production",
+  "requested_moe": "tpu-inference-grug",
+  "runtime_fingerprint_digest": "79e4d181c83d2da9c823ea8403ed0230f20ce330211e55c3ee85f6d0c0e9c1a1",
+  "schema_version": 1
+}

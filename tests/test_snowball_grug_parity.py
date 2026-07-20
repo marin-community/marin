@@ -16,6 +16,8 @@ Lives on the marin side (not ``lib/levanter/tests``) because it imports ``experi
 levanter -> experiments dependency direction forbids the reverse.
 """
 
+from typing import NamedTuple
+
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -87,22 +89,33 @@ def _capture_experiment(model: "gm.Transformer", tokens: jax.Array) -> list[np.n
     return outs
 
 
-def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.ndarray]:
-    """Per-block hidden states for the Snowball transformer (mirrors its __call__)."""
+class SnowballActivations(NamedTuple):
+    embedded: jax.Array
+    block_outputs: jax.Array
+    final: jax.Array
+
+
+def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> SnowballActivations:
+    """Embedding, stacked block outputs, and final norm (mirrors the production scan)."""
     tf = model.transformer
     cfg = tf.config
     short = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=None)
     long = AttentionMask(is_causal=True, sliding_window=None, segment_ids=None)
     hidden = tf.token_embed.at[tokens].get(out_sharding=_EMBED_SPEC)
     hidden = tf.embed_gated_norm(tf.embed_norm(hidden))
-    outs = [hidden]
-    n = len(tf.blocks)
-    for i, block in enumerate(tf.blocks):
-        is_long = i % 4 == 3 or i == n - 1
-        hidden = block(hidden, short, long, is_long)
-        outs.append(hidden)
-    outs.append(tf.final_gated_norm(tf.final_norm(hidden)))
-    return outs
+    embedded = hidden
+    n = tf.blocks.Block.size
+    idx = jnp.arange(n)
+    long_schedule = ((idx % 4) == 3) | (idx == n - 1)
+
+    def _scan_layer(carry, layer_and_flag):
+        layer, use_long = layer_and_flag
+        output = layer(carry, short, long, use_long)
+        return output, output
+
+    hidden, block_outputs = jax.lax.scan(_scan_layer, hidden, (tf.blocks.stacked, long_schedule))
+    final = tf.final_gated_norm(tf.final_norm(hidden))
+    return SnowballActivations(embedded=embedded, block_outputs=block_outputs, final=final)
 
 
 def test_snowball_matches_grug_experiment_per_layer_and_logits():
@@ -114,8 +127,16 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
         tokens = (jnp.arange(10, dtype=jnp.int32).reshape(1, 10)) % _COMMON["vocab_size"]
 
         # Per-layer activation parity (embedding, each block, final norm).
-        exp_acts = [np.asarray(o) for o in _capture_experiment(exp, tokens)]
-        snow_acts = [np.asarray(o) for o in _capture_snowball(snow, tokens)]
+        # Compile the whole diagnostic capture once. Calling each MoE block
+        # eagerly incurs a separate CPU compilation and can exceed the suite's
+        # ordinary timeout without exercising any additional behavior.
+        exp_acts = [np.asarray(o) for o in jax.jit(_capture_experiment)(exp, tokens)]
+        snow_activations = jax.jit(_capture_snowball)(snow, tokens)
+        snow_acts = [
+            np.asarray(snow_activations.embedded),
+            *(np.asarray(o) for o in snow_activations.block_outputs),
+            np.asarray(snow_activations.final),
+        ]
         assert len(exp_acts) == len(snow_acts) == _COMMON["num_layers"] + 2
         labels = ["embed"] + [f"block{i}" for i in range(_COMMON["num_layers"])] + ["final_norm"]
         for label, ea, sa in zip(labels, exp_acts, snow_acts, strict=True):

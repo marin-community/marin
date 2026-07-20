@@ -1,0 +1,47 @@
+{
+  "concurrent_first_tokens": {
+    "code-humaneval-01": 1432,
+    "code-humaneval-02": 1432,
+    "code-humaneval-03": 220,
+    "code-humaneval-04": 1432,
+    "code-humaneval-05": 1432,
+    "code-humaneval-06": 1432,
+    "instruction-ifeval-01": 578,
+    "instruction-ifeval-02": 578
+  },
+  "data_parallel_size": 1,
+  "discovery": {
+    "code_sha256": "8aaf0b9c7ec836ae119f1004ed8b51a9821cf4a3ffa71686adba75322720f847",
+    "report_sha256": "7e47be3187554cbe41beac6430dc9c478bab03640cb9f7e5467a0938550e0fac"
+  },
+  "model_config_digest": "817f156a77bfcdfb35071f066bd63b224ecb70847fb179712b004abdb18f59f8",
+  "runtime_fingerprint_digest": "8d5bbd4e57cb34c270bf6aa06a70e18a2ecbda281c52455842a24664f4f13fc2",
+  "fork_source_revisions": [
+    [
+      "vllm",
+      "40cfab43c208dd9e762e6752fca887bdde69d1c9"
+    ],
+    [
+      "tpu-inference",
+      "e9a360537e2c9f8cffaecdbba124685061630550"
+    ]
+  ],
+  "max_num_seqs": 8,
+  "name": "snowball-vllm-tpu-production-v1",
+  "parameter_sha256": "781bc3291c81ce282be6762520280ebd5ef5b85e88ba65129c2d0162d48ee632",
+  "prefix_caching": true,
+  "prompt_fixture_sha256": "47863868cbfe336739c8097535f113f4d2dae4954f772eb91511c911433596e8",
+  "schema_version": 1,
+  "sequential_case_id": "code-humaneval-01",
+  "sequential_continuation": [
+    1432,
+    262,
+    674,
+    16347,
+    279,
+    1160,
+    311,
+    6106
+  ],
+  "tensor_parallel_size": 8
+}
