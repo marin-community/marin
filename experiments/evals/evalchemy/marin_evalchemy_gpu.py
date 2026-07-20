@@ -148,8 +148,55 @@ def _auto_serve_overrides(model: str, requested_max_model_len: int):
     return tuple(extra), mml
 
 
+# ── Baked per-model eval defaults: the Delphi grug THINKING checkpoint ─────────────────────────────
+# A no-override launch (just EVAL_MODEL=<grug>) MUST produce valid MATH500/AIME: correct context/gen
+# split (the gen budget must NOT consume the whole context, or a long prompt overflows → vLLM 400s →
+# EMPTY results — the bug this bakes out), the atomic <|start_think|>/<|end_think|> delimiters intact,
+# the Delphi chat_template (NOT the generic `main` /think template), and the answer-channel loop curbed.
+# Every value below is a DEFAULT — the matching EVAL_* env var still overrides it.
+PROMPT_HEADROOM = 4096  # min context reserved for the prompt; default gen budget = max_model_len − this.
+GRUG_THINKING_MODELS = {"penfever/grug-67b-a2b-sft-s2-thinking-step630"}
+
+
+def _is_grug_thinking(model: str) -> bool:
+    m = model.lower()
+    return model in GRUG_THINKING_MODELS or ("grug" in m and "thinking" in m)
+
+
+def _grug_profile(model: str) -> dict:
+    """Baked eval defaults for the Delphi grug thinking checkpoint ({} for any other model)."""
+    if not _is_grug_thinking(model):
+        return {}
+    return {
+        "tp": 1,  # 256-expert MoE: experts shard via data + expert parallelism, NOT tensor parallelism
+        "revision": "delphi-v0-think",  # the checkpoint revision carrying the Delphi chat_template (NOT main)
+        "tokenizer": "penfever/grug-67b-a2b-sft-s2-thinking-step630-tok",
+        # grug MoE expert-parallel serve; --revision selects the Delphi-template checkpoint.
+        "vllm_extra_args": ("--data-parallel-size", "8", "--enable-expert-parallel",
+                            "--model-loader-extra-config", '{"distributed":true}',
+                            "--revision", "delphi-v0-think"),
+        # skip_special_tokens=false → PRESERVE the atomic 128002/128003 delimiters (default True strips
+        # them → model looks like it emits no CoT). repetition_penalty=1.1 → curb the answer-channel
+        # loops (marin #7321) so long-CoT MATH500/GPQA samples terminate + box within the gen budget.
+        "extra_gen_kwargs": {"skip_special_tokens": "false", "repetition_penalty": "1.1"},
+    }
+
+
+def _grug_chat_template(model: str, revision: str) -> str | None:
+    """Fetch the Delphi thinking chat_template.jinja from the model's revision (it carries the
+    <|start_think|>/<|end_think|> machinery). cw nodes have egress. Returns None on failure so the serve
+    degrades to the repo's own template rather than hard-failing the launch."""
+    try:
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
+        return Path(hf_hub_download(model, "chat_template.jinja", revision=revision)).read_text()
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] grug chat_template fetch failed (rev={revision}): {e!r}; using served repo template")
+        return None
+
+
 def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
-    tp = int(os.environ.get("EVAL_TP", "8"))
+    prof = _grug_profile(model)  # baked defaults for the Delphi grug thinking checkpoint ({} otherwise)
+    tp = int(os.environ.get("EVAL_TP", str(prof.get("tp", 8))))
     max_model_len = int(os.environ.get("EVAL_MAX_MODEL_LEN", "32768"))
     # ⚠ max_gen_toks MUST be < max_model_len (prompt + max_tokens ≤ context, else vLLM 400s every
     # request). Default 20480 leaves ~12k for even 25-shot prompts. lm-harness loglikelihood/MC tasks
@@ -157,12 +204,17 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     # Tier-2 budget is MODEL-CLASS-dependent: thinking/GDN models need ~30720 (near-full 32k) for
     # their CoT + boxed answer under the chat template; instruct models finish at 20480. Tier-1 uses
     # 20480 (completion-style, shorter). AIME already forces 30720 via EVAL_MAX_GEN_TOKS in the launcher.
-    _default_gen = 30720 if (tier == 2 and _is_thinking(model)) else 20480
+    # grug thinking: size the gen budget to LEAVE prompt headroom (max_model_len − PROMPT_HEADROOM =
+    # 28672 @ 32k) so the CoT budget can't starve a long prompt into a context overflow → EMPTY result
+    # (marin #7321). Other thinking/GDN models keep the historical near-full 30720; instruct 20480.
+    _default_gen = (max_model_len - PROMPT_HEADROOM) if prof else (30720 if (tier == 2 and _is_thinking(model)) else 20480)
     max_gen_toks = int(os.environ.get("EVAL_MAX_GEN_TOKS", str(_default_gen)))
     num_concurrent = int(os.environ.get("EVAL_NUM_CONCURRENT", "16"))
     # Per-model serve mitigations (GDN triton / limit-mm / native-context cap) derived automatically
     # from config.json — durable + identical across tiers, no hand-passed flags.
-    env_extra = tuple(os.environ["EVAL_VLLM_EXTRA_ARGS"].split()) if os.environ.get("EVAL_VLLM_EXTRA_ARGS") else ()
+    # grug thinking: default the serve args to the expert-parallel + delphi-v0-think-revision set (env wins).
+    env_extra = (tuple(os.environ["EVAL_VLLM_EXTRA_ARGS"].split()) if os.environ.get("EVAL_VLLM_EXTRA_ARGS")
+                 else tuple(prof.get("vllm_extra_args", ())))
     auto_extra, max_model_len = _auto_serve_overrides(model, max_model_len)
     # Merge: env-passed flags win; append an auto flag only if its flag-name isn't already present.
     merged = list(env_extra)
@@ -219,13 +271,17 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     ctf = os.environ.get("EVAL_CHAT_TEMPLATE_FILE")
     if ctf:
         chat_template_content = Path(ctf).read_text()
+    elif prof:  # grug thinking: default to the Delphi thinking template from the delphi-v0-think revision
+        chat_template_content = _grug_chat_template(model, prof["revision"])
     # LOCAL (grug thinking model): extra --gen_kwargs (key=value, comma-separated) folded into every
     # lm-eval request. THE crux for Delphi thinking models: EVAL_EXTRA_GEN_KWARGS="skip_special_tokens=false"
     # PRESERVES the atomic 128002/128003 delimiters (vLLM's skip_special_tokens=True default STRIPS them,
     # which made the model look like it emitted no CoT — the original serving bug).
-    extra_gen_kwargs: dict[str, str] = {}
+    # grug thinking default: {skip_special_tokens:false, repetition_penalty:1.1}; EVAL_EXTRA_GEN_KWARGS wins.
+    extra_gen_kwargs: dict[str, str] = dict(prof.get("extra_gen_kwargs", {}))
     egk = os.environ.get("EVAL_EXTRA_GEN_KWARGS")
     if egk:
+        extra_gen_kwargs = {}
         for pair in egk.split(","):
             pair = pair.strip()
             if not pair:
@@ -274,7 +330,9 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
 
 def main() -> None:
     model = os.environ.get("EVAL_MODEL", "Qwen/Qwen3-30B-A3B-Thinking-2507")
-    tokenizer = os.environ.get("EVAL_TOKENIZER", model)
+    # grug thinking: default to the sanitized -tok tokenizer (the model dir's own tokenizer also works,
+    # but the -tok repo is the proven sanitized PreTrainedTokenizerFast). EVAL_TOKENIZER overrides.
+    tokenizer = os.environ.get("EVAL_TOKENIZER") or _grug_profile(model).get("tokenizer") or model
     tier = int(os.environ.get("EVAL_TIER", "1"))
     suffix = os.environ.get("EVAL_JOB_SUFFIX", "")
     config = build_config(model, tokenizer, tier)
