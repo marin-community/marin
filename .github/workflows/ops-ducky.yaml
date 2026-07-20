@@ -6,10 +6,10 @@ name: "Ops - Ducky"
 # spec or code hash changed, building the Vue dashboard itself (spec build_commands)
 # on every deploy.
 #
-# Service config lives in infra/ducky/Pulumi.ducky-marin.yaml; secret values live in
-# Secret Manager, resolved at submit time. The one dispatch input is a
-# deploy_generation override — the forced-redeploy hammer for a wedged instance whose
-# spec and code are unchanged.
+# Service config lives in infra/ducky/Pulumi.ducky-marin.yaml; repository secrets enter
+# the deploy process as environment variables and are resolved at submit time. The one
+# dispatch input is a deploy_generation override — the forced-redeploy hammer for a
+# wedged instance whose spec and code are unchanged.
 on:
   push:
     branches:
@@ -53,6 +53,12 @@ jobs:
 
       - name: Roll the ducky service
         uses: ./.github/actions/pulumi-deploy
+        env:
+          DUCKY_GCS_HMAC_KEY_ID: ${{ secrets.DUCKY_GCS_HMAC_KEY_ID }}
+          DUCKY_GCS_HMAC_SECRET: ${{ secrets.DUCKY_GCS_HMAC_SECRET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          DUCKY_CW_SECRET_KEY: ${{ secrets.DUCKY_CW_SECRET_KEY }}
         with:
           stack: ducky-marin
           work-dir: infra/ducky

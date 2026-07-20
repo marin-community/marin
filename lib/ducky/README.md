@@ -174,33 +174,14 @@ over a small column (answered from footers / cheap columns), and truncate text w
 
 Ducky deploys through Pulumi: the `infra/ducky` project declares it as an always-on Iris
 job (`iac.iris.service.IrisService`), with the job shape and `DUCKY_*` task environment in
-the committed `infra/ducky/Pulumi.ducky-marin.yaml` and secret values in Secret Manager.
-CI rolls the stack on merge to main (`ops-ducky.yaml`); to force a redeploy with unchanged
-code, dispatch that workflow with a `deploy_generation` override. The deploy builds the
-Vue dashboard itself on every roll (node/npm required on the deploying machine). For a
-manual roll:
+the committed `infra/ducky/Pulumi.ducky-marin.yaml`. CI supplies the five repository secrets
+to the deploy process, which resolves their `env:` references only when submitting the Iris
+job. CI rolls the stack on merge to main (`ops-ducky.yaml`); to force a redeploy with unchanged
+code, dispatch that workflow with a `deploy_generation` override. The deploy builds the Vue
+dashboard itself on every roll (node/npm required on the deploying machine).
 
-The first deployment requires these repository secrets to be migrated into version 1 of the
-corresponding Secret Manager resources:
-
-| GitHub secret | Secret Manager resource |
-| --- | --- |
-| `DUCKY_GCS_HMAC_KEY_ID` | `ducky-gcs-hmac-key-id` |
-| `DUCKY_GCS_HMAC_SECRET` | `ducky-gcs-hmac-secret` |
-| `R2_ACCESS_KEY_ID` | `marin-r2-access-key-id` |
-| `R2_SECRET_ACCESS_KEY` | `marin-r2-secret-key` |
-| `DUCKY_CW_SECRET_KEY` | `ducky-cw-secret-key` |
-
-Create each resource and add its value without putting the payload on the command line:
-
-```bash
-gcloud secrets create SECRET_NAME --project=hai-gcp-models --replication-policy=automatic
-gcloud secrets versions add SECRET_NAME --project=hai-gcp-models --data-file=-
-```
-
-Then update `infra/permissions` to grant the Ducky deploy account
-`roles/secretmanager.secretAccessor` on only these five resources, apply that stack, and roll
-Ducky. Do not grant secret payload access across the project.
+A manual deploy must export `DUCKY_GCS_HMAC_KEY_ID`, `DUCKY_GCS_HMAC_SECRET`,
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `DUCKY_CW_SECRET_KEY` before rolling the stack:
 
 ```bash
 uv sync --all-packages --extra deploy
