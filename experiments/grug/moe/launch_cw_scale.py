@@ -75,7 +75,7 @@ from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component, datakit_data_config
 from experiments.grug.moe.model import GrugModelConfig, RematMode
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.marin_tokenizer import marin_tokenizer
@@ -145,6 +145,10 @@ def build_scale_model() -> GrugModelConfig:
     mla_default = "1" if use_mla else "0"
     mla_scale_q_lora = os.environ.get("SCALE_MLA_SCALE_Q_LORA", mla_default) == "1"
     mla_scale_kv_lora = os.environ.get("SCALE_MLA_SCALE_KV_LORA", mla_default) == "1"
+    # KV down-projection ablation (#7425): slice the residual instead of x @ w_dkv; alternate the
+    # first/last half per layer with SCALE_MLA_KV_SLICE_ALT.
+    mla_kv_slice = os.environ.get("SCALE_MLA_KV_SLICE") == "1"
+    mla_kv_slice_alternate = os.environ.get("SCALE_MLA_KV_SLICE_ALT") == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -182,6 +186,8 @@ def build_scale_model() -> GrugModelConfig:
         num_kv_heads=num_kv_heads,
         mla_scale_q_lora=mla_scale_q_lora,
         mla_scale_kv_lora=mla_scale_kv_lora,
+        mla_kv_slice=mla_kv_slice,
+        mla_kv_slice_alternate=mla_kv_slice_alternate,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,
@@ -293,6 +299,11 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     else:
         lr = float(lr_override) if lr_override else heuristic.adam_lr
         optimizer = dataclasses.replace(SCALE_OPTIMIZER, learning_rate=lr, **schedule)
+    # #7425: freeze w_dkv (LR 0) via the MuonH set_to_zero group.
+    if os.environ.get("SCALE_FREEZE_WDKV") == "1":
+        if not isinstance(optimizer, GrugMoeMuonHConfig):
+            raise ValueError("SCALE_FREEZE_WDKV=1 requires SCALE_OPTIMIZER=muonh")
+        optimizer = dataclasses.replace(optimizer, freeze_substrings=("w_dkv",))
     print(
         f"[scale] optimizer={opt_name} muonh_lr={heuristic.learning_rate:.5f} adam_lr={heuristic.adam_lr:.5f} "
         f"(heuristic: {total_tokens / 1e9:.1f}B tokens, dim={model.hidden_dim}); "

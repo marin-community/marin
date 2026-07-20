@@ -232,6 +232,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    # #7425: param paths whose (lowercased) key contains any of these substrings are frozen
+    # (routed to a set_to_zero group -> LR 0, no weight decay). Used to freeze w_dkv.
+    freeze_substrings: tuple[str, ...] = ()
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -274,6 +277,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh": muonh_transform(),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
+                "frozen": optax.set_to_zero(),
             }
             return optax.multi_transform(transforms, self.create_mask)
 
@@ -288,6 +292,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            if self.freeze_substrings and any(s in path_lower for s in self.freeze_substrings):
+                return "frozen"
             if (
                 "token_embed" in path_lower
                 or "router_bias" in path_lower

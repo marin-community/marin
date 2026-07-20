@@ -162,6 +162,11 @@ class GrugModelConfig:
     # up-projection (kv: sqrt(d/kv_lora_rank), q: sqrt(d/q_lora_rank)). Off by default.
     mla_scale_q_lora: bool = False
     mla_scale_kv_lora: bool = False
+    # KV down-projection ablation (#7425): instead of c_kv = kv_norm(x @ w_dkv), slice the residual.
+    # mla_kv_slice takes the first kv_lora_rank dims of x (no w_dkv); with mla_kv_slice_alternate,
+    # odd layers take the *last* kv_lora_rank dims instead (requires hidden_dim >= 2*kv_lora_rank).
+    mla_kv_slice: bool = False
+    mla_kv_slice_alternate: bool = False
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -350,7 +355,9 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
+        kv_slice_upper: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
+        del kv_slice_upper  # MLA-only knob (KV down-projection slice)
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -710,7 +717,7 @@ class MultiheadLatentAttention(eqx.Module):
     no half-RoPE / PKO, so ``use_pko`` / ``disable_rope`` are ignored.
     """
 
-    w_dkv: Float[Array, "D Ckv"]
+    w_dkv: Float[Array, "D Ckv"] | None  # None when cfg.mla_kv_slice (KV latent is a residual slice)
     kv_norm: RMSNorm
     w_uk: Float[Array, "Ckv NKnope"]
     w_uv: Float[Array, "Ckv NV"]
@@ -749,8 +756,10 @@ class MultiheadLatentAttention(eqx.Module):
             w_dq = reshard(_init_weight(k_dq, (d, cq), std), P("data", None))
             q_norm = RMSNorm.init(cq, cfg.layer_norm_eps)
             w_uq = reshard(_init_weight(k_uq, (cq, n * qk), std), P("data", "model"))
+        # KV down-projection: a learned matrix, or None when the latent is a fixed residual slice.
+        w_dkv = None if cfg.mla_kv_slice else reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None))
         return MultiheadLatentAttention(
-            w_dkv=reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None)),
+            w_dkv=w_dkv,
             kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),
             w_uk=reshard(_init_weight(k_uk, (ckv, n * nope), std), P("data", "model")),
             w_uv=reshard(_init_weight(k_uv, (ckv, n * vd), std), P("data", "model")),
@@ -770,6 +779,7 @@ class MultiheadLatentAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
+        kv_slice_upper: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
         del use_pko, disable_rope  # MLA has no PKO / half-RoPE
         cfg = self.cfg
@@ -785,8 +795,14 @@ class MultiheadLatentAttention(eqx.Module):
         # that then mismatches a resharded operand when there is no tensor parallelism.
         head_spec = P(_BATCH_AXES, None, "model", None)
 
-        # Compressed KV latent -> normed -> up-project to per-head k_nope and v.
-        c_kv = self.kv_norm(jnp.einsum("bsh,hc->bsc", x, self.w_dkv))
+        # KV latent: learned down-projection (x @ w_dkv), or a fixed residual slice (#7425).
+        # slice takes x[:, :, :ckv], or x[:, :, ckv:2*ckv] on the ``upper`` (odd-parity) layers.
+        if cfg.mla_kv_slice:
+            ckv = cfg.kv_lora_rank
+            c_pre = jnp.where(kv_slice_upper, x[..., ckv : 2 * ckv], x[..., :ckv])
+        else:
+            c_pre = jnp.einsum("bsh,hc->bsc", x, self.w_dkv)
+        c_kv = self.kv_norm(c_pre)
         if cfg.mla_scale_kv_lora:
             c_kv = c_kv * (cfg.hidden_dim / cfg.kv_lora_rank) ** 0.5
         k_nope_up = rearrange(jnp.einsum("bsc,cd->bsd", c_kv, self.w_uk), "... (n d) -> ... n d", d=nope)
@@ -863,9 +879,10 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool | jax.Array = False,
+        kv_slice_upper: bool | jax.Array = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope, kv_slice_upper=kv_slice_upper)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -990,8 +1007,9 @@ class Transformer(eqx.Module):
                 layer_mask = long_mask if is_long else short_mask
                 use_pko = is_long and not cfg.disable_pko
                 disable_rope = is_long and cfg.disable_long_rope
+                kv_slice_upper = cfg.mla_kv_slice and cfg.mla_kv_slice_alternate and i % 2 == 1
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, layer_mask, use_pko, disable_rope
+                    hidden, layer_mask, use_pko, disable_rope, kv_slice_upper
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -1008,6 +1026,12 @@ class Transformer(eqx.Module):
             # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
             # (scan requires disable_pko=True).
             mask_schedule = _long_layer_schedule(cfg.num_layers)
+            # #7425: per-layer KV-slice parity (odd layers take the upper residual half); all-False
+            # unless the alternating-slice ablation is on. Rides in as a Bool[num_layers] scan input.
+            if cfg.mla_kv_slice and cfg.mla_kv_slice_alternate:
+                kv_slice_schedule = jnp.arange(cfg.num_layers) % 2 == 1
+            else:
+                kv_slice_schedule = jnp.zeros(cfg.num_layers, dtype=jnp.bool_)
             # Precompute the FA4 per-token metadata for both the full-causal (long) and
             # sliding-window (short) layers OUTSIDE the scan, then select per layer with a
             # jnp.where inside the body. This removes the lax.cond around the FA4 pure_callback:
@@ -1028,17 +1052,19 @@ class Transformer(eqx.Module):
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, jax.Array],
+                scan_inputs: tuple[Block, jax.Array, jax.Array],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask = scan_inputs
+                layer, layer_use_long_mask, layer_kv_slice_upper = scan_inputs
                 use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
                 lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
                 layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
                 disable_rope = use_long if cfg.disable_long_rope else False
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
+                return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                    carry_hidden, layer_mask, False, disable_rope, layer_kv_slice_upper
+                )
 
             hidden, stacked_router_stats = jax.lax.scan(
-                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule, kv_slice_schedule)
             )
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
