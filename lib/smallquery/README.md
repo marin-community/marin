@@ -25,13 +25,23 @@ Phase 0 findings: `.agents/projects/smallquery/ballista-poc-phase0.md`.
 ## Build and publish the image
 
 ```bash
-docker buildx build --load -t ghcr.io/marin-community/smallquery-ballista:54.0.0 \
+# 1. Build (~45 min — a Rust release build of scheduler + executor + cli).
+docker buildx build --load -t smallquery-ballista:54.0.0 \
   -f lib/smallquery/docker/Dockerfile lib/smallquery
-iris build push smallquery-ballista:54.0.0 --image-name smallquery-ballista   # → GHCR
+
+# 2. Authenticate to GHCR once, with a classic PAT that has write:packages.
+echo "$GH_TOKEN" | docker login ghcr.io -u <username> --password-stdin
+
+# 3. Push → ghcr.io/marin-community/smallquery-ballista:54.0.0
+iris build push smallquery-ballista:54.0.0 --image-name smallquery-ballista --version 54.0.0
 ```
 
-GCP workers pull it automatically through the GHCR → Artifact Registry mirror; no
-multi-region push is needed. Pin `--build-arg BALLISTA_REF=<tag>` to change the version.
+If you already ran `smoke.sh`, it built `smallquery-ballista:local` — retag that instead
+of rebuilding: `docker tag smallquery-ballista:local smallquery-ballista:54.0.0`, then
+push. GCP workers pull the pushed image automatically through the GHCR → Artifact
+Registry mirror; no multi-region push is needed. `--platform` defaults to the host arch
+(build on/for the worker arch — amd64 for standard GCP CPU workers). Pin
+`--build-arg BALLISTA_REF=<tag>` to change the Ballista version.
 
 ## Local smoke (no cluster, no GCS)
 
