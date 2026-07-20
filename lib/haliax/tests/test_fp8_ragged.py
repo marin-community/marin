@@ -9,7 +9,12 @@ import numpy as np
 import pytest
 
 from haliax.nn.ragged_dot import ragged_dot
-from haliax.quantization import Fp8RaggedDotOp, apply_updates, partition_for_grad_overwrite
+from haliax.quantization import (
+    Fp8RaggedDotOp,
+    _jax_supports_mixed_fp8_wgmma,
+    apply_updates,
+    partition_for_grad_overwrite,
+)
 
 
 def _on_hopper_gpu() -> bool:
@@ -21,6 +26,12 @@ def _on_hopper_gpu() -> bool:
 # Mirrors fp8_scaled_ragged_dot's own precondition: the Mosaic wgmma kernels are
 # sm_90a-specific, so on any non-Hopper GPU these tests must skip, not error.
 hopper_only = pytest.mark.skipif(not _on_hopper_gpu(), reason="fp8 ragged wgmma kernels require Hopper (SM90)")
+
+# The default mixed e5m2 x e4m3 backward lowers only on jax >= 0.11.0
+# (jax-ml/jax#38859); Fp8RaggedDotOp.init with defaults fails fast on older jax.
+mixed_wgmma = pytest.mark.skipif(
+    not _jax_supports_mixed_fp8_wgmma(), reason="mixed e5m2 x e4m3 wgmma needs jax >= 0.11.0 (jax-ml/jax#38859)"
+)
 
 
 def _reference_ragged_dot(lhs, rhs, group_sizes):
@@ -65,7 +76,9 @@ def _nonuniform(T, K, E, N, seed=0):
 @hopper_only
 def test_fp8_forward_parity_vs_reference():
     lhs, rhs, gs = _nonuniform(128, 128, 4, 128)
-    op = Fp8RaggedDotOp.init()
+    # rev_dtype only affects the backward; uniform e4m3 keeps the forward
+    # parity tests runnable on jax 0.10.x Hopper pods.
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
     out = ragged_dot(lhs, rhs, gs, op=op)
     ref = _reference_ragged_dot(lhs, rhs, gs)
     _assert_close_fp8(out, ref, rel_fro_tol=5e-2, max_dev_tol=0.15, what="FP8 forward")
@@ -77,13 +90,14 @@ def test_fp8_forward_parity_with_empty_groups():
     # empty experts' weights must not contaminate neighboring groups' outputs.
     lhs, rhs, _ = _nonuniform(128, 128, 4, 128, seed=5)
     gs = jnp.asarray([0, 64, 0, 64], jnp.int32)
-    op = Fp8RaggedDotOp.init()
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)  # forward-only; see above
     out = ragged_dot(lhs, rhs, gs, op=op)
     ref = _reference_ragged_dot(lhs, rhs, gs)
     _assert_close_fp8(out, ref, rel_fro_tol=5e-2, max_dev_tol=0.15, what="FP8 forward (empty groups)")
 
 
 @hopper_only
+@mixed_wgmma
 def test_fp8_grads_parity_vs_reference():
     # Both gradients run as FP8 GEMMs and are approximate vs the f32 reference
     # grad, held to the 6e-2 FP8 tolerance. T is a multiple of 128 (the wgrad's
@@ -91,7 +105,7 @@ def test_fp8_grads_parity_vs_reference():
     # 5-token expert.
     lhs, rhs, _ = _nonuniform(128, 128, 4, 128, seed=3)
     gs = jnp.asarray([13, 5, 47, 63], jnp.int32)  # non-uniform, sums to T=128
-    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e4m3 (uniform backward)
+    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e5m2 (mixed backward)
 
     def loss(l, r):
         return ragged_dot(l, r, gs, op=op).astype(jnp.float32).sum()
@@ -107,6 +121,7 @@ def test_fp8_grads_parity_vs_reference():
 
 
 @hopper_only
+@mixed_wgmma
 def test_fp8_grad_rhs_parity_incl_boundaries():
     # The weight gradient (grad_rhs) contracts the ragged token dim in block_k=128
     # tiles via mgpu_dwgrad. This exercises the boundary appendix (pre-masked
@@ -136,6 +151,7 @@ def test_fp8_grad_rhs_parity_incl_boundaries():
 
 
 @hopper_only
+@mixed_wgmma
 def test_output_grad_scale_updates_across_steps():
     """The backward's delayed scaling updates output_grad_scale from gradient magnitudes.
 
@@ -190,5 +206,7 @@ def test_fp8_misaligned_shape_fails_fast(t, k, n, match):
     lhs = jnp.zeros((t, k), jnp.bfloat16)
     rhs = jnp.zeros((4, k, n), jnp.bfloat16)
     gs = jnp.asarray([t // 4] * 4, jnp.int32)
+    # Uniform rev_dtype so the op constructs on jax 0.10.x (incl. CPU CI); the
+    # shape contract under test is independent of the backward dtype recipe.
     with pytest.raises(ValueError, match=match):
-        ragged_dot(lhs, rhs, gs, op=Fp8RaggedDotOp.init())
+        ragged_dot(lhs, rhs, gs, op=Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn))

@@ -246,6 +246,15 @@ class RaggedDotOp(Protocol):
     def __call__(self, lhs, rhs, group_sizes) -> jnp.ndarray: ...
 
 
+# Mosaic-GPU wgmma accepts mixed E4M3/E5M2 operand dtypes from jax/jaxlib 0.11.0
+# (jax-ml/jax#38859); older releases reject them in the dialect verifier.
+_MIXED_WGMMA_MIN_JAX = (0, 11)
+
+
+def _jax_supports_mixed_fp8_wgmma() -> bool:
+    return tuple(int(p) for p in jax.__version__.split(".")[:2]) >= _MIXED_WGMMA_MIN_JAX
+
+
 class Fp8RaggedDotOp(OverwriteWithGradient):
     """Direct-quantization FP8 ``ragged_dot`` op for MoE grouped matmuls.
 
@@ -271,14 +280,13 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     (e.g. Blackwell hardware block scaling, which carries no delayed-scaling
     state) is a new op class.
 
-    Unlike [Fp8DotGeneralOp][], whose output-gradient dtype defaults to E5M2,
-    ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``: stock-jaxlib
-    Mosaic ``wgmma`` requires both operands of a contraction to share one
-    dtype, and re-quantizing *weights* down to E5M2 to match an E5M2 gradient
-    costs too much mantissa.  **The uniform ``e4m3 x e4m3`` backward is therefore
-    an approximation** -- the numerically correct output-gradient dtype is E5M2 --
-    and ``init`` rejects mixed dtype pairs until mixed-dtype ``wgmma`` is
-    available upstream (jax-ml/jax#38859).
+    Like [Fp8DotGeneralOp][], ``rev_dtype`` defaults to E5M2 -- the numerically
+    correct output-gradient dtype -- so both backward GEMMs are genuine mixed
+    ``e5m2 x e4m3`` contractions on the FP8 tensor cores.  Mixed-dtype
+    ``wgmma`` requires jax/jaxlib >= 0.11.0 (jax-ml/jax#38859); ``init``
+    fails fast on older jax.  Passing ``rev_dtype=jnp.float8_e4m3fn`` recovers
+    a uniform backward that lowers on jax 0.10.x (an approximation: E4M3
+    trades dynamic range for mantissa on the output gradient).
     """
 
     input_scale: jnp.ndarray
@@ -297,14 +305,15 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         amax_history_length: int = 1024,
         compute_dtype: DTypeLike | None = None,
         fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
-        rev_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e5m2,
     ):
-        if jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype):
+        if jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype) and not _jax_supports_mixed_fp8_wgmma():
             raise ValueError(
-                "Fp8RaggedDotOp requires fwd_dtype == rev_dtype: stock-jaxlib Mosaic wgmma only "
-                "contracts same-dtype operands, so the backward runs uniform GEMMs in fwd_dtype. "
-                f"Got fwd_dtype={jnp.dtype(fwd_dtype).name}, rev_dtype={jnp.dtype(rev_dtype).name}. "
-                "The genuine mixed E5M2×E4M3 backward needs mixed-dtype wgmma (jax-ml/jax#38859)."
+                f"Mixed FP8 operand dtypes (fwd_dtype={jnp.dtype(fwd_dtype).name}, "
+                f"rev_dtype={jnp.dtype(rev_dtype).name}) need the mixed-dtype wgmma shipped in "
+                f"jax >= {'.'.join(str(v) for v in _MIXED_WGMMA_MIN_JAX)} (jax-ml/jax#38859); "
+                f"this is jax {jax.__version__}. Pass rev_dtype=jnp.float8_e4m3fn for the "
+                "uniform-backward approximation."
             )
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),

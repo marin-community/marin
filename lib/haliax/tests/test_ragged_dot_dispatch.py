@@ -9,8 +9,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from haliax._src.ragged_dot_mgpu import mgpu_dwgrad, mgpu_ragged_dot
 from haliax.nn import ragged_dot
-from haliax.quantization import Fp8RaggedDotOp
+from haliax.quantization import Fp8RaggedDotOp, _jax_supports_mixed_fp8_wgmma
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
@@ -142,11 +143,58 @@ def _fp8_inputs(T=64, K=128, E=4, N=128, seed=0):
 
 def test_op_with_explicit_implementation_raises():
     lhs, rhs, gs = _fp8_inputs()
-    op = Fp8RaggedDotOp.init()
+    # Uniform rev_dtype so the op constructs on jax 0.10.x too; the dtype
+    # recipe is irrelevant to the dispatch contract under test.
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
     with pytest.raises(ValueError, match="mutually exclusive"):
         ragged_dot(lhs, rhs, gs, implementation="xla", op=op)
 
 
-def test_init_rejects_mixed_fp8_dtypes():
-    with pytest.raises(ValueError, match="fwd_dtype == rev_dtype"):
-        Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)
+@pytest.mark.skipif(_jax_supports_mixed_fp8_wgmma(), reason="guard only fires on jax < 0.11.0")
+def test_init_mixed_rev_dtype_fails_fast_on_old_jax():
+    # On jax without mixed-dtype wgmma (jax-ml/jax#38859) the default mixed
+    # recipe must fail at init with an actionable error, not deep inside
+    # Mosaic lowering on the first backward pass.
+    with pytest.raises(ValueError, match="38859"):
+        Fp8RaggedDotOp.init()
+    # The uniform approximation stays constructible.
+    Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
+
+
+@pytest.mark.skipif(not _jax_supports_mixed_fp8_wgmma(), reason="mixed wgmma needs jax >= 0.11.0")
+def test_init_defaults_to_mixed_backward():
+    op = Fp8RaggedDotOp.init()
+    assert jnp.dtype(op.fwd_dtype) == jnp.dtype(jnp.float8_e4m3fn)
+    assert jnp.dtype(op.rev_dtype) == jnp.dtype(jnp.float8_e5m2)
+
+
+# Dummy tile config: the dtype gates under test fire before any tile-shape or
+# kernel work, so the values never matter.
+_KERNEL_KW = dict(block_m=64, block_n=64, block_k=64, max_concurrent_steps=2, grid_block_n=1)
+
+
+def test_mgpu_ragged_dot_rejects_non_fp8_mixed_dtypes():
+    lhs = jnp.zeros((64, 64), jnp.bfloat16)
+    rhs = jnp.zeros((2, 64, 64), jnp.float8_e4m3fn)
+    gs = jnp.asarray([32, 32], jnp.int32)
+    with pytest.raises(NotImplementedError, match="same dtype or both be FP8"):
+        mgpu_ragged_dot(lhs, rhs, group_sizes=gs, **_KERNEL_KW)
+
+
+def test_mgpu_ragged_dot_accepts_mixed_fp8_pair_past_dtype_gate():
+    # k != k2 so the call dies on the later shape check -- reaching it proves
+    # the e5m2 x e4m3 pair passed the dtype gate that used to reject any
+    # mismatch, without needing a Hopper GPU to run the kernel.
+    lhs = jnp.zeros((64, 64), jnp.float8_e5m2)
+    rhs = jnp.zeros((2, 128, 64), jnp.float8_e4m3fn)
+    gs = jnp.asarray([32, 32], jnp.int32)
+    with pytest.raises(ValueError, match="must match"):
+        mgpu_ragged_dot(lhs, rhs, group_sizes=gs, **_KERNEL_KW)
+
+
+def test_mgpu_dwgrad_rejects_non_fp8_operands():
+    lhs_t = jnp.zeros((64, 128), jnp.bfloat16)
+    grad_t = jnp.zeros((64, 128), jnp.float8_e5m2)
+    gs = jnp.asarray([64, 64], jnp.int32)
+    with pytest.raises(NotImplementedError, match="expects FP8 operands"):
+        mgpu_dwgrad(lhs_t, grad_t, group_sizes=gs, **_KERNEL_KW)

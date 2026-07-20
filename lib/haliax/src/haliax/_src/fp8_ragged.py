@@ -26,9 +26,9 @@ helpers in ``_src/fp8.py``: activation, weight, and output-gradient scale +
 amax-history state all update through the custom VJPs as ``OverwriteWithGradient``
 cotangents.
 
-On stock jaxlib Mosaic ``wgmma`` rejects mixed operand dtypes, so ``rev_dtype``
-defaults to E4M3 and both backward GEMMs are uniform ``e4m3 x e4m3`` -- an
-approximation of the E5M2-gradient recipe (see ``Fp8RaggedDotOp``).
+``rev_dtype`` defaults to E5M2 (the numerically correct output-gradient dtype),
+so both backward GEMMs are genuine mixed ``e5m2 x e4m3`` contractions.  Mixed
+``wgmma`` needs jax >= 0.11.0 (jax-ml/jax#38859; see ``Fp8RaggedDotOp``).
 """
 
 import functools
@@ -48,6 +48,7 @@ from .fp8_cast_transpose import (
 from .ragged_dot_mgpu import mgpu_dwgrad, mgpu_ragged_dot
 
 _E4M3 = jnp.float8_e4m3fn
+_E5M2 = jnp.float8_e5m2
 
 # H100 per-block SMEM ceiling (bytes) for the Mosaic operand pipeline; see the
 # forward config note. The wgrad operand tiles are FP8 (1 byte), so the pipeline
@@ -164,7 +165,7 @@ def quantized_ragged_dot(
     lhs,  # [T, K] original operand: differentiable, receives grad_lhs
     rhs,  # [E, K, N] original operand: differentiable, receives grad_rhs
     group_sizes,  # [E]
-    rev_dtype,  # static: output-gradient FP8 dtype (E4M3 here)
+    rev_dtype,  # static: output-gradient FP8 dtype (E5M2 by default)
 ):
     """FP8 ragged forward of pre-quantized E4M3 operands; FP8 dgrad and wgrad.
 
@@ -266,7 +267,7 @@ def fp8_scaled_ragged_dot(
     rhs_amax_history,
     grad_amax_history,
     fwd_dtype=_E4M3,
-    rev_dtype=_E4M3,
+    rev_dtype=_E5M2,
 ):
     """FP8 ``ragged_dot`` with an E4M3 forward and an all-FP8 (dgrad + wgrad) backward.
 
@@ -278,8 +279,9 @@ def fp8_scaled_ragged_dot(
         lhs_scale, rhs_scale, grad_scale: ``[1]`` delayed-scaling scales.
         lhs_amax_history, rhs_amax_history, grad_amax_history: amax histories.
         fwd_dtype: forward-operand FP8 dtype (E4M3).
-        rev_dtype: output-gradient FP8 dtype. Defaults to E4M3 so both gradients are
-            uniform ``e4m3 x e4m3`` contractions that lower on stock jaxlib.
+        rev_dtype: output-gradient FP8 dtype. Defaults to E5M2, making both
+            gradients mixed ``e5m2 x e4m3`` contractions (needs jax >= 0.11.0,
+            jax-ml/jax#38859); E4M3 gives uniform GEMMs that lower on jax 0.10.x.
 
     Quantizes activations and expert weights to ``fwd_dtype`` with delayed
     per-tensor scaling and runs the forward and both gradients on the FP8 tensor

@@ -102,9 +102,9 @@ def warmup_op_state(op, lhs, rhs, group_sizes, steps=4):
     return op
 
 
-def bench_config(e, tpe, k, n, iters):
+def bench_config(e, tpe, k, n, iters, rev_dtype):
     lhs, rhs, group_sizes = make_inputs(e, tpe, k, n)
-    op = Fp8RaggedDotOp.init(amax_history_length=16)
+    op = Fp8RaggedDotOp.init(amax_history_length=16, rev_dtype=rev_dtype)
     op = warmup_op_state(op, lhs, rhs, group_sizes)
 
     def fp8_fwd(l, r, g):
@@ -146,11 +146,24 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--quick", action="store_true", help="operating point only")
+    ap.add_argument(
+        "--rev-dtype",
+        choices=("e5m2", "e4m3"),
+        default="e5m2",
+        help="output-gradient FP8 dtype: e5m2 = genuine mixed backward (jax >= 0.11.0, "
+        "jax-ml/jax#38859), e4m3 = uniform backward that also lowers on jax 0.10.x",
+    )
     args = ap.parse_args()
+    rev_dtype = {"e5m2": jnp.float8_e5m2, "e4m3": jnp.float8_e4m3fn}[args.rev_dtype]
 
     print(f"jax {jax.__version__}  device {jax.devices()[0].device_kind}")
-    print("FP8 ragged_dot (E4M3 fwd / E4M3 bwd, delayed per-tensor scaling) vs bf16 Triton baseline")
-    print("Backward: approximate same-dtype (uniform e4m3); genuine mixed e5m2 x e4m3 is a follow-up.")
+    print(
+        f"FP8 ragged_dot (E4M3 fwd / {args.rev_dtype.upper()} bwd, delayed per-tensor scaling) vs bf16 Triton baseline"
+    )
+    if args.rev_dtype == "e5m2":
+        print("Backward: genuine mixed e5m2 x e4m3 wgmma (requires jax >= 0.11.0, jax-ml/jax#38859).")
+    else:
+        print("Backward: uniform e4m3 x e4m3 (approximate output-gradient dtype).")
     # Show that group_sizes are genuinely non-uniform and dynamic.
     e0, tpe0 = OPERATING_POINT
     gs0 = nonuniform_group_sizes(e0, e0 * tpe0, jax.random.split(jax.random.key(0), 3)[2])
@@ -174,7 +187,7 @@ def main():
     for name, e, tpe in configs:
         k, n = SHAPES[name]
         try:
-            r = bench_config(e, tpe, k, n, args.iters)
+            r = bench_config(e, tpe, k, n, args.iters, rev_dtype)
             star = "  <-- operating point" if (e, tpe) == OPERATING_POINT and name == "w13" else ""
             print(
                 f"{name:5s} {e:3d} {tpe:6d} {k:5d} {n:5d} "

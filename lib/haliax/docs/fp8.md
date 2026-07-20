@@ -163,12 +163,9 @@ information on how it works.
 
 !!! warning "Experimental — scientific validation required before training use"
 
-    `ragged_dot` FP8 is opt-in and uses an **approximate backward**: the output
-    gradient is quantized to E4M3 rather than the numerically correct E5M2,
-    because stock jaxlib's Mosaic `wgmma` cannot mix operand dtypes (see
-    [the caveat below](#approximate-same-dtype-backward-caveat); blocked on
-    [jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859) — drop this
-    warning when the pinned jaxlib includes it).  bf16 remains the training
+    `ragged_dot` FP8 is opt-in.  The default backward quantizes the output
+    gradient to the numerically correct E5M2, which requires jax >= 0.11.0
+    (see [Mixed backward](#mixed-backward)).  bf16 remains the training
     default.  Validate loss curves and gradient norms before using FP8 in a
     production training run.
 
@@ -209,16 +206,19 @@ tensor (activation, expert weight, and output gradient), updated through the
 gradient hijack described in [How FP8 works](#how-fp8-works) above — and shares
 the same scaling-recipe helpers, so the two ops quantize identically.
 
-### Approximate same-dtype backward (caveat)
+### Mixed backward
 
-The numerically correct output-gradient dtype is E5M2, but stock jaxlib's Mosaic
-`wgmma` rejects mixed operand dtypes (E5M2 x E4M3).  Until mixed-dtype `wgmma`
-lands upstream ([jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859)),
-`rev_dtype` defaults to E4M3 so both gradients are uniform `e4m3 x e4m3`
-contractions.  This is an approximation: E4M3 has a lower dynamic range than E5M2
-and can distort large-magnitude output gradients.  The genuine mixed
-`e5m2 x e4m3` backward is a deferred follow-up.  Gradient relative-Frobenius error
-at the operating point is < 6e-2 (within the accepted FP8 tolerance).
+`rev_dtype` defaults to E5M2 -- the numerically correct output-gradient dtype --
+so both backward GEMMs are genuine mixed `e5m2 x e4m3` contractions on the FP8
+tensor cores.  Mixed-dtype Mosaic `wgmma` ships in jax/jaxlib >= 0.11.0
+([jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859)); on older jax
+`Fp8RaggedDotOp.init` fails fast with an actionable error.
+
+Passing `rev_dtype=jnp.float8_e4m3fn` recovers a uniform `e4m3 x e4m3` backward
+that also lowers on jax 0.10.x (an approximation: E4M3 trades dynamic range for
+mantissa, which can distort large-magnitude output gradients).  Gradient
+relative-Frobenius error at the operating point is < 6e-2 for both recipes
+(within the accepted FP8 tolerance).
 
 ### Performance (H100, d=2560 MoE operating point)
 
@@ -228,7 +228,10 @@ Measured fwd+bwd speedup vs the bf16 Triton baseline, with a throughput timer
 a per-call sync would penalize FP8's extra kernel launches and understate what
 a training run sees): **1.35×** at the operating point, **1.20×** at the w2
 (down-projection) point (**1.38×** / **1.23×** at the EP4 per-device batch of
-1280 tokens/expert).  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
+1280 tokens/expert; measured with the uniform `e4m3` backward -- the genuine
+mixed `e5m2 x e4m3` backward has repeatedly measured within run-to-run variance
+of it, so the correct E5M2 gradient costs nothing).  See
+`lib/haliax/bench/bench_fp8_ragged_dot.py` for the full
 sweep (E_local ∈ {16,32,64}, tokens/expert ∈ {512,1024,2048,4096}, w13 and w2
 shapes).
 

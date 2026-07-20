@@ -12,6 +12,8 @@
 #     (upstream hardcodes the output dtype to ``lhs.dtype``);
 #   * `out_scale` parameter: per-tensor dequant scale folded into the store;
 #   * `num_sms` read from the device instead of hardcoded;
+#   * mixed FP8 operand pairs (E5M2 x E4M3) are accepted; lowering them needs
+#     jax >= 0.11.0 (mixed-dtype wgmma, jax-ml/jax#38859);
 #   * the ``main``/``ref_``/profiling helpers are dropped.
 # ``mgpu_dwgrad`` additionally adapts ``transposed_ragged_dot`` for FP8: the
 # operands are token-contiguous ([K,T] x [N,T]) with the wgmma transpose on the
@@ -31,6 +33,8 @@ from jax import lax
 from jax import numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
+
+_FP8_DTYPES = (jnp.float8_e4m3fn, jnp.float8_e5m2)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,8 +109,10 @@ def mgpu_ragged_dot(
     out_dtype=None,
     out_scale=None,
 ) -> jax.Array:
-    if lhs.dtype != rhs.dtype:
-        raise NotImplementedError(f"lhs and rhs must have the same dtype, got {lhs.dtype} and {rhs.dtype}")
+    if lhs.dtype != rhs.dtype and not (lhs.dtype in _FP8_DTYPES and rhs.dtype in _FP8_DTYPES):
+        raise NotImplementedError(
+            f"lhs and rhs must have the same dtype or both be FP8 (mixed wgmma), got {lhs.dtype} and {rhs.dtype}"
+        )
     m, k = lhs.shape
     g, k2, n = rhs.shape
     _od = lhs.dtype if out_dtype is None else out_dtype
@@ -270,9 +276,8 @@ def mgpu_dwgrad(
     boundary step and cost ~12% of the kernel.  Only ``lhs_t`` needs
     the appendix: zeroing one operand of the ``wgmma`` zeroes the contribution.
     """
-    _fp8 = (jnp.float8_e4m3fn, jnp.float8_e5m2)
-    if lhs_t.dtype != grad_t.dtype or lhs_t.dtype not in _fp8:
-        raise NotImplementedError(f"mgpu_dwgrad expects same-dtype FP8 operands, got {lhs_t.dtype}, {grad_t.dtype}")
+    if lhs_t.dtype not in _FP8_DTYPES or grad_t.dtype not in _FP8_DTYPES:
+        raise NotImplementedError(f"mgpu_dwgrad expects FP8 operands, got {lhs_t.dtype}, {grad_t.dtype}")
     g = group_sizes.shape[0]
     k_dim, t_wide = lhs_t.shape
     n_dim, t = grad_t.shape
