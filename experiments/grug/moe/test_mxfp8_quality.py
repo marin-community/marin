@@ -125,6 +125,7 @@ def test_quality_diagnostic_models_isolate_grouped_and_dense_fp8() -> None:
     grouped = quality_model("mxfp8-grouped-only")
     dense = quality_model("fp8-dense-only")
     debug = quality_model("mxfp8-debug")
+    barrier = quality_model("mxfp8-barrier")
 
     assert grouped.fp8 == GrugFp8Config(
         dense=False,
@@ -140,6 +141,7 @@ def test_quality_diagnostic_models_isolate_grouped_and_dense_fp8() -> None:
     hybrid = quality_model("mxfp8").fp8
     assert hybrid is not None
     assert debug.fp8 == dataclasses.replace(hybrid, mxfp8_debug=True)
+    assert barrier.fp8 == dataclasses.replace(hybrid, mxfp8_wgrad_barrier=True)
 
 
 def test_eval_model_casts_weights_to_compute_dtype_without_casting_fp8_state() -> None:

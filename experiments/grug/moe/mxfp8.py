@@ -404,6 +404,8 @@ def _backward_pipeline(op: "MxFp8MoeMlpOp", res, g) -> dict:
         mma_tiler_mn=_WGRAD_TILER[0],
         cluster_shape_mn=_WGRAD_TILER[1],
     )
+    if op.wgrad_barrier:
+        dw2 = jax.lax.optimization_barrier(dw2)
     if op.debug:
         g_scale_bytes = jax.lax.bitcast_convert_type(g_sfc, jnp.uint8)
         h_scale_bytes = jax.lax.bitcast_convert_type(sfh_col, jnp.uint8)
@@ -501,6 +503,7 @@ class MxFp8MoeMlpOp:
 
     producer: Literal["auto", "cute", "xla"] = "auto"
     debug: bool = False
+    wgrad_barrier: bool = False
 
     def __call__(self, x, w13, w2, group_sizes):
         return _mxfp8_expert_mlp(self, x, w13, w2, group_sizes)
