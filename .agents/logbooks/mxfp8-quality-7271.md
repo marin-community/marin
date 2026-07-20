@@ -376,3 +376,9 @@ author: Matt Wittmann
 - Interpretation: at 54.0% of the schedule, all three held-out metrics favor BF16 for an eleventh consecutive gate. The metrics rebound from the unusually narrow step-16,000 gate, but remain within the earlier observed range; the smoothed train difference increases to three thousandths. The evidence continues to support a small persistent, non-monotonic quality cost without establishing the final cooldown-tail verdict.
 - Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. Thirteenth hourly recovery checkpoints are available at BF16 step 16,384 and MXFP8 step 17,435.
 - Next action: continue every scheduled evaluation and hourly checkpoint through step 31,474; publish the next issue update at a materially later milestone or if the quality/health conclusion changes.
+
+### 2026-07-20 10:18 - MXFP8Q-007 fourteenth hourly checkpoints pass
+
+- Result: both arms completed their fourteenth hourly checkpoint write to region-local S3. BF16 saved step 17,654 and MXFP8 saved step 18,789; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
+- Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
+- Next action: continue monitoring finite telemetry and the scheduled step-18,000 evaluations.
