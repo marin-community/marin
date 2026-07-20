@@ -1696,3 +1696,82 @@ author: mcwitt
   `MXFP8BlockScaling` dense path against the same per-tensor baseline. This
   provides an independent implementation control before concluding that
   only unavailable epilogue fusion could meet the gate.
+
+### 2026-07-20 16:27 - MXFP8-U003: TE reaches the projected step gate; in-repo CuTe does not
+
+- Hypothesis: an independent optimized MXFP8 implementation, optionally with
+  fused Q/K/V and shared gate/up parameter layouts, can reduce producer and
+  launch costs enough to make uniform MXFP8 plausible at full-step scale.
+- Commit Hashes: `29071f8ee` for the Transformer Engine separate-projection
+  control, `9e7b7653e` for its fused-projection control, and `db8b919f5` for
+  the equivalent Marin CuTe fused-projection benchmark.
+- Transformer Engine command (two replications, changing `r1` to `r2`):
+  `/home/marin/projects/marin/.venv/bin/iris --cluster=cw-us-east-08a job run
+  --no-wait --user mwittmann --job-name mxfp8-uniform-te-fused-r1 --gpu
+  GB200x1 --enable-extra-resources --cpu 16 --memory 96g --extra gpu -- bash
+  experiments/grug/moe/standalone/run_te_bench.sh python
+  experiments/grug/moe/standalone/bench_te_dense.py --git-sha 9e7b7653e
+  --shape q_o_shared_5120x5120 --shape kv_5120x1280
+  --projection-fusion --tokens 65536 --warmup 10 --iters 50 --out
+  /dev/stdout`. The runner installs TE 2.16.0 JAX against CUDA 13.0 and
+  cuDNN 9.19. NVIDIA's documented `make_dot_general_cls(MXFP8BlockScaling())`
+  path is used directly.
+- CuTe command: the same Iris resources and timing protocol, running
+  `bench_mxfp8_dense.py --git-sha db8b919f5 --producer cute
+  --projection-fusion` under job names `mxfp8-uniform-cute-fused-r1/r2`.
+- Separate-projection TE control (`replicated`):
+
+  | replication | 5120x5120 TE / per-tensor | 5120x1280 TE / per-tensor | weighted TE / per-tensor |
+  |---|---:|---:|---:|
+  | r1 | 4.480 / 4.105 ms | 1.455 / 1.234 ms | 1.1009x |
+  | r2 | 4.115 / 3.855 ms | 1.352 / 1.112 ms | 1.0829x |
+
+  TE lowered to `te_gemm_v2_ffi` and `te_dbias_quantize_ffi`, not JAX's
+  native producer or a BF16 fallback. Output/dgrad/wgrad errors were about
+  `3.71e-2/3.71e-2/3.80e-2`, lower than the per-tensor control.
+- Fused representation: Q/K/V are one `5120x7680` parameter/GEMM and shared
+  gate/up are one `5120x10240` parameter/GEMM. O and shared down remain two
+  separate square projections. The baseline splits the same combined BF16
+  parameter and runs the current per-tensor operator independently, so the
+  comparison charges all forward, dgrad, and wgrad work without a parameter
+  concatenation in either arm.
+- Result (`replicated`, two independent jobs per implementation):
+
+  | implementation | replication | fused QKV MX / tensor | fused gate/up MX / tensor | complete dense MX / tensor |
+  |---|---|---:|---:|---:|
+  | TE 2.16 | r1 | 6.592 / 6.492 ms | 8.445 / 8.078 ms | **1.0608x** |
+  | TE 2.16 | r2 | 6.218 / 6.184 ms | 8.173 / 7.716 ms | **1.0539x** |
+  | Marin CuTe | r1 | 6.885 / 6.356 ms | 8.927 / 7.971 ms | **1.1345x** |
+  | Marin CuTe | r2 | 7.074 / 6.454 ms | 9.120 / 8.139 ms | **1.1426x** |
+
+  Every fused CuTe row compiled three `__cudnn$blockScaledDot` calls plus
+  `CuteDSLRT_NvJaxCutlassCall`; its errors matched the validated MXFP8 class.
+  Fusion improves the earlier CuTe 1.2125x median dense ratio but does not
+  remove enough producer cost.
+- Full-step projection: the matched hybrid production run processes
+  `1024*4096` tokens at 392,287 tok/s, or 10.6919 s/step. At 48 layers, the
+  measured dense deltas project as follows. This is an additive kernel-time
+  estimate, not a replacement for a matched full-step run.
+
+  | implementation | replication | added dense time/step | projected hybrid throughput ratio | projected tok/s |
+  |---|---:|---:|---:|---:|
+  | TE fused | r1 | 66.0 ms | **0.9939x** | 389,881 |
+  | TE fused | r2 | 56.0 ms | **0.9948x** | 390,242 |
+  | CuTe fused | r1 | 145.6 ms | **0.9866x** | 387,017 |
+  | CuTe fused | r2 | 156.1 ms | **0.9856x** | 386,643 |
+
+- Artifacts: `/mwittmann/mxfp8-uniform-te-dense-r1/r2`,
+  `/mwittmann/mxfp8-uniform-te-fused-r1/r2`, and
+  `/mwittmann/mxfp8-uniform-cute-fused-r1/r2`; all six succeeded with exit 0
+  and retain full JSON in durable task logs.
+- Interpretation: uniform MXFP8 is not physically impossible: NVIDIA's
+  optimized producer plus fused parameter layout clears the 99% *projected*
+  full-step gate in both replications. The currently integrated CuTe producer
+  misses it in both replications, and its known 16-node executable-load failure
+  independently blocks a production run. The TE result cannot yet be called a
+  uniform Grug demonstration because TE is not packaged in Marin and the
+  projection has not been tested through Grug's sharding/remat/full-step graph.
+- Next action: prototype TE's stateless `dense.dense` call without Flax state,
+  then stop if packaging or sharding prevents a bounded Grug smoke. If the
+  direct call works, add an experiment-only fused QKV/gate-up layout and apply
+  the 4-8 GPU full-step gate before considering a 64-GPU run.
