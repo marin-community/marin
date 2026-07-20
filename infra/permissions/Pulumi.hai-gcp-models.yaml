@@ -12,5 +12,20 @@ config:
     - marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   marin-permissions:id_token_service_accounts:
     - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+  marin-permissions:secret_metadata_viewers:
+    - marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+  marin-permissions:secret_iam_grants:
+    marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com:
+      - marin-status-page-github-token
+      - cloudsql-grafana-password
+      - marin-grafana-cw-read-token
+      - marin-grafana-slack-webhook
+  marin-permissions:artifact_registry_grants:
+    - service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+      location: us-central1
+      repositories:
+        - marin-grafana
+  marin-permissions:iap_iam_managers:
+    - marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6QvsjVzr0PISU10T8p7CBI0p31YV97owWqgbmeAU4wUSSQCdtF6ivDSFDEI7pl9JQ4dMHYbmdE2rjMYZjjF9S6S3BiIx2j9acg0JGF88fZT8lDPrScl/KjBkTV76oECYPg18C/ry5YsXaAE=

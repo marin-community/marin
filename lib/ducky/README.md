@@ -180,6 +180,28 @@ code, dispatch that workflow with a `deploy_generation` override. The deploy bui
 Vue dashboard itself on every roll (node/npm required on the deploying machine). For a
 manual roll:
 
+The first deployment requires these repository secrets to be migrated into version 1 of the
+corresponding Secret Manager resources:
+
+| GitHub secret | Secret Manager resource |
+| --- | --- |
+| `DUCKY_GCS_HMAC_KEY_ID` | `ducky-gcs-hmac-key-id` |
+| `DUCKY_GCS_HMAC_SECRET` | `ducky-gcs-hmac-secret` |
+| `R2_ACCESS_KEY_ID` | `marin-r2-access-key-id` |
+| `R2_SECRET_ACCESS_KEY` | `marin-r2-secret-key` |
+| `DUCKY_CW_SECRET_KEY` | `ducky-cw-secret-key` |
+
+Create each resource and add its value without putting the payload on the command line:
+
+```bash
+gcloud secrets create SECRET_NAME --project=hai-gcp-models --replication-policy=automatic
+gcloud secrets versions add SECRET_NAME --project=hai-gcp-models --data-file=-
+```
+
+Then add the five names under
+`marin-permissions:secret_access_grants.iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com`
+in `infra/permissions/Pulumi.hai-gcp-models.yaml` and apply that stack before rolling Ducky.
+
 ```bash
 uv sync --all-packages --extra deploy
 cd infra/ducky

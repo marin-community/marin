@@ -12,6 +12,33 @@ WORKLOAD_IDENTITY_USER = "roles/iam.workloadIdentityUser"
 STATE_WRITER = "roles/storage.objectAdmin"
 KMS_ENCRYPTER_DECRYPTER = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
 SERVICE_ACCOUNT_TOKEN_CREATOR = "roles/iam.serviceAccountTokenCreator"
+SECRET_METADATA_VIEWER = "roles/secretmanager.viewer"
+SECRET_ACCESSOR = "roles/secretmanager.secretAccessor"
+SECRET_IAM_ROLE_ID = "marinSecretIamManager"
+SECRET_IAM_PERMISSIONS = (
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.getIamPolicy",
+    "secretmanager.secrets.setIamPolicy",
+)
+ARTIFACT_REGISTRY_WRITER = "roles/artifactregistry.writer"
+IAP_IAM_ROLE_ID = "marinIapIamManager"
+IAP_IAM_PERMISSIONS = (
+    "iap.webServices.getIamPolicy",
+    "iap.webServices.setIamPolicy",
+)
+
+
+@dataclass(frozen=True)
+class GcpSecretGrant:
+    service_account: str
+    secrets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GcpArtifactRegistryGrant:
+    service_account: str
+    location: str
+    repositories: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -26,6 +53,11 @@ class GcpDeployPermissionsArgs:
     kms_key: str
     service_accounts: tuple[str, ...]
     id_token_service_accounts: frozenset[str] = frozenset()
+    secret_metadata_viewers: frozenset[str] = frozenset()
+    secret_iam_grants: tuple[GcpSecretGrant, ...] = ()
+    secret_access_grants: tuple[GcpSecretGrant, ...] = ()
+    artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
+    iap_iam_managers: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -75,6 +107,21 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
     )
 
 
+def _validate_permission_accounts(args: GcpDeployPermissionsArgs) -> None:
+    deploy_accounts = set(args.service_accounts)
+    secret_accounts = (
+        args.secret_metadata_viewers
+        | {grant.service_account for grant in args.secret_iam_grants}
+        | {grant.service_account for grant in args.secret_access_grants}
+    )
+    permission_accounts = (
+        secret_accounts | {grant.service_account for grant in args.artifact_registry_grants} | args.iap_iam_managers
+    )
+    unknown_accounts = permission_accounts - deploy_accounts
+    if unknown_accounts:
+        raise ValueError(f"permissions contain undeclared deploy accounts: {sorted(unknown_accounts)!r}")
+
+
 class GcpDeployPermissions(pulumi.ComponentResource):
     """Grant main-branch GitHub workflows access to deploy through existing accounts.
 
@@ -92,6 +139,7 @@ class GcpDeployPermissions(pulumi.ComponentResource):
     ) -> None:
         super().__init__("marin:gcp:GcpDeployPermissions", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider, protect=True)
+        _validate_permission_accounts(args)
         for permission_set in deploy_permission_sets(args):
             gcp.serviceaccount.IAMMember(
                 f"{permission_set.account_id}-github-main",
@@ -122,5 +170,80 @@ class GcpDeployPermissions(pulumi.ComponentResource):
                 member=permission_set.service_account_member,
                 opts=child,
             )
+
+        for email in args.secret_metadata_viewers:
+            gcp.projects.IAMMember(
+                f"{_account_id(args.project, email)}-secret-metadata",
+                project=args.project,
+                role=SECRET_METADATA_VIEWER,
+                member=f"serviceAccount:{email}",
+                opts=child,
+            )
+
+        if args.secret_iam_grants:
+            secret_iam_role = gcp.projects.IAMCustomRole(
+                "secret-iam-manager",
+                project=args.project,
+                role_id=SECRET_IAM_ROLE_ID,
+                title="Marin Secret IAM Manager",
+                description="Manage IAM policies on selected deployment secrets without reading payloads.",
+                permissions=list(SECRET_IAM_PERMISSIONS),
+                opts=child,
+            )
+            for grant in args.secret_iam_grants:
+                account_id = _account_id(args.project, grant.service_account)
+                for secret in grant.secrets:
+                    gcp.secretmanager.SecretIamMember(
+                        f"{account_id}-{secret}-iam-manager",
+                        project=args.project,
+                        secret_id=secret,
+                        role=secret_iam_role.name,
+                        member=f"serviceAccount:{grant.service_account}",
+                        opts=child,
+                    )
+
+        for grant in args.secret_access_grants:
+            account_id = _account_id(args.project, grant.service_account)
+            for secret in grant.secrets:
+                gcp.secretmanager.SecretIamMember(
+                    f"{account_id}-{secret}-accessor",
+                    project=args.project,
+                    secret_id=secret,
+                    role=SECRET_ACCESSOR,
+                    member=f"serviceAccount:{grant.service_account}",
+                    opts=child,
+                )
+
+        for grant in args.artifact_registry_grants:
+            account_id = _account_id(args.project, grant.service_account)
+            for repository in grant.repositories:
+                gcp.artifactregistry.RepositoryIamMember(
+                    f"{account_id}-{repository}-writer",
+                    project=args.project,
+                    location=grant.location,
+                    repository=repository,
+                    role=ARTIFACT_REGISTRY_WRITER,
+                    member=f"serviceAccount:{grant.service_account}",
+                    opts=child,
+                )
+
+        if args.iap_iam_managers:
+            iap_iam_role = gcp.projects.IAMCustomRole(
+                "iap-iam-manager",
+                project=args.project,
+                role_id=IAP_IAM_ROLE_ID,
+                title="Marin IAP IAM Manager",
+                description="Manage IAP policies on web services without accessing them.",
+                permissions=list(IAP_IAM_PERMISSIONS),
+                opts=child,
+            )
+            for email in args.iap_iam_managers:
+                gcp.projects.IAMMember(
+                    f"{_account_id(args.project, email)}-iap-iam-manager",
+                    project=args.project,
+                    role=iap_iam_role.name,
+                    member=f"serviceAccount:{email}",
+                    opts=child,
+                )
 
         self.register_outputs({})
