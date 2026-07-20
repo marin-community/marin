@@ -135,3 +135,12 @@ author: Matt Wittmann
 - Result: both child gangs and coordinators succeeded after 20 finite steps and forced evaluation. Final BF16/MXFP8 train loss=11.53080/11.53457 (delta +0.00377); eval loss=11.50498/11.50874 (+0.00375); Paloma macro=11.53829/11.54153 (+0.00323); uncheatable macro=11.52126/11.52456 (+0.00330). Across 18 non-compile throughput samples, BF16 averaged 795,878 tok/s and MXFP8 averaged 848,859 tok/s: 1.0666x, or +6.66%.
 - Interpretation: the first-backward defect is cleared at the original smoke horizon, quality tracks closely in the warmup prefix, and the guarded treatment remains faster. This is a launch gate, not the issue's compute-optimal quality conclusion.
 - Next action: launch and babysit the matched 31,474-step, 66.006B-token pair; evaluate same-token quality and wall-time-matched loss from the complete histories.
+
+### 2026-07-19 20:15 - MXFP8Q-007 full pair launched
+
+- Hypothesis: over the compute-optimal 66.006B-token schedule, guarded hybrid MXFP8 remains quality-neutral at matched tokens and reaches the BF16 loss frontier sooner in wall time.
+- Commit Hash: `d11d6ac54` (treatment implementation `f8be94f87`).
+- Command: coordinators `/mwittmann/mxfp8q-007-full-{bf16,mxfp8}-coord`, each launching 8xGB200x4 non-preemptible replicas with pair ID `MXFP8Q-007-full`; default 31,474-step horizon.
+- Config: d2560/L26/E128/top-4/f1280/shared-f2560, seq4096, batch512, seed0; identical data order, optimizer, schedule, ring/scan/remat topology, Paloma and uncheatable eval; BF16 versus hybrid grouped MXFP8 + dense per-tensor FP8. Hourly and forced-final checkpoints use region-local S3.
+- Result: both 32-GPU child gangs allocated and entered `running`; first-step/W&B finite gate pending.
+- Next action: require finite first gradients on both arms, then babysit progress, hourly checkpoints, evaluation, and terminal state without changing the cluster.
