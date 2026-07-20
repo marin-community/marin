@@ -54,6 +54,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
 
 from experiments.grug.moe.mxfp8 import MXFP8_QWEIGHT_CHECKPOINT_NAME, MxFp8MoeMlpOp
+from experiments.grug.moe.mxfp8_dense import mxfp8_dense_dot
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
@@ -173,18 +174,20 @@ class GrugFp8Config:
     collectives for ``"mxfp8"`` (MXFP8-000b decision; explicit ``wire=True``
     with mxfp8 is rejected).
 
-    Unless ``dense`` is disabled, the dense GEMMs — attention q/k/v/o and the
-    shared-expert MLP — also run as FP8 cuBLASLt matmuls with delayed
-    per-tensor scaling ([haliax.quantization.Fp8DotGeneralOp][]) under EITHER
-    recipe (per MXFP8-001b, per-tensor beats native mxfp8 dense on sm100). The
-    router, attention gate, GatedNorm, embedding, and lm-head projections stay
-    in full precision.
+    Unless ``dense`` is disabled, ``dense_recipe`` controls attention q/k/v/o
+    and shared-expert MLP projections. ``"per_tensor"`` uses delayed scaling
+    ([haliax.quantization.Fp8DotGeneralOp][]), while ``"mxfp8"`` uses stateless
+    Transformer Engine MXFP8 block scaling. The default preserves the hybrid
+    recipe where grouped expert GEMMs use MXFP8 and dense GEMMs use per-tensor
+    scaling. The router, attention gate, GatedNorm, embedding, and lm-head
+    projections stay in full precision.
     """
 
     wire: bool | None = None
     dense: bool = True
     grouped: bool = True
     recipe: Literal["auto", "per_tensor", "mxfp8"] = "auto"
+    dense_recipe: Literal["per_tensor", "mxfp8"] = "per_tensor"
     mxfp8_producer: Literal["auto", "cute", "xla"] = "auto"
     # Save the fwd-orientation MXFP8 weight copies across the remat recompute
     # (weights change once per step; full remat otherwise re-quantizes them in
@@ -196,6 +199,10 @@ class GrugFp8Config:
     def __post_init__(self) -> None:
         if self.recipe not in ("auto", "per_tensor", "mxfp8"):
             raise ValueError(f"recipe must be 'auto', 'per_tensor', or 'mxfp8', got {self.recipe!r}")
+        if self.dense_recipe not in ("per_tensor", "mxfp8"):
+            raise ValueError(f"dense_recipe must be 'per_tensor' or 'mxfp8', got {self.dense_recipe!r}")
+        if self.recipe == "per_tensor" and self.dense_recipe == "mxfp8":
+            raise ValueError("dense_recipe='mxfp8' requires recipe='auto' or recipe='mxfp8'")
         if self.recipe == "mxfp8":
             if self.wire:
                 raise ValueError(
@@ -519,7 +526,7 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         fp8_ops = None
-        if cfg.fp8 is not None and cfg.fp8.dense:
+        if cfg.fp8 is not None and cfg.fp8.dense and cfg.fp8.dense_recipe == "per_tensor":
             fp8_ops = AttnFp8Ops.init(cfg.fp8.amax_history_length)
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
@@ -543,11 +550,18 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        if self.fp8_ops is None:
+        dense_recipe = self.cfg.fp8.dense_recipe if self.cfg.fp8 is not None and self.cfg.fp8.dense else None
+        if dense_recipe is None:
             q_proj = jnp.einsum("bsh,hd->bsd", x, self.w_q)
             k_proj = jnp.einsum("bsh,hd->bsd", x, self.w_k)
             v_proj = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        elif dense_recipe == "mxfp8":
+            proj_spec = P(_BATCH_AXES, None, "model")
+            q_proj = mxfp8_dense_dot(x, self.w_q, out_sharding=proj_spec)
+            k_proj = mxfp8_dense_dot(x, self.w_k, out_sharding=proj_spec)
+            v_proj = mxfp8_dense_dot(x, self.w_v, out_sharding=proj_spec)
         else:
+            assert self.fp8_ops is not None
             proj_spec = P(_BATCH_AXES, None, "model")
             q_proj = _fp8_dense_dot(self.fp8_ops.q, x, self.w_q, out_sharding=proj_spec)
             k_proj = _fp8_dense_dot(self.fp8_ops.k, x, self.w_k, out_sharding=proj_spec)
@@ -631,8 +645,11 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        if self.fp8_ops is None:
+        if dense_recipe is None:
             return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        if dense_recipe == "mxfp8":
+            return mxfp8_dense_dot(attn_out, self.w_o, out_sharding=batch_spec)
+        assert self.fp8_ops is not None
         return _fp8_dense_dot(self.fp8_ops.o, attn_out, self.w_o, out_sharding=batch_spec)
 
 
@@ -684,6 +701,7 @@ class DenseMLP(eqx.Module):
     w_up: jax.Array
     w_down: jax.Array
     fp8_ops: SharedMlpFp8Ops | None
+    dense_recipe: Literal["per_tensor", "mxfp8"] | None = eqx.field(static=True)
 
     @staticmethod
     def init(
@@ -696,13 +714,17 @@ class DenseMLP(eqx.Module):
     ) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         fp8_ops = None
+        dense_recipe = None
         if fp8 is not None and fp8.dense:
-            fp8_ops = SharedMlpFp8Ops.init(fp8.amax_history_length)
+            dense_recipe = fp8.dense_recipe
+            if dense_recipe == "per_tensor":
+                fp8_ops = SharedMlpFp8Ops.init(fp8.amax_history_length)
         return DenseMLP(
             w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
             w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
             fp8_ops=fp8_ops,
+            dense_recipe=dense_recipe,
         )
 
     @named_call
@@ -719,11 +741,17 @@ class DenseMLP(eqx.Module):
 
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        if self.fp8_ops is None:
+        if self.dense_recipe is None:
             gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
             up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
             out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
+        elif self.dense_recipe == "mxfp8":
+            hidden_spec = P(_BATCH_AXES, "model")
+            gate = mxfp8_dense_dot(x_flat, self.w_gate, out_sharding=hidden_spec)
+            up = mxfp8_dense_dot(x_flat, self.w_up, out_sharding=hidden_spec)
+            out_flat = mxfp8_dense_dot(activation_fn(gate) * up, self.w_down, out_sharding=_batch_spec())
         else:
+            assert self.fp8_ops is not None
             hidden_spec = P(_BATCH_AXES, "model")
             gate = _fp8_dense_dot(self.fp8_ops.gate, x_flat, self.w_gate, out_sharding=hidden_spec)
             up = _fp8_dense_dot(self.fp8_ops.up, x_flat, self.w_up, out_sharding=hidden_spec)

@@ -74,6 +74,12 @@ def _parse():
     p.add_argument("--fp8", action="store_true", help="FP8 grouped + dense GEMMs + wire collectives")
     p.add_argument("--no-fp8-wire", action="store_true", help="with --fp8: keep EP collectives bf16")
     p.add_argument("--no-fp8-dense", action="store_true", help="with --fp8: keep dense GEMMs bf16")
+    p.add_argument(
+        "--fp8-dense-recipe",
+        default="per_tensor",
+        choices=["per_tensor", "mxfp8"],
+        help="dense-GEMM recipe: per_tensor delayed scaling or stateless Transformer Engine mxfp8",
+    )
     p.add_argument("--no-fp8-grouped", action="store_true", help="with --fp8: keep expert GEMMs bf16 (dense-only arm)")
     p.add_argument(
         "--fp8-recipe",
@@ -138,6 +144,7 @@ def main():
             dense=not a.no_fp8_dense,
             grouped=not a.no_fp8_grouped,
             recipe=a.fp8_recipe,
+            dense_recipe=a.fp8_dense_recipe,
             mxfp8_producer=a.mxfp8_producer,
             mxfp8_save_qweights=a.mxfp8_save_qweights,
         )
@@ -229,7 +236,13 @@ def main():
             "fp8": (
                 None
                 if fp8 is None
-                else {"wire": fp8.wire, "dense": fp8.dense, "grouped": fp8.grouped, "recipe": fp8.recipe}
+                else {
+                    "wire": fp8.wire,
+                    "dense": fp8.dense,
+                    "grouped": fp8.grouped,
+                    "recipe": fp8.recipe,
+                    "dense_recipe": fp8.dense_recipe,
+                }
             ),
             "capacity_factor_note": "branch-hardcoded 1.25 (standalone default was 1.0)",
             "num_gpus": a.num_gpus,

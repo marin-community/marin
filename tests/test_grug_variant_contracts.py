@@ -12,6 +12,7 @@ import dataclasses
 import importlib
 import json
 import logging
+import sys
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -324,8 +325,8 @@ def test_grug_moe_fp8_config_threads_ops_into_expert_mlp():
         return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(amax_history_length=8))
-        gemm_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(wire=False))
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="per_tensor", amax_history_length=8))
+        gemm_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="per_tensor", wire=False))
         bf16_model = eqx.filter_eval_shape(build, None)
 
     fp8_mlp = fp8_model.blocks[0].mlp.expert_mlp
@@ -353,8 +354,8 @@ def test_grug_moe_fp8_config_threads_dense_ops():
         return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(amax_history_length=8))
-        moe_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(dense=False))
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="mxfp8", amax_history_length=8))
+        moe_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="per_tensor", dense=False))
         bf16_model = eqx.filter_eval_shape(build, None)
 
     attn = fp8_model.blocks[0].attn
@@ -372,6 +373,56 @@ def test_grug_moe_fp8_config_threads_dense_ops():
 
     assert bf16_model.blocks[0].attn.fp8_ops is None
     assert bf16_model.blocks[0].shared.fp8_ops is None
+
+
+def test_grug_moe_fp8_dense_recipe_config_contract():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    hybrid = model_module.GrugFp8Config(recipe="mxfp8")
+    uniform = model_module.GrugFp8Config(recipe="mxfp8", dense_recipe="mxfp8")
+    auto = model_module.GrugFp8Config(recipe="auto", dense_recipe="mxfp8")
+
+    assert hybrid.dense_recipe == "per_tensor"
+    assert uniform.dense_recipe == "mxfp8"
+    assert auto.dense_recipe == "mxfp8"
+    with pytest.raises(ValueError, match="dense_recipe"):
+        model_module.GrugFp8Config(dense_recipe="blockwise")
+    with pytest.raises(ValueError, match="dense_recipe='mxfp8'"):
+        model_module.GrugFp8Config(recipe="per_tensor", dense_recipe="mxfp8")
+
+
+def test_grug_moe_uniform_mxfp8_shape_init_has_no_delayed_dense_state_or_te_import():
+    te_modules_before = {
+        name for name in sys.modules if name == "transformer_engine" or name.startswith("transformer_engine.")
+    }
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+
+    def build(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(
+            cfg,
+            fp8=fp8,
+            hidden_dim=128,
+            intermediate_dim=128,
+            shared_expert_intermediate_dim=128,
+        )
+        return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        uniform_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="mxfp8", dense_recipe="mxfp8"))
+        hybrid_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="mxfp8"))
+        bf16_model = eqx.filter_eval_shape(build, None)
+
+    def array_leaf_count(tree):
+        return len(jax.tree.leaves(tree))
+
+    assert array_leaf_count(uniform_model) == array_leaf_count(bf16_model)
+    assert array_leaf_count(hybrid_model) > array_leaf_count(uniform_model)
+    te_modules_after = {
+        name for name in sys.modules if name == "transformer_engine" or name.startswith("transformer_engine.")
+    }
+    assert te_modules_after == te_modules_before
 
 
 def test_grug_moe_fp8_dense_config_rejects_misaligned_dims():
@@ -446,7 +497,7 @@ def test_grug_moe_fp8_state_gets_no_optimizer_moments():
         return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        fp8_state = eqx.filter_eval_shape(build, model_module.GrugFp8Config())
+        fp8_state = eqx.filter_eval_shape(build, model_module.GrugFp8Config(recipe="per_tensor"))
         bf16_state = eqx.filter_eval_shape(build, None)
 
     # The fp8 model carries extra quantization-state leaves in params, but none
@@ -461,7 +512,10 @@ def test_grug_moe_ema_update_carries_current_fp8_state():
 
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=64, seq_len=4)
     cfg = dataclasses.replace(
-        cfg, fp8=model_module.GrugFp8Config(amax_history_length=4), hidden_dim=128, intermediate_dim=128
+        cfg,
+        fp8=model_module.GrugFp8Config(recipe="per_tensor", amax_history_length=4),
+        hidden_dim=128,
+        intermediate_dim=128,
     )
 
     with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
