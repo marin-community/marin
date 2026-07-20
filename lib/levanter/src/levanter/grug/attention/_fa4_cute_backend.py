@@ -929,6 +929,13 @@ _segmented_flash_attention_bias_custom_vjp.defvjp(
 )
 
 
+# Query-block size for the banded d_bias scan. Each block contracts against a contiguous
+# [B, block+window-1, Hq, D] key slice and forms [B, block, block+window-1, Hq] score/dP tiles, so this
+# bounds peak backward memory. Larger blocks reduce per-block launch overhead and redundant key reads
+# (adjacent blocks overlap by window-1) at the cost of a slightly larger tile.
+_D_BIAS_QUERY_BLOCK = 128
+
+
 def _rel_pos_bias_band_grad(
     q: jax.Array,
     k: jax.Array,
@@ -961,41 +968,57 @@ def _rel_pos_bias_band_grad(
     window = bias.shape[3]
     compute_dtype = q.dtype
 
-    k_f = align_kv_heads(k, num_q_heads=q_heads).astype(jnp.float32)  # [B, S, Hq, D]
-    v_f = align_kv_heads(v, num_q_heads=q_heads).astype(jnp.float32)  # [B, S, Hq, Dv]
-    q_f = q.astype(jnp.float32)
+    k_c = align_kv_heads(k, num_q_heads=q_heads)  # [B, S, Hq, D], compute dtype
+    v_c = align_kv_heads(v, num_q_heads=q_heads)  # [B, S, Hq, Dv]
+    v_head_dim = v_c.shape[-1]
     o_f = out.astype(jnp.float32)
-    do_f = dout.astype(jnp.float32)
-    bias_f = bias.astype(jnp.float32)  # [B, S, Hq, window]
 
     # D_i = rowsum(dO ∘ O) over head_dim -> [B, S, Hq]; lse arrives as [B, Hq, S].
-    d_row = jnp.sum(do_f * o_f, axis=-1)  # [B, S, Hq]
+    d_row = jnp.sum(dout.astype(jnp.float32) * o_f, axis=-1)  # [B, S, Hq]
     lse_bshq = jnp.transpose(lse, (0, 2, 1))  # [B, S, Hq]
 
-    # A dense per-(i, offset) gather would materialize [B, S, window, Hq, D] -- hundreds of GB at
-    # seq 4096 / window 1024. Bound peak memory by scanning over blocks of query rows; only the query
-    # axis is chunked (keys stay full), so the validated per-row math runs unchanged per block.
-    block = min(64, seq_len)
+    # Per query block, contract Q/dO against a *contiguous* key slice covering that block's window
+    # (dense tensor-core matmul, compute dtype, fp32 accumulation), then extract the banded diagonals.
+    # This avoids the naive per-(query, offset) gather, which materializes [B, block, window, Hq, D]
+    # (tens of GB at seq 4096 / window 1024) and is bandwidth-bound; here the score/dP tiles are only
+    # [B, block, block+window-1, Hq]. Chunking over query blocks bounds peak memory; the per-element
+    # math (biased softmax-input gradient, in fp32) is unchanged, so it stays bit-close to the naive
+    # form (fp32) and matches the kernel's own bf16 QK/dP recompute (bf16). ``block+window-1`` keys are
+    # left-padded by ``window-1`` so each block's slice starts at its own query offset.
+    block = min(_D_BIAS_QUERY_BLOCK, seq_len)
     num_blocks = (seq_len + block - 1) // block
     padded = num_blocks * block
-    offsets = jnp.arange(window)
+    key_range = block + window - 1
 
     def _pad_q(x: jax.Array) -> jax.Array:
         pad = [(0, 0)] * x.ndim
         pad[1] = (0, padded - seq_len)
         return jnp.pad(x, pad)
 
-    q_p = _pad_q(q_f).reshape(batch, num_blocks, block, q_heads, head_dim)
-    do_p = _pad_q(do_f).reshape(batch, num_blocks, block, q_heads, v_f.shape[-1])
+    def _pad_k(x: jax.Array) -> jax.Array:  # window-1 on the left (older keys), pad to padded on right
+        pad = [(0, 0)] * x.ndim
+        pad[1] = (window - 1, padded - seq_len)
+        return jnp.pad(x, pad)
+
+    q_p = _pad_q(q).reshape(batch, num_blocks, block, q_heads, head_dim)
+    do_p = _pad_q(dout).reshape(batch, num_blocks, block, q_heads, v_head_dim)
     d_row_p = _pad_q(d_row).reshape(batch, num_blocks, block, q_heads)
     lse_p = _pad_q(lse_bshq).reshape(batch, num_blocks, block, q_heads)
-    bias_p = _pad_q(bias_f).reshape(batch, num_blocks, block, q_heads, window)
+    bias_p = _pad_q(bias).reshape(batch, num_blocks, block, q_heads, window)
     lb_p = _pad_q(lower_bounds).reshape(batch, num_blocks, block)
     valid_p = _pad_q(valid).reshape(batch, num_blocks, block)
+    k_pad = _pad_k(k_c)  # [B, window-1+padded, Hq, D]
+    v_pad = _pad_k(v_c)
+
+    offsets = jnp.arange(window)
+    row_local = jnp.arange(block)
+    # Band offset r maps to local key column i_l + (window-1) - r inside the [block, key_range] tile.
+    band_col = row_local[:, None] + (window - 1) - offsets[None, :]  # [block, window]
 
     def _one_block(block_idx: jax.Array) -> jax.Array:
-        qi = block_idx * block + jnp.arange(block)  # [block] global query indices
-        q_blk = q_p[:, block_idx]  # [B, block, Hq, D]
+        q0 = block_idx * block
+        qi = q0 + row_local  # [block] global query indices
+        q_blk = q_p[:, block_idx]  # [B, block, Hq, D]  (compute dtype)
         do_blk = do_p[:, block_idx]
         d_row_blk = d_row_p[:, block_idx]
         lse_blk = lse_p[:, block_idx]
@@ -1003,17 +1026,20 @@ def _rel_pos_bias_band_grad(
         lb_blk = lb_p[:, block_idx]  # [B, block]
         valid_blk = valid_p[:, block_idx]  # [B, block]
 
-        j = qi[:, None] - offsets[None, :]  # [block, window]
-        j_cl = jnp.clip(j, 0, seq_len - 1)
-        k_band = jnp.take(k_f, j_cl, axis=1)  # [B, block, window, Hq, D]
-        v_band = jnp.take(v_f, j_cl, axis=1)  # [B, block, window, Hq, Dv]
+        k_range = jax.lax.dynamic_slice_in_dim(k_pad, q0, key_range, axis=1)  # [B, key_range, Hq, D]
+        v_range = jax.lax.dynamic_slice_in_dim(v_pad, q0, key_range, axis=1)
+        qk = jnp.einsum("bihd,bjhd->bijh", q_blk, k_range, preferred_element_type=jnp.float32) * softmax_scale
+        dp = jnp.einsum("bihd,bjhd->bijh", do_blk, v_range, preferred_element_type=jnp.float32)
+        # Extract the banded diagonals: qk_band[:, i_l, r, :] = qk[:, i_l, i_l+window-1-r, :].
+        gather_col = jnp.broadcast_to(band_col[None, :, :, None], (batch, block, window, q_heads))
+        qk_band = jnp.take_along_axis(qk, gather_col, axis=2)  # [B, block, window, Hq]
+        dp_band = jnp.take_along_axis(dp, gather_col, axis=2)
 
-        qk = jnp.einsum("bihd,biwhd->biwh", q_blk, k_band) * softmax_scale
-        dp = jnp.einsum("bihd,biwhd->biwh", do_blk, v_band)
-        scores = qk + jnp.transpose(bias_blk, (0, 1, 3, 2))  # [B, block, window, Hq]
+        scores = qk_band + jnp.transpose(bias_blk.astype(jnp.float32), (0, 1, 3, 2))  # [B, block, window, Hq]
         p = jnp.exp(scores - lse_blk[:, :, None, :])
-        g = p * (dp - d_row_blk[:, :, None, :])  # [B, block, window, Hq]
+        g = p * (dp_band - d_row_blk[:, :, None, :])  # [B, block, window, Hq]
 
+        j = qi[:, None] - offsets[None, :]  # [block, window] global key index
         in_band = (
             (j[None] >= 0)
             & (j[None] >= lb_blk[:, :, None])
