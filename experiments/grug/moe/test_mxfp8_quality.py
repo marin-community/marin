@@ -6,11 +6,15 @@ import os
 from datetime import timedelta
 from typing import cast
 
+import equinox as eqx
+import jax.numpy as jnp
+import jmp
 import pytest
 from fray.client import Client
 from fray.cluster import GpuConfig
 from fray.current_client import set_current_client
 from fray.types import JobRequest, JobStatus
+from haliax.quantization import OverwriteWithGradient
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import StepContext
 
@@ -22,6 +26,7 @@ from experiments.grug.moe.launch_mxfp8_quality import (
     quality_model,
 )
 from experiments.grug.moe.model import GrugFp8Config
+from experiments.grug.moe.train import _model_for_compute
 
 _PINNED_TRAIN_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
@@ -68,6 +73,15 @@ class _RecordingFrayClient:
         return _RecordedJob()
 
 
+class _OverwriteState(OverwriteWithGradient):
+    value: jnp.ndarray
+
+
+class _MixedPrecisionModel(eqx.Module):
+    weight: jnp.ndarray
+    overwrite_state: _OverwriteState
+
+
 def _ignore_config(_: object) -> None:
     pass
 
@@ -107,6 +121,19 @@ def test_quality_models_differ_only_by_mxfp8_config() -> None:
     assert bf16 == dataclasses.replace(mxfp8, fp8=None)
 
 
+def test_eval_model_casts_weights_to_compute_dtype_without_casting_fp8_state() -> None:
+    model = _MixedPrecisionModel(
+        weight=jnp.ones((2,), dtype=jnp.float32),
+        overwrite_state=_OverwriteState(jnp.ones((2,), dtype=jnp.float32)),
+    )
+    mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
+
+    compute_model = _model_for_compute(model, mp)
+
+    assert compute_model.weight.dtype == jnp.bfloat16
+    assert compute_model.overwrite_state.value.dtype == jnp.float32
+
+
 def test_quality_model_rejects_unknown_arm() -> None:
     with pytest.raises(ValueError, match="unknown quality arm"):
         quality_model("fp16")
@@ -138,6 +165,7 @@ def test_quality_checkpoint_exposes_durable_pair_configuration(monkeypatch: pyte
     assert config.eval.steps_per_eval == 1000
     assert config.eval.max_eval_batches == 8
     assert isinstance(config.tracker, WandbConfig)
+    assert config.tracker.entity == "marin-community"
     assert config.tracker.project == "marin_moe"
     assert config.tracker.group == "mxfp8-quality-7271"
     assert config.tracker.name == "MXFP8Q-000-mxfp8-s20"

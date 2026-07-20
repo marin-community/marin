@@ -165,6 +165,7 @@ def build_quality_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
             seed=0,
             mp="params=float32,compute=bfloat16,output=bfloat16",
             tracker=WandbConfig(
+                entity="marin-community",
                 project="marin_moe",
                 tags=["mxfp8-quality", "7271", arm, "grug", "moe", "gb200"],
                 group=_WANDB_GROUP,

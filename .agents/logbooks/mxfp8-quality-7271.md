@@ -48,3 +48,13 @@ author: Matt Wittmann
 - Result: both arms failed before step 0 and before W&B initialization with `MixtureDataset in RESTART_STRATEGY encountered an empty finite dataset (async_len() returned 0)`. The coordinators and child gangs were stopped while retrying.
 - Interpretation: `LmDataConfig` slices every component to `int(true_length * experiment_budget / target_budget)`. At 20 steps the ratio is about `4.04e-6`, so sufficiently rare components become empty; restart sampling rejects empty finite datasets. This is shared smoke infrastructure, not a BF16/MXFP8 quality signal.
 - Next action: keep simulated epoching for the full 31,474-step comparison, disable it for shortened shape smokes as in the existing GB200 scale-smoke pattern, add regression coverage for both modes, and relaunch the exact pair.
+
+### 2026-07-19 17:58 - MXFP8Q-001 training cleared; forced evaluation failed
+
+- Hypothesis: Grug's tagged evaluator passes FP32 parameter leaves directly to the BF16-only FA4 attention kernel, unlike the training loss path which casts ordinary leaves to compute dtype while preserving FP8 operator state.
+- Commit Hash: failed launch used `a36b48c20`.
+- Command: corrected `MXFP8Q-001-smoke` pair with `GIT_COMMIT=a36b48c20`; W&B runs [BF16](https://wandb.ai/emcwitt/marin_moe/runs/MXFP8Q-001-smoke-bf16-s20) and [MXFP8](https://wandb.ai/emcwitt/marin_moe/runs/MXFP8Q-001-smoke-mxfp8-s20).
+- Config: same 20-step shape smoke as above, with shortened-run simulated epoching disabled.
+- Result: the previous empty-dataset failure was cleared. BF16 completed 20/20 train steps with final loss 9.2135 and final-step throughput 799,086 tok/s. MXFP8 logged two finite steps, ending at loss 11.8043; its forced evaluation then began. Both arms failed evaluation with `gpu_fa4_cute_attention currently supports only bf16/fp16, got float32`. Neither wrote the forced final checkpoint. The W&B API key defaulted to the submitter entity because the tracker entity was not explicit.
+- Interpretation: the failure is isolated to the final evaluation path, which omitted the mixed-precision cast. The MXFP8 W&B background queue did not flush beyond step 1 after the exception, so this smoke is not a valid throughput comparison.
+- Next action: reuse the training-path model cast in tagged evaluation, preserving `OverwriteWithGradient` FP8 scale/amax state in FP32; pin W&B to `marin-community`; validate locally; relaunch both arms under the same IDs.

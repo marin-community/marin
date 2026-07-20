@@ -6,6 +6,7 @@ import functools
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 import equinox as eqx
 import jax
@@ -49,6 +50,8 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+_Model = TypeVar("_Model")
 
 
 @dataclass(frozen=True)
@@ -153,6 +156,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -174,7 +178,8 @@ def build_tagged_evaluator(
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
-        per_pos_loss = model.next_token_loss(
+        compute_model = _model_for_compute(model, mp)
+        per_pos_loss = compute_model.next_token_loss(
             batch.tokens,
             batch.loss_weight,
             mask=batch.attn_mask,
@@ -280,6 +285,12 @@ def _is_overwrite(x) -> bool:
     return isinstance(x, OverwriteWithGradient)
 
 
+def _model_for_compute(model: _Model, mp: jmp.Policy) -> _Model:
+    """Cast trainable model leaves for compute while preserving FP8 operator state."""
+    op_state, plain = partition_for_grad_overwrite(model)
+    return eqx.combine(op_state, mp.cast_to_compute(plain), is_leaf=_is_overwrite)
+
+
 def _ema_update(old: Transformer, new: Transformer, beta: float) -> Transformer:
     """EMA of trainable weights; FP8 op state carries the current step's values.
 
@@ -350,8 +361,7 @@ def _make_train_step(
             # Cast only ordinary params to compute dtype: the FP8 ops' scales
             # and amax histories must stay f32, or every step's state update
             # rounds through bf16.
-            op_state, plain = partition_for_grad_overwrite(params)
-            compute_params = eqx.combine(op_state, mp.cast_to_compute(plain), is_leaf=_is_overwrite)
+            compute_params = _model_for_compute(params, mp)
             return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
@@ -497,6 +507,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler
