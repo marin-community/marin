@@ -140,6 +140,21 @@ def test_bf16_w2_wgrad_matches_grouped_reference():
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), rtol=2e-2, atol=2e-2)
 
 
+def test_nonfinite_w2_wgrad_uses_bf16_fallback():
+    groups = jnp.asarray([2], jnp.int32)
+    f, d = 64, 3
+    c_concat = jnp.arange(2 * 2 * f, dtype=jnp.bfloat16).reshape(2, 2 * f) / 128
+    c_interleaved = c_concat[:, jnp.asarray(mxfp8.interleave_perm(2 * f))]
+    g = jnp.arange(2 * d, dtype=jnp.bfloat16).reshape(2, d) / 16
+    fused = jnp.full((1, f, d), jnp.nan, jnp.bfloat16)
+
+    actual = jax.jit(mxfp8._finite_or_bf16_w2_wgrad)(fused, c_interleaved, g, groups)
+    expected = mxfp8._bf16_w2_wgrad(c_interleaved, g, groups)
+
+    assert jnp.all(jnp.isfinite(actual))
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+
+
 def test_padded_row_count_is_an_upper_bound():
     rng = np.random.default_rng(2)
     for _ in range(50):

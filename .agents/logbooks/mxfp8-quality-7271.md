@@ -13,9 +13,9 @@ author: Matt Wittmann
 - The first fully instrumented pair exposed a smoke artifact: setting the trainer horizon to 20 compressed the full run's 314-step LR warmup to zero steps. Shortened runs now reproduce the full optimizer schedule prefix and reject horizons that extend past warmup.
 - After correcting the schedule, BF16 remains finite but MXFP8 still becomes NaN on the first backward pass. W&B isolates the first non-finite tensor to `expert_mlp.w_down`; `w_gate` and `w_up` gradients are finite.
 - The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with unit-normal, loss-scaled, and all-zero synthetic cotangents.
-- Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the production hybrid fails. Reading the fused `w_down` gradient for conditional telemetry makes the same hybrid graph finite, while a matched non-instrumented control reproduces the NaN. This points to a compiler liveness/scheduling interaction around that custom-call output.
+- Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the unguarded production hybrid fails. A finite reduction plus conditional BF16 `w_down`-gradient recompute clears the exact failure and is now part of the treatment implementation.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
-- The full 1e21-FLOP pair is blocked on the first-backward numerical defect. No quality or performance result is claimed yet.
+- The full 1e21-FLOP pair remains gated on a clean 20-step treatment rerun and throughput check. No long-run quality result is claimed yet.
 
 ## Scope
 
@@ -117,3 +117,12 @@ author: Matt Wittmann
 - Result: the run reproduced NaN in total and expert `w_down` gradient norms on the first backward pass. A pure `jax.lax.optimization_barrier(dw2)` does not stabilize the graph.
 - Interpretation: compiler motion/fusion prevention alone is insufficient; the successful telemetry graph's finite reduction and conditional side-effect introduce a stronger data/control dependency. A correctness guard must consume the fused gradient and provide a numerically valid alternative rather than relying on a scheduling hint.
 - Next action: reduce `isfinite(dw2)` and conditionally recompute only an invalid `w_down` gradient from the saved BF16 preactivation/cotangent via `ragged_dot_general`; validate the fallback helper on CPU, then run the exact two-step hybrid control.
+
+### 2026-07-19 19:55 - MXFP8Q-005 finite guard clears the exact failure
+
+- Hypothesis: consuming the fused `dw2` with a finite reduction and conditionally recomputing an invalid result from BF16 preactivations/cotangents will make the hybrid backward robust without replacing its normal MXFP8 path.
+- Commit Hash: diagnostic arm used `abae0fd03`; promotion into the treatment is pending commit.
+- Command: two-step full-hybrid [finite-guard run](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-005-guard-mxfp8-finite-guard-s2), exact topology and shortened data realization from MXFP8Q-003/004.
+- Result: the first backward is finite: total grad norm=0.36288 and expert `w_down`=0.02595. The run completed with train loss=11.80212, eval loss=11.78692, and Paloma macro loss=11.78972. Its child and coordinator both succeeded. CPU coverage verifies that a non-finite fused result selects a finite BF16 grouped-wgrad reference.
+- Interpretation: the guard supplies the stronger data dependency that the pure barrier lacked and guarantees a valid fallback if the fused result is actually non-finite. The normal forward, dgrad, `w13` wgrad, and finite `w2` wgrad remain MXFP8.
+- Next action: remove the temporary debug/barrier/diagnostic-arm surface, make the guard intrinsic to `MxFp8MoeMlpOp`, and rerun the original 20-step treatment to validate stability and measure throughput overhead before launching the full pair.

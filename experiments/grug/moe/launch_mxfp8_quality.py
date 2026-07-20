@@ -106,11 +106,11 @@ def _optimizer_for_run_steps(
 
 
 def quality_model(arm: str) -> GrugModelConfig:
-    """Return a quality-gate arm or one of its FP8 isolation controls."""
+    """Return one of the matched quality-gate models."""
     model, _, _, _ = quality_cell()
     if arm == "bf16":
         return model
-    if arm in ("mxfp8", "mxfp8-debug", "mxfp8-barrier", "mxfp8-finite-guard"):
+    if arm == "mxfp8":
         return dataclasses.replace(
             model,
             fp8=GrugFp8Config(
@@ -118,35 +118,9 @@ def quality_model(arm: str) -> GrugModelConfig:
                 grouped=True,
                 recipe="mxfp8",
                 mxfp8_producer="xla",
-                mxfp8_debug=arm == "mxfp8-debug",
-                mxfp8_wgrad_barrier=arm == "mxfp8-barrier",
-                mxfp8_wgrad_finite_guard=arm == "mxfp8-finite-guard",
             ),
         )
-    if arm == "mxfp8-grouped-only":
-        return dataclasses.replace(
-            model,
-            fp8=GrugFp8Config(
-                dense=False,
-                grouped=True,
-                recipe="mxfp8",
-                mxfp8_producer="xla",
-            ),
-        )
-    if arm == "fp8-dense-only":
-        return dataclasses.replace(
-            model,
-            fp8=GrugFp8Config(
-                dense=True,
-                grouped=False,
-                recipe="per_tensor",
-            ),
-        )
-    raise ValueError(
-        f"unknown quality arm {arm!r}; expected 'bf16', 'mxfp8', 'mxfp8-debug', 'mxfp8-barrier', "
-        "'mxfp8-finite-guard', "
-        "'mxfp8-grouped-only', or 'fp8-dense-only'"
-    )
+    raise ValueError(f"unknown quality arm {arm!r}; expected 'bf16' or 'mxfp8'")
 
 
 def _apply_train_env() -> None:
