@@ -167,6 +167,9 @@ class GrugModelConfig:
     # odd layers take the *last* kv_lora_rank dims instead (requires hidden_dim >= 2*kv_lora_rank).
     mla_kv_slice: bool = False
     mla_kv_slice_alternate: bool = False
+    # Initialize w_dkv as a semi-orthogonal matrix (orthonormal columns -> all singular values 1,
+    # exact rank kv_lora_rank). Paired with freezing (LR 0) it fixes a full-rank isometric KV read.
+    mla_wdkv_orthonormal: bool = False
     max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
@@ -756,8 +759,14 @@ class MultiheadLatentAttention(eqx.Module):
             w_dq = reshard(_init_weight(k_dq, (d, cq), std), P("data", None))
             q_norm = RMSNorm.init(cq, cfg.layer_norm_eps)
             w_uq = reshard(_init_weight(k_uq, (cq, n * qk), std), P("data", "model"))
-        # KV down-projection: a learned matrix, or None when the latent is a fixed residual slice.
-        w_dkv = None if cfg.mla_kv_slice else reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None))
+        # KV down-projection: None (residual slice), a semi-orthogonal matrix (orthonormal
+        # columns, exact rank ckv), or the default Gaussian init.
+        if cfg.mla_kv_slice:
+            w_dkv = None
+        elif cfg.mla_wdkv_orthonormal:
+            w_dkv = reshard(jax.nn.initializers.orthogonal()(k_dkv, (d, ckv), jnp.float32), P("data", None))
+        else:
+            w_dkv = reshard(_init_weight(k_dkv, (d, ckv), std), P("data", None))
         return MultiheadLatentAttention(
             w_dkv=w_dkv,
             kv_norm=RMSNorm.init(ckv, cfg.layer_norm_eps),

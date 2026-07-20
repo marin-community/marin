@@ -149,6 +149,8 @@ def build_scale_model() -> GrugModelConfig:
     # first/last half per layer with SCALE_MLA_KV_SLICE_ALT.
     mla_kv_slice = os.environ.get("SCALE_MLA_KV_SLICE") == "1"
     mla_kv_slice_alternate = os.environ.get("SCALE_MLA_KV_SLICE_ALT") == "1"
+    # SCALE_MLA_WDKV_ORTHONORMAL=1 inits w_dkv orthonormal (rank 512); pair with SCALE_FREEZE_WDKV=1.
+    mla_wdkv_orthonormal = os.environ.get("SCALE_MLA_WDKV_ORTHONORMAL") == "1"
     # SCALE_NUM_KV_HEADS overrides the global KV-head count (== num_heads for full MHA). Default ~4:1 GQA.
     kv_env = os.environ.get("SCALE_NUM_KV_HEADS")
     if kv_env is not None:
@@ -188,6 +190,7 @@ def build_scale_model() -> GrugModelConfig:
         mla_scale_kv_lora=mla_scale_kv_lora,
         mla_kv_slice=mla_kv_slice,
         mla_kv_slice_alternate=mla_kv_slice_alternate,
+        mla_wdkv_orthonormal=mla_wdkv_orthonormal,
         qk_nope_head_dim=qk_nope,
         qk_rope_head_dim=qk_rope,
         v_head_dim=v_head_dim,
