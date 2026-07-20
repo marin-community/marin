@@ -295,6 +295,10 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
     run_id = os.environ.get("EVAL_RUN_ID", uuid.uuid4().hex[:6])
     default_out = f"s3://marin-us-east-02a/iris/marinbase-eval/{_slug(model)}/tier{tier}-{run_id}"
     out_path = os.environ.get("EVAL_OUT_PATH", default_out)
+    # extra_gen_kwargs only reaches EvalchemyEvalConfig if that field exists in the installed marin lib;
+    # pass it ONLY when non-empty so the common (empty) path stays compatible with libs predating the
+    # field. Non-empty (grug thinking skip_special_tokens=false) requires the field to be present.
+    _egk = {"extra_gen_kwargs": extra_gen_kwargs} if extra_gen_kwargs else {}
     return EvalchemyEvalConfig(
         model=model,
         tokenizer=tokenizer,
@@ -318,13 +322,13 @@ def build_config(model: str, tokenizer: str, tier: int) -> EvalchemyEvalConfig:
         ),
         apply_chat_template=apply_chat_template,
         max_gen_toks=max_gen_toks,
-        extra_gen_kwargs=extra_gen_kwargs,
         max_eval_instances=max_eval_instances,
         num_concurrent=num_concurrent,
         eval_image=EVAL_IMAGE,
         eval_cpu=8.0,
         eval_memory="32g",
         eval_disk="50g",
+        **_egk,
     )
 
 
