@@ -96,6 +96,12 @@ def custom_call_count(compiled_text, target):
     return compiled_text.count(f'custom_call_target="{target}"')
 
 
+def linear_orientations(q_row, s_row_t, q_col, s_col):
+    row_scale = jax.lax.bitcast_convert_type(s_row_t.T, jnp.float8_e8m0fnu)
+    col_scale = jax.lax.bitcast_convert_type(s_col.T, jnp.float8_e8m0fnu)
+    return q_row[None], row_scale[None], q_col.T[None], col_scale[None]
+
+
 def timed_samples(fn, args, iters, warmup):
     for _ in range(warmup):
         jax.block_until_ready(fn(*args))
@@ -119,12 +125,17 @@ def parse_args(argv=None):
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
     p.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
+    p.add_argument("--producer", choices=["none", "cute"], default="none")
     p.add_argument("--out", default="bench_mxfp8_dense.json")
     return p.parse_args(argv)
 
 
 def main():
     a = parse_args()
+    if a.producer == "cute":
+        from experiments.grug.moe.standalone.mxfp8_grouped.quantize_cute import (  # noqa: PLC0415
+            dual_quantize_mxfp8_cute,
+        )
 
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind}, jax {jax.__version__}")
@@ -255,6 +266,72 @@ def main():
             "err_gx": rel_frob(oracle_dx, oracle_ref_gx),
             "err_gw": rel_frob(oracle_dw, oracle_ref_gw),
         }
+        if a.producer == "cute":
+
+            def cute_orientations(t):
+                return linear_orientations(*dual_quantize_mxfp8_cute(t))
+
+            def cute_quantize_reuse(x, w, g):
+                return *cute_orientations(x), *cute_orientations(w), *cute_orientations(g)
+
+            producer = jax.jit(cute_quantize_reuse).lower(x, w, g).compile()
+            producer_outputs = jax.block_until_ready(producer(x, w, g))
+            xqr, xrs, xqc, xcs, wqr, wrs, wqc, wcs, gqr, grs, gqc, gcs = producer_outputs
+            cute_operands = (xqr, xrs, wqc, wcs, gqr, grs, wqr, wrs, xqc, xcs, gqc, gcs)
+            matches_oracle = [
+                bool(jnp.array_equal(actual, expected))
+                for actual, expected in zip(cute_operands, oracle_operands, strict=True)
+            ]
+            mismatch_indices = [i for i, matches in enumerate(matches_oracle) if not matches]
+            assert all(matches_oracle), f"CuTe linear operands differ from JAX at indices {mismatch_indices}"
+            producer_ms, producer_mad_ms = timed_samples(producer, (x, w, g), a.iters, a.warmup)
+
+            def cute_reuse_fwdbwd(x, w, g):
+                xqr, xrs, xqc, xcs, wqr, wrs, wqc, wcs, gqr, grs, gqc, gcs = cute_quantize_reuse(x, w, g)
+                return prequant_fwdbwd(xqr, xrs, wqc, wcs, gqr, grs, wqr, wrs, xqc, xcs, gqc, gcs)
+
+            def cute_unshared_fwdbwd(x, w, g):
+                x_forward = cute_orientations(jax.lax.optimization_barrier(x))
+                w_forward = cute_orientations(jax.lax.optimization_barrier(w))
+                g_dgrad = cute_orientations(jax.lax.optimization_barrier(g))
+                w_dgrad = cute_orientations(jax.lax.optimization_barrier(w))
+                x_wgrad = cute_orientations(jax.lax.optimization_barrier(x))
+                g_wgrad = cute_orientations(jax.lax.optimization_barrier(g))
+                out_type = jnp.bfloat16
+                y = scaled_matmul(
+                    x_forward[0], w_forward[2], x_forward[1], w_forward[3], preferred_element_type=out_type
+                )
+                dx = scaled_matmul(g_dgrad[0], w_dgrad[0], g_dgrad[1], w_dgrad[1], preferred_element_type=out_type)
+                dw = scaled_matmul(x_wgrad[2], g_wgrad[2], x_wgrad[3], g_wgrad[3], preferred_element_type=out_type)
+                return y, dx, dw
+
+            for producer_arm, fn in {
+                "mxfp8_cute_reuse": cute_reuse_fwdbwd,
+                "mxfp8_cute_unshared": cute_unshared_fwdbwd,
+            }.items():
+                lowered = jax.jit(fn).lower(x, w, g)
+                compile_started = time.perf_counter()
+                compiled = lowered.compile()
+                producer_compile_ms = (time.perf_counter() - compile_started) * 1e3
+                compiled_text = compiled.as_text()
+                targets = sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_text)))
+                block_scaled_dot_calls = custom_call_count(compiled_text, "__cudnn$blockScaledDot")
+                assert block_scaled_dot_calls >= 3
+                elapsed, elapsed_mad = timed_samples(compiled, (x, w, g), a.iters, a.warmup)
+                out, dx, dw = compiled(x, w, g)
+                shape_res[producer_arm] = {
+                    "fwdbwd_ms": elapsed * 1e3,
+                    "fwdbwd_mad_ms": elapsed_mad * 1e3,
+                    "fwdbwd_tfs": 3 * flops_fwd / elapsed / 1e12,
+                    "compile_ms": producer_compile_ms,
+                    "standalone_reuse_producer_ms": producer_ms * 1e3,
+                    "standalone_reuse_producer_mad_ms": producer_mad_ms * 1e3,
+                    "custom_call_targets": targets,
+                    "block_scaled_dot_call_count": block_scaled_dot_calls,
+                    "err_out": rel_frob(out.reshape(a.tokens, n), ref_out),
+                    "err_gx": rel_frob(dx.reshape(a.tokens, k), oracle_ref_gx),
+                    "err_gw": rel_frob(dw.reshape(k, n), oracle_ref_gw),
+                }
         if production_weight:
             production_measurements.append((production_weight, oracle_ms, shape_res["fp8_tensor"]["fwdbwd_ms"] / 1e3))
 

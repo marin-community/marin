@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import jax.numpy as jnp
 import pytest
 
 from experiments.grug.moe.standalone import bench_mxfp8_dense as benchmark
@@ -43,3 +44,27 @@ def test_custom_call_count_counts_compiled_call_sites():
     )
 
     assert benchmark.custom_call_count(hlo, "__cudnn$blockScaledDot") == 2
+
+
+def test_linear_orientations_match_scaled_matmul_contract():
+    q_row = jnp.arange(128, dtype=jnp.uint8).reshape(2, 64)
+    s_row_t = jnp.arange(4, dtype=jnp.uint8).reshape(2, 2)
+    q_col = q_row + 1
+    s_col = jnp.arange(4, dtype=jnp.uint8).reshape(1, 4)
+
+    row_q, row_scale, col_q, col_scale = benchmark.linear_orientations(q_row, s_row_t, q_col, s_col)
+
+    assert row_q.shape == (1, 2, 64)
+    assert row_scale.shape == (1, 2, 2)
+    assert col_q.shape == (1, 64, 2)
+    assert col_scale.shape == (1, 4, 1)
+    assert jnp.array_equal(row_q[0], q_row)
+    assert jnp.array_equal(row_scale[0].view(jnp.uint8), s_row_t.T)
+    assert jnp.array_equal(col_q[0], q_col.T)
+    assert jnp.array_equal(col_scale[0].view(jnp.uint8), s_col.T)
+
+
+def test_cute_producer_is_explicit():
+    args = benchmark.parse_args(["--git-sha", "abc123", "--producer", "cute"])
+
+    assert args.producer == "cute"
