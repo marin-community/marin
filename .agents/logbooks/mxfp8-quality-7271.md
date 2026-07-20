@@ -16,7 +16,7 @@ author: Matt Wittmann
 - Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the unguarded production hybrid fails. A finite reduction plus conditional BF16 `w_down`-gradient recompute clears the exact failure and is now part of the treatment implementation.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
 - The promoted implementation passes a fresh paired 20-step smoke: MXFP8 is finite, tracks BF16 within 0.0038 loss, and is 1.0666x faster on mean throughput.
-- The full 1e21-FLOP pair is running. At step 16,000, its trailing-100-step train delta is +0.00202; eval/Paloma/uncheatable deltas are +0.00073/+0.00156/+0.00318, and mean throughput is 1.0724x BF16. Ten consecutive gates now have aligned held-out signs favoring BF16, but this covers only 50.8% of the schedule and is not the final cooldown-tail quality conclusion.
+- The full 1e21-FLOP pair is running. At step 17,000, its trailing-100-step train delta is +0.00304; eval/Paloma/uncheatable deltas are +0.00377/+0.00241/+0.00600, and mean throughput is 1.0723x BF16. Eleven consecutive gates now have aligned held-out signs favoring BF16, but this covers only 54.0% of the schedule and is not the final cooldown-tail quality conclusion.
 
 ## Scope
 
@@ -366,3 +366,13 @@ author: Matt Wittmann
 - Root cause: the local `kubectl port-forward` died. The Iris controller pod remained 1/1 ready with zero restarts, and the controller service remained present; this was not a run or cluster failure.
 - Result: replaced only the local port-forward and updated both monitoring state files to session 55036. The existing status loop reconnected on its next retry and confirmed both child gangs and coordinators still running.
 - Next action: continue normal monitoring; do not restart or resubmit either arm.
+
+### 2026-07-20 09:48 - MXFP8Q-007 step-17,000 gate widens within the prior range
+
+- Hypothesis: the very small aggregate and Paloma differences at step 16,000 will rebound without exceeding the earlier bounded range, while the smoothed train gap remains a few thousandths.
+- Commit Hash: running jobs use `d11d6ac54` (treatment implementation `f8be94f87`).
+- Result: BF16/MXFP8 train loss at exactly step 17,000 is 1.749151/1.752017 (delta +0.002866); the trailing 100-step mean delta is +0.003036. Eval loss is 2.499588/2.503356 (+0.003768), Paloma macro is 2.814274/2.816684 (+0.002411), and uncheatable macro is 2.244242/2.250246 (+0.006003).
+- Performance: cumulative mean non-compile throughput is 788,917 tok/s BF16 versus 845,967 tok/s MXFP8, or 1.0723x. W&B runtime from the first train sample to step 17,000 is 48,457.3s versus 45,448.1s; at the BF16 arm's step-17,000 elapsed time, MXFP8 had reached step 18,105, a 1,105-step lead.
+- Interpretation: at 54.0% of the schedule, all three held-out metrics favor BF16 for an eleventh consecutive gate. The metrics rebound from the unusually narrow step-16,000 gate, but remain within the earlier observed range; the smoothed train difference increases to three thousandths. The evidence continues to support a small persistent, non-monotonic quality cost without establishing the final cooldown-tail verdict.
+- Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. Thirteenth hourly recovery checkpoints are available at BF16 step 16,384 and MXFP8 step 17,435.
+- Next action: continue every scheduled evaluation and hourly checkpoint through step 31,474; publish the next issue update at a materially later milestone or if the quality/health conclusion changes.
