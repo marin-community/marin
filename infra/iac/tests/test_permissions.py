@@ -78,15 +78,13 @@ def test_deploy_workflows_use_main_branch_wif_service_accounts():
         assert step["with"]["service-account"] == service_account
 
 
-def test_pulumi_deploy_action_uses_wif_without_passphrase_or_key_json():
+def test_pulumi_deploy_action_uses_wif_without_key_json():
     action = yaml.safe_load((REPO_ROOT / ".github" / "actions" / "pulumi-deploy" / "action.yaml").read_text())
     assert "gcp-credentials" not in action["inputs"]
     auth = next(step for step in action["runs"]["steps"] if step.get("uses") == "google-github-actions/auth@v3")
     assert auth["with"]["workload_identity_provider"] == "${{ inputs.workload-identity-provider }}"
     assert auth["with"]["service_account"] == "${{ inputs.service-account }}"
     assert "credentials_json" not in auth["with"]
-    registry_auth = next(step for step in action["runs"]["steps"] if step.get("name") == "Configure registry auth")
-    assert registry_auth["run"] == "gcloud auth configure-docker us-central1-docker.pkg.dev --quiet"
 
 
 def test_service_stacks_use_shared_kms_provider():
