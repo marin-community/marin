@@ -174,6 +174,47 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
+      - uid: k8s-gpu-pod-termination-stuck
+        title: GpuPodTerminationStuck
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cluster }}: GPU pod termination stuck on {{ $labels.node }} ({{ $labels.pods }})"
+          runbook_url: https://github.com/marin-community/marin/blob/main/.agents/skills/recover-stuck-k8s-pod/SKILL.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: k8s
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/stuck_gpu_pods
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: pods, text: pods, type: string }
+                - { selector: task_attempts, text: task_attempts, type: string }
+                - { selector: gpus, text: gpus, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The GCE controllers are not in K8S_CLUSTERS; their liveness comes from the
   # existing per-cluster iris datasources. The health row always exists (the
   # bridge answers reachable=false rather than erroring), and `up` is its 0/1

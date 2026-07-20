@@ -8,7 +8,7 @@ GETs and the CW read-role bearer token — no kubernetes client. K8sFleet fans a
 query out across every cluster and stamps a ``cluster`` column, so one response
 covers the fleet.
 
-The pod-level scans (crashloops, pending) cover every namespace except the
+The pod-level scans (crashloops, pending, termination candidates) cover every namespace except the
 provider-managed prefixes in PROVIDER_NAMESPACE_PREFIXES: CoreWeave's per-node
 daemons are thousands of pods of someone else's infrastructure, while the
 namespaces we operate hold about a hundred.
@@ -29,8 +29,10 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TypeVar
 
 import httpx
 from config import (
@@ -51,6 +53,14 @@ _MAX_RETRY_AFTER = 3.0
 _EVENT_LIMIT = 100
 _EVENT_MESSAGE_LIMIT = 200
 
+# A pod is a stuck-termination candidate only after its API deletion deadline has
+# been expired for this long. Grafana holds the alert for another five minutes.
+STUCK_TERMINATION_OVERDUE_SECONDS = 120
+
+_GPU_RESOURCE = "nvidia.com/gpu"
+_IRIS_TASK_ID_ENV = "IRIS_TASK_ID"
+_TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
+
 # Container waiting reasons the crashloop rows report.
 BACKOFF_REASONS = ("CrashLoopBackOff", "ImagePullBackOff")
 
@@ -69,6 +79,50 @@ class K8sErrorClass(StrEnum):
     HTTP = "http"  # any other non-200
 
 
+class TerminationClass(StrEnum):
+    """Operator action implied by an overdue terminating pod."""
+
+    INVALID_TIMESTAMP = "invalid_timestamp"
+    FINALIZER = "finalizer"
+    TERMINAL = "terminal"
+    UNBOUND = "unbound"
+    NODE_CLEANUP = "node_cleanup"
+
+
+@dataclass(frozen=True)
+class TerminatingPod:
+    """A pod termination record that requires operator visibility."""
+
+    cluster: str
+    namespace: str
+    pod: str
+    node: str
+    phase: str
+    deletion_timestamp: str
+    deletion_grace_seconds: int | None
+    overdue_seconds: int | None
+    gpu_count: int
+    task_attempt: str
+    task_label: str
+    job_label: str
+    priority_class: str
+    finalizers: str
+    classification: TerminationClass
+
+
+@dataclass(frozen=True)
+class TerminatingPodError:
+    """A cluster query failure returned beside healthy clusters' pod records."""
+
+    cluster: str
+    error_class: str
+    error: str
+
+
+TerminatingPodResult = TerminatingPod | TerminatingPodError
+_Row = TypeVar("_Row")
+
+
 class K8sError(Exception):
     """A per-cluster query failure, carrying its class for error rows."""
 
@@ -82,6 +136,14 @@ def _age_seconds(timestamp: str | None) -> int | None:
         return None
     created = datetime.fromisoformat(timestamp)
     return max(int((datetime.now(UTC) - created).total_seconds()), 0)
+
+
+def _deletion_overdue_seconds(timestamp: str) -> int | None:
+    """Return age past a deletion deadline, or None for an invalid deadline."""
+    try:
+        return _age_seconds(timestamp)
+    except (TypeError, ValueError):
+        return None
 
 
 def _epoch_ms(timestamp: str | None) -> int | None:
@@ -238,10 +300,11 @@ class K8sSource:
         names = [(ns.get("metadata") or {}).get("name") or "" for ns in namespaces]
         return [name for name in names if name and not name.startswith(PROVIDER_NAMESPACE_PREFIXES)]
 
-    def _scan_pods(self, field_selector: str) -> list[dict]:
+    def _scan_pods(self, field_selector: str | None) -> list[dict]:
         pods: list[dict] = []
+        params = {"fieldSelector": field_selector} if field_selector else None
         for namespace in self._scanned_namespaces():
-            pods.extend(self._list(f"/api/v1/namespaces/{namespace}/pods", {"fieldSelector": field_selector}))
+            pods.extend(self._list(f"/api/v1/namespaces/{namespace}/pods", params))
         return pods
 
     def crashloops(self) -> list[dict]:
@@ -284,6 +347,47 @@ class K8sSource:
                 }
             )
         rows.sort(key=lambda row: row["age_seconds"] or 0, reverse=True)
+        return rows
+
+    def termination_candidates(self) -> list[TerminatingPod]:
+        """Return overdue terminating pods and invalid deletion timestamps.
+
+        Raises:
+            ValueError: A candidate has a malformed GPU resource quantity.
+        """
+        rows = []
+        for pod in self._scan_pods(None):
+            metadata = pod.get("metadata") or {}
+            deletion_timestamp = metadata.get("deletionTimestamp")
+            if not deletion_timestamp:
+                continue
+            overdue_seconds = _deletion_overdue_seconds(deletion_timestamp)
+            if overdue_seconds is not None and overdue_seconds < STUCK_TERMINATION_OVERDUE_SECONDS:
+                continue
+            spec = pod.get("spec") or {}
+            status = pod.get("status") or {}
+            labels = metadata.get("labels") or {}
+            finalizers = sorted(metadata.get("finalizers") or [])
+            rows.append(
+                TerminatingPod(
+                    cluster=self._target.name,
+                    namespace=metadata.get("namespace") or "",
+                    pod=metadata.get("name") or "",
+                    node=spec.get("nodeName") or "",
+                    phase=status.get("phase") or "",
+                    deletion_timestamp=deletion_timestamp,
+                    deletion_grace_seconds=metadata.get("deletionGracePeriodSeconds"),
+                    overdue_seconds=overdue_seconds,
+                    gpu_count=_pod_gpu_count(pod),
+                    task_attempt=_iris_task_attempt(pod),
+                    task_label=labels.get("iris.task_id") or "",
+                    job_label=labels.get("iris.job_id") or "",
+                    priority_class=spec.get("priorityClassName") or "",
+                    finalizers=",".join(finalizers),
+                    classification=_termination_class(pod, overdue_seconds),
+                )
+            )
+        rows.sort(key=lambda row: row.overdue_seconds if row.overdue_seconds is not None else -1, reverse=True)
         return rows
 
     def kueue(self) -> list[dict]:
@@ -347,6 +451,57 @@ def _pod_scope(metadata: dict) -> str:
     return SCOPE_WORKLOAD
 
 
+def _resource_gpu_count(resources: dict | None) -> int:
+    resources = resources or {}
+    values = []
+    for field in ("requests", "limits"):
+        raw = (resources.get(field) or {}).get(_GPU_RESOURCE, 0)
+        try:
+            values.append(int(raw))
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"invalid {_GPU_RESOURCE} {field} quantity: {raw!r}") from err
+    return max(values, default=0)
+
+
+def _pod_gpu_count(pod: dict) -> int:
+    """Return the effective GPU request Kubernetes uses to schedule the pod."""
+    spec = pod.get("spec") or {}
+    app_total = sum(_resource_gpu_count(c.get("resources")) for c in spec.get("containers") or [])
+    restartable_total = 0
+    init_peak = 0
+    for container in spec.get("initContainers") or []:
+        count = _resource_gpu_count(container.get("resources"))
+        if container.get("restartPolicy") == "Always":
+            restartable_total += count
+        else:
+            init_peak = max(init_peak, restartable_total + count)
+    return max(app_total + restartable_total, init_peak)
+
+
+def _iris_task_attempt(pod: dict) -> str:
+    for container in (pod.get("spec") or {}).get("containers") or []:
+        if container.get("name") != "task":
+            continue
+        for item in container.get("env") or []:
+            if item.get("name") == _IRIS_TASK_ID_ENV:
+                return item.get("value") or ""
+    return ""
+
+
+def _termination_class(pod: dict, overdue_seconds: int | None) -> TerminationClass:
+    metadata = pod.get("metadata") or {}
+    if overdue_seconds is None:
+        return TerminationClass.INVALID_TIMESTAMP
+    if metadata.get("finalizers"):
+        return TerminationClass.FINALIZER
+    status = pod.get("status") or {}
+    if status.get("phase") in _TERMINAL_POD_PHASES:
+        return TerminationClass.TERMINAL
+    if not (pod.get("spec") or {}).get("nodeName"):
+        return TerminationClass.UNBOUND
+    return TerminationClass.NODE_CLEANUP
+
+
 class K8sFleet:
     """Fans one query out across every cluster, one thread each, stamping ``cluster``."""
 
@@ -354,21 +509,33 @@ class K8sFleet:
         self._sources = tuple(sources)
         self._executor = ThreadPoolExecutor(max_workers=max(len(self._sources), 1), thread_name_prefix="k8s")
 
+    def _collect(
+        self,
+        fn: Callable[[K8sSource], list[_Row]],
+        on_error: Callable[[K8sSource, K8sError], list[_Row]],
+    ) -> list[_Row]:
+        futures = [(source, self._executor.submit(fn, source)) for source in self._sources]
+        rows: list[_Row] = []
+        for source, future in futures:
+            try:
+                rows.extend(future.result())
+            except K8sError as err:
+                logger.warning("k8s query failed for %s: %s", source.target.name, err)
+                rows.extend(on_error(source, err))
+        return rows
+
     def _fan_out(
         self,
         fn: Callable[[K8sSource], list[dict]],
         on_error: Callable[[K8sError], list[dict]],
     ) -> list[dict]:
-        futures = [(source, self._executor.submit(fn, source)) for source in self._sources]
-        rows: list[dict] = []
-        for source, future in futures:
-            try:
-                cluster_rows = future.result()
-            except K8sError as err:
-                logger.warning("k8s query failed for %s: %s", source.target.name, err)
-                cluster_rows = on_error(err)
-            rows.extend({"cluster": source.target.name, **row} for row in cluster_rows)
-        return rows
+        def stamped(source: K8sSource) -> list[dict]:
+            return [{"cluster": source.target.name, **row} for row in fn(source)]
+
+        def stamped_error(source: K8sSource, err: K8sError) -> list[dict]:
+            return [{"cluster": source.target.name, **row} for row in on_error(err)]
+
+        return self._collect(stamped, stamped_error)
 
     @staticmethod
     def _error_row(err: K8sError) -> list[dict]:
@@ -382,6 +549,12 @@ class K8sFleet:
 
     def pending(self) -> list[dict]:
         return self._fan_out(lambda s: s.pending(), self._error_row)
+
+    def termination_candidates(self) -> list[TerminatingPodResult]:
+        return self._collect(
+            lambda source: source.termination_candidates(),
+            lambda source, err: [TerminatingPodError(source.target.name, str(err.error_class), str(err))],
+        )
 
     def kueue(self) -> list[dict]:
         return self._fan_out(lambda s: s.kueue(), self._error_row)
@@ -441,3 +614,43 @@ class K8sFleet:
             return rows
 
         return self._fan_out(gaps, lambda err: [{"component": c.key, "value": 0} for c in WATCHED_COMPONENTS])
+
+    def alert_stuck_gpu_pods(self, candidates: Sequence[TerminatingPodResult] | None = None) -> list[dict]:
+        """Return node-grouped counts plus zero rows where no qualifying evidence exists."""
+        rows = list(candidates) if candidates is not None else self.termination_candidates()
+        by_node: dict[tuple[str, str], list[TerminatingPod]] = {}
+        for row in rows:
+            if not isinstance(row, TerminatingPod):
+                continue
+            if row.classification != TerminationClass.NODE_CLEANUP or row.gpu_count <= 0:
+                continue
+            key = (row.cluster, row.node)
+            by_node.setdefault(key, []).append(row)
+
+        alert_rows = []
+        affected_clusters = set()
+        for (cluster, node), node_rows in sorted(by_node.items()):
+            affected_clusters.add(cluster)
+            alert_rows.append(
+                {
+                    "cluster": cluster,
+                    "node": node,
+                    "pods": ",".join(sorted(row.pod for row in node_rows)),
+                    "task_attempts": ",".join(sorted(row.task_attempt for row in node_rows if row.task_attempt)),
+                    "gpus": str(sum(row.gpu_count for row in node_rows)),
+                    "value": len(node_rows),
+                }
+            )
+        for source in self._sources:
+            if source.target.name not in affected_clusters:
+                alert_rows.append(
+                    {
+                        "cluster": source.target.name,
+                        "node": "",
+                        "pods": "",
+                        "task_attempts": "",
+                        "gpus": "0",
+                        "value": 0,
+                    }
+                )
+        return alert_rows

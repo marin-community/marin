@@ -22,6 +22,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/control_plane                       watched components + webhook endpoints, all clusters
     GET /k8s/crashloops                          containers in backoff waiting states
     GET /k8s/pending                             Pending / SchedulingGated pods with age
+    GET /k8s/termination_candidates             pods overdue past their deletion deadline
     GET /k8s/kueue                               unadmitted Kueue workloads per queue
     GET /k8s/events                              recent Warning events
     GET /k8s/health                              per-cluster API server reachability + latency
@@ -29,6 +30,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /k8s/alerts/crashloops?scope=            alert rows: cluster, scope, value(count)
     GET /k8s/alerts/webhook_ready                alert rows: cluster, webhook, value(ready count)
     GET /k8s/alerts/degraded                     alert rows: cluster, component, value(desired-ready)
+    GET /k8s/alerts/stuck_gpu_pods                alert rows: cluster, node, pod labels, value(count)
     GET /health                                  bridge liveness
 
 A dead controller or GitHub returns 5xx (not empty rows), and the failure is not
@@ -42,6 +44,7 @@ threadpool.
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 import pyarrow as pa
@@ -70,6 +73,7 @@ TO_MACRO = "{{to}}"
 # it into columns under this prefix so a panel can select one as a series.
 LABELS_COLUMN = "labels"
 LABEL_PREFIX = "label_"
+_K8S_TERMINATION_CANDIDATES_CACHE_KEY = "termination_candidates"
 
 
 def _sql_timestamp(at: datetime) -> str:
@@ -312,6 +316,10 @@ def create_app(
     def k8s_pending(_: Request) -> JSONResponse:
         return k8s_endpoint("pending", k8s_fleet.pending)
 
+    def k8s_termination_candidates(_: Request) -> JSONResponse:
+        rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
+        return JSONResponse([asdict(row) for row in rows])
+
     def k8s_kueue(_: Request) -> JSONResponse:
         return k8s_endpoint("kueue", k8s_fleet.kueue)
 
@@ -339,6 +347,11 @@ def create_app(
     def k8s_alerts_degraded(_: Request) -> JSONResponse:
         return k8s_endpoint("alerts_degraded", k8s_fleet.alert_degraded)
 
+    def k8s_alerts_stuck_gpu_pods(_: Request) -> JSONResponse:
+        # The dashboard and alert projection share one fleet LIST per cache TTL.
+        rows = k8s_cache.get_or_compute(_K8S_TERMINATION_CANDIDATES_CACHE_KEY, k8s_fleet.termination_candidates)
+        return JSONResponse(k8s_fleet.alert_stuck_gpu_pods(rows))
+
     def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "clusters": sorted(finelog_sources)})
 
@@ -356,6 +369,7 @@ def create_app(
             Route("/k8s/control_plane", k8s_control_plane),
             Route("/k8s/crashloops", k8s_crashloops),
             Route("/k8s/pending", k8s_pending),
+            Route("/k8s/termination_candidates", k8s_termination_candidates),
             Route("/k8s/kueue", k8s_kueue),
             Route("/k8s/events", k8s_events),
             Route("/k8s/health", k8s_health),
@@ -363,6 +377,7 @@ def create_app(
             Route("/k8s/alerts/crashloops", k8s_alerts_crashloops),
             Route("/k8s/alerts/webhook_ready", k8s_alerts_webhook_ready),
             Route("/k8s/alerts/degraded", k8s_alerts_degraded),
+            Route("/k8s/alerts/stuck_gpu_pods", k8s_alerts_stuck_gpu_pods),
         ]
     )
 

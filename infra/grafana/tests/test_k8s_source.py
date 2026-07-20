@@ -4,6 +4,9 @@
 """Tests for the k8s source: flattening of canned API-server JSON, pagination,
 error classification, and the fleet's always-one-row-per-cluster alert contract."""
 
+from dataclasses import asdict
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 from conftest import (
@@ -22,6 +25,9 @@ from k8s_source import K8sError, K8sErrorClass, K8sFleet
 from server import create_app
 from starlette.testclient import TestClient
 
+GPU_RESOURCE = "nvidia.com/gpu"
+STALE_DELETION_TIMESTAMP = "2000-01-01T00:00:00Z"
+
 
 def _workload(name: str, queue: str, *, conditions: list | None = None, created: str = "2026-07-19T00:00:00Z") -> dict:
     return {
@@ -33,6 +39,35 @@ def _workload(name: str, queue: str, *, conditions: list | None = None, created:
 
 def _namespace(name: str) -> dict:
     return {"metadata": {"name": name}}
+
+
+def _termination_candidate(
+    name: str,
+    *,
+    node: str | None = None,
+    timestamp: str = STALE_DELETION_TIMESTAMP,
+    phase: str = "Running",
+    finalizers: list[str] | None = None,
+) -> dict:
+    manifest = pod("iris", name)
+    manifest["metadata"]["deletionTimestamp"] = timestamp
+    if finalizers:
+        manifest["metadata"]["finalizers"] = finalizers
+    manifest["spec"]["containers"] = [{"name": "task", "resources": {}}]
+    if node is not None:
+        manifest["spec"]["nodeName"] = node
+    manifest["status"]["phase"] = phase
+    return manifest
+
+
+def _with_gpu(manifest: dict, quantity: str) -> dict:
+    manifest["spec"]["containers"][0]["resources"]["limits"] = {GPU_RESOURCE: quantity}
+    return manifest
+
+
+def _with_task_attempt(manifest: dict, task_attempt: str) -> dict:
+    manifest["spec"]["containers"][0]["env"] = [{"name": "IRIS_TASK_ID", "value": task_attempt}]
+    return manifest
 
 
 # --- K8sSource --------------------------------------------------------------
@@ -214,6 +249,84 @@ def test_warning_events_flatten_newest_first():
     assert len(rows[0]["message"]) == 200
 
 
+def test_terminating_classifies_node_and_api_cleanup_cases():
+    recent = datetime.now(UTC).isoformat()
+    labels = {"iris.task_id": "sanitized.task", "iris.job_id": "sanitized.job"}
+    stuck_gpu = _with_task_attempt(
+        _with_gpu(_termination_candidate("stuck-gpu", node="node-a"), "4"), "/user/full-job/0:3"
+    )
+    stuck_gpu["metadata"].update({"deletionGracePeriodSeconds": 30, "labels": labels})
+    routes = {
+        "/api/v1/namespaces": [_namespace("iris")],
+        "/api/v1/namespaces/iris/pods": [
+            stuck_gpu,
+            _termination_candidate("finalizer", node="node-b", finalizers=["z", "a"]),
+            _termination_candidate("terminal", node="node-c", phase="Succeeded"),
+            _termination_candidate("unbound"),
+            _with_gpu(_termination_candidate("invalid", node="node-d", timestamp="not-a-time"), "1"),
+            _termination_candidate("within-threshold", node="node-e", timestamp=recent),
+        ],
+    }
+    rows = make_k8s_source(k8s_api(routes)).termination_candidates()
+    by_name = {row.pod: row for row in rows}
+
+    assert set(by_name) == {"stuck-gpu", "finalizer", "terminal", "unbound", "invalid"}
+    stuck_gpu = asdict(by_name["stuck-gpu"])
+    assert stuck_gpu.pop("cluster") == "cw-a"
+    overdue_seconds = stuck_gpu.pop("overdue_seconds")
+    assert stuck_gpu == {
+        "namespace": "iris",
+        "pod": "stuck-gpu",
+        "node": "node-a",
+        "phase": "Running",
+        "deletion_timestamp": STALE_DELETION_TIMESTAMP,
+        "deletion_grace_seconds": 30,
+        "gpu_count": 4,
+        "task_attempt": "/user/full-job/0:3",
+        "task_label": "sanitized.task",
+        "job_label": "sanitized.job",
+        "priority_class": "",
+        "finalizers": "",
+        "classification": "node_cleanup",
+    }
+    assert overdue_seconds > 0
+    assert by_name["finalizer"].classification == "finalizer"
+    assert by_name["finalizer"].finalizers == "a,z"
+    assert by_name["terminal"].classification == "terminal"
+    assert by_name["unbound"].classification == "unbound"
+    assert by_name["invalid"].classification == "invalid_timestamp"
+    assert by_name["invalid"].overdue_seconds is None
+
+
+def test_terminating_gpu_count_uses_requests_limits_and_init_peak():
+    manifest = _with_gpu(_termination_candidate("mixed-resources", node="node-a"), "2")
+    manifest["spec"]["containers"][0]["resources"]["requests"] = {GPU_RESOURCE: "1"}
+    manifest["spec"]["containers"].append({"name": "sidecar", "resources": {"requests": {GPU_RESOURCE: "1"}}})
+    manifest["spec"]["initContainers"] = [
+        {"name": "setup", "resources": {"limits": {GPU_RESOURCE: "4"}}},
+        {
+            "name": "restartable",
+            "restartPolicy": "Always",
+            "resources": {"limits": {GPU_RESOURCE: "1"}},
+        },
+    ]
+    routes = {
+        "/api/v1/namespaces": [_namespace("iris")],
+        "/api/v1/namespaces/iris/pods": [manifest],
+    }
+    (row,) = make_k8s_source(k8s_api(routes)).termination_candidates()
+    assert row.gpu_count == 4
+
+
+def test_terminating_rejects_an_invalid_gpu_quantity():
+    routes = {
+        "/api/v1/namespaces": [_namespace("iris")],
+        "/api/v1/namespaces/iris/pods": [_with_gpu(_termination_candidate("invalid-gpu", node="node-a"), "many")],
+    }
+    with pytest.raises(ValueError):
+        make_k8s_source(k8s_api(routes)).termination_candidates()
+
+
 # --- K8sFleet ---------------------------------------------------------------
 
 
@@ -251,6 +364,9 @@ def test_alert_routes_return_explicit_zeros_when_healthy():
         {"cluster": "cw-a", "component": "traefik/traefik", "value": 0},
         {"cluster": "cw-a", "component": "cert-manager/cert-manager", "value": 0},
     ]
+    assert fleet.alert_stuck_gpu_pods() == [
+        {"cluster": "cw-a", "node": "", "pods": "", "task_attempts": "", "gpus": "0", "value": 0}
+    ]
 
 
 def test_alert_routes_keep_one_row_per_cluster_when_unreachable():
@@ -263,6 +379,33 @@ def test_alert_routes_keep_one_row_per_cluster_when_unreachable():
         {"cluster": "cw-a", "webhook": "kueue-system/kueue-webhook-service", "value": 0}
     ]
     assert {row["value"] for row in fleet.alert_degraded()} == {0}
+    assert {row["value"] for row in fleet.alert_stuck_gpu_pods()} == {0}
+
+
+def test_stuck_gpu_alert_groups_only_node_cleanup_rows_by_node():
+    routes_a = healthy_k8s_routes()
+    routes_a["/api/v1/namespaces"] = [_namespace("iris")]
+    routes_a["/api/v1/namespaces/iris/pods"] = [
+        _with_task_attempt(_with_gpu(_termination_candidate("task-b", node="node-a"), "2"), "/u/job/1:2"),
+        _with_task_attempt(_with_gpu(_termination_candidate("task-a", node="node-a"), "1"), "/u/job/0:2"),
+        _with_gpu(_termination_candidate("terminal", node="node-b", phase="Failed"), "4"),
+        _with_gpu(_termination_candidate("finalizer", node="node-c", finalizers=["x"]), "4"),
+        _with_gpu(_termination_candidate("unbound"), "4"),
+        _termination_candidate("cpu-only", node="node-d"),
+    ]
+    fleet = _fleet(("cw-a", k8s_api(routes_a)), ("cw-b", k8s_api(healthy_k8s_routes())))
+    rows = fleet.alert_stuck_gpu_pods(fleet.termination_candidates())
+    assert rows == [
+        {
+            "cluster": "cw-a",
+            "node": "node-a",
+            "pods": "task-a,task-b",
+            "task_attempts": "/u/job/0:2,/u/job/1:2",
+            "gpus": "3",
+            "value": 2,
+        },
+        {"cluster": "cw-b", "node": "", "pods": "", "task_attempts": "", "gpus": "0", "value": 0},
+    ]
 
 
 def test_crashloop_alert_counts_by_scope():
@@ -288,10 +431,40 @@ def _client(fleet: K8sFleet) -> TestClient:
 
 def test_k8s_routes_serve_fleet_rows():
     client = _client(_fleet(("cw-a", k8s_api(healthy_k8s_routes()))))
-    for path in ("/k8s/control_plane", "/k8s/crashloops", "/k8s/pending", "/k8s/kueue", "/k8s/events"):
+    for path in (
+        "/k8s/control_plane",
+        "/k8s/crashloops",
+        "/k8s/pending",
+        "/k8s/kueue",
+        "/k8s/events",
+    ):
         assert client.get(path).status_code == 200
     health = client.get("/k8s/health").json()
     assert health[0]["cluster"] == "cw-a" and health[0]["reachable"] is True
+
+
+def test_stuck_termination_routes_return_classification_and_alert_projection():
+    routes = healthy_k8s_routes()
+    routes["/api/v1/namespaces"] = [_namespace("iris")]
+    routes["/api/v1/namespaces/iris/pods"] = [
+        _with_task_attempt(_with_gpu(_termination_candidate("task-0", node="gpu-node"), "4"), "/user/job/0:1")
+    ]
+    client = _client(_fleet(("cw-a", k8s_api(routes))))
+
+    (terminating,) = client.get("/k8s/termination_candidates").json()
+    assert terminating["cluster"] == "cw-a"
+    assert terminating["pod"] == "task-0"
+    assert terminating["classification"] == "node_cleanup"
+    assert client.get("/k8s/alerts/stuck_gpu_pods").json() == [
+        {
+            "cluster": "cw-a",
+            "node": "gpu-node",
+            "pods": "task-0",
+            "task_attempts": "/user/job/0:1",
+            "gpus": "4",
+            "value": 1,
+        }
+    ]
 
 
 def test_alerts_crashloops_scope_param_filters_rows():

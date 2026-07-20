@@ -380,6 +380,126 @@
       ]
     },
     {
+      "id": 8,
+      "type": "table",
+      "title": "Stuck terminating pods",
+      "description": "Pods still present at least two minutes after metadata.deletionTimestamp. Only node_cleanup rows that request GPUs page; finalizer, terminal, unbound, and invalid_timestamp rows need API/controller cleanup rather than an automatic node reboot.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "k8s"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "overdue_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "deletion_grace_seconds"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/termination_candidates",
+          "url_options": {
+            "method": "GET"
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "namespace",
+              "text": "namespace",
+              "type": "string"
+            },
+            {
+              "selector": "pod",
+              "text": "pod",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "classification",
+              "text": "classification",
+              "type": "string"
+            },
+            {
+              "selector": "gpu_count",
+              "text": "gpu_count",
+              "type": "number"
+            },
+            {
+              "selector": "task_attempt",
+              "text": "task_attempt",
+              "type": "string"
+            },
+            {
+              "selector": "priority_class",
+              "text": "priority_class",
+              "type": "string"
+            },
+            {
+              "selector": "overdue_seconds",
+              "text": "overdue_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "deletion_grace_seconds",
+              "text": "deletion_grace_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "finalizers",
+              "text": "finalizers",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 5,
       "type": "table",
       "title": "Crash-looping pods",
@@ -392,7 +512,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 15
+        "y": 23
       },
       "fieldConfig": {
         "defaults": {},
@@ -462,7 +582,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 23
       },
       "fieldConfig": {
         "defaults": {},
@@ -540,7 +660,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 31
       },
       "fieldConfig": {
         "defaults": {},

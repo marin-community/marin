@@ -202,6 +202,21 @@ preemption budget; `failed` is terminal with no retry.
 `-` target) and take `--dry-run`. This is the query→act bridge: select the
 targets with SQL, preview, then fire. See "Bulk actions: query → act" below.
 
+### Recovering a stuck terminating Kubernetes pod
+
+Use [the `recover-stuck-k8s-pod` skill](../../.agents/skills/recover-stuck-k8s-pod/SKILL.md)
+when a CoreWeave pod remains after its Kubernetes deletion deadline. The Grafana
+**K8s control plane** dashboard classifies overdue pods; its alert fires only for
+node-bound, nonterminal GPU pods without finalizers.
+
+The recovery order is safety-critical: record the node's existing cordon state,
+cordon it, quiesce the exact Iris attempt and every sibling workload, then use a
+CoreWeave force reboot if targeted graceful deletion still cannot stop the pod.
+Never force-delete the pod object while the old process may still be running.
+Kubernetes does not wait for kubelet confirmation, so replacement work can start
+while the old process still owns the GPU. Force-delete a stale object only after
+CoreWeave confirms the reboot completed (or process death is otherwise proven).
+
 ## Process Inspection & Profiling
 
 ```bash

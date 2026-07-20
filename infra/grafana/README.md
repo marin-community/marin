@@ -34,9 +34,10 @@ GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
-GET /k8s/kueue | events | health                  ... one response, `cluster` column
+GET /k8s/termination_candidates | kueue | events | health
+                                                    ... one response, `cluster` column
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
-     webhook_ready,degraded}                      numeric, >=1 row per cluster
+     webhook_ready,degraded,stuck_gpu_pods}       numeric, >=1 row per cluster
 GET /health                                       bridge liveness
 ```
 
@@ -72,7 +73,11 @@ control-plane components (a config constant: kueue-controller-manager, iris-cont
 traefik, cert-manager) with ready/desired/restarts/waiting state, admission-webhook
 ready-endpoint counts from `discovery.k8s.io` EndpointSlices, backoff pods, pending and
 scheduling-gated pods, the unadmitted Kueue backlog per queue, and recent Warning
-events. The pod-level scans skip provider-managed namespaces (`cw-*`, `kube-*`):
+events. It also reports pods still present at least two minutes after their API
+deletion deadline, classified as node cleanup, finalizer cleanup, terminal cleanup,
+unbound cleanup, or invalid timestamp. Those rows include the assigned node, GPU
+request, canonical Iris task-attempt id from `IRIS_TASK_ID`, priority class, and
+finalizers. The pod-level scans skip provider-managed namespaces (`cw-*`, `kube-*`):
 CoreWeave's per-node daemons are thousands of pods of someone else's infrastructure,
 while the namespaces we operate hold about a hundred. These are current-state reads —
 the bridge stores no history; trends come from the finelog-backed rows.
@@ -130,9 +135,12 @@ redeploy.
 
 Rules page only on near-certain incidents: an unreachable cluster, a
 crash-looping watched component, an admission webhook with no ready endpoints, a
-degraded component, and a dead Iris controller. Workload-tier signals (gated pods,
-Kueue backlog, workload crashloops) are dashboard-only — they have expected benign
-causes, so paging on them would be noise. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
+degraded component, a dead Iris controller, and a GPU pod that stays node-bound and
+nonterminal without finalizers for five minutes after the bridge's two-minute
+overdue threshold. The stuck-pod rule groups by node and links the cordon-first
+recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
+Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
+dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai +
 Slack); `severity=warning` routes to `ops-slack` (Slack only). Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
 explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
