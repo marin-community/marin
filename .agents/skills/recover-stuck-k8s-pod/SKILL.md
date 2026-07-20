@@ -51,11 +51,11 @@ kubectl --kubeconfig <kubeconfig> --context <context> \
 
 The Grafana `classification` column chooses the first applicable case:
 
+- `invalid_timestamp`: repair or escalate the malformed object metadata.
 - `finalizer`: investigate and repair the owning controller. Do not reboot a
   node solely because an object has a finalizer.
 - `terminal`: the workload finished; investigate API or runtime cleanup.
 - `unbound`: no node owns the pod; investigate API or scheduler cleanup.
-- `invalid_timestamp`: repair or escalate the malformed object metadata.
 - `node_cleanup`: the nonterminal object is bound to a node with no finalizer.
   Continue with node-level recovery only for this case.
 
