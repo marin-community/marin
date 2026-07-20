@@ -938,3 +938,19 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
 - **NET: linear-past-threshold FORM generalizes across code/math/web; THRESHOLD τ is per-bucket
   (τ_code≈8.85, τ_math≈11.7), amplitude b per-bucket (math>code>web) with B^−0.73·d^+1.68 scaling.**
   Remaining open: does the term survive to 100B production (gate running, ~06:00Z).
+
+## 2026-07-20 Report revision: per-figure explainers + f32 + two miscaption fixes
+- Added a collapsed-by-default "What am I looking at?" <details> panel under every figure
+  (setup / how-to-read / takeaway), per rav's request. 19 figures.
+- Fixed TWO miscaptions found by actually viewing each figure:
+  - f14_delta_groups: was mislabeled "bucket→content affinity map"; it's actually per-group
+    epoch-DISCOUNT ridge deltas (superseded qsplit h_eff work) → DROPPED from the report.
+  - f15_sample_size: was mislabeled "held-out accuracy vs #runs"; it's actually V-HISTOGRAM
+    FINGERPRINT STABILITY (seed0-vs-seed1 Hellinger agreement vs docs/bucket) → recaptioned,
+    moved to §2 controls (feature reliability).
+  - f17/f18 recaptioned as the single-bucket-FLAT (mean-reversion) vs GROUP-signal (ρ=+0.54)
+    contrast; f16 gained its MDS lossy-projection caveat (stress 0.357, ~17% variance).
+- Published to all 3: Claude artifact (same URL, label per-figure-explainers), GCS private
+  (reports/mve_current_best_approach_2026-07-19.html refreshed), and Marin public site NEW
+  version https://storage.googleapis.com/marin-public/rav/mixing-via-embeddings/2026.07.20/index.html
+  (2026.07.19 link stays live). Generators live in gitignored scratch/mixture_features/report/.
