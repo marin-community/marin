@@ -152,6 +152,78 @@ python grug_moe_mfu.py --run-id row13-ep8 --output-dir runs/row13-ep8 \
   --moe-implementation ring --expert-parallelism 8 --num-gpus 8
 ```
 
+### Issue #7279 single-rack matrix
+
+These arguments reproduce the fastest 64-GB200 architecture from
+[#7201](https://github.com/marin-community/marin/issues/7201#issuecomment-5016389653):
+
+```bash
+reference_args=(
+  --steps 30 --warmup-steps 8
+  --batch-size 1024 --seq-len 4096
+  --hidden-dim 6144 --num-layers 48
+  --num-experts 128 --num-experts-per-token 4
+  --num-heads 48 --num-kv-heads 8 --head-dim 128
+  --shared-expert-intermediate-dim 6144
+  --sliding-window 512 --global-every 6
+  --attention-implementation gpu_fa4_cute
+  --num-gpus 64 --replica-axis-size 2
+  --capacity-factor 1.0 --remat-mode recompute_all
+)
+
+baseline_args=("${reference_args[@]}" --expert-intermediate-dim 3072)
+latent_args=(
+  "${reference_args[@]}"
+  --expert-intermediate-dim 6144
+  --moe-latent-dim 3072 --moe-latent-norm
+)
+```
+
+Run each arm in a fresh 16-node Iris gang job. The EP1 controls isolate local
+projection and GEMM-shape costs:
+
+```bash
+# B200LMOE-001-A / 002-A: EP1 controls
+python grug_moe_mfu.py "${baseline_args[@]}" \
+  --run-id b200lmoe-001-a --output-dir runs/b200lmoe-001-a \
+  --moe-implementation sonic_cute --expert-parallelism 1
+python grug_moe_mfu.py "${latent_args[@]}" \
+  --run-id b200lmoe-002-a --output-dir runs/b200lmoe-002-a \
+  --moe-implementation sonic_cute --expert-parallelism 1
+
+# B200LMOE-001-B / 002-B: ring_cute EP4
+python grug_moe_mfu.py "${baseline_args[@]}" \
+  --run-id b200lmoe-001-b --output-dir runs/b200lmoe-001-b \
+  --moe-implementation ring_cute --expert-parallelism 4
+python grug_moe_mfu.py "${latent_args[@]}" \
+  --run-id b200lmoe-002-b --output-dir runs/b200lmoe-002-b \
+  --moe-implementation ring_cute --expert-parallelism 4
+
+# B200LMOE-001-C / 002-C: ring_cute EP8
+python grug_moe_mfu.py "${baseline_args[@]}" \
+  --run-id b200lmoe-001-c --output-dir runs/b200lmoe-001-c \
+  --moe-implementation ring_cute --expert-parallelism 8
+python grug_moe_mfu.py "${latent_args[@]}" \
+  --run-id b200lmoe-002-c --output-dir runs/b200lmoe-002-c \
+  --moe-implementation ring_cute --expert-parallelism 8
+
+# B200LMOE-001-D / 002-D: ragged_all_to_all_cute EP8
+XLA_FLAGS=--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false \
+  python grug_moe_mfu.py "${baseline_args[@]}" \
+  --run-id b200lmoe-001-d --output-dir runs/b200lmoe-001-d \
+  --moe-implementation ragged_all_to_all_cute --expert-parallelism 8
+XLA_FLAGS=--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=false \
+  python grug_moe_mfu.py "${latent_args[@]}" \
+  --run-id b200lmoe-002-d --output-dir runs/b200lmoe-002-d \
+  --moe-implementation ragged_all_to_all_cute --expert-parallelism 8
+```
+
+The matched-work latent arms change routed experts from
+`6144 -> 3072 -> 6144` to `3072 -> 6144 -> 3072`. Routing and the shared expert
+remain at width 6144. This preserves routed-expert parameter count and active
+expert GEMM work, halves the EP activation payload, and adds one shared
+`6144 -> 3072 -> 6144` projection pair per layer.
+
 ### Multi-node
 
 The script joins one JAX mesh across a multi-node gang automatically. Under an iris
@@ -190,6 +262,11 @@ export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 | `--num-gpus` | 8 | total GPUs to shard across (all nodes; asserted against the joined mesh) |
 | `--num-layers` | 26 | decoder layers |
 | `--num-experts` / `--num-experts-per-token` | 64 / 4 | MoE experts, top-k |
+| `--expert-intermediate-dim` | hidden / 2 | routed-expert intermediate width |
+| `--shared-expert-intermediate-dim` | expert intermediate | always-on shared-expert intermediate width; 0 disables it |
+| `--moe-latent-dim` / `--moe-latent-norm` | off / off | compress only the routed path to this width and optionally apply latent RMSNorm |
+| `--num-heads` / `--num-kv-heads` | hidden / head dim | explicit query and KV head counts |
+| `--sliding-window` / `--global-every` | 2048 / 4 | local attention window and full-causal layer frequency |
 | `--batch-size` / `--seq-len` | 128 / 4096 | global batch, sequence length |
 | `--steps` / `--warmup-steps` | 20 / 8 | total steps, warmup excluded from the median |
 | `--profile-dir` | off | write a `jax.profiler` trace of steady-state steps 10–12 (process 0 only) |
@@ -202,10 +279,11 @@ MFU is the honest, active-expert accounting:
 ```
 flops_per_token   = lm_flops_per_token(..., num_experts_per_tok=num_experts_per_token)  # active experts, not all 64
 flops_per_example = 3 * flops_per_token * seq_len                                        # ×3 for fwd + bwd
-mfu_b200          = (flops_per_example * examples_per_second) / (num_gpus * 2.25e15)     # 2.25e15 = dense B200 bf16 peak/GPU
+mfu_b200          = (flops_per_example * examples_per_second) / (num_gpus * 2.25e15)     # B200 convention
+mfu_gb200         = (flops_per_example * examples_per_second) / (num_gpus * 2.50e15)     # #7201 GB200 convention
 ```
 
-Each step prints a JSON line (`mfu_b200`, `tokens_per_second`, `duration`, `loss`, …);
+Each step prints a JSON line (`mfu_gb200`, `mfu_b200`, `tokens_per_second`, `duration`, `loss`, …);
 the final `SUMMARY {...}` line and `metrics_summary.json` report the **steady-state
 median** over the post-warmup steps.
 

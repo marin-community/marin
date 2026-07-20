@@ -274,12 +274,15 @@ class GrugModelConfig:
     shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
+    moe_latent_dim: int | None = None
+    moe_latent_norm: bool = False
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
     head_dim: int | None = None
     max_seq_len: int = 8192
     sliding_window: int = 2048
+    global_every: int = 4
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
@@ -321,6 +324,8 @@ class GrugModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
+        if self.global_every <= 0:
+            raise ValueError("global_every must be positive")
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
         if self.num_experts_per_token <= 0:
@@ -329,6 +334,13 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.moe_latent_norm and self.moe_latent_dim is None:
+            raise ValueError("moe_latent_norm requires moe_latent_dim")
+        if self.moe_latent_dim is not None:
+            if self.moe_latent_dim <= 0 or self.moe_latent_dim >= self.hidden_dim:
+                raise ValueError("moe_latent_dim must be positive and smaller than hidden_dim")
+            if self.hidden_dim % self.moe_latent_dim != 0:
+                raise ValueError("hidden_dim must be divisible by moe_latent_dim")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -723,11 +735,18 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    moe_down: jax.Array | None
+    moe_up: jax.Array | None
+    moe_latent_rms: RMSNorm | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> MoEMLP:
-        k_router, k_expert = random.split(key, 2)
+        if cfg.moe_latent_dim is None:
+            k_router, k_expert = random.split(key, 2)
+            k_down = k_up = None
+        else:
+            k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -735,12 +754,28 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        expert_hidden_dim = cfg.moe_latent_dim if cfg.moe_latent_dim is not None else d
+        moe_down = (
+            reshard(_init_weight(k_down, (d, cfg.moe_latent_dim), cfg.initializer_std), P(None, None))
+            if cfg.moe_latent_dim is not None
+            else None
+        )
+        moe_up = (
+            reshard(_init_weight(k_up, (cfg.moe_latent_dim, d), cfg.initializer_std), P(None, None))
+            if cfg.moe_latent_dim is not None
+            else None
+        )
+        moe_latent_rms = (
+            RMSNorm.init(cfg.moe_latent_dim, cfg.layer_norm_eps)
+            if cfg.moe_latent_dim is not None and cfg.moe_latent_norm
+            else None
+        )
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=expert_hidden_dim,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -748,6 +783,9 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
             ),
+            moe_down=moe_down,
+            moe_up=moe_up,
+            moe_latent_rms=moe_latent_rms,
             cfg=cfg,
         )
 
@@ -801,8 +839,14 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        expert_in = x_flat
+        if self.moe_down is not None:
+            expert_in = reshard(jnp.einsum("td,dl->tl", x_flat, self.moe_down), P(_BATCH_AXES, None))
+            if self.moe_latent_rms is not None:
+                expert_in = self.moe_latent_rms(expert_in)
+
         routed_flat, dropped_assignments = self.expert_mlp(
-            x_flat,
+            expert_in,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
@@ -810,16 +854,18 @@ class MoEMLP(eqx.Module):
         )
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
+        if self.moe_up is not None:
+            routed_flat = reshard(jnp.einsum("tl,ld->td", routed_flat, self.moe_up), P(_BATCH_AXES, None))
+
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
 
 
-def _long_layer_schedule(num_layers: int) -> jax.Array:
-    """Bool[num_layers] = True for every 4th layer and the last layer (the full-causal
-    "long" layers); False elsewhere (sliding-window "short" layers)."""
+def long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
+    """Return the full-causal layer schedule, including the final layer."""
     idx = jnp.arange(num_layers)
-    return ((idx % 4) == 3) | (idx == num_layers - 1)
+    return ((idx % global_every) == global_every - 1) | (idx == num_layers - 1)
 
 
 class Block(eqx.Module):
@@ -1035,7 +1081,7 @@ class Transformer(eqx.Module):
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
                 is_last = i == num_blocks - 1
-                is_long = i % 4 == 3 or is_last
+                is_long = i % cfg.global_every == cfg.global_every - 1 or is_last
                 use_pko = is_long and not cfg.disable_pko
                 layer_mask = long_mask if is_long else short_mask
                 disable_rope = cfg.disable_long_rope if is_long else False
@@ -1061,7 +1107,7 @@ class Transformer(eqx.Module):
             # short/long choice rides in as a Bool[num_layers] scan input, selecting between the
             # precomputed FA4 bounds with jnp.where (no lax.cond — see the fa4 bounds comment
             # above). ``disable_rope`` rides in as a traced per-layer scalar.
-            mask_schedule = _long_layer_schedule(cfg.num_layers)
+            mask_schedule = long_layer_schedule(cfg.num_layers, cfg.global_every)
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
@@ -1360,7 +1406,6 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-@OptimizerConfig.register_subclass("grug_moe_adamh_v2")
 @dataclass(frozen=True)
 class GrugMoeAdamHConfig(OptimizerConfig):
     """AdamH for Grug MoE. Four optimizer groups, no flags.
@@ -1448,7 +1493,6 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-@OptimizerConfig.register_subclass("grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
     """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
@@ -1741,20 +1785,30 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
-        hidden_dim=model_config.hidden_dim,
-        intermediate_dim=model_config.intermediate_dim,
-        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
-        num_kv_heads=model_config.num_kv_heads,
-        num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
-        vocab_size=model_config.vocab_size,
-        glu=True,
-        num_experts=model_config.num_experts,
-        num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
-        num_experts_per_tok=model_config.num_experts_per_token,
-    )
+    flop_kwargs = {
+        "hidden_dim": model_config.hidden_dim,
+        "shared_intermediate_dim": model_config.shared_expert_intermediate_dim,
+        "num_layers": model_config.num_layers,
+        "num_kv_heads": model_config.num_kv_heads,
+        "num_heads": model_config.num_heads,
+        "seq_len": model_config.max_seq_len,
+        "vocab_size": model_config.vocab_size,
+        "glu": True,
+        "num_experts": model_config.num_experts,
+        "num_shared_experts": 1 if model_config.shared_expert_intermediate_dim > 0 else 0,
+        "num_experts_per_tok": model_config.num_experts_per_token,
+    }
+    if model_config.moe_latent_dim is None:
+        flops_per_token = lm_flops_per_token(intermediate_dim=model_config.intermediate_dim, **flop_kwargs)
+    else:
+        flops_without_routed_experts = lm_flops_per_token(intermediate_dim=0, **flop_kwargs)
+        routed_expert_flops = (
+            6 * model_config.moe_latent_dim * model_config.intermediate_dim * model_config.num_experts_per_token
+        )
+        latent_projection_flops = 4 * model_config.hidden_dim * model_config.moe_latent_dim
+        flops_per_token = flops_without_routed_experts + model_config.num_layers * (
+            routed_expert_flops + latent_projection_flops
+        )
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
@@ -1763,6 +1817,11 @@ def _compute_flops(
     }
 
     return flops_per_example, flops_summary
+
+
+def model_config_summary(model_config: GrugModelConfig) -> dict[str, object]:
+    """Return the resolved model configuration in JSON-serializable form."""
+    return dataclasses.asdict(model_config)
 
 
 def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: BatchSchedule):
@@ -2142,6 +2201,7 @@ __all__ = [
 
 # ==================== minimal synthetic-data MFU harness ====================
 _B200_BF16_PEAK_FLOPS = 2.25e15
+_GB200_BF16_PEAK_FLOPS = 2.5e15
 _H100_BF16_PEAK_FLOPS = 9.89e14
 _BATCH_AXES = ("replica_dcn", "data", "expert")
 # Steady-state step window traced by --profile-dir (inclusive; past the default 8 warmup steps).
@@ -2170,7 +2230,7 @@ def _global_array(host_value: np.ndarray, sharding: NamedSharding) -> jax.Array:
     return jax.make_array_from_callback(host_value.shape, sharding, lambda idx: host_value[idx])
 
 
-def _parse():
+def _parse(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--run-id", required=True)
     p.add_argument("--output-dir", required=True)
@@ -2183,6 +2243,14 @@ def _parse():
     p.add_argument("--num-experts", type=int, default=64)
     p.add_argument("--num-experts-per-token", type=int, default=4)
     p.add_argument("--head-dim", type=int, default=128)
+    p.add_argument("--num-heads", type=int, default=None)
+    p.add_argument("--num-kv-heads", type=int, default=None)
+    p.add_argument("--expert-intermediate-dim", type=int, default=None)
+    p.add_argument("--shared-expert-intermediate-dim", type=int, default=None)
+    p.add_argument("--sliding-window", type=int, default=2048)
+    p.add_argument("--global-every", type=int, default=4)
+    p.add_argument("--moe-latent-dim", type=int, default=None)
+    p.add_argument("--moe-latent-norm", action="store_true")
     p.add_argument("--num-gpus", type=int, default=8)
     p.add_argument(
         "--replica-axis-size",
@@ -2244,7 +2312,45 @@ def _parse():
             "(process 0 only) to this directory"
         ),
     )
-    return p.parse_args()
+    return p.parse_args(argv)
+
+
+def model_config_from_args(args: argparse.Namespace) -> GrugModelConfig:
+    num_heads = args.num_heads if args.num_heads is not None else args.hidden_dim // args.head_dim
+    num_kv_heads = args.num_kv_heads if args.num_kv_heads is not None else num_heads
+    expert_intermediate_dim = (
+        args.expert_intermediate_dim if args.expert_intermediate_dim is not None else args.hidden_dim // 2
+    )
+    shared_expert_intermediate_dim = (
+        args.shared_expert_intermediate_dim
+        if args.shared_expert_intermediate_dim is not None
+        else expert_intermediate_dim
+    )
+    return GrugModelConfig(
+        vocab_size=128256,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=args.head_dim,
+        intermediate_dim=expert_intermediate_dim,
+        shared_expert_intermediate_dim=shared_expert_intermediate_dim,
+        num_experts=args.num_experts,
+        num_experts_per_token=args.num_experts_per_token,
+        max_seq_len=args.seq_len,
+        sliding_window=args.sliding_window,
+        global_every=args.global_every,
+        moe_latent_dim=args.moe_latent_dim,
+        moe_latent_norm=args.moe_latent_norm,
+        initializer_std=0.5 / (args.hidden_dim**0.5),
+        qk_mult=1.3,
+        attention_implementation=args.attention_implementation,
+        moe_implementation=args.moe_implementation,
+        capacity_factor=args.capacity_factor,
+        use_array_stacked_blocks=not args.unrolled_blocks,
+        disable_pko=True,
+        remat_mode=args.remat_mode,
+    )
 
 
 def _make_batch(bs, seq_len, vocab, step, mesh):
@@ -2271,36 +2377,14 @@ def main():
     is_main_process = jax.process_index() == 0
     out = Path(a.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    nh = a.hidden_dim // a.head_dim
-    inter = a.hidden_dim // 2
-    model = GrugModelConfig(
-        vocab_size=128256,
-        hidden_dim=a.hidden_dim,
-        num_layers=a.num_layers,
-        num_heads=nh,
-        num_kv_heads=nh,
-        head_dim=a.head_dim,
-        intermediate_dim=inter,
-        shared_expert_intermediate_dim=inter,
-        num_experts=a.num_experts,
-        num_experts_per_token=a.num_experts_per_token,
-        max_seq_len=a.seq_len,
-        sliding_window=2048,
-        initializer_std=0.5 / (a.hidden_dim**0.5),
-        qk_mult=1.3,
-        attention_implementation=a.attention_implementation,
-        moe_implementation=a.moe_implementation,
-        capacity_factor=a.capacity_factor,
-        use_array_stacked_blocks=not a.unrolled_blocks,
-        disable_pko=True,
-        remat_mode=a.remat_mode,
-    )
+    model = model_config_from_args(a)
     optimizer = GrugMoeMuonHConfig(learning_rate=1e-3, adam_lr=1e-4, min_lr_ratio=0.0, warmup=0.1)
     mp = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
     opt = optimizer.build(a.steps)
     train_step = _make_train_step(opt, mp, z_loss_weight=1e-4, ema_beta=None, watch_config=None)
     flops_per_example, flops_summary = _compute_flops(model_config=model)
-    peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
+    b200_peak = a.num_gpus * _B200_BF16_PEAK_FLOPS
+    gb200_peak = a.num_gpus * _GB200_BF16_PEAK_FLOPS
     mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis_size)
     metrics = []
     tps = a.batch_size * a.seq_len
@@ -2330,7 +2414,8 @@ def main():
                 "duration": dur,
                 "tokens_per_second": tps / dur,
                 "achieved_flops_per_second": achieved,
-                "mfu_b200": achieved / peak,
+                "mfu_b200": achieved / b200_peak,
+                "mfu_gb200": achieved / gb200_peak,
                 "mfu_h100_equiv": achieved / (a.num_gpus * _H100_BF16_PEAK_FLOPS),
                 "loss": float(loss),
             }
@@ -2345,12 +2430,12 @@ def main():
     summary = {
         "args": vars(a),
         "config": {
+            **model_config_summary(model),
             **flops_summary,
-            "hidden_dim": model.hidden_dim,
-            "moe_implementation": model.moe_implementation,
             "num_gpus": a.num_gpus,
         },
         "steady_median_mfu_b200": med([m["mfu_b200"] for m in steady]),
+        "steady_median_mfu_gb200": med([m["mfu_gb200"] for m in steady]),
         "steady_median_achieved_tflops": (
             None if not steady else med([m["achieved_flops_per_second"] for m in steady]) / 1e12
         ),
