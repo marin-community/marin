@@ -7,9 +7,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
+from haliax.quantization import RaggedDotOp
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int, Key
 
@@ -29,6 +31,9 @@ MoeImplementation: TypeAlias = Literal[
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
+# EP backends wired for injected ragged-dot ops and FP8 wire collectives
+# (deepep resolves its own GEMMs and collectives).
+_QUANTIZED_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -51,6 +56,19 @@ MOE_REMAT_SAVE_NAMES = (
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_MOE_OUTPUT,
 )
+
+
+class MoeRaggedDotOps(eqx.Module):
+    """Stateful grouped-matmul ops for the two expert GEMMs.
+
+    Each GEMM gets its own op instance (e.g. [haliax.quantization.Fp8RaggedDotOp][])
+    because delayed-scaling state tracks per-tensor amax statistics: the w13 input
+    (hidden states) and the w2 input (SwiGLU activations) have different
+    distributions, exactly as two `Linear` layers carry separate `Fp8DotGeneralOp`s.
+    """
+
+    w13: RaggedDotOp
+    w2: RaggedDotOp
 
 
 @dataclass(frozen=True)

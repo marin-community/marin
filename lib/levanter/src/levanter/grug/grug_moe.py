@@ -29,10 +29,12 @@ from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
+    _QUANTIZED_EP_MOE_IMPLEMENTATIONS,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
+    MoeRaggedDotOps,
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
@@ -68,6 +70,11 @@ class MoEExpertMlp(eqx.Module):
     implementation: MoeImplementation = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    # Optional stateful grouped-matmul ops (e.g. FP8). Lives in the model pytree
+    # so quantization state (OverwriteWithGradient) flows through the trainer's
+    # partition_for_grad_overwrite / apply_updates like Linear's dot_general ops.
+    ragged_dot_ops: MoeRaggedDotOps | None = None
+    fp8_wire: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(
@@ -81,6 +88,8 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
+        ragged_dot_ops: MoeRaggedDotOps | None = None,
+        fp8_wire: bool = False,
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
@@ -97,6 +106,8 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            ragged_dot_ops=ragged_dot_ops,
+            fp8_wire=fp8_wire,
         )
 
     @named_call
@@ -121,6 +132,8 @@ class MoEExpertMlp(eqx.Module):
             mesh=mesh,
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
+            ragged_dot_ops=self.ragged_dot_ops,
+            fp8_wire=self.fp8_wire,
         )
 
 
@@ -137,6 +150,8 @@ def moe_mlp(
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    ragged_dot_ops: MoeRaggedDotOps | None = None,
+    fp8_wire: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -146,6 +161,15 @@ def moe_mlp(
 
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
+
+    ``ragged_dot_ops`` supplies stateful grouped-matmul ops for the two expert
+    GEMMs (e.g. FP8 quantized ops, see [MoeRaggedDotOps][]); ``None`` keeps the
+    default bf16 kernels. Only the EP ring / ragged_all_to_all backends support
+    ops.
+
+    ``fp8_wire=True`` switches the EP dispatch/combine collectives to carry FP8
+    over the wire (E4M3 activations forward, E5M2 gradients backward; see
+    ``levanter.grug._moe.fp8_wire``). Ring and ragged_all_to_all backends only.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -180,6 +204,18 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+
+    has_ep = has_expert_axis and expert_axis_size > 1
+    if ragged_dot_ops is not None and (not has_ep or resolved_implementation not in _QUANTIZED_EP_MOE_IMPLEMENTATIONS):
+        raise NotImplementedError(
+            "ragged_dot_ops is only wired into the EP ring / ragged_all_to_all backends; "
+            f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+        )
+    if fp8_wire and (not has_ep or resolved_implementation not in _QUANTIZED_EP_MOE_IMPLEMENTATIONS):
+        raise NotImplementedError(
+            "fp8_wire is only wired into the EP ring / ragged_all_to_all backends; "
+            f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+        )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -225,13 +261,19 @@ def moe_mlp(
         combine_weights = _reshard_for_shard_map(combine_weights, mesh, batch_spec)
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
+        if ragged_dot_ops is not None:
+            ragged_dot_ops = jax.tree.map(
+                lambda a: _reshard_for_shard_map(a, mesh, P()) if eqx.is_array(a) else a, ragged_dot_ops
+            )
 
+        backend_kwargs = {"fp8_wire": fp8_wire} if resolved_implementation in _QUANTIZED_EP_MOE_IMPLEMENTATIONS else {}
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                **backend_kwargs,
             ),
             mesh=mesh,
             in_specs=(
@@ -240,11 +282,12 @@ def moe_mlp(
                 batch_spec,
                 w_up_gate_spec,
                 w_down_spec,
+                P(),  # ragged-dot op state is replicated across the mesh
             ),
             out_specs=(batch_spec, P()),
             check_vma=False,
         )
-        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        out, dropped = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down, ragged_dot_ops)
         if report_capacity_overflow:
             return out, dropped
         return out
@@ -294,6 +337,7 @@ __all__ = [
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
+    "MoeRaggedDotOps",
     "PspecAxis",
     "moe_mlp",
     "resolve_moe_implementation",

@@ -23,6 +23,8 @@ import jmp
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.partitioning import set_mesh
+from haliax.quantization import Fp8DotGeneralOp, Fp8RaggedDotOp
 from jax._src import config as jax_config
 from jax.sharding import use_abstract_mesh
 from levanter.checkpoint import CheckpointerConfig
@@ -31,7 +33,7 @@ from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import _compact_grug_mesh_shape, compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -302,6 +304,191 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
     assert "ragged_all_to_all" in str(closed_jaxpr)
+
+
+def test_grug_moe_fp8_config_rejects_non_tile_aligned_dims():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    assert cfg.hidden_dim % 128 != 0, "fixture must violate the fp8 kernel's alignment contract"
+    with pytest.raises(ValueError, match="multiples of 128"):
+        dataclasses.replace(cfg, fp8=model_module.GrugFp8Config())
+
+
+def test_grug_moe_fp8_config_threads_ops_into_expert_mlp():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+
+    def build(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(cfg, fp8=fp8, hidden_dim=128, intermediate_dim=128)
+        return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        # rev_dtype="e4m3" (uniform backward) so the op constructs on jax 0.10.x CPU
+        # CI; the threading/state contracts under test are dtype-recipe independent.
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=8))
+        gemm_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", wire=False))
+        bf16_model = eqx.filter_eval_shape(build, None)
+
+    fp8_mlp = fp8_model.blocks[0].mlp.expert_mlp
+    assert isinstance(fp8_mlp.ragged_dot_ops.w13, Fp8RaggedDotOp)
+    assert isinstance(fp8_mlp.ragged_dot_ops.w2, Fp8RaggedDotOp)
+    assert fp8_mlp.ragged_dot_ops.w13.input_amax_history.shape == (8,)
+    assert fp8_mlp.fp8_wire
+
+    gemm_only_mlp = gemm_only_model.blocks[0].mlp.expert_mlp
+    assert isinstance(gemm_only_mlp.ragged_dot_ops.w13, Fp8RaggedDotOp)
+    assert not gemm_only_mlp.fp8_wire
+
+    bf16_mlp = bf16_model.blocks[0].mlp.expert_mlp
+    assert bf16_mlp.ragged_dot_ops is None
+    assert not bf16_mlp.fp8_wire
+
+
+def test_grug_moe_fp8_config_threads_dense_ops():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+
+    def build(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(cfg, fp8=fp8, hidden_dim=128, intermediate_dim=128)
+        return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=8))
+        moe_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", dense=False))
+        bf16_model = eqx.filter_eval_shape(build, None)
+
+    attn = fp8_model.blocks[0].attn
+    for op in (attn.fp8_ops.q, attn.fp8_ops.k, attn.fp8_ops.v, attn.fp8_ops.o):
+        assert isinstance(op, Fp8DotGeneralOp)
+    assert attn.fp8_ops.q.input_amax_history.shape == (8,)
+    shared = fp8_model.blocks[0].shared
+    for op in (shared.fp8_ops.gate, shared.fp8_ops.up, shared.fp8_ops.down):
+        assert isinstance(op, Fp8DotGeneralOp)
+
+    # dense=False keeps the FP8 expert path but reverts every dense GEMM to bf16.
+    assert moe_only_model.blocks[0].attn.fp8_ops is None
+    assert moe_only_model.blocks[0].shared.fp8_ops is None
+    assert moe_only_model.blocks[0].mlp.expert_mlp.ragged_dot_ops is not None
+
+    assert bf16_model.blocks[0].attn.fp8_ops is None
+    assert bf16_model.blocks[0].shared.fp8_ops is None
+
+
+def test_grug_moe_fp8_dense_config_rejects_misaligned_dims():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    cfg = dataclasses.replace(cfg, hidden_dim=128, intermediate_dim=128, shared_expert_intermediate_dim=8)
+    with pytest.raises(ValueError, match="16-aligned"):
+        dataclasses.replace(cfg, fp8=model_module.GrugFp8Config())
+    # The misaligned shared-expert dim only matters when the dense GEMMs quantize.
+    dataclasses.replace(cfg, fp8=model_module.GrugFp8Config(dense=False))
+
+
+def _rel_frobenius(actual: jax.Array, reference: jax.Array) -> float:
+    ref = reference.astype(jnp.float32)
+    return float(jnp.linalg.norm(actual.astype(jnp.float32) - ref) / jnp.linalg.norm(ref))
+
+
+def test_grug_moe_fp8_dense_shared_expert_tracks_bf16():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    fp8_config = model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=4)
+
+    with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        key = jax.random.PRNGKey(0)
+        bf16_mlp = jax.jit(lambda: model_module.DenseMLP.init(128, 64, 0.02, key=key))()
+        fp8_mlp = jax.jit(lambda: model_module.DenseMLP.init(128, 64, 0.02, key=key, fp8=fp8_config))()
+        x = jax.random.normal(jax.random.PRNGKey(1), (2, 8, 128), dtype=jnp.bfloat16)
+        y_bf16 = jax.jit(lambda m, x: m(x))(bf16_mlp, x)
+        y_fp8 = jax.jit(lambda m, x: m(x))(fp8_mlp, x)
+        # The weight-grad dot contracts the token-sharded dim; make sure the
+        # backward lowers and stays finite under the explicit mesh too.
+        grads = eqx.filter_jit(eqx.filter_grad(lambda m, x: jnp.sum(m(x).astype(jnp.float32) ** 2)))(fp8_mlp, x)
+
+    assert y_fp8.shape == y_bf16.shape
+    assert _rel_frobenius(y_fp8, y_bf16) < 0.1
+    assert all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(eqx.filter(grads, eqx.is_array)))
+
+
+def test_grug_moe_fp8_dense_attention_tracks_bf16():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    def build_cfg(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=8)
+        return dataclasses.replace(cfg, fp8=fp8, hidden_dim=128, intermediate_dim=128)
+
+    with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        key = jax.random.PRNGKey(0)
+        bf16_cfg = build_cfg(None)
+        fp8_cfg = build_cfg(model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=4))
+        bf16_attn = jax.jit(lambda: model_module.CausalSelfAttention.init(bf16_cfg, key=key))()
+        fp8_attn = jax.jit(lambda: model_module.CausalSelfAttention.init(fp8_cfg, key=key))()
+        x = jax.random.normal(jax.random.PRNGKey(1), (2, 8, 128), dtype=jnp.bfloat16)
+        mask = GrugAttentionMask.causal()
+        y_bf16 = jax.jit(lambda m, x: m(x, mask))(bf16_attn, x)
+        y_fp8 = jax.jit(lambda m, x: m(x, mask))(fp8_attn, x)
+        grads = eqx.filter_jit(eqx.filter_grad(lambda m, x: jnp.sum(m(x, mask).astype(jnp.float32) ** 2)))(fp8_attn, x)
+
+    assert y_fp8.shape == y_bf16.shape
+    assert _rel_frobenius(y_fp8, y_bf16) < 0.1
+    assert all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in jax.tree.leaves(eqx.filter(grads, eqx.is_array)))
+
+
+def test_grug_moe_fp8_state_gets_no_optimizer_moments():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=4)
+    optimizer = optax.adam(1e-2)
+    mp = jmp.get_policy("f32")
+
+    def build(fp8):
+        cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+        cfg = dataclasses.replace(cfg, fp8=fp8, hidden_dim=128, intermediate_dim=128)
+        return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        fp8_state = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3"))
+        bf16_state = eqx.filter_eval_shape(build, None)
+
+    # The fp8 model carries extra quantization-state leaves in params, but none
+    # of them may get optimizer moments.
+    assert len(jax.tree.leaves(fp8_state.params)) > len(jax.tree.leaves(bf16_state.params))
+    assert len(jax.tree.leaves(fp8_state.opt_state)) == len(jax.tree.leaves(bf16_state.opt_state))
+
+
+def test_grug_moe_ema_update_carries_current_fp8_state():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    model_module = importlib.import_module("experiments.grug.moe.model")
+
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=64, seq_len=4)
+    cfg = dataclasses.replace(
+        cfg,
+        fp8=model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=4),
+        hidden_dim=128,
+        intermediate_dim=128,
+    )
+
+    with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
+        old = jax.jit(lambda: model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0)))()
+        new = jax.jit(lambda: model_module.Transformer.init(cfg, key=jax.random.PRNGKey(1)))()
+
+    ops_path = lambda t: t.blocks[0].mlp.expert_mlp.ragged_dot_ops.w13.input_scale  # noqa: E731
+    new = eqx.tree_at(ops_path, new, jnp.full((1,), 7.0))
+
+    ema = train_module._ema_update(old, new, 0.75)
+
+    # Plain weights blend; fp8 op state is the current step's, not an average
+    # (a blend with old's scale of 1.0 would give 2.5).
+    expected_router = 0.75 * old.blocks[0].mlp.router + 0.25 * new.blocks[0].mlp.router
+    assert jnp.allclose(ema.blocks[0].mlp.router, expected_router)
+    assert ops_path(ema) == 7.0
+    same_state = jax.tree.map(
+        jnp.array_equal,
+        ema.blocks[0].mlp.expert_mlp.ragged_dot_ops,
+        new.blocks[0].mlp.expert_mlp.ragged_dot_ops,
+    )
+    assert all(jax.tree.leaves(same_state))
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():

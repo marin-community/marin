@@ -10,7 +10,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
-from haliax.nn.ragged_dot import ragged_dot
+from levanter.grug._moe.common import MoeRaggedDotOps
+from levanter.grug._moe.fp8_wire import fp8_ragged_a2a
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
     _compact_by_keep_mask,
@@ -18,6 +19,7 @@ from levanter.grug._moe.ep_common import (
     _expert_prefix_keep_mask,
     _local_permute_from_counts,
     _permute_by_global_expert,
+    _resolve_ragged_dot_fns,
     _shard_a2a_params,
     _sort_activations,
     _unpermute_from_global_expert,
@@ -31,10 +33,12 @@ def _moe_mlp_ep_ragged_a2a_local(
     combine_weights_local: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    ops: MoeRaggedDotOps | None = None,
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    fp8_wire: bool = False,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -72,17 +76,20 @@ def _moe_mlp_ep_ragged_a2a_local(
         sorted_x = _compact_by_keep_mask(sorted_x, keep_mask)
 
         all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
-        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
-        dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
-        x_dispatched = jax.lax.ragged_all_to_all(
-            sorted_x,
-            dispatch_out_shape,
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            axis_name="expert",
-        )
+        if fp8_wire:
+            x_dispatched = fp8_ragged_a2a(sorted_x, all_shard_counts, shard_id, recv_capacity, "expert")
+        else:
+            input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+            dispatch_out_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
+            x_dispatched = jax.lax.ragged_all_to_all(
+                sorted_x,
+                dispatch_out_shape,
+                input_offsets,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
+                axis_name="expert",
+            )
         x_dispatch, local_sorted_indices, local_group_sizes = _local_permute_from_counts(
             x_dispatched,
             clipped_group_sizes,
@@ -90,27 +97,32 @@ def _moe_mlp_ep_ragged_a2a_local(
             shard_index=shard_id,
         )
 
+    rd_w13, rd_w2 = _resolve_ragged_dot_fns(ops)
+
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        w13_out = rd_w13(x_dispatch, moe_w13_local, local_group_sizes)
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
-        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
+        out_dispatch = rd_w2(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
 
     with jax.named_scope("combine"):
         local_output = _sort_activations(out_dispatch, jnp.argsort(local_sorted_indices))
-        return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
-        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
-            all_shard_counts.T, shard_id
-        )
-        returned = jax.lax.ragged_all_to_all(
-            local_output,
-            return_out_shape,
-            return_input_offsets,
-            return_send_sizes,
-            return_output_offsets,
-            return_recv_sizes,
-            axis_name="expert",
-        )
+        if fp8_wire:
+            returned = fp8_ragged_a2a(local_output, all_shard_counts.T, shard_id, assignments_per_shard, "expert")
+        else:
+            return_out_shape = jnp.zeros((assignments_per_shard, x_local.shape[1]), dtype=local_output.dtype)
+            return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
+                all_shard_counts.T, shard_id
+            )
+            returned = jax.lax.ragged_all_to_all(
+                local_output,
+                return_out_shape,
+                return_input_offsets,
+                return_send_sizes,
+                return_output_offsets,
+                return_recv_sizes,
+                axis_name="expert",
+            )
         returned = _expand_from_keep_mask(returned, keep_mask)
         out_local = _unpermute_from_global_expert(
             returned,

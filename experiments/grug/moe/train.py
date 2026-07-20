@@ -17,6 +17,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from haliax.quantization import OverwriteWithGradient, apply_updates, partition_for_grad_overwrite
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -34,6 +35,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.trainer_state import init_optimizer_for_trainables
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -269,6 +271,25 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
+def _is_overwrite(x) -> bool:
+    return isinstance(x, OverwriteWithGradient)
+
+
+def _ema_update(old: Transformer, new: Transformer, beta: float) -> Transformer:
+    """EMA of trainable weights; FP8 op state carries the current step's values.
+
+    Quantization statistics (amax histories, scales) are step-local state, not
+    parameters, so averaging them across steps is not meaningful. The carried
+    scales are calibrated on the raw training weights; EMA weights are assumed
+    close enough in magnitude that re-deriving scales from them is not worth
+    the machinery.
+    """
+    new_overwrites, new_plain = partition_for_grad_overwrite(new)
+    _, old_plain = partition_for_grad_overwrite(old)
+    ema_plain = jax.tree_util.tree_map(lambda o, n: beta * o + (1.0 - beta) * n, old_plain, new_plain)
+    return eqx.combine(new_overwrites, ema_plain, is_leaf=_is_overwrite)
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -282,7 +303,8 @@ def initial_state(
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
+        # Excludes OverwriteWithGradient (FP8 op state) from optimizer moments.
+        opt_state=init_optimizer_for_trainables(optimizer, params),
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
@@ -317,7 +339,11 @@ def _make_train_step(
             qb_ema_params = None
 
         def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
+            # Cast only ordinary params to compute dtype: the FP8 ops' scales
+            # and amax histories must stay f32, or every step's state update
+            # rounds through bf16.
+            op_state, plain = partition_for_grad_overwrite(params)
+            compute_params = eqx.combine(op_state, mp.cast_to_compute(plain), is_leaf=_is_overwrite)
             return compute_params.next_token_loss(
                 batch.tokens,
                 batch.loss_weight,
@@ -329,19 +355,22 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
-        updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
-        params = optax.apply_updates(qb_params, updates)
+        # FP8 op state arrives as fake gradients: overwrite it in the params
+        # instead of feeding it to the optimizer.
+        overwrites, grads = partition_for_grad_overwrite(grads)
+        _, plain_params = partition_for_grad_overwrite(qb_params)
+        updates, opt_state = optimizer.update(grads, state.opt_state, plain_params)
+        # optax.apply_updates casts p + u back to the param dtype; haliax's
+        # overwrite-aware apply_updates does not, so keep that cast here.
+        updates = jax.tree_util.tree_map(lambda u, p: u.astype(p.dtype), updates, plain_params)
+        params = apply_updates(qb_params, updates, overwrites)
 
         if ema_beta is None:
             ema_params = None
         else:
             if qb_ema_params is None:
                 raise ValueError("ema_params must be initialized when ema_beta is set.")
-            ema_params = jax.tree_util.tree_map(
-                lambda old, new: ema_beta * old + (1.0 - ema_beta) * new,
-                qb_ema_params,
-                params,
-            )
+            ema_params = _ema_update(qb_ema_params, params, ema_beta)
 
         watch_stats = None
         if watch_config is not None and compute_watch:
@@ -351,7 +380,7 @@ def _make_train_step(
                 include_per_parameter_norms=watch_config.include_per_parameter_norms,
                 include_histogram=watch_config.include_histograms,
                 split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
+                params=plain_params,
                 grads=grads,
                 updates=updates,
                 opt_state=state.opt_state,
@@ -446,7 +475,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             path_override=config.trainer.sharding_dump_path,
         )
 
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+        _, plain_params = partition_for_grad_overwrite(state.params)
+        levanter.tracker.log_summary({"parameter_count": parameter_count(plain_params)})
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
