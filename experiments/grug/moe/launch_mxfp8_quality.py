@@ -110,7 +110,7 @@ def quality_model(arm: str) -> GrugModelConfig:
     model, _, _, _ = quality_cell()
     if arm == "bf16":
         return model
-    if arm == "mxfp8":
+    if arm in ("mxfp8", "mxfp8-debug"):
         return dataclasses.replace(
             model,
             fp8=GrugFp8Config(
@@ -118,6 +118,7 @@ def quality_model(arm: str) -> GrugModelConfig:
                 grouped=True,
                 recipe="mxfp8",
                 mxfp8_producer="xla",
+                mxfp8_debug=arm == "mxfp8-debug",
             ),
         )
     if arm == "mxfp8-grouped-only":
@@ -139,7 +140,10 @@ def quality_model(arm: str) -> GrugModelConfig:
                 recipe="per_tensor",
             ),
         )
-    raise ValueError(f"unknown quality arm {arm!r}; expected 'bf16', 'mxfp8', 'mxfp8-grouped-only', or 'fp8-dense-only'")
+    raise ValueError(
+        f"unknown quality arm {arm!r}; expected 'bf16', 'mxfp8', 'mxfp8-debug', "
+        "'mxfp8-grouped-only', or 'fp8-dense-only'"
+    )
 
 
 def _apply_train_env() -> None:

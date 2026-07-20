@@ -12,7 +12,8 @@ author: Matt Wittmann
 - Two smoke-only defects are fixed: shortened mixtures no longer produce empty finite components, and tagged evaluation now applies the same mixed-precision cast as training.
 - The first fully instrumented pair exposed a smoke artifact: setting the trainer horizon to 20 compressed the full run's 314-step LR warmup to zero steps. Shortened runs now reproduce the full optimizer schedule prefix and reject horizons that extend past warmup.
 - After correcting the schedule, BF16 remains finite but MXFP8 still becomes NaN on the first backward pass. W&B isolates the first non-finite tensor to `expert_mlp.w_down`; `w_gate` and `w_up` gradients are finite.
-- The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with both unit-normal and loss-scaled random cotangents. Grouped-only and dense-only graph controls are next.
+- The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with unit-normal, loss-scaled, and all-zero synthetic cotangents.
+- Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the production hybrid fails. Diagnostic-only telemetry is being added to the hybrid custom VJP.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
 - The full 1e21-FLOP pair is blocked on the first-backward numerical defect. No quality or performance result is claimed yet.
 
@@ -89,3 +90,12 @@ author: Matt Wittmann
 - Result: both jobs passed. Unit-normal cotangents measured relative Frobenius errors output=0.06555, dx=0.06725, dw13=0.06743, dw2=0.06706 versus the BF16 reference; loss-scaled cotangents produced the same finite errors.
 - Interpretation: the static local shape, wgrad layout, and simple cotangent underflow are falsified. The defect requires the training graph or its cotangent distribution.
 - Next action: run two-step grouped-only and dense-only controls on the exact quality graph. If grouped-only fails, instrument the grouped custom VJP inputs; if only the hybrid fails, trace the dense FP8 upstream cotangent.
+
+### 2026-07-19 19:03 - MXFP8Q-002 isolation controls show a hybrid-only failure
+
+- Hypothesis: either the grouped MXFP8 expert op or dense per-tensor FP8 independently produces the first-backward NaN.
+- Commit Hash: `e468da927`.
+- Command: two-step full-graph controls [grouped-only](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-002-diag-mxfp8-grouped-only-s2) and [dense-only](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-002-diag-fp8-dense-only-s2), each on the exact 8xGB200x4 quality topology.
+- Result: both controls completed with finite train/eval/checkpoint results. Grouped-only step-0 total grad norm=0.56530 and expert w_down/w_gate/w_up norms=0.03060/0.02003/0.02024; final train loss=11.80210 and eval loss=11.78640. Dense-only total grad norm=0.36285 and expert norms=0.02596/0.02608/0.02594; final train loss=11.80208 and eval loss=11.78690. A separate exact-shape all-zero-cotangent op probe returned finite, exact-zero dx/dw13/dw2.
+- Interpretation: neither component fails alone. The NaN requires the hybrid computation graph and is not explained by an entirely zero grouped-op cotangent. The known-finite #7282 d5120 hybrid also has zero step-0 attention/shared weight gradients but finite expert w_down=0.04234, so those zero gradients are expected initialization behavior rather than the direct cause.
+- Next action: enable diagnostic-only custom-VJP telemetry on non-finite dw2 to record the real hybrid cotangent, column-quantized values/scales, hidden values/scales, and routing range.

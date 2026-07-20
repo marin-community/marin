@@ -404,6 +404,43 @@ def _backward_pipeline(op: "MxFp8MoeMlpOp", res, g) -> dict:
         mma_tiler_mn=_WGRAD_TILER[0],
         cluster_shape_mn=_WGRAD_TILER[1],
     )
+    if op.debug:
+        g_scale_bytes = jax.lax.bitcast_convert_type(g_sfc, jnp.uint8)
+        h_scale_bytes = jax.lax.bitcast_convert_type(sfh_col, jnp.uint8)
+
+        def report_nonfinite(_):
+            g_abs = jnp.abs(g.astype(jnp.float32))
+            jax.debug.print(
+                "MXFP8_NONFINITE_DW2 g_nan={g_nan} g_inf={g_inf} g_zero={g_zero} "
+                "g_abs_min_nonzero={g_min} g_abs_max={g_max} g_col_nan={g_col_nan} "
+                "g_col_zero={g_col_zero} g_scale_zero={g_scale_zero} g_scale_255={g_scale_255} "
+                "h_col_nan={h_col_nan} h_col_zero={h_col_zero} h_scale_zero={h_scale_zero} "
+                "h_scale_255={h_scale_255} dw2_nan={dw2_nan} group_min={group_min} group_max={group_max}",
+                g_nan=jnp.sum(jnp.isnan(g)),
+                g_inf=jnp.sum(jnp.isinf(g)),
+                g_zero=jnp.sum(g == 0),
+                g_min=jnp.min(jnp.where(g_abs > 0, g_abs, jnp.inf)),
+                g_max=jnp.max(g_abs),
+                g_col_nan=jnp.sum(jnp.isnan(g_col)),
+                g_col_zero=jnp.sum(g_col == 0),
+                g_scale_zero=jnp.sum(g_scale_bytes == 0),
+                g_scale_255=jnp.sum(g_scale_bytes == 255),
+                h_col_nan=jnp.sum(jnp.isnan(h_col)),
+                h_col_zero=jnp.sum(h_col == 0),
+                h_scale_zero=jnp.sum(h_scale_bytes == 0),
+                h_scale_255=jnp.sum(h_scale_bytes == 255),
+                dw2_nan=jnp.sum(jnp.isnan(dw2)),
+                group_min=jnp.min(group_sizes),
+                group_max=jnp.max(group_sizes),
+            )
+            return jnp.int32(0)
+
+        jax.lax.cond(
+            jnp.any(~jnp.isfinite(dw2)),
+            report_nonfinite,
+            lambda _: jnp.int32(0),
+            operand=jnp.int32(0),
+        )
     dw13 = _deinterleave_w13_grad(dw13i)
 
     return {
@@ -463,6 +500,7 @@ class MxFp8MoeMlpOp:
     """
 
     producer: Literal["auto", "cute", "xla"] = "auto"
+    debug: bool = False
 
     def __call__(self, x, w13, w2, group_sizes):
         return _mxfp8_expert_mlp(self, x, w13, w2, group_sizes)
