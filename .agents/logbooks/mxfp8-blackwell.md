@@ -1570,3 +1570,60 @@ author: mcwitt
   `docs/superpowers/specs/2026-07-20-uniform-mxfp8-design.md`: measure the
   zero-producer oracle on d2560 and production d5120 shapes before adding any
   model integration.
+
+### 2026-07-20 15:37 - MXFP8-U001: zero-producer dense oracle passes, narrowly
+
+- Hypothesis: once all block quantization and transpose work is removed,
+  three cuDNN block-scaled matmuls (forward, dgrad, and wgrad) can match the
+  delayed per-tensor FP8 forward+backward path on the weighted production
+  dense mix.
+- Commit Hash: `21e129ca58d2b5c0eec67d99ae9e8ed01f7f339f`.
+- Command (run twice, changing `--job-name` from `mix-r1` to `mix-r2`):
+  `/home/marin/projects/marin/.venv/bin/iris --cluster=cw-us-east-08a job run
+  --no-wait --user mwittmann --job-name mxfp8-uniform-oracle-mix-r1 --gpu
+  GB200x1 --enable-extra-resources --cpu 16 --memory 96g --extra gpu -- python
+  experiments/grug/moe/standalone/bench_mxfp8_dense.py --git-sha
+  21e129ca58d2b5c0eec67d99ae9e8ed01f7f339f --shape
+  q_o_shared_5120x5120 --shape kv_5120x1280 --tokens 65536 --warmup 10
+  --iters 50 --out /dev/stdout`.
+- Config: one GB200 per replication, JAX 0.10.1, CUDA 13, cuDNN 9.19,
+  `XLA_FLAGS=""`. Each replication ran both production shapes sequentially
+  on the same GPU. The mix weights five square projections and two K/V
+  projections. All oracle rows compiled exactly three
+  `__cudnn$blockScaledDot` call sites.
+- Result (`replicated`, two independent jobs):
+
+  | replication | shape | per-tensor fwd+bwd (median +/- MAD) | prequant MXFP8 oracle (median +/- MAD) | oracle / per-tensor |
+  |---|---|---:|---:|---:|
+  | mix-r1 | 5120x5120 | 4.029 +/- 0.122 ms | 4.086 +/- 0.212 ms | 1.0140x |
+  | mix-r1 | 5120x1280 | 1.223 +/- 0.028 ms | 1.159 +/- 0.027 ms | 0.9481x |
+  | mix-r2 | 5120x5120 | 4.061 +/- 0.078 ms | 3.978 +/- 0.033 ms | 0.9796x |
+  | mix-r2 | 5120x1280 | 1.257 +/- 0.060 ms | 1.157 +/- 0.013 ms | 0.9207x |
+  | mix-r1 | weighted 5:2 | - | - | **1.0068x** |
+  | mix-r2 | weighted 5:2 | - | - | **0.9731x** |
+
+  Median complete-mix ratio: **0.9900x**. Both replications pass the oracle
+  gate (`<=1.01x`). The slower run's 1.4% square-shape deficit is smaller
+  than that row's timing dispersion and does not hide a K/V regression.
+  Output/dgrad/wgrad relative errors were respectively
+  `3.72e-2/2.66e-2/1.03e-2` (square) and
+  `3.72e-2/3.32e-2/1.03e-2` (K/V), all lower than the per-tensor arm.
+- Producer bound: the deliberately unfused six-quantization JAX path cost
+  2.491/2.505 ms on square and 1.647/1.666 ms on K/V. Those costs are not
+  part of the oracle but show that native JAX producers cannot meet the
+  final gate; fused dual-orientation production and reuse are required.
+- Harness failures excluded from performance evidence:
+  `/mwittmann/mxfp8-uniform-oracle-{square,kv}-r1` failed because Iris bundles
+  omit `.git`; `--git-sha` is now explicit. Square `r2` failed because the
+  first validator counted shared StableHLO helper definitions rather than
+  compiled call sites; K/V `r2` completed and agreed with the retained runs.
+- Artifacts: Iris jobs `/mwittmann/mxfp8-uniform-oracle-mix-r1` and
+  `/mwittmann/mxfp8-uniform-oracle-mix-r2`; full machine-readable JSON is in
+  each job's durable task log.
+- Interpretation: the block-scaled GEMMs themselves do not rule out uniform
+  MXFP8, so stopping criterion 1 does not apply. The available margin is only
+  about 1%, making producer reuse decisive.
+- Next action: MXFP8-U002 measures the existing CuTe dual-orientation
+  producer in the dense linear-scale layout, first unshared and then reusing
+  each high-precision `x`, `w`, and cotangent producer across the three
+  oracle products and across Q/K/V or gate/up projections.
