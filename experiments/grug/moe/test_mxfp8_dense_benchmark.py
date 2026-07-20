@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import pytest
 
 from experiments.grug.moe.standalone import bench_mxfp8_dense as benchmark
+from experiments.grug.moe.standalone import bench_te_dense as te_benchmark
 
 
 def test_sample_statistics_reports_median_and_mad():
@@ -81,3 +82,13 @@ def test_projection_reuse_benchmark_is_explicit():
     args = benchmark.parse_args(["--git-sha", "abc123", "--producer", "cute", "--projection-reuse"])
 
     assert args.projection_reuse
+
+
+def test_te_dense_benchmark_requires_provenance():
+    with pytest.raises(SystemExit):
+        te_benchmark.parse_args([])
+
+    args = te_benchmark.parse_args(["--git-sha", "abc123", "--shape", "kv_5120x1280"])
+
+    assert args.git_sha == "abc123"
+    assert args.shape == ["kv_5120x1280"]

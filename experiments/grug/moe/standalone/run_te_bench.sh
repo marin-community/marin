@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # MXFP8-004b: install TransformerEngine (jax) on an aarch64 GB200 pod and run
-# bench_te_grouped.py. transformer_engine_cu13 has a prebuilt manylinux aarch64
+# a benchmark command. transformer_engine_cu13 has a prebuilt manylinux aarch64
 # wheel up to 2.16.0; the jax glue (transformer_engine_jax) is sdist-only and
 # compiles a small pybind11 extension against the pod's jax[cuda13] stack
 # (--no-build-isolation so it detects CUDA 13, --no-deps so its static
@@ -53,4 +56,8 @@ export LD_LIBRARY_PATH="$NCCLLIB:${LD_LIBRARY_PATH:-}"
 python -c "import transformer_engine.jax, transformer_engine_jax as t; \
 print('TE_IMPORT_OK cublasLt', t.get_cublasLt_version(), 'cuda', t.get_cuda_version(), 'cudnn', t.get_cudnn_version())"
 
-python experiments/grug/moe/standalone/bench_te_grouped.py --out /tmp/bench_te_grouped.json
+if [ "$#" -eq 0 ]; then
+  set -- python experiments/grug/moe/standalone/bench_te_grouped.py --out /tmp/bench_te_grouped.json
+fi
+
+"$@"
