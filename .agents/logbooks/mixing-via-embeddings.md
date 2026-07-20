@@ -954,3 +954,24 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
   (reports/mve_current_best_approach_2026-07-19.html refreshed), and Marin public site NEW
   version https://storage.googleapis.com/marin-public/rav/mixing-via-embeddings/2026.07.20/index.html
   (2026.07.19 link stays live). Generators live in gitignored scratch/mixture_features/report/.
+
+## 2026-07-20 ★ GATE SETTLED (100B matched-mechanism, real subset-repeat): HARM VANISHES at production
+- 3 runs c01q0@w=0.2, max_train_batches REAL subset-repeat (SAME mechanism as E2/twobucket-a2, NOT
+  simulated) at 100B/47758 steps, content h flat. humaneval bpb: e4 0.7408 (anchor, e=4<τ≈8.85, clean
+  flat baseline), e16 0.7379, e32 0.8111. Single seed (pre-registered); pair floor √2σ=0.008.
+- **e4→e16 (PRIMARY decider) = −0.0029 bpb ≈ 0**: −0.4σ from prediction B (vanish), −9.3σ from A
+  (persist, +0.072). The a3 power law is REFUTED at the production-relevant epoch level.
+- e4→e32 (amplifier) = +0.0702 bpb: +8.8σ from zero (a REAL small residual, not rounded away) but
+  −20.8σ below A's +0.234 (~3.4× attenuated). Harm survives ONLY at extreme ≥32-epoch over-repetition.
+- **4-point budget curve harm(e16) {2.5,10,40,100}B = {0.688, 0.384, 0.0915, −0.0029}, fitted β=−1.15**
+  (steeper than a3's −0.73; local 40→100B slope −2.66) → harm collapses FASTER than the power law near
+  production. This is the B (vanish) signature. Figure f29.
+- **Mechanism confound RESOLVED**: this matched real-subset-repeat run agrees with the earlier transect
+  (simulated epoching) → BOTH mechanisms say harm vanishes at 100B. My earlier skepticism (refusing to
+  accept the transect's "kernel suffices" until the mechanism was matched) is now discharged with data.
+- ★★ FINAL CAMPAIGN VERDICT: at PRODUCTION scale (100B) the **KERNEL ALONE SUFFICES**. The
+  linear-past-threshold harm term (per-bucket τ, per-bucket b, B^−0.73·d^+1.68) is a PROXY-SCALE /
+  EXTREME-REPETITION GUARDRAIL — warranted only for small-budget (<~40B) proxy fits, ≥~16-32 epoch
+  proposals, or large models — NOT a core production term. The severe 10B harm (e16 +0.39, e32 +1.27)
+  was a small-budget artifact. Caveat: single-seed; the e32 +8.8σ residual is the one non-zero point,
+  so keep a small (~3.4× weaker than 10B) guardrail for ≥32-epoch extremes.
