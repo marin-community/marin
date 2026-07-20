@@ -10,6 +10,7 @@ and weight gradient for the same explicit BF16 cotangent.
 """
 
 import argparse
+import itertools
 import json
 import os
 import re
@@ -40,6 +41,7 @@ def parse_args(argv=None):
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
+    parser.add_argument("--projection-fusion", action="store_true")
     parser.add_argument("--out", default="bench_te_dense.json")
     return parser.parse_args(argv)
 
@@ -82,6 +84,21 @@ def main():
     }
     production_measurements = []
 
+    def compile_and_measure(fn, fn_args):
+        lowered = jax.jit(fn).lower(*fn_args)
+        compile_started = time.perf_counter()
+        compiled = lowered.compile()
+        compile_ms = (time.perf_counter() - compile_started) * 1e3
+        median, mad = timed_samples(compiled, fn_args, args.iters, args.warmup)
+        compiled_text = compiled.as_text()
+        return compiled, {
+            "fwdbwd_ms": median * 1e3,
+            "fwdbwd_mad_ms": mad * 1e3,
+            "compile_ms": compile_ms,
+            "custom_call_targets": sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_text))),
+            "block_scaled_dot_call_count": custom_call_count(compiled_text, "__cudnn$blockScaledDot"),
+        }
+
     for label, k, n, production_weight in selected_shapes:
         key_init, key_x, key_g = jax.random.split(jax.random.PRNGKey(0), 3)
         x = jax.random.normal(key_x, (args.tokens, k), dtype=jnp.bfloat16)
@@ -100,21 +117,6 @@ def main():
         def tensor_fwdbwd(x, w, g):
             y, pullback = jax.vjp(dot_fp8_tensor, x, w)
             return y, pullback(g)
-
-        def compile_and_measure(fn, fn_args):
-            lowered = jax.jit(fn).lower(*fn_args)
-            compile_started = time.perf_counter()
-            compiled = lowered.compile()
-            compile_ms = (time.perf_counter() - compile_started) * 1e3
-            median, mad = timed_samples(compiled, fn_args, args.iters, args.warmup)
-            compiled_text = compiled.as_text()
-            return compiled, {
-                "fwdbwd_ms": median * 1e3,
-                "fwdbwd_mad_ms": mad * 1e3,
-                "compile_ms": compile_ms,
-                "custom_call_targets": sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_text))),
-                "block_scaled_dot_call_count": custom_call_count(compiled_text, "__cudnn$blockScaledDot"),
-            }
 
         te_compiled, te_result = compile_and_measure(te_fwdbwd, (variables, x, g))
         tensor_compiled, tensor_result = compile_and_measure(tensor_fwdbwd, (x, w, g))
@@ -141,6 +143,75 @@ def main():
                 f"  {arm:14s} {row['fwdbwd_ms']:.3f} +/- {row['fwdbwd_mad_ms']:.3f} ms "
                 f"err {row['err_out']:.2e}/{row['err_gx']:.2e}/{row['err_gw']:.2e}"
             )
+
+    if args.projection_fusion:
+        fusion_results = {}
+        for label, widths in (("qkv", (5120, 1280, 1280)), ("shared_gate_up", (5120, 5120))):
+            split_points = tuple(itertools.accumulate(widths))[:-1]
+            output_width = sum(widths)
+            key_init, key_x, key_g = jax.random.split(jax.random.PRNGKey(output_width), 3)
+            x = jax.random.normal(key_x, (args.tokens, 5120), dtype=jnp.bfloat16)
+            g = jax.random.normal(key_g, (args.tokens, output_width), dtype=jnp.bfloat16)
+            model = DenseBlock(features=output_width)
+            variables = model.init(key_init, x)
+            w = variables["params"]["Dense_0"]["kernel"]
+
+            def te_fused_fwd(variables, x, model=model):
+                return model.apply(variables, x)
+
+            def te_fused_fwdbwd(variables, x, g):
+                y, pullback = jax.vjp(te_fused_fwd, variables, x)
+                return y, pullback(g)
+
+            def tensor_split_fwd(x, w, split_points=split_points):
+                return tuple(dot_fp8_tensor(x, part) for part in jnp.split(w, split_points, axis=1))
+
+            def tensor_split_fwdbwd(x, w, g, split_points=split_points):
+                y, pullback = jax.vjp(tensor_split_fwd, x, w)
+                return y, pullback(tuple(jnp.split(g, split_points, axis=1)))
+
+            te_compiled, te_result = compile_and_measure(te_fused_fwdbwd, (variables, x, g))
+            tensor_compiled, tensor_result = compile_and_measure(tensor_split_fwdbwd, (x, w, g))
+            te_out, (te_variable_grads, te_gx) = te_compiled(variables, x, g)
+            tensor_out_parts, (tensor_gx, tensor_gw) = tensor_compiled(x, w, g)
+            tensor_out = jnp.concatenate(tensor_out_parts, axis=1)
+            te_gw = te_variable_grads["params"]["Dense_0"]["kernel"]
+            ref_out = jax.lax.dot_general(x.astype(jnp.float32), w.astype(jnp.float32), DNUMS)
+            ref_gx = jax.lax.dot_general(g.astype(jnp.float32), w.T.astype(jnp.float32), DNUMS)
+            ref_gw = jax.lax.dot_general(x.T.astype(jnp.float32), g.astype(jnp.float32), DNUMS)
+            for result, out, gx, gw in (
+                (te_result, te_out, te_gx, te_gw),
+                (tensor_result, tensor_out, tensor_gx, tensor_gw),
+            ):
+                result["err_out"] = rel_frob(out, ref_out)
+                result["err_gx"] = rel_frob(gx, ref_gx)
+                result["err_gw"] = rel_frob(gw, ref_gw)
+            fusion_results[label] = {"te_mxfp8_fused": te_result, "fp8_tensor_split": tensor_result}
+            print(f"\n== fused {label} projection (T={args.tokens}, N={output_width}) ==")
+            for arm, row in fusion_results[label].items():
+                print(
+                    f"  {arm:18s} {row['fwdbwd_ms']:.3f} +/- {row['fwdbwd_mad_ms']:.3f} ms "
+                    f"err {row['err_out']:.2e}/{row['err_gx']:.2e}/{row['err_gw']:.2e}"
+                )
+
+        square_results = results["shapes"]["q_o_shared_5120x5120"]
+        fused_total = (
+            fusion_results["qkv"]["te_mxfp8_fused"]["fwdbwd_ms"]
+            + fusion_results["shared_gate_up"]["te_mxfp8_fused"]["fwdbwd_ms"]
+            + 2 * square_results["te_mxfp8"]["fwdbwd_ms"]
+        )
+        current_total = (
+            fusion_results["qkv"]["fp8_tensor_split"]["fwdbwd_ms"]
+            + fusion_results["shared_gate_up"]["fp8_tensor_split"]["fwdbwd_ms"]
+            + 2 * square_results["fp8_tensor"]["fwdbwd_ms"]
+        )
+        results["projection_fusion"] = {
+            "bundles": fusion_results,
+            "production_dense_te_mxfp8_ms": fused_total,
+            "production_dense_fp8_tensor_ms": current_total,
+            "production_dense_time_ratio": fused_total / current_total,
+        }
+        print(f"\nfused TE MXFP8 / current per-tensor production dense time: {fused_total / current_total:.4f}x")
 
     covered_weight = sum(weight for weight, _, _ in production_measurements)
     results["covered_production_weight"] = covered_weight

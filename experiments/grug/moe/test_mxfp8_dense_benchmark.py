@@ -92,3 +92,9 @@ def test_te_dense_benchmark_requires_provenance():
 
     assert args.git_sha == "abc123"
     assert args.shape == ["kv_5120x1280"]
+
+
+def test_te_dense_projection_fusion_is_explicit():
+    args = te_benchmark.parse_args(["--git-sha", "abc123", "--projection-fusion"])
+
+    assert args.projection_fusion
