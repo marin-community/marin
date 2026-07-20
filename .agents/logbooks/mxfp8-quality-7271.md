@@ -142,5 +142,5 @@ author: Matt Wittmann
 - Commit Hash: `d11d6ac54` (treatment implementation `f8be94f87`).
 - Command: coordinators `/mwittmann/mxfp8q-007-full-{bf16,mxfp8}-coord`, each launching 8xGB200x4 non-preemptible replicas with pair ID `MXFP8Q-007-full`; default 31,474-step horizon.
 - Config: d2560/L26/E128/top-4/f1280/shared-f2560, seq4096, batch512, seed0; identical data order, optimizer, schedule, ring/scan/remat topology, Paloma and uncheatable eval; BF16 versus hybrid grouped MXFP8 + dense per-tensor FP8. Hourly and forced-final checkpoints use region-local S3.
-- Result: both 32-GPU child gangs allocated and entered `running`; first-step/W&B finite gate pending.
-- Next action: require finite first gradients on both arms, then babysit progress, hourly checkpoints, evaluation, and terminal state without changing the cluster.
+- Result: both 32-GPU child gangs allocated and passed the first-gradient gate. BF16/MXFP8 total grad norm=0.56620/0.36288 and expert `w_down`=0.03072/0.02595. At step 7, loss=11.76569/11.76785 and instantaneous throughput=805,660/857,373 tok/s. W&B: [BF16](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-007-full-bf16-s31474), [MXFP8](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-007-full-mxfp8-s31474).
+- Next action: babysit progress, hourly checkpoints, periodic evaluation, and terminal state without changing the cluster.
