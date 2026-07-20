@@ -343,6 +343,12 @@ class Table:
             self._cond.notify_all()
         self._thread.join(timeout=max(self._flush_interval * 2, 10.0))
         with self._cond:
+            if self._processed_seq < self._pushed_seq:
+                logger.warning(
+                    "Table(%s) close() timed out before draining %d pending row(s); they were not sent",
+                    self._namespace,
+                    self._pushed_seq - self._processed_seq,
+                )
             self._closed = True
             self._cond.notify_all()
 
