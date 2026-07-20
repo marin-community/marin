@@ -193,6 +193,9 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            # rel_pos_b is a 2D offset table that must not be orthogonalized/whitened; keep it on raw Adam.
+            if "rel_pos_b" in path_lower:
+                return "adam"
             if "token_embed" in path_lower:
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
@@ -288,6 +291,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            # rel_pos_b is a 2D offset table (zero-init) that must not be Newton-Schulz orthogonalized;
+            # route it to raw Adam. rel_pos_a stays a normal matrix and falls through to muonh below.
+            if "rel_pos_b" in path_lower:
+                return "adam"
             if (
                 "token_embed" in path_lower
                 or "router_bias" in path_lower

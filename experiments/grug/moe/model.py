@@ -176,6 +176,15 @@ class GrugModelConfig:
     """When True (default), the every-4th + last 'long' layers skip rotary
     embedding entirely (Q and K go into attention un-rotated). Short layers
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
+    rel_pos_bias: bool = False
+    """When True, GQA (``CausalSelfAttention``) replaces half-RoPE with a learned,
+    per-layer relative-position bias added to the pre-softmax attention logits. RoPE is
+    disabled on every layer (this bias supplies positional information). No effect on MLA."""
+    rel_pos_latent: int = 16
+    """Latent width of the relative-position bias factorization (``rel_pos_a``/``rel_pos_b``)."""
+    rel_pos_window: int = 1024
+    """Relative-offset band width of the position bias: query ``i`` receives a learned bias on
+    keys ``i-r`` for ``r`` in ``0..window-1`` (r=0 is self); keys further back get no bias."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -328,18 +337,34 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    # Learned relative-position bias (only when ``cfg.rel_pos_bias``); None otherwise.
+    # ``rel_pos_a`` projects the attention input to a per-head latent; ``rel_pos_b`` (zero-init)
+    # maps the latent to a bias over relative offsets 0..window-1. See ``__call__``.
+    rel_pos_a: Float[Array, "D LN"] | None
+    rel_pos_b: Float[Array, "R L"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        rel_pos_a = None
+        rel_pos_b = None
+        if cfg.rel_pos_bias:
+            k_ra = random.fold_in(key, 0x9E3779B9)
+            latent = cfg.rel_pos_latent
+            # rel_pos_a: [hidden, latent*num_heads], heads-major so ``(h d)`` reshapes to (num_heads, latent).
+            rel_pos_a = reshard(_init_weight(k_ra, (d, n * latent), cfg.initializer_std), P("data", "model"))
+            # rel_pos_b: [window, latent], zero-init so the bias contributes nothing at init (NoPE-equivalent).
+            rel_pos_b = reshard(jnp.zeros((cfg.rel_pos_window, latent)), P(None, None))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            rel_pos_a=rel_pos_a,
+            rel_pos_b=rel_pos_b,
             cfg=cfg,
         )
 
@@ -406,7 +431,11 @@ class CausalSelfAttention(eqx.Module):
                 jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
             )
 
-        if isinstance(disable_rope, bool):
+        # The learned relative-position bias supplies positional information, so it fully
+        # replaces RoPE: skip rotary on every layer when it is enabled.
+        if self.rel_pos_a is not None:
+            pass
+        elif isinstance(disable_rope, bool):
             if not disable_rope:
                 q, k = _rope(q, k)
         else:
@@ -415,7 +444,18 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.where(keep, q_roped, q)
             k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+
+        bias = None
+        if self.rel_pos_a is not None:
+            latent = self.cfg.rel_pos_latent
+            window = self.cfg.rel_pos_window
+            # x @ rel_pos_a -> per-head latent [B, S, num_heads, latent].
+            rel_latent = rearrange(jnp.einsum("bsh,hd->bsd", x, self.rel_pos_a), "b s (n d) -> b s n d", d=latent)
+            # Contract the latent against the (zero-init) offset table to get a per-head band:
+            # bias_band[b, i, h, r] is the bias on the logit between query i and key i-r (r=0 is self).
+            bias_band = jnp.einsum("bsnd,rd->bsnr", rel_latent, self.rel_pos_b)
+            bias = _rel_pos_bias_full(bias_band, seq_len, window)
+        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation, bias=bias)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         # GPU XSA with GQA can give attn_out a backend-specific head sharding;
         # match v to that dynamic sharding before the per-head projection math.
@@ -1099,6 +1139,26 @@ class Transformer(eqx.Module):
             summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
+
+
+def _rel_pos_bias_full(bias_band: Float[Array, "B S N R"], q_len: int, window: int) -> Float[Array, "B N Q K"]:
+    """Scatter a per-head relative-offset band into a dense additive attention bias.
+
+    ``bias_band[b, i, h, r]`` is the learned bias on the logit between query ``i`` and key
+    ``i-r`` (``r=0`` is self). Returns ``bias_full[b, h, i, j] = bias_band[b, i, h, i-j]`` for
+    ``0 <= i-j < window`` and ``0`` otherwise (including the causal upper triangle ``j > i``,
+    which the softmax mask also zeros). Correctness over efficiency: materializes ``[B, N, Q, K]``.
+    """
+    i = jnp.arange(q_len)[:, None]
+    j = jnp.arange(q_len)[None, :]
+    offset = i - j  # [Q, K]
+    in_band = (offset >= 0) & (offset < window)
+    offset_clamped = jnp.clip(offset, 0, window - 1)
+    # band[b, h, i, r]; gather along r using offset[i, j] to land on [b, h, i, j].
+    band = jnp.transpose(bias_band, (0, 2, 1, 3))  # [B, N, S, window]
+    idx = jnp.broadcast_to(offset_clamped[None, None, :, :], (*band.shape[:2], q_len, q_len))
+    gathered = jnp.take_along_axis(band, idx, axis=3)  # [B, N, Q, K]
+    return jnp.where(in_band[None, None, :, :], gathered, jnp.zeros_like(gathered))
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:

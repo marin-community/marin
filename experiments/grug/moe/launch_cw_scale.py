@@ -46,6 +46,10 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_OPTIMIZER     adam (default) | adamh | muonh. muonh runs Newton-Schulz on
                         2D/3D/4D weight matrices; all use linear LR decay to 5% of
                         peak with 1% warmup.
+    SCALE_REL_POS_BIAS  1 replaces GQA half-RoPE with a learned per-layer relative-position
+                        bias (RoPE disabled on every layer). No effect under SCALE_MLA.
+    SCALE_REL_POS_LATENT  latent width of the position-bias factorization (default 16)
+    SCALE_REL_POS_WINDOW  relative-offset band width of the position bias (default 1024)
     RUN_ID              unique run identifier
 """
 
@@ -170,6 +174,11 @@ def build_scale_model() -> GrugModelConfig:
     # (plus optional latent-dim scaling) already sets the qk magnitude. GQA keeps the heuristic
     # value. SCALE_QK_MULT overrides either.
     qk_mult = float(os.environ.get("SCALE_QK_MULT", "1.0" if use_mla else str(base.qk_mult)))
+    # SCALE_REL_POS_BIAS=1 swaps GQA half-RoPE for a learned per-layer relative-position bias
+    # (latent width SCALE_REL_POS_LATENT, offset band SCALE_REL_POS_WINDOW). No effect under MLA.
+    rel_pos_bias = os.environ.get("SCALE_REL_POS_BIAS") == "1"
+    rel_pos_latent = env_int("SCALE_REL_POS_LATENT", 16)
+    rel_pos_window = env_int("SCALE_REL_POS_WINDOW", 1024)
     return dataclasses.replace(
         base,
         vocab_size=VOCAB_SIZE,
@@ -195,6 +204,9 @@ def build_scale_model() -> GrugModelConfig:
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
+        rel_pos_bias=rel_pos_bias,
+        rel_pos_latent=rel_pos_latent,
+        rel_pos_window=rel_pos_window,
         use_array_stacked_blocks=os.environ.get("SCALE_SCAN_LAYERS") == "1",
     )
 

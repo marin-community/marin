@@ -265,6 +265,7 @@ def reference_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
+    bias: Float[Array, "B H Q K"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
@@ -273,6 +274,14 @@ def reference_attention(
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+
+    # Per-head additive bias (e.g. a learned relative-position bias) is added to the
+    # pre-softmax logits. Causal / windowed masking below still zeros out disallowed
+    # positions regardless of the bias value.
+    if bias is not None:
+        if bias.shape != scores.shape:
+            raise ValueError(f"bias must match scores shape {scores.shape}, got {bias.shape}")
+        scores = scores + bias.astype(scores.dtype)
 
     explicit = None
     if mask is None:
@@ -485,9 +494,16 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    bias: Float[Array, "B H Q K"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
-        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, bias=bias)
+    if bias is not None:
+        # Only the reference path applies a per-head additive bias today; the fused FA4/CuTe
+        # kernels get bias injection in Stage 2.
+        raise NotImplementedError(
+            f"Per-head attention bias is only supported by the 'reference' implementation; got {implementation!r}."
+        )
     if implementation == "cudnn":
         return cudnn_attention(q, k, v, mask)
     if implementation == "gpu_fa4_cute":
