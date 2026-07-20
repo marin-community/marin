@@ -104,3 +104,9 @@ def test_te_dense_projection_fusion_is_explicit():
     args = te_benchmark.parse_args(["--git-sha", "abc123", "--projection-fusion"])
 
     assert args.projection_fusion
+
+
+def test_te_dense_direct_api_is_explicit():
+    args = te_benchmark.parse_args(["--git-sha", "abc123", "--direct-api"])
+
+    assert args.direct_api

@@ -42,6 +42,7 @@ def parse_args(argv=None):
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
     parser.add_argument("--projection-fusion", action="store_true")
+    parser.add_argument("--direct-api", action="store_true")
     parser.add_argument("--out", default="bench_te_dense.json")
     return parser.parse_args(argv)
 
@@ -55,6 +56,17 @@ def main():
 
     recipe = MXFP8BlockScaling()
     te_dot_general_cls = te_flax.make_dot_general_cls(recipe)
+    if args.direct_api:
+        import transformer_engine.jax as te  # noqa: PLC0415
+        from transformer_engine.jax.quantize.quantizer import QuantizerFactory  # noqa: PLC0415
+        from transformer_engine.jax.quantize.scaling_modes import ScalingMode  # noqa: PLC0415
+
+        direct_quantizer_set = QuantizerFactory.create_set(
+            scaling_mode=ScalingMode.MXFP8_1D_SCALING,
+            fwd_dtype=jnp.float8_e4m3fn,
+            bwd_dtype=jnp.float8_e4m3fn,
+            is_2x2x=True,
+        )
 
     class DenseBlock(nn.Module):
         features: int
@@ -135,7 +147,29 @@ def main():
             result["err_gx"] = rel_frob(gx, ref_gx)
             result["err_gw"] = rel_frob(gw, ref_gw)
 
-        results["shapes"][label] = {"te_mxfp8": te_result, "fp8_tensor": tensor_result}
+        shape_results = {"te_mxfp8": te_result, "fp8_tensor": tensor_result}
+        if args.direct_api:
+
+            def direct_fwd(x, w):
+                return te.dense.dense(
+                    x,
+                    w,
+                    contracting_dims=((1,), (0,)),
+                    quantizer_set=direct_quantizer_set,
+                )
+
+            def direct_fwdbwd(x, w, g):
+                y, pullback = jax.vjp(direct_fwd, x, w)
+                return y, pullback(g)
+
+            direct_compiled, direct_result = compile_and_measure(direct_fwdbwd, (x, w, g))
+            direct_out, (direct_gx, direct_gw) = direct_compiled(x, w, g)
+            direct_result["err_out"] = rel_frob(direct_out, ref_out)
+            direct_result["err_gx"] = rel_frob(direct_gx, ref_gx)
+            direct_result["err_gw"] = rel_frob(direct_gw, ref_gw)
+            shape_results["te_mxfp8_direct"] = direct_result
+
+        results["shapes"][label] = shape_results
         production_measurements.append((production_weight, te_result["fwdbwd_ms"], tensor_result["fwdbwd_ms"]))
         print(f"\n== {label} (T={args.tokens}) ==")
         for arm, row in results["shapes"][label].items():
