@@ -515,6 +515,49 @@ def test_k8s_executing_task_past_deadline_is_timed_out(make_controller):
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_FAILED
 
 
+def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
+    """A K8s pod that is still Pending/SchedulingGated (reported as BUILDING) must
+    NOT be execution-timed-out, no matter how long it waits for Kueue/autoscaler
+    admission — the execution clock only starts at RUNNING (gang start).
+
+    Guards the #7431 fix against the trap the backend-agnostic scan would spring:
+    K8s maps Pending → BUILDING, and if BUILDING stamped ``started_at_ms`` the
+    admission wait would be charged against ``--timeout`` — the very thing gangs
+    skip activeDeadlineSeconds to avoid.
+    """
+    ctrl = make_controller(provider=FakeDirectProvider(), remote_state_dir="file:///tmp/iris-7431-pending")
+    state = ControllerTestState(ctrl._db)
+
+    jid = JobName.root("test-user", "gang-pending")
+    req = make_direct_job_request("gang-pending", replicas=1)
+    req.timeout.milliseconds = 1000  # 1s wall-clock deadline
+    with state._db.transaction() as cur:
+        ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now())
+    [task_id] = [t.task_id for t in query_tasks_for_job(state, jid)]
+
+    # Pod has been Pending (BUILDING) for two hours — far longer than the 1s
+    # deadline — but never admitted/RUNNING.
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur)
+    attempt_id = batch.tasks_to_run[0].attempt_id
+    long_ago = Timestamp.from_ms(Timestamp.now().epoch_ms() - 2 * 3600 * 1000)
+    with state._db.transaction() as cur:
+        commit_dispatch_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_BUILDING)],
+            now=long_ago,
+        )
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
+    # started_at_ms must stay NULL for a K8s BUILDING (Pending) attempt.
+    assert query_attempt(state, task_id, attempt_id).started_at_ms is None
+
+    ctrl._timeout_rate_limiter = RateLimiter(interval_seconds=0.0)
+    reconcile_once(ctrl)
+
+    # Still BUILDING — the admission wait is not execution time.
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_BUILDING
+
+
 def test_drain_multiple_tasks(state):
     """Multiple pending tasks are all promoted in a single drain call."""
     task_ids = submit_direct_job(state, "multi-task", replicas=3)
