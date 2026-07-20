@@ -22,7 +22,3 @@ Pulumi stack.
 The production preview contained one `SecretIamMember` create and 19 unchanged resources. The
 apply completed, and the secret IAM policy contains the scoped accessor binding. CoreWeave CI then
 passed controller startup, its integration tests, and the full integration pipeline.
-
-## Future work
-
-- [ ] Replace the remaining JSON service-account credential with GitHub OIDC.

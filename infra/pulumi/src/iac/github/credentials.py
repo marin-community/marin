@@ -7,26 +7,16 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar
+from typing import Annotated, ClassVar, Literal, Self
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 SECRET_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 PINNED_GCP_SECRET = re.compile(
     r"^gcp-secret://projects/(?P<project>[^/]+)/secrets/(?P<secret>[^/]+)/versions/(?P<version>[1-9][0-9]*)$"
 )
 CREDENTIAL_SCHEMA_VERSION = 1
-CREDENTIAL_COMMON_FIELDS = frozenset(
-    {
-        "name",
-        "scope",
-        "presence",
-        "source_kind",
-        "source_ref",
-        "disposition",
-        "note",
-    }
-)
 
 
 class CredentialScope(StrEnum):
@@ -63,14 +53,6 @@ class Disposition(StrEnum):
     REVIEW = "review"
 
 
-def _credential_scope_fields(scope: CredentialScope) -> frozenset[str]:
-    if scope is CredentialScope.ORGANIZATION:
-        return frozenset({"visibility", "repositories"})
-    if scope is CredentialScope.REPOSITORY:
-        return frozenset({"repository"})
-    return frozenset({"repository", "environment"})
-
-
 def _organization_key(name: str) -> tuple[str, ...]:
     return (CredentialScope.ORGANIZATION, name)
 
@@ -83,24 +65,37 @@ def _environment_key(repository: str, environment: str, name: str) -> tuple[str,
     return (CredentialScope.ENVIRONMENT, repository, environment, name)
 
 
-@dataclass(frozen=True)
-class ValueSource:
+class ValueSource(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
     kind: SourceKind
-    ref: str
+    ref: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_gcp_version(self) -> Self:
+        if self.kind is SourceKind.GCP_SECRET and not PINNED_GCP_SECRET.fullmatch(self.ref):
+            raise ValueError("GCP Secret Manager sources must pin a numeric version")
+        return self
 
     @property
     def does_not_require_owner_recovery(self) -> bool:
         return self.kind is not SourceKind.MANUAL
 
 
-@dataclass(frozen=True, kw_only=True)
-class Credential:
-    name: str
+class Credential(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(pattern=SECRET_NAME)
     presence: Presence
     source: ValueSource
     disposition: Disposition
     note: str = ""
-    scope: ClassVar[CredentialScope]
+
+    @model_validator(mode="after")
+    def validate_disposition(self) -> Self:
+        if self.disposition is Disposition.REMOVE_CANDIDATE and self.presence is not Presence.PRESENT:
+            raise ValueError("cannot remove a credential that is not present")
+        return self
 
     @property
     def key(self) -> tuple[str, ...]:
@@ -111,36 +106,52 @@ class Credential:
         return ":".join(self.key)
 
 
-@dataclass(frozen=True, kw_only=True)
 class OrganizationCredential(Credential):
     visibility: OrganizationVisibility
     repositories: tuple[str, ...] = ()
-    scope: ClassVar[CredentialScope] = CredentialScope.ORGANIZATION
+    scope: Literal[CredentialScope.ORGANIZATION] = CredentialScope.ORGANIZATION
+
+    @field_validator("repositories")
+    @classmethod
+    def sort_repositories(cls, repositories: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(sorted(repositories))
+
+    @model_validator(mode="after")
+    def validate_visibility(self) -> Self:
+        if self.visibility is OrganizationVisibility.SELECTED and not self.repositories:
+            raise ValueError("selected visibility requires repositories")
+        if self.visibility is not OrganizationVisibility.SELECTED and self.repositories:
+            raise ValueError("repositories require selected visibility")
+        return self
 
     @property
     def key(self) -> tuple[str, ...]:
         return _organization_key(self.name)
 
 
-@dataclass(frozen=True, kw_only=True)
 class RepositoryCredential(Credential):
     repository: str
-    scope: ClassVar[CredentialScope] = CredentialScope.REPOSITORY
+    scope: Literal[CredentialScope.REPOSITORY] = CredentialScope.REPOSITORY
 
     @property
     def key(self) -> tuple[str, ...]:
         return _repository_key(self.repository, self.name)
 
 
-@dataclass(frozen=True, kw_only=True)
 class EnvironmentCredential(Credential):
     repository: str
     environment: str
-    scope: ClassVar[CredentialScope] = CredentialScope.ENVIRONMENT
+    scope: Literal[CredentialScope.ENVIRONMENT] = CredentialScope.ENVIRONMENT
 
     @property
     def key(self) -> tuple[str, ...]:
         return _environment_key(self.repository, self.environment, self.name)
+
+
+CredentialConfig = Annotated[
+    OrganizationCredential | RepositoryCredential | EnvironmentCredential,
+    Field(discriminator="scope"),
+]
 
 
 @dataclass(frozen=True)
@@ -234,62 +245,12 @@ class AuditReport:
 
 
 def _credential_from_dict(raw: dict) -> Credential:
-    scope = CredentialScope(raw["scope"])
-    unknown_fields = set(raw) - CREDENTIAL_COMMON_FIELDS - _credential_scope_fields(scope)
-    if unknown_fields:
-        raise ValueError(f"unknown credential fields: {sorted(unknown_fields)}")
-    name = raw["name"]
-    presence = Presence(raw["presence"])
-    source = ValueSource(kind=SourceKind(raw["source_kind"]), ref=raw["source_ref"])
-    disposition = Disposition(raw["disposition"])
-    note = raw.get("note", "")
-    if scope is CredentialScope.ORGANIZATION:
-        credential: Credential = OrganizationCredential(
-            name=name,
-            presence=presence,
-            source=source,
-            disposition=disposition,
-            note=note,
-            visibility=OrganizationVisibility(raw["visibility"]),
-            repositories=tuple(sorted(raw.get("repositories", []))),
-        )
-    elif scope is CredentialScope.REPOSITORY:
-        credential = RepositoryCredential(
-            name=name,
-            presence=presence,
-            source=source,
-            disposition=disposition,
-            note=note,
-            repository=raw["repository"],
-        )
-    else:
-        credential = EnvironmentCredential(
-            name=name,
-            presence=presence,
-            source=source,
-            disposition=disposition,
-            note=note,
-            repository=raw["repository"],
-            environment=raw["environment"],
-        )
-    _validate_credential(credential)
-    return credential
-
-
-def _validate_credential(credential: Credential) -> None:
-    if not SECRET_NAME.fullmatch(credential.name):
-        raise ValueError(f"invalid GitHub secret name {credential.name!r}")
-    if not credential.source.ref:
-        raise ValueError(f"{credential.label} has an empty source_ref")
-    if credential.source.kind is SourceKind.GCP_SECRET and not PINNED_GCP_SECRET.fullmatch(credential.source.ref):
-        raise ValueError(f"{credential.label} must pin a numeric GCP Secret Manager version")
-    if isinstance(credential, OrganizationCredential):
-        if credential.visibility is OrganizationVisibility.SELECTED and not credential.repositories:
-            raise ValueError(f"{credential.label} selects no repositories")
-        if credential.visibility is not OrganizationVisibility.SELECTED and credential.repositories:
-            raise ValueError(f"{credential.label} lists repositories without selected visibility")
-    if credential.disposition is Disposition.REMOVE_CANDIDATE and credential.presence is not Presence.PRESENT:
-        raise ValueError(f"{credential.label} cannot remove a credential that is not present")
+    normalized = dict(raw)
+    normalized["source"] = {
+        "kind": normalized.pop("source_kind"),
+        "ref": normalized.pop("source_ref"),
+    }
+    return TypeAdapter(CredentialConfig).validate_python(normalized)
 
 
 def credential_manifest(

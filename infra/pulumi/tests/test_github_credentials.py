@@ -30,6 +30,7 @@ from iac.github.resources import credential_resource_plans, register_credentials
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STACK_CONFIG = REPO_ROOT / "infra" / "pulumi" / "github" / "Pulumi.marin-community.yaml"
+EXAMPLE_REPOSITORY = "example/repo"
 
 EXPECTED_REMOVAL_CANDIDATES = frozenset(
     {
@@ -120,22 +121,22 @@ def test_registers_each_present_secret_and_selected_repository_access(monkeypatc
 def test_live_audit_reports_missing_unmanaged_and_scope_drift() -> None:
     manifest = CredentialManifest(
         organization="example",
-        repositories=("example/repo",),
+        repositories=(EXAMPLE_REPOSITORY,),
         credentials=(
             OrganizationCredential(
                 name="ORG_TOKEN",
                 presence=Presence.PRESENT,
-                source=ValueSource(SourceKind.MANUAL, "owner-recovery:org-token"),
+                source=ValueSource(kind=SourceKind.MANUAL, ref="owner-recovery:org-token"),
                 disposition=Disposition.KEEP,
                 visibility=OrganizationVisibility.SELECTED,
-                repositories=("example/repo",),
+                repositories=(EXAMPLE_REPOSITORY,),
             ),
             RepositoryCredential(
                 name="REPO_TOKEN",
                 presence=Presence.PRESENT,
-                source=ValueSource(SourceKind.MANUAL, "owner-recovery:repo-token"),
+                source=ValueSource(kind=SourceKind.MANUAL, ref="owner-recovery:repo-token"),
                 disposition=Disposition.KEEP,
-                repository="example/repo",
+                repository=EXAMPLE_REPOSITORY,
             ),
         ),
     )
@@ -144,7 +145,7 @@ def test_live_audit_reports_missing_unmanaged_and_scope_drift() -> None:
             name="ORG_TOKEN",
             visibility=OrganizationVisibility.ALL,
         ),
-        RepositoryLiveSecret(name="UNMANAGED", repository="example/repo"),
+        RepositoryLiveSecret(name="UNMANAGED", repository=EXAMPLE_REPOSITORY),
     )
 
     report = audit_credentials(manifest, {}, live)
@@ -160,14 +161,14 @@ def test_live_audit_reports_missing_unmanaged_and_scope_drift() -> None:
 def test_environment_secret_does_not_resolve_as_a_repository_secret() -> None:
     manifest = CredentialManifest(
         organization="example",
-        repositories=("example/repo",),
+        repositories=(EXAMPLE_REPOSITORY,),
         credentials=(
             EnvironmentCredential(
                 name="DEPLOY_TOKEN",
                 presence=Presence.PRESENT,
-                source=ValueSource(SourceKind.MANUAL, "owner-recovery:deploy-token"),
+                source=ValueSource(kind=SourceKind.MANUAL, ref="owner-recovery:deploy-token"),
                 disposition=Disposition.KEEP,
-                repository="example/repo",
+                repository=EXAMPLE_REPOSITORY,
                 environment="production",
             ),
         ),
@@ -188,12 +189,12 @@ def test_manifest_rejects_unpinned_gcp_secret_version() -> None:
         credential_manifest(
             schema_version=CREDENTIAL_SCHEMA_VERSION,
             organization="example",
-            repositories=["example/repo"],
+            repositories=[EXAMPLE_REPOSITORY],
             credentials=[
                 {
                     "name": "TOKEN",
                     "scope": "repository",
-                    "repository": "example/repo",
+                    "repository": EXAMPLE_REPOSITORY,
                     "presence": "present",
                     "source_kind": "gcp-secret",
                     "source_ref": "gcp-secret://projects/p/secrets/s/versions/latest",
@@ -204,16 +205,16 @@ def test_manifest_rejects_unpinned_gcp_secret_version() -> None:
 
 
 def test_manifest_rejects_unknown_fields() -> None:
-    with pytest.raises(ValueError, match=r"unknown credential fields:.*unexpected"):
+    with pytest.raises(ValueError):
         credential_manifest(
             schema_version=CREDENTIAL_SCHEMA_VERSION,
             organization="example",
-            repositories=["example/repo"],
+            repositories=[EXAMPLE_REPOSITORY],
             credentials=[
                 {
                     "name": "TOKEN",
                     "scope": "repository",
-                    "repository": "example/repo",
+                    "repository": EXAMPLE_REPOSITORY,
                     "presence": "present",
                     "source_kind": "manual",
                     "source_ref": "owner-recovery:token",
