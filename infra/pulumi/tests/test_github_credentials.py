@@ -7,6 +7,7 @@ from pathlib import Path
 import pulumi
 import pytest
 from iac.github import resources as github_resources
+from iac.github.audit import audit_credentials, discover_secret_references
 from iac.github.credentials import (
     CREDENTIAL_SCHEMA_VERSION,
     CredentialManifest,
@@ -22,9 +23,7 @@ from iac.github.credentials import (
     SecretReference,
     SourceKind,
     ValueSource,
-    audit_credentials,
     credential_manifest,
-    discover_secret_references,
     load_stack_manifest,
 )
 from iac.github.resources import credential_resource_plans, register_credentials

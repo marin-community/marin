@@ -9,12 +9,9 @@ import json
 import sys
 from pathlib import Path
 
-from iac.github.credentials import (
-    audit_credentials,
-    discover_secret_references,
-    github_secret_inventory,
-    load_stack_manifest,
-)
+from iac.github.audit import audit_credentials, discover_secret_references
+from iac.github.credentials import load_stack_manifest
+from iac.github.inventory import github_secret_inventory
 
 STACK_DIR = Path(__file__).resolve().parent
 REPO_ROOT = STACK_DIR.parents[2]
@@ -47,8 +44,8 @@ def main() -> None:
         _print_section("Removal candidates", report.removal_candidates)
         _print_section("Referenced but missing", report.referenced_missing)
         _print_section("Shadowed organization secrets", report.shadowed)
-        _print_section("Sources available without owner recovery", report.available_sources)
-        _print_section("Sources requiring owner recovery", report.manual_sources)
+        _print_section("Credentials recoverable without owner recovery", report.recoverable_credentials)
+        _print_section("Credentials requiring owner recovery", report.manual_recovery_credentials)
         if report.errors:
             print(f"Errors ({len(report.errors)}):")
             for finding in report.errors:
