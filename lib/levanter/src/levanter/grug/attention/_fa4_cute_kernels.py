@@ -327,11 +327,26 @@ def segmented_flash_attention_forward_launcher(
             sK_layout = cute.tile_to_shape(sQO_layout_atom, (self._n_block_size, self._head_dim_padded), (0, 1))
             sV_layout = cute.tile_to_shape(sQO_layout_atom, (self._n_block_size, self._head_dim_v_padded), (0, 1))
 
-            @cute.struct
-            class SharedStorage:
-                sQO: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sQO_layout)], 1024]
-                sK: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sK_layout)], 1024]
-                sV: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sV_layout)], 1024]
+            # Relative-position bias tile staged in SMEM once per N-tile (bias path only). The band is
+            # read per (query, key) in the softmax loop with a scattered, uncoalesced GMEM access; a
+            # coalesced cooperative load into this [m, n] tile turns that into one SMEM read per element.
+            sBias_layout = cute.make_layout((self._m_block_size, self._n_block_size))
+            if cutlass.const_expr(mBias is not None):
+
+                @cute.struct
+                class SharedStorage:
+                    sQO: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sQO_layout)], 1024]
+                    sK: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sK_layout)], 1024]
+                    sV: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sV_layout)], 1024]
+                    sBias: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sBias_layout)], 1024]
+
+            else:
+
+                @cute.struct
+                class SharedStorage:
+                    sQO: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sQO_layout)], 1024]
+                    sK: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sK_layout)], 1024]
+                    sV: cute.struct.Align[cute.struct.MemRange[self._dtype, cute.cosize(sV_layout)], 1024]
 
             # Grug divergence from upstream samples: JAX cutlass_call operands are
             # generic memrefs on some targets, so use CopyUniversalOp instead of a
@@ -456,6 +471,9 @@ def segmented_flash_attention_forward_launcher(
             sQ = storage.sQO.get_tensor(sQ_layout)
             sK = storage.sK.get_tensor(sK_layout)
             sV = storage.sV.get_tensor(sV_layout)
+            sBias = None
+            if cutlass.const_expr(mBias is not None):
+                sBias = storage.sBias.get_tensor(cute.make_layout((self._m_block_size, self._n_block_size)))
             sVt = cute.composition(
                 sV,
                 cute.make_layout((self._head_dim_v_padded, self._n_block_size), stride=(self._n_block_size, 1)),
@@ -588,6 +606,8 @@ def segmented_flash_attention_forward_launcher(
                 mLowerBounds=mLowerBounds,
                 mValid=mValid,
                 mBias=mBias,
+                sBias=sBias,
+                tidx=tidx,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -780,6 +800,9 @@ def segmented_flash_attention_forward_launcher(
                 )
                 cute.arch.cp_async_commit_group()
 
+            if cutlass.const_expr(basic_params.mBias is not None):
+                self.stage_bias_band(basic_params)
+                self.cta_sync_barrier.arrive_and_wait()
             self.softmax_rescale_O(basic_params, mma_params, softmax_params, acc_S, is_first_n_block)
 
             rP = cute.make_fragment_like(acc_S, self._dtype)
@@ -817,6 +840,31 @@ def segmented_flash_attention_forward_launcher(
                     mma_params.tOrVt[None, None, k],
                     mma_params.acc_O,
                 )
+
+        @cute.jit
+        def stage_bias_band(self, basic_params: SimpleNamespace):
+            # Cooperative, coalesced load of the [m, n] band tile for this (m_block, n_block) into SMEM.
+            # Consecutive threads take consecutive (m_local, n_local), i.e. consecutive band offsets
+            # within a query row, so the GMEM reads coalesce instead of the softmax loop's per-element
+            # scattered access. Out-of-window / out-of-bounds cells are staged as 0 (never added later).
+            mBias = basic_params.mBias
+            sBias = basic_params.sBias
+            tidx = basic_params.tidx
+            seq_len = mBias.shape[1]
+            total = self._m_block_size * self._n_block_size
+            for it in cutlass.range_constexpr(cute.ceil_div(total, self._num_threads)):
+                flat = tidx + it * self._num_threads
+                if flat < total:
+                    m_local = flat // self._n_block_size
+                    n_local = flat % self._n_block_size
+                    query_idx = basic_params.m_block * self._m_block_size + m_local
+                    key_idx = basic_params.n_block * self._n_block_size + n_local
+                    offset = query_idx - key_idx
+                    in_window = (not cute.elem_less(offset, 0)) and cute.elem_less(offset, self._rel_pos_window)
+                    val = self._dtype(0.0)
+                    if cute.elem_less(query_idx, seq_len) and in_window:
+                        val = mBias[basic_params.batch_idx, query_idx, basic_params.q_head, offset]
+                    sBias[m_local, n_local] = val
 
         @cute.jit
         def softmax_rescale_O(
@@ -875,13 +923,13 @@ def segmented_flash_attention_forward_launcher(
                     # of every kept in-window causal pair. acc_S is the raw QK product and the kernel
                     # multiplies it by softmax_scale inside exp2, so divide the bias by softmax_scale
                     # (== multiply by inv_softmax_scale) to match the reference which biases q*scale·k.
+                    # The band was staged into SMEM (coalesced) above; out-of-window cells are 0 there,
+                    # so adding sBias for every kept pair is exactly the in-window bias.
                     if cutlass.const_expr(basic_params.mBias is not None):
-                        offset = query_idx - key_idx
-                        in_window = (not cute.elem_less(offset, 0)) and cute.elem_less(offset, self._rel_pos_window)
-                        if keep and in_window:
-                            bias_val = basic_params.mBias[
-                                basic_params.batch_idx, query_meta_idx, basic_params.q_head, offset
-                            ]
+                        if keep:
+                            query_local = query_idx - basic_params.m_block * self._m_block_size
+                            key_local = key_idx - basic_params.n_block * self._n_block_size
+                            bias_val = basic_params.sBias[query_local, key_local]
                             acc_S_mn[r, c] = (
                                 acc_S_mn[r, c] + cutlass.Float32(bias_val) * softmax_params.inv_softmax_scale
                             )
