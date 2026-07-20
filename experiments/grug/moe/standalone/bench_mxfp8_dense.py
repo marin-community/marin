@@ -92,6 +92,10 @@ def weighted_production_ratio(measurements):
     return weighted_oracle / weighted_per_tensor
 
 
+def custom_call_count(compiled_text, target):
+    return compiled_text.count(f'custom_call_target="{target}"')
+
+
 def timed_samples(fn, args, iters, warmup):
     for _ in range(warmup):
         jax.block_until_ready(fn(*args))
@@ -226,12 +230,12 @@ def main():
         quantize_ms, quantize_mad_ms = timed_samples(quantize_all, (x, w, g), a.iters, a.warmup)
         oracle = jax.jit(prequant_fwdbwd)
         lowered_oracle = oracle.lower(*oracle_operands)
-        lowered_oracle_text = lowered_oracle.as_text()
-        assert lowered_oracle_text.count("block_scaled_dot") >= 3, "oracle did not lower all three block-scaled dots"
         compile_started = time.perf_counter()
         compiled_oracle = lowered_oracle.compile()
         compile_ms = (time.perf_counter() - compile_started) * 1e3
         compiled_oracle_text = compiled_oracle.as_text()
+        oracle_call_count = custom_call_count(compiled_oracle_text, "__cudnn$blockScaledDot")
+        assert oracle_call_count >= 3, "oracle did not compile all three block-scaled dots"
         oracle_targets = sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_oracle_text)))
         oracle_ms, oracle_mad_ms = timed_samples(compiled_oracle, oracle_operands, a.iters, a.warmup)
         oracle_y, oracle_dx, oracle_dw = compiled_oracle(*oracle_operands)
@@ -246,6 +250,7 @@ def main():
             "quantize_all_mad_ms": quantize_mad_ms * 1e3,
             "compile_ms": compile_ms,
             "custom_call_targets": oracle_targets,
+            "block_scaled_dot_call_count": oracle_call_count,
             "err_out": rel_frob(oracle_y, ref_out),
             "err_gx": rel_frob(oracle_dx, oracle_ref_gx),
             "err_gw": rel_frob(oracle_dw, oracle_ref_gw),

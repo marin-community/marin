@@ -31,3 +31,15 @@ def test_git_sha_is_required_benchmark_provenance():
     args = benchmark.parse_args(["--git-sha", "abc123"])
 
     assert args.git_sha == "abc123"
+
+
+def test_custom_call_count_counts_compiled_call_sites():
+    hlo = "\n".join(
+        [
+            'custom-call(), custom_call_target="__cudnn$blockScaledDot"',
+            'custom-call(), custom_call_target="unrelated"',
+            'custom-call(), custom_call_target="__cudnn$blockScaledDot"',
+        ]
+    )
+
+    assert benchmark.custom_call_count(hlo, "__cudnn$blockScaledDot") == 2
