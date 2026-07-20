@@ -15,7 +15,7 @@ author: Matt Wittmann
 - The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with unit-normal, loss-scaled, and all-zero synthetic cotangents.
 - Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the unguarded production hybrid fails. A finite reduction plus conditional BF16 `w_down`-gradient recompute clears the exact failure and is now part of the treatment implementation.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
-- The full 1e21-FLOP pair remains gated on a clean 20-step treatment rerun and throughput check. No long-run quality result is claimed yet.
+- The promoted implementation passes a fresh paired 20-step smoke: MXFP8 is finite, tracks BF16 within 0.0038 loss, and is 1.0666x faster on mean throughput. The full 1e21-FLOP pair is ready to launch; no long-run quality result is claimed yet.
 
 ## Scope
 
@@ -126,3 +126,12 @@ author: Matt Wittmann
 - Result: the first backward is finite: total grad norm=0.36288 and expert `w_down`=0.02595. The run completed with train loss=11.80212, eval loss=11.78692, and Paloma macro loss=11.78972. Its child and coordinator both succeeded. CPU coverage verifies that a non-finite fused result selects a finite BF16 grouped-wgrad reference.
 - Interpretation: the guard supplies the stronger data dependency that the pure barrier lacked and guarantees a valid fallback if the fused result is actually non-finite. The normal forward, dgrad, `w13` wgrad, and finite `w2` wgrad remain MXFP8.
 - Next action: remove the temporary debug/barrier/diagnostic-arm surface, make the guard intrinsic to `MxFp8MoeMlpOp`, and rerun the original 20-step treatment to validate stability and measure throughput overhead before launching the full pair.
+
+### 2026-07-19 20:11 - MXFP8Q-006 paired smoke passes
+
+- Hypothesis: the promoted treatment remains finite for 20 steps, preserves the BF16 loss trajectory, completes forced evaluation/checkpointing, and retains a throughput advantage after the finite guard.
+- Commit Hash: `f8be94f87`.
+- Command: paired [BF16](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-006-smoke-bf16-s20) and [MXFP8](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-006-smoke-mxfp8-s20) runs on 8xGB200x4 per arm, exact d2560/L26/E128/top-4 quality topology and full-run LR prefix.
+- Result: both child gangs and coordinators succeeded after 20 finite steps and forced evaluation. Final BF16/MXFP8 train loss=11.53080/11.53457 (delta +0.00377); eval loss=11.50498/11.50874 (+0.00375); Paloma macro=11.53829/11.54153 (+0.00323); uncheatable macro=11.52126/11.52456 (+0.00330). Across 18 non-compile throughput samples, BF16 averaged 795,878 tok/s and MXFP8 averaged 848,859 tok/s: 1.0666x, or +6.66%.
+- Interpretation: the first-backward defect is cleared at the original smoke horizon, quality tracks closely in the warmup prefix, and the guarded treatment remains faster. This is a launch gate, not the issue's compute-optimal quality conclusion.
+- Next action: launch and babysit the matched 31,474-step, 66.006B-token pair; evaluate same-token quality and wall-time-matched loss from the complete histories.
