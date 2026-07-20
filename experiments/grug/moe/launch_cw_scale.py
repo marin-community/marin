@@ -72,7 +72,7 @@ from marin.training.training import LevanterCheckpoint
 from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.launch_datakit_moe_mix import datakit_data_config
-from experiments.grug.moe.model import GrugModelConfig, RematMode
+from experiments.grug.moe.model import GrugModelConfig, MtpWeightSchedule, RematMode
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -131,6 +131,20 @@ def build_scale_model() -> GrugModelConfig:
     attn_impl_env = os.environ.get("SCALE_ATTN_IMPL")
     attention_implementation = cast("GrugAttentionImplementation | None", attn_impl_env or None)
     base = MoeHeuristic().build_model_config(hidden_dim, seq_len=seq_len)
+    # SCALE_MTP_DEPTH>0 adds DeepSeek-V3 Multi-Token Prediction modules (each = one extra
+    # block + a 2d->d projection + an extra shared-head CE pass); SCALE_MTP_LOSS_WEIGHT is the
+    # (initial) lambda on the averaged MTP CE (DeepSeek-V3 default 0.3). Depth 0 (default) = no MTP.
+    # SCALE_MTP_SCHEDULE in {constant, linear, step} moves the weight from SCALE_MTP_LOSS_WEIGHT
+    # to SCALE_MTP_LOSS_WEIGHT_FINAL over training: "linear" interpolates; "step" holds then drops
+    # at SCALE_MTP_STEP_FRACTION (DeepSeek-V3's 0.3-then-0.1-for-the-last-10%). SCALE_MTP_DENSE=1
+    # makes each MTP block a single dense SwiGLU MLP (SCALE_MTP_DENSE_INTERMEDIATE wide, no experts).
+    mtp_depth = env_int("SCALE_MTP_DEPTH", 0)
+    mtp_loss_weight = float(os.environ.get("SCALE_MTP_LOSS_WEIGHT", "0.3"))
+    mtp_loss_weight_final = float(os.environ.get("SCALE_MTP_LOSS_WEIGHT_FINAL", str(mtp_loss_weight)))
+    mtp_weight_schedule = cast(MtpWeightSchedule, os.environ.get("SCALE_MTP_SCHEDULE", "constant"))
+    mtp_step_decay_fraction = float(os.environ.get("SCALE_MTP_STEP_FRACTION", "0.9"))
+    mtp_dense = os.environ.get("SCALE_MTP_DENSE") == "1"
+    mtp_dense_intermediate_dim = env_int("SCALE_MTP_DENSE_INTERMEDIATE", 3 * hidden_dim if mtp_dense else 0)
     return dataclasses.replace(
         base,
         vocab_size=VOCAB_SIZE,
@@ -147,6 +161,13 @@ def build_scale_model() -> GrugModelConfig:
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
         use_array_stacked_blocks=os.environ.get("SCALE_SCAN_LAYERS") == "1",
+        mtp_depth=mtp_depth,
+        mtp_loss_weight=mtp_loss_weight,
+        mtp_loss_weight_final=mtp_loss_weight_final,
+        mtp_weight_schedule=mtp_weight_schedule,
+        mtp_step_decay_fraction=mtp_step_decay_fraction,
+        mtp_dense=mtp_dense,
+        mtp_dense_intermediate_dim=mtp_dense_intermediate_dim,
     )
 
 

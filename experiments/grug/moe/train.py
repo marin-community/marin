@@ -200,20 +200,30 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
-    flops_per_token = lm_flops_per_token(
-        hidden_dim=model_config.hidden_dim,
-        intermediate_dim=model_config.intermediate_dim,
-        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
-        num_kv_heads=model_config.num_kv_heads,
-        num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
-        vocab_size=model_config.vocab_size,
-        glu=True,
-        num_experts=model_config.num_experts,
-        num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
-        num_experts_per_tok=model_config.num_experts_per_token,
-    )
+    def _fpt(num_layers: int) -> float:
+        return lm_flops_per_token(
+            hidden_dim=model_config.hidden_dim,
+            intermediate_dim=model_config.intermediate_dim,
+            shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
+            num_layers=num_layers,
+            num_kv_heads=model_config.num_kv_heads,
+            num_heads=model_config.num_heads,
+            seq_len=model_config.max_seq_len,
+            vocab_size=model_config.vocab_size,
+            glu=True,
+            num_experts=model_config.num_experts,
+            num_shared_experts=1 if model_config.shared_expert_intermediate_dim > 0 else 0,
+            num_experts_per_tok=model_config.num_experts_per_token,
+        )
+
+    flops_per_token = _fpt(model_config.num_layers)
+    # Each DeepSeek-V3 MTP module adds one transformer block (folded in via the extra
+    # num_layers term), one extra shared-head lm_head pass, and a 2d->d projection.
+    if model_config.mtp_depth > 0:
+        d = model_config.hidden_dim
+        extra_lm_heads = model_config.mtp_depth * 2 * d * model_config.vocab_size
+        extra_proj = model_config.mtp_depth * 2 * (2 * d) * d
+        flops_per_token = _fpt(model_config.num_layers + model_config.mtp_depth) + extra_lm_heads + extra_proj
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
@@ -305,8 +315,10 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
+    num_train_steps: int,
 ):
     one = jnp.array(1, dtype=jnp.int32)
+    inv_num_train_steps = 1.0 / max(num_train_steps, 1)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
         if isinstance(watch_config.watch_targets, str):
@@ -326,6 +338,9 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        # Training progress in [0, 1] for the MTP loss-weight schedule (no-op when mtp_depth == 0).
+        mtp_progress = state.step.astype(jnp.float32) * inv_num_train_steps
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
@@ -335,6 +350,7 @@ def _make_train_step(
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
+                mtp_progress=mtp_progress,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
@@ -400,6 +416,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
+        num_train_steps=trainer.num_train_steps,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
