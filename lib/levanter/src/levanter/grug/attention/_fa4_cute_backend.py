@@ -968,23 +968,28 @@ def _rel_pos_bias_band_grad(
     window = bias.shape[3]
     compute_dtype = q.dtype
 
-    k_c = align_kv_heads(k, num_q_heads=q_heads)  # [B, S, Hq, D], compute dtype
-    v_c = align_kv_heads(v, num_q_heads=q_heads)  # [B, S, Hq, Dv]
-    v_head_dim = v_c.shape[-1]
+    # Upcast to fp32 for the recompute, matching the prior (naive-gather) path exactly so d_bias is
+    # numerically identical to it (bit-close on CPU; TF32 tensor cores on GPU). Only the *shape* of the
+    # contraction changes below, not the dtype/precision.
+    k_f = align_kv_heads(k, num_q_heads=q_heads).astype(jnp.float32)  # [B, S, Hq, D]
+    v_f = align_kv_heads(v, num_q_heads=q_heads).astype(jnp.float32)  # [B, S, Hq, Dv]
+    v_head_dim = v_f.shape[-1]
+    q_f = q.astype(jnp.float32)
+    do_f = dout.astype(jnp.float32)
+    bias_f = bias.astype(jnp.float32)  # [B, S, Hq, window]
     o_f = out.astype(jnp.float32)
 
     # D_i = rowsum(dO ∘ O) over head_dim -> [B, S, Hq]; lse arrives as [B, Hq, S].
-    d_row = jnp.sum(dout.astype(jnp.float32) * o_f, axis=-1)  # [B, S, Hq]
+    d_row = jnp.sum(do_f * o_f, axis=-1)  # [B, S, Hq]
     lse_bshq = jnp.transpose(lse, (0, 2, 1))  # [B, S, Hq]
 
     # Per query block, contract Q/dO against a *contiguous* key slice covering that block's window
-    # (dense tensor-core matmul, compute dtype, fp32 accumulation), then extract the banded diagonals.
-    # This avoids the naive per-(query, offset) gather, which materializes [B, block, window, Hq, D]
-    # (tens of GB at seq 4096 / window 1024) and is bandwidth-bound; here the score/dP tiles are only
-    # [B, block, block+window-1, Hq]. Chunking over query blocks bounds peak memory; the per-element
-    # math (biased softmax-input gradient, in fp32) is unchanged, so it stays bit-close to the naive
-    # form (fp32) and matches the kernel's own bf16 QK/dP recompute (bf16). ``block+window-1`` keys are
-    # left-padded by ``window-1`` so each block's slice starts at its own query offset.
+    # (dense matmul, fp32), then extract the banded diagonals. This avoids the naive per-(query, offset)
+    # gather, which materializes [B, block, window, Hq, D] (tens of GB at seq 4096 / window 1024) and is
+    # bandwidth-bound; here the score/dP tiles are only [B, block, block+window-1, Hq]. Chunking over
+    # query blocks bounds peak memory; the per-element math (biased softmax-input gradient, fp32) is
+    # unchanged. ``block+window-1`` keys are left-padded by ``window-1`` so each block's slice starts at
+    # its own query offset.
     block = min(_D_BIAS_QUERY_BLOCK, seq_len)
     num_blocks = (seq_len + block - 1) // block
     padded = num_blocks * block
@@ -1000,15 +1005,15 @@ def _rel_pos_bias_band_grad(
         pad[1] = (window - 1, padded - seq_len)
         return jnp.pad(x, pad)
 
-    q_p = _pad_q(q).reshape(batch, num_blocks, block, q_heads, head_dim)
-    do_p = _pad_q(dout).reshape(batch, num_blocks, block, q_heads, v_head_dim)
+    q_p = _pad_q(q_f).reshape(batch, num_blocks, block, q_heads, head_dim)
+    do_p = _pad_q(do_f).reshape(batch, num_blocks, block, q_heads, v_head_dim)
     d_row_p = _pad_q(d_row).reshape(batch, num_blocks, block, q_heads)
     lse_p = _pad_q(lse_bshq).reshape(batch, num_blocks, block, q_heads)
-    bias_p = _pad_q(bias).reshape(batch, num_blocks, block, q_heads, window)
+    bias_p = _pad_q(bias_f).reshape(batch, num_blocks, block, q_heads, window)
     lb_p = _pad_q(lower_bounds).reshape(batch, num_blocks, block)
     valid_p = _pad_q(valid).reshape(batch, num_blocks, block)
-    k_pad = _pad_k(k_c)  # [B, window-1+padded, Hq, D]
-    v_pad = _pad_k(v_c)
+    k_pad = _pad_k(k_f)  # [B, window-1+padded, Hq, D]
+    v_pad = _pad_k(v_f)
 
     offsets = jnp.arange(window)
     row_local = jnp.arange(block)
@@ -1018,7 +1023,7 @@ def _rel_pos_bias_band_grad(
     def _one_block(block_idx: jax.Array) -> jax.Array:
         q0 = block_idx * block
         qi = q0 + row_local  # [block] global query indices
-        q_blk = q_p[:, block_idx]  # [B, block, Hq, D]  (compute dtype)
+        q_blk = q_p[:, block_idx]  # [B, block, Hq, D]  (fp32)
         do_blk = do_p[:, block_idx]
         d_row_blk = d_row_p[:, block_idx]
         lse_blk = lse_p[:, block_idx]
