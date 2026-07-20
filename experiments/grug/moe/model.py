@@ -176,6 +176,10 @@ class GrugModelConfig:
     """When True (default), the every-4th + last 'long' layers skip rotary
     embedding entirely (Q and K go into attention un-rotated). Short layers
     still apply half-RoPE. Set to False to keep RoPE on long layers."""
+    global_every: int = 4
+    """Every ``global_every``-th layer (plus the last) is a 'long' full-causal layer;
+    the rest are 'short' sliding-window layers. Default 4 = 3-local:1-global; set 6 for
+    5-local:1-global."""
     rel_pos_bias: bool = False
     """When True, GQA (``CausalSelfAttention``) replaces half-RoPE with a learned,
     per-layer relative-position bias added to the pre-softmax attention logits. RoPE is
@@ -920,12 +924,12 @@ class Block(eqx.Module):
         return x, router_stats
 
 
-def _long_layer_schedule(num_layers: int) -> jax.Array:
-    """Bool[num_layers] mask marking the 'long' (full causal) layers: every 4th layer
-    plus the last one. Rides into the ``lax.scan`` body as a per-layer scan input so the
-    scan can pick the sliding-window vs full mask at runtime."""
+def _long_layer_schedule(num_layers: int, global_every: int = 4) -> jax.Array:
+    """Bool[num_layers] mask marking the 'long' (full causal) layers: every
+    ``global_every``-th layer plus the last one. Rides into the ``lax.scan`` body as a
+    per-layer scan input so the scan can pick the sliding-window vs full mask at runtime."""
     idx = jnp.arange(num_layers)
-    return ((idx % 4) == 3) | (idx == num_layers - 1)
+    return ((idx % global_every) == (global_every - 1)) | (idx == num_layers - 1)
 
 
 class Transformer(eqx.Module):
@@ -1032,7 +1036,7 @@ class Transformer(eqx.Module):
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
                 is_last = i == num_blocks - 1
-                is_long = i % 4 == 3 or is_last
+                is_long = i % cfg.global_every == (cfg.global_every - 1) or is_last
                 layer_mask = long_mask if is_long else short_mask
                 use_pko = is_long and not cfg.disable_pko
                 disable_rope = is_long and cfg.disable_long_rope
@@ -1053,7 +1057,7 @@ class Transformer(eqx.Module):
             # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
             # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
             # (scan requires disable_pko=True).
-            mask_schedule = _long_layer_schedule(cfg.num_layers)
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
             # Precompute the FA4 per-token metadata for both the full-causal (long) and
             # sliding-window (short) layers OUTSIDE the scan, then select per layer with a
             # jnp.where inside the body. This removes the lax.cond around the FA4 pure_callback:

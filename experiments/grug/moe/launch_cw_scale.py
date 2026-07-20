@@ -201,6 +201,7 @@ def build_scale_model() -> GrugModelConfig:
         shared_expert_intermediate_dim=env_int("SCALE_SHARED_INTERMEDIATE", hidden_dim),
         # Attention sliding-window span; default keeps the heuristic value (2048).
         sliding_window=env_int("SCALE_SLIDING_WINDOW", base.sliding_window),
+        global_every=env_int("SCALE_GLOBAL_EVERY", 4),
         remat_mode=cast(RematMode, remat_mode),
         moe_implementation=moe_implementation,
         attention_implementation=attention_implementation,
