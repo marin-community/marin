@@ -216,37 +216,40 @@ class IrisEnvironment(BaseEnvironment):
         # start()/stop() hop across asyncio.to_thread workers; _stop_sync closes
         # it once the sandbox is done.
         self._endpoint = connect_controller(cluster_name=self._cluster, controller_url=self._controller_url)
-        url = self._endpoint.url
-        credentials = self._endpoint.credentials
-        self._iris = IrisClient.remote(url, workspace=None, credentials=credentials)
-        self._rpc = ControllerServiceClientSync(
-            address=url,
-            timeout_ms=EXEC_RPC_PADDING * 1000,
-            interceptors=credentials.interceptors() if credentials is not None else [],
-            accept_compression=IRIS_RPC_COMPRESSIONS,
-            send_compression=None,
-        )
-        self._job = self._iris.submit(
-            entrypoint=Entrypoint.from_command("sleep", "infinity"),
-            name=self._job_name(),
-            # setup_scripts=[] means no setup phase: run the task image as-is
-            # (sandbox images have no uv/iris toolchain).
-            environment=EnvironmentSpec(setup_scripts=[]),
-            resources=ResourceSpec(
-                cpu=float(self.task_env_config.cpus or DEFAULT_CPUS),
-                memory=(self.task_env_config.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
-                disk=(self.task_env_config.storage_mb or DEFAULT_STORAGE_MB) * 1024 * 1024,
-            ),
-            task_image=self.task_env_config.docker_image,
-            container_profile=self._container_profile,
-            scheduling_timeout=Duration.from_seconds(self._scheduling_timeout),
-            timeout=Duration.from_seconds(self._sandbox_ttl),
-            # A restarted sandbox is a fresh container with all trial state lost,
-            # so never retry: fail the trial and let harbor-level resume handle it.
-            max_retries_failure=0,
-            max_retries_preemption=0,
-        )
+        # Everything below opens further resources (client, RPC channel, job) against
+        # that endpoint; a failure anywhere in this block must tear down whatever got
+        # opened so far, including the endpoint's tunnel, not just the wait below.
         try:
+            url = self._endpoint.url
+            credentials = self._endpoint.credentials
+            self._iris = IrisClient.remote(url, workspace=None, credentials=credentials)
+            self._rpc = ControllerServiceClientSync(
+                address=url,
+                timeout_ms=EXEC_RPC_PADDING * 1000,
+                interceptors=credentials.interceptors() if credentials is not None else [],
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
+            self._job = self._iris.submit(
+                entrypoint=Entrypoint.from_command("sleep", "infinity"),
+                name=self._job_name(),
+                # setup_scripts=[] means no setup phase: run the task image as-is
+                # (sandbox images have no uv/iris toolchain).
+                environment=EnvironmentSpec(setup_scripts=[]),
+                resources=ResourceSpec(
+                    cpu=float(self.task_env_config.cpus or DEFAULT_CPUS),
+                    memory=(self.task_env_config.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
+                    disk=(self.task_env_config.storage_mb or DEFAULT_STORAGE_MB) * 1024 * 1024,
+                ),
+                task_image=self.task_env_config.docker_image,
+                container_profile=self._container_profile,
+                scheduling_timeout=Duration.from_seconds(self._scheduling_timeout),
+                timeout=Duration.from_seconds(self._sandbox_ttl),
+                # A restarted sandbox is a fresh container with all trial state lost,
+                # so never retry: fail the trial and let harbor-level resume handle it.
+                max_retries_failure=0,
+                max_retries_preemption=0,
+            )
             self._task_id = self._wait_for_running()
         except BaseException:
             self._stop_sync()
