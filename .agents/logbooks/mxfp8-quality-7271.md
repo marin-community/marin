@@ -9,7 +9,8 @@ author: Matt Wittmann
 
 ## Current TL;DR
 
-- The paired launcher is ready at `485e23f7f`: 16 focused tests pass and the final read-only review found no remaining issues.
+- The first paired smoke was stopped before training: simulated epoching reduced rare finite components to zero sequences at the 20-step budget.
+- The regression fix disables simulated epoching only for shortened shape smokes; the full fixed-token run retains the intended simulated schedule. Seventeen focused tests pass.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
 - A 20-step, full-topology smoke is next. No quality or performance result is claimed yet.
 
@@ -37,3 +38,13 @@ author: Matt Wittmann
 - Result: pending submission.
 - Interpretation: the launcher passed 16 focused tests and a final read-only review with no findings. Four CPU/`recipe="auto"` variant-contract failures are inherited unchanged from #7282.
 - Next action: submit and babysit both 20-step arms; require finite loss, final evaluation, S3 checkpoint, and exact-ID resume before the full 31,474-step pair.
+
+### 2026-07-19 18:02 - MXFP8Q-001 smoke stopped before training
+
+- Hypothesis: shortening `experiment_budget` to 20 steps while retaining a 10.37T-token `target_budget` truncates at least one rare finite mixture component to zero sequences.
+- Commit Hash: fix pending commit; failed launch used `c0be963da` with launcher snapshot `485e23f7f`.
+- Command: paired Iris coordinators `/mwittmann/mxfp8q-001-smoke-bf16-coord` and `/mwittmann/mxfp8q-001-smoke-mxfp8-coord`; each launched an 8xGB200x4 child gang.
+- Config: both arms used the same 20-step shape-smoke data config with simulated epoching enabled.
+- Result: both arms failed before step 0 and before W&B initialization with `MixtureDataset in RESTART_STRATEGY encountered an empty finite dataset (async_len() returned 0)`. The coordinators and child gangs were stopped while retrying.
+- Interpretation: `LmDataConfig` slices every component to `int(true_length * experiment_budget / target_budget)`. At 20 steps the ratio is about `4.04e-6`, so sufficiently rare components become empty; restart sampling rejects empty finite datasets. This is shared smoke infrastructure, not a BF16/MXFP8 quality signal.
+- Next action: keep simulated epoching for the full 31,474-step comparison, disable it for shortened shape smokes as in the existing GB200 scale-smoke pattern, add regression coverage for both modes, and relaunch the exact pair.

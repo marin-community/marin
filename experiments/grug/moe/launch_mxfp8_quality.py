@@ -150,7 +150,8 @@ def build_quality_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
             total_steps=steps,
             batch_size=batch_size,
             max_seq_len=model.max_seq_len,
-            enable_simulated_epoching=True,
+            # Short shape smokes cannot downsample every rare finite component to at least one sequence.
+            enable_simulated_epoching=steps == full_steps,
             val_components=val_components,
         )
         return GrugMoeLaunchConfig(

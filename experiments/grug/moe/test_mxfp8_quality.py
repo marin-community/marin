@@ -145,10 +145,23 @@ def test_quality_checkpoint_exposes_durable_pair_configuration(monkeypatch: pyte
     assert resources.device == GpuConfig(variant="GB200", count=4)
     assert resources.replicas == 8
     assert resources.preemptible is False
-    assert config.data.target_budget == 10_372_343_704_053
-    assert config.data.experiment_budget == 20 * 512 * 4096
+    assert config.data.target_budget is None
+    assert config.data.experiment_budget is None
     assert all(dep.name in config.data.components for dep in step.deps)
     assert {key: os.environ[key] for key in _PINNED_TRAIN_ENV} == _PINNED_TRAIN_ENV
+
+
+def test_quality_checkpoint_keeps_simulated_epoching_for_full_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_quality_runtime_env(monkeypatch)
+    monkeypatch.setenv("MXFP8_QUALITY_ARM", "bf16")
+    monkeypatch.setenv("MXFP8_QUALITY_PAIR_ID", "MXFP8Q-full")
+
+    step = build_quality_checkpoint(version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    _, _, batch_size, full_steps = quality_cell()
+
+    assert config.data.target_budget == 10_372_343_704_053
+    assert config.data.experiment_budget == full_steps * batch_size * config.model.max_seq_len
 
 
 def test_quality_checkpoint_identity_is_stable_for_exact_reruns_and_isolates_arm_and_steps(
