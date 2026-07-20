@@ -359,3 +359,10 @@ author: Matt Wittmann
 - Result: both arms completed their thirteenth hourly checkpoint write to region-local S3. BF16 saved step 16,384 and MXFP8 saved step 17,435; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
 - Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
 - Next action: continue monitoring finite telemetry and the scheduled step-17,000 evaluations.
+
+### 2026-07-20 09:21 - Local Iris tunnel recovered without run intervention
+
+- Signal: the resident status loop began receiving connection-refused errors from `127.0.0.1:10080`; the original port-forward session terminated with `lost connection to pod`.
+- Root cause: the local `kubectl port-forward` died. The Iris controller pod remained 1/1 ready with zero restarts, and the controller service remained present; this was not a run or cluster failure.
+- Result: replaced only the local port-forward and updated both monitoring state files to session 55036. The existing status loop reconnected on its next retry and confirmed both child gangs and coordinators still running.
+- Next action: continue normal monitoring; do not restart or resubmit either arm.
