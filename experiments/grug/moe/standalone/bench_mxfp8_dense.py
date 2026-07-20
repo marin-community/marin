@@ -21,7 +21,7 @@ dot_general, which would otherwise masquerade as a null result.
 Single GPU. Run on a B200 (sm100); the mxfp8 arm is expected to fail at
 compile time on Hopper.
 
-Usage: python bench_mxfp8_dense.py [--tokens 65536] [--iters 50] [--out out.json]
+Usage: python bench_mxfp8_dense.py --git-sha REV [--tokens 65536] [--iters 50]
 """
 
 import argparse
@@ -29,7 +29,6 @@ import json
 import os
 import re
 import statistics
-import subprocess
 import time
 
 import jax
@@ -109,14 +108,19 @@ def timed(fn, args, iters, warmup):
     return median
 
 
-def main():
+def parse_args(argv=None):
     p = argparse.ArgumentParser()
+    p.add_argument("--git-sha", required=True)
     p.add_argument("--tokens", type=int, default=65536)
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
     p.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
     p.add_argument("--out", default="bench_mxfp8_dense.json")
-    a = p.parse_args()
+    return p.parse_args(argv)
+
+
+def main():
+    a = parse_args()
 
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind}, jax {jax.__version__}")
@@ -125,7 +129,7 @@ def main():
         "device": str(dev.device_kind),
         "backend": str(dev.client.platform_version),
         "jax": jax.__version__,
-        "git_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "git_sha": a.git_sha,
         "xla_flags": os.environ.get("XLA_FLAGS", ""),
         "tokens": a.tokens,
         "warmup": a.warmup,

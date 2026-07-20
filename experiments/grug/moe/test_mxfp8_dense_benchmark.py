@@ -22,3 +22,12 @@ def test_weighted_production_ratio_uses_dense_operation_mix():
     )
 
     assert ratio == pytest.approx(6.95 / 7.0)
+
+
+def test_git_sha_is_required_benchmark_provenance():
+    with pytest.raises(SystemExit):
+        benchmark.parse_args([])
+
+    args = benchmark.parse_args(["--git-sha", "abc123"])
+
+    assert args.git_sha == "abc123"
