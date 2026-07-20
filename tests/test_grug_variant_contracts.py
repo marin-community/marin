@@ -324,8 +324,10 @@ def test_grug_moe_fp8_config_threads_ops_into_expert_mlp():
         return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(amax_history_length=8))
-        gemm_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(wire=False))
+        # rev_dtype="e4m3" (uniform backward) so the op constructs on jax 0.10.x CPU
+        # CI; the threading/state contracts under test are dtype-recipe independent.
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=8))
+        gemm_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", wire=False))
         bf16_model = eqx.filter_eval_shape(build, None)
 
     fp8_mlp = fp8_model.blocks[0].mlp.expert_mlp
@@ -353,8 +355,8 @@ def test_grug_moe_fp8_config_threads_dense_ops():
         return model_module.Transformer.init(cfg, key=jax.random.PRNGKey(0))
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(amax_history_length=8))
-        moe_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(dense=False))
+        fp8_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=8))
+        moe_only_model = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3", dense=False))
         bf16_model = eqx.filter_eval_shape(build, None)
 
     attn = fp8_model.blocks[0].attn
@@ -391,7 +393,7 @@ def _rel_frobenius(actual: jax.Array, reference: jax.Array) -> float:
 
 def test_grug_moe_fp8_dense_shared_expert_tracks_bf16():
     model_module = importlib.import_module("experiments.grug.moe.model")
-    fp8_config = model_module.GrugFp8Config(amax_history_length=4)
+    fp8_config = model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=4)
 
     with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         key = jax.random.PRNGKey(0)
@@ -419,7 +421,7 @@ def test_grug_moe_fp8_dense_attention_tracks_bf16():
     with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
         key = jax.random.PRNGKey(0)
         bf16_cfg = build_cfg(None)
-        fp8_cfg = build_cfg(model_module.GrugFp8Config(amax_history_length=4))
+        fp8_cfg = build_cfg(model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=4))
         bf16_attn = jax.jit(lambda: model_module.CausalSelfAttention.init(bf16_cfg, key=key))()
         fp8_attn = jax.jit(lambda: model_module.CausalSelfAttention.init(fp8_cfg, key=key))()
         x = jax.random.normal(jax.random.PRNGKey(1), (2, 8, 128), dtype=jnp.bfloat16)
@@ -446,7 +448,7 @@ def test_grug_moe_fp8_state_gets_no_optimizer_moments():
         return train_module.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        fp8_state = eqx.filter_eval_shape(build, model_module.GrugFp8Config())
+        fp8_state = eqx.filter_eval_shape(build, model_module.GrugFp8Config(rev_dtype="e4m3"))
         bf16_state = eqx.filter_eval_shape(build, None)
 
     # The fp8 model carries extra quantization-state leaves in params, but none
@@ -461,7 +463,10 @@ def test_grug_moe_ema_update_carries_current_fp8_state():
 
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=64, seq_len=4)
     cfg = dataclasses.replace(
-        cfg, fp8=model_module.GrugFp8Config(amax_history_length=4), hidden_dim=128, intermediate_dim=128
+        cfg,
+        fp8=model_module.GrugFp8Config(rev_dtype="e4m3", amax_history_length=4),
+        hidden_dim=128,
+        intermediate_dim=128,
     )
 
     with set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):

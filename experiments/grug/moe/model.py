@@ -123,11 +123,17 @@ class GrugFp8Config:
     per-tensor scaling recipe ([haliax.quantization.Fp8DotGeneralOp][]). The
     router, attention gate, GatedNorm, embedding, and lm-head projections stay
     in full precision.
+
+    ``rev_dtype`` is the output-gradient FP8 dtype of the expert ragged GEMMs:
+    the default ``"e5m2"`` runs the numerically correct mixed ``e5m2 x e4m3``
+    backward and needs jax >= 0.11.0 (jax-ml/jax#38859); ``"e4m3"`` is the
+    uniform approximation that also lowers on jax 0.10.x.
     """
 
     wire: bool = True
     dense: bool = True
     amax_history_length: int = 1024
+    rev_dtype: Literal["e5m2", "e4m3"] = "e5m2"
 
 
 @dataclass(frozen=True)
@@ -699,9 +705,10 @@ class MoEMLP(eqx.Module):
 
         ragged_dot_ops = None
         if cfg.fp8 is not None:
+            rev_dtype = {"e5m2": jnp.float8_e5m2, "e4m3": jnp.float8_e4m3fn}[cfg.fp8.rev_dtype]
             ragged_dot_ops = MoeRaggedDotOps(
-                w13=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
-                w2=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length),
+                w13=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length, rev_dtype=rev_dtype),
+                w2=Fp8RaggedDotOp.init(cfg.fp8.amax_history_length, rev_dtype=rev_dtype),
             )
 
         d, e = cfg.hidden_dim, cfg.num_experts
