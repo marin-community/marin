@@ -10,10 +10,11 @@ author: Matt Wittmann
 ## Current TL;DR
 
 - Two smoke-only defects are fixed: shortened mixtures no longer produce empty finite components, and tagged evaluation now applies the same mixed-precision cast as training.
-- The first fully instrumented pair exposed a third smoke artifact: setting the trainer horizon to 20 compressed the full run's 314-step LR warmup to zero steps. BF16 survived the near-peak update; MXFP8 became NaN on step 2, so this is not a valid quality result.
-- Shortened runs now reproduce the full optimizer schedule prefix and reject horizons that extend past warmup. Nineteen focused launcher tests pass.
+- The first fully instrumented pair exposed a smoke artifact: setting the trainer horizon to 20 compressed the full run's 314-step LR warmup to zero steps. Shortened runs now reproduce the full optimizer schedule prefix and reject horizons that extend past warmup.
+- After correcting the schedule, BF16 remains finite but MXFP8 still becomes NaN on the first backward pass. W&B isolates the first non-finite tensor to `expert_mlp.w_down`; `w_gate` and `w_up` gradients are finite.
+- The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with both unit-normal and loss-scaled random cotangents. Grouped-only and dense-only graph controls are next.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
-- A corrected 20-step, full-topology smoke is next. No quality or performance result is claimed yet.
+- The full 1e21-FLOP pair is blocked on the first-backward numerical defect. No quality or performance result is claimed yet.
 
 ## Scope
 
@@ -69,3 +70,22 @@ author: Matt Wittmann
 - Result: BF16 completed 20 steps, saved `step-20`, and finished with train loss 9.21343, 795,203 tok/s, Paloma macro loss 9.49029, and uncheatable macro loss 9.38663. MXFP8 logged finite loss 11.80426 at global step 1, became NaN on the next update on all eight ranks, forced NaN evaluation, and saved a poisoned `step-2` checkpoint. Iris marked both jobs succeeded because the training loop breaks rather than raises on NaN. W&B correctly recorded both runs in `marin-community/marin_moe`.
 - Interpretation: the MXFP8 run's first logged LR was 0.0064745. The full 31,474-step schedule has a 314-step warmup and would use about 2.16e-5 at the same point, roughly 300x smaller. The corrected #7282 production-shape run remained finite for 50 steps with the same MXFP8 recipe and full Newton-Schulz, which further points to the smoke schedule rather than an immediate operator defect.
 - Next action: for shortened runs, scale the smoke peak and use an all-warmup schedule so every LR value matches the full schedule prefix; reject shortened horizons beyond the full warmup; rerun with fresh identities.
+
+### 2026-07-19 18:36 - MXFP8Q-001c reproduces NaN at the correct full-run LR
+
+- Hypothesis: preserving the full run's first 20 LR values will remove the treatment's step-2 NaN.
+- Commit Hash: `47b74d4ce`.
+- Command: paired coordinators `/mwittmann/mxfp8q-001c-smoke-{bf16,mxfp8}-coord`; W&B runs [BF16](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-001c-smoke-bf16-s20) and [MXFP8](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-001c-smoke-mxfp8-s20).
+- Config: same full topology and treatment as 001b. The 20-step optimizer uses an all-warmup schedule with scaled endpoints, matching the full schedule prefix to float32 rounding; first treatment LR is 2.16477e-5.
+- Result: BF16 completed 20/20 with train loss 11.53079, eval loss 11.50498, Paloma macro loss 11.53831, uncheatable macro loss 11.52123, 797,926 tok/s, and a step-20 checkpoint. MXFP8 again stopped on step 2 and produced all-NaN evaluation plus a poisoned step-2 checkpoint. Its step-0 forward loss was finite at 11.80426, but `grad/norm/total` was already NaN. Per-parameter norms isolate the non-finite value to `expert_mlp.w_down`; `w_gate`=0.02608 and `w_up`=0.02594 were finite. Issue update: https://github.com/marin-community/marin/issues/7271#issuecomment-5018066223.
+- Interpretation: schedule compression was a real harness defect but not the numerical root cause. The first backward pass, before MuonH applies an update, is invalid specifically in the fused w2 weight-gradient path.
+- Next action: reproduce the local grouped-op shape on one GB200, then split grouped MXFP8 from dense per-tensor FP8 in the full graph.
+
+### 2026-07-19 18:45 - Exact local op shape is finite with synthetic cotangents
+
+- Hypothesis: local expert count 16 and dispatch capacity 262,144 trigger a static layout or fused-kernel defect absent from the original E64 op test.
+- Commit Hash: `47b74d4ce`.
+- Command: direct one-GB200 jobs `/mwittmann/mxfp8q-op-e16-m262k-uniform` and `/mwittmann/mxfp8q-op-e16-smallcot`, using the existing blackbox op harness with E=16, M=262144, D=2560, F=1280, uniform groups, and XLA producers. The second scales the output cotangent by `1 / (512 * 4096)`.
+- Result: both jobs passed. Unit-normal cotangents measured relative Frobenius errors output=0.06555, dx=0.06725, dw13=0.06743, dw2=0.06706 versus the BF16 reference; loss-scaled cotangents produced the same finite errors.
+- Interpretation: the static local shape, wgrad layout, and simple cotangent underflow are falsified. The defect requires the training graph or its cotangent distribution.
+- Next action: run two-step grouped-only and dense-only controls on the exact quality graph. If grouped-only fails, instrument the grouped custom VJP inputs; if only the hybrid fails, trace the dense FP8 upstream cotangent.

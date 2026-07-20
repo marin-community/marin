@@ -121,6 +121,23 @@ def test_quality_models_differ_only_by_mxfp8_config() -> None:
     assert bf16 == dataclasses.replace(mxfp8, fp8=None)
 
 
+def test_quality_diagnostic_models_isolate_grouped_and_dense_fp8() -> None:
+    grouped = quality_model("mxfp8-grouped-only")
+    dense = quality_model("fp8-dense-only")
+
+    assert grouped.fp8 == GrugFp8Config(
+        dense=False,
+        grouped=True,
+        recipe="mxfp8",
+        mxfp8_producer="xla",
+    )
+    assert dense.fp8 == GrugFp8Config(
+        dense=True,
+        grouped=False,
+        recipe="per_tensor",
+    )
+
+
 def test_eval_model_casts_weights_to_compute_dtype_without_casting_fp8_state() -> None:
     model = _MixedPrecisionModel(
         weight=jnp.ones((2,), dtype=jnp.float32),

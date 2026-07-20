@@ -106,7 +106,7 @@ def _optimizer_for_run_steps(
 
 
 def quality_model(arm: str) -> GrugModelConfig:
-    """Return the matched BF16 or hybrid MXFP8 quality model."""
+    """Return a quality-gate arm or one of its FP8 isolation controls."""
     model, _, _, _ = quality_cell()
     if arm == "bf16":
         return model
@@ -120,7 +120,26 @@ def quality_model(arm: str) -> GrugModelConfig:
                 mxfp8_producer="xla",
             ),
         )
-    raise ValueError(f"unknown quality arm {arm!r}; expected 'bf16' or 'mxfp8'")
+    if arm == "mxfp8-grouped-only":
+        return dataclasses.replace(
+            model,
+            fp8=GrugFp8Config(
+                dense=False,
+                grouped=True,
+                recipe="mxfp8",
+                mxfp8_producer="xla",
+            ),
+        )
+    if arm == "fp8-dense-only":
+        return dataclasses.replace(
+            model,
+            fp8=GrugFp8Config(
+                dense=True,
+                grouped=False,
+                recipe="per_tensor",
+            ),
+        )
+    raise ValueError(f"unknown quality arm {arm!r}; expected 'bf16', 'mxfp8', 'mxfp8-grouped-only', or 'fp8-dense-only'")
 
 
 def _apply_train_env() -> None:
