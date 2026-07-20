@@ -28,16 +28,19 @@ IAP_IAM_PERMISSIONS = (
 
 
 @dataclass(frozen=True)
-class GcpSecretGrant:
-    service_account: str
-    secrets: tuple[str, ...]
+class GcpArtifactRegistryGrant:
+    location: str
+    repositories: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class GcpArtifactRegistryGrant:
+class GcpDeployAccount:
     service_account: str
-    location: str
-    repositories: tuple[str, ...]
+    mint_id_tokens: bool = False
+    secret_metadata_viewer: bool = False
+    secret_iam_secrets: tuple[str, ...] = ()
+    artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
+    iap_iam_manager: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,12 +53,7 @@ class GcpDeployPermissionsArgs:
     kms_location: str
     kms_key_ring: str
     kms_key: str
-    service_accounts: tuple[str, ...]
-    id_token_service_accounts: frozenset[str] = frozenset()
-    secret_metadata_viewers: frozenset[str] = frozenset()
-    secret_iam_grants: tuple[GcpSecretGrant, ...] = ()
-    artifact_registry_grants: tuple[GcpArtifactRegistryGrant, ...] = ()
-    iap_iam_managers: frozenset[str] = frozenset()
+    accounts: tuple[GcpDeployAccount, ...]
 
 
 @dataclass(frozen=True)
@@ -82,11 +80,6 @@ def _service_account_member(email: str) -> str:
 
 def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPermissionSet, ...]:
     """Resolve stable IAM members and resource IDs for each deployment account."""
-    unknown_id_token_accounts = args.id_token_service_accounts - set(args.service_accounts)
-    if unknown_id_token_accounts:
-        raise ValueError(
-            f"id_token_service_accounts contains undeclared deploy accounts: {sorted(unknown_id_token_accounts)!r}"
-        )
     github_principal = (
         f"principal://iam.googleapis.com/projects/{args.project_number}/locations/global/"
         f"workloadIdentityPools/{args.workload_identity_pool}/subject/{args.github_subject}"
@@ -97,27 +90,16 @@ def deploy_permission_sets(args: GcpDeployPermissionsArgs) -> tuple[GcpDeployPer
     )
     return tuple(
         GcpDeployPermissionSet(
-            account_id=_account_id(args.project, email),
-            service_account_id=f"projects/{args.project}/serviceAccounts/{email}",
-            service_account_member=_service_account_member(email),
+            account_id=_account_id(args.project, account.service_account),
+            service_account_id=f"projects/{args.project}/serviceAccounts/{account.service_account}",
+            service_account_member=_service_account_member(account.service_account),
             github_principal=github_principal,
             state_bucket=args.state_bucket,
             crypto_key_id=crypto_key_id,
-            mint_id_tokens=email in args.id_token_service_accounts,
+            mint_id_tokens=account.mint_id_tokens,
         )
-        for email in args.service_accounts
+        for account in args.accounts
     )
-
-
-def _validate_permission_accounts(args: GcpDeployPermissionsArgs) -> None:
-    deploy_accounts = set(args.service_accounts)
-    secret_accounts = args.secret_metadata_viewers | {grant.service_account for grant in args.secret_iam_grants}
-    permission_accounts = (
-        secret_accounts | {grant.service_account for grant in args.artifact_registry_grants} | args.iap_iam_managers
-    )
-    unknown_accounts = permission_accounts - deploy_accounts
-    if unknown_accounts:
-        raise ValueError(f"permissions contain undeclared deploy accounts: {sorted(unknown_accounts)!r}")
 
 
 def _create_base_permissions(
@@ -156,66 +138,63 @@ def _create_base_permissions(
         )
 
 
-def _create_secret_iam_members(
-    project: str,
-    grants: tuple[GcpSecretGrant, ...],
-    role: pulumi.Input[str],
-    name_suffix: str,
-    opts: pulumi.ResourceOptions,
-) -> None:
-    for grant in grants:
-        account_id = _account_id(project, grant.service_account)
-        for secret in grant.secrets:
-            gcp.secretmanager.SecretIamMember(
-                f"{account_id}-{secret}-{name_suffix}",
-                project=project,
-                secret_id=secret,
-                role=role,
-                member=_service_account_member(grant.service_account),
-                opts=opts,
-            )
-
-
 def _create_secret_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:
-    for email in args.secret_metadata_viewers:
+    for account in args.accounts:
+        if not account.secret_metadata_viewer:
+            continue
         gcp.projects.IAMMember(
-            f"{_account_id(args.project, email)}-secret-metadata",
+            f"{_account_id(args.project, account.service_account)}-secret-metadata",
             project=args.project,
             role=SECRET_METADATA_VIEWER,
-            member=_service_account_member(email),
+            member=_service_account_member(account.service_account),
             opts=opts,
         )
 
-    if args.secret_iam_grants:
-        secret_iam_role = gcp.projects.IAMCustomRole(
-            "secret-iam-manager",
-            project=args.project,
-            role_id=SECRET_IAM_ROLE_ID,
-            title="Marin Secret IAM Manager",
-            description="Manage IAM policies on selected deployment secrets without reading payloads.",
-            permissions=list(SECRET_IAM_PERMISSIONS),
-            opts=opts,
-        )
-        _create_secret_iam_members(args.project, args.secret_iam_grants, secret_iam_role.name, "iam-manager", opts)
+    secret_iam_accounts = tuple(account for account in args.accounts if account.secret_iam_secrets)
+    if not secret_iam_accounts:
+        return
+
+    secret_iam_role = gcp.projects.IAMCustomRole(
+        "secret-iam-manager",
+        project=args.project,
+        role_id=SECRET_IAM_ROLE_ID,
+        title="Marin Secret IAM Manager",
+        description="Manage IAM policies on selected deployment secrets without reading payloads.",
+        permissions=list(SECRET_IAM_PERMISSIONS),
+        opts=opts,
+    )
+    for account in secret_iam_accounts:
+        account_id = _account_id(args.project, account.service_account)
+        for secret in account.secret_iam_secrets:
+            gcp.secretmanager.SecretIamMember(
+                f"{account_id}-{secret}-iam-manager",
+                project=args.project,
+                secret_id=secret,
+                role=secret_iam_role.name,
+                member=_service_account_member(account.service_account),
+                opts=opts,
+            )
 
 
 def _create_artifact_registry_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:
-    for grant in args.artifact_registry_grants:
-        account_id = _account_id(args.project, grant.service_account)
-        for repository in grant.repositories:
-            gcp.artifactregistry.RepositoryIamMember(
-                f"{account_id}-{repository}-writer",
-                project=args.project,
-                location=grant.location,
-                repository=repository,
-                role=ARTIFACT_REGISTRY_WRITER,
-                member=_service_account_member(grant.service_account),
-                opts=opts,
-            )
+    for account in args.accounts:
+        account_id = _account_id(args.project, account.service_account)
+        for grant in account.artifact_registry_grants:
+            for repository in grant.repositories:
+                gcp.artifactregistry.RepositoryIamMember(
+                    f"{account_id}-{repository}-writer",
+                    project=args.project,
+                    location=grant.location,
+                    repository=repository,
+                    role=ARTIFACT_REGISTRY_WRITER,
+                    member=_service_account_member(account.service_account),
+                    opts=opts,
+                )
 
 
 def _create_iap_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.ResourceOptions) -> None:
-    if not args.iap_iam_managers:
+    iap_iam_accounts = tuple(account for account in args.accounts if account.iap_iam_manager)
+    if not iap_iam_accounts:
         return
 
     iap_iam_role = gcp.projects.IAMCustomRole(
@@ -227,12 +206,12 @@ def _create_iap_permissions(args: GcpDeployPermissionsArgs, opts: pulumi.Resourc
         permissions=list(IAP_IAM_PERMISSIONS),
         opts=opts,
     )
-    for email in args.iap_iam_managers:
+    for account in iap_iam_accounts:
         gcp.projects.IAMMember(
-            f"{_account_id(args.project, email)}-iap-iam-manager",
+            f"{_account_id(args.project, account.service_account)}-iap-iam-manager",
             project=args.project,
             role=iap_iam_role.name,
-            member=_service_account_member(email),
+            member=_service_account_member(account.service_account),
             opts=opts,
         )
 
@@ -254,7 +233,6 @@ class GcpDeployPermissions(pulumi.ComponentResource):
     ) -> None:
         super().__init__("marin:gcp:GcpDeployPermissions", name, None, opts)
         child = pulumi.ResourceOptions(parent=self, provider=gcp_provider, protect=True)
-        _validate_permission_accounts(args)
         _create_base_permissions(deploy_permission_sets(args), child)
         _create_secret_permissions(args, child)
         _create_artifact_registry_permissions(args, child)
