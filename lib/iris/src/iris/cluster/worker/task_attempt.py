@@ -368,9 +368,7 @@ class TaskAttempt:
             log_reader = handle.log_reader()
             self._monitor_loop(handle, log_reader)
         except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Monitoring failed:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Monitoring failed", e)
         finally:
             self._cleanup()
             logger.info(
@@ -625,13 +623,9 @@ class TaskAttempt:
         except TaskCancelled:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Infrastructure error:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_WORKER_FAILED, "Infrastructure error", e)
         except Exception as e:
-            error_msg = format_exception_with_traceback(e)
-            self._append_log(source=INJECTED_ERROR_SOURCE, data=f"Task failed:\n{error_msg}")
-            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
+            self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Task failed", e)
         finally:
             self._cleanup()
             logger.info(
@@ -981,6 +975,17 @@ class TaskAttempt:
     def _append_log(self, *, source: str, data: str) -> None:
         """Push a single log entry (for rare events like errors)."""
         self._push_logs([self._make_log_entry(source=source, data=data)])
+
+    def _fail_from_exception(self, state: TaskState, summary: str, exc: Exception) -> None:
+        """Log ``exc``'s traceback as an injected error and move to a terminal ``state``.
+
+        ``summary`` heads the log line (e.g. "Task failed"); the formatted
+        traceback becomes both the log body and the terminal error stored on
+        the attempt.
+        """
+        error_msg = format_exception_with_traceback(exc)
+        self._append_log(source=INJECTED_ERROR_SOURCE, data=f"{summary}:\n{error_msg}")
+        self.transition_to(state, error=error_msg)
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
         """Fetch new logs from container and push as a batch."""
