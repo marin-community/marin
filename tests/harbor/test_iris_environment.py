@@ -12,12 +12,16 @@ the job left the endpoint opened by connect_controller() never closed.
 from pathlib import Path
 
 import pytest
-from harbor.models.task.config import EnvironmentConfig
-from harbor.models.trial.paths import TrialPaths
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from marin.harbor import iris_environment
-from marin.harbor.iris_environment import IrisEnvironment
 from upath import UPath
+
+try:
+    from harbor.models.task.config import EnvironmentConfig
+    from harbor.models.trial.paths import TrialPaths
+    from marin.harbor import iris_environment
+    from marin.harbor.iris_environment import IrisEnvironment
+except ImportError:
+    pytest.skip("harbor is not installed (marin[harbor] extra)", allow_module_level=True)
 
 
 class _FakeEndpoint:
