@@ -130,6 +130,8 @@ _MEMORY_CHECK_INTERVAL = 10
 # limit, and keep flushing until usage drops to _SCATTER_FLUSH_TARGET.
 _SCATTER_FLUSH_THRESHOLD = 0.75
 _SCATTER_FLUSH_TARGET = 0.60
+# Threshold for triggering a gc.collect() after a flush.
+_GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
 
 
 def _read_cgroup_memory_bytes() -> int:
@@ -529,7 +531,6 @@ class ScatterWriter:
     def _flush(self) -> None:
         """Flush the accumulated buffer into one combined Parquet file sorted by [_SHARD_COL, _SORT_KEY_COL]."""
         if not self._frames:
-            gc.collect()
             return
 
         buffer = pl.concat(self._frames, rechunk=False)
@@ -545,14 +546,14 @@ class ScatterWriter:
                 df = _items_to_dataframe(rows, self._key_fn, self._sort_fn, num_output_shards=0)
                 frames.append(df.with_columns(pl.lit(shard_val, dtype=pl.Int32).alias(_SHARD_COL)))
             if not frames:
-                gc.collect()
                 return
             buffer = pl.concat(frames, rechunk=True)
 
         buffer_sorted = buffer.sort([_SHARD_COL, _SORT_KEY_COL])
         del buffer
 
-        self._total_bytes_written += int(buffer_sorted.estimated_size())
+        flushed_bytes = int(buffer_sorted.estimated_size())
+        self._total_bytes_written += flushed_bytes
         self._total_rows_written += len(buffer_sorted)
         shard_sizes = buffer_sorted.group_by(_SHARD_COL).agg(pl.col(_PAYLOAD_COL).bin.size().sum().alias("bytes"))
         for shard_val, nbytes in shard_sizes.iter_rows():
@@ -582,7 +583,8 @@ class ScatterWriter:
             )
 
         del buffer_sorted
-        gc.collect()
+        if flushed_bytes >= _GC_FLUSH_SIZE_THRESHOLD_BYTES:
+            gc.collect()
 
     def write(self, df: pl.DataFrame) -> None:
         """Buffer a DataFrame, flushing on memory pressure.
