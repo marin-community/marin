@@ -75,3 +75,9 @@ def test_byte_mismatch_count_compares_fp8_bits():
     rhs = jnp.array([1.0, 2.5, 3.0], dtype=jnp.float8_e4m3fn)
 
     assert benchmark.byte_mismatch_count(lhs, rhs) == 1
+
+
+def test_projection_reuse_benchmark_is_explicit():
+    args = benchmark.parse_args(["--git-sha", "abc123", "--producer", "cute", "--projection-reuse"])
+
+    assert args.projection_reuse

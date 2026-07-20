@@ -132,6 +132,7 @@ def parse_args(argv=None):
     p.add_argument("--warmup", type=int, default=10)
     p.add_argument("--shape", action="append", choices=[label for label, _, _, _ in SHAPES])
     p.add_argument("--producer", choices=["none", "cute"], default="none")
+    p.add_argument("--projection-reuse", action="store_true")
     p.add_argument("--out", default="bench_mxfp8_dense.json")
     return p.parse_args(argv)
 
@@ -146,6 +147,9 @@ def main():
         from experiments.grug.moe.standalone.mxfp8_grouped.quantize_cute import (  # noqa: PLC0415
             dual_quantize_mxfp8_cute,
         )
+
+        def cute_orientations(t):
+            return linear_orientations(*dual_quantize_mxfp8_cute(t))
 
     dev = jax.devices()[0]
     print(f"device: {dev.device_kind}, jax {jax.__version__}")
@@ -278,9 +282,6 @@ def main():
         }
         if a.producer == "cute":
 
-            def cute_orientations(t):
-                return linear_orientations(*dual_quantize_mxfp8_cute(t))
-
             def cute_quantize_reuse(x, w, g):
                 return *cute_orientations(x), *cute_orientations(w), *cute_orientations(g)
 
@@ -396,6 +397,93 @@ def main():
                 line += f"  quantize_x {r['quantize_x_ms']:.3f} ms  err out {r['err_out']:.2e}"
             print(line)
         results["shapes"][label] = shape_res
+
+    if a.projection_reuse:
+        assert a.producer == "cute", "--projection-reuse requires --producer cute"
+        keys = jax.random.split(jax.random.PRNGKey(17), 6)
+        projection_x = jax.random.normal(keys[0], (a.tokens, 5120), dtype=jnp.bfloat16)
+        w_q = jax.random.normal(keys[1], (5120, 5120), dtype=jnp.bfloat16) / (5120**0.5)
+        w_k = jax.random.normal(keys[2], (5120, 1280), dtype=jnp.bfloat16) / (5120**0.5)
+        w_v = jax.random.normal(keys[3], (5120, 1280), dtype=jnp.bfloat16) / (5120**0.5)
+        w_gate = jax.random.normal(keys[4], (5120, 5120), dtype=jnp.bfloat16) / (5120**0.5)
+        w_up = jax.random.normal(keys[5], (5120, 5120), dtype=jnp.bfloat16) / (5120**0.5)
+
+        def cute_forward(x_orientations, w_orientations):
+            return scaled_matmul(
+                x_orientations[0],
+                w_orientations[2],
+                x_orientations[1],
+                w_orientations[3],
+                preferred_element_type=jnp.bfloat16,
+            )
+
+        def attention_cute_reuse(x, w_q, w_k, w_v):
+            x_orientations = cute_orientations(x)
+            return (
+                cute_forward(x_orientations, cute_orientations(w_q)),
+                cute_forward(x_orientations, cute_orientations(w_k)),
+                cute_forward(x_orientations, cute_orientations(w_v)),
+            )
+
+        def attention_cute_unshared(x_q, x_k, x_v, w_q, w_k, w_v):
+            return (
+                cute_forward(cute_orientations(x_q), cute_orientations(w_q)),
+                cute_forward(cute_orientations(x_k), cute_orientations(w_k)),
+                cute_forward(cute_orientations(x_v), cute_orientations(w_v)),
+            )
+
+        def attention_per_tensor(x, w_q, w_k, w_v):
+            return dot_fp8_tensor(x, w_q), dot_fp8_tensor(x, w_k), dot_fp8_tensor(x, w_v)
+
+        def gate_up_cute_reuse(x, w_gate, w_up):
+            x_orientations = cute_orientations(x)
+            return (
+                cute_forward(x_orientations, cute_orientations(w_gate)),
+                cute_forward(x_orientations, cute_orientations(w_up)),
+            )
+
+        def gate_up_cute_unshared(x_gate, x_up, w_gate, w_up):
+            return (
+                cute_forward(cute_orientations(x_gate), cute_orientations(w_gate)),
+                cute_forward(cute_orientations(x_up), cute_orientations(w_up)),
+            )
+
+        def gate_up_per_tensor(x, w_gate, w_up):
+            return dot_fp8_tensor(x, w_gate), dot_fp8_tensor(x, w_up)
+
+        projection_arms = {
+            "attention_per_tensor": (attention_per_tensor, (projection_x, w_q, w_k, w_v)),
+            "attention_cute_unshared": (
+                attention_cute_unshared,
+                (projection_x, projection_x, projection_x, w_q, w_k, w_v),
+            ),
+            "attention_cute_reuse": (attention_cute_reuse, (projection_x, w_q, w_k, w_v)),
+            "gate_up_per_tensor": (gate_up_per_tensor, (projection_x, w_gate, w_up)),
+            "gate_up_cute_unshared": (
+                gate_up_cute_unshared,
+                (projection_x, projection_x, w_gate, w_up),
+            ),
+            "gate_up_cute_reuse": (gate_up_cute_reuse, (projection_x, w_gate, w_up)),
+        }
+        projection_results = {}
+        for arm, (fn, args) in projection_arms.items():
+            lowered = jax.jit(fn).lower(*args)
+            compile_started = time.perf_counter()
+            compiled = lowered.compile()
+            compile_ms = (time.perf_counter() - compile_started) * 1e3
+            elapsed, elapsed_mad = timed_samples(compiled, args, a.iters, a.warmup)
+            compiled_text = compiled.as_text()
+            projection_results[arm] = {
+                "fwd_ms": elapsed * 1e3,
+                "fwd_mad_ms": elapsed_mad * 1e3,
+                "compile_ms": compile_ms,
+                "custom_call_targets": sorted(set(re.findall(r'custom_call_target="([^"]+)"', compiled_text))),
+                "block_scaled_dot_call_count": custom_call_count(compiled_text, "__cudnn$blockScaledDot"),
+            }
+        results["projection_reuse"] = projection_results
+        print("\n== projection activation reuse ==")
+        for arm, row in projection_results.items():
+            print(f"  {arm:28s} {row['fwd_ms']:.3f} +/- {row['fwd_mad_ms']:.3f} ms")
 
     covered_weight = sum(weight for weight, _, _ in production_measurements)
     results["covered_production_weight"] = covered_weight
