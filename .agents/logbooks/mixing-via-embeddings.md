@@ -975,3 +975,11 @@ transect 100B validates the budget extrapolation; then validate combined kernel+
   proposals, or large models — NOT a core production term. The severe 10B harm (e16 +0.39, e32 +1.27)
   was a small-budget artifact. Caveat: single-seed; the e32 +8.8σ residual is the one non-zero point,
   so keep a small (~3.4× weaker than 10B) guardrail for ≥32-epoch extremes.
+
+## 2026-07-20 Report v-final: 100B verdict folded in, published everywhere
+- f29 added (§05, budget-transfer curve), open-question #1 flipped to RESOLVED (vanishes), spec-table
+  "when the term fires" row → settled (dormant at 100B), thesis/note upgraded "likely suffices"→"suffices
+  (confirmed by matched-mechanism gate)". 20 figures, each with a collapsible explainer.
+- Published: Claude artifact (same URL, label 100b-gate-settled-vanishes), GCS private (refreshed),
+  Marin public NEW version https://storage.googleapis.com/marin-public/rav/mixing-via-embeddings/2026.07.21/index.html
+  (2026.07.19 + .20 links stay live). Both decisive questions now settled in the report.
