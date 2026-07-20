@@ -190,6 +190,8 @@ class GrugFp8Config:
     mxfp8_debug: bool = False
     # Diagnostic compiler barrier on the fused w2-gradient output.
     mxfp8_wgrad_barrier: bool = False
+    # Diagnostic finite guard with a BF16 w2-gradient fallback.
+    mxfp8_wgrad_finite_guard: bool = False
     # Save the fwd-orientation MXFP8 weight copies across the remat recompute
     # (weights change once per step; full remat otherwise re-quantizes them in
     # bwd). Bit-identical numerics; costs fp8 copies of the local expert
@@ -851,6 +853,7 @@ class MoEMLP(eqx.Module):
                     producer=fp8.mxfp8_producer,
                     debug=fp8.mxfp8_debug,
                     wgrad_barrier=fp8.mxfp8_wgrad_barrier,
+                    wgrad_finite_guard=fp8.mxfp8_wgrad_finite_guard,
                 )
             else:
                 ragged_dot_ops = MoeRaggedDotOps(

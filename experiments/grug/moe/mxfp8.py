@@ -93,6 +93,11 @@ _GEMM_TILER = ((256, 256), (2, 1))
 _WGRAD_TILER = ((256, 256), (2, 2))
 
 _PRODUCER_CHOICES = ("auto", "cute", "xla")
+_WGRAD_DIM_NUMBERS = jax.lax.RaggedDotDimensionNumbers(
+    dot_dimension_numbers=(((0,), (0,)), ((), ())),
+    lhs_ragged_dimensions=(0,),
+    rhs_group_dimensions=(),
+)
 
 
 def _fused_kernels():
@@ -247,6 +252,20 @@ def _deinterleave_w13_grad(dw13i: jax.Array) -> jax.Array:
     """(E, D, N2) wgrad output over interleaved columns -> concat gate/up layout."""
     n2 = dw13i.shape[2]
     return dw13i[:, :, jnp.asarray(deinterleave_perm(n2))]
+
+
+def _bf16_w2_wgrad(c13: jax.Array, g: jax.Array, group_sizes: jax.Array) -> jax.Array:
+    """Recompute the grouped w2 gradient from saved BF16 preactivations."""
+    n2 = c13.shape[1]
+    f = n2 // 2
+    c_concat = c13[:, jnp.asarray(deinterleave_perm(n2))]
+    hidden = jax.nn.silu(c_concat[:, :f].astype(jnp.float32)) * c_concat[:, f:].astype(jnp.float32)
+    return jax.lax.ragged_dot_general(
+        lhs=hidden.astype(jnp.bfloat16),
+        rhs=g.astype(jnp.bfloat16),
+        group_sizes=group_sizes,
+        ragged_dot_dimension_numbers=_WGRAD_DIM_NUMBERS,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -406,6 +425,13 @@ def _backward_pipeline(op: "MxFp8MoeMlpOp", res, g) -> dict:
     )
     if op.wgrad_barrier:
         dw2 = jax.lax.optimization_barrier(dw2)
+    if op.wgrad_finite_guard:
+        dw2 = jax.lax.cond(
+            jnp.all(jnp.isfinite(dw2)),
+            lambda fused_dw2: fused_dw2,
+            lambda _: _bf16_w2_wgrad(c13, g_pad, layout.padded_group_sizes),
+            dw2,
+        )
     if op.debug:
         g_scale_bytes = jax.lax.bitcast_convert_type(g_sfc, jnp.uint8)
         h_scale_bytes = jax.lax.bitcast_convert_type(sfh_col, jnp.uint8)
@@ -504,6 +530,7 @@ class MxFp8MoeMlpOp:
     producer: Literal["auto", "cute", "xla"] = "auto"
     debug: bool = False
     wgrad_barrier: bool = False
+    wgrad_finite_guard: bool = False
 
     def __call__(self, x, w13, w2, group_sizes):
         return _mxfp8_expert_mlp(self, x, w13, w2, group_sizes)

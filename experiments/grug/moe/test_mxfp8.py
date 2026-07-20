@@ -126,6 +126,20 @@ def test_deinterleave_grad_inverts_interleave():
     np.testing.assert_array_equal(np.asarray(mxfp8._deinterleave_w13_grad(jnp.asarray(dw_interleaved))), dw_concat)
 
 
+def test_bf16_w2_wgrad_matches_grouped_reference():
+    groups = jnp.asarray([2, 1], jnp.int32)
+    f, d = 64, 3
+    c_concat = jnp.arange(3 * 2 * f, dtype=jnp.bfloat16).reshape(3, 2 * f) / 128
+    c_interleaved = c_concat[:, jnp.asarray(mxfp8.interleave_perm(2 * f))]
+    g = jnp.arange(3 * d, dtype=jnp.bfloat16).reshape(3, d) / 16
+
+    actual = mxfp8._bf16_w2_wgrad(c_interleaved, g, groups)
+    hidden = jax.nn.silu(c_concat[:, :f].astype(jnp.float32)) * c_concat[:, f:].astype(jnp.float32)
+    expected = jnp.stack((hidden[:2].T @ g[:2].astype(jnp.float32), hidden[2:].T @ g[2:].astype(jnp.float32)))
+
+    np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected), rtol=2e-2, atol=2e-2)
+
+
 def test_padded_row_count_is_an_upper_bound():
     rng = np.random.default_rng(2)
     for _ in range(50):

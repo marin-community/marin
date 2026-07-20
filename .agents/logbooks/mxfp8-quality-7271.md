@@ -13,7 +13,7 @@ author: Matt Wittmann
 - The first fully instrumented pair exposed a smoke artifact: setting the trainer horizon to 20 compressed the full run's 314-step LR warmup to zero steps. Shortened runs now reproduce the full optimizer schedule prefix and reject horizons that extend past warmup.
 - After correcting the schedule, BF16 remains finite but MXFP8 still becomes NaN on the first backward pass. W&B isolates the first non-finite tensor to `expert_mlp.w_down`; `w_gate` and `w_up` gradients are finite.
 - The fused op passes the exact local E16/M262144/D2560/F1280 shape on one GB200 with unit-normal, loss-scaled, and all-zero synthetic cotangents.
-- Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the production hybrid fails. Diagnostic-only telemetry is being added to the hybrid custom VJP.
+- Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the production hybrid fails. Reading the fused `w_down` gradient for conditional telemetry makes the same hybrid graph finite, while a matched non-instrumented control reproduces the NaN. This points to a compiler liveness/scheduling interaction around that custom-call output.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
 - The full 1e21-FLOP pair is blocked on the first-backward numerical defect. No quality or performance result is claimed yet.
 
@@ -99,3 +99,21 @@ author: Matt Wittmann
 - Result: both controls completed with finite train/eval/checkpoint results. Grouped-only step-0 total grad norm=0.56530 and expert w_down/w_gate/w_up norms=0.03060/0.02003/0.02024; final train loss=11.80210 and eval loss=11.78640. Dense-only total grad norm=0.36285 and expert norms=0.02596/0.02608/0.02594; final train loss=11.80208 and eval loss=11.78690. A separate exact-shape all-zero-cotangent op probe returned finite, exact-zero dx/dw13/dw2.
 - Interpretation: neither component fails alone. The NaN requires the hybrid computation graph and is not explained by an entirely zero grouped-op cotangent. The known-finite #7282 d5120 hybrid also has zero step-0 attention/shared weight gradients but finite expert w_down=0.04234, so those zero gradients are expected initialization behavior rather than the direct cause.
 - Next action: enable diagnostic-only custom-VJP telemetry on non-finite dw2 to record the real hybrid cotangent, column-quantized values/scales, hidden values/scales, and routing range.
+
+### 2026-07-19 19:34 - MXFP8Q-003 telemetry masks the hybrid NaN
+
+- Hypothesis: conditional finite-value telemetry can observe the invalid fused `w_down` gradient without changing the failing computation.
+- Commit Hash: telemetry run and matched control used `08470bfe0`; minimal barrier probe is `11ca6cb63`.
+- Command: two-step full-hybrid runs [telemetry](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-003-debug-mxfp8-debug-s2) and [non-instrumented control](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-003-control-mxfp8-s2) on the exact 8xGB200x4 quality topology.
+- Result: the telemetry run completed finite with train loss=11.80211, eval loss=11.78691, total grad norm=0.36288, and expert `w_down` grad norm=0.02595; its non-finite callback never fired. The matched non-instrumented control reproduced NaN in total and `w_down` gradient norms on its first backward pass. The only model-config difference is the debug flag, which adds a finite reduction and conditional callback consumer after the fused `dw2` custom call.
+- Interpretation: observing `dw2` changes the failure, so the telemetry cannot expose the original invalid inputs. The result is consistent with output liveness, aliasing, or scheduling sensitivity in the hybrid compiled graph rather than invalid synthetic-op numerics. A full weight-gradient finite reduction is too expensive to adopt as the quality treatment.
+- Next action: test `jax.lax.optimization_barrier` on `dw2` as the smallest zero-arithmetic compiler intervention. If it clears the matched control, confirm at the original 20-step horizon and compare throughput before making it the production treatment.
+
+### 2026-07-19 19:44 - MXFP8Q-004 compiler barrier is insufficient
+
+- Hypothesis: preventing compiler motion across the fused `dw2` output is sufficient to reproduce the stabilizing effect of the diagnostic consumer without doing arithmetic.
+- Commit Hash: `11ca6cb63`.
+- Command: two-step full-hybrid [barrier run](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-004-barrier-mxfp8-barrier-s2), exact topology and shortened data realization from MXFP8Q-003.
+- Result: the run reproduced NaN in total and expert `w_down` gradient norms on the first backward pass. A pure `jax.lax.optimization_barrier(dw2)` does not stabilize the graph.
+- Interpretation: compiler motion/fusion prevention alone is insufficient; the successful telemetry graph's finite reduction and conditional side-effect introduce a stronger data/control dependency. A correctness guard must consume the fused gradient and provide a numerically valid alternative rather than relying on a scheduling hint.
+- Next action: reduce `isfinite(dw2)` and conditionally recompute only an invalid `w_down` gradient from the saved BF16 preactivation/cotangent via `ragged_dot_general`; validate the fallback helper on CPU, then run the exact two-step hybrid control.
