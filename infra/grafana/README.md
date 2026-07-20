@@ -213,13 +213,11 @@ gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx pus
 
 cd infra/grafana
 pulumi login gs://marin-iac-state
-export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
-  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
 # The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
 # reads this token from the environment.
 export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
   --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
-pulumi stack select marin-grafana                         # first time: pulumi stack init marin-grafana
+pulumi stack select marin-grafana
 
 # Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member. Editing this
 # and re-running updates only the grant, never the service.
@@ -228,6 +226,9 @@ pulumi config set --path 'viewers[0]' you@example.com
 pulumi preview                                            # plan; then, once it looks right:
 pulumi up
 ```
+
+The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
 `pulumi up` builds the Dockerfile with buildx, pushes it digest-pinned to Artifact
 Registry, and rolls the service to that digest. `min` and `max` instances are both 1: one

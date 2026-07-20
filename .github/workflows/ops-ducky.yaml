@@ -32,8 +32,12 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -52,8 +56,9 @@ jobs:
         with:
           stack: ducky-marin
           work-dir: infra/ducky
-          gcp-credentials: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
-          gcp-project-id: ${{ secrets.GCP_PROJECT_ID }}
+          service-account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+          gcp-project-id: hai-gcp-models
           # The program imports ducky + iris, so sync the whole workspace.
           uv-sync-args: "--all-packages --extra deploy --frozen"
-          config-map: ${{ inputs.deploy_generation && format('{{"ducky:deploy_generation": {{"value": "{0}"}}}}', inputs.deploy_generation) || '' }}
+          config-map: >-
+            ${{ inputs.deploy_generation && format('{{"ducky:deploy_generation": {{"value": "{0}"}}}}', inputs.deploy_generation) || '' }}

@@ -1,0 +1,16 @@
+config:
+  marin-permissions:project: hai-gcp-models
+  marin-permissions:project_number: "748532799086"
+  marin-permissions:workload_identity_pool: github-pool
+  marin-permissions:github_subject: repo:marin-community/marin:ref:refs/heads/main
+  marin-permissions:state_bucket: marin-iac-state
+  marin-permissions:kms_location: us-central1
+  marin-permissions:kms_key_ring: marin-iac-keyring
+  marin-permissions:kms_key: marin-iac-key
+  marin-permissions:deploy_service_accounts:
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+    - marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+  marin-permissions:id_token_service_accounts:
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6QvsjVzr0PISU10T8p7CBI0p31YV97owWqgbmeAU4wUSSQCdtF6ivDSFDEI7pl9JQ4dMHYbmdE2rjMYZjjF9S6S3BiIx2j9acg0JGF88fZT8lDPrScl/KjBkTV76oECYPg18C/ry5YsXaAE=

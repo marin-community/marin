@@ -31,3 +31,5 @@ config:
     DUCKY_R2_ACCESS_KEY: gcp-secret://projects/hai-gcp-models/secrets/marin-r2-access-key-id/versions/1
     DUCKY_R2_SECRET_KEY: gcp-secret://projects/hai-gcp-models/secrets/marin-r2-secret-key/versions/1
     DUCKY_CW_SECRET_KEY: gcp-secret://projects/hai-gcp-models/secrets/ducky-cw-secret-key/versions/1
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6aRDsYQ2FS3VJ7N/qENL4tQrvNlhqlCaoVXini2vOpQSSACdtF6iP6ajZwMv19he+MWpHMqfWQ1fP3JPQh2oux4p+QxrtbKeTwhC5bKFZWhFl/2ByVgcBSYdqcixKp19YM17xuE31qiiSQ==

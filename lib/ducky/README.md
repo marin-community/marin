@@ -184,11 +184,12 @@ manual roll:
 uv sync --all-packages --extra deploy
 cd infra/ducky
 pulumi login gs://marin-iac-state
-export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
-  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
 pulumi stack select ducky-marin
 pulumi up
 ```
+
+The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used.
 
 Runtime config still arrives as `DUCKY_*` env vars — see `config.py`; the stack yaml is
 where the values are set.

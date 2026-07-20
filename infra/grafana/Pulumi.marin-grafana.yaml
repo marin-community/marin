@@ -13,4 +13,5 @@ config:
   # in the oa.dev Cloudflare zone; unset custom_domain to serve only the run.app URL.
   marin-grafana:custom_domain: grafana.oa.dev
   marin-grafana:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
-encryptionsalt: v1:l4cpXo+O0AQ=:v1:eyZFohyodD1XPLAl:MQudWu5IcpxOK62NyqAUU5cCP8FYBw==
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6Q+ANb/lWOlKPlnYfjnVwqsddavq2mCxtpbL2qM4LDkSSQCdtF6i23aOY/4tztuXbQxjEf7zLiHzOSRS37IKAQ0lwPtGPtsU+eHwrNMTw6rqY4wLRoKzPpdTOWDtzYkIgSixmuEPz14nxCE=

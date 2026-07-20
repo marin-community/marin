@@ -165,10 +165,10 @@ The shared backend is a GCS bucket + a GCP KMS secrets provider, both in `hai-gc
 - **State bucket** `gs://marin-iac-state` (us-central1, uniform bucket-level access, versioned).
 - **Secrets provider: a GCP KMS key**,
 `gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`.
-Unlike a passphrase, KMS access is asymmetric: CI holds only
-`roles/cloudkms.cryptoKeyDecrypter` (can decrypt to compute a preview diff, cannot write new
-secrets), operators hold `roles/cloudkms.cryptoKeyEncrypterDecrypter` (can `pulumi up`) — see
-`spec.md §9`. No `PULUMI_CONFIG_PASSPHRASE` is set against this backend; decryption is
+Unlike a passphrase, KMS access is asymmetric: preview-only CI holds
+`roles/cloudkms.cryptoKeyDecrypter`, while deployment workflows and operators that run
+`pulumi up` hold `roles/cloudkms.cryptoKeyEncrypterDecrypter` — see `spec.md §9` and
+[`infra/permissions`](../permissions/README.md). No `PULUMI_CONFIG_PASSPHRASE` is set against this backend; decryption is
 authorized by each caller's own GCP credentials (`gcloud auth application-default login`
 locally, WIF in CI), so IAM on the key is the only access control. Each stack's
 `secretsprovider` URI is recorded in its committed `Pulumi.<stack>.yaml` at `stack init`.

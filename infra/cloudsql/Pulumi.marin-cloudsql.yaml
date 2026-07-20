@@ -1,1 +1,2 @@
-encryptionsalt: v1:uNRpnaR/2DY=:v1:15putJq1VQi9MCER:PK9QNpcru7nqSbaxOCq6bY+cOS5DnA==
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+encryptedkey: CiQAKk3j6YA/XAGlhj7JJNRafiajGAk+3H3kRAnSH7XVr2O6LzESSQCdtF6iwZ8tr2HVyOhyHQ7eteEamJqBGzZOorPzjIUprg6+/dntFzIo0iSTzyK0JO5xALvdLaBQOG/dVii4gzMk811tAFBhIvY=

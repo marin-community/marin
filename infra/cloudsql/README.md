@@ -21,13 +21,16 @@ uv sync --all-packages --extra deploy                     # once: iac + Pulumi p
 
 cd infra/cloudsql
 pulumi login gs://marin-iac-state
-export PULUMI_CONFIG_PASSPHRASE="$(gcloud secrets versions access latest \
-  --secret=pulumi-iac-passphrase --project=hai-gcp-models)"
-pulumi stack select marin-cloudsql                        # first time: pulumi stack init marin-cloudsql
+pulumi stack select marin-cloudsql
 
 pulumi preview                                            # plan; then, once it looks right:
 pulumi up
 ```
+
+The stack uses the shared `marin-iac-key` KMS secrets provider. The operator needs
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; no passphrase is used. Grafana reads
+this stack through a `StackReference`, so both stacks must remain on providers its deploy
+identity can decrypt.
 
 `pulumi up` creates the instance, the `grafana` and `evals` databases, the
 `cloudsql-grafana-password` and `cloudsql-evals-password` secret shells, and the
