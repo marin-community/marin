@@ -31,7 +31,17 @@ _PINNED_TRAIN_ENV = {
     "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc",
     "CE_IMPL": "liger",
 }
-_UNSUPPORTED_TRAIN_ENV = ("SCALE_MUON_NO_NS", "SCALE_MUON_DROP_NS_MATMULS", "SCALE_MUON_SYRK")
+_UNSUPPORTED_MUON_ENV = (
+    "SCALE_MUON_NO_NS",
+    "SCALE_MUON_DROP_NS_MATMULS",
+    "SCALE_MUON_SYRK",
+)
+_UNPINNED_DISPATCH_ENV = (
+    "XLA_FLAGS",
+    "NCCL_DEBUG",
+    "JAX_COMPILATION_CACHE_DIR",
+    "LIBTPU_INIT_ARGS",
+)
 
 
 class _RecordedJob:
@@ -63,7 +73,7 @@ def _ignore_config(_: object) -> None:
 
 
 def _clear_quality_runtime_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in (*_PINNED_TRAIN_ENV, *_UNSUPPORTED_TRAIN_ENV):
+    for key in (*_PINNED_TRAIN_ENV, *_UNSUPPORTED_MUON_ENV, *_UNPINNED_DISPATCH_ENV):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -180,6 +190,7 @@ def test_quality_runtime_recipe_reaches_gpu_job_request_identically_for_both_arm
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_quality_runtime_env(monkeypatch)
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     monkeypatch.setenv("MXFP8_QUALITY_PAIR_ID", "MXFP8Q-dispatch")
     monkeypatch.setenv("MXFP8_QUALITY_STEPS", "20")
     submitted_envs: list[dict[str, str]] = []
@@ -202,7 +213,8 @@ def test_quality_runtime_recipe_reaches_gpu_job_request_identically_for_both_arm
 
     assert submitted_envs[0] == submitted_envs[1]
     assert {key: submitted_envs[0][key] for key in _PINNED_TRAIN_ENV} == _PINNED_TRAIN_ENV
-    assert all(key not in submitted_envs[0] for key in _UNSUPPORTED_TRAIN_ENV)
+    assert all(key not in submitted_envs[0] for key in _UNSUPPORTED_MUON_ENV)
+    assert "JAX_PLATFORMS" not in submitted_envs[0]
 
 
 @pytest.mark.parametrize(
@@ -212,6 +224,10 @@ def test_quality_runtime_recipe_reaches_gpu_job_request_identically_for_both_arm
         ("SCALE_MUON_DROP_NS_MATMULS", "1"),
         ("SCALE_MUON_SYRK", "1"),
         ("CE_IMPL", "triton"),
+        ("XLA_FLAGS", "--xla_gpu_enable_latency_hiding_scheduler=true"),
+        ("NCCL_DEBUG", "INFO"),
+        ("JAX_COMPILATION_CACHE_DIR", "/tmp/separate-arm-cache"),
+        ("LIBTPU_INIT_ARGS", "--xla_tpu_enable_async_collective_fusion=true"),
     ],
 )
 def test_quality_runtime_recipe_rejects_conflicts_before_mutation_or_submission(

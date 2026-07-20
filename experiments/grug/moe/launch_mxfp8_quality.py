@@ -52,7 +52,9 @@ _TRAIN_ENV = {
     "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc",
     "CE_IMPL": "liger",
 }
-_CLOSED_RECIPE_ENV_PREFIXES = ("SCALE_MUON_", "CE_")
+_CLOSED_TRAIN_ENV_PREFIXES = ("XLA_", "NCCL_", "JAX_", "CE_", "SCALE_MUON_")
+_CLOSED_TRAIN_ENV_KEYS = ("LIBTPU_INIT_ARGS",)
+_IGNORED_TRAIN_ENV_KEYS = ("JAX_PLATFORMS",)
 
 _VALIDATION = [
     *paloma_datasets(tokenizer=marin_tokenizer).values(),
@@ -99,9 +101,12 @@ def quality_model(arm: str) -> GrugModelConfig:
 def _apply_train_env() -> None:
     conflicting = {}
     for key, value in os.environ.items():
-        unsupported_recipe_key = key.startswith(_CLOSED_RECIPE_ENV_PREFIXES) and key not in _TRAIN_ENV
+        dispatcher_forwards_key = key.startswith(_CLOSED_TRAIN_ENV_PREFIXES) or key in _CLOSED_TRAIN_ENV_KEYS
+        unsupported_forwarded_key = (
+            dispatcher_forwards_key and key not in _TRAIN_ENV and key not in _IGNORED_TRAIN_ENV_KEYS
+        )
         conflicting_pinned_value = key in _TRAIN_ENV and value != _TRAIN_ENV[key]
-        if unsupported_recipe_key or conflicting_pinned_value:
+        if unsupported_forwarded_key or conflicting_pinned_value:
             conflicting[key] = value
     if conflicting:
         details = ", ".join(f"{key}={value!r}" for key, value in sorted(conflicting.items()))
