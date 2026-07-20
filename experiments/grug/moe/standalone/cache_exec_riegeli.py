@@ -30,11 +30,16 @@ CHUNK_HEADER = 40
 EM_CUDA = 190
 
 
-def flatten_blocks(buf: bytes) -> bytes:
-    """Drop the 24-byte block header at every 64 KiB file boundary."""
+def flatten_blocks(buf: bytes, header_at_zero: bool) -> bytes:
+    """Drop the 24-byte block header at every 64 KiB file boundary.
+
+    ``header_at_zero`` controls whether position 0 also carries a block header
+    (both variants are attempted; the right one yields a file-signature chunk).
+    """
     out = []
     for i in range(0, len(buf), BLOCK_SIZE):
-        out.append(buf[i + BLOCK_HEADER : i + BLOCK_SIZE])
+        skip = BLOCK_HEADER if (i > 0 or header_at_zero) else 0
+        out.append(buf[i + skip : i + BLOCK_SIZE])
     return b"".join(out)
 
 
@@ -135,12 +140,29 @@ def iter_records(stream: bytes):
             vp += sz
 
 
+# First 8 bytes of every riegeli file: the file-signature chunk's fixed header hash.
+RIEGELI_SIGNATURE = bytes.fromhex("83af70d10d884a3f")
+
+
 def analyze(path: str, copy_to: str | None) -> None:
     with fsspec.open(path, "rb") as f:
         raw = f.read()
-    entry = decompress(raw)[4:]  # strip 4-byte big-endian compile time
-    stream = flatten_blocks(entry)
+    buf = decompress(raw)
+    # Entry layout: [4B time][varint][metadata proto][wrapper]...[riegeli file].
+    # Locate the riegeli container by its fixed signature hash.
+    rg = buf.find(RIEGELI_SIGNATURE)
+    if rg == -1:
+        raise ValueError("no riegeli signature found in entry")
+    entry = buf[rg:]
     print(f"ENTRY {path}")
+    print(f"  riegeli_off={rg} container_bytes={len(entry)}")
+    for header_at_zero in (True, False):
+        stream = flatten_blocks(entry, header_at_zero)
+        if len(stream) > 24 and stream[24] == ord("s"):  # file-signature chunk
+            print(f"  header_at_zero={header_at_zero}")
+            break
+    else:
+        raise ValueError(f"no file-signature chunk found (stream head {stream[:48].hex()})")
     records = list(iter_records(stream))
     print(f"  records={len(records)} sizes={[len(r) for _, r in records]}")
     big = max(records, key=lambda t: len(t[1]))[1]
