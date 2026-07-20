@@ -1532,3 +1532,41 @@ author: mcwitt
   starting with --xla_gpu_enable_command_buffer=, HLO dump diff cute-vs-xla).
 - Next action: post corrected numbers to #7282/#7201; producer-load
   root-cause as a separate work item.
+
+### 2026-07-20 15:15 - MXFP8-U000: uniform-dense baseline replicated; oracle design approved
+
+- Hypothesis: native `jax.nn.scaled_dot_general` still loses to delayed
+  per-tensor FP8 because of block-quantization producers, while prequantized
+  `blockScaledDot` remains competitive.
+- Commit Hash: `0a3785463` for the benchmark. The approved design spec remains
+  local and uncommitted.
+- Command: `/home/marin/projects/marin/.venv/bin/iris
+  --cluster=cw-us-east-08a job run --no-wait --user mwittmann --job-name
+  mxfp8-uniform-baseline-r1 --gpu GB200x1 --enable-extra-resources --cpu 16
+  --memory 64g --extra gpu -- python
+  experiments/grug/moe/standalone/bench_mxfp8_dense.py --out
+  /tmp/mxfp8-uniform-baseline-r1.json`.
+- Config: one GB200, JAX 0.10.1, cuDNN 9.19, `M=65536`, BF16 inputs, 10
+  warmups, median of 50 iterations. Job
+  `/mwittmann/mxfp8-uniform-baseline-r1` succeeded in 43.65 seconds.
+- Result (`exploratory`, one job):
+
+  | shape | per-tensor fwd+bwd | native mxfp8 fwd+bwd | native / per-tensor time | prequant mxfp8 fwd | per-tensor fwd |
+  |---|---:|---:|---:|---:|---:|
+  | 2560x2560 | 1.084 ms | 2.180 ms | 2.01x | 0.430 ms | 0.433 ms |
+  | 2560x1280 | 0.648 ms | 1.479 ms | 2.28x | 0.308 ms | 0.313 ms |
+  | 1280x2560 | 0.681 ms | 1.524 ms | 2.24x | 0.331 ms | 0.299 ms |
+
+  Native MXFP8 lowered to `__cudnn$blockScaledDot` for every shape. Its
+  output/input-gradient/weight-gradient relative errors were lower than the
+  per-tensor arm, so the loss is a producer-cost result, not a fallback or
+  numerical failure.
+- Interpretation: the original MXFP8-001/001b conclusion replicates on a
+  fresh GB200. Forward-only prequantized MXFP8 is within -1% to +11% of
+  per-tensor FP8 depending on shape; a three-product prequantized
+  forward+dgrad+wgrad oracle is required before deciding whether fusion can
+  make uniform MXFP8 competitive.
+- Next action: implement MXFP8-U001 from
+  `docs/superpowers/specs/2026-07-20-uniform-mxfp8-design.md`: measure the
+  zero-producer oracle on d2560 and production d5120 shapes before adding any
+  model integration.
