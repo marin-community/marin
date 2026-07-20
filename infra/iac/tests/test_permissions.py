@@ -15,7 +15,6 @@ SERVICE_ACCOUNTS = (
     "iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com",
     "marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com",
 )
-WIF_PROVIDER = "projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc"
 KMS_PROVIDER = (
     "gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/" "marin-iac-keyring/cryptoKeys/marin-iac-key"
 )
