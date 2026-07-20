@@ -80,6 +80,31 @@ def quality_cell() -> tuple[GrugModelConfig, GrugMoeMuonHConfig, int, int]:
     return model, optimizer, batch_size, steps
 
 
+def _optimizer_for_run_steps(
+    optimizer: GrugMoeMuonHConfig,
+    *,
+    run_steps: int,
+    full_steps: int,
+) -> GrugMoeMuonHConfig:
+    """Preserve the full run's LR prefix in a shortened warmup smoke."""
+    if run_steps == full_steps:
+        return optimizer
+
+    full_warmup_steps = int(optimizer.warmup * full_steps) if optimizer.warmup <= 1.0 else int(optimizer.warmup)
+    if run_steps > full_warmup_steps:
+        raise ValueError(
+            f"shortened quality runs must stay within the {full_warmup_steps}-step warmup; got {run_steps} steps"
+        )
+
+    smoke_lr_scale = run_steps / full_warmup_steps
+    return dataclasses.replace(
+        optimizer,
+        learning_rate=optimizer.learning_rate * smoke_lr_scale,
+        adam_lr=optimizer.adam_lr * smoke_lr_scale,
+        warmup=1.0,
+    )
+
+
 def quality_model(arm: str) -> GrugModelConfig:
     """Return the matched BF16 or hybrid MXFP8 quality model."""
     model, _, _, _ = quality_cell()
@@ -122,6 +147,7 @@ def build_quality_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
     assert batch_size == _BATCH_SIZE
 
     steps = env_int("MXFP8_QUALITY_STEPS", full_steps)
+    optimizer = _optimizer_for_run_steps(optimizer, run_steps=steps, full_steps=full_steps)
     pair_id = os.environ.get("MXFP8_QUALITY_PAIR_ID", "")
     if not pair_id:
         raise ValueError("MXFP8_QUALITY_PAIR_ID must identify this quality comparison")

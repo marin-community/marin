@@ -9,10 +9,11 @@ author: Matt Wittmann
 
 ## Current TL;DR
 
-- The first paired smoke was stopped before training: simulated epoching reduced rare finite components to zero sequences at the 20-step budget.
-- The regression fix disables simulated epoching only for shortened shape smokes; the full fixed-token run retains the intended simulated schedule. Seventeen focused tests pass.
+- Two smoke-only defects are fixed: shortened mixtures no longer produce empty finite components, and tagged evaluation now applies the same mixed-precision cast as training.
+- The first fully instrumented pair exposed a third smoke artifact: setting the trainer horizon to 20 compressed the full run's 314-step LR warmup to zero steps. BF16 survived the near-peak update; MXFP8 became NaN on step 2, so this is not a valid quality result.
+- Shortened runs now reproduce the full optimizer schedule prefix and reject horizons that extend past warmup. Nineteen focused launcher tests pass.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
-- A 20-step, full-topology smoke is next. No quality or performance result is claimed yet.
+- A corrected 20-step, full-topology smoke is next. No quality or performance result is claimed yet.
 
 ## Scope
 
@@ -58,3 +59,13 @@ author: Matt Wittmann
 - Result: the previous empty-dataset failure was cleared. BF16 completed 20/20 train steps with final loss 9.2135 and final-step throughput 799,086 tok/s. MXFP8 logged two finite steps, ending at loss 11.8043; its forced evaluation then began. Both arms failed evaluation with `gpu_fa4_cute_attention currently supports only bf16/fp16, got float32`. Neither wrote the forced final checkpoint. The W&B API key defaulted to the submitter entity because the tracker entity was not explicit.
 - Interpretation: the failure is isolated to the final evaluation path, which omitted the mixed-precision cast. The MXFP8 W&B background queue did not flush beyond step 1 after the exception, so this smoke is not a valid throughput comparison.
 - Next action: reuse the training-path model cast in tagged evaluation, preserving `OverwriteWithGradient` FP8 scale/amax state in FP32; pin W&B to `marin-community`; validate locally; relaunch both arms under the same IDs.
+
+### 2026-07-19 18:20 - MXFP8Q-001b instrumented smoke invalidated by compressed warmup
+
+- Hypothesis: the treatment's step-2 NaN is caused by shortening the trainer horizon from 31,474 to 20, which also shortens the fractional LR warmup and decay schedule.
+- Commit Hash: failed launch used `f70187cd0`.
+- Command: fresh paired Iris coordinators `/mwittmann/mxfp8q-001b-smoke-{bf16,mxfp8}-coord`; W&B runs [BF16](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-001b-smoke-bf16-s20) and [MXFP8](https://wandb.ai/marin-community/marin_moe/runs/MXFP8Q-001b-smoke-mxfp8-s20).
+- Config: d2560/L26/E128/top-4, batch512, seq4096, 8xGB200x4 per arm, full MuonH/NS, and the corrected evaluation/W&B configuration. The smoke still passed `steps=20` to the optimizer builder.
+- Result: BF16 completed 20 steps, saved `step-20`, and finished with train loss 9.21343, 795,203 tok/s, Paloma macro loss 9.49029, and uncheatable macro loss 9.38663. MXFP8 logged finite loss 11.80426 at global step 1, became NaN on the next update on all eight ranks, forced NaN evaluation, and saved a poisoned `step-2` checkpoint. Iris marked both jobs succeeded because the training loop breaks rather than raises on NaN. W&B correctly recorded both runs in `marin-community/marin_moe`.
+- Interpretation: the MXFP8 run's first logged LR was 0.0064745. The full 31,474-step schedule has a 314-step warmup and would use about 2.16e-5 at the same point, roughly 300x smaller. The corrected #7282 production-shape run remained finite for 50 steps with the same MXFP8 recipe and full Newton-Schulz, which further points to the smoke schedule rather than an immediate operator defect.
+- Next action: for shortened runs, scale the smoke peak and use an all-warmup schedule so every LR value matches the full schedule prefix; reject shortened horizons beyond the full warmup; rerun with fresh identities.

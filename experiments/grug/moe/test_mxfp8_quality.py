@@ -154,7 +154,11 @@ def test_quality_checkpoint_exposes_durable_pair_configuration(monkeypatch: pyte
     assert config.batch_size == 512
     assert config.seed == 0
     assert config.model == quality_model("mxfp8")
-    assert config.optimizer == quality_cell()[1]
+    full_optimizer = quality_cell()[1]
+    smoke_schedule = config.optimizer.lr_scheduler(config.steps)
+    full_schedule = full_optimizer.lr_scheduler(quality_cell()[3])
+    for step_index in range(config.steps):
+        assert jnp.allclose(smoke_schedule(step_index), full_schedule(step_index), rtol=1e-5, atol=1e-12)
     assert config.grug_trainer.expert_axis_size == 8
     assert config.grug_trainer.replica_axis_size == 2
     assert config.checkpointer is not None
@@ -177,6 +181,16 @@ def test_quality_checkpoint_exposes_durable_pair_configuration(monkeypatch: pyte
     assert config.data.experiment_budget is None
     assert all(dep.name in config.data.components for dep in step.deps)
     assert {key: os.environ[key] for key in _PINNED_TRAIN_ENV} == _PINNED_TRAIN_ENV
+
+
+def test_quality_checkpoint_rejects_shortened_run_past_full_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_quality_runtime_env(monkeypatch)
+    monkeypatch.setenv("MXFP8_QUALITY_ARM", "mxfp8")
+    monkeypatch.setenv("MXFP8_QUALITY_STEPS", "315")
+    monkeypatch.setenv("MXFP8_QUALITY_PAIR_ID", "MXFP8Q-000")
+
+    with pytest.raises(ValueError, match="must stay within the 314-step warmup"):
+        build_quality_checkpoint(version="dev")
 
 
 def test_quality_checkpoint_keeps_simulated_epoching_for_full_run(monkeypatch: pytest.MonkeyPatch) -> None:
