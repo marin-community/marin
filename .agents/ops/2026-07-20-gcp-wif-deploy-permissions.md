@@ -3,7 +3,7 @@ date: 2026-07-20
 system: gcp
 severity: degradation
 resolution: mitigated
-pr: none
+pr: 7444
 issue: weaver #543
 ---
 
