@@ -16,7 +16,7 @@ author: Matt Wittmann
 - Grouped-only and dense-only graph controls both complete with finite gradients and evaluation; only the unguarded production hybrid fails. A finite reduction plus conditional BF16 `w_down`-gradient recompute clears the exact failure and is now part of the treatment implementation.
 - The primary gate is a matched-token d2560/L26/E128/top-4 run: 31,474 steps, batch 512, sequence length 4096, and 66,005,762,048 tokens per arm.
 - The promoted implementation passes a fresh paired 20-step smoke: MXFP8 is finite, tracks BF16 within 0.0038 loss, and is 1.0666x faster on mean throughput.
-- The full 1e21-FLOP pair is running. Its step-6,000 gate remains quality-neutral so far: the trailing-100-step train delta is +0.00214, eval/Paloma/uncheatable deltas are +0.00031/-0.00192/+0.00102, and mean throughput is 1.0721x BF16. This covers 19.1% of the schedule and is not the final quality conclusion.
+- The full 1e21-FLOP pair is running. Its step-7,000 gate still has a small trailing-100-step train delta of +0.00220; eval/Paloma/uncheatable deltas are +0.00248/+0.00121/+0.00488, and mean throughput is 1.0723x BF16. This covers 22.2% of the schedule and is not the final quality conclusion.
 
 ## Scope
 
@@ -211,3 +211,13 @@ author: Matt Wittmann
 - Result: both arms completed their fifth hourly checkpoint write to region-local S3. BF16 saved step 6,284 and MXFP8 saved step 6,664; the process-0 logs reported `Saved checkpoint` after all eight ranks completed serialization barriers.
 - Health: both child gangs and coordinators remained running through the writes and resumed training without an error-level checkpoint failure.
 - Next action: continue monitoring finite telemetry and the scheduled step-7,000 evaluations.
+
+### 2026-07-20 01:52 - MXFP8Q-007 step-7,000 gate passes
+
+- Hypothesis: the treatment will keep its smoothed train-loss delta near two thousandths while held-out differences continue to vary around a small magnitude.
+- Commit Hash: running jobs use `d11d6ac54` (treatment implementation `f8be94f87`).
+- Result: BF16/MXFP8 train loss at exactly step 7,000 is 1.938809/1.940908 (delta +0.002098); the trailing 100-step mean delta is +0.002196. Eval loss is 2.654647/2.657123 (+0.002476), Paloma macro is 2.984921/2.986131 (+0.001209), and uncheatable macro is 2.405274/2.410152 (+0.004878).
+- Performance: cumulative mean non-compile throughput is 789,018 tok/s BF16 versus 846,029 tok/s MXFP8, or 1.0723x. W&B runtime from the first train sample to step 7,000 is 19,891.9s versus 18,691.2s; at the BF16 arm's step-7,000 elapsed time, MXFP8 had reached step 7,451, a 451-step lead.
+- Interpretation: at 22.2% of the schedule, all three held-out metrics favor BF16 at this gate, with uncheatable showing the largest gap so far. The gaps remain only a few thousandths and the smoothed train delta is unchanged from prior gates, but the aligned held-out sign is a new signal to track rather than dismiss. Later gates and the cooldown tail are required before deciding whether it persists.
+- Health: both child gangs and coordinators remain running with finite telemetry and resumed training after evaluation. Fifth hourly recovery checkpoints are available at BF16 step 6,284 and MXFP8 step 6,664.
+- Next action: continue scheduled evaluations and checkpoints; escalate the issue update before step 10,000 if the aligned held-out regression persists or grows at the next gates.
