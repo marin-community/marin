@@ -100,6 +100,15 @@ and have `N/2` chips.
 The contacts-v1 raw docs and bucket must be region-local. Verified 2026-07-14 in us-east5, us-east1,
 us-central1, us-west4, and europe-west4 (`gs://marin-eu-west4`). Large-slice capacity is not guaranteed.
 
+Region preference exploits recent-best throughput but is conditional on availability. Watch for a
+large availability drop across an entire preferred region (work stuck pending or silent-hung
+region-wide): re-explore by spreading lower-value but still-useful trials (sparse or grid-filling
+points) across every allowed region not already saturated with running trials, re-mapping current
+capacity rather than piling onto the preferred pool — a stale "avoid" label or an availability read
+older than ~a day is missing evidence, not proof of unavailability. Once capacity is re-mapped,
+exploitation of proven regions resumes as the default, and every trial still earns its place in the
+grid.
+
 ```yaml
 placement:
   # Any slice fits any batch; the trainer derives the data/tensor-parallel split (see runbook).

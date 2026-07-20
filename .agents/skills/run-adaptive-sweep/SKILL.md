@@ -60,6 +60,8 @@ The Dispatcher observes `run_progress` at `observation_interval`. Re-run `rank-t
 
 Target exploration decreases linearly from all feasible targets at the first resource rung to one target at `full_exploitation_level`. At and beyond that rung, use only the highest-throughput feasible target. If its jobs stop progressing, its measured throughput decays and another target can become first.
 
+Watch for the exceptional case of a large availability drop across an entire region — its work queuing or stalling region-wide, not a single lost step. Respond by re-exploring broadly: place lower-value but still-useful trials into every allowed region not already saturated with running trials, re-establishing where capacity currently exists instead of concentrating on the preferred pool. Once availability is re-mapped across regions, exploitation of proven targets resumes as the default.
+
 Honor the tool's recovery eligibility without treating it as an automatic command:
 
 - `startup_relocation_timeout` permits a same-region relocation when the current execution has never appeared in W&B.
