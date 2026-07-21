@@ -70,3 +70,23 @@ author: mcwitt
 - Artifacts: `s3://marin-us-east-02a/marin/scratch/mwittmann/cubin-diag/CUBIN7421-002b/task-0/`.
 - Interpretation: the probe builds and loads on the target architecture, intercepts the production XLA loader API, parses the raw ELF inputs, and preserves a successful JIT. The instrumentation is ready for the multi-host positive control.
 - Next action: run the exact archived L48/B512 configuration with task-index split trace/sync profiles and automatic retries disabled.
+
+### 2026-07-21 - CUBIN7421-003 split trace/sync diagnostic
+
+- Hypothesis: comparing the same failing graph across trace and pre-load synchronization ranks will distinguish a loader-local failure from an earlier asynchronous CUDA error.
+- Commit Hash: `7ae727a82`.
+- Jobs: `/mwittmann/cubin7421-trace-sync-l48-b512-coord` and `/mwittmann/cubin7421-trace-sync-l48-b512-002-coord`.
+- Config: 16 GB200x4 hosts; d5120, L48, sequence 4096, 128 experts, top-5, batch 512; intermediate and shared intermediate 2560; ring EP8, replica axis 1; `gpu_fa4_cute`; scanned layers; CuTe MXFP8 producer; liger CE; MuonH with all three distribution knobs; `cuda_async`; local checkpoints; one training step. Even task indices use trace, odd task indices synchronize immediately before each load. Probe and Iris failure retries are zero.
+- Result: the first coordinator failed before creating a GPU child because `bash -lc` reset the virtual-environment path and selected a Python without Fray. The corrected coordinator launched all 16 hosts and reproduced `CUDA_ERROR_INVALID_VALUE` at `jit_train_step`. Current Iris exports `IRIS_TASK_ID`, not `IRIS_TASK_INDEX`; every worker therefore defaulted to trace, and artifact upload raised `KeyError` before preserving the local files.
+- Interpretation: the positive control remains reproducible with the probe loaded, but this attempt cannot compare trace with sync or classify the CUDA failure. The missing task identity is an instrumentation integration defect.
+- Next action: derive the task index from canonical `IRIS_TASK_ID` in both the preload library and uploader, verify parity and task-zero capture in the fake-driver harness, then repeat after the GPU cooldown.
+
+### 2026-07-21 - CUBIN7421-003b task-identity correction
+
+- Hypothesis: canonical Iris task IDs provide the stable rank index required for profile parity and per-task artifact paths.
+- Commit Hash: pending.
+- Commands: focused fake-driver and tooling tests; strict C++ compilation; scoped repository lint.
+- Config: `IRIS_TASK_ID=/user/job/1:0` selects sync; `IRIS_TASK_ID=/user/job/0:0` enables task-zero capture; legacy `IRIS_TASK_INDEX` remains accepted for direct tools.
+- Result: 19 focused tests passed. The C++ source compiled with `-Wall -Wextra -Werror`; scoped repository lint passed.
+- Interpretation: both the interposer and Python uploader now derive the same index from the runtime identity current Iris actually exports.
+- Next action: commit the correction and repeat the exact CUBIN7421-003 split run after cooldown.

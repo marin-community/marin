@@ -12,7 +12,7 @@ import os
 import shutil
 import subprocess
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +35,17 @@ class ProbeSummary:
     sync_results: dict[str, int]
     hashes: dict[str, int]
     maximum_in_flight: int
+
+
+def task_index_from_environment(environment: Mapping[str, str]) -> int:
+    """Return the Iris task index from canonical or legacy task identity."""
+    if "IRIS_TASK_INDEX" in environment:
+        return int(environment["IRIS_TASK_INDEX"])
+    task_id = environment.get("IRIS_TASK_ID")
+    if task_id is None:
+        raise ValueError("Probe artifact upload requires IRIS_TASK_ID")
+    task_component = task_id.rsplit("/", maxsplit=1)[-1]
+    return int(task_component.split(":", maxsplit=1)[0])
 
 
 def read_probe_events(log_dir: Path) -> list[ProbeEvent]:
@@ -206,7 +217,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
         return
     task_index = args.task_index
     if task_index is None:
-        task_index = int(os.environ["IRIS_TASK_INDEX"])
+        task_index = task_index_from_environment(os.environ)
     upload_probe_artifacts(args.log_dir, args.prefix, task_index)
 
 

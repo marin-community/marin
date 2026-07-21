@@ -258,6 +258,28 @@ std::uint64_t timestamp_ns() {
     return static_cast<std::uint64_t>(value.tv_sec) * 1'000'000'000 + value.tv_nsec;
 }
 
+long iris_task_index() {
+    const char* legacy_index = std::getenv("IRIS_TASK_INDEX");
+    if (legacy_index != nullptr) {
+        return std::strtol(legacy_index, nullptr, 10);
+    }
+    const char* task_id = std::getenv("IRIS_TASK_ID");
+    if (task_id == nullptr) {
+        return -1;
+    }
+    const char* index = std::strrchr(task_id, '/');
+    if (index == nullptr) {
+        return -1;
+    }
+    ++index;
+    char* end = nullptr;
+    const long parsed = std::strtol(index, &end, 10);
+    if (end == index || (*end != ':' && *end != '\0')) {
+        return -1;
+    }
+    return parsed;
+}
+
 void log_event(const std::string& event) {
     const char* log_dir = std::getenv("MARIN_CUDA_MODULE_PROBE_LOG_DIR");
     if (log_dir == nullptr) {
@@ -266,13 +288,22 @@ void log_event(const std::string& event) {
         }
         return;
     }
-    const char* task = std::getenv("IRIS_TASK_INDEX");
-    if (task == nullptr) {
-        task = "local";
+    char task_buffer[32];
+    const char* task_label = "local";
+    const long task_index = iris_task_index();
+    if (task_index >= 0) {
+        const int task_size = std::snprintf(task_buffer, sizeof(task_buffer), "%ld", task_index);
+        if (task_size < 0 || static_cast<std::size_t>(task_size) >= sizeof(task_buffer)) {
+            if (probe_required()) {
+                _exit(125);
+            }
+            return;
+        }
+        task_label = task_buffer;
     }
     char path[4096];
     const int path_size = std::snprintf(
-        path, sizeof(path), "%s/probe-%s-%ld.ndjson", log_dir, task, static_cast<long>(getpid())
+        path, sizeof(path), "%s/probe-%s-%ld.ndjson", log_dir, task_label, static_cast<long>(getpid())
     );
     if (path_size < 0 || static_cast<std::size_t>(path_size) >= sizeof(path)) {
         if (probe_required()) {
@@ -298,10 +329,9 @@ void log_event(const std::string& event) {
 
 void capture_cubin(const void* image, const ElfIdentity& identity) {
     const char* capture = std::getenv("MARIN_CUDA_MODULE_PROBE_CAPTURE_CUBIN");
-    const char* task = std::getenv("IRIS_TASK_INDEX");
     const char* log_dir = std::getenv("MARIN_CUDA_MODULE_PROBE_LOG_DIR");
-    if (capture == nullptr || std::strcmp(capture, "1") != 0 || task == nullptr || std::strcmp(task, "0") != 0 ||
-        log_dir == nullptr || identity.kind != ElfIdentity::Kind::kElf64) {
+    if (capture == nullptr || std::strcmp(capture, "1") != 0 || iris_task_index() != 0 || log_dir == nullptr ||
+        identity.kind != ElfIdentity::Kind::kElf64) {
         return;
     }
     char path[4096];
@@ -345,8 +375,8 @@ std::string effective_profile() {
     if (std::strcmp(requested, "trace_sync_split") != 0) {
         return requested;
     }
-    const char* task = std::getenv("IRIS_TASK_INDEX");
-    return task != nullptr && std::strtol(task, nullptr, 10) % 2 != 0 ? "sync" : "trace";
+    const long task_index = iris_task_index();
+    return task_index >= 0 && task_index % 2 != 0 ? "sync" : "trace";
 }
 
 void resolve_related_symbols(void* handle, Dlsym lookup) {

@@ -10,6 +10,7 @@ import pytest
 from experiments.grug.moe.standalone.cuda_module_probe import (
     read_probe_events,
     summarize_events,
+    task_index_from_environment,
     upload_probe_artifacts,
 )
 
@@ -85,3 +86,14 @@ def test_upload_writes_compressed_events_and_task_zero_cubins(tmp_path: Path) ->
     with gzip.open(task_dir / "events.ndjson.gz", "rt") as events:
         assert [json.loads(line)["event"] for line in events] == ["load_enter", "load_exit"]
     assert (task_dir / "cubins" / "abc.cubin").read_bytes() == b"cubin"
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [
+        ({"IRIS_TASK_INDEX": "3"}, 3),
+        ({"IRIS_TASK_ID": "/user/job/15:0"}, 15),
+    ],
+)
+def test_task_index_from_environment(environment: dict[str, str], expected: int) -> None:
+    assert task_index_from_environment(environment) == expected

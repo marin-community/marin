@@ -32,6 +32,8 @@ The first GB200 smoke failed before JAX emitted output because the interposer re
 
 The corrected GB200 smoke succeeded under JAX 0.10.1. It intercepted 10 real `cuModuleLoadFatBinary` calls on raw ELF inputs, all of which returned success through the original API, while the JIT completed with the expected result. This establishes production-path coverage and permits the multi-host diagnostic; it does not yet test the failing graph or classify the failure.
 
+The first multi-host probe attempt reproduced the original `CUDA_ERROR_INVALID_VALUE` at `jit_train_step`, but current Iris provides rank identity through `IRIS_TASK_ID` rather than `IRIS_TASK_INDEX`. All workers consequently used the trace fallback, and the Python uploader raised while resolving its task path. No per-task artifacts survived, so this attempt establishes only that the probed positive control still fails. Task-index derivation now parses the canonical Iris task ID in both the interposer and uploader, with regression coverage for odd-rank sync selection and task-zero CUBIN capture.
+
 ## Future work
 
 - [ ] Trace the immediately preceding CUDA operation if pre-load synchronization fails.

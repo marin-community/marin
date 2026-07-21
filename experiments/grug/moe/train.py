@@ -44,7 +44,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
-from experiments.grug.moe.standalone.cuda_module_probe import upload_probe_artifacts
+from experiments.grug.moe.standalone.cuda_module_probe import task_index_from_environment, upload_probe_artifacts
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -619,7 +619,7 @@ def _upload_configured_probe_artifacts() -> None:
     upload_prefix = os.environ.get("MARIN_CUDA_MODULE_PROBE_UPLOAD_PREFIX")
     if log_dir is None or upload_prefix is None:
         raise ValueError("Probe runs require MARIN_CUDA_MODULE_PROBE_LOG_DIR and MARIN_CUDA_MODULE_PROBE_UPLOAD_PREFIX")
-    upload_probe_artifacts(Path(log_dir), upload_prefix, int(os.environ["IRIS_TASK_INDEX"]))
+    upload_probe_artifacts(Path(log_dir), upload_prefix, task_index_from_environment(os.environ))
 
 
 def _run_grug_local(config: GrugRunConfig) -> None:

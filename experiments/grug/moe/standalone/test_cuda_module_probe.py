@@ -135,6 +135,20 @@ def test_sync_profile_returns_prior_async_error_without_loading(probe_build: Pro
     assert probe_build.fake_log.read_text().splitlines() == ["sync:700"]
 
 
+def test_split_profile_uses_canonical_iris_task_id(probe_build: ProbeBuild) -> None:
+    result = probe_build.run(
+        MARIN_CUDA_MODULE_PROBE_PROFILE="trace_sync_split",
+        IRIS_TASK_ID="/user/job/1:0",
+        FAKE_CUDA_SYNC_RESULT="700",
+    )
+
+    assert result.returncode == 5
+    enter_event = next(event for event in probe_build.events() if event["event"] == "load_enter")
+    exit_event = next(event for event in probe_build.events() if event["event"] == "load_exit")
+    assert enter_event["effective_profile"] == "sync"
+    assert exit_event["pre_sync_result"] == 700
+
+
 def test_data_direct_uses_data_for_valid_elf(probe_build: ProbeBuild) -> None:
     result = probe_build.run(
         MARIN_CUDA_MODULE_PROBE_PROFILE="data_direct", FAKE_CUDA_FAT_RESULTS="1", FAKE_CUDA_DATA_RESULTS="0"
@@ -184,7 +198,7 @@ def test_concurrent_loads_have_unique_sequences_and_overlap(probe_build: ProbeBu
 
 
 def test_task_zero_capture_is_named_by_content_hash(probe_build: ProbeBuild) -> None:
-    result = probe_build.run(MARIN_CUDA_MODULE_PROBE_CAPTURE_CUBIN="1", IRIS_TASK_INDEX="0")
+    result = probe_build.run(MARIN_CUDA_MODULE_PROBE_CAPTURE_CUBIN="1", IRIS_TASK_ID="/user/job/0:0")
 
     assert result.returncode == 0, result.stderr
     enter = next(event for event in probe_build.events() if event["event"] == "load_enter")
