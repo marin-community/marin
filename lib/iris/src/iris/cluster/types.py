@@ -745,11 +745,6 @@ class EnvironmentSpec:
     # A launch-wrapping profiler hook (e.g. NsysHook); wraps the run command and may
     # contribute a build-phase install. See iris.cluster.hooks and the CLI's --profile.
     profile: TaskHook | None = None
-    # A launch-wrapping crash respawner (RespawnHook): restarts the command in place
-    # when it dies from a crash signal, so a fate-sharing gang rides out one task's
-    # crash without an iris-level reschedule. See iris.cluster.hooks.respawn and the
-    # CLI's --respawn.
-    respawn: TaskHook | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.

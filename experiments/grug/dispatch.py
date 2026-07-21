@@ -44,20 +44,9 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
-    max_restarts: int = 3,
     processes_per_task: int = 1,
 ) -> None:
-    """Submit a grug train entrypoint through Fray and wait for completion.
-
-    Crash recovery is layered: a task whose process dies from a crash signal
-    (e.g. the JAX gang fate-sharing abort after a coordination-service RPC
-    drop) is respawned in place up to ``max_restarts`` times, resuming from
-    checkpoints in the warm container. If a task still fails, the iris-level
-    budgets take over: ``max_task_failures`` is coupled to
-    ``max_retries_failure`` so the gang is rescheduled rather than the job
-    dying on its first failed task (with the job-level default of 0, one
-    crashed task kills the whole job before any per-task retry engages).
-    """
+    """Submit a grug train entrypoint through Fray and wait for completion."""
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
     request = JobRequest(
@@ -66,8 +55,7 @@ def dispatch_grug_training_run(
         resources=resources,
         environment=create_environment(env_vars=env_vars, extras=extras_for_resources(resources)),
         max_retries_failure=max_retries_failure,
-        max_task_failures=max_retries_failure,
-        max_restarts=max_restarts,
+        max_task_failures=10,
         processes_per_task=processes_per_task,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)

@@ -459,9 +459,8 @@ def collect_hooks(
 ) -> list[TaskHook]:
     """Build the ordered task hooks for this job, outer-wrapper last.
 
-    Order is the nesting: the multigpu supervisor goes first (inner), then the crash
-    respawner (a respawn restarts every rank the supervisor runs), the profiler last
-    (outer), so a profiler traces every attempt of every rank — one report per task.
+    Order is the nesting: the multigpu supervisor goes first (inner), the profiler last
+    (outer), so a profiler traces every rank the supervisor spawns — one report per task.
 
     Profiling is best-effort: a request without a GPU (nsys profiles CUDA work) is logged
     and left to run rather than rejected, and the output URI is whatever the caller asked
@@ -470,9 +469,6 @@ def collect_hooks(
     hooks: list[TaskHook] = []
     if processes_per_task > 1:
         hooks.append(build_multigpu_hook(resources, processes_per_task))
-    respawn = environment.respawn if environment is not None else None
-    if respawn is not None:
-        hooks.append(respawn)
     profile = environment.profile if environment is not None else None
     if profile is not None:
         device = resources.device

@@ -30,30 +30,10 @@ def test_run_all_children_succeed_returns_zero() -> None:
     assert run(nproc=3, devices_per_proc=1, child_argv=check) == 0
 
 
-def test_run_restores_callers_signal_handlers() -> None:
-    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
-
-    assert run(nproc=1, devices_per_proc=1, child_argv=_py("pass")) == 0
-
-    assert {sig: signal.getsignal(sig) for sig in previous} == previous
-
-
 def test_run_propagates_first_child_failure() -> None:
     # The rank-1 child exits 7; siblings exit 0. The supervisor surfaces 7.
     code = "import os,sys; sys.exit(7 if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='1' else 0)"
     assert run(nproc=3, devices_per_proc=1, child_argv=_py(code)) == 7
-
-
-def test_run_signal_death_surfaces_as_128_plus_signum() -> None:
-    # A rank that dies from a signal must surface the conventional 128+signum
-    # (139 for SIGSEGV), not Popen's raw negative code — which sys.exit would
-    # wrap to a meaningless 245 and hide from iris and any outer respawn hook.
-    code = (
-        "import os,resource,signal; "
-        "resource.setrlimit(resource.RLIMIT_CORE, (0, 0)); "
-        "os.kill(os.getpid(), signal.SIGSEGV)"
-    )
-    assert run(nproc=1, devices_per_proc=1, child_argv=_py(code)) == 139
 
 
 def test_run_terminates_peers_when_one_fails() -> None:

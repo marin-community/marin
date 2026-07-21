@@ -21,14 +21,12 @@ from fray.types import (
     ANY_REGION,
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
     GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
 )
 from iris.cluster.constraints import ConstraintOp
-from iris.cluster.hooks.respawn import RespawnHook
 
 
 class TestConvertConstraints:
@@ -232,29 +230,6 @@ class TestImagePlumbing:
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
-
-
-def test_submit_job_with_restarts_adds_respawn_hook_and_preserves_environment():
-    fake_iris = MagicMock()
-    fake_iris.submit.return_value = MagicMock(job_id="job-respawn")
-    client = FrayIrisClient.from_iris_client(fake_iris)
-
-    request = JobRequest(
-        name="test-job",
-        entrypoint=Entrypoint.from_callable(lambda: None),
-        environment=EnvironmentConfig(workspace=".", env_vars={"RUN_ID": "abc"}),
-        max_restarts=7,
-    )
-    client.submit(request)
-
-    environment = fake_iris.submit.call_args.kwargs["environment"]
-    assert environment.env_vars["RUN_ID"] == "abc"
-    assert environment.respawn == RespawnHook(max_restarts=7)
-
-
-def test_job_request_rejects_negative_restart_budget():
-    with pytest.raises(ValueError, match="max_restarts must be >= 0"):
-        JobRequest(name="test-job", entrypoint=Entrypoint.from_callable(lambda: None), max_restarts=-1)
 
 
 class TestActorGroupEnvironment:

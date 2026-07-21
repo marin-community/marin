@@ -8,7 +8,6 @@ Handles type conversion between fray types and Iris types, actor hosting
 via submitted jobs, and deferred actor handle resolution.
 """
 
-import dataclasses
 import logging
 import os
 import sys
@@ -34,7 +33,6 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.hooks.respawn import RespawnHook
 from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.rpc import actor_pb2, job_pb2
@@ -584,12 +582,6 @@ class FrayIrisClient:
         iris_resources = convert_resources(request.resources)
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
-        if request.max_restarts > 0:
-            respawn = RespawnHook(max_restarts=request.max_restarts)
-            if iris_environment is None:
-                iris_environment = EnvironmentSpec(respawn=respawn)
-            else:
-                iris_environment = dataclasses.replace(iris_environment, respawn=respawn)
         iris_constraints = convert_constraints(request.resources)
 
         replicas = request.replicas or 1

@@ -20,9 +20,6 @@ alongside its run-phase ``_main`` wrapper:
   and the launch wrapper that runs the command under ``nsys profile``.
 - ``multigpu`` / ``multigpu_main`` — ``MultiGpuHook`` + ``build_multigpu_hook`` + the
   ``IRIS_MULTIGPU_*`` rank-env contract, and the per-node process supervisor.
-- ``respawn`` / ``respawn_main`` — ``RespawnHook`` + the ``--respawn*`` flags and the
-  ``IRIS_RESPAWN_ATTEMPT`` contract, and the wrapper that restarts the command in place
-  when it dies from a crash signal.
 
 Everything a hook needs at run time — rank selection, output upload, signal forwarding —
 lives inside the module its ``wrap`` prepends; the client only knows "it wraps the command".
