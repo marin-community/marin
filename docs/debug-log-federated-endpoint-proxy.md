@@ -34,11 +34,11 @@ Before the fix, `FederatedEndpointProxy` shared one `httpx.AsyncClient` across e
 
 - Add a real-HTTP regression test that holds 100 federated requests open and verifies a probe reaches the upstream without waiting for them.
 - Remove the controller-wide active-connection cap while retaining disabled keepalive.
-- Give `PoolTimeout` an explicit diagnostic if a finite cap is introduced again.
+- Log transport exceptions with their representation so exceptions with an empty string remain identifiable.
 
 ## Results
 
-The real-HTTP test failed on the existing code: 100 requests reached the peer and remained open, while the probe did not reach the peer within two seconds. The proxy now leaves `max_connections` unbounded, retains `max_keepalive_connections=0`, and reports a future pool timeout by name and duration.
+The real-HTTP test failed on the existing code: 100 requests reached the peer and remained open, while the probe did not reach the peer within two seconds. The proxy now leaves `max_connections` unbounded, retains `max_keepalive_connections=0`, and logs unexpected transport exceptions with their representation.
 
 The two proxy test files passed 58 tests. The Iris unit suite passed 2,839 tests with one skip. The repository suite passed 1,158 tests and failed three Arrow Flight tests because this Docker container discovered the host VM's `10.128.0.14` address through GCP metadata and could not connect to that address from its network namespace. Re-running the complete seven-test Arrow Flight file with metadata discovery disabled and the container hostname advertised passed.
 

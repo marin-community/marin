@@ -81,6 +81,21 @@ class UpstreamObservation:
     headers: list[dict[str, str]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SaturatedUpstream:
+    app: Starlette
+    all_blockers_arrived: Event
+    probe_arrived: Event
+    release_blockers: Event
+
+
+@dataclass(frozen=True)
+class SaturatedRequestResults:
+    probe_reached_upstream: bool
+    blocker_responses: list[httpx.Response]
+    probe_response: httpx.Response
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("", 0))
@@ -118,7 +133,7 @@ def _build_upstream_app(seen: UpstreamObservation) -> Starlette:
     return app
 
 
-def _build_saturated_upstream_app(blocking_requests: int) -> tuple[Starlette, Event, Event, Event]:
+def _build_saturated_upstream_app(blocking_requests: int) -> SaturatedUpstream:
     """Build an upstream that holds ``blocking_requests`` while exposing a probe."""
     arrived = 0
     all_blockers_arrived = Event()
@@ -137,16 +152,16 @@ def _build_saturated_upstream_app(blocking_requests: int) -> tuple[Starlette, Ev
         probe_arrived.set()
         return JSONResponse({"status": "reached"})
 
-    return (
-        Starlette(
+    return SaturatedUpstream(
+        app=Starlette(
             routes=[
                 Route("/proxy/{endpoint_name:str}/block", block),
                 Route("/proxy/{endpoint_name:str}/probe", probe),
             ]
         ),
-        all_blockers_arrived,
-        probe_arrived,
-        release_blockers,
+        all_blockers_arrived=all_blockers_arrived,
+        probe_arrived=probe_arrived,
+        release_blockers=release_blockers,
     )
 
 
@@ -286,10 +301,8 @@ def test_federated_endpoint_serves_through_the_parent_proxy_end_to_end(tmp_path,
 
 def test_federated_proxy_does_not_queue_probe_behind_100_long_requests(threads: ThreadContainer) -> None:
     blocking_requests = 100
-    upstream_app, all_blockers_arrived, probe_arrived, release_blockers = _build_saturated_upstream_app(
-        blocking_requests
-    )
-    upstream_url = _serve(threads, upstream_app, name="saturated-peer")
+    upstream = _build_saturated_upstream_app(blocking_requests)
+    upstream_url = _serve(threads, upstream.app, name="saturated-peer")
     proxy = FederatedEndpointProxy(
         lambda peer_id: upstream_url if peer_id == PEER_ID else None,
         lambda: "federation-token",
@@ -297,24 +310,28 @@ def test_federated_proxy_does_not_queue_probe_behind_100_long_requests(threads: 
     )
     parent_url = _serve(threads, _build_federated_forwarder(proxy), name="federated-forwarder")
 
-    async def run_requests() -> tuple[bool, list[httpx.Response], httpx.Response]:
+    async def run_requests() -> SaturatedRequestResults:
         limits = httpx.Limits(max_connections=None)
         async with httpx.AsyncClient(limits=limits, timeout=10.0) as client:
             blockers = [asyncio.create_task(client.get(f"{parent_url}/block")) for _ in range(blocking_requests)]
-            blockers_reached_upstream = await asyncio.to_thread(all_blockers_arrived.wait, 5.0)
+            blockers_reached_upstream = await asyncio.to_thread(upstream.all_blockers_arrived.wait, 5.0)
             if not blockers_reached_upstream:
-                release_blockers.set()
+                upstream.release_blockers.set()
                 await asyncio.gather(*blockers, return_exceptions=True)
                 raise AssertionError("blocking requests did not reach the federated upstream")
 
             probe = asyncio.create_task(client.get(f"{parent_url}/probe"))
-            probe_reached_upstream = await asyncio.to_thread(probe_arrived.wait, 2.0)
-            release_blockers.set()
+            probe_reached_upstream = await asyncio.to_thread(upstream.probe_arrived.wait, 2.0)
+            upstream.release_blockers.set()
             blocker_responses = await asyncio.gather(*blockers)
-            return probe_reached_upstream, blocker_responses, await probe
+            return SaturatedRequestResults(
+                probe_reached_upstream=probe_reached_upstream,
+                blocker_responses=blocker_responses,
+                probe_response=await probe,
+            )
 
-    probe_reached_upstream, blocker_responses, probe_response = asyncio.run(run_requests())
+    results = asyncio.run(run_requests())
 
-    assert probe_reached_upstream
-    assert all(response.status_code == 200 for response in blocker_responses)
-    assert probe_response.status_code == 200
+    assert results.probe_reached_upstream
+    assert all(response.status_code == 200 for response in results.blocker_responses)
+    assert results.probe_response.status_code == 200
