@@ -28,6 +28,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
+    GRUG_MOE_BANNED_CONFIG_ALIASES,
     GRUG_MOE_MODEL_TYPE,
     GrugMoeHfConfig,
     SnowballConfig,
@@ -106,6 +107,28 @@ def test_snowball_config_hf_roundtrip():
     ):
         assert getattr(back, field) == getattr(cfg, field), field
     assert back.inferred_head_dim == cfg.inferred_head_dim
+
+    # Single-name config contract (issue #7447): the serialized config.json carries exactly one
+    # spelling per dual-name field -- the canonical Option A name with the right value -- and none
+    # of the dropped aliases. from_hf_config still round-trips (above) via its fallback tuples.
+    serialized = hf.to_dict()
+    canonical = {
+        "hidden_size": cfg.hidden_dim,
+        "num_hidden_layers": cfg.num_layers,
+        "num_attention_heads": cfg.num_heads,
+        "num_key_value_heads": cfg.num_kv_heads,
+        "max_position_embeddings": cfg.max_seq_len,
+        "rms_norm_eps": cfg.layer_norm_eps,
+        "initializer_range": cfg.initializer_std,
+        "num_experts": cfg.num_experts,
+        "num_experts_per_tok": cfg.num_experts_per_token,
+        "moe_intermediate_size": cfg.intermediate_dim,
+        "shared_expert_intermediate_size": cfg.shared_expert_intermediate_dim,
+    }
+    for key, value in canonical.items():
+        assert serialized.get(key) == value, key
+    leaked = GRUG_MOE_BANNED_CONFIG_ALIASES & serialized.keys()
+    assert not leaked, f"banned config aliases leaked into config.json: {sorted(leaked)}"
 
 
 def test_snowball_hf_converter_matches_config_class():

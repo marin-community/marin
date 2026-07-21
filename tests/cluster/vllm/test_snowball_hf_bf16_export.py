@@ -29,6 +29,7 @@ from haliax.partitioning import set_mesh
 from iris.client import IrisClient
 from iris.rpc import job_pb2
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.models.snowball import GRUG_MOE_BANNED_CONFIG_ALIASES
 from levanter.tokenizers import load_tokenizer
 
 from experiments.grug.moe.model import GrugModelConfig, Transformer
@@ -69,11 +70,38 @@ def _to_main_model(params: VendoredTransformer, config: GrugModelConfig) -> Tran
     )
 
 
-def _assert_vllm_bf16(export_dir: Path) -> None:
+def _assert_single_name_config_contract(exported_config: dict[str, Any], config: GrugModelConfig) -> None:
+    """Issue #7447: the published config.json carries exactly one spelling per dual-name field.
+
+    Assert the canonical Option A name is present with the right value and that none of the dropped
+    aliases leak. This runs against the real, ``config_overrides``-merged artifact (which could
+    otherwise sneak an alias back in), and complements the Levanter-side from_hf_config round-trip.
+    """
+    canonical = {
+        "hidden_size": config.hidden_dim,
+        "num_hidden_layers": config.num_layers,
+        "num_attention_heads": config.num_heads,
+        "num_key_value_heads": config.num_kv_heads,
+        "max_position_embeddings": config.max_seq_len,
+        "rms_norm_eps": config.layer_norm_eps,
+        "initializer_range": config.initializer_std,
+        "num_experts": config.num_experts,
+        "num_experts_per_tok": config.num_experts_per_token,
+        "moe_intermediate_size": config.intermediate_dim,
+        "shared_expert_intermediate_size": config.shared_expert_intermediate_dim,
+    }
+    for key, value in canonical.items():
+        assert exported_config.get(key) == value, key
+    leaked = GRUG_MOE_BANNED_CONFIG_ALIASES & exported_config.keys()
+    assert not leaked, f"banned config aliases leaked into config.json: {sorted(leaked)}"
+
+
+def _assert_vllm_bf16(export_dir: Path, config: GrugModelConfig) -> None:
     exported_config = json.loads((export_dir / "config.json").read_text())
     assert exported_config["architectures"] == ["GrugMoeForCausalLM"]
     assert exported_config["model_type"] == "grug_moe"
     assert exported_config["dtype"] == "bfloat16"
+    _assert_single_name_config_contract(exported_config, config)
 
     tensor_dtypes: set[str] = set()
     for shard_path in export_dir.glob("model-*.safetensors"):
@@ -127,7 +155,7 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
                 export_dir_str,
                 dtype=jnp.bfloat16,
             )
-            _assert_vllm_bf16(export_dir)
+            _assert_vllm_bf16(export_dir, main_config)
             actual_sha256 = _tree_sha256(export_dir)
             assert actual_sha256 == SNOWBALL.export_sha256, actual_sha256
 
