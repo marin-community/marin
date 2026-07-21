@@ -354,10 +354,26 @@ def _moe_mlp_chunked_no_ep(
 
     Instead of resharding the full expert weights to replicated before the GEMM (the exposed FSDP
     all-gather), pass the H-sharded weights into the shard_map and let the local fn all-gather one
-    ``1/chunks`` slice of experts at a time over the ``data`` axis, so each gather fits the scheduler's
+    ``1/chunks`` slice at a time over the ``data`` axis, so each gather fits the scheduler's
     overlap-memory budget and chunk k+1's gather can hide under chunk k's GEMM.
+
+    ``SCALE_MOE_CHUNK_DIM`` selects what the ``1/chunks`` slice partitions: ``expert`` (default)
+    gathers a group of experts per chunk and caps each group at a static capacity (drops overflow);
+    ``intermediate`` gathers a slice of every expert's intermediate dim per chunk and accumulates the
+    partial down-projections (dropless).
     """
-    from levanter.grug._moe.sonic_cute import _moe_mlp_local_sonic_cute_chunked  # noqa: PLC0415
+    from levanter.grug._moe.sonic_cute import (  # noqa: PLC0415
+        _moe_mlp_local_sonic_cute_chunked,
+        _moe_mlp_local_sonic_cute_intermediate_chunked,
+    )
+
+    chunk_dim = os.environ.get("SCALE_MOE_CHUNK_DIM", "expert")
+    if chunk_dim == "expert":
+        local_fn = _moe_mlp_local_sonic_cute_chunked
+    elif chunk_dim == "intermediate":
+        local_fn = _moe_mlp_local_sonic_cute_intermediate_chunked
+    else:
+        raise ValueError(f"SCALE_MOE_CHUNK_DIM must be 'expert' or 'intermediate', got {chunk_dim!r}")
 
     batch_spec = _batch_spec_from_x(x, mesh)
     # FSDP layout from MoEExpertMlpPspecs: w_up_gate [E, H/data, 2I/model], w_down [E, I/model, H/data].
@@ -372,7 +388,7 @@ def _moe_mlp_chunked_no_ep(
 
     shard_fn = shard_map(
         partial(
-            _moe_mlp_local_sonic_cute_chunked,
+            local_fn,
             activation_fn=activation_fn,
             num_experts=num_experts,
             chunks=chunks,
