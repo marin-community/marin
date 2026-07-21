@@ -11,7 +11,16 @@ from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
 from levanter.grug._moe.scatter import _moe_mlp_local_scatter
 from levanter.grug._moe.sonic import _moe_mlp_local_sonic
-from levanter.grug._moe.sonic_cute import _moe_mlp_local_sonic_cute
+try:
+    from levanter.grug._moe.sonic_cute import _moe_mlp_local_sonic_cute
+except ModuleNotFoundError as _e:  # quack-kernels (and its torch dep) are optional
+    _sonic_cute_error = _e
+
+    def _moe_mlp_local_sonic_cute(*args, **kwargs):
+        raise ModuleNotFoundError(
+            "moe_implementation='sonic_cute' requires quack-kernels and torch: "
+            f"{_sonic_cute_error}"
+        ) from _sonic_cute_error
 
 _MOE_LOCAL_FNS = {
     "scatter": _moe_mlp_local_scatter,

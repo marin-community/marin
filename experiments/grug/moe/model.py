@@ -72,7 +72,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     return int(mesh.shape[axis_name])
 
 
-RematMode = Literal["recompute_all", "save_moe", "none"]
+RematMode = Literal["recompute_all", "save_moe", "attn_only", "moe_only", "all_but_moe", "none"]
 
 
 def _batch_spec() -> P:
@@ -141,7 +141,17 @@ class GrugModelConfig:
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
-    backward skips re-running expert dispatch and its EP collectives."""
+    backward skips re-running expert dispatch and its EP collectives; "attn_only"
+    checkpoints just the attention sub-block, so the MoE forward — including its
+    custom_vjp residuals, which name-based save policies cannot reach — is never
+    re-executed in backward (memory-heavy: the custom_vjp pins dispatch tensors
+    and gathered expert weights per layer); "moe_only" is the inverse — only the
+    MoE sub-block is checkpointed, so attention and the norms are never re-run
+    (memory-heavy: live-side norm/rope intermediates are saved in fp32);
+    "all_but_moe" checkpoints attention *and* all norms, leaving only the MoE
+    (router → dispatch → expert GEMMs → combine) and shared expert live — with
+    the slim sonic_cute residuals this is the split that fits in HBM;
+    "none" disables checkpointing entirely."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -674,22 +684,62 @@ class Block(eqx.Module):
         use_long_mask: Bool[Array, ""] | bool,
         use_pko: bool = False,
         disable_long_rope: bool = False,
+        sub_remat: Literal["none", "attention", "moe", "all_but_moe"] = "none",
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        # lax.cond so the body has a uniform shape across scan iterations: long layers use
-        # the full causal mask (and may PKO / drop RoPE); short layers use the sliding-window
-        # mask, never PKO, and always RoPE.
-        attn_out = jax.lax.cond(
-            jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
-            operand=None,
-        )
+        def _attn_block(attn_mods, h, use_long, s_mask, l_mask):
+            rms_attn, attn_gated_norm, attn = attn_mods
+            attn_in = attn_gated_norm(rms_attn(h))
+            # lax.cond so the body has a uniform shape across scan iterations: long layers use
+            # the full causal mask (and may PKO / drop RoPE); short layers use the sliding-window
+            # mask, never PKO, and always RoPE.
+            return jax.lax.cond(
+                jnp.asarray(use_long, dtype=jnp.bool_),
+                lambda _: attn(attn_in, l_mask, use_pko=use_pko, disable_rope=disable_long_rope),
+                lambda _: attn(attn_in, s_mask, use_pko=False, disable_rope=False),
+                operand=None,
+            )
+
+        def _mlp_block(mlp_mods, h):
+            rms_mlp, mlp_gated_norm, mlp, shared = mlp_mods
+            mlp_in = mlp_gated_norm(rms_mlp(h))
+            mlp_out, router_stats = mlp(mlp_in)
+            if shared is not None:
+                mlp_out = mlp_out + shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            return mlp_out, router_stats
+
+        # Modules and traced values enter the checkpointed sub-functions as explicit
+        # arguments (not via closure) so eqx.filter_checkpoint sees them as
+        # differentiable/dynamic inputs.
+        attn_mods = (self.rms_attn, self.attn_gated_norm, self.attn)
+        mlp_mods = (self.rms_mlp, self.mlp_gated_norm, self.mlp, self.shared)
+
+        if sub_remat == "all_but_moe":
+            # Checkpoint attention *and* the mlp-side norms — everything whose live
+            # residuals would otherwise be saved as fp32 by autodiff — leaving only
+            # the MoE (router, dispatch, expert GEMMs, combine) and shared expert
+            # live so backward never re-runs the expert forward.
+            def _pre_moe(mods, h, use_long, s_mask, l_mask):
+                a_mods, rms_mlp, mlp_gated_norm = mods
+                h2 = h + _attn_block(a_mods, h, use_long, s_mask, l_mask)
+                return h2, mlp_gated_norm(rms_mlp(h2))
+
+            pre_mods = (attn_mods, self.rms_mlp, self.mlp_gated_norm)
+            x, mlp_in = eqx.filter_checkpoint(_pre_moe)(pre_mods, x, use_long_mask, short_mask, long_mask)
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            return x + mlp_out, router_stats
+
+        if sub_remat == "attention":
+            attn_out = eqx.filter_checkpoint(_attn_block)(attn_mods, x, use_long_mask, short_mask, long_mask)
+        else:
+            attn_out = _attn_block(attn_mods, x, use_long_mask, short_mask, long_mask)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+
+        if sub_remat == "moe":
+            mlp_out, router_stats = eqx.filter_checkpoint(_mlp_block)(mlp_mods, x)
+        else:
+            mlp_out, router_stats = _mlp_block(mlp_mods, x)
         x = x + mlp_out
         return x, router_stats
 
@@ -790,6 +840,15 @@ class Transformer(eqx.Module):
         else:
             remat_policy = None
 
+        _SUB_REMAT = {"attn_only": "attention", "moe_only": "moe", "all_but_moe": "all_but_moe"}
+
+        def _apply_block(block: Block, *args) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+            if cfg.remat_mode == "none":
+                return block(*args)
+            if cfg.remat_mode in _SUB_REMAT:
+                return block(*args, sub_remat=_SUB_REMAT[cfg.remat_mode])
+            return eqx.filter_checkpoint(block, policy=remat_policy)(*args)
+
         if self.blocks is not None:
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
@@ -797,8 +856,8 @@ class Transformer(eqx.Module):
                 is_last = i == num_blocks - 1
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
-                hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
+                hidden, router_stats = _apply_block(
+                    block, hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -820,8 +879,8 @@ class Transformer(eqx.Module):
                 scan_inputs: tuple[Block, Bool[Array, ""]],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask = scan_inputs
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
+                return _apply_block(
+                    layer, carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
                 )
 
             hidden, stacked_router_stats = jax.lax.scan(
