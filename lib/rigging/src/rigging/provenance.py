@@ -199,24 +199,55 @@ def _getuser() -> str | None:
 # A path segment is lowercase alphanumerics plus '_' and '-'; collapse anything else.
 _USER_SEGMENT_RE = re.compile(r"[^a-z0-9_-]+")
 
+# Machine/service logins that must never own a per-user namespace: resolving to one of
+# these means the launching human's identity was not threaded to this process.
+_MACHINE_LOGINS = frozenset({"root", "runner", "ubuntu", "exedev"})
+
+
+def _launch_built_by() -> str | None:
+    """``built_by`` from the launch provenance env, or ``None`` when absent or unusable."""
+    raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if not isinstance(payload, dict):
+        logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
+        return None
+    built_by = payload.get("built_by")
+    return built_by if isinstance(built_by, str) and built_by.strip() else None
+
 
 def username_segment() -> str:
     """The current user as a path-safe segment, for per-user artifact namespacing.
 
-    Resolves the same OS login that stamps provenance ``built_by`` and reduces it to a clean
-    segment: an email-like login drops its domain but keeps the whole local name
+    Resolves the same user that stamps provenance ``built_by``: the launch identity carried
+    in ``MARIN_PROVENANCE`` when present — so a remote worker namespaces under the submitting
+    human, not its own OS login — otherwise the local OS login. The raw name is reduced to a
+    clean segment: an email-like login drops its domain but keeps the whole local name
     (``russell.power@host`` → ``russell-power``), and the result is lowercased with any
     remaining character collapsed to ``-``. The full local name is kept so distinct users stay
     distinct. Raises ``RuntimeError`` if no username resolves — per-user namespacing must never
     silently fall back to a shared bucket.
     """
-    raw = _getuser()
+    raw = _launch_built_by() or _getuser()
     if not raw:
-        raise RuntimeError("cannot resolve a username for per-user namespacing (getpass.getuser found none)")
+        raise RuntimeError(
+            "cannot resolve a username for per-user namespacing "
+            "(no launch provenance built_by, and getpass.getuser found none)"
+        )
     name = raw.strip()
     if "@" in name:
         name = name.split("@", 1)[0]
     segment = _USER_SEGMENT_RE.sub("-", name.lower()).strip("-")
     if not segment:
         raise RuntimeError(f"username {raw!r} did not sanitize to a usable path segment")
+    if segment in _MACHINE_LOGINS:
+        logger.warning(
+            "per-user namespace resolved to machine login %r — the launching human's identity "
+            "was not threaded to this process",
+            segment,
+        )
     return segment
