@@ -3,9 +3,15 @@
 
 """Tests for conversation data transformation scripts."""
 
+import json
 from pathlib import Path
+from typing import ClassVar
 
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
+from marin.transform.conversation.adapters import (
+    InputDatasetFormat,
+    TransformAdapter,
+    tools_column_to_chat_template_kwargs,
+)
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
@@ -101,6 +107,44 @@ class TestTransformAdapters:
         assert messages[0].content == "What is the capital of France?"
         assert messages[1].role == "assistant"
         assert messages[1].content == "The capital of France is Paris."
+
+    def test_multi_turn_preserves_tool_calling_fields(self):
+        """SINGLE_COLUMN_MULTI_TURN passes through assistant tool_calls + tool_call_id/name."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+        )
+        row = {
+            "messages": [
+                {"role": "user", "content": "List the files."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}],
+                },
+                {"role": "tool", "content": "a.py\nb.py", "tool_call_id": "call_1", "name": "bash"},
+            ]
+        }
+
+        messages = adapter.transform_conversation_to_openai_format(row)
+
+        assert messages[1].tool_calls == row["messages"][1]["tool_calls"]
+        assert messages[2].role == "tool"
+        assert messages[2].tool_call_id == "call_1"
+        assert messages[2].name == "bash"
+        # A plain user turn carries none of the tool fields.
+        assert messages[0].tool_calls is None
+        assert messages[0].tool_call_id is None
+
+    def test_multi_turn_empty_tool_calls_dropped(self):
+        """An empty tool_calls list is not attached (truthiness guard), matching template semantics."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+        )
+        row = {"messages": [{"role": "assistant", "content": "hi", "tool_calls": []}]}
+        messages = adapter.transform_conversation_to_openai_format(row)
+        assert messages[0].tool_calls is None
 
     def test_sharegpt_format_adapter(self):
         """Test ShareGPT format adapter."""
@@ -243,6 +287,54 @@ class TestTransformRow:
         }
 
         assert transform_row(row, cfg, adapter) is None
+
+
+class TestToolsColumnToChatTemplateKwargs:
+    """Test the reusable ``tools`` -> ``chat_template_kwargs`` extra_metadata_fn."""
+
+    TOOLS: ClassVar = [{"type": "function", "function": {"name": "bash", "parameters": {}}}]
+
+    def test_tools_json_string_relocated(self):
+        row = {"messages": [], "tools": json.dumps(self.TOOLS)}
+        assert tools_column_to_chat_template_kwargs(row) == {"chat_template_kwargs": {"tools": self.TOOLS}}
+
+    def test_tools_already_parsed_list(self):
+        row = {"messages": [], "tools": self.TOOLS}
+        assert tools_column_to_chat_template_kwargs(row) == {"chat_template_kwargs": {"tools": self.TOOLS}}
+
+    def test_missing_tools_returns_empty(self):
+        assert tools_column_to_chat_template_kwargs({"messages": []}) == {}
+
+    def test_empty_and_unparseable_return_empty(self):
+        assert tools_column_to_chat_template_kwargs({"tools": "[]"}) == {}
+        assert tools_column_to_chat_template_kwargs({"tools": []}) == {}
+        assert tools_column_to_chat_template_kwargs({"tools": "{not json"}) == {}
+
+    def test_flows_through_transform_row_as_extra_column(self):
+        """End-to-end: the emitted chat_template_kwargs lands as a top-level extra column."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            replacements={},
+            extra_metadata_fn=tools_column_to_chat_template_kwargs,
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="test/tools",
+            revision="main",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+        )
+        row = {
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+            "tools": json.dumps(self.TOOLS),
+        }
+        result = transform_row(row, cfg, adapter)
+        assert result is not None
+        assert result.model_dump()["chat_template_kwargs"] == {"tools": self.TOOLS}
 
 
 class TestPreferenceDataTransform:

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -128,7 +129,22 @@ class TransformAdapter:
             conversation = row[self.conversation_column]
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                message = OpenAIChatMessage(role=role, content=conv[self.content_key])
+                # Preserve structured tool-calling fields when present (agentic / tool-calling SFT):
+                # the plain role/content mapping otherwise drops assistant ``tool_calls`` and the
+                # ``tool_call_id``/``name`` that carry the <tool_call>/<tool_response> structure a
+                # tools-aware chat template renders. No-op for conversations without these keys, so it
+                # is backward-compatible for plain chat datasets.
+                tool_calls = conv.get("tool_calls")
+                if tool_calls:
+                    message.tool_calls = tool_calls
+                tool_call_id = conv.get("tool_call_id")
+                if tool_call_id is not None:
+                    message.tool_call_id = tool_call_id
+                name = conv.get("name")
+                if name is not None:
+                    message.name = name
+                messages.append(message)
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
@@ -164,3 +180,38 @@ class TransformAdapter:
 
     def copy(self) -> "TransformAdapter":
         return dataclasses.replace(self)
+
+
+def tools_column_to_chat_template_kwargs(row: dict[str, Any], *, tools_column: str = "tools") -> dict[str, Any]:
+    """Relocate a per-row ``tools`` column into a ``chat_template_kwargs`` column.
+
+    Intended as a ``TransformAdapter.extra_metadata_fn`` for tool-calling / agentic SFT datasets
+    (e.g. the opencode serve-parity data) whose rows carry the callable function schemas in a
+    ``tools`` column. Levanter's ``ChatLmDatasetFormat`` has no ``tools`` column wiring: it renders
+    the template with ``apply_chat_template(..., **chat_template_kwargs)`` and, by default, reads
+    those kwargs from a ``chat_template_kwargs`` column. Emitting ``{"chat_template_kwargs":
+    {"tools": [...]}}`` here makes the template's ``{% if tools %}`` / ``<tools>`` system block
+    render per row, byte-for-byte matching a HuggingFace ``apply_chat_template(tools=...)`` render.
+
+    ``tools`` may be a JSON string (Arrow-safe datasets store the schema list as a string) or an
+    already-parsed list; both are handled. Returns ``{}`` (no extra column) when ``tools`` is
+    missing, empty, or an unparseable string, so rows without tools are unaffected. Mirrors the
+    ``chat_template_kwargs``-emitting pattern of ``ReasoningToChatKwargs`` in
+    ``experiments/datasets/instruction.py``.
+
+    Assistant ``tool_calls.function.arguments`` JSON-string parsing is handled separately by
+    ``transform_conversation._normalize_tool_structures`` (already applied by ``transform_row``),
+    and empty ``tool_calls`` lists are dropped by the ``SINGLE_COLUMN_MULTI_TURN`` adapter's
+    truthiness guard, so this function only concerns the ``tools`` schema relocation.
+    """
+    tools = row.get(tools_column)
+    if tools is None:
+        return {}
+    if isinstance(tools, str):
+        try:
+            tools = json.loads(tools)
+        except json.JSONDecodeError:
+            return {}
+    if not tools:
+        return {}
+    return {"chat_template_kwargs": {"tools": tools}}
