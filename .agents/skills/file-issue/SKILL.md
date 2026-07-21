@@ -171,10 +171,10 @@ cat > "$body_file" <<'EOF'
 <body>
 EOF
 
-gh issue create --repo marin-community/marin \
+issue_url="$(gh issue create --repo marin-community/marin \
   --title "<title>" \
   --label "agent-generated" \
-  --body-file "$body_file"
+  --body-file "$body_file")"
 ```
 
 Add kind-appropriate labels (`bug`, `experiment`). If a relevant label does not
@@ -185,8 +185,9 @@ Before creating the issue, re-open the body file and verify it contains no
 unrelated shell output (pre-commit logs, pytest session headers, prompt
 transcripts). If it does, clean the draft before posting.
 
-After creating the issue, fetch its `title,body` with `gh issue view --json` and
-correct any text added or altered by the publishing tool.
+After creating the issue, fetch its published text with
+`gh issue view "$issue_url" --json title,body` and correct any text added or
+altered by the publishing tool.
 
 ### 8. Report Back
 

@@ -58,6 +58,36 @@ Keep `not just X, but Y` unchanged in inline code."""
     )
 
 
+def test_cleanup_github_body_preserves_blockquoted_fenced_code():
+    body = """> ```markdown
+> **Oh my god**
+> This is not just X, but Y.
+> ```
+
+Wow — keep the quoted example intact.
+"""
+
+    result = cleanup_github_body(body)
+
+    assert (
+        result.cleaned_body
+        == """> ```markdown
+> **Oh my god**
+> This is not just X, but Y.
+> ```
+
+Keep the quoted example intact."""
+    )
+
+
+def test_cleanup_github_body_preserves_double_backtick_inline_code():
+    body = "Wow — use ``not just `X`, but Y`` exactly."
+
+    result = cleanup_github_body(body)
+
+    assert result.cleaned_body == "Use ``not just `X`, but Y`` exactly."
+
+
 def test_cleanup_github_body_removes_standalone_bold_heading_but_keeps_list_label():
     body = """**Reproduction**
 

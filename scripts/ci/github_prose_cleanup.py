@@ -23,8 +23,7 @@ _ARCHIVE_MARKER_PREFIX = "marin-prose-cleanup-archive"
 _CLEANUP_FOOTER_RE = re.compile(
     r"\n{2,}---\n" r"\[Original description\]\([^\n)]+\)\s+" + re.escape(CLEANUP_FOOTER_MARKER) + r"\s*$"
 )
-_FENCE_START_RE = re.compile(r"^(?: {0,3})(?P<fence>`{3,}|~{3,})")
-_INLINE_CODE_RE = re.compile(r"(`+[^`\n]*?`+)")
+_FENCE_START_RE = re.compile(r"^(?: {0,3})(?P<quote_prefix>(?:>[ \t]?)*)(?P<fence>`{3,}|~{3,})")
 _ATX_HEADING_RE = re.compile(
     r"^[ \t]{0,3}#{1,6}(?:[ \t]+(?P<heading_text>[^\n]*?))?[ \t]*#*[ \t]*(?:\n|$)", re.MULTILINE
 )
@@ -191,14 +190,47 @@ def _clean_plain_text(text: str) -> str:
     return _strip_decorative_bold(cleaned)
 
 
-def _clean_outside_inline_code(text: str) -> str:
-    parts = _INLINE_CODE_RE.split(text)
-    cleaned_parts = [part if index % 2 else _clean_plain_text(part) for index, part in enumerate(parts)]
-    cleaned = "".join(cleaned_parts)
-    if cleaned == text:
-        return text
+def _clean_prose_fragment(text: str) -> str:
+    cleaned = _clean_plain_text(text)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
+def _backtick_run_length(text: str, start: int) -> int:
+    end = start
+    while end < len(text) and text[end] == "`":
+        end += 1
+    return end - start
+
+
+def _inline_code_span_end(text: str, opening_end: int, delimiter_length: int) -> int | None:
+    cursor = opening_end
+    while (candidate := text.find("`", cursor)) >= 0:
+        run_length = _backtick_run_length(text, candidate)
+        if run_length == delimiter_length:
+            return candidate + run_length
+        cursor = candidate + run_length
+    return None
+
+
+def _clean_outside_inline_code(text: str) -> str:
+    output: list[str] = []
+    prose_start = 0
+    cursor = 0
+    while (opening_start := text.find("`", cursor)) >= 0:
+        delimiter_length = _backtick_run_length(text, opening_start)
+        opening_end = opening_start + delimiter_length
+        span_end = _inline_code_span_end(text, opening_end, delimiter_length)
+        if span_end is None:
+            cursor = opening_end
+            continue
+        output.append(_clean_prose_fragment(text[prose_start:opening_start]))
+        output.append(text[opening_start:span_end])
+        prose_start = span_end
+        cursor = span_end
+
+    output.append(_clean_prose_fragment(text[prose_start:]))
+    return "".join(output)
 
 
 def _clean_outside_fenced_code(body: str) -> str:
@@ -206,6 +238,7 @@ def _clean_outside_fenced_code(body: str) -> str:
     prose: list[str] = []
     fence_character: str | None = None
     fence_length = 0
+    fence_quote_depth = 0
 
     def flush_prose() -> None:
         if prose:
@@ -222,6 +255,7 @@ def _clean_outside_fenced_code(body: str) -> str:
             fence = fence_match.group("fence")
             fence_character = fence[0]
             fence_length = len(fence)
+            fence_quote_depth = fence_match.group("quote_prefix").count(">")
             output.append(line)
             continue
 
@@ -229,9 +263,16 @@ def _clean_outside_fenced_code(body: str) -> str:
         if fence_match is None:
             continue
         fence = fence_match.group("fence")
-        if fence[0] == fence_character and len(fence) >= fence_length and not line[fence_match.end() :].strip():
+        quote_depth = fence_match.group("quote_prefix").count(">")
+        if (
+            fence[0] == fence_character
+            and len(fence) >= fence_length
+            and quote_depth == fence_quote_depth
+            and not line[fence_match.end() :].strip()
+        ):
             fence_character = None
             fence_length = 0
+            fence_quote_depth = 0
 
     flush_prose()
     return "".join(output)

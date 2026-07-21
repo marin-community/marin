@@ -84,8 +84,9 @@ Before committing or calling `gh pr create` or `gh pr edit`:
    does not add behavior, motivation, evidence, a caveat, or an issue link.
 4. Check that the title, opening sentence, and issue link agree with the actual
    branch scope.
-5. After creating or editing the PR, fetch `title,body` with `gh pr view --json`
-   and correct any text added or altered by the publishing tool.
+5. After creating or editing the PR, fetch the published text with
+   `gh pr view --json title,body` and correct any text added or altered by the
+   publishing tool.
 
 Use `printf %s '<title>' | wc -m` for the title. Inspect the body file itself
 after drafting it.
