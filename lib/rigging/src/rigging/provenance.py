@@ -99,13 +99,9 @@ class Provenance:
         outside a checkout or when the ``git`` binary is absent, so it never raises. Use to
         stamp an artifact built by an arbitrary run.
         """
-        raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
-        if raw:
-            # A malformed value must not break stamping; fall through to the git path.
-            try:
-                return cls.from_json(raw)
-            except (json.JSONDecodeError, KeyError, TypeError):
-                logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
+        published = _provenance_from_env()
+        if published is not None:
+            return published
 
         cwd = str(repo_dir) if repo_dir is not None else None
 
@@ -163,6 +159,21 @@ class Provenance:
         return f"{self.base_commit}{suffix}"
 
 
+def _provenance_from_env() -> Provenance | None:
+    """The provenance published in ``MARIN_PROVENANCE``, or ``None`` when absent or malformed.
+
+    A malformed value must not break stamping or namespacing; callers fall back.
+    """
+    raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
+    if not raw:
+        return None
+    try:
+        return Provenance.from_json(raw)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
+        return None
+
+
 @functools.cache
 def _capture_once() -> Provenance:
     return Provenance.capture()
@@ -204,22 +215,6 @@ _USER_SEGMENT_RE = re.compile(r"[^a-z0-9_-]+")
 _MACHINE_LOGINS = frozenset({"root", "runner", "ubuntu", "exedev"})
 
 
-def _launch_built_by() -> str | None:
-    """``built_by`` from the launch provenance env, or ``None`` when absent or unusable."""
-    raw = os.environ.get(LAUNCH_PROVENANCE_ENV)
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        payload = None
-    if not isinstance(payload, dict):
-        logger.warning("Ignoring malformed %s value: %r", LAUNCH_PROVENANCE_ENV, raw)
-        return None
-    built_by = payload.get("built_by")
-    return built_by if isinstance(built_by, str) and built_by.strip() else None
-
-
 def username_segment() -> str:
     """The current user as a path-safe segment, for per-user artifact namespacing.
 
@@ -232,7 +227,8 @@ def username_segment() -> str:
     distinct. Raises ``RuntimeError`` if no username resolves — per-user namespacing must never
     silently fall back to a shared bucket.
     """
-    raw = _launch_built_by() or _getuser()
+    launch = _provenance_from_env()
+    raw = (launch.built_by if launch is not None else None) or _getuser()
     if not raw:
         raise RuntimeError(
             "cannot resolve a username for per-user namespacing "
