@@ -37,6 +37,12 @@ CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 # this many tokens for the prompt when shrinking a generation budget to fit a small served context.
 _CONTEXT_PROMPT_RESERVE = 1024
 
+# lm-eval truncates a prompt to max_length, but the served backend also counts the requested output
+# tokens against its context window (a loglikelihood request adds one output token to a
+# max_length-long prompt). Report a context this much below the true served window so prompt +
+# output never crosses it; on a large-context model the shave is negligible.
+_CONTEXT_MARGIN = 64
+
 
 def generation_budget(max_gen_toks: int, max_length: int | None) -> int:
     """The per-request generation cap, shrunk to fit a served context smaller than the budget.
@@ -180,8 +186,9 @@ def main() -> None:
     # applied by fsspec, so url_to_fs needs no extra config. out_path is region-local (the eval child
     # is pinned to the serve region), so no cross-region copy.
     out_fs, _ = fsspec.core.url_to_fs(out_path)
-    max_length = served_max_length(config["base_url"])
-    print(f"served max_model_len: {max_length}", flush=True)
+    served = served_max_length(config["base_url"])
+    max_length = served - _CONTEXT_MARGIN if served is not None else None
+    print(f"served max_model_len: {served} (lm-eval max_length={max_length})", flush=True)
     failures: list[str] = []
     for task in tasks:
         dest = f"{out_path}/{task['dir']}"
