@@ -24,7 +24,7 @@ jobs:
       id-token: write
     outputs:
       description: ${{ steps.rewrite.outputs.structured_output }}
-      quota_exhausted: ${{ steps.classify.outputs.quota_exhausted }}
+      rate_limited: ${{ steps.classify.outputs.rate_limited }}
 
     steps:
       # pull_request_target can expose credentials, so execute only the
@@ -85,7 +85,7 @@ jobs:
 
   cleanup:
     needs: rewrite
-    if: needs.rewrite.result == 'success' && needs.rewrite.outputs.quota_exhausted != 'true'
+    if: needs.rewrite.result == 'success' && needs.rewrite.outputs.rate_limited != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

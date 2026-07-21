@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
-from scripts.ci.claude_runner import ClaudeRunStatus, report_quota_exhaustion, run_claude
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
 
 logger = logging.getLogger(__name__)
 
@@ -441,8 +441,8 @@ def run_agent(prompt: str, root: Path) -> None:
         ],
         cwd=root,
     )
-    if result.status == ClaudeRunStatus.QUOTA_EXHAUSTED:
-        report_quota_exhaustion()
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
         return
     logger.info("%s", result.output)
 

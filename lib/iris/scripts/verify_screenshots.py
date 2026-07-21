@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from scripts.ci.claude_runner import ClaudeRunStatus, report_quota_exhaustion, run_claude
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
 
 
 def verify_screenshots(pairs: list[tuple[Path, str]]) -> tuple[ClaudeRunStatus, str]:
@@ -34,7 +34,7 @@ def verify_screenshots(pairs: list[tuple[Path, str]]) -> tuple[ClaudeRunStatus, 
         ["--model=sonnet", "--dangerously-skip-permissions", "--tools=Read"],
         timeout=180,
     )
-    if result.status == ClaudeRunStatus.QUOTA_EXHAUSTED:
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
         return result.status, result.output
     text = result.output.strip()
     # Claude often prepends reasoning despite instructions, so we cannot require the
@@ -69,8 +69,8 @@ def main():
 
     print(f"Verifying {len(pairs)} screenshots in one batch...")
     status, explanation = verify_screenshots(pairs)
-    if status == ClaudeRunStatus.QUOTA_EXHAUSTED:
-        report_quota_exhaustion()
+    if status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
         return
     print(explanation)
 

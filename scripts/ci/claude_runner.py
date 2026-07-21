@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run Claude Code and distinguish quota exhaustion from agent failures."""
+"""Run Claude Code and distinguish rate limiting from agent failures."""
 
 import argparse
 import json
@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+RATE_LIMITED_OUTPUT = "rate_limited"
+
 
 class ClaudeRunStatus(StrEnum):
     SUCCESS = "success"
-    QUOTA_EXHAUSTED = "quota_exhausted"
+    RATE_LIMITED = RATE_LIMITED_OUTPUT
     FAILED = "failed"
 
 
@@ -37,7 +39,7 @@ def classify_claude_result(value: object) -> ClaudeRunStatus:
     """Classify a CLI envelope or claude-code-action execution trace."""
     messages = _result_messages(value)
     if any(message.get("is_error") is True and message.get("api_error_status") == 429 for message in messages):
-        return ClaudeRunStatus.QUOTA_EXHAUSTED
+        return ClaudeRunStatus.RATE_LIMITED
     if any(message.get("is_error") is True for message in messages):
         return ClaudeRunStatus.FAILED
     return ClaudeRunStatus.SUCCESS
@@ -67,36 +69,36 @@ def run_claude(
     output = envelope.get("result") if isinstance(envelope, dict) else None
     if not isinstance(output, str):
         raise ValueError("Claude CLI result is missing its text output")
-    if status == ClaudeRunStatus.FAILED or (completed.returncode != 0 and status != ClaudeRunStatus.QUOTA_EXHAUSTED):
+    if status == ClaudeRunStatus.FAILED or (completed.returncode != 0 and status != ClaudeRunStatus.RATE_LIMITED):
         raise subprocess.CalledProcessError(
             completed.returncode, command, output=completed.stdout, stderr=completed.stderr
         )
     return ClaudeRunResult(status=status, output=output)
 
 
-def report_quota_exhaustion() -> None:
-    print("::warning title=Claude quota exhausted::Skipping Claude agent because the account returned HTTP 429.")
+def report_rate_limit() -> None:
+    print("::warning title=Claude rate limited::Skipping Claude agent because the account returned HTTP 429.")
 
 
-def _write_github_output(output_path: Path, quota_exhausted: bool) -> None:
+def _write_github_output(output_path: Path, rate_limited: bool) -> None:
     with output_path.open("a") as output:
-        output.write(f"quota_exhausted={str(quota_exhausted).lower()}\n")
+        output.write(f"{RATE_LIMITED_OUTPUT}={str(rate_limited).lower()}\n")
 
 
 def classify_action(outcome: str, execution_file: Path | None, github_output: Path) -> None:
-    """Fail an action invocation unless it succeeded or exhausted quota."""
+    """Fail an action invocation unless it succeeded or was rate limited."""
     if outcome == "success":
-        _write_github_output(github_output, quota_exhausted=False)
+        _write_github_output(github_output, rate_limited=False)
         return
     if execution_file is None or not execution_file.is_file():
         raise ValueError("Claude action failed without an execution file")
 
     execution = json.loads(execution_file.read_text())
-    if classify_claude_result(execution) != ClaudeRunStatus.QUOTA_EXHAUSTED:
-        raise RuntimeError("Claude action failed for a reason other than quota exhaustion")
+    if classify_claude_result(execution) != ClaudeRunStatus.RATE_LIMITED:
+        raise RuntimeError("Claude action failed for a reason other than rate limiting")
 
-    _write_github_output(github_output, quota_exhausted=True)
-    report_quota_exhaustion()
+    _write_github_output(github_output, rate_limited=True)
+    report_rate_limit()
 
 
 def main() -> None:

@@ -44,7 +44,7 @@ def test_run_claude_success_returns_model_output(tmp_path: Path) -> None:
     assert result.output == "finished"
 
 
-def test_run_claude_quota_exhaustion_returns_quota_status(tmp_path: Path) -> None:
+def test_run_claude_rate_limit_returns_rate_limited_status(tmp_path: Path) -> None:
     executable = write_fake_claude(
         tmp_path,
         error_payload(429),
@@ -53,11 +53,11 @@ def test_run_claude_quota_exhaustion_returns_quota_status(tmp_path: Path) -> Non
 
     result = run_claude("prompt", [], executable=executable)
 
-    assert result.status == ClaudeRunStatus.QUOTA_EXHAUSTED
+    assert result.status == ClaudeRunStatus.RATE_LIMITED
     assert result.output == "weekly limit reached"
 
 
-def test_run_claude_non_quota_error_raises(tmp_path: Path) -> None:
+def test_run_claude_other_api_error_raises(tmp_path: Path) -> None:
     executable = write_fake_claude(
         tmp_path,
         error_payload(404),
@@ -68,17 +68,17 @@ def test_run_claude_non_quota_error_raises(tmp_path: Path) -> None:
         run_claude("prompt", [], executable=executable)
 
 
-def test_classify_action_quota_exhaustion_writes_soft_failure_output(tmp_path: Path) -> None:
+def test_classify_action_rate_limit_writes_soft_failure_output(tmp_path: Path) -> None:
     execution_file = tmp_path / "execution.json"
     execution_file.write_text(json.dumps([error_payload(429)]))
     github_output = tmp_path / "github-output"
 
     classify_action("failure", execution_file, github_output)
 
-    assert github_output.read_text() == "quota_exhausted=true\n"
+    assert github_output.read_text() == "rate_limited=true\n"
 
 
-def test_classify_action_non_quota_error_raises(tmp_path: Path) -> None:
+def test_classify_action_other_api_error_raises(tmp_path: Path) -> None:
     execution_file = tmp_path / "execution.json"
     execution_file.write_text(json.dumps([error_payload(404)]))
 

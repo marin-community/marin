@@ -5,7 +5,7 @@
 
 import argparse
 
-from scripts.ci.claude_runner import ClaudeRunStatus, report_quota_exhaustion, run_claude
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
 
 # Suppress Claude Code's default "Co-Authored-By: Claude" / "Generated with
 # Claude Code" trailers on the commits and PRs the agent creates. AGENTS.md
@@ -118,8 +118,8 @@ def main() -> None:
             "600",
         ],
     )
-    if result.status == ClaudeRunStatus.QUOTA_EXHAUSTED:
-        report_quota_exhaustion()
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
         return
     print(result.output)
 

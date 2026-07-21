@@ -11,9 +11,9 @@ inputs:
     default: ''
 
 outputs:
-  quota_exhausted:
-    description: Whether Claude failed because its account quota was exhausted.
-    value: ${{ steps.classify.outputs.quota_exhausted }}
+  rate_limited:
+    description: Whether Claude failed with HTTP 429.
+    value: ${{ steps.classify.outputs.rate_limited }}
 
 runs:
   using: composite

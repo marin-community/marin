@@ -13,7 +13,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from scripts.ci.claude_runner import ClaudeRunStatus, report_quota_exhaustion, run_claude
+from scripts.ci.claude_runner import ClaudeRunStatus, report_rate_limit, run_claude
 
 logger = logging.getLogger(__name__)
 
@@ -202,12 +202,12 @@ def run_scout(subproject: str, worktree_path: Path) -> tuple[str, dict, str]:
         ],
         cwd=worktree_path,
     )
-    if agent_result.status == ClaudeRunStatus.QUOTA_EXHAUSTED:
+    if agent_result.status == ClaudeRunStatus.RATE_LIMITED:
         Path(result_file).unlink(missing_ok=True)
-        report_quota_exhaustion()
+        report_rate_limit()
         return (
             subproject,
-            {"subproject": subproject, "status": "quota_exhausted", "summary": "Claude quota exhausted"},
+            {"subproject": subproject, "status": "rate_limited", "summary": "Claude rate limited"},
             str(worktree_path),
         )
     logger.info("%s", agent_result.output)
@@ -248,8 +248,8 @@ def run_merge(date: str, haiku_seed: str, scout_results: list[dict], worktree_in
             "200",
         ],
     )
-    if result.status == ClaudeRunStatus.QUOTA_EXHAUSTED:
-        report_quota_exhaustion()
+    if result.status == ClaudeRunStatus.RATE_LIMITED:
+        report_rate_limit()
         return
     logger.info("%s", result.output)
 
