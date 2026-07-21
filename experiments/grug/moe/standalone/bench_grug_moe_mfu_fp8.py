@@ -32,6 +32,7 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.model import GrugFp8Config, GrugModelConfig
+from experiments.grug.moe.mxfp8_dense import mxfp8_dense_mesh_context
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import _compute_flops, _make_train_step, initial_state
 
@@ -178,7 +179,8 @@ def main():
     mesh = compact_grug_mesh(expert_axis_size=a.expert_parallelism, replica_axis_size=a.replica_axis)
     metrics = []
     tps = a.batch_size * a.seq_len
-    with set_mesh(mesh):
+    use_mxfp8_dense = fp8 is not None and fp8.dense and fp8.dense_recipe == "mxfp8"
+    with set_mesh(mesh), mxfp8_dense_mesh_context(enabled=use_mxfp8_dense):
 
         @jax.jit
         def init(rng):

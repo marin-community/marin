@@ -42,6 +42,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.mxfp8_dense import mxfp8_dense_mesh_context
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -441,7 +442,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
+    use_mxfp8_dense = (
+        config.model.fp8 is not None and config.model.fp8.dense and config.model.fp8.dense_recipe == "mxfp8"
+    )
+    with set_mesh(mesh), mxfp8_dense_mesh_context(enabled=use_mxfp8_dense):
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(

@@ -425,6 +425,21 @@ def test_grug_moe_uniform_mxfp8_shape_init_has_no_delayed_dense_state_or_te_impo
     assert te_modules_after == te_modules_before
 
 
+def test_grug_moe_disabled_mxfp8_mesh_context_does_not_import_transformer_engine():
+    dense_module = importlib.import_module("experiments.grug.moe.mxfp8_dense")
+    te_modules_before = {
+        name for name in sys.modules if name == "transformer_engine" or name.startswith("transformer_engine.")
+    }
+
+    with dense_module.mxfp8_dense_mesh_context(enabled=False):
+        pass
+
+    te_modules_after = {
+        name for name in sys.modules if name == "transformer_engine" or name.startswith("transformer_engine.")
+    }
+    assert te_modules_after == te_modules_before
+
+
 def test_grug_moe_fp8_dense_config_rejects_misaligned_dims():
     model_module = importlib.import_module("experiments.grug.moe.model")
     cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)

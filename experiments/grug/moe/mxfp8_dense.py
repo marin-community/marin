@@ -3,10 +3,34 @@
 
 """Stateless Transformer Engine MXFP8 dense projection."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import jax
 import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 from jax.sharding import auto_axes
+
+
+@contextmanager
+def mxfp8_dense_mesh_context(*, enabled: bool) -> Iterator[None]:
+    """Configure Transformer Engine for Grug's distributed dense projections."""
+    if not enabled:
+        yield
+        return
+
+    from transformer_engine.jax.sharding import (  # type: ignore[import]  # noqa: PLC0415
+        MeshResource,
+        global_shard_guard,
+    )
+
+    mesh_resource = MeshResource(
+        dp_resource="replica_dcn",
+        fsdp_resource="data",
+        tpsp_resource="model",
+    )
+    with global_shard_guard(mesh_resource):
+        yield
 
 
 def mxfp8_dense_dot(x: jax.Array, w: jax.Array, *, out_sharding: P) -> jax.Array:
