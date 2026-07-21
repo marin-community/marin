@@ -114,18 +114,14 @@ class LevanterBackend:
     def load_model(
         self, spec: ModelSpec, config_overrides: Mapping[str, Any] | None = None
     ) -> Iterator[LoadedLevanterModel]:
-        """Load ``spec`` into a Levanter model on the slice's device mesh, yielding it on-mesh.
+        """Load model weights onto the serving mesh.
 
-        The weight-load half of :meth:`serve`, split out so the load path can be exercised without
-        booting the inference engine. It discovers the model class from the HF checkpoint, builds
-        the serving mesh — with ``AxisType.Explicit`` axes when the model requires them (Grug/
-        Snowball reshard against named specs) — and loads the weights sharded across the slice at
-        ``spec.dtype`` (so a BF16 export loads directly as BF16, casting per-shard on read). The
-        model is yielded inside the device-mesh context; use it within the ``with`` block.
+        Args:
+            spec: Model, dtype, and sharding settings to load.
+            config_overrides: Fields to replace on the HF-derived Levanter model config.
 
-        ``config_overrides`` replaces fields on the discovered model config before load — the escape
-        hatch for runtime knobs the HF ``config.json`` does not carry, e.g. a Grug MoE's kernel
-        backend (``moe_implementation="sonic"``), which the portable default cannot size on GPU.
+        Yields:
+            The loaded model and serving metadata inside its active device-mesh context.
         """
         spec = self._resolved_spec(spec)
         assert spec.num_chips is not None

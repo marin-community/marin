@@ -6,7 +6,6 @@ import functools
 import logging
 import os
 import time
-import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -191,30 +190,17 @@ def _infer_max_pages_from_hbm(
             "Provide `max_pages` explicitly or increase `hbm_utilization`."
         )
 
-    # Use the previous heuristic as the initial guess before expanding.
-    guess = max(int(config.max_seqs * max_pages_per_seq), 1)
-
+    # No engine state can use more than max_seqs fully populated sequences. Allocating pages beyond
+    # this bound only consumes the HBM needed by compilation and transient execution buffers.
+    page_capacity = max(int(config.max_seqs * max_pages_per_seq), 1)
     low = 1
-    high = guess
+    high = page_capacity
     high_bytes = cache_bytes(high)
 
     if high_bytes <= budget:
-        low = high
-        while True:
-            high *= 2
-            if high > (1 << 20):
-                warnings.warn(
-                    "KV cache size exceeded 1M pages during budget inference; "
-                    "aborting search and using current estimate."
-                )
-                high = 1 << 20
-                break
-            high_bytes = cache_bytes(high)
-            if high_bytes > budget:
-                break
-            low = high
+        low = page_capacity
 
-    # Binary search between the known-good lower bound and the first oversized bound.
+    # Binary search between one known-good page and the capacity bound when the full cache is too large.
     while low + 1 < high:
         mid = (low + high) // 2
         mid_bytes = cache_bytes(mid)

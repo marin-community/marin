@@ -3,6 +3,7 @@
 
 import equinox as eqx
 import haliax as hax
+import jax
 import jax.numpy as jnp
 from haliax import Axis
 
@@ -62,10 +63,10 @@ def _build_service(vocab_size=10):
 
 
 def test_auto_page_sizing_uses_explicit_axis_resources(monkeypatch):
-    # Device memory statistics are an accelerator I/O boundary. Supply a small deterministic
-    # budget so this CPU test exercises automatic page sizing without allocating a large cache.
-    monkeypatch.setattr(engine_module, "estimated_free_device_memory", lambda _device: 1e-5)
-    mesh = create_mesh_from_axis_specs(ici_axes={"model": 1}, dcn_axes={})
+    # Device memory statistics are an accelerator I/O boundary. Supply a deterministic ample
+    # budget so this test reaches the useful page-capacity bound on any host.
+    monkeypatch.setattr(engine_module, "estimated_free_device_memory", lambda _device: 100.0)
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
 
     with hax.partitioning.set_mesh(mesh):
         service = InferenceEngine.from_model_with_config(
@@ -83,4 +84,4 @@ def test_auto_page_sizing_uses_explicit_axis_resources(monkeypatch):
         )
 
     assert service.config.max_pages is not None
-    assert service.config.max_pages > 0
+    assert service.config.max_pages == service.config.max_seqs * service.config.max_pages_per_seq

@@ -29,3 +29,17 @@ tests passed and 1 was skipped.
 ## Future work
 
 - [ ] Confirm the repaired branch starts the reported Levanter service on Iris.
+
+## Follow-up: runtime HBM exhaustion
+
+After resource mapping was repaired, Qwen3-0.6B started and accepted a request but failed its first batch with a
+runtime buffer allocation error: an 877.50 MB buffer was requested with only 684.98 MB free. The startup log reported
+4096 tokens per sequence and 224,640 tokens per batch.
+
+The inferred KV-page search treated `max_seqs * max_pages_per_seq` as an initial guess, then kept expanding while HBM
+was available. That produced storage for 224,640 tokens even though 16 active sequence slots with a 4096-token limit
+can address at most 65,536 tokens. The unreachable cache pages displaced compilation and execution buffers.
+
+Automatic page sizing now treats `max_seqs * max_pages_per_seq` as a hard capacity bound and only searches downward
+when the full useful cache exceeds the configured HBM budget. The public-constructor regression checks the exact
+capacity bound on any device count, including four-device TPU CI.
