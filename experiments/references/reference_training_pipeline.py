@@ -126,23 +126,11 @@ def store_mixture(
     *,
     weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL,
 ) -> LmDataConfig:
-    """Build the Levanter training data config from a datakit store's non-empty buckets.
-
-    Each entry in ``store.buckets`` (already filtered to buckets that received rows) becomes one
-    ``DatasetComponent`` with ``flat_cache=True`` pointing at the bucket's pre-tokenized Levanter
-    cache -- the shape the store writes (``cluster=C/quality=Q/part-*`` + a merged
-    ``shard_ledger.json`` at the bucket root, no ``train/`` subdir). The ordinary
-    ``TokenizedCache`` path does not work here: its ``as_component`` omits ``flat_cache``, so
-    Levanter looks for ``<bucket>/train/`` and silently drops every component.
-
-    ``cache_dir`` is the bucket's **absolute** ``s3://`` path: Levanter resolves a relative
-    ``cache_dir`` against the worker's CWD (``/app``), not the object store, so a relativized path
-    fails to load. The store's content hash keeps the recipe stable across rebuilds; the region
-    prefix in the path makes the training identity region-specific, which is acceptable here.
+    """One ``DatasetComponent`` per non-empty store bucket, as the Levanter training data config.
 
     Weights are token-proportional (``bucket.total_tokens``) or uniform; Levanter renormalizes.
-    Under ``TOKEN_PROPORTIONAL`` a bucket with ``total_tokens <= 0`` raises (a ``0``-weight
-    component is silently dropped by Levanter, so it signals a broken store, not a valid mixture).
+    Raises ``ValueError`` if the store has no non-empty buckets, or (under ``TOKEN_PROPORTIONAL``)
+    if any bucket has ``total_tokens <= 0``.
     """
     if not store.buckets:
         raise ValueError(f"store at {store.cache_path} has no non-empty buckets; datakit produced no data")
@@ -153,13 +141,19 @@ def store_mixture(
         name = _bucket_name(bucket.cluster_id, bucket.quality_bucket)
         components[name] = DatasetComponent(
             source=None,
+            # Absolute s3:// path: Levanter resolves a relative cache_dir against the worker CWD
+            # (/app), not the object store, so a relativized path fails to load.
             cache_dir=bucket.path,
             format=TextLmDatasetFormat(),
             tags=[name],
+            # The store writes flat caches (part-* + shard_ledger.json at the bucket root, no
+            # train/ subdir); TokenizedCache.as_component omits flat_cache, so Levanter would look
+            # for <bucket>/train/ and silently drop the component.
             flat_cache=True,
         )
         if weighting is MixtureWeighting.TOKEN_PROPORTIONAL:
             if bucket.total_tokens <= 0:
+                # A 0-weight component is silently dropped by Levanter -> a broken store, not a mixture.
                 raise ValueError(f"bucket {name} at {bucket.path} has total_tokens={bucket.total_tokens}; expected > 0")
             weights[name] = float(bucket.total_tokens)
         else:
@@ -188,13 +182,11 @@ def reference_train_on_store(
     weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL,
     resources: ResourceConfig = REFERENCE_TRAIN_RESOURCES,
 ) -> ArtifactStep[LevanterCheckpoint]:
-    """The reference pretrain step over a resolved datakit store, as a lazy checkpoint handle.
+    """The reference pretrain over a resolved datakit store, as an ``ArtifactStep[LevanterCheckpoint]``.
 
-    Mirrors the Grug base trial: an ``ArtifactStep[LevanterCheckpoint]`` named ``REF_NAME`` whose
-    ``build_config`` embeds ``store_mixture(store, ...)`` as ``GrugBaseLaunchConfig.data`` and
-    dispatches ``run_grug_base_trial``. The store's bucket paths and weights are literals in the
-    config, so they bear identity in the fingerprint (a datakit change re-fingerprints training).
-    Uses a fixed ``REFERENCE_STEPS`` step count; epochs are unsupported for the flat store caches.
+    The store's bucket paths and weights are config literals, so they bear identity in the
+    fingerprint: a datakit change re-fingerprints training. Uses a fixed ``REFERENCE_STEPS`` step
+    count; epochs are unsupported for the store's flat caches (there is no ``<bucket>/train/.stats.json``).
     """
     version = resolve_version(REF_NAME, version)
 
