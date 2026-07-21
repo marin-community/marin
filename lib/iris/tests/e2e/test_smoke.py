@@ -328,6 +328,14 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
         f"Jobs for user {user}: smoke-simple (succeeded), smoke-failed (failed), and smoke-running (running)",
     )
 
+    # The job detail breadcrumb returns to the same user-scoped list.
+    if not isinstance(smoke_page, _NoOpPage):
+        smoke_page.locator("tr", has_text="smoke-simple").get_by_role("link", name="smoke-simple").click()
+        _wait_for_job_detail_screenshot_ready(smoke_page, quick.job_id.to_wire())
+        smoke_page.get_by_role("link", name="Jobs").click()
+        wait_for_dashboard_ready(smoke_page)
+        assert smoke_page.url.endswith(f"/#/?user={user}")
+
     smoke_cluster.kill(running)
 
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
@@ -36,6 +36,7 @@ const props = defineProps<{
   jobId: string
 }>()
 
+const route = useRoute()
 const { multiBackend, peers, ensurePeers } = useBackends()
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
@@ -565,7 +566,10 @@ const pageTitle = computed(() => {
 // Child jobs link back to their parent job; root jobs link to the jobs list.
 const backTo = computed(() => {
   const parentJobId = job.value?.parentJobId
-  return parentJobId ? `/job/${encodeURIComponent(parentJobId)}` : '/'
+  return {
+    path: parentJobId ? `/job/${encodeURIComponent(parentJobId)}` : '/',
+    query: route.query,
+  }
 })
 
 const backLabel = computed(() => (job.value?.parentJobId ? 'Back to parent job' : 'Jobs'))
