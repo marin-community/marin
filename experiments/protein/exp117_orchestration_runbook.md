@@ -64,11 +64,14 @@ wiring) makes every permissible slice fit every batch; `tpu_batch_config` is the
 authority and raises if one genuinely won't. Do not avoid a smaller slice on a hand-estimate that
 per-device batch/activations won't fit, and do not "memory-match" a prior slice — choose by
 availability and throughput, and let the tool reject an infeasible placement. Small slices are
-often the right call (more available; fine for near-done trials). For a trial with little training
-left, **slices smaller than the grid floor are acceptable** (e.g. `v6e-4`, a single-host 4-chip
-slice): the tiny slice schedules easily and the remaining compute is trivial. When a same-region
-relocation of a near-done trial keeps failing to gang, step DOWN in size (…→`v5litepod-32`→`v6e-8`→
-`v6e-4`) rather than holding out for a large slice.
+often the right call (more available; fine for near-done trials). When a same-region relocation of a
+near-done trial keeps failing to gang, step DOWN in slice size toward the grid floor rather than
+holding out for a large slice. **Below-floor slices trade away HBM headroom and can OOM a large
+batch:** empirically `v6e-4` GANGED but OOM'd `bs256` (per-device batch 64 → "Used 31.26G of 31.25G
+hbm, exceeded by 14.85M"); the calibrated floor for `bs256` is `v6e-8` (per-device batch 32). So
+`tpu_batch_config`/XLA remains the authority — try small, and on an OOM step back UP one size to the
+smallest slice that fits. (A genuinely reproducible OOM on a grid slice is still a corrective halt;
+an OOM only from going below the floor is not.)
 
 ## Slice-throughput balancing (bs64 catch-up)
 Every 8-epoch run is the SAME ~37.4B tokens regardless of batch, so wall-clock ≈ tokens ÷ chips. A
