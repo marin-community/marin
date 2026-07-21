@@ -33,6 +33,22 @@ import fsspec
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 
+# vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
+# this many tokens for the prompt when shrinking a generation budget to fit a small served context.
+_CONTEXT_PROMPT_RESERVE = 1024
+
+
+def generation_budget(max_gen_toks: int, max_length: int | None) -> int:
+    """The per-request generation cap, shrunk to fit a served context smaller than the budget.
+
+    A model whose context is smaller than the suite's generation budget (e.g. a 4k-context model
+    under an 8k chat budget) 400s every request unless the requested ``max_tokens`` leaves room for
+    the prompt within the context window.
+    """
+    if max_length is None or max_gen_toks + _CONTEXT_PROMPT_RESERVE <= max_length:
+        return max_gen_toks
+    return max(256, max_length - _CONTEXT_PROMPT_RESERVE)
+
 
 def served_max_length(base_url: str) -> int | None:
     """The served model's context length, from the OpenAI ``/models`` card (vLLM reports ``max_model_len``).
@@ -91,6 +107,12 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
     # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
+    gen_budget = generation_budget(config["max_gen_toks"], max_length)
+    if gen_budget != config["max_gen_toks"]:
+        print(
+            f"clamped max_gen_toks {config['max_gen_toks']} -> {gen_budget} to fit served context {max_length}",
+            flush=True,
+        )
     cmd = [
         python,
         "-m",
@@ -102,11 +124,11 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         "--tasks",
         task["name"],
         "--gen_kwargs",
-        f"max_gen_toks={config['max_gen_toks']}",
+        f"max_gen_toks={gen_budget}",
         # Chat-native benchmarks (MATH500-style) size their generations from --max_tokens, not
         # gen_kwargs; lm-eval-native tasks ignore it.
         "--max_tokens",
-        str(config["max_gen_toks"]),
+        str(gen_budget),
         "--output_path",
         output_path,
         # Per-question jsonl (doc, prompt, responses, per-sample scores) next to the results JSON;
