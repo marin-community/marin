@@ -13,7 +13,7 @@ python_bin="${MARIN_REPRO_PYTHON:-python}"
 run_root="$(mktemp -d /tmp/b200-nccl-fast-restart.XXXXXX)"
 
 mkdir -p "${run_root}/cache"
-export JAX_COMPILATION_CACHE_DIR="${run_root}/cache"
+export MARIN_REPRO_CACHE_ROOT="${run_root}/cache"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_enable_command_buffer=}"
@@ -22,6 +22,11 @@ export NCCL_DEBUG_SUBSYS="${NCCL_DEBUG_SUBSYS:-INIT,BOOTSTRAP}"
 
 nvidia-smi --query-gpu=name,driver_version --format=csv
 echo "CONFIG processes_per_task=${processes_per_task} repeats=${repeat_count} timeout=${run_timeout}s"
+
+# Give each global rank a stable cache across process generations without
+# introducing cross-process cache-file contention.
+# shellcheck disable=SC2016
+child_command='export JAX_COMPILATION_CACHE_DIR="$MARIN_REPRO_CACHE_ROOT/rank-$IRIS_MULTIGPU_PROCESS_INDEX"; exec "$1" "$2"'
 
 status=0
 pass_count=0
@@ -33,7 +38,7 @@ for ((repeat = 1; repeat <= repeat_count; repeat++)); do
     timeout --signal=TERM --kill-after=30s "${run_timeout}s" \
         "${python_bin}" -m iris.cluster.hooks.multigpu_main \
         --nproc "${processes_per_task}" \
-        -- "${python_bin}" "${repro_script}" \
+        -- bash -c "${child_command}" bash "${python_bin}" "${repro_script}" \
         2>&1 | tee "${run_root}/repeat-${repeat}.log"
     repeat_status="${PIPESTATUS[0]}"
     set -e
