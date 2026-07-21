@@ -120,10 +120,10 @@ class InferenceEngineConfig:
         return (self.max_seq_len + self.page_size - 1) // self.page_size
 
 
-def _tree_byte_size(tree) -> int:
+def _tree_byte_size(tree, axis_resources: ResourceMapping | None = None) -> int:
     """Return the per-device number of bytes represented by ``tree``."""
 
-    return sharded_tree_size(tree)
+    return sharded_tree_size(tree, mapping=axis_resources)
 
 
 def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
@@ -151,7 +151,11 @@ def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
     return min(budgets)
 
 
-def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig) -> int:
+def _infer_max_pages_from_hbm(
+    model: LmHeadModel,
+    config: InferenceEngineConfig,
+    axis_resources: ResourceMapping | None = None,
+) -> int:
     """Infer a KV-page budget using HBM utilization targets."""
 
     max_pages_per_seq = config.max_pages_per_seq
@@ -178,7 +182,7 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
 
         cache_shape = eqx.filter_eval_shape(initial_cache, num_pages)
 
-        return _tree_byte_size(cache_shape)
+        return _tree_byte_size(cache_shape, axis_resources)
 
     bytes_one = cache_bytes(1)
     if bytes_one > budget:
@@ -868,7 +872,7 @@ class InferenceEngine:
     ) -> "InferenceEngine":
         """Build an engine using a EngineConfig for sizing knobs."""
         if config.max_pages is None:
-            inferred_pages = _infer_max_pages_from_hbm(model, config)
+            inferred_pages = _infer_max_pages_from_hbm(model, config, axis_resources)
             config = dataclasses.replace(config, max_pages=int(inferred_pages))
 
         max_pages_per_seq = config.max_pages_per_seq
