@@ -13,6 +13,8 @@ Run from the repository root:
 import dataclasses
 import hashlib
 import json
+import os
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -20,6 +22,7 @@ from typing import Any, cast
 
 import draccus
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import pytest
@@ -120,7 +123,13 @@ def _tree_sha256(export_dir: Path) -> str:
     return digest.hexdigest()
 
 
-def assert_checkpoint_reproduces_bf16_export() -> None:
+def _export_snowball_bf16(export_dir: Path) -> None:
+    """Load the pinned checkpoint and write the bf16 HF export into ``export_dir``.
+
+    Shared by the reproduction test (which asserts the persisted digest) and the re-cut/publish
+    entrypoint (which uploads the tree), so both exercise byte-identical export logic. Validates the
+    single-name config contract on the produced ``config.json`` before returning.
+    """
     executor_info = read_executor_info()
     model_config = executor_info["config"]["model"]
     vendored_config = decode_vendored_config(executor_info)
@@ -147,17 +156,45 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
             .with_config_overrides({"dtype": "bfloat16"})
         )
         export_model = _to_main_model(params, main_config)
+        converter.save_pretrained(export_model, str(export_dir), dtype=jnp.bfloat16)
 
-        with tempfile.TemporaryDirectory(prefix="snowball-bf16-export-") as export_dir_str:
-            export_dir = Path(export_dir_str)
-            converter.save_pretrained(
-                export_model,
-                export_dir_str,
-                dtype=jnp.bfloat16,
-            )
-            _assert_vllm_bf16(export_dir, main_config)
-            actual_sha256 = _tree_sha256(export_dir)
-            assert actual_sha256 == SNOWBALL.export_sha256, actual_sha256
+    _assert_vllm_bf16(export_dir, main_config)
+
+
+def assert_checkpoint_reproduces_bf16_export() -> None:
+    with tempfile.TemporaryDirectory(prefix="snowball-bf16-export-") as export_dir_str:
+        export_dir = Path(export_dir_str)
+        _export_snowball_bf16(export_dir)
+        actual_sha256 = _tree_sha256(export_dir)
+        assert actual_sha256 == SNOWBALL.export_sha256, actual_sha256
+
+
+def recut_and_publish_snowball_bf16(export_base_uri: str) -> tuple[str, str]:
+    """Re-cut the bf16 export from the pinned checkpoint and upload it to a content-addressed URI.
+
+    Writes the export locally, computes its whole-tree digest, uploads the tree to
+    ``<export_base_uri>/<digest[:16]>/`` (content-addressed -- a new config.json yields a new
+    directory and never overwrites an existing cut), and returns ``(export_sha256, export_uri)`` to
+    paste into ``ModelIdentity.SNOWBALL``. Must run on an 8xH100 node with object-store write access.
+    """
+    with tempfile.TemporaryDirectory(prefix="snowball-bf16-export-") as export_dir_str:
+        export_dir = Path(export_dir_str)
+        _export_snowball_bf16(export_dir)
+        export_sha256 = _tree_sha256(export_dir)
+        export_uri = f"{export_base_uri.rstrip('/')}/{export_sha256[:16]}/"
+        fs = fsspec.core.get_fs_token_paths(export_uri, mode="wb")[0]
+        fs.put(os.path.join(export_dir_str, "*"), export_uri, recursive=True)
+        print(f"export_sha256={export_sha256}")
+        print(f"export_uri={export_uri}")
+        return export_sha256, export_uri
+
+
+if __name__ == "__main__":
+    # Operator entrypoint for the re-cut (issue #7447 / #7366): re-export and upload a fresh tree,
+    # then paste the printed export_sha256/export_uri into ModelIdentity.SNOWBALL. Base URI defaults
+    # to the current export's parent (strips the content-addressed <digest[:16]>/ segment).
+    base_uri = sys.argv[1] if len(sys.argv) > 1 else SNOWBALL.export_uri.rstrip("/").rsplit("/", 1)[0]
+    recut_and_publish_snowball_bf16(base_uri)
 
 
 def test_snowball_checkpoint_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient, run_test_job) -> None:
