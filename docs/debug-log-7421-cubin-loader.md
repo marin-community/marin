@@ -38,7 +38,10 @@ The corrected split run produced all 16 task artifacts. Eight trace tasks and ei
 
 The 64 failing calls differ from the successful raw-ELF loads. Their input kind is unknown, their address is page-aligned, and no bounded size or hash is available, so the safe retry sequence did not run. Each task failed once per local GPU. Context and device queries succeeded after each failure, but `cuMemGetInfo` returned CUDA code 201 and no memory counts. The run therefore does not distinguish a null or malformed compiler output from loader-local resource state. The probe now records whether the input pointer is null; a fake-driver integration test covers that event field.
 
+The null-classification rerun reproduced the failure and uploaded all 16 task artifacts. Its 94,180 successful FatBinary calls all received non-null images. Its 64 failed calls all received null images, returned `CUDA_ERROR_INVALID_VALUE`, and followed a successful immediate synchronization. The failures again occurred four times per task, once per local GPU.
+
+This locates the immediate defect before the CUDA loader. The driver is not rejecting a real CUBIN for architecture, ownership, or pressure reasons; it is rejecting a null argument. XLA's “compiled for a different GPU?” suffix is therefore misleading for this failure. OOM remains a viable upstream cause only if it makes compilation or assembly produce no module image, but the loader-boundary probe cannot establish that causal step. Loader retry treatments are not meaningful for a null image; the next diagnostic boundary is the producer of the module byte span and its compilation status.
+
 ## Future work
 
-- [ ] Rerun the positive control with explicit null-input classification.
-- [ ] If the failing input is non-null, add a bounded prefix identity before choosing Data-direct or paired-pressure treatments.
+- [ ] Instrument the module-byte producer to pair an empty result with its compiler or assembler status and memory state.

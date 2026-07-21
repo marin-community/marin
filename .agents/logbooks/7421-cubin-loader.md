@@ -101,3 +101,14 @@ author: mcwitt
 - Artifacts: `s3://marin-us-east-02a/marin/users/root/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e128-r16-cubin7421-trace-sync-l48-b512-003/dev/cuda-module-probe/`.
 - Interpretation: a stale asynchronous CUDA error is not the direct source of the reported loader error. The original FatBinary call itself returns invalid value after a successful synchronization. OOM remains possible only through an upstream mechanism that produces an absent or malformed image, or through loader-local resource state; this run did not measure free memory at the failure.
 - Next action: record whether unknown inputs are null. If they are non-null, add a bounded prefix identity before selecting Data-direct or paired-pressure treatments.
+
+### 2026-07-21 - CUBIN7421-004 null-input classification
+
+- Hypothesis: the 64 unknown inputs are null, which would locate the immediate defect before the CUDA loader rather than in CUBIN architecture or pointer handling.
+- Commit Hash: `b77c2c283`.
+- Jobs: `/mwittmann/cubin7421-null-classify-l48-b512-004-coord`, child `/mwittmann/cubin7421-null-classify-l48-b512-004-coord/grug-train-cubin7421-null-classify-l48-b512-004`, and collector `/mwittmann/cubin7421-null-collect-004`.
+- Config: the same 16-host L48/B512 graph and split trace/sync profiles as CUBIN7421-003c. The only probe change was an explicit `image_is_null` field on each load entry.
+- Result: the failure reproduced at `jit_train_step`, and all 16 task artifacts uploaded. Of 94,244 FatBinary calls, all 94,180 successful calls had non-null images and all 64 failed calls had null images. Every failed call returned `CUDA_ERROR_INVALID_VALUE`; its immediately preceding synchronization returned `CUDA_SUCCESS`. Each task again recorded four failures, one per local GPU.
+- Artifacts: `s3://marin-us-east-02a/marin/users/root/experiments/grug-moe-cw/grug-moe-cw-d5120-L48-e128-r16-cubin7421-null-classify-l48-b512-004/dev/cuda-module-probe/`.
+- Interpretation: the immediate failure is not a wrong-architecture or malformed CUBIN rejected by the driver. The caller passes a null module image, and the driver reports invalid argument; XLA then renders that as the generic “compiled for a different GPU?” message. An upstream OOM remains consistent with the observations if it causes compilation or assembly to yield no image, but this evidence does not identify why the image is null. Data-direct, pointer-copy, and loader-pressure treatments cannot be informative for a null input.
+- Next action: instrument the producer of the module byte span so that an empty compiler/assembler result is paired with its originating status and memory state before the loader call.
